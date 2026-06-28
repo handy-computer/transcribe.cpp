@@ -22,10 +22,10 @@ void apply_family_invariants(transcribe_model & model) {
 
     // Run knobs are reached through transcribe_whisper_run_ext. No PNC/ITN
     // runtime toggle — whisper emits whatever its training distribution does.
-    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INITIAL_PROMPT,       true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INITIAL_PROMPT, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK, true);
-    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_LONG_FORM,            true);
-    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION,         true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_LONG_FORM, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
-} // namespace transcribe::whisper
+}  // namespace transcribe::whisper

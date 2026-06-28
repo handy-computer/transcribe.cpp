@@ -4,16 +4,15 @@
 
 #pragma once
 
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "transcribe/whisper.h"
 #include "weights.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstdint>
 #include <optional>
@@ -95,15 +94,15 @@ struct WhisperKvCache {
             ggml_free(ctx);
             ctx = nullptr;
         }
-        self_k = nullptr;
-        self_v = nullptr;
-        cross_k = nullptr;
-        cross_v = nullptr;
-        n_batch = 1;
-        n = 0;
-        head = 0;
-        T_enc = 0;
-        T_enc_pad = 0;
+        self_k          = nullptr;
+        self_v          = nullptr;
+        cross_k         = nullptr;
+        cross_v         = nullptr;
+        n_batch         = 1;
+        n               = 0;
+        head            = 0;
+        T_enc           = 0;
+        T_enc_pad       = 0;
         cross_populated = false;
     }
 };
@@ -114,9 +113,9 @@ struct WhisperKvCache {
 // Allocated on first use, reallocated only on shape change (T_enc is fixed at
 // max_source_positions=1500 for stock variants, so effectively never).
 struct WhisperEncOut {
-    ggml_tensor *         tensor = nullptr;
-    ggml_context *        ctx    = nullptr;
-    ggml_backend_buffer_t buffer = nullptr;
+    ggml_tensor *         tensor  = nullptr;
+    ggml_context *        ctx     = nullptr;
+    ggml_backend_buffer_t buffer  = nullptr;
     int                   d_model = 0;
     int                   T_enc   = 0;
 
@@ -135,10 +134,7 @@ struct WhisperEncOut {
     }
 };
 
-bool enc_out_init(WhisperEncOut & enc_out,
-                  ggml_backend_t  backend,
-                  int             d_model,
-                  int             T_enc);
+bool enc_out_init(WhisperEncOut & enc_out, ggml_backend_t backend, int d_model, int T_enc);
 
 // Active-KV padding for the self-attention step graph (whisper.cpp's
 // whisper_kv_cache_get_padding): 32 on Metal+FA, 1 otherwise. Aligns the FA
@@ -185,8 +181,9 @@ struct WhisperPerfStage {
 
     void add(int64_t us) {
         total_us += us;
-        count    += 1;
+        count += 1;
     }
+
     void reset() {
         total_us = 0;
         count    = 0;
@@ -235,29 +232,40 @@ struct WhisperPerf {
     int chunks = 0;
 
     void reset() {
-        enc_build.reset();         enc_alloc.reset();
-        enc_compute.reset();       enc_tensor_get.reset();
-        cross_build.reset();       cross_alloc.reset();
+        enc_build.reset();
+        enc_alloc.reset();
+        enc_compute.reset();
+        enc_tensor_get.reset();
+        cross_build.reset();
+        cross_alloc.reset();
         cross_compute.reset();
-        prompt_build.reset();      prompt_alloc.reset();
-        prompt_compute.reset();    prompt_tensor_get.reset();
+        prompt_build.reset();
+        prompt_alloc.reset();
+        prompt_compute.reset();
+        prompt_tensor_get.reset();
         prompt_cpu.reset();
-        step_build.reset();        step_alloc.reset();
-        step_compute.reset();      step_tensor_get.reset();
+        step_build.reset();
+        step_alloc.reset();
+        step_compute.reset();
+        step_tensor_get.reset();
         step_cpu.reset();
-        prompt_cpu_suppress.reset();  prompt_cpu_timestamp.reset();
-        prompt_cpu_sample.reset();    prompt_cpu_logprob.reset();
-        step_cpu_suppress.reset();    step_cpu_timestamp.reset();
-        step_cpu_sample.reset();      step_cpu_logprob.reset();
+        prompt_cpu_suppress.reset();
+        prompt_cpu_timestamp.reset();
+        prompt_cpu_sample.reset();
+        prompt_cpu_logprob.reset();
+        step_cpu_suppress.reset();
+        step_cpu_timestamp.reset();
+        step_cpu_sample.reset();
+        step_cpu_logprob.reset();
         chunks = 0;
     }
 };
 
 struct WhisperModel final : public transcribe_model {
-    Tokenizer       tok;
-    WhisperHParams  hparams;
-    WhisperWeights  weights;
-    ggml_context *  ctx_meta = nullptr;
+    Tokenizer      tok;
+    WhisperHParams hparams;
+    WhisperWeights weights;
+    ggml_context * ctx_meta = nullptr;
 
     // Runtime backend plan. See transcribe-backend.h.
     transcribe::BackendPlan plan;
@@ -266,7 +274,7 @@ struct WhisperModel final : public transcribe_model {
     // Language token ids keyed by BCP-47 short code (from general.languages).
     // Resolves a params.language string to the <|lang_xx|> token id (whisper
     // packs these in tokenizer slots 50259 + lang_index).
-    std::vector<std::string> lang_codes;   // owned copy; lifetime matches the model
+    std::vector<std::string> lang_codes;  // owned copy; lifetime matches the model
     std::vector<int32_t>     lang_token_ids;
 
     // C++ mel frontend (per_utterance / hann_periodic / reflect / Slaney).
@@ -281,12 +289,12 @@ struct WhisperModel final : public transcribe_model {
 };
 
 struct WhisperSession final : public transcribe_session {
-    ggml_context *        compute_ctx      = nullptr;
+    ggml_context *       compute_ctx      = nullptr;
     // Currently-allocated capacity of compute_ctx (mem_size). Used by
     // ensure_compute_ctx to decide between ggml_reset (cheap reuse)
     // and ggml_free + ggml_init (only when more space is needed).
-    size_t                compute_ctx_size = 0;
-    ggml_backend_sched_t  sched       = nullptr;
+    size_t               compute_ctx_size = 0;
+    ggml_backend_sched_t sched            = nullptr;
 
     // Persistent backend-resident encoder output (see WhisperEncOut).
     WhisperEncOut enc_out;
@@ -324,4 +332,4 @@ struct WhisperSession final : public transcribe_session {
     ~WhisperSession() override;
 };
 
-} // namespace transcribe::whisper
+}  // namespace transcribe::whisper

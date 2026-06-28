@@ -40,25 +40,25 @@ namespace transcribe::granite_nar {
 
 struct GraniteNarHParams {
     // Encoder
-    int32_t enc_n_layers         = 0;   // 16
-    int32_t enc_hidden           = 0;   // 1024
-    int32_t enc_n_heads          = 0;   // 8
-    int32_t enc_head_dim         = 0;   // 128
-    int32_t enc_input_dim        = 0;   // 160 (2 stacked mel frames)
-    int32_t enc_output_dim       = 0;   // 348 (CTC char vocab)
-    int32_t enc_bpe_output_dim   = 0;   // 100352 (new snapshot) or 100353 (old)
-    int32_t enc_bpe_pool_window  = 0;   // 4
+    int32_t enc_n_layers         = 0;  // 16
+    int32_t enc_hidden           = 0;  // 1024
+    int32_t enc_n_heads          = 0;  // 8
+    int32_t enc_head_dim         = 0;  // 128
+    int32_t enc_input_dim        = 0;  // 160 (2 stacked mel frames)
+    int32_t enc_output_dim       = 0;  // 348 (CTC char vocab)
+    int32_t enc_bpe_output_dim   = 0;  // 100352 (new snapshot) or 100353 (old)
+    int32_t enc_bpe_pool_window  = 0;  // 4
     // BPE-CTC blank id. New snapshot: 100257 (BOS, channel exists inside
     // the bpe_output_dim=vocab_size head, decode uses argmax directly).
     // Old snapshot: 0 (separate blank channel at index 0, decode subtracts 1
     // from non-blank argmax to recover the LLM token id).
     int32_t enc_bpe_blank_id     = 0;
-    int32_t enc_self_cond_layer  = 0;   // 8 (1-indexed boundary)
-    int32_t enc_feedforward_mult = 0;   // 4
-    int32_t enc_conv_kernel_size = 0;   // 15
-    int32_t enc_conv_expansion   = 0;   // 2
-    int32_t enc_max_pos_emb      = 0;   // 512
-    int32_t enc_context_size     = 0;   // 200
+    int32_t enc_self_cond_layer  = 0;  // 8 (1-indexed boundary)
+    int32_t enc_feedforward_mult = 0;  // 4
+    int32_t enc_conv_kernel_size = 0;  // 15
+    int32_t enc_conv_expansion   = 0;  // 2
+    int32_t enc_max_pos_emb      = 0;  // 512
+    int32_t enc_context_size     = 0;  // 200
 
     // 1-indexed layer indices to capture into the projector's multi-layer
     // concat. e.g. [4, 8, 12, -1]. Negative values are interpreted as
@@ -86,30 +86,30 @@ struct GraniteNarHParams {
     bool scale_projected_embeddings = true;
 
     // Text LM (Granite-4)
-    int32_t dec_n_layers      = 0;  // 40
-    int32_t dec_hidden        = 0;  // 2048
-    int32_t dec_intermediate  = 0;  // 4096
-    int32_t dec_n_heads       = 0;  // 16
-    int32_t dec_n_kv_heads    = 0;  // 4
-    int32_t dec_head_dim      = 0;  // 128
+    int32_t     dec_n_layers     = 0;  // 40
+    int32_t     dec_hidden       = 0;  // 2048
+    int32_t     dec_intermediate = 0;  // 4096
+    int32_t     dec_n_heads      = 0;  // 16
+    int32_t     dec_n_kv_heads   = 0;  // 4
+    int32_t     dec_head_dim     = 0;  // 128
     std::string dec_hidden_act;
-    float   dec_rms_norm_eps  = 0.0f;
-    float   dec_rope_theta    = 0.0f;
-    int32_t dec_max_pos_emb   = 0;
-    bool    dec_tie_word_embeddings = true;
-    int32_t dec_vocab_size    = 0;  // 100352
+    float       dec_rms_norm_eps        = 0.0f;
+    float       dec_rope_theta          = 0.0f;
+    int32_t     dec_max_pos_emb         = 0;
+    bool        dec_tie_word_embeddings = true;
+    int32_t     dec_vocab_size          = 0;  // 100352
 
-    float dec_embedding_multiplier = 0.0f;  // 12
-    float dec_logits_scaling       = 0.0f;  // 8
-    float dec_attention_multiplier = 0.0f;  // 1/128 = 0.0078125
-    float dec_residual_multiplier  = 0.0f;  // 0.22
+    float dec_embedding_multiplier = 0.0f;    // 12
+    float dec_logits_scaling       = 0.0f;    // 8
+    float dec_attention_multiplier = 0.0f;    // 1/128 = 0.0078125
+    float dec_residual_multiplier  = 0.0f;    // 0.22
 
     int32_t dec_bos_id = 0;
     int32_t dec_eos_id = 0;
     int32_t dec_pad_id = 0;
 
     // Frontend
-    std::string fe_type;             // "mel"
+    std::string fe_type;  // "mel"
     int32_t     fe_sample_rate = 0;
     int32_t     fe_num_mels    = 0;
     int32_t     fe_n_fft       = 0;
@@ -125,8 +125,7 @@ struct GraniteNarHParams {
     std::vector<std::string> ctc_chars;
 };
 
-transcribe_status read_granite_nar_hparams(const gguf_context * gguf,
-                                           GraniteNarHParams &  hp);
+transcribe_status read_granite_nar_hparams(const gguf_context * gguf, GraniteNarHParams & hp);
 
 // Weight slots
 
@@ -143,45 +142,45 @@ struct GraniteNarEncTop {
 
 struct GraniteNarEncBlock {
     // FF1 macaron
-    ggml_tensor * norm_ff1_w   = nullptr;
-    ggml_tensor * norm_ff1_b   = nullptr;
-    ggml_tensor * ff1_up_w     = nullptr;
-    ggml_tensor * ff1_up_b     = nullptr;
-    ggml_tensor * ff1_down_w   = nullptr;
-    ggml_tensor * ff1_down_b   = nullptr;
+    ggml_tensor * norm_ff1_w          = nullptr;
+    ggml_tensor * norm_ff1_b          = nullptr;
+    ggml_tensor * ff1_up_w            = nullptr;
+    ggml_tensor * ff1_up_b            = nullptr;
+    ggml_tensor * ff1_down_w          = nullptr;
+    ggml_tensor * ff1_down_b          = nullptr;
     // Shaw block-local attention
-    ggml_tensor * norm_attn_w  = nullptr;
-    ggml_tensor * norm_attn_b  = nullptr;
-    ggml_tensor * attn_q_w     = nullptr;
-    ggml_tensor * attn_kv_w    = nullptr;
-    ggml_tensor * attn_out_w   = nullptr;
-    ggml_tensor * attn_out_b   = nullptr;
-    ggml_tensor * attn_rel_pos_emb = nullptr;
+    ggml_tensor * norm_attn_w         = nullptr;
+    ggml_tensor * norm_attn_b         = nullptr;
+    ggml_tensor * attn_q_w            = nullptr;
+    ggml_tensor * attn_kv_w           = nullptr;
+    ggml_tensor * attn_out_w          = nullptr;
+    ggml_tensor * attn_out_b          = nullptr;
+    ggml_tensor * attn_rel_pos_emb    = nullptr;
     // Conv module
-    ggml_tensor * norm_conv_w        = nullptr;
-    ggml_tensor * norm_conv_b        = nullptr;
-    ggml_tensor * conv_pointwise1_w  = nullptr;
-    ggml_tensor * conv_pointwise1_b  = nullptr;
-    ggml_tensor * conv_depthwise_w   = nullptr;
-    ggml_tensor * conv_bn_w          = nullptr;
-    ggml_tensor * conv_bn_b          = nullptr;
-    ggml_tensor * conv_bn_mean       = nullptr;
-    ggml_tensor * conv_bn_var        = nullptr;
-    ggml_tensor * conv_pointwise2_w  = nullptr;
-    ggml_tensor * conv_pointwise2_b  = nullptr;
+    ggml_tensor * norm_conv_w         = nullptr;
+    ggml_tensor * norm_conv_b         = nullptr;
+    ggml_tensor * conv_pointwise1_w   = nullptr;
+    ggml_tensor * conv_pointwise1_b   = nullptr;
+    ggml_tensor * conv_depthwise_w    = nullptr;
+    ggml_tensor * conv_bn_w           = nullptr;
+    ggml_tensor * conv_bn_b           = nullptr;
+    ggml_tensor * conv_bn_mean        = nullptr;
+    ggml_tensor * conv_bn_var         = nullptr;
+    ggml_tensor * conv_pointwise2_w   = nullptr;
+    ggml_tensor * conv_pointwise2_b   = nullptr;
     // Pre-fused BN (computed at load time).
     ggml_tensor * conv_bn_fused_scale = nullptr;
     ggml_tensor * conv_bn_fused_bias  = nullptr;
     // FF2 macaron
-    ggml_tensor * norm_ff2_w   = nullptr;
-    ggml_tensor * norm_ff2_b   = nullptr;
-    ggml_tensor * ff2_up_w     = nullptr;
-    ggml_tensor * ff2_up_b     = nullptr;
-    ggml_tensor * ff2_down_w   = nullptr;
-    ggml_tensor * ff2_down_b   = nullptr;
+    ggml_tensor * norm_ff2_w          = nullptr;
+    ggml_tensor * norm_ff2_b          = nullptr;
+    ggml_tensor * ff2_up_w            = nullptr;
+    ggml_tensor * ff2_up_b            = nullptr;
+    ggml_tensor * ff2_down_w          = nullptr;
+    ggml_tensor * ff2_down_b          = nullptr;
     // Post-block LayerNorm
-    ggml_tensor * norm_post_w  = nullptr;
-    ggml_tensor * norm_post_b  = nullptr;
+    ggml_tensor * norm_post_w         = nullptr;
+    ggml_tensor * norm_post_b         = nullptr;
 };
 
 struct GraniteNarProjTop {
@@ -202,8 +201,8 @@ struct GraniteNarProjTop {
 
 struct GraniteNarProjBlock {
     // pre-norm before cross-attention
-    ggml_tensor * norm_attn_w   = nullptr;
-    ggml_tensor * norm_attn_b   = nullptr;
+    ggml_tensor * norm_attn_w    = nullptr;
+    ggml_tensor * norm_attn_b    = nullptr;
     // cross-attention (q from query stream, k/v from encoder slice)
     ggml_tensor * cross_attn_q_w = nullptr;
     ggml_tensor * cross_attn_q_b = nullptr;
@@ -214,17 +213,17 @@ struct GraniteNarProjBlock {
     ggml_tensor * cross_attn_o_w = nullptr;
     ggml_tensor * cross_attn_o_b = nullptr;
     // pre-norm before FFN
-    ggml_tensor * norm_ffn_w    = nullptr;
-    ggml_tensor * norm_ffn_b    = nullptr;
+    ggml_tensor * norm_ffn_w     = nullptr;
+    ggml_tensor * norm_ffn_b     = nullptr;
     // FFN (fc1 -> SiLU -> fc2)
-    ggml_tensor * ffn_fc1_w     = nullptr;
-    ggml_tensor * ffn_fc1_b     = nullptr;
-    ggml_tensor * ffn_fc2_w     = nullptr;
-    ggml_tensor * ffn_fc2_b     = nullptr;
+    ggml_tensor * ffn_fc1_w      = nullptr;
+    ggml_tensor * ffn_fc1_b      = nullptr;
+    ggml_tensor * ffn_fc2_w      = nullptr;
+    ggml_tensor * ffn_fc2_b      = nullptr;
 };
 
 struct GraniteNarDecEmbed {
-    ggml_tensor * token_w = nullptr;   // tied: also serves as lm_head
+    ggml_tensor * token_w = nullptr;  // tied: also serves as lm_head
 };
 
 struct GraniteNarDecBlock {
@@ -244,19 +243,19 @@ struct GraniteNarDecFinal {
 };
 
 struct GraniteNarWeights {
-    GraniteNarEncTop                   enc_top;
-    std::vector<GraniteNarEncBlock>    enc_blocks;
+    GraniteNarEncTop                enc_top;
+    std::vector<GraniteNarEncBlock> enc_blocks;
 
-    GraniteNarProjTop                  proj_top;
-    std::vector<GraniteNarProjBlock>   proj_blocks;
+    GraniteNarProjTop                proj_top;
+    std::vector<GraniteNarProjBlock> proj_blocks;
 
-    GraniteNarDecEmbed                 dec_embed;
-    std::vector<GraniteNarDecBlock>    dec_blocks;
-    GraniteNarDecFinal                 dec_final;
+    GraniteNarDecEmbed              dec_embed;
+    std::vector<GraniteNarDecBlock> dec_blocks;
+    GraniteNarDecFinal              dec_final;
 };
 
-transcribe_status build_granite_nar_weights(ggml_context *           ctx_meta,
+transcribe_status build_granite_nar_weights(ggml_context *            ctx_meta,
                                             const GraniteNarHParams & hp,
-                                            GraniteNarWeights &      weights);
+                                            GraniteNarWeights &       weights);
 
-} // namespace transcribe::granite_nar
+}  // namespace transcribe::granite_nar

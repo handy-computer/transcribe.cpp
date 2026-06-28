@@ -15,7 +15,7 @@ void apply_family_invariants(transcribe_model & model) {
     // from the .pt file), so it is intentionally skipped at convert.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    caps.supports_translate            = false;
+    caps.supports_translate = false;
 
     // Feature bits: cancellation is wired at the run level. FunASR-Nano
     // exposes a runtime ITN toggle via the LLM system-prompt suffix
@@ -23,7 +23,7 @@ void apply_family_invariants(transcribe_model & model) {
     // The generic transcribe_run_params::itn enum routes here. No PNC
     // runtime toggle.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
-    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN,          true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN, true);
 }
 
-} // namespace transcribe::funasr_nano
+}  // namespace transcribe::funasr_nano

@@ -32,21 +32,18 @@ struct Arch {
     // Must be a NUL-terminated string with static lifetime.
     const char * name;
 
-    transcribe_status (*load)(
-        Loader &                               loader,
-        const transcribe_model_load_params *        params,
-        struct transcribe_model **             out_model);
+    transcribe_status (*load)(Loader &                             loader,
+                              const transcribe_model_load_params * params,
+                              struct transcribe_model **           out_model);
 
-    transcribe_status (*init_context)(
-        struct transcribe_model *              model,
-        const transcribe_session_params *      params,
-        struct transcribe_session **           out_ctx);
+    transcribe_status (*init_context)(struct transcribe_model *         model,
+                                      const transcribe_session_params * params,
+                                      struct transcribe_session **      out_ctx);
 
-    transcribe_status (*run)(
-        struct transcribe_session *            ctx,
-        const float *                          pcm,
-        int                                    n_samples,
-        const transcribe_run_params *              params);
+    transcribe_status (*run)(struct transcribe_session *   ctx,
+                             const float *                 pcm,
+                             int                           n_samples,
+                             const transcribe_run_params * params);
 
     // Optional offline batch fast path. When non-null, transcribe_run_batch
     // delegates here to process all `n` utterances in one dispatch; when
@@ -67,12 +64,11 @@ struct Arch {
     //   - The return value is the whole-batch status: OK when the dispatch
     //     ran (per-utterance failures live in each ResultSet), non-OK only
     //     for whole-batch faults (OOM, abort, backend error).
-    transcribe_status (*run_batch)(
-        struct transcribe_session *            ctx,
-        const float * const *                  pcm,
-        const int *                            n_samples,
-        int                                    n,
-        const transcribe_run_params *              params);
+    transcribe_status (*run_batch)(struct transcribe_session *   ctx,
+                                   const float * const *         pcm,
+                                   const int *                   n_samples,
+                                   int                           n,
+                                   const transcribe_run_params * params);
 
     // Optional streaming hooks. stream_begin / stream_feed /
     // stream_finalize are a required triple (the dispatcher returns
@@ -96,28 +92,22 @@ struct Arch {
     //     all output committed. Dispatcher -> FINISHED on OK, FAILED else.
     //   stream_reset: release per-utterance state / buffered audio (keeping
     //     allocations); the dispatcher forces state back to IDLE around it.
-    transcribe_status (*stream_validate)(
-        const struct transcribe_session *      ctx,
-        const transcribe_run_params *          run_params,
-        const transcribe_stream_params *       stream_params);
+    transcribe_status (*stream_validate)(const struct transcribe_session * ctx,
+                                         const transcribe_run_params *     run_params,
+                                         const transcribe_stream_params *  stream_params);
 
-    transcribe_status (*stream_begin)(
-        struct transcribe_session *            ctx,
-        const transcribe_run_params *              run_params,
-        const transcribe_stream_params *       stream_params);
+    transcribe_status (*stream_begin)(struct transcribe_session *      ctx,
+                                      const transcribe_run_params *    run_params,
+                                      const transcribe_stream_params * stream_params);
 
-    transcribe_status (*stream_feed)(
-        struct transcribe_session *            ctx,
-        const float *                          pcm,
-        int                                    n_samples,
-        transcribe_stream_update *             update);
+    transcribe_status (*stream_feed)(struct transcribe_session * ctx,
+                                     const float *               pcm,
+                                     int                         n_samples,
+                                     transcribe_stream_update *  update);
 
-    transcribe_status (*stream_finalize)(
-        struct transcribe_session *            ctx,
-        transcribe_stream_update *             update);
+    transcribe_status (*stream_finalize)(struct transcribe_session * ctx, transcribe_stream_update * update);
 
-    void (*stream_reset)(
-        struct transcribe_session *            ctx);
+    void (*stream_reset)(struct transcribe_session * ctx);
 
     // Optional kind+slot probe. Returns true when the loaded model variant
     // accepts the named extension kind on the given slot (run_params::family
@@ -125,10 +115,7 @@ struct Arch {
     // per-loaded-variant AND per-slot. NULL is reserved for "no extension
     // surface at all" — a family with no surface for one slot returns false
     // rather than NULL'ing the hook.
-    bool (*accepts_ext_kind)(
-        const struct transcribe_model *        model,
-        transcribe_ext_slot                    slot,
-        uint32_t                               kind);
+    bool (*accepts_ext_kind)(const struct transcribe_model * model, transcribe_ext_slot slot, uint32_t kind);
 
     // Optional pre-clear validation for the one-shot transcribe_run path,
     // the _RUN-slot analogue of stream_validate. Called as the LAST gate
@@ -141,13 +128,11 @@ struct Arch {
     // hook actually checks (a family that defers checks to run() trades them
     // out of the guarantee). NULL is skipped; the generic header-size + kind
     // checks remain in force.
-    transcribe_status (*run_validate)(
-        const struct transcribe_session *      ctx,
-        const transcribe_run_params *          params);
+    transcribe_status (*run_validate)(const struct transcribe_session * ctx, const transcribe_run_params * params);
 };
 
 // Look up an architecture by name. Returns nullptr if no registered
 // family matches.
 const Arch * find_arch(const char * name);
 
-} // namespace transcribe
+}  // namespace transcribe

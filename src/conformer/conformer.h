@@ -30,71 +30,71 @@ constexpr float kLayerNormEps = 1e-5f;
 // Nullable-pointer projection over the pre_encode weights. The family
 // fills this from its own weights struct at the call site.
 struct PreEncodeView {
-    ggml_tensor * conv0_w = nullptr; // [KW=3, KH=3, IC=1,        OC=channels]
-    ggml_tensor * conv0_b = nullptr; // [channels]
-    ggml_tensor * conv2_w = nullptr; // depthwise [KW=3, KH=3, 1, OC=channels]
-    ggml_tensor * conv2_b = nullptr; // [channels]
-    ggml_tensor * conv3_w = nullptr; // pointwise [1, 1, channels, channels]
-    ggml_tensor * conv3_b = nullptr; // [channels]
-    ggml_tensor * conv5_w = nullptr; // depthwise
+    ggml_tensor * conv0_w = nullptr;  // [KW=3, KH=3, IC=1,        OC=channels]
+    ggml_tensor * conv0_b = nullptr;  // [channels]
+    ggml_tensor * conv2_w = nullptr;  // depthwise [KW=3, KH=3, 1, OC=channels]
+    ggml_tensor * conv2_b = nullptr;  // [channels]
+    ggml_tensor * conv3_w = nullptr;  // pointwise [1, 1, channels, channels]
+    ggml_tensor * conv3_b = nullptr;  // [channels]
+    ggml_tensor * conv5_w = nullptr;  // depthwise
     ggml_tensor * conv5_b = nullptr;
-    ggml_tensor * conv6_w = nullptr; // pointwise
+    ggml_tensor * conv6_w = nullptr;  // pointwise
     ggml_tensor * conv6_b = nullptr;
     // Final projection from [channels * (num_mels / subsampling)] to d_model.
-    ggml_tensor * out_w   = nullptr; // [pre_encode_in, d_model]
-    ggml_tensor * out_b   = nullptr; // [d_model]
+    ggml_tensor * out_w   = nullptr;  // [pre_encode_in, d_model]
+    ggml_tensor * out_b   = nullptr;  // [d_model]
 };
 
 // Nullable-pointer projection over one Conformer block's weights.
 // Every `_b` (bias) slot is optional — null = skip the add.
 struct BlockView {
     // Macaron FF1.
-    ggml_tensor * norm_ff1_w = nullptr; // [d_model]
-    ggml_tensor * norm_ff1_b = nullptr; // [d_model]
-    ggml_tensor * ff1_lin1_w = nullptr; // [d_model, d_ff]
-    ggml_tensor * ff1_lin1_b = nullptr; // [d_ff], nullable
-    ggml_tensor * ff1_lin2_w = nullptr; // [d_ff, d_model]
-    ggml_tensor * ff1_lin2_b = nullptr; // [d_model], nullable
+    ggml_tensor * norm_ff1_w = nullptr;  // [d_model]
+    ggml_tensor * norm_ff1_b = nullptr;  // [d_model]
+    ggml_tensor * ff1_lin1_w = nullptr;  // [d_model, d_ff]
+    ggml_tensor * ff1_lin1_b = nullptr;  // [d_ff], nullable
+    ggml_tensor * ff1_lin2_w = nullptr;  // [d_ff, d_model]
+    ggml_tensor * ff1_lin2_b = nullptr;  // [d_model], nullable
 
     // Self-attention with relative positional encoding.
-    ggml_tensor * norm_attn_w = nullptr; // [d_model]
-    ggml_tensor * norm_attn_b = nullptr; // [d_model]
-    ggml_tensor * attn_q_w    = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_q_b    = nullptr; // [d_model], nullable
-    ggml_tensor * attn_k_w    = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_k_b    = nullptr; // [d_model], nullable
-    ggml_tensor * attn_v_w    = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_v_b    = nullptr; // [d_model], nullable
-    ggml_tensor * attn_out_w  = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_out_b  = nullptr; // [d_model], nullable
-    ggml_tensor * attn_pos_w  = nullptr; // [d_model, d_model] linear_pos (no bias)
-    ggml_tensor * attn_pos_u  = nullptr; // [n_head, head_dim]
-    ggml_tensor * attn_pos_v  = nullptr; // [n_head, head_dim]
+    ggml_tensor * norm_attn_w = nullptr;  // [d_model]
+    ggml_tensor * norm_attn_b = nullptr;  // [d_model]
+    ggml_tensor * attn_q_w    = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_q_b    = nullptr;  // [d_model], nullable
+    ggml_tensor * attn_k_w    = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_k_b    = nullptr;  // [d_model], nullable
+    ggml_tensor * attn_v_w    = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_v_b    = nullptr;  // [d_model], nullable
+    ggml_tensor * attn_out_w  = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_out_b  = nullptr;  // [d_model], nullable
+    ggml_tensor * attn_pos_w  = nullptr;  // [d_model, d_model] linear_pos (no bias)
+    ggml_tensor * attn_pos_u  = nullptr;  // [n_head, head_dim]
+    ggml_tensor * attn_pos_v  = nullptr;  // [n_head, head_dim]
 
     // Convolution module. Pointwise conv1 is 2*d_model for GLU.
-    ggml_tensor * norm_conv_w         = nullptr; // [d_model]
-    ggml_tensor * norm_conv_b         = nullptr; // [d_model]
-    ggml_tensor * conv_pw1_w          = nullptr; // [1, d_model, 2*d_model]
-    ggml_tensor * conv_pw1_b          = nullptr; // [2*d_model], nullable
-    ggml_tensor * conv_dw_w           = nullptr; // [k, 1, d_model]
-    ggml_tensor * conv_dw_b           = nullptr; // [d_model], nullable
-    ggml_tensor * conv_pw2_w          = nullptr; // [1, d_model, d_model]
-    ggml_tensor * conv_pw2_b          = nullptr; // [d_model], nullable
+    ggml_tensor * norm_conv_w         = nullptr;  // [d_model]
+    ggml_tensor * norm_conv_b         = nullptr;  // [d_model]
+    ggml_tensor * conv_pw1_w          = nullptr;  // [1, d_model, 2*d_model]
+    ggml_tensor * conv_pw1_b          = nullptr;  // [2*d_model], nullable
+    ggml_tensor * conv_dw_w           = nullptr;  // [k, 1, d_model]
+    ggml_tensor * conv_dw_b           = nullptr;  // [d_model], nullable
+    ggml_tensor * conv_pw2_w          = nullptr;  // [1, d_model, d_model]
+    ggml_tensor * conv_pw2_b          = nullptr;  // [d_model], nullable
     // Post-depthwise normalisation. Exactly one pair is populated per block
     // per BlockParams::conv_norm_type: BatchNorm (conv_bn_fused_*, fused at
     // load) or LayerNorm (conv_ln_*, per-channel mean/std at inference).
-    ggml_tensor * conv_bn_fused_scale = nullptr; // [d_model]
-    ggml_tensor * conv_bn_fused_bias  = nullptr; // [d_model]
-    ggml_tensor * conv_ln_w           = nullptr; // [d_model]
-    ggml_tensor * conv_ln_b           = nullptr; // [d_model]
+    ggml_tensor * conv_bn_fused_scale = nullptr;  // [d_model]
+    ggml_tensor * conv_bn_fused_bias  = nullptr;  // [d_model]
+    ggml_tensor * conv_ln_w           = nullptr;  // [d_model]
+    ggml_tensor * conv_ln_b           = nullptr;  // [d_model]
 
     // Macaron FF2.
     ggml_tensor * norm_ff2_w = nullptr;
     ggml_tensor * norm_ff2_b = nullptr;
     ggml_tensor * ff2_lin1_w = nullptr;
-    ggml_tensor * ff2_lin1_b = nullptr; // nullable
+    ggml_tensor * ff2_lin1_b = nullptr;  // nullable
     ggml_tensor * ff2_lin2_w = nullptr;
-    ggml_tensor * ff2_lin2_b = nullptr; // nullable
+    ggml_tensor * ff2_lin2_b = nullptr;  // nullable
 
     // Final per-block layer norm.
     ggml_tensor * norm_out_w = nullptr;
@@ -110,9 +110,9 @@ struct BlockView {
 // direct_dw_* false (im2col), which is safe on Metal where the direct 2-D
 // depthwise kernel is not implemented for all shapes.
 struct ConvPolicy {
-    bool direct_pw                = true;
-    bool direct_dw_in_block       = false;
-    bool direct_dw_in_pre_encode  = false;
+    bool direct_pw               = true;
+    bool direct_dw_in_block      = false;
+    bool direct_dw_in_pre_encode = false;
 
     // Causal pre_encode convolutions. NeMo's cache-aware streaming swaps
     // every Conv2d in ConvSubsampling for CausalConv2D, padding
@@ -120,7 +120,7 @@ struct ConvPolicy {
     // is (left=2, right=1), different from the offline (k-1)/2 symmetric
     // path, and shifts both the freq and time output dims. False on every
     // offline variant; true on nemotron-speech-streaming-en.
-    bool causal_pre_encode        = false;
+    bool causal_pre_encode = false;
 };
 
 // Resolve a conv-dispatch toggle from its env overrides. The DIRECT var forces
@@ -129,9 +129,7 @@ struct ConvPolicy {
 // pointwise and the per-family depthwise dispatch helpers, so the env-var read
 // has exactly one definition. `direct_env` / `no_direct_env` are env var names
 // (e.g. "TRANSCRIBE_CONV_DIRECT_DW" / "TRANSCRIBE_CONV_NO_DIRECT_DW").
-bool resolve_conv_direct(const char * direct_env,
-                         const char * no_direct_env,
-                         bool         backend_default);
+bool resolve_conv_direct(const char * direct_env, const char * no_direct_env, bool backend_default);
 
 // Pointwise conv dispatch auto-detect (same answer for every family today).
 // Env overrides: TRANSCRIBE_CONV_NO_DIRECT_PW forces im2col,
@@ -146,8 +144,8 @@ struct BlockParams {
     int        d_model;
     int        n_head;
     int        conv_kernel;
-    ggml_type  kv_type;      // GGML_TYPE_COUNT = auto (f16 if quant, f32 if f32)
-    bool       use_flash;    // false -> manual mul_mat + soft_max + mul_mat
+    ggml_type  kv_type;    // GGML_TYPE_COUNT = auto (f16 if quant, f32 if f32)
+    bool       use_flash;  // false -> manual mul_mat + soft_max + mul_mat
     ConvPolicy policy;
 
     // Local attention window. -1 / -1 = full attention (default).
@@ -262,10 +260,7 @@ ggml_tensor * named(ggml_tensor * t, const char * name);
 
 // LayerNorm with affine: y = gamma * (x - mean) / sqrt(var + eps) + beta.
 // `gamma` is required; `beta` may be null for bias-free LN.
-ggml_tensor * layer_norm(ggml_context * ctx,
-                         ggml_tensor *  x,
-                         ggml_tensor *  gamma,
-                         ggml_tensor *  beta);
+ggml_tensor * layer_norm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * gamma, ggml_tensor * beta);
 
 // Two-linear FeedForward: y = Linear2(SiLU(Linear1(x))). Biases are
 // optional — pass nullptr to skip the add.
@@ -305,9 +300,12 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
 ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
                              ggml_tensor *  kernel,
                              ggml_tensor *  data,
-                             int            s0, int s1,
-                             int            p0, int p1,
-                             int            d0, int d1);
+                             int            s0,
+                             int            s1,
+                             int            p0,
+                             int            p1,
+                             int            d0,
+                             int            d1);
 
 // f32-friendly 1D depthwise conv. Same Metal reasoning.
 ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
@@ -323,17 +321,12 @@ ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
 // from the load-time BN fusion and must always be present. Callers
 // that need a no-op path should skip the call entirely rather than
 // pass null.
-ggml_tensor * fused_batch_norm(ggml_context * ctx,
-                               ggml_tensor *  x,
-                               ggml_tensor *  scale_1d,
-                               ggml_tensor *  bias_1d);
+ggml_tensor * fused_batch_norm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale_1d, ggml_tensor * bias_1d);
 
 // Add a 1-D bias [C] to a 4-D conv output [W, H, C, N] via broadcast.
 // Nullable: passing bias_1d == nullptr is a no-op that returns
 // conv_out unchanged.
-ggml_tensor * add_conv_bias(ggml_context * ctx,
-                            ggml_tensor *  conv_out,
-                            ggml_tensor *  bias_1d);
+ggml_tensor * add_conv_bias(ggml_context * ctx, ggml_tensor * conv_out, ggml_tensor * bias_1d);
 
 // Sub-blocks (exposed for families that hand-build a block).
 
@@ -343,10 +336,7 @@ ggml_tensor * add_conv_bias(ggml_context * ctx,
 // BlockParams::conv_context_{left,right} (depthwise padding),
 // BlockParams::conv_pad_mask, and BlockParams::conv_norm_type
 // (BN vs LN).
-ggml_tensor * conv_module(ggml_context *      ctx,
-                          ggml_tensor *       x,
-                          const BlockView &   b,
-                          const BlockParams & params);
+ggml_tensor * conv_module(ggml_context * ctx, ggml_tensor * x, const BlockView & b, const BlockParams & params);
 
 // Relative-position multi-head self-attention. Flash attention when
 // use_flash is true; manual mul_mat + soft_max_ext + mul_mat fallback
@@ -383,7 +373,7 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
                            ggml_tensor *       pos_emb,
                            const BlockView &   b,
                            const BlockParams & params,
-                           ggml_tensor *       x_q = nullptr,
+                           ggml_tensor *       x_q    = nullptr,
                            ggml_tensor *       k_full = nullptr,
                            ggml_tensor *       v_full = nullptr);
 
@@ -396,10 +386,8 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
 // output. Pointer-of-struct + user pointer (not std::function) keeps the
 // header C-ABI-friendly. Pass nullptr to skip observation.
 struct BlockObserver {
-    void (*on_point)(void *        user,
-                     const char *  tag,
-                     ggml_tensor * t) = nullptr;
-    void * user = nullptr;
+    void (*on_point)(void * user, const char * tag, ggml_tensor * t) = nullptr;
+    void * user                                                      = nullptr;
 };
 
 // Full Conformer block forward: FF1 -> attn -> conv -> FF2 -> LN_out.
@@ -444,4 +432,4 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                const char *          error_tag,
                                PreEncodeValidMasks * valid_masks = nullptr);
 
-} // namespace transcribe::conformer
+}  // namespace transcribe::conformer

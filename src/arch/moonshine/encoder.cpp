@@ -12,33 +12,31 @@
 
 #include "encoder.h"
 
-#include "moonshine.h"
-#include "weights.h"
-
 #include "conformer/conformer.h"
+#include "ggml.h"
+#include "moonshine.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-
-#include "ggml.h"
+#include "weights.h"
 
 #include <cmath>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 
 namespace transcribe::moonshine {
 
 namespace {
 
 namespace conf = transcribe::conformer;
-using conf::named;
 using conf::layer_norm;
+using conf::named;
 
-ggml_tensor * add_conv1d_bias(ggml_context * ctx,
-                              ggml_tensor *  conv_out,
-                              ggml_tensor *  bias_1d) {
-    if (bias_1d == nullptr) return conv_out;
+ggml_tensor * add_conv1d_bias(ggml_context * ctx, ggml_tensor * conv_out, ggml_tensor * bias_1d) {
+    if (bias_1d == nullptr) {
+        return conv_out;
+    }
     const int64_t channels = bias_1d->ne[0];
-    ggml_tensor * bias_4d = ggml_reshape_4d(ctx, bias_1d, 1, channels, 1, 1);
+    ggml_tensor * bias_4d  = ggml_reshape_4d(ctx, bias_1d, 1, channels, 1, 1);
     return ggml_add(ctx, conv_out, bias_4d);
 }
 
@@ -52,17 +50,13 @@ ggml_tensor * apply_partial_rope(ggml_context *           ctx,
                                  const MoonshineHParams & hp,
                                  int                      head_dim_rot,
                                  int                      n_ctx_orig) {
-    return ggml_rope_ext(
-        ctx, x, positions, /*c=*/nullptr,
-        head_dim_rot,
-        GGML_ROPE_TYPE_NORMAL,
-        n_ctx_orig,
-        hp.rope_theta,
-        /*freq_scale=*/1.0f,
-        /*ext_factor=*/0.0f,
-        /*attn_factor=*/1.0f,
-        /*beta_fast=*/32.0f,
-        /*beta_slow=*/1.0f);
+    return ggml_rope_ext(ctx, x, positions, /*c=*/nullptr, head_dim_rot, GGML_ROPE_TYPE_NORMAL, n_ctx_orig,
+                         hp.rope_theta,
+                         /*freq_scale=*/1.0f,
+                         /*ext_factor=*/0.0f,
+                         /*attn_factor=*/1.0f,
+                         /*beta_fast=*/32.0f,
+                         /*beta_slow=*/1.0f);
 }
 
 // Encoder MHSA with partial RoPE on q/k and head_dim padding.
@@ -80,8 +74,7 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
                           const MoonshineHParams & hp,
                           int                      n_heads,
                           int                      d_model,
-                          bool                     use_flash)
-{
+                          bool                     use_flash) {
     const int     head_dim     = d_model / n_heads;
     const int     head_dim_pad = hp.enc_head_dim_padded();
     const int     head_dim_rot = hp.enc_head_dim_rot();
@@ -111,7 +104,7 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
     // Permute to [head_dim, T, n_heads, 1] then make contiguous and
     // pad axis 0 (head_dim) to head_dim_padded if required.
     auto to_attn_layout = [&](ggml_tensor * t) -> ggml_tensor * {
-        t = ggml_permute(ctx, t, 0, 2, 1, 3);   // [head_dim, T, n_heads, 1]
+        t = ggml_permute(ctx, t, 0, 2, 1, 3);  // [head_dim, T, n_heads, 1]
         t = ggml_cont(ctx, t);
         if (pad > 0) {
             t = ggml_pad(ctx, t, pad, 0, 0, 0);
@@ -124,8 +117,7 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
 
     ggml_tensor * o;
     if (use_flash) {
-        o = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr,
-                                scale, 0.0f, 0.0f);
+        o = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr, scale, 0.0f, 0.0f);
         // ggml_flash_attn_ext output: [head_dim_pad, n_heads, T, 1]
         // (reduces along the K sequence axis). Rearrange to
         // [head_dim_pad, T, n_heads, 1] for the slice-and-merge below.
@@ -133,19 +125,16 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
         o = ggml_cont(ctx, o);
     } else {
         ggml_tensor * kq      = ggml_mul_mat(ctx, k, q);
-        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr,
-                                                  scale, 0.0f);
-        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr, scale, 0.0f);
+        ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+        o                     = ggml_mul_mat(ctx, v_t, kq_soft);
         // o shape: [head_dim_pad, T, n_heads, 1]
     }
 
     // Slice off head_dim padding before merging heads (HF slices
     // [..., :head_dim] before the n_heads*head_dim merge).
     if (pad > 0) {
-        o = ggml_view_3d(ctx, o,
-                         head_dim, T, n_heads,
-                         o->nb[1], o->nb[2], 0);
+        o = ggml_view_3d(ctx, o, head_dim, T, n_heads, o->nb[1], o->nb[2], 0);
         o = ggml_cont(ctx, o);
     }
 
@@ -161,14 +150,19 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
 // Encoder MLP: fc1 (with bias) -> GELU(erf) -> fc2 (with bias).
 ggml_tensor * ffn_encoder(ggml_context * ctx,
                           ggml_tensor *  x,
-                          ggml_tensor *  fc1_w, ggml_tensor * fc1_b,
-                          ggml_tensor *  fc2_w, ggml_tensor * fc2_b)
-{
+                          ggml_tensor *  fc1_w,
+                          ggml_tensor *  fc1_b,
+                          ggml_tensor *  fc2_w,
+                          ggml_tensor *  fc2_b) {
     ggml_tensor * h = ggml_mul_mat(ctx, fc1_w, x);
-    if (fc1_b != nullptr) h = ggml_add(ctx, h, fc1_b);
-    h = ggml_gelu_erf(ctx, h);
+    if (fc1_b != nullptr) {
+        h = ggml_add(ctx, h, fc1_b);
+    }
+    h               = ggml_gelu_erf(ctx, h);
     ggml_tensor * o = ggml_mul_mat(ctx, fc2_w, h);
-    if (fc2_b != nullptr) o = ggml_add(ctx, o, fc2_b);
+    if (fc2_b != nullptr) {
+        o = ggml_add(ctx, o, fc2_b);
+    }
     return o;
 }
 
@@ -179,21 +173,17 @@ ggml_tensor * build_block(ggml_context *            ctx,
                           const MoonshineHParams &  hp,
                           int                       n_heads,
                           int                       d_model,
-                          bool                      use_flash)
-{
+                          bool                      use_flash) {
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_attn_w, /*beta=*/nullptr);
-        y = mha_encoder(ctx, y, pos_ids,
-                        b.attn_q_w, b.attn_k_w, b.attn_v_w, b.attn_out_w,
-                        hp, n_heads, d_model, use_flash);
+        y = mha_encoder(ctx, y, pos_ids, b.attn_q_w, b.attn_k_w, b.attn_v_w, b.attn_out_w, hp, n_heads, d_model,
+                        use_flash);
         x = ggml_add(ctx, x, y);
     }
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
-        y = ffn_encoder(ctx, y,
-                        b.ffn_fc1_w, b.ffn_fc1_b,
-                        b.ffn_fc2_w, b.ffn_fc2_b);
-        x = ggml_add(ctx, x, y);
+        y               = ffn_encoder(ctx, y, b.ffn_fc1_w, b.ffn_fc1_b, b.ffn_fc2_w, b.ffn_fc2_b);
+        x               = ggml_add(ctx, x, y);
     }
     return x;
 }
@@ -201,26 +191,27 @@ ggml_tensor * build_block(ggml_context *            ctx,
 // Number of frames after a single Conv1d layer with no padding:
 //   T_out = floor((T_in - K) / stride) + 1
 int conv1d_t_out(int T_in, int K, int stride) {
-    if (T_in < K) return 0;
+    if (T_in < K) {
+        return 0;
+    }
     return (T_in - K) / stride + 1;
 }
 
-} // namespace
+}  // namespace
 
 int encoder_t_enc(const MoonshineHParams & hp, int n_samples) {
-    if (n_samples <= 0 ||
-        hp.conv_kernel_sizes.size() < 3 || hp.conv_strides.size() < 3)
-    {
+    if (n_samples <= 0 || hp.conv_kernel_sizes.size() < 3 || hp.conv_strides.size() < 3) {
         return 0;
     }
-    const int t1 = conv1d_t_out(n_samples,
-                                hp.conv_kernel_sizes[0], hp.conv_strides[0]);
-    if (t1 <= 0) return 0;
-    const int t2 = conv1d_t_out(t1,
-                                hp.conv_kernel_sizes[1], hp.conv_strides[1]);
-    if (t2 <= 0) return 0;
-    const int t3 = conv1d_t_out(t2,
-                                hp.conv_kernel_sizes[2], hp.conv_strides[2]);
+    const int t1 = conv1d_t_out(n_samples, hp.conv_kernel_sizes[0], hp.conv_strides[0]);
+    if (t1 <= 0) {
+        return 0;
+    }
+    const int t2 = conv1d_t_out(t1, hp.conv_kernel_sizes[1], hp.conv_strides[1]);
+    if (t2 <= 0) {
+        return 0;
+    }
+    const int t3 = conv1d_t_out(t2, hp.conv_kernel_sizes[2], hp.conv_strides[2]);
     return t3;
 }
 
@@ -228,14 +219,12 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
                                  const MoonshineWeights & w,
                                  const MoonshineHParams & hp,
                                  int                      n_samples,
-                                 bool                     use_flash)
-{
-    EncoderBuild eb {};
+                                 bool                     use_flash) {
+    EncoderBuild eb{};
 
     if (ctx == nullptr || n_samples <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine encoder: invalid arg (ctx=%p, n_samples=%d)",
-                     static_cast<void *>(ctx), n_samples);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine encoder: invalid arg (ctx=%p, n_samples=%d)",
+                static_cast<void *>(ctx), n_samples);
         return eb;
     }
 
@@ -245,14 +234,17 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
 
     if (T_enc <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine encoder: input too short (n_samples=%d "
-                     "produces T_enc<=0)", n_samples);
+                "moonshine encoder: input too short (n_samples=%d "
+                "produces T_enc<=0)",
+                n_samples);
         return eb;
     }
 
     // ---- audio input ----
     eb.audio_in = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_samples);
-    if (eb.audio_in == nullptr) return eb;
+    if (eb.audio_in == nullptr) {
+        return eb;
+    }
     named(eb.audio_in, "enc.audio.in");
     ggml_set_input(eb.audio_in);
     eb.dumps.audio_in = eb.audio_in;
@@ -289,10 +281,10 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     {
         const int64_t C  = w.enc_stem.gn_w->ne[0];
         const int64_t T1 = x->ne[1];
-        x = ggml_reshape_4d(ctx, x, /*ne0=*/C, /*ne1=*/T1, /*ne2=*/1, /*ne3=*/1);
-        x = ggml_group_norm(ctx, x, /*n_groups=*/hp.conv_groupnorm_num_groups,
-                            /*eps=*/hp.conv_groupnorm_eps);
-        x = ggml_reshape_2d(ctx, x, C, T1);
+        x                = ggml_reshape_4d(ctx, x, /*ne0=*/C, /*ne1=*/T1, /*ne2=*/1, /*ne3=*/1);
+        x                = ggml_group_norm(ctx, x, /*n_groups=*/hp.conv_groupnorm_num_groups,
+                                           /*eps=*/hp.conv_groupnorm_eps);
+        x                = ggml_reshape_2d(ctx, x, C, T1);
     }
     x = ggml_mul(ctx, x, w.enc_stem.gn_w);
     x = ggml_add(ctx, x, w.enc_stem.gn_b);
@@ -334,8 +326,7 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     const int n_blocks = static_cast<int>(w.enc_blocks.size());
     eb.dumps.block_outs.reserve(static_cast<size_t>(n_blocks));
     for (int i = 0; i < n_blocks; ++i) {
-        x = build_block(ctx, x, eb.pos_ids_in, w.enc_blocks[i], hp,
-                        n_heads, d_model, use_flash);
+        x = build_block(ctx, x, eb.pos_ids_in, w.enc_blocks[i], hp, n_heads, d_model, use_flash);
 
         char bname[64];
         std::snprintf(bname, sizeof(bname), "enc.block.%d.out", i);
@@ -356,8 +347,7 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (eb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine encoder: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -365,4 +355,4 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     return eb;
 }
 
-} // namespace transcribe::moonshine
+}  // namespace transcribe::moonshine

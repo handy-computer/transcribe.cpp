@@ -21,4 +21,4 @@ bool flag(const char * name);
 // setenv/putenv.
 const char * str(const char * name);
 
-} // namespace transcribe::env
+}  // namespace transcribe::env

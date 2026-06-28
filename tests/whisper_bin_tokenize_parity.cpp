@@ -38,17 +38,16 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 bool file_exists(const char * path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path, &st) == 0;
 }
 
@@ -57,10 +56,8 @@ const char * env_or_null(const char * key) {
     return (v != nullptr && v[0] != '\0') ? v : nullptr;
 }
 
-std::vector<int32_t> tokenize(const transcribe_model * model,
-                              const char *             text)
-{
-    int32_t buf[256];
+std::vector<int32_t> tokenize(const transcribe_model * model, const char * text) {
+    int32_t   buf[256];
     const int n = transcribe_tokenize(model, text, buf, 256);
     if (n < 0) {
         return {};
@@ -71,56 +68,48 @@ std::vector<int32_t> tokenize(const transcribe_model * model,
 std::string fmt_ids(const std::vector<int32_t> & v) {
     std::string s = "[";
     for (size_t i = 0; i < v.size(); ++i) {
-        if (i) s += ", ";
+        if (i) {
+            s += ", ";
+        }
         s += std::to_string(v[i]);
     }
     s += "]";
     return s;
 }
 
-void compare(const transcribe_model * gguf,
-             const transcribe_model * bin,
-             const char *             text)
-{
+void compare(const transcribe_model * gguf, const transcribe_model * bin, const char * text) {
     const auto a = tokenize(gguf, text);
-    const auto b = tokenize(bin,  text);
+    const auto b = tokenize(bin, text);
     if (a == b && !a.empty()) {
         return;
     }
-    std::fprintf(stderr,
-                 "FAIL parity for %s\n  gguf: %s\n  bin:  %s\n",
-                 text, fmt_ids(a).c_str(), fmt_ids(b).c_str());
+    std::fprintf(stderr, "FAIL parity for %s\n  gguf: %s\n  bin:  %s\n", text, fmt_ids(a).c_str(), fmt_ids(b).c_str());
     ++g_failures;
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * gguf_path = env_or_null("TRANSCRIBE_WHISPER_GGUF_TINY");
     const char * bin_path  = env_or_null("TRANSCRIBE_WHISPER_BIN_TINY_Q8_0");
-    if (gguf_path == nullptr || bin_path == nullptr ||
-        !file_exists(gguf_path) || !file_exists(bin_path))
-    {
+    if (gguf_path == nullptr || bin_path == nullptr || !file_exists(gguf_path) || !file_exists(bin_path)) {
         std::fprintf(stderr,
                      "SKIP: TRANSCRIBE_WHISPER_GGUF_TINY and "
                      "TRANSCRIBE_WHISPER_BIN_TINY_Q8_0 must both be set\n");
         return 77;
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;
 
     transcribe_model * gguf = nullptr;
-    if (transcribe_model_load_file(gguf_path, &mp, &gguf) != TRANSCRIBE_OK ||
-        gguf == nullptr)
-    {
+    if (transcribe_model_load_file(gguf_path, &mp, &gguf) != TRANSCRIBE_OK || gguf == nullptr) {
         std::fprintf(stderr, "FAIL: could not load GGUF %s\n", gguf_path);
         return 1;
     }
     transcribe_model * bin = nullptr;
-    if (transcribe_model_load_file(bin_path, &mp, &bin) != TRANSCRIBE_OK ||
-        bin == nullptr)
-    {
+    if (transcribe_model_load_file(bin_path, &mp, &bin) != TRANSCRIBE_OK || bin == nullptr) {
         std::fprintf(stderr, "FAIL: could not load .bin %s\n", bin_path);
         transcribe_model_free(gguf);
         return 1;

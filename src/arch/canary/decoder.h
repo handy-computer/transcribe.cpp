@@ -25,9 +25,9 @@ struct DecoderDumps {
     // For canary's per-sublayer dumps: indexed by layer, three slots each.
     // Slot 0 = post self_attn residual, slot 1 = post cross_attn residual,
     // slot 2 = post ffn residual (i.e. block out).
-    ggml_tensor * sub_self [64] = {};
-    ggml_tensor * sub_cross[64] = {};
-    ggml_tensor * sub_ffn  [64] = {};
+    ggml_tensor * sub_self[64]    = {};
+    ggml_tensor * sub_cross[64]   = {};
+    ggml_tensor * sub_ffn[64]     = {};
     ggml_tensor * out_before_head = nullptr;
     ggml_tensor * logits_raw      = nullptr;  // pre-softmax
     ggml_tensor * logits          = nullptr;  // post-softmax (when log_softmax fires)
@@ -41,18 +41,18 @@ struct DecoderBuild {
     ggml_tensor * out        = nullptr;  // logits [vocab, seq]
     ggml_tensor * argmax_out = nullptr;  // [seq] i32 when skip_log_softmax
 
-    DecoderDumps  dumps {};
+    DecoderDumps  dumps{};
     ggml_cgraph * graph = nullptr;
 };
 
 // Build a graph that computes cross-attention K/V for all decoder
 // layers from the encoder output, writing them into the cross-attn
 // KV cache.
-DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
-                                  const CanaryWeights &  w,
-                                  const CanaryHParams &  hp,
-                                  CanaryKvCache &        kv_cache,
-                                  int                    T_enc);
+DecoderBuild build_cross_kv_graph(ggml_context *        ctx,
+                                  const CanaryWeights & w,
+                                  const CanaryHParams & hp,
+                                  CanaryKvCache &       kv_cache,
+                                  int                   T_enc);
 
 // Build a decoder graph that uses the KV cache. Works for both prompt
 // pass (n_tokens > 1, n_past == 0) and step pass (n_tokens == 1).
@@ -60,15 +60,15 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
 // skip_log_softmax: when true, skip the log-softmax tail and add a GPU
 // argmax over the last new-token position (saves a vocab-wide softmax
 // per step). The pre-softmax logits remain available via dumps.logits_raw.
-DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
-                                    const CanaryWeights &  w,
-                                    const CanaryHParams &  hp,
-                                    CanaryKvCache &        kv_cache,
-                                    int                    n_tokens,
-                                    int                    n_past,
-                                    int                    T_enc,
-                                    bool                   skip_log_softmax = false,
-                                    bool                   use_flash        = true);
+DecoderBuild build_decoder_graph_kv(ggml_context *        ctx,
+                                    const CanaryWeights & w,
+                                    const CanaryHParams & hp,
+                                    CanaryKvCache &       kv_cache,
+                                    int                   n_tokens,
+                                    int                   n_past,
+                                    int                   T_enc,
+                                    bool                  skip_log_softmax = false,
+                                    bool                  use_flash        = true);
 
 // Static-topology single-token decoder graph. Built once per utterance
 // after the prompt pass and reused for every step in the autoregressive
@@ -107,12 +107,12 @@ StepBuild build_step_graph(ggml_context *        ctx,
 // (each utterance right-padded); per-layer K/V written to the batched cross
 // cache slab (layer, b). Padded frames produce bias-only K/V discarded by
 // the cross-pad mask at attention time.
-DecoderBuild build_cross_kv_graph_batched(ggml_context *         ctx,
-                                          const CanaryWeights &  w,
-                                          const CanaryHParams &  hp,
-                                          CanaryKvCache &        kv_cache,
-                                          int                    T_enc_max,
-                                          int                    n_batch);
+DecoderBuild build_cross_kv_graph_batched(ggml_context *        ctx,
+                                          const CanaryWeights & w,
+                                          const CanaryHParams & hp,
+                                          CanaryKvCache &       kv_cache,
+                                          int                   T_enc_max,
+                                          int                   n_batch);
 
 // Static-topology batched single-step graph for B utterances, reused for
 // the prompt feed and generation. Self-attn writes self-KV at kv_idx[b] and
@@ -139,4 +139,4 @@ StepBuildBatched build_step_graph_batched(ggml_context *        ctx,
                                           int                   n_batch,
                                           bool                  use_flash = true);
 
-} // namespace transcribe::canary
+}  // namespace transcribe::canary

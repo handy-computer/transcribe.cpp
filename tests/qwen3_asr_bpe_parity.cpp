@@ -22,12 +22,10 @@
 // Gated on the TRANSCRIBE_QWEN3_ASR_0_6B_GGUF env var (same var the
 // structural real-smoke test uses). Unset -> exit 77 (skip).
 
-#include "transcribe.h"
-
+#include "arch/qwen3_asr/qwen3_asr.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
-
-#include "arch/qwen3_asr/qwen3_asr.h"
+#include "transcribe.h"
 
 #include <sys/stat.h>
 
@@ -48,34 +46,29 @@ int g_failures = 0;
 
 // Fixture schema used by the generated .inc file.
 struct Fixture {
-    const char *   text;
-    const int32_t  ids[32];
-    size_t         n_ids;
+    const char *  text;
+    const int32_t ids[32];
+    size_t        n_ids;
 };
 
 #include "fixtures/qwen3_asr_bpe_parity.inc"
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
-void check_ids_equal(const char *                  label,
-                     const char *                  text,
-                     const int32_t *               expected,
-                     size_t                         expected_n,
-                     const std::vector<int32_t> &  actual)
-{
-    if (actual.size() == expected_n &&
-        std::memcmp(actual.data(), expected,
-                    expected_n * sizeof(int32_t)) == 0)
-    {
+void check_ids_equal(const char *                 label,
+                     const char *                 text,
+                     const int32_t *              expected,
+                     size_t                       expected_n,
+                     const std::vector<int32_t> & actual) {
+    if (actual.size() == expected_n && std::memcmp(actual.data(), expected, expected_n * sizeof(int32_t)) == 0) {
         return;
     }
 
     ++g_failures;
-    std::fprintf(stderr, "FAIL[%s] input=\"%s\"\n  expected (%zu):",
-                 label, text, expected_n);
+    std::fprintf(stderr, "FAIL[%s] input=\"%s\"\n  expected (%zu):", label, text, expected_n);
     for (size_t i = 0; i < expected_n; ++i) {
         std::fprintf(stderr, " %d", static_cast<int>(expected[i]));
     }
@@ -86,7 +79,7 @@ void check_ids_equal(const char *                  label,
     std::fprintf(stderr, "\n");
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * env = std::getenv("TRANSCRIBE_QWEN3_ASR_0_6B_GGUF");
@@ -98,26 +91,22 @@ int main() {
     }
     const std::string model_path = env;
     if (!file_exists(model_path)) {
-        std::fprintf(stderr,
-                     "qwen3_asr_bpe_parity: model not found: %s\n",
-                     model_path.c_str());
+        std::fprintf(stderr, "qwen3_asr_bpe_parity: model not found: %s\n", model_path.c_str());
         return 77;
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
-    mp.backend = TRANSCRIBE_BACKEND_CPU;
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    mp.backend                      = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
-    if (transcribe_model_load_file(model_path.c_str(), &mp, &model) !=
-            TRANSCRIBE_OK ||
-        model == nullptr)
-    {
+    if (transcribe_model_load_file(model_path.c_str(), &mp, &model) != TRANSCRIBE_OK || model == nullptr) {
         std::fprintf(stderr, "qwen3_asr_bpe_parity: failed to load model\n");
         return EXIT_FAILURE;
     }
 
-    const auto * base = reinterpret_cast<const transcribe_model *>(model);
-    const auto * qm   = static_cast<const transcribe::qwen3_asr::QwenAsrModel *>(base);
-    const transcribe::Tokenizer & tok = qm->tok;
+    const auto *                  base = reinterpret_cast<const transcribe_model *>(model);
+    const auto *                  qm   = static_cast<const transcribe::qwen3_asr::QwenAsrModel *>(base);
+    const transcribe::Tokenizer & tok  = qm->tok;
 
     if (!tok.has_encoder()) {
         std::fprintf(stderr,
@@ -129,17 +118,14 @@ int main() {
     }
 
     // Section 1: plain-text BPE parity.
-    std::fprintf(stderr,
-                 "qwen3_asr_bpe_parity: %zu plain BPE fixtures\n",
-                 k_bpe_fixtures_n);
+    std::fprintf(stderr, "qwen3_asr_bpe_parity: %zu plain BPE fixtures\n", k_bpe_fixtures_n);
     for (size_t i = 0; i < k_bpe_fixtures_n; ++i) {
-        const auto & f = k_bpe_fixtures[i];
-        std::vector<int32_t> got;
+        const auto &            f = k_bpe_fixtures[i];
+        std::vector<int32_t>    got;
         const transcribe_status st = tok.encode(f.text, got);
         if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr,
-                         "FAIL[bpe] encode returned %s for input \"%s\"\n",
-                         transcribe_status_string(st), f.text);
+            std::fprintf(stderr, "FAIL[bpe] encode returned %s for input \"%s\"\n", transcribe_status_string(st),
+                         f.text);
             ++g_failures;
             continue;
         }
@@ -147,14 +133,11 @@ int main() {
     }
 
     // Section 2: language-prefix parity (encode_language_prefix).
-    std::fprintf(stderr,
-                 "qwen3_asr_bpe_parity: %zu language-prefix fixtures\n",
-                 k_lang_prefix_fixtures_n);
+    std::fprintf(stderr, "qwen3_asr_bpe_parity: %zu language-prefix fixtures\n", k_lang_prefix_fixtures_n);
     for (size_t i = 0; i < k_lang_prefix_fixtures_n; ++i) {
-        const auto & f = k_lang_prefix_fixtures[i];
-        std::vector<int32_t> got;
-        const transcribe_status st =
-            transcribe::qwen3_asr::encode_language_prefix(tok, f.bcp47, got);
+        const auto &            f = k_lang_prefix_fixtures[i];
+        std::vector<int32_t>    got;
+        const transcribe_status st = transcribe::qwen3_asr::encode_language_prefix(tok, f.bcp47, got);
         if (st != TRANSCRIBE_OK) {
             std::fprintf(stderr,
                          "FAIL[lang] encode_language_prefix returned "
@@ -171,8 +154,7 @@ int main() {
     transcribe_model_free(model);
 
     if (g_failures > 0) {
-        std::fprintf(stderr,
-                     "qwen3_asr_bpe_parity: %d failures\n", g_failures);
+        std::fprintf(stderr, "qwen3_asr_bpe_parity: %d failures\n", g_failures);
         return EXIT_FAILURE;
     }
     std::fprintf(stdout, "qwen3_asr_bpe_parity: ok\n");

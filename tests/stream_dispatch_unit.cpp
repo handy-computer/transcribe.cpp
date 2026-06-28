@@ -10,9 +10,9 @@
 // TRANSLATE rejection, language validation) require a real model and
 // are covered by stream_capability_unit.cpp.
 
-#include "transcribe-session.h"
 #include "transcribe-arch.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe.h"
 
 #include <cstddef>
@@ -23,41 +23,40 @@
 
 namespace {
 
-int g_failures = 0;
-int g_begin_calls = 0;
-const char * g_feed_texts[8] = {};
-int g_n_feed_texts = 0;
-int g_feed_text_i = 0;
-const char * g_finalize_text = "";
-const char * g_token_texts[8] = {};
-int g_n_token_rows = 0;
-int g_forced_n_committed_tokens = -1;
-int g_forced_n_committed_words = -1;
-int g_forced_n_committed_segments = -1;
-int64_t g_feed_audio_committed_us = 0;
+int          g_failures                    = 0;
+int          g_begin_calls                 = 0;
+const char * g_feed_texts[8]               = {};
+int          g_n_feed_texts                = 0;
+int          g_feed_text_i                 = 0;
+const char * g_finalize_text               = "";
+const char * g_token_texts[8]              = {};
+int          g_n_token_rows                = 0;
+int          g_forced_n_committed_tokens   = -1;
+int          g_forced_n_committed_words    = -1;
+int          g_forced_n_committed_segments = -1;
+int64_t      g_feed_audio_committed_us     = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 void reset_sequence_globals() {
     for (int i = 0; i < 8; ++i) {
-        g_feed_texts[i] = nullptr;
+        g_feed_texts[i]  = nullptr;
         g_token_texts[i] = nullptr;
     }
-    g_n_feed_texts = 0;
-    g_feed_text_i = 0;
-    g_finalize_text = "";
-    g_n_token_rows = 0;
-    g_forced_n_committed_tokens = -1;
-    g_forced_n_committed_words = -1;
+    g_n_feed_texts                = 0;
+    g_feed_text_i                 = 0;
+    g_finalize_text               = "";
+    g_n_token_rows                = 0;
+    g_forced_n_committed_tokens   = -1;
+    g_forced_n_committed_words    = -1;
     g_forced_n_committed_segments = -1;
-    g_feed_audio_committed_us = 0;
+    g_feed_audio_committed_us     = 0;
 }
 
 void test_accessors_on_null_ctx() {
@@ -80,17 +79,19 @@ void test_accessors_on_idle_ctx() {
 }
 
 void test_default_params() {
-    transcribe_stream_params p; transcribe_stream_params_init(&p);
+    transcribe_stream_params p;
+    transcribe_stream_params_init(&p);
     CHECK(p.family == nullptr);
     CHECK(p.struct_size == sizeof(transcribe_stream_params));
 }
 
 void test_begin_null_args() {
     // session == NULL is still rejected.
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    CHECK(transcribe_stream_begin(nullptr, &rp, &sp) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    CHECK(transcribe_stream_begin(nullptr, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
 
     // NULL run/stream params now mean "all defaults", so they are no
     // longer rejected as INVALID_ARG. With this model-less context the
@@ -98,10 +99,8 @@ void test_begin_null_args() {
     // gate (NOT_IMPLEMENTED); the point under test is that NULL params
     // is accepted, not the downstream gate's exact code.
     transcribe_session session;
-    CHECK(transcribe_stream_begin(&session, nullptr, &sp) !=
-          TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_stream_begin(&session, &rp, nullptr) !=
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) != TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_begin(&session, &rp, nullptr) != TRANSCRIBE_ERR_INVALID_ARG);
 
     // None of these should have moved the context off IDLE.
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
@@ -111,81 +110,72 @@ void test_begin_rejected_when_active() {
     transcribe_session session;
     session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
     // Still ACTIVE — rejection must not clear lifecycle.
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_ACTIVE);
 }
 
 void test_begin_no_model_returns_not_implemented() {
     // session with no model still reaches the model/arch check.
-    transcribe_session session;
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
-          TRANSCRIBE_ERR_NOT_IMPLEMENTED);
+    transcribe_session    session;
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
 }
 
-transcribe_status fake_stream_begin(
-    transcribe_session *              session,
-    const transcribe_run_params *         run_params,
-    const transcribe_stream_params *  stream_params)
-{
-    (void)session;
-    (void)run_params;
-    (void)stream_params;
+transcribe_status fake_stream_begin(transcribe_session *             session,
+                                    const transcribe_run_params *    run_params,
+                                    const transcribe_stream_params * stream_params) {
+    (void) session;
+    (void) run_params;
+    (void) stream_params;
     ++g_begin_calls;
     return TRANSCRIBE_OK;
 }
 
-transcribe_status fake_stream_feed(
-    transcribe_session *     session,
-    const float *            pcm,
-    int                      n_samples,
-    transcribe_stream_update * update)
-{
-    (void)session;
-    (void)pcm;
-    (void)n_samples;
-    (void)update;
+transcribe_status fake_stream_feed(transcribe_session *       session,
+                                   const float *              pcm,
+                                   int                        n_samples,
+                                   transcribe_stream_update * update) {
+    (void) session;
+    (void) pcm;
+    (void) n_samples;
+    (void) update;
     return TRANSCRIBE_OK;
 }
 
-transcribe_status fake_stream_finalize(
-    transcribe_session *      session,
-    transcribe_stream_update * update)
-{
-    (void)session;
-    (void)update;
+transcribe_status fake_stream_finalize(transcribe_session * session, transcribe_stream_update * update) {
+    (void) session;
+    (void) update;
     return TRANSCRIBE_OK;
 }
 
-transcribe_status fake_sequence_stream_begin(
-    transcribe_session *              session,
-    const transcribe_run_params *     run_params,
-    const transcribe_stream_params *  stream_params)
-{
-    (void)session;
-    (void)run_params;
-    (void)stream_params;
+transcribe_status fake_sequence_stream_begin(transcribe_session *             session,
+                                             const transcribe_run_params *    run_params,
+                                             const transcribe_stream_params * stream_params) {
+    (void) session;
+    (void) run_params;
+    (void) stream_params;
     g_feed_text_i = 0;
     return TRANSCRIBE_OK;
 }
 
-transcribe_status fake_sequence_stream_feed(
-    transcribe_session *       session,
-    const float *              pcm,
-    int                        n_samples,
-    transcribe_stream_update * update)
-{
-    (void)pcm;
-    (void)n_samples;
-    (void)update;
+transcribe_status fake_sequence_stream_feed(transcribe_session *       session,
+                                            const float *              pcm,
+                                            int                        n_samples,
+                                            transcribe_stream_update * update) {
+    (void) pcm;
+    (void) n_samples;
+    (void) update;
     if (g_feed_text_i < g_n_feed_texts) {
-        session->full_text = g_feed_texts[g_feed_text_i++];
+        session->full_text  = g_feed_texts[g_feed_text_i++];
         session->has_result = true;
         if (g_n_token_rows > 0) {
             session->tokens.clear();
@@ -212,24 +202,17 @@ transcribe_status fake_sequence_stream_feed(
     return TRANSCRIBE_OK;
 }
 
-transcribe_status fake_sequence_stream_finalize(
-    transcribe_session *       session,
-    transcribe_stream_update * update)
-{
-    (void)update;
-    session->full_text = g_finalize_text != nullptr ? g_finalize_text : "";
+transcribe_status fake_sequence_stream_finalize(transcribe_session * session, transcribe_stream_update * update) {
+    (void) update;
+    session->full_text  = g_finalize_text != nullptr ? g_finalize_text : "";
     session->has_result = true;
     return TRANSCRIBE_OK;
 }
 
-bool fake_accepts_no_ext(
-    const transcribe_model * model,
-    transcribe_ext_slot      slot,
-    uint32_t                 kind)
-{
-    (void)model;
-    (void)slot;
-    (void)kind;
+bool fake_accepts_no_ext(const transcribe_model * model, transcribe_ext_slot slot, uint32_t kind) {
+    (void) model;
+    (void) slot;
+    (void) kind;
     return false;
 }
 
@@ -238,14 +221,12 @@ int g_validate_calls = 0;
 // stream_validate that always rejects, modeling a family preflight that
 // found a bad extension value. Must run BEFORE the dispatcher clears the
 // snapshot; must NOT lead to stream_begin being called.
-transcribe_status fake_stream_validate_reject(
-    const transcribe_session *        session,
-    const transcribe_run_params *     run_params,
-    const transcribe_stream_params *  stream_params)
-{
-    (void)session;
-    (void)run_params;
-    (void)stream_params;
+transcribe_status fake_stream_validate_reject(const transcribe_session *       session,
+                                              const transcribe_run_params *    run_params,
+                                              const transcribe_stream_params * stream_params) {
+    (void) session;
+    (void) run_params;
+    (void) stream_params;
     ++g_validate_calls;
     return TRANSCRIBE_ERR_INVALID_ARG;
 }
@@ -257,7 +238,7 @@ void test_begin_rejects_unknown_ext_kind_before_hook() {
         nullptr,
         nullptr,
         nullptr,  // run_batch
-        nullptr,                  // stream_validate
+        nullptr,  // stream_validate
         fake_stream_begin,
         fake_stream_feed,
         fake_stream_finalize,
@@ -266,23 +247,24 @@ void test_begin_rejects_unknown_ext_kind_before_hook() {
     };
 
     transcribe_model model;
-    model.arch = &arch;
+    model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
     transcribe_session session;
-    session.model        = &model;
-    session.has_result   = true;
-    session.full_text    = "previous result";
+    session.model      = &model;
+    session.has_result = true;
+    session.full_text  = "previous result";
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     const transcribe_ext ext = { sizeof(transcribe_ext), 0x58585858u };
-    sp.family = &ext;
+    sp.family                = &ext;
 
     g_begin_calls = 0;
-    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(g_begin_calls == 0);
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
     CHECK(session.has_result);
@@ -296,7 +278,7 @@ void test_begin_rejects_tiny_ext_before_hook() {
         nullptr,
         nullptr,
         nullptr,  // run_batch
-        nullptr,                  // stream_validate
+        nullptr,  // stream_validate
         fake_stream_begin,
         fake_stream_feed,
         fake_stream_finalize,
@@ -305,7 +287,7 @@ void test_begin_rejects_tiny_ext_before_hook() {
     };
 
     transcribe_model model;
-    model.arch = &arch;
+    model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
@@ -314,14 +296,15 @@ void test_begin_rejects_tiny_ext_before_hook() {
     session.has_result = true;
     session.full_text  = "previous result";
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     transcribe_ext ext = { 0, 0 };
-    sp.family = &ext;
+    sp.family          = &ext;
 
     g_begin_calls = 0;
-    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
-          TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     CHECK(g_begin_calls == 0);
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
     CHECK(session.has_result);
@@ -351,7 +334,7 @@ void test_begin_family_preflight_reject_preserves_snapshot() {
     };
 
     transcribe_model model;
-    model.arch = &arch;
+    model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
@@ -365,19 +348,20 @@ void test_begin_family_preflight_reject_preserves_snapshot() {
     session.model              = &model;
     session.has_result         = true;
     session.full_text          = "previous result";
-    session.stream_state       = TRANSCRIBE_STREAM_FAILED;     // a prior failed stream
-    session.stream_last_status = TRANSCRIBE_ERR_BACKEND;       // its failing status
+    session.stream_state       = TRANSCRIBE_STREAM_FAILED;  // a prior failed stream
+    session.stream_last_status = TRANSCRIBE_ERR_BACKEND;    // its failing status
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
 
     g_validate_calls = 0;
     g_begin_calls    = 0;
-    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
     // Preflight ran, begin did not.
     CHECK(g_validate_calls == 1);
-    CHECK(g_begin_calls    == 0);
+    CHECK(g_begin_calls == 0);
     // Snapshot preserved, lifecycle untouched (NOT cleared, NOT moved).
     CHECK(session.has_result);
     CHECK(session.full_text == "previous result");
@@ -389,60 +373,53 @@ void test_begin_family_preflight_reject_preserves_snapshot() {
 }
 
 void test_feed_rejects_idle() {
-    transcribe_session session;
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
-    upd.result_changed = true; // dirty sentinel — must be zeroed
-    upd.is_final       = true;
-    upd.revision       = 42;
+    transcribe_session       session;
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
+    upd.result_changed    = true;  // dirty sentinel — must be zeroed
+    upd.is_final          = true;
+    upd.revision          = 42;
     upd.input_received_ms = 999;
 
-    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_ERR_INVALID_ARG);
     // Dispatcher zero-inits update before the state check returns,
     // preserving the caller's struct_size.
-    CHECK(upd.struct_size       == sizeof(transcribe_stream_update));
-    CHECK(upd.result_changed    == false);
-    CHECK(upd.is_final          == false);
-    CHECK(upd.revision          == 0);
+    CHECK(upd.struct_size == sizeof(transcribe_stream_update));
+    CHECK(upd.result_changed == false);
+    CHECK(upd.is_final == false);
+    CHECK(upd.revision == 0);
     CHECK(upd.input_received_ms == 0);
 }
 
 void test_feed_rejects_finished_and_failed() {
     transcribe_session session;
-    float pcm = 0.0f;
+    float              pcm = 0.0f;
 
     session.stream_state = TRANSCRIBE_STREAM_FINISHED;
-    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(session.stream_state == TRANSCRIBE_STREAM_FINISHED);
 
     session.stream_state = TRANSCRIBE_STREAM_FAILED;
-    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(session.stream_state == TRANSCRIBE_STREAM_FAILED);
 }
 
 void test_feed_rejects_null_ctx_and_bad_input() {
     float pcm = 0.0f;
-    CHECK(transcribe_stream_feed(nullptr, &pcm, 1, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(nullptr, &pcm, 1, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
 
     transcribe_session session;
     session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
 
     // Negative n_samples
-    CHECK(transcribe_stream_feed(&session, &pcm, -1, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, &pcm, -1, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
     // Zero n_samples — polling without audio goes through the
     // accessors, not feed.
-    CHECK(transcribe_stream_feed(&session, &pcm, 0, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, &pcm, 0, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
     // pcm NULL is rejected unconditionally, regardless of n_samples.
-    CHECK(transcribe_stream_feed(&session, nullptr, 16000, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_stream_feed(&session, nullptr, 0, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, nullptr, 16000, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, nullptr, 0, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
 
     // The ACTIVE state survives every malformed-input rejection
     // because the dispatcher returns before the family hook runs.
@@ -452,37 +429,33 @@ void test_feed_rejects_null_ctx_and_bad_input() {
 void test_feed_active_no_hook_returns_not_implemented() {
     transcribe_session session;
     session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
-    float pcm = 0.0f;
+    float pcm            = 0.0f;
     // No model → defensive NOT_IMPLEMENTED branch.
-    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
-          TRANSCRIBE_ERR_NOT_IMPLEMENTED);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
 }
 
 void test_finalize_rejects_non_active() {
     transcribe_session session;
 
     // IDLE
-    CHECK(transcribe_stream_finalize(&session, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_finalize(&session, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
 
     session.stream_state = TRANSCRIBE_STREAM_FINISHED;
-    CHECK(transcribe_stream_finalize(&session, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_finalize(&session, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
 
     session.stream_state = TRANSCRIBE_STREAM_FAILED;
-    CHECK(transcribe_stream_finalize(&session, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_finalize(&session, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
 
-    CHECK(transcribe_stream_finalize(nullptr, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_finalize(nullptr, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
 }
 
 void test_finalize_update_zeroinit() {
-    transcribe_session session;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
-    upd.result_changed   = true;
-    upd.is_final         = false; // will be cleared then forced true on success path
-    upd.revision         = 99;
+    transcribe_session       session;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
+    upd.result_changed     = true;
+    upd.is_final           = false;  // will be cleared then forced true on success path
+    upd.revision           = 99;
     upd.audio_committed_ms = 7;
 
     // No model + ACTIVE → returns NOT_IMPLEMENTED, but the dispatcher
@@ -491,12 +464,11 @@ void test_finalize_update_zeroinit() {
     // doesn't happen here — verify the early-return path leaves
     // update fully zeroed and preserves the caller's struct_size).
     session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
-    CHECK(transcribe_stream_finalize(&session, &upd) ==
-          TRANSCRIBE_ERR_NOT_IMPLEMENTED);
-    CHECK(upd.struct_size        == sizeof(transcribe_stream_update));
-    CHECK(upd.result_changed     == false);
-    CHECK(upd.is_final           == false);
-    CHECK(upd.revision           == 0);
+    CHECK(transcribe_stream_finalize(&session, &upd) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
+    CHECK(upd.struct_size == sizeof(transcribe_stream_update));
+    CHECK(upd.result_changed == false);
+    CHECK(upd.is_final == false);
+    CHECK(upd.revision == 0);
     CHECK(upd.audio_committed_ms == 0);
 }
 
@@ -510,20 +482,20 @@ void test_reset_from_each_state() {
     // FINISHED: clears result + counters, returns to IDLE.
     {
         transcribe_session session;
-        session.stream_state         = TRANSCRIBE_STREAM_FINISHED;
-        session.has_result           = true;
-        session.full_text            = "stale";
-        session.stream_revision      = 7;
-        session.n_committed_tokens   = 5;
-        session.stream_last_status   = TRANSCRIBE_ERR_OOM;
+        session.stream_state          = TRANSCRIBE_STREAM_FINISHED;
+        session.has_result            = true;
+        session.full_text             = "stale";
+        session.stream_revision       = 7;
+        session.n_committed_tokens    = 5;
+        session.stream_last_status    = TRANSCRIBE_ERR_OOM;
         session.stream_audio_input_us = 12345;
         transcribe_stream_reset(&session);
-        CHECK(session.stream_state          == TRANSCRIBE_STREAM_IDLE);
-        CHECK(session.has_result            == false);
+        CHECK(session.stream_state == TRANSCRIBE_STREAM_IDLE);
+        CHECK(session.has_result == false);
         CHECK(session.full_text.empty());
-        CHECK(session.stream_revision       == 0);
-        CHECK(session.n_committed_tokens    == 0);
-        CHECK(session.stream_last_status    == TRANSCRIBE_OK);
+        CHECK(session.stream_revision == 0);
+        CHECK(session.n_committed_tokens == 0);
+        CHECK(session.stream_last_status == TRANSCRIBE_OK);
         CHECK(session.stream_audio_input_us == 0);
     }
     // FAILED: same as FINISHED — clear everything, back to IDLE.
@@ -534,10 +506,10 @@ void test_reset_from_each_state() {
         session.was_aborted          = true;
         session.n_committed_segments = 3;
         transcribe_stream_reset(&session);
-        CHECK(session.stream_state          == TRANSCRIBE_STREAM_IDLE);
-        CHECK(session.stream_last_status    == TRANSCRIBE_OK);
-        CHECK(session.was_aborted           == false);
-        CHECK(session.n_committed_segments  == 0);
+        CHECK(session.stream_state == TRANSCRIBE_STREAM_IDLE);
+        CHECK(session.stream_last_status == TRANSCRIBE_OK);
+        CHECK(session.was_aborted == false);
+        CHECK(session.n_committed_segments == 0);
     }
     // NULL session — no-op.
     transcribe_stream_reset(nullptr);
@@ -549,9 +521,10 @@ void test_run_rejected_while_active() {
     session.has_result   = true;
     session.full_text    = "active stream result";
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    float pcm = 0.0f;
-    const transcribe_status st = transcribe_run(&session, &pcm, 1, &rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    float                   pcm = 0.0f;
+    const transcribe_status st  = transcribe_run(&session, &pcm, 1, &rp);
     CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
     // Rejection must NOT clear the active stream's result snapshot.
     CHECK(session.has_result);
@@ -561,27 +534,28 @@ void test_run_rejected_while_active() {
 
 void test_run_clears_stream_snapshot_from_finished() {
     transcribe_session session;
-    session.stream_state         = TRANSCRIBE_STREAM_FINISHED;
-    session.stream_revision      = 12;
-    session.n_committed_tokens   = 4;
-    session.stream_last_status   = TRANSCRIBE_ERR_BACKEND;
+    session.stream_state          = TRANSCRIBE_STREAM_FINISHED;
+    session.stream_revision       = 12;
+    session.n_committed_tokens    = 4;
+    session.stream_last_status    = TRANSCRIBE_ERR_BACKEND;
     session.stream_audio_input_us = 55555;
-    session.has_result           = true;
-    session.full_text            = "old run text";
+    session.has_result            = true;
+    session.full_text             = "old run text";
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    float pcm = 0.0f;
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    float                   pcm = 0.0f;
     // No model → NOT_IMPLEMENTED, but clear_result + state reset must
     // have already run by the time we get here.
-    const transcribe_status st = transcribe_run(&session, &pcm, 1, &rp);
+    const transcribe_status st  = transcribe_run(&session, &pcm, 1, &rp);
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
-    CHECK(session.has_result          == false);
+    CHECK(session.has_result == false);
     CHECK(session.full_text.empty());
-    CHECK(session.stream_revision     == 0);
-    CHECK(session.n_committed_tokens  == 0);
-    CHECK(session.stream_last_status  == TRANSCRIBE_OK);
+    CHECK(session.stream_revision == 0);
+    CHECK(session.n_committed_tokens == 0);
+    CHECK(session.stream_last_status == TRANSCRIBE_OK);
     CHECK(session.stream_audio_input_us == 0);
-    CHECK(session.stream_state        == TRANSCRIBE_STREAM_IDLE);
+    CHECK(session.stream_state == TRANSCRIBE_STREAM_IDLE);
 }
 
 void test_clear_result_preserves_lifecycle() {
@@ -590,18 +564,18 @@ void test_clear_result_preserves_lifecycle() {
     // lifecycle. Verify directly so a future refactor doesn't silently
     // tangle the two.
     transcribe_session session;
-    session.stream_state       = TRANSCRIBE_STREAM_ACTIVE;
-    session.stream_revision    = 9;
-    session.n_committed_words  = 2;
-    session.has_result         = true;
-    session.full_text          = "snapshot";
+    session.stream_state      = TRANSCRIBE_STREAM_ACTIVE;
+    session.stream_revision   = 9;
+    session.n_committed_words = 2;
+    session.has_result        = true;
+    session.full_text         = "snapshot";
 
     session.clear_result();
-    CHECK(session.stream_state         == TRANSCRIBE_STREAM_ACTIVE);
-    CHECK(session.has_result           == false);
+    CHECK(session.stream_state == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(session.has_result == false);
     CHECK(session.full_text.empty());
-    CHECK(session.stream_revision      == 0);
-    CHECK(session.n_committed_words    == 0);
+    CHECK(session.stream_revision == 0);
+    CHECK(session.n_committed_words == 0);
 }
 
 void test_last_status_survives_reads() {
@@ -621,7 +595,7 @@ const transcribe::Arch & sequence_arch() {
         nullptr,
         nullptr,
         nullptr,
-        nullptr,                  // run_batch
+        nullptr,  // run_batch
         nullptr,
         fake_sequence_stream_begin,
         fake_sequence_stream_feed,
@@ -638,7 +612,7 @@ const transcribe::Arch & sequence_arch_named_parakeet() {
         nullptr,
         nullptr,
         nullptr,
-        nullptr,                  // run_batch
+        nullptr,  // run_batch
         nullptr,
         fake_sequence_stream_begin,
         fake_sequence_stream_feed,
@@ -655,7 +629,7 @@ const transcribe::Arch & sequence_arch_named_moonshine_streaming() {
         nullptr,
         nullptr,
         nullptr,
-        nullptr,                  // run_batch
+        nullptr,  // run_batch
         nullptr,
         fake_sequence_stream_begin,
         fake_sequence_stream_feed,
@@ -668,7 +642,7 @@ const transcribe::Arch & sequence_arch_named_moonshine_streaming() {
 
 void init_streaming_model(transcribe_model & model) {
     reset_sequence_globals();
-    model.arch = &sequence_arch();
+    model.arch                    = &sequence_arch();
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 }
@@ -679,17 +653,19 @@ void test_stream_text_on_finalize_policy() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "hello wor";
-    g_n_feed_texts = 1;
-    g_finalize_text = "hello world";
+    g_feed_texts[0]           = "hello wor";
+    g_n_feed_texts            = 1;
+    g_finalize_text           = "hello world";
     g_feed_audio_committed_us = 123000;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     CHECK(upd.result_changed);
     CHECK(!upd.committed_changed);
@@ -697,13 +673,15 @@ void test_stream_text_on_finalize_policy() {
     CHECK(upd.audio_committed_ms == 0);
     CHECK(transcribe_stream_n_committed_tokens(&session) == 0);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.full_text, "hello wor") == 0);
     CHECK(std::strcmp(text.committed_text, "") == 0);
     CHECK(std::strcmp(text.tentative_text, "hello wor") == 0);
 
-    transcribe_stream_update fin; transcribe_stream_update_init(&fin);
+    transcribe_stream_update fin;
+    transcribe_stream_update_init(&fin);
     CHECK(transcribe_stream_finalize(&session, &fin) == TRANSCRIBE_OK);
     CHECK(fin.is_final);
     CHECK(fin.result_changed);
@@ -723,19 +701,21 @@ void test_stream_auto_known_family_uses_family_stable_prefix() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "family stable";
-    g_n_feed_texts = 1;
-    g_n_token_rows = 1;
-    g_token_texts[0] = "family stable";
+    g_feed_texts[0]             = "family stable";
+    g_n_feed_texts              = 1;
+    g_n_token_rows              = 1;
+    g_token_texts[0]            = "family stable";
     g_forced_n_committed_tokens = 1;
 
     CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.committed_text, "family stable") == 0);
     CHECK(std::strcmp(text.tentative_text, "") == 0);
@@ -747,21 +727,23 @@ void test_stream_auto_unknown_family_falls_back_to_generic_stable_prefix() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "generic stable";
-    g_feed_texts[1] = "generic stable";
-    g_feed_texts[2] = "generic stable";
-    g_n_feed_texts = 3;
-    g_n_token_rows = 1;
-    g_token_texts[0] = "generic stable";
+    g_feed_texts[0]             = "generic stable";
+    g_feed_texts[1]             = "generic stable";
+    g_feed_texts[2]             = "generic stable";
+    g_n_feed_texts              = 3;
+    g_n_token_rows              = 1;
+    g_token_texts[0]            = "generic stable";
     g_forced_n_committed_tokens = 1;
 
     CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.committed_text, "") == 0);
     CHECK(std::strcmp(text.tentative_text, "generic stable") == 0);
@@ -792,23 +774,26 @@ void test_stream_stable_prefix_known_family_uses_family_boundary() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "token stable";
-    g_n_feed_texts = 1;
-    g_n_token_rows = 1;
-    g_token_texts[0] = "token stable";
+    g_feed_texts[0]             = "token stable";
+    g_n_feed_texts              = 1;
+    g_n_token_rows              = 1;
+    g_token_texts[0]            = "token stable";
     g_forced_n_committed_tokens = 1;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    sp.commit_policy             = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
     sp.stable_prefix_agreement_n = 3;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     CHECK(upd.committed_changed);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.committed_text, "token stable") == 0);
     CHECK(std::strcmp(text.tentative_text, "") == 0);
@@ -821,20 +806,22 @@ void test_stream_family_token_prefix_maps_trimmed_leading_space() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "And";
-    g_n_feed_texts = 1;
-    g_n_token_rows = 1;
-    g_token_texts[0] = " And";
+    g_feed_texts[0]             = "And";
+    g_n_feed_texts              = 1;
+    g_n_token_rows              = 1;
+    g_token_texts[0]            = " And";
     g_forced_n_committed_tokens = 1;
 
     CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     CHECK(upd.committed_changed);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.full_text, "And") == 0);
     CHECK(std::strcmp(text.committed_text, "And") == 0);
@@ -847,22 +834,25 @@ void test_stream_text_stable_prefix_does_not_rewrite_committed() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "hello wor";
-    g_feed_texts[1] = "hello world";
-    g_feed_texts[2] = "hullo world!";
-    g_n_feed_texts = 3;
-    g_finalize_text = "hullo world!!";
+    g_feed_texts[0]           = "hello wor";
+    g_feed_texts[1]           = "hello world";
+    g_feed_texts[2]           = "hullo world!";
+    g_n_feed_texts            = 3;
+    g_finalize_text           = "hullo world!!";
     g_feed_audio_committed_us = 0;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    sp.commit_policy             = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
     sp.stable_prefix_agreement_n = 2;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.committed_text, "") == 0);
     CHECK(std::strcmp(text.tentative_text, "hello wor") == 0);
@@ -886,7 +876,8 @@ void test_stream_text_stable_prefix_does_not_rewrite_committed() {
     CHECK(std::strcmp(text.committed_text, "hello wor") == 0);
     CHECK(std::strcmp(text.tentative_text, "ld!") == 0);
 
-    transcribe_stream_update fin; transcribe_stream_update_init(&fin);
+    transcribe_stream_update fin;
+    transcribe_stream_update_init(&fin);
     CHECK(transcribe_stream_finalize(&session, &fin) == TRANSCRIBE_OK);
     CHECK(!fin.committed_changed);
     CHECK(fin.tentative_changed);
@@ -908,21 +899,24 @@ void test_stream_text_clamps_raw_tentative_offset_after_shrink() {
     g_feed_texts[0] = "hello wor";
     g_feed_texts[1] = "hello world";
     g_feed_texts[2] = "hi";
-    g_n_feed_texts = 3;
+    g_n_feed_texts  = 3;
     g_finalize_text = "hi";
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    sp.commit_policy             = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
     sp.stable_prefix_agreement_n = 2;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.committed_text, "hello wor") == 0);
 
@@ -944,18 +938,19 @@ void test_stream_committed_row_hints_can_exceed_current_rows() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "abc";
-    g_n_feed_texts = 1;
-    g_n_token_rows = 1;
-    g_token_texts[0] = "abc";
-    g_forced_n_committed_tokens = 7;
-    g_forced_n_committed_words = 3;
+    g_feed_texts[0]               = "abc";
+    g_n_feed_texts                = 1;
+    g_n_token_rows                = 1;
+    g_token_texts[0]              = "abc";
+    g_forced_n_committed_tokens   = 7;
+    g_forced_n_committed_words    = 3;
     g_forced_n_committed_segments = 2;
 
     CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     CHECK(transcribe_n_tokens(&session) == 1);
     CHECK(transcribe_stream_n_committed_tokens(&session) == 7);
@@ -969,28 +964,31 @@ void test_stream_text_stable_prefix_floors_utf8_boundary() {
     transcribe_session session;
     session.model = &model;
 
-    static const char cafe_acute[] = "caf\303\251"; // cafe + U+00E9
-    static const char cafe_circ[]  = "caf\303\252"; // cafe + U+00EA
-    g_feed_texts[0] = cafe_acute;
-    g_feed_texts[1] = cafe_circ;
-    g_n_feed_texts = 2;
-    g_finalize_text = cafe_circ;
-    g_feed_audio_committed_us = 0;
+    static const char cafe_acute[] = "caf\303\251";  // cafe + U+00E9
+    static const char cafe_circ[]  = "caf\303\252";  // cafe + U+00EA
+    g_feed_texts[0]                = cafe_acute;
+    g_feed_texts[1]                = cafe_circ;
+    g_n_feed_texts                 = 2;
+    g_finalize_text                = cafe_circ;
+    g_feed_audio_committed_us      = 0;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    sp.commit_policy             = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
     sp.stable_prefix_agreement_n = 2;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
 
     transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     CHECK(upd.committed_changed);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.full_text, cafe_circ) == 0);
     CHECK(std::strcmp(text.committed_text, "caf") == 0);
@@ -1008,21 +1006,24 @@ void test_stream_text_stable_prefix_respects_agreement_n() {
     g_feed_texts[0] = "agree now";
     g_feed_texts[1] = "agree now";
     g_feed_texts[2] = "agree now";
-    g_n_feed_texts = 3;
+    g_n_feed_texts  = 3;
     g_finalize_text = "agree now";
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    sp.commit_policy             = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
     sp.stable_prefix_agreement_n = 3;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.committed_text, "") == 0);
     CHECK(std::strcmp(text.tentative_text, "agree now") == 0);
@@ -1043,10 +1044,10 @@ void test_old_stream_params_ignores_new_tail_fields() {
     transcribe_session session;
     session.model = &model;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    sp.struct_size = offsetof(transcribe_stream_params, commit_policy);
-    sp.commit_policy =
-        static_cast<transcribe_stream_commit_policy>(99);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    sp.struct_size               = offsetof(transcribe_stream_params, commit_policy);
+    sp.commit_policy             = static_cast<transcribe_stream_commit_policy>(99);
     sp.stable_prefix_agreement_n = 99;
 
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
@@ -1060,24 +1061,27 @@ void test_stream_text_stable_prefix_intentionally_commits_partial_words() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "turn le";
-    g_feed_texts[1] = "turn left";
-    g_n_feed_texts = 2;
-    g_finalize_text = "turn left";
+    g_feed_texts[0]           = "turn le";
+    g_feed_texts[1]           = "turn left";
+    g_n_feed_texts            = 2;
+    g_finalize_text           = "turn left";
     g_feed_audio_committed_us = 0;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+    sp.commit_policy             = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
     sp.stable_prefix_agreement_n = 2;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
     transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
 
-    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
     CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
     CHECK(std::strcmp(text.committed_text, "turn le") == 0);
     CHECK(std::strcmp(text.tentative_text, "ft") == 0);
@@ -1089,17 +1093,19 @@ void test_stream_update_old_prefix_tail_untouched() {
     transcribe_session session;
     session.model = &model;
 
-    g_feed_texts[0] = "old prefix";
-    g_n_feed_texts = 1;
-    g_finalize_text = "old prefix";
+    g_feed_texts[0]           = "old prefix";
+    g_n_feed_texts            = 1;
+    g_finalize_text           = "old prefix";
     g_feed_audio_committed_us = 0;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE;
     CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
 
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
-    upd.struct_size = offsetof(transcribe_stream_update, committed_changed);
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
+    upd.struct_size       = offsetof(transcribe_stream_update, committed_changed);
     upd.committed_changed = true;
     upd.tentative_changed = false;
 
@@ -1114,21 +1120,21 @@ void test_stream_update_old_prefix_tail_untouched() {
 void test_begin_rejects_bad_commit_params_before_clear() {
     transcribe_session session;
     session.has_result = true;
-    session.full_text = "previous";
+    session.full_text  = "previous";
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     sp.commit_policy = static_cast<transcribe_stream_commit_policy>(99);
-    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(session.has_result);
     CHECK(session.full_text == "previous");
 
     transcribe_stream_params_init(&sp);
     sp.stable_prefix_agreement_n = 33;
-    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(session.has_result);
     CHECK(session.full_text == "previous");
 }
@@ -1145,7 +1151,7 @@ void test_begin_rejects_bad_commit_params_before_clear() {
 bool g_abort_flag = false;
 
 bool abort_cb_returns_flag(void * userdata) {
-    (void)userdata;
+    (void) userdata;
     return g_abort_flag;
 }
 
@@ -1153,41 +1159,34 @@ bool abort_cb_returns_flag(void * userdata) {
 // some output before hitting a terminal error mid-feed. The partial
 // snapshot must remain readable (the dispatcher does not clear it on the
 // failure path).
-transcribe_status fake_failing_stream_feed(
-    transcribe_session *       session,
-    const float *              pcm,
-    int                        n_samples,
-    transcribe_stream_update * update)
-{
-    (void)pcm;
-    (void)n_samples;
-    (void)update;
+transcribe_status fake_failing_stream_feed(transcribe_session *       session,
+                                           const float *              pcm,
+                                           int                        n_samples,
+                                           transcribe_stream_update * update) {
+    (void) pcm;
+    (void) n_samples;
+    (void) update;
     session->full_text  = "partial before failure";
     session->has_result = true;
     return TRANSCRIBE_ERR_BACKEND;
 }
 
-transcribe_status fake_failing_stream_finalize(
-    transcribe_session *       session,
-    transcribe_stream_update * update)
-{
-    (void)session;
-    (void)update;
+transcribe_status fake_failing_stream_finalize(transcribe_session * session, transcribe_stream_update * update) {
+    (void) session;
+    (void) update;
     return TRANSCRIBE_ERR_BACKEND;
 }
 
 // Polls the session abort callback the way a real family hook must. When
 // the callback fires, poll_abort() sets session->was_aborted and we
 // return the terminal ABORTED status; otherwise the feed succeeds.
-transcribe_status fake_aborting_stream_feed(
-    transcribe_session *       session,
-    const float *              pcm,
-    int                        n_samples,
-    transcribe_stream_update * update)
-{
-    (void)pcm;
-    (void)n_samples;
-    (void)update;
+transcribe_status fake_aborting_stream_feed(transcribe_session *       session,
+                                            const float *              pcm,
+                                            int                        n_samples,
+                                            transcribe_stream_update * update) {
+    (void) pcm;
+    (void) n_samples;
+    (void) update;
     if (session->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
@@ -1202,9 +1201,9 @@ const transcribe::Arch & failing_arch() {
         nullptr,
         nullptr,
         nullptr,
-        nullptr,                     // run_batch
+        nullptr,            // run_batch
         nullptr,
-        fake_stream_begin,           // begin succeeds -> ACTIVE
+        fake_stream_begin,  // begin succeeds -> ACTIVE
         fake_failing_stream_feed,
         fake_failing_stream_finalize,
         nullptr,
@@ -1219,7 +1218,7 @@ const transcribe::Arch & aborting_arch() {
         nullptr,
         nullptr,
         nullptr,
-        nullptr,                  // run_batch
+        nullptr,  // run_batch
         nullptr,
         fake_stream_begin,
         fake_aborting_stream_feed,
@@ -1231,7 +1230,7 @@ const transcribe::Arch & aborting_arch() {
 }
 
 void setup_streaming_model(transcribe_model & model, const transcribe::Arch & arch) {
-    model.arch = &arch;
+    model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 }
@@ -1245,8 +1244,9 @@ void test_feed_failure_transitions_to_failed() {
     CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_ACTIVE);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_ERR_BACKEND);
 
     // ACTIVE -> FAILED, terminal status preserved, partial result readable.
@@ -1261,8 +1261,7 @@ void test_feed_failure_transitions_to_failed() {
 
     // A FAILED stream rejects further feeds and the terminal status survives
     // the rejected call.
-    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
-          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_FAILED);
     CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_BACKEND);
 
@@ -1281,7 +1280,8 @@ void test_finalize_failure_transitions_to_failed() {
     // Begin only (no feed — failing_arch's feed would fail first); finalize
     // an ACTIVE stream and let the family hook fail.
     CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
     CHECK(transcribe_stream_finalize(&session, &upd) == TRANSCRIBE_ERR_BACKEND);
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_FAILED);
     CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_BACKEND);
@@ -1300,8 +1300,9 @@ void test_feed_abort_sets_was_aborted() {
 
     CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
 
     // First feed: callback says "don't abort" -> succeeds, not aborted.
     g_abort_flag = false;
@@ -1343,8 +1344,9 @@ void test_two_sessions_independent_streams() {
     transcribe_set_abort_callback(&b, abort_cb_returns_flag, nullptr);
     g_abort_flag = false;
 
-    float pcm = 0.0f;
-    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
 
     // A enters ACTIVE; B is untouched.
     CHECK(transcribe_stream_begin(&a, nullptr, nullptr) == TRANSCRIBE_OK);
@@ -1391,32 +1393,27 @@ void test_two_sessions_independent_streams() {
 // (ASan: heap-use-after-free; plain build: the scribbled bytes); with it the
 // feed must see the original string.
 
-transcribe_run_params g_retained_rp;        // the family-side shallow copy
+transcribe_run_params g_retained_rp;  // the family-side shallow copy
 std::string           g_language_seen_at_feed;
 
-transcribe_status retain_stream_begin(
-    transcribe_session *              session,
-    const transcribe_run_params *     run_params,
-    const transcribe_stream_params *  stream_params)
-{
-    (void)session;
-    (void)stream_params;
+transcribe_status retain_stream_begin(transcribe_session *             session,
+                                      const transcribe_run_params *    run_params,
+                                      const transcribe_stream_params * stream_params) {
+    (void) session;
+    (void) stream_params;
     g_retained_rp = *run_params;  // exactly what parakeet/moonshine do
     return TRANSCRIBE_OK;
 }
 
-transcribe_status retain_stream_feed(
-    transcribe_session *       session,
-    const float *              pcm,
-    int                        n_samples,
-    transcribe_stream_update * update)
-{
-    (void)session;
-    (void)pcm;
-    (void)n_samples;
-    (void)update;
-    g_language_seen_at_feed =
-        g_retained_rp.language != nullptr ? g_retained_rp.language : "<null>";
+transcribe_status retain_stream_feed(transcribe_session *       session,
+                                     const float *              pcm,
+                                     int                        n_samples,
+                                     transcribe_stream_update * update) {
+    (void) session;
+    (void) pcm;
+    (void) n_samples;
+    (void) update;
+    g_language_seen_at_feed = g_retained_rp.language != nullptr ? g_retained_rp.language : "<null>";
     return TRANSCRIBE_OK;
 }
 
@@ -1427,7 +1424,7 @@ void test_begin_copies_param_strings_out() {
         nullptr,
         nullptr,
         nullptr,  // run_batch
-        nullptr,                  // stream_validate
+        nullptr,  // stream_validate
         retain_stream_begin,
         retain_stream_feed,
         fake_stream_finalize,
@@ -1436,7 +1433,7 @@ void test_begin_copies_param_strings_out() {
     };
 
     transcribe_model model;
-    model.arch = &arch;
+    model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
@@ -1446,14 +1443,14 @@ void test_begin_copies_param_strings_out() {
     // FFI-shaped caller: the params struct and its language string live on
     // the heap and are destroyed the moment begin returns (a ctypes binding
     // garbage-collects them exactly like this).
-    auto * rp = static_cast<transcribe_run_params *>(
-        std::malloc(sizeof(transcribe_run_params)));
+    auto * rp = static_cast<transcribe_run_params *>(std::malloc(sizeof(transcribe_run_params)));
     transcribe_run_params_init(rp);
     char * lang = static_cast<char *>(std::malloc(16));
     std::snprintf(lang, 16, "en-US");
     rp->language = lang;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     g_language_seen_at_feed.clear();
     CHECK(transcribe_stream_begin(&session, rp, &sp) == TRANSCRIBE_OK);
 
@@ -1464,7 +1461,8 @@ void test_begin_copies_param_strings_out() {
     std::free(lang);
     std::free(rp);
 
-    transcribe_stream_update up; transcribe_stream_update_init(&up);
+    transcribe_stream_update up;
+    transcribe_stream_update_init(&up);
     const float pcm[160] = {};
     CHECK(transcribe_stream_feed(&session, pcm, 160, &up) == TRANSCRIBE_OK);
     CHECK(g_language_seen_at_feed == "en-US");
@@ -1498,25 +1496,27 @@ void test_begin_accepts_min_prefix_run_params() {
     };
 
     transcribe_model model;
-    model.arch = &arch;
+    model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
     transcribe_session session;
     session.model = &model;
 
-    const size_t min_size = offsetof(transcribe_run_params, family) +
-                            sizeof(((transcribe_run_params *) nullptr)->family);
+    const size_t min_size =
+        offsetof(transcribe_run_params, family) + sizeof(((transcribe_run_params *) nullptr)->family);
 
     // Stage full defaults on the stack, then heap-allocate ONLY the
     // prefix and declare exactly that many bytes via struct_size.
-    transcribe_run_params staged; transcribe_run_params_init(&staged);
+    transcribe_run_params staged;
+    transcribe_run_params_init(&staged);
     staged.struct_size = min_size;
-    staged.language = "en";  // exercise the string copy alongside
-    auto * rp = static_cast<transcribe_run_params *>(std::malloc(min_size));
+    staged.language    = "en";  // exercise the string copy alongside
+    auto * rp          = static_cast<transcribe_run_params *>(std::malloc(min_size));
     std::memcpy(rp, &staged, min_size);
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     g_retained_rp = transcribe_run_params{};
     g_language_seen_at_feed.clear();
     CHECK(transcribe_stream_begin(&session, rp, &sp) == TRANSCRIBE_OK);
@@ -1528,7 +1528,8 @@ void test_begin_accepts_min_prefix_run_params() {
     CHECK(g_retained_rp.struct_size == min_size);
     CHECK(g_retained_rp.spec_k_drafts == -1);
 
-    transcribe_stream_update up; transcribe_stream_update_init(&up);
+    transcribe_stream_update up;
+    transcribe_stream_update_init(&up);
     const float pcm[160] = {};
     CHECK(transcribe_stream_feed(&session, pcm, 160, &up) == TRANSCRIBE_OK);
     CHECK(g_language_seen_at_feed == "en");
@@ -1536,7 +1537,7 @@ void test_begin_accepts_min_prefix_run_params() {
     transcribe_stream_reset(&session);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_accessors_on_null_ctx();

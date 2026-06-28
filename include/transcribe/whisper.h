@@ -45,8 +45,8 @@ extern "C" {
  *   Check shape "X > thold"  →  disable with +INF (_THOLD_DISABLED).
  *   Check shape "X < thold"  →  disable with -INF (_LOGPROB_DISABLED).
  */
-#define TRANSCRIBE_WHISPER_THOLD_DISABLED   ((float) INFINITY)   /* +INF */
-#define TRANSCRIBE_WHISPER_LOGPROB_DISABLED ((float) -INFINITY)  /* -INF */
+#define TRANSCRIBE_WHISPER_THOLD_DISABLED   ((float) INFINITY)  /* +INF */
+#define TRANSCRIBE_WHISPER_LOGPROB_DISABLED ((float) -INFINITY) /* -INF */
 
 /*
  * How an initial prompt composes with condition_on_prev_tokens on
@@ -119,21 +119,21 @@ struct transcribe_whisper_run_ext {
      * disables for the next chunk when the prior chunk was accepted at
      * temperature >= 0.5 (matches HF ":1090-1093").
      */
-    bool            condition_on_prev_tokens;
+    bool condition_on_prev_tokens;
 
     /* Cap for carried prev tokens; default 223 = max_target_positions/2 - 1. */
-    int32_t         max_prev_context_tokens;
+    int32_t max_prev_context_tokens;
 
     /*
      * Sampling + temperature fallback. Default behavior matches
      * Whisper's own recipe, not HF generate()'s library-default.
      * Use the _DISABLED sentinels to turn off individual thresholds.
      */
-    float           temperature;             /* first-tier; default 0.0 */
-    float           temperature_inc;         /* default 0.2             */
-    float           compression_ratio_thold; /* default 2.4             */
-    float           logprob_thold;           /* default -1.0            */
-    float           no_speech_thold;         /* default 0.6             */
+    float temperature;             /* first-tier; default 0.0 */
+    float temperature_inc;         /* default 0.2             */
+    float compression_ratio_thold; /* default 2.4             */
+    float logprob_thold;           /* default -1.0            */
+    float no_speech_thold;         /* default 0.6             */
 
     /*
      * Seed for the sampler at temperature > 0. 0 = nondeterministic
@@ -142,15 +142,14 @@ struct transcribe_whisper_run_ext {
      * Ignored when temperature == 0.0 (greedy decode is deterministic
      * by construction).
      */
-    uint32_t        seed;
+    uint32_t seed;
 
     /* Seconds. Caps the first emitted timestamp; default 1.0. */
-    float           max_initial_timestamp;
+    float max_initial_timestamp;
 };
 
 /* Fills ext.size/kind and the Whisper decoding recipe defaults. */
-TRANSCRIBE_API void transcribe_whisper_run_ext_init(
-    struct transcribe_whisper_run_ext * ext);
+TRANSCRIBE_API void transcribe_whisper_run_ext_init(struct transcribe_whisper_run_ext * ext);
 
 /* ----------------------------------------------------------------------- */
 /* Whisper decoding trace                                                  */
@@ -176,7 +175,7 @@ struct transcribe_whisper_chunk_trace {
     uint64_t struct_size;
     int64_t  t0_ms;
     int64_t  t1_ms;
-    float    temperature_used;    /* the tier that was accepted */
+    float    temperature_used; /* the tier that was accepted */
     float    compression_ratio;
     float    avg_logprob;
     float    no_speech_prob;
@@ -184,15 +183,13 @@ struct transcribe_whisper_chunk_trace {
     int32_t  n_fallbacks;         /* tiers tried before accept (0 = tier 0 accepted) */
 };
 
-TRANSCRIBE_API void transcribe_whisper_chunk_trace_init(
-    struct transcribe_whisper_chunk_trace * out);
+TRANSCRIBE_API void transcribe_whisper_chunk_trace_init(struct transcribe_whisper_chunk_trace * out);
 
 /*
  * Number of chunk traces captured on the most recent successful run.
  * Returns 0 before any run or on non-Whisper contexts.
  */
-TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
-    const struct transcribe_session * session);
+TRANSCRIBE_API int transcribe_get_whisper_chunk_count(const struct transcribe_session * session);
 
 /*
  * Read the trace at index [0, count) into caller-owned storage.
@@ -209,10 +206,9 @@ TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
  *                                  left as zero-initialized by the init
  *                                  function.
  */
-TRANSCRIBE_API transcribe_status transcribe_get_whisper_chunk_trace(
-    const struct transcribe_session *       session,
-    int                                     i,
-    struct transcribe_whisper_chunk_trace * out_trace);
+TRANSCRIBE_API transcribe_status transcribe_get_whisper_chunk_trace(const struct transcribe_session *       session,
+                                                                    int                                     i,
+                                                                    struct transcribe_whisper_chunk_trace * out_trace);
 
 #ifdef __cplusplus
 } /* extern "C" */

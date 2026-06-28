@@ -7,15 +7,14 @@
 #pragma once
 
 #include "causal_lm/causal_lm.h"
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstdint>
 #include <optional>
@@ -72,13 +71,13 @@ struct ChatTokens {
 };
 
 struct QwenAsrModel final : public transcribe_model {
-    Tokenizer       tok;
-    QwenAsrHParams  hparams;
-    QwenAsrWeights  weights;
-    ggml_context *  ctx_meta = nullptr;
+    Tokenizer      tok;
+    QwenAsrHParams hparams;
+    QwenAsrWeights weights;
+    ggml_context * ctx_meta = nullptr;
 
-    transcribe::BackendPlan       plan;
-    ggml_backend_buffer_t         backend_buffer = nullptr;
+    transcribe::BackendPlan                    plan;
+    ggml_backend_buffer_t                      backend_buffer = nullptr;
     transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     std::optional<transcribe::MelFrontend> mel;
@@ -104,12 +103,11 @@ struct QwenAsrSession final : public transcribe_session {
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
     // Allocated/resized lazily by run_batch; freed in the destructor.
     transcribe::causal_lm::KvCache kv_cache_batch;
-    int                           kv_batch_cap   = 0;  // allocated n_batch
-    int                           kv_batch_n_ctx = 0;  // allocated n_ctx
+    int                            kv_batch_cap   = 0;  // allocated n_batch
+    int                            kv_batch_n_ctx = 0;  // allocated n_ctx
 
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // audio encoder output, pre-injection
-
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
@@ -118,4 +116,4 @@ struct QwenAsrSession final : public transcribe_session {
     ~QwenAsrSession() override;
 };
 
-} // namespace transcribe::qwen3_asr
+}  // namespace transcribe::qwen3_asr

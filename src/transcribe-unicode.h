@@ -44,16 +44,18 @@ struct CptFlags {
 
     uint16_t bits = 0;
 
-    bool is_letter     () const { return (bits & LETTER)      != 0; }
-    bool is_number     () const { return (bits & NUMBER)      != 0; }
-    bool is_whitespace () const { return (bits & WHITESPACE)  != 0; }
+    bool is_letter() const { return (bits & LETTER) != 0; }
+
+    bool is_number() const { return (bits & NUMBER) != 0; }
+
+    bool is_whitespace() const { return (bits & WHITESPACE) != 0; }
 
     // True if any category bit in MASK_CATEGORIES (the low byte) is
     // set. Mirrors unicode_cpt_flags::as_uint() & MASK_CATEGORIES != 0
     // from llama.cpp. Used by the pretokenizer to distinguish "known
     // character in some category" from "undefined / outside the
     // ranges we care about" (OOR codepoints get bits=0 at lookup).
-    bool has_category  () const { return (bits & 0x00FFu)     != 0; }
+    bool has_category() const { return (bits & 0x00FFu) != 0; }
 };
 
 // UTF-8 codec. Mirrors the narrow subset of llama.cpp's unicode.cpp
@@ -61,8 +63,8 @@ struct CptFlags {
 // std::invalid_argument; callers only pass text that already made it
 // through the GGUF tokenizer / Python reference, so the throw guards a
 // programming bug rather than a user-facing error path.
-std::string           cpt_to_utf8   (uint32_t cpt);
-uint32_t              cpt_from_utf8 (const std::string & utf8, size_t & offset);
+std::string           cpt_to_utf8(uint32_t cpt);
+uint32_t              cpt_from_utf8(const std::string & utf8, size_t & offset);
 std::vector<uint32_t> cpts_from_utf8(const std::string & utf8);
 
 // Length in bytes of the UTF-8 sequence whose leading byte is `c`.
@@ -170,4 +172,4 @@ std::vector<std::string> pretokenize_gpt2_raw_bytes(const std::string & text);
 // pretokenizer we'd emit 5380 where the reference produces (30, 198).
 std::vector<std::string> pretokenize_granite(const std::string & text);
 
-} // namespace transcribe::unicode
+}  // namespace transcribe::unicode

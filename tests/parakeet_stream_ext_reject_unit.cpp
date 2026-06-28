@@ -36,7 +36,7 @@
 #include <string>
 
 #ifndef TRANSCRIBE_TEST_FIXTURES_DIR
-#  error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
+#    error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
 #endif
 
 namespace {
@@ -45,24 +45,22 @@ const std::string g_fixtures_dir = TRANSCRIBE_TEST_FIXTURES_DIR;
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
-bool load_and_init(const char *                  fixture_name,
-                   struct transcribe_model **    out_model,
-                   struct transcribe_session **  out_ctx)
-{
+bool load_and_init(const char *                 fixture_name,
+                   struct transcribe_model **   out_model,
+                   struct transcribe_session ** out_ctx) {
     *out_model = nullptr;
     *out_ctx   = nullptr;
 
@@ -76,20 +74,16 @@ bool load_and_init(const char *                  fixture_name,
         return false;
     }
 
-    const transcribe_status load_st =
-        transcribe_model_load_file(p.c_str(), nullptr, out_model);
+    const transcribe_status load_st = transcribe_model_load_file(p.c_str(), nullptr, out_model);
     if (load_st != TRANSCRIBE_OK || *out_model == nullptr) {
-        std::fprintf(stderr, "FAIL load %s: %s\n",
-                     fixture_name, transcribe_status_string(load_st));
+        std::fprintf(stderr, "FAIL load %s: %s\n", fixture_name, transcribe_status_string(load_st));
         ++g_failures;
         return false;
     }
 
-    const transcribe_status init_st =
-        transcribe_session_init(*out_model, nullptr, out_ctx);
+    const transcribe_status init_st = transcribe_session_init(*out_model, nullptr, out_ctx);
     if (init_st != TRANSCRIBE_OK || *out_ctx == nullptr) {
-        std::fprintf(stderr, "FAIL session_init %s: %s\n",
-                     fixture_name, transcribe_status_string(init_st));
+        std::fprintf(stderr, "FAIL session_init %s: %s\n", fixture_name, transcribe_status_string(init_st));
         transcribe_model_free(*out_model);
         *out_model = nullptr;
         ++g_failures;
@@ -106,19 +100,19 @@ bool load_and_init(const char *                  fixture_name,
 void test_cache_aware_rejects_sub_sentinel() {
     struct transcribe_model *   model = nullptr;
     struct transcribe_session * ctx   = nullptr;
-    if (!load_and_init("tokenizer_minimal_streaming_cache_aware.gguf",
-                       &model, &ctx))
-    {
+    if (!load_and_init("tokenizer_minimal_streaming_cache_aware.gguf", &model, &ctx)) {
         return;
     }
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
 
     transcribe_parakeet_stream_ext ext;
     transcribe_parakeet_stream_ext_init(&ext);
     ext.att_context_right = -2;
 
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     sp.family = &ext.ext;
 
     const transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
@@ -126,12 +120,12 @@ void test_cache_aware_rejects_sub_sentinel() {
     // Pre-flight rejection: dispatcher returns the error before clear
     // or any state transition, so the session stays IDLE with
     // last_status untouched.
-    CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_get_state(ctx) == TRANSCRIBE_STREAM_IDLE);
     CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_OK);
 
     // Also try a strongly negative value to confirm the boundary.
-    ext.att_context_right = -42;
-    sp.family = &ext.ext;
+    ext.att_context_right       = -42;
+    sp.family                   = &ext.ext;
     const transcribe_status st2 = transcribe_stream_begin(ctx, &rp, &sp);
     CHECK(st2 == TRANSCRIBE_ERR_INVALID_ARG);
 
@@ -145,13 +139,12 @@ void test_cache_aware_rejects_sub_sentinel() {
 void test_buffered_rejects_sub_sentinel() {
     struct transcribe_model *   model = nullptr;
     struct transcribe_session * ctx   = nullptr;
-    if (!load_and_init("tokenizer_minimal_streaming_buffered.gguf",
-                       &model, &ctx))
-    {
+    if (!load_and_init("tokenizer_minimal_streaming_buffered.gguf", &model, &ctx)) {
         return;
     }
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
 
     auto try_reject = [&](int32_t L, int32_t C, int32_t R) {
         transcribe_parakeet_buffered_stream_ext ext;
@@ -159,12 +152,13 @@ void test_buffered_rejects_sub_sentinel() {
         ext.left_ms  = L;
         ext.chunk_ms = C;
         ext.right_ms = R;
-        transcribe_stream_params sp; transcribe_stream_params_init(&sp);
-        sp.family = &ext.ext;
+        transcribe_stream_params sp;
+        transcribe_stream_params_init(&sp);
+        sp.family                  = &ext.ext;
         const transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
         CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
         // Pre-flight rejection leaves lifecycle / last_status untouched.
-        CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_IDLE);
+        CHECK(transcribe_stream_get_state(ctx) == TRANSCRIBE_STREAM_IDLE);
         CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_OK);
     };
 
@@ -195,13 +189,12 @@ void test_buffered_rejects_sub_sentinel() {
 void test_buffered_zero_is_real_value() {
     struct transcribe_model *   model = nullptr;
     struct transcribe_session * ctx   = nullptr;
-    if (!load_and_init("tokenizer_minimal_streaming_buffered.gguf",
-                       &model, &ctx))
-    {
+    if (!load_and_init("tokenizer_minimal_streaming_buffered.gguf", &model, &ctx)) {
         return;
     }
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
 
     transcribe_parakeet_buffered_stream_ext ext;
     transcribe_parakeet_buffered_stream_ext_init(&ext);
@@ -210,7 +203,8 @@ void test_buffered_zero_is_real_value() {
     ext.left_ms  = 70;
     ext.chunk_ms = 1;
     ext.right_ms = 0;
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     sp.family = &ext.ext;
 
     const transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
@@ -227,7 +221,7 @@ void test_buffered_zero_is_real_value() {
     transcribe_model_free(model);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_cache_aware_rejects_sub_sentinel();
@@ -235,8 +229,7 @@ int main() {
     test_buffered_zero_is_real_value();
 
     if (g_failures > 0) {
-        std::fprintf(stderr, "parakeet_stream_ext_reject_unit: %d failures\n",
-                     g_failures);
+        std::fprintf(stderr, "parakeet_stream_ext_reject_unit: %d failures\n", g_failures);
         return EXIT_FAILURE;
     }
     std::fprintf(stdout, "parakeet_stream_ext_reject_unit: ok\n");

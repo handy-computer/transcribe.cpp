@@ -26,8 +26,6 @@ namespace transcribe_cli {
 //
 // Stereo (or higher channel count) input is downmixed to mono by
 // averaging channels. Any sample rate other than 16 kHz is an error.
-bool load_wav_mono_16k(const std::string &  path,
-                       std::vector<float> & out_pcm,
-                       std::string &        out_error);
+bool load_wav_mono_16k(const std::string & path, std::vector<float> & out_pcm, std::string & out_error);
 
-} // namespace transcribe_cli
+}  // namespace transcribe_cli

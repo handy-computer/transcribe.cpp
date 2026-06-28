@@ -1,0 +1,12 @@
+# Revisions for `git blame` to skip (mechanical changes, no authorship signal).
+#
+# Enable locally:  git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub honors this file automatically on the default branch.
+#
+# IMPORTANT: each SHA must be the commit as it lands on `main`. These entries
+# assume the PR merges with a *merge commit* (which preserves the SHA). A squash
+# or rebase merge rewrites the SHA and would make the entry silently match
+# nothing.
+
+# Tree-wide clang-format (clang-format 22.1.5; see scripts/ci/clang-format.sh).
+906d1088483418bbe347993fd909af054893fcd8

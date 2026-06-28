@@ -17,14 +17,13 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "causal_lm/causal_lm.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <optional>
@@ -46,34 +45,34 @@ void apply_family_invariants(transcribe_model & model);
 // GGUF tokenizer). The HF chat template emits these by name; we look up
 // each token id once and reuse.
 struct ChatTokens {
-    int32_t im_start       = -1;   // "<|im_start|>"
-    int32_t im_end         = -1;   // "<|im_end|>"
-    int32_t role_user      = -1;   // bpe("user") = single token in Qwen2 BPE
-    int32_t role_assistant = -1;   // bpe("assistant") = single token
+    int32_t im_start       = -1;  // "<|im_start|>"
+    int32_t im_end         = -1;  // "<|im_end|>"
+    int32_t role_user      = -1;  // bpe("user") = single token in Qwen2 BPE
+    int32_t role_assistant = -1;  // bpe("assistant") = single token
 };
 
 struct CanaryQwenModel final : public transcribe_model {
-    Tokenizer            tok;
-    CanaryQwenHParams    hparams;
-    CanaryQwenWeights    weights;
-    ggml_context *       ctx_meta = nullptr;
+    Tokenizer         tok;
+    CanaryQwenHParams hparams;
+    CanaryQwenWeights weights;
+    ggml_context *    ctx_meta = nullptr;
 
-    transcribe::BackendPlan       plan;
-    ggml_backend_buffer_t         backend_buffer = nullptr;
+    transcribe::BackendPlan plan;
+    ggml_backend_buffer_t   backend_buffer = nullptr;
 
     // BatchNorm fusion in the conformer conv module: fused (scale, bias)
     // computed at load time; running_mean/var unused at inference.
-    ggml_context *               bn_fused_ctx    = nullptr;
-    ggml_backend_buffer_t        bn_fused_buffer = nullptr;
+    ggml_context *        bn_fused_ctx    = nullptr;
+    ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
     // F16 conv pointwise/depthwise weights promoted to F32 (see model.cpp).
-    ggml_context *               conv_pw_f32_ctx    = nullptr;
-    ggml_backend_buffer_t        conv_pw_f32_buffer = nullptr;
+    ggml_context *        conv_pw_f32_ctx    = nullptr;
+    ggml_backend_buffer_t conv_pw_f32_buffer = nullptr;
 
     // BF16 encoder + decoder linear weights promoted to F32 on CPU (see
     // model.cpp; matches the reference's F32 inference regime).
-    ggml_context *               linear_f32_ctx    = nullptr;
-    ggml_backend_buffer_t        linear_f32_buffer = nullptr;
+    ggml_context *        linear_f32_ctx    = nullptr;
+    ggml_backend_buffer_t linear_f32_buffer = nullptr;
 
     transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
@@ -103,9 +102,8 @@ struct CanaryQwenSession final : public transcribe_session {
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
     transcribe::causal_lm::KvCache kv_cache_batch;
-    int                           kv_batch_cap   = 0;
-    int                           kv_batch_n_ctx = 0;
-
+    int                            kv_batch_cap   = 0;
+    int                            kv_batch_n_ctx = 0;
 
     // Reusable host scratch.
     std::vector<float> mel_buf;       // [num_mels, n_frames]
@@ -123,4 +121,4 @@ struct CanaryQwenSession final : public transcribe_session {
     ~CanaryQwenSession() override;
 };
 
-} // namespace transcribe::canary_qwen
+}  // namespace transcribe::canary_qwen

@@ -26,26 +26,24 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_NEAR(actual, expected, tol)                                   \
-    do {                                                                    \
-        const double _a = static_cast<double>(actual);                      \
-        const double _e = static_cast<double>(expected);                    \
-        const double _d = std::fabs(_a - _e);                               \
-        if (_d > (tol)) {                                                   \
-            std::fprintf(stderr,                                            \
-                "FAIL %s:%d: %s = %.17g, expected %.17g, diff %.6g > %.6g\n", \
-                __FILE__, __LINE__, #actual, _a, _e, _d, (tol));            \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_NEAR(actual, expected, tol)                                                                          \
+    do {                                                                                                           \
+        const double _a = static_cast<double>(actual);                                                             \
+        const double _e = static_cast<double>(expected);                                                           \
+        const double _d = std::fabs(_a - _e);                                                                      \
+        if (_d > (tol)) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %.17g, expected %.17g, diff %.6g > %.6g\n", __FILE__, __LINE__, \
+                         #actual, _a, _e, _d, (tol));                                                              \
+            ++g_failures;                                                                                          \
+        }                                                                                                          \
     } while (0)
 
 // Real Parakeet 0.6B frontend config (v2 + v3 share these values).
@@ -64,39 +62,45 @@ transcribe::MelConfig parakeet_config() {
 
 void test_window() {
     transcribe::MelFrontend mf(parakeet_config());
-    const auto & w = mf.window();
+    const auto &            w = mf.window();
 
     CHECK(w.size() == 512);
 
     // First and last 56 entries are the zero pad: (n_fft - win_length) / 2
     // on each side. The 57th entry from each end is the first non-zero
     // sample of the symmetric Hann.
-    for (int i = 0; i < 56; ++i) CHECK(w[i] == 0.0);
-    for (int i = 0; i < 56; ++i) CHECK(w[511 - i] == 0.0);
+    for (int i = 0; i < 56; ++i) {
+        CHECK(w[i] == 0.0);
+    }
+    for (int i = 0; i < 56; ++i) {
+        CHECK(w[511 - i] == 0.0);
+    }
 
     // Symmetric Hann formula 0.5 - 0.5*cos(2*pi*k/(N-1)) with N=400.
     // The boundary samples at the edge of the Hann are tiny but non-zero.
     // Reference values captured from numpy and librosa, machine-precision.
-    CHECK_NEAR(w[56], 0.0,                                  1e-15);
-    CHECK_NEAR(w[57], 6.199333200590518e-05,                1e-15);
-    CHECK_NEAR(w[58], 0.0002479579553307798,                1e-15);
-    CHECK_NEAR(w[59], 0.0005578477557081074,                1e-15);
-    CHECK_NEAR(w[60], 0.0009915858887327156,                1e-15);
+    CHECK_NEAR(w[56], 0.0, 1e-15);
+    CHECK_NEAR(w[57], 6.199333200590518e-05, 1e-15);
+    CHECK_NEAR(w[58], 0.0002479579553307798, 1e-15);
+    CHECK_NEAR(w[59], 0.0005578477557081074, 1e-15);
+    CHECK_NEAR(w[60], 0.0009915858887327156, 1e-15);
 
     // Peak region. For a symmetric N=400 Hann the peak straddles indices
     // 199 and 200 (in window space) = 255 and 256 in the padded buffer,
     // both equal to ~0.99998 (NOT 1.0 - that would be the periodic form).
-    CHECK_NEAR(w[254], 0.9998605186060137,                  1e-15);
-    CHECK_NEAR(w[255], 0.9999845014267927,                  1e-15);
-    CHECK_NEAR(w[256], 0.9999845014267927,                  1e-15);
-    CHECK_NEAR(w[257], 0.9998605186060137,                  1e-15);
-    CHECK_NEAR(w[258], 0.9996125837088883,                  1e-15);
+    CHECK_NEAR(w[254], 0.9998605186060137, 1e-15);
+    CHECK_NEAR(w[255], 0.9999845014267927, 1e-15);
+    CHECK_NEAR(w[256], 0.9999845014267927, 1e-15);
+    CHECK_NEAR(w[257], 0.9998605186060137, 1e-15);
+    CHECK_NEAR(w[258], 0.9996125837088883, 1e-15);
 
     // Sum of a symmetric Hann window of length 400 is exactly
     // (N - 1) / 2 = 199.5. Off by anything > a few ULPs means the
     // formula is wrong.
     double sum = 0.0;
-    for (double v : w) sum += v;
+    for (double v : w) {
+        sum += v;
+    }
     CHECK_NEAR(sum, 199.5, 1e-12);
 
     // Sum of squares: closed form for a symmetric Hann length N is
@@ -104,15 +108,17 @@ void test_window() {
     // librosa-style symmetric form (k / (N-1)) gives a slightly
     // different value; reference captured from numpy directly:
     double sumsq = 0.0;
-    for (double v : w) sumsq += v * v;
+    for (double v : w) {
+        sumsq += v * v;
+    }
     CHECK_NEAR(sumsq, 149.625, 1e-12);
 }
 
 void test_mel_filterbank() {
     transcribe::MelFrontend mf(parakeet_config());
-    const auto & fb = mf.filterbank();
-    const int n_freq = mf.n_freq();
-    const int n_mels = mf.num_mels();
+    const auto &            fb     = mf.filterbank();
+    const int               n_freq = mf.n_freq();
+    const int               n_mels = mf.num_mels();
 
     CHECK(static_cast<int>(fb.size()) == n_mels * n_freq);
     CHECK(n_freq == 257);
@@ -126,7 +132,9 @@ void test_mel_filterbank() {
     // exact (sr=16000, n_fft=512, n_mels=128, fmin=0, fmax=8000,
     // norm='slaney') call.
     double total = 0.0;
-    for (float v : fb) total += static_cast<double>(v);
+    for (float v : fb) {
+        total += static_cast<double>(v);
+    }
     CHECK_NEAR(total, 4.090487480163574, 5e-6);
 
     // Per-row spot checks. Slaney filters are sparse at low mel
@@ -143,8 +151,8 @@ void test_mel_filterbank() {
     }
 
     // Mel bin 5: triangular filter spanning fft bins 4 and 5.
-    CHECK_NEAR(get(5, 4),  0.014789481647312641, 5e-7);
-    CHECK_NEAR(get(5, 5),  0.013588061556220055, 5e-7);
+    CHECK_NEAR(get(5, 4), 0.014789481647312641, 5e-7);
+    CHECK_NEAR(get(5, 5), 0.013588061556220055, 5e-7);
     CHECK(get(5, 3) == 0.0f);
     CHECK(get(5, 6) == 0.0f);
 
@@ -160,16 +168,16 @@ void test_mel_filterbank() {
     // Per-row sums (Slaney area-normalized triangles, so each row's
     // sum is 2/(width) * triangle area = roughly constant per
     // octave; reference values from librosa).
-    double row_0_sum = 0.0;
-    double row_64_sum = 0.0;
+    double row_0_sum   = 0.0;
+    double row_64_sum  = 0.0;
     double row_127_sum = 0.0;
     for (int k = 0; k < n_freq; ++k) {
-        row_0_sum   += get(0, k);
-        row_64_sum  += get(64, k);
+        row_0_sum += get(0, k);
+        row_64_sum += get(64, k);
         row_127_sum += get(127, k);
     }
-    CHECK_NEAR(row_0_sum,   0.028377542272210, 5e-7);
-    CHECK_NEAR(row_64_sum,  0.030684133991599, 5e-6);
+    CHECK_NEAR(row_0_sum, 0.028377542272210, 5e-7);
+    CHECK_NEAR(row_64_sum, 0.030684133991599, 5e-6);
     CHECK_NEAR(row_127_sum, 0.031943686306477, 5e-6);
 
     // Total nonzero count: librosa Slaney with these params gives
@@ -177,7 +185,11 @@ void test_mel_filterbank() {
     // would either widen the filters (more nonzeros) or break the
     // mel scale (different distribution).
     int nonzero = 0;
-    for (float v : fb) if (v != 0.0f) ++nonzero;
+    for (float v : fb) {
+        if (v != 0.0f) {
+            ++nonzero;
+        }
+    }
     CHECK(nonzero == 504);
 }
 
@@ -192,7 +204,7 @@ void test_n_frames_for() {
     CHECK(mf.n_frames_for(0) == 1);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_window();

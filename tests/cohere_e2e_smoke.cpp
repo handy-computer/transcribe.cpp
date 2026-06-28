@@ -34,7 +34,6 @@
 // correctness without needing a real model file.
 
 #include "transcribe.h"
-
 #include "wav.h"
 
 #include <sys/stat.h>
@@ -47,49 +46,43 @@
 #include <vector>
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
-#  define TRANSCRIBE_TEST_SAMPLES_DIR "samples"
+#    define TRANSCRIBE_TEST_SAMPLES_DIR "samples"
 #endif
 
 namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ_INT(actual, expected)                                      \
-    do {                                                                    \
-        const long long _a = static_cast<long long>(actual);                \
-        const long long _e = static_cast<long long>(expected);              \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: %s = %lld, expected %lld\n",          \
-                         __FILE__, __LINE__, #actual, _a, _e);              \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ_INT(actual, expected)                                                                           \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
-#define CHECK_STR_EQ(a, b)                                                  \
-    do {                                                                    \
-        const std::string _av = (a);                                        \
-        const std::string _bv = (b);                                        \
-        if (_av != _bv) {                                                   \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: \"%s\" != \"%s\"\n",                  \
-                         __FILE__, __LINE__,                                \
-                         _av.c_str(), _bv.c_str());                         \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_STR_EQ(a, b)                                                                                        \
+    do {                                                                                                          \
+        const std::string _av = (a);                                                                              \
+        const std::string _bv = (b);                                                                              \
+        if (_av != _bv) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _av.c_str(), _bv.c_str()); \
+            ++g_failures;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -102,21 +95,24 @@ bool file_exists(const std::string & path) {
 // a shared header: the porting policy is no-refactor-during-port, and
 // a one-function helper in two tests is cheaper than a new header.
 int edit_distance(const std::string & a, const std::string & b) {
-    const int n = static_cast<int>(a.size());
-    const int m = static_cast<int>(b.size());
+    const int        n = static_cast<int>(a.size());
+    const int        m = static_cast<int>(b.size());
     std::vector<int> prev(static_cast<size_t>(m + 1));
     std::vector<int> curr(static_cast<size_t>(m + 1));
-    for (int j = 0; j <= m; ++j) prev[static_cast<size_t>(j)] = j;
+    for (int j = 0; j <= m; ++j) {
+        prev[static_cast<size_t>(j)] = j;
+    }
     for (int i = 1; i <= n; ++i) {
         curr[0] = i;
         for (int j = 1; j <= m; ++j) {
-            const int cost = (a[static_cast<size_t>(i - 1)] ==
-                              b[static_cast<size_t>(j - 1)]) ? 0 : 1;
-            const int del = prev[static_cast<size_t>(j)]     + 1;
-            const int ins = curr[static_cast<size_t>(j - 1)] + 1;
-            const int sub = prev[static_cast<size_t>(j - 1)] + cost;
-            int best = del < ins ? del : ins;
-            if (sub < best) best = sub;
+            const int cost = (a[static_cast<size_t>(i - 1)] == b[static_cast<size_t>(j - 1)]) ? 0 : 1;
+            const int del  = prev[static_cast<size_t>(j)] + 1;
+            const int ins  = curr[static_cast<size_t>(j - 1)] + 1;
+            const int sub  = prev[static_cast<size_t>(j - 1)] + cost;
+            int       best = del < ins ? del : ins;
+            if (sub < best) {
+                best = sub;
+            }
             curr[static_cast<size_t>(j)] = best;
         }
         prev.swap(curr);
@@ -134,7 +130,7 @@ const char * const k_jfk_reference_text =
 
 constexpr int k_max_edit_distance = 3;
 
-} // namespace
+}  // namespace
 
 int main() {
     // ---- Resolve model path ------------------------------------------
@@ -145,7 +141,7 @@ int main() {
             std::fprintf(stderr,
                          "cohere_e2e_smoke: TRANSCRIBE_COHERE_GGUF not set. "
                          "Skipping.\n");
-            return 77; // CTest "skipped"
+            return 77;  // CTest "skipped"
         }
         model_path = env;
     }
@@ -156,7 +152,7 @@ int main() {
                      "Set TRANSCRIBE_COHERE_GGUF to a valid GGUF path. "
                      "Skipping.\n",
                      model_path.c_str());
-        return 77; // CTest "skipped"
+        return 77;  // CTest "skipped"
     }
 
     // ---- Resolve audio path ------------------------------------------
@@ -171,8 +167,7 @@ int main() {
     }
 
     if (!file_exists(wav_path)) {
-        std::fprintf(stderr,
-                     "cohere_e2e_smoke: wav not found: %s\n", wav_path.c_str());
+        std::fprintf(stderr, "cohere_e2e_smoke: wav not found: %s\n", wav_path.c_str());
         return EXIT_FAILURE;
     }
 
@@ -182,15 +177,15 @@ int main() {
     // ---- Load model --------------------------------------------------
     const auto t_start = std::chrono::steady_clock::now();
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;  // strict CPU for cross-platform determinism
+
     struct transcribe_model * model = nullptr;
     {
-        const transcribe_status st =
-            transcribe_model_load_file(model_path.c_str(), &mp, &model);
+        const transcribe_status st = transcribe_model_load_file(model_path.c_str(), &mp, &model);
         if (st != TRANSCRIBE_OK || model == nullptr) {
-            std::fprintf(stderr, "FAIL load: %s\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "FAIL load: %s\n", transcribe_status_string(st));
             return EXIT_FAILURE;
         }
     }
@@ -200,8 +195,7 @@ int main() {
     {
         const char * backend = transcribe_model_backend(model);
         if (backend == nullptr || backend[0] == '\0') {
-            std::fprintf(stderr,
-                         "FAIL: backend = \"\" after load, expected non-empty\n");
+            std::fprintf(stderr, "FAIL: backend = \"\" after load, expected non-empty\n");
             ++g_failures;
         } else {
             std::fprintf(stderr, "cohere_e2e_smoke: backend=%s\n", backend);
@@ -210,46 +204,43 @@ int main() {
 
     // ---- Load wav ----------------------------------------------------
     std::vector<float> pcm;
-    std::string load_err;
+    std::string        load_err;
     if (!transcribe_cli::load_wav_mono_16k(wav_path, pcm, load_err)) {
-        std::fprintf(stderr, "cohere_e2e_smoke: wav load: %s\n",
-                     load_err.c_str());
+        std::fprintf(stderr, "cohere_e2e_smoke: wav load: %s\n", load_err.c_str());
         transcribe_model_free(model);
         return EXIT_FAILURE;
     }
-    std::fprintf(stderr, "cohere_e2e_smoke: loaded %zu samples (%.2f s)\n",
-                 pcm.size(), static_cast<double>(pcm.size()) / 16000.0);
+    std::fprintf(stderr, "cohere_e2e_smoke: loaded %zu samples (%.2f s)\n", pcm.size(),
+                 static_cast<double>(pcm.size()) / 16000.0);
 
     // ---- Init context + run ------------------------------------------
-    transcribe_session_params cp; transcribe_session_params_init(&cp);
+    transcribe_session_params cp;
+    transcribe_session_params_init(&cp);
+
     struct transcribe_session * ctx = nullptr;
     {
-        const transcribe_status st =
-            transcribe_session_init(model, &cp, &ctx);
+        const transcribe_status st = transcribe_session_init(model, &cp, &ctx);
         if (st != TRANSCRIBE_OK || ctx == nullptr) {
-            std::fprintf(stderr, "cohere_e2e_smoke: ctx init: %s\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "cohere_e2e_smoke: ctx init: %s\n", transcribe_status_string(st));
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
     }
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
     {
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr, "FAIL run: %s\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "FAIL run: %s\n", transcribe_status_string(st));
             transcribe_session_free(ctx);
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
     }
 
-    const auto t_end = std::chrono::steady_clock::now();
-    const double wall_ms = std::chrono::duration<double, std::milli>(
-        t_end - t_start).count();
+    const auto   t_end   = std::chrono::steady_clock::now();
+    const double wall_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
 
     // ---- Verify output text ------------------------------------------
     const char * full = transcribe_full_text(ctx);
@@ -267,20 +258,17 @@ int main() {
     // rewrite) but not so tight that a one-character detokenizer
     // tweak trips the gate.
     const int dist = edit_distance(actual, k_jfk_reference_text);
-    std::fprintf(stderr,
-                 "cohere_e2e_smoke: edit_distance=%d (tolerance=%d)\n",
-                 dist, k_max_edit_distance);
+    std::fprintf(stderr, "cohere_e2e_smoke: edit_distance=%d (tolerance=%d)\n", dist, k_max_edit_distance);
     if (dist > k_max_edit_distance) {
-        std::fprintf(stderr,
-                     "FAIL: text edit distance %d exceeds %d\n",
-                     dist, k_max_edit_distance);
+        std::fprintf(stderr, "FAIL: text edit distance %d exceeds %d\n", dist, k_max_edit_distance);
         std::fprintf(stderr, "  reference: %s\n", k_jfk_reference_text);
         std::fprintf(stderr, "  actual:    %s\n", actual.c_str());
         ++g_failures;
     }
 
     // ---- Verify timing -----------------------------------------------
-    transcribe_timings t; transcribe_timings_init(&t);
+    transcribe_timings t;
+    transcribe_timings_init(&t);
     CHECK(transcribe_get_timings(ctx, &t) == TRANSCRIBE_OK);
     std::fprintf(stderr,
                  "cohere_e2e_smoke: timings load=%.2f mel=%.2f "
@@ -298,9 +286,7 @@ int main() {
     // If it takes longer, something is hung or degenerate.
     std::fprintf(stderr, "cohere_e2e_smoke: wall=%.2f ms\n", wall_ms);
     if (wall_ms > 120000.0) {
-        std::fprintf(stderr,
-                     "FAIL: wall time %.0f ms exceeds 120 s budget\n",
-                     wall_ms);
+        std::fprintf(stderr, "FAIL: wall time %.0f ms exceeds 120 s budget\n", wall_ms);
         ++g_failures;
     }
 
@@ -310,7 +296,8 @@ int main() {
 
     // At least one segment with non-empty text.
     if (n_segments > 0) {
-        transcribe_segment seg; transcribe_segment_init(&seg);
+        transcribe_segment seg;
+        transcribe_segment_init(&seg);
         CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
         CHECK(seg.text != nullptr && seg.text[0] != '\0');
     }
@@ -324,12 +311,13 @@ int main() {
     // NONE. segment_n_{words,tokens} are both zero because the
     // family does not expose sub-segment structure.
     CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
-    CHECK_EQ_INT(transcribe_n_words(ctx),  0);
+    CHECK_EQ_INT(transcribe_n_words(ctx), 0);
     CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
     if (n_segments > 0) {
-        transcribe_segment seg; transcribe_segment_init(&seg);
+        transcribe_segment seg;
+        transcribe_segment_init(&seg);
         CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
-        CHECK_EQ_INT(seg.n_words,  0);
+        CHECK_EQ_INT(seg.n_words, 0);
         CHECK_EQ_INT(seg.n_tokens, 0);
     }
 
@@ -347,25 +335,25 @@ int main() {
     // is the "transcribe_run replaces the previous result" rule
     // from include/transcribe.h applied to the failure path.
     {
-        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
-        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        transcribe_run_params rp2;
+        transcribe_run_params_init(&rp2);
+        rp2.timestamps             = TRANSCRIBE_TIMESTAMPS_WORD;
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
         CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
         // The prior successful result must be gone: no stale text,
         // no stale segments/words/tokens, returned_timestamp_kind
         // back to the pre-run sentinel.
         CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
         CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
-        CHECK_EQ_INT(transcribe_n_words(ctx),    0);
-        CHECK_EQ_INT(transcribe_n_tokens(ctx),   0);
+        CHECK_EQ_INT(transcribe_n_words(ctx), 0);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
     }
     {
-        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
-        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        transcribe_run_params rp2;
+        transcribe_run_params_init(&rp2);
+        rp2.timestamps             = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
         CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
         CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
         CHECK_EQ_INT(transcribe_n_segments(ctx), 0);

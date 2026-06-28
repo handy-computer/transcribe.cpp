@@ -27,14 +27,11 @@ struct transcribe_model;
 // honors n_ctx should cache the result onto the base session's n_ctx field.
 // The negative-value rejection happens once, generically, in
 // transcribe_session_init().
-inline int32_t transcribe_session_params_n_ctx(
-    const struct transcribe_session_params * params) {
+inline int32_t transcribe_session_params_n_ctx(const struct transcribe_session_params * params) {
     if (params == nullptr) {
         return 0;
     }
-    const size_t field_end =
-        offsetof(struct transcribe_session_params, n_ctx) +
-        sizeof(params->n_ctx);
+    const size_t field_end = offsetof(struct transcribe_session_params, n_ctx) + sizeof(params->n_ctx);
     if (params->struct_size < static_cast<uint64_t>(field_end)) {
         return 0;
     }
@@ -90,13 +87,13 @@ struct transcribe_session {
     // sentinels ("", 0, NAN).
 
     struct TokenEntry {
-        int         id            = 0;
-        std::string text;            // decoded fragment (▁ → space)
-        float       p             = 0.0f;
-        int64_t     t0_ms         = 0;
-        int64_t     t1_ms         = 0;
-        int         seg_index     = 0;
-        int         word_index    = -1;
+        int         id = 0;
+        std::string text;  // decoded fragment (▁ → space)
+        float       p          = 0.0f;
+        int64_t     t0_ms      = 0;
+        int64_t     t1_ms      = 0;
+        int         seg_index  = 0;
+        int         word_index = -1;
     };
 
     struct WordEntry {
@@ -118,10 +115,10 @@ struct transcribe_session {
         int         n_tokens    = 0;
     };
 
-    std::vector<TokenEntry>      tokens;
-    std::vector<WordEntry>       words;
-    std::vector<SegmentEntry>    segments;
-    std::string                  full_text;
+    std::vector<TokenEntry>   tokens;
+    std::vector<WordEntry>    words;
+    std::vector<SegmentEntry> segments;
+    std::string               full_text;
 
     // Offline batch results (transcribe_run_batch). The scratch fields
     // above are the single "current result" slot every run() writes into
@@ -146,19 +143,19 @@ struct transcribe_session {
         std::string               full_text;
         std::string               detected_language;
         transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-        bool                      has_result   = false;
-        transcribe_status         status       = TRANSCRIBE_OK;
+        bool                      has_result  = false;
+        transcribe_status         status      = TRANSCRIBE_OK;
         // Per-utterance timings (us). For a batched run the encoder is one
         // shared dispatch, so a family amortizes its total encode time across
         // the batch (sum over utterances == the real batch encode time);
         // decode is genuinely per-utterance. Lets transcribe_batch_get_timings
         // expose where time goes (encoder vs host decode) per utterance.
-        int64_t                   t_mel_us     = 0;
-        int64_t                   t_encode_us  = 0;
-        int64_t                   t_decode_us  = 0;
+        int64_t                   t_mel_us    = 0;
+        int64_t                   t_encode_us = 0;
+        int64_t                   t_decode_us = 0;
     };
 
-    std::vector<ResultSet>       batch_results;
+    std::vector<ResultSet> batch_results;
 
     // Snapshot the current scratch result slot (the fields above that a
     // per-family run() populates) into a standalone ResultSet. Used by the
@@ -187,9 +184,9 @@ struct transcribe_session {
     // "unknown" — either no detection ran (English-only model, user
     // supplied a hint, family doesn't support LID) or detection produced
     // a non-language sentinel (e.g. SenseVoice's <|nospeech|>).
-    std::string                  detected_language;
-    transcribe_timestamp_kind    result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-    bool                         has_result  = false;
+    std::string               detected_language;
+    transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    bool                      has_result  = false;
 
     // Abort / cancellation (set via transcribe_set_abort_callback).
     // run() drivers call poll_abort() at chunk / decode-step boundaries;
@@ -197,9 +194,9 @@ struct transcribe_session {
     // TRANSCRIBE_ERR_ABORTED with partial segments preserved. was_aborted
     // is cleared at the top of every transcribe_run, NOT by clear_result
     // (the partial result may be deliberately retained).
-    transcribe_abort_callback    abort_cb        = nullptr;
-    void *                       abort_userdata  = nullptr;
-    bool                         was_aborted     = false;
+    transcribe_abort_callback abort_cb       = nullptr;
+    void *                    abort_userdata = nullptr;
+    bool                      was_aborted    = false;
 
     bool poll_abort() {
         if (abort_cb != nullptr && abort_cb(abort_userdata)) {
@@ -215,7 +212,7 @@ struct transcribe_session {
     // top of every transcribe_run, NOT by clear_result. Distinct from the
     // up-front TRANSCRIBE_ERR_INPUT_TOO_LONG rejection (couldn't finish vs
     // couldn't start). See docs/input-limits.md.
-    bool                         was_truncated   = false;
+    bool was_truncated = false;
 
     // Streaming state. Lifecycle (stream_state) is separated from the
     // result snapshot so clear_result() can wipe per-call data without
@@ -224,17 +221,16 @@ struct transcribe_session {
     // committed counts, last_status, audio cursors) ARE cleared by
     // clear_result. Audio cursors are us-precision; the public
     // stream_update struct exposes them as ms.
-    transcribe_stream_state      stream_state          = TRANSCRIBE_STREAM_IDLE;
-    int32_t                      stream_revision      = 0;
-    int                          n_committed_segments = 0;
-    int                          n_committed_words    = 0;
-    int                          n_committed_tokens   = 0;
-    transcribe_status            stream_last_status   = TRANSCRIBE_OK;
-    int64_t                      stream_audio_input_us     = 0;
-    int64_t                      stream_audio_committed_us = 0;
-    transcribe_stream_commit_policy stream_commit_policy =
-        TRANSCRIBE_STREAM_COMMIT_AUTO;
-    uint32_t                     stream_stable_prefix_agreement_n = 0;
+    transcribe_stream_state         stream_state                     = TRANSCRIBE_STREAM_IDLE;
+    int32_t                         stream_revision                  = 0;
+    int                             n_committed_segments             = 0;
+    int                             n_committed_words                = 0;
+    int                             n_committed_tokens               = 0;
+    transcribe_status               stream_last_status               = TRANSCRIBE_OK;
+    int64_t                         stream_audio_input_us            = 0;
+    int64_t                         stream_audio_committed_us        = 0;
+    transcribe_stream_commit_policy stream_commit_policy             = TRANSCRIBE_STREAM_COMMIT_AUTO;
+    uint32_t                        stream_stable_prefix_agreement_n = 0;
 
     // Session-owned copies of the caller's run-params strings, refreshed
     // on every transcribe_stream_begin. The dispatcher hands the family
@@ -243,18 +239,18 @@ struct transcribe_session {
     // storage (the public contract lets the caller free its params pointers
     // the moment begin returns). Stable for the stream's lifetime; only the
     // next begin mutates them.
-    std::string                  stream_language_owned;
-    std::string                  stream_target_language_owned;
+    std::string stream_language_owned;
+    std::string stream_target_language_owned;
 
     // UI-facing streaming text state. `full_text` above remains the raw
     // model hypothesis. `stream_committed_text` is the append-only public
     // display/input prefix; `stream_tentative_text` is the current raw
     // suffix after `stream_raw_tentative_start_bytes`. The raw history is
     // used by the generic STABLE_PREFIX policy.
-    std::string                  stream_committed_text;
-    std::string                  stream_tentative_text;
-    uint64_t                     stream_raw_tentative_start_bytes = 0;
-    std::deque<std::string>      stream_raw_history;
+    std::string             stream_committed_text;
+    std::string             stream_tentative_text;
+    uint64_t                stream_raw_tentative_start_bytes = 0;
+    std::deque<std::string> stream_raw_history;
 
     void clear_result();
 

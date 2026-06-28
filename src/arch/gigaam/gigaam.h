@@ -12,8 +12,8 @@
 #include "decoder.h"
 #include "mel.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
 
@@ -40,10 +40,10 @@ void apply_family_invariants(transcribe_model & model);
 // Concrete model. Owns the ggml_context that holds every weight tensor's
 // data buffer plus the host decoder mirror for the RNN-T/CTC greedy loop.
 struct GigaamModel final : public transcribe_model {
-    Tokenizer       tok;
-    GigaamHParams   hparams;
-    GigaamWeights   weights;
-    ggml_context *  ctx_meta = nullptr;
+    Tokenizer      tok;
+    GigaamHParams  hparams;
+    GigaamWeights  weights;
+    ggml_context * ctx_meta = nullptr;
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
@@ -65,17 +65,17 @@ struct GigaamModel final : public transcribe_model {
 // Concrete context. One scheduler + compute_ctx lifecycle per context,
 // mirroring parakeet.
 struct GigaamSession final : public transcribe_session {
-    ggml_context *        compute_ctx = nullptr;
-    ggml_backend_sched_t  sched       = nullptr;
+    ggml_context *       compute_ctx = nullptr;
+    ggml_backend_sched_t sched       = nullptr;
 
     ggml_tensor * encoder_out = nullptr;
 
-    std::vector<float>   mel_buf;
-    std::vector<float>   pos_buf;          // cos/sin rotary PE bank, host scratch
-    std::vector<float>   enc_host;
+    std::vector<float> mel_buf;
+    std::vector<float> pos_buf;  // cos/sin rotary PE bank, host scratch
+    std::vector<float> enc_host;
 
     GigaamSession() = default;
     ~GigaamSession() override;
 };
 
-} // namespace transcribe::gigaam
+}  // namespace transcribe::gigaam

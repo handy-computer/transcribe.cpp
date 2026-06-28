@@ -25,13 +25,13 @@ namespace transcribe::granite_conformer {
 // GraniteNarEncBlock, packed so the helper has no compile-time dependency on
 // either family's weights struct.
 struct ShawAttnWeights {
-    ggml_tensor * norm_attn_w     = nullptr;  // [hidden]
-    ggml_tensor * norm_attn_b     = nullptr;  // [hidden]      (nullable)
-    ggml_tensor * attn_q_w        = nullptr;  // [hidden, inner_dim]
-    ggml_tensor * attn_kv_w       = nullptr;  // [hidden, 2*inner_dim]  (fused K|V)
-    ggml_tensor * attn_rel_pos_emb = nullptr; // [head_dim, 2*max_pos_emb+1]
-    ggml_tensor * attn_out_w      = nullptr;  // [inner_dim, hidden]
-    ggml_tensor * attn_out_b      = nullptr;  // [hidden]      (nullable)
+    ggml_tensor * norm_attn_w      = nullptr;  // [hidden]
+    ggml_tensor * norm_attn_b      = nullptr;  // [hidden]      (nullable)
+    ggml_tensor * attn_q_w         = nullptr;  // [hidden, inner_dim]
+    ggml_tensor * attn_kv_w        = nullptr;  // [hidden, 2*inner_dim]  (fused K|V)
+    ggml_tensor * attn_rel_pos_emb = nullptr;  // [head_dim, 2*max_pos_emb+1]
+    ggml_tensor * attn_out_w       = nullptr;  // [inner_dim, hidden]
+    ggml_tensor * attn_out_b       = nullptr;  // [hidden]      (nullable)
 };
 
 // Build the Shaw block-local attention sub-graph.
@@ -59,17 +59,17 @@ struct ShawAttnWeights {
 //   layer_norm_eps : pre-norm eps (both Granite families use 1e-5).
 //
 // Returns: [d_model, T_enc, B] (matches input), or nullptr on shape error.
-ggml_tensor * shaw_block_attn(ggml_context *           ctx,
-                              ggml_tensor *            x,
-                              ggml_tensor *            zero_pad,
-                              ggml_tensor *            dists,
-                              ggml_tensor *            pad_mask_3d,
-                              const ShawAttnWeights &  w,
-                              int                      n_heads,
-                              int                      head_dim,
-                              int                      context_size,
-                              int                      num_blocks,
-                              int                      T_enc,
-                              float                    layer_norm_eps);
+ggml_tensor * shaw_block_attn(ggml_context *          ctx,
+                              ggml_tensor *           x,
+                              ggml_tensor *           zero_pad,
+                              ggml_tensor *           dists,
+                              ggml_tensor *           pad_mask_3d,
+                              const ShawAttnWeights & w,
+                              int                     n_heads,
+                              int                     head_dim,
+                              int                     context_size,
+                              int                     num_blocks,
+                              int                     T_enc,
+                              float                   layer_norm_eps);
 
-} // namespace transcribe::granite_conformer
+}  // namespace transcribe::granite_conformer

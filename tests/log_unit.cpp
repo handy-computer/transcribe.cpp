@@ -17,10 +17,9 @@
 // The log sink is process-global state; this binary owns it exclusively,
 // and each test installs the state it needs.
 
+#include "ggml.h"
 #include "transcribe-log.h"
 #include "transcribe.h"
-
-#include "ggml.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -32,13 +31,12 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 // Recording sink. userdata carries the vector so the tests also pin that
@@ -85,8 +83,8 @@ void test_ggml_bridge_installed_and_maps_levels() {
     transcribe_log_set(recording_cb, &rec);
 
     // transcribe_log_set must have routed ggml's logger to its bridge.
-    ggml_log_callback bridge = nullptr;
-    void * bridge_userdata = nullptr;
+    ggml_log_callback bridge          = nullptr;
+    void *            bridge_userdata = nullptr;
     ggml_log_get(&bridge, &bridge_userdata);
     CHECK(bridge != nullptr);
     if (bridge == nullptr) {
@@ -98,10 +96,10 @@ void test_ggml_bridge_installed_and_maps_levels() {
     // INFO=1 WARN=2 ERROR=3 DEBUG=4): each ggml level must arrive as the
     // SAME-MEANING transcribe level, not the same number.
     bridge(GGML_LOG_LEVEL_DEBUG, "d\n", bridge_userdata);
-    bridge(GGML_LOG_LEVEL_INFO,  "i\n", bridge_userdata);
-    bridge(GGML_LOG_LEVEL_WARN,  "w\n", bridge_userdata);
+    bridge(GGML_LOG_LEVEL_INFO, "i\n", bridge_userdata);
+    bridge(GGML_LOG_LEVEL_WARN, "w\n", bridge_userdata);
     bridge(GGML_LOG_LEVEL_ERROR, "e\n", bridge_userdata);
-    bridge(GGML_LOG_LEVEL_CONT,  ".",   bridge_userdata);
+    bridge(GGML_LOG_LEVEL_CONT, ".", bridge_userdata);
 
     CHECK(rec.size() == 5);
     if (rec.size() == 5) {
@@ -147,8 +145,8 @@ void test_ggml_bridge_honors_disable() {
     Record rec;
     transcribe_log_set(recording_cb, &rec);
 
-    ggml_log_callback bridge = nullptr;
-    void * bridge_userdata = nullptr;
+    ggml_log_callback bridge          = nullptr;
+    void *            bridge_userdata = nullptr;
     ggml_log_get(&bridge, &bridge_userdata);
     CHECK(bridge != nullptr);
     if (bridge == nullptr) {
@@ -162,7 +160,7 @@ void test_ggml_bridge_honors_disable() {
     CHECK(rec.empty());
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_callback_receives_log_msg();

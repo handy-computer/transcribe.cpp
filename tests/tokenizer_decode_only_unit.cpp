@@ -35,26 +35,22 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_STR_EQ(a, b)                                                  \
-    do {                                                                    \
-        const std::string _av = (a);                                        \
-        const std::string _bv = (b);                                        \
-        if (_av != _bv) {                                                   \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: \"%s\" != \"%s\"\n",                  \
-                         __FILE__, __LINE__,                                \
-                         _av.c_str(), _bv.c_str());                         \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_STR_EQ(a, b)                                                                                        \
+    do {                                                                                                          \
+        const std::string _av = (a);                                                                              \
+        const std::string _bv = (b);                                                                              \
+        if (_av != _bv) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _av.c_str(), _bv.c_str()); \
+            ++g_failures;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
 // UTF-8 of "é" is the two raw bytes 0xC3 0xA9. Under GPT-2's
@@ -62,16 +58,16 @@ int g_failures = 0;
 // ("©"). The UTF-8 encoding of those two codepoints is the four bytes
 // 0xC3 0x83 0xC2 0xA9 (the bytes of "Ã©"). decode_gpt2_bytes inverts
 // the remap per codepoint to recover 0xC3 0xA9.
-const char k_eacute_raw[]   = "\xC3\xA9";              // "é" raw UTF-8
-const char k_eacute_remap[] = "\xC3\x83\xC2\xA9";      // "Ã©" UTF-8
+const char k_eacute_raw[]   = "\xC3\xA9";          // "é" raw UTF-8
+const char k_eacute_remap[] = "\xC3\x83\xC2\xA9";  // "Ã©" UTF-8
 
 void test_gpt2_decode_only() {
     transcribe::Tokenizer tok;
 
     std::vector<std::string> vocab;
-    vocab.emplace_back("hello");                  // id 0: ASCII passes through
-    vocab.emplace_back(k_eacute_remap);           // id 1: byte-remapped "é"
-    vocab.emplace_back("<|endoftext|>");          // id 2: special, falls back
+    vocab.emplace_back("hello");          // id 0: ASCII passes through
+    vocab.emplace_back(k_eacute_remap);   // id 1: byte-remapped "é"
+    vocab.emplace_back("<|endoftext|>");  // id 2: special, falls back
 
     transcribe::Tokenizer::DecodeOnlySpecials specials;
     specials.bos_id = 11;
@@ -99,15 +95,15 @@ void test_gpt2_decode_only() {
 
     // Decode: id 0 is ASCII, id 1 inverts the remap to raw "é".
     {
-        const int ids[] = {0};
+        const int ids[] = { 0 };
         CHECK_STR_EQ(tok.decode(ids, 1), "hello");
     }
     {
-        const int ids[] = {1};
+        const int ids[] = { 1 };
         CHECK_STR_EQ(tok.decode(ids, 1), k_eacute_raw);
     }
     {
-        const int ids[] = {0, 1};
+        const int ids[] = { 0, 1 };
         CHECK_STR_EQ(tok.decode(ids, 2), std::string("hello") + k_eacute_raw);
     }
 }
@@ -124,8 +120,8 @@ void test_raw_bytes_decode_only() {
     for (int i = 0; i < 256; ++i) {
         vocab.emplace_back(1, static_cast<char>(static_cast<unsigned char>(i)));
     }
-    vocab.emplace_back("hello");                  // id 256
-    vocab.emplace_back(k_eacute_raw);             // id 257: raw "é" bytes
+    vocab.emplace_back("hello");       // id 256
+    vocab.emplace_back(k_eacute_raw);  // id 257: raw "é" bytes
 
     transcribe::Tokenizer::DecodeOnlySpecials specials;
     specials.eos_id = 50257;
@@ -149,7 +145,9 @@ void test_raw_bytes_decode_only() {
         std::vector<int32_t> out;
         CHECK(tok.encode(k_eacute_raw, out) == TRANSCRIBE_OK);
         CHECK(out.size() == 1);
-        if (out.size() == 1) CHECK(out[0] == 257);
+        if (out.size() == 1) {
+            CHECK(out[0] == 257);
+        }
     }
     {
         // No multi-byte token covers "x" — encode falls back to the
@@ -157,7 +155,9 @@ void test_raw_bytes_decode_only() {
         std::vector<int32_t> out;
         CHECK(tok.encode("x", out) == TRANSCRIBE_OK);
         CHECK(out.size() == 1);
-        if (out.size() == 1) CHECK(out[0] == 0x78);
+        if (out.size() == 1) {
+            CHECK(out[0] == 0x78);
+        }
     }
     {
         // "hello" doesn't merge into a single token because real BPE
@@ -169,31 +169,29 @@ void test_raw_bytes_decode_only() {
         CHECK(tok.encode("hello", out) == TRANSCRIBE_OK);
         CHECK(out.size() == 5);
         std::vector<int> ids_int(out.begin(), out.end());
-        CHECK_STR_EQ(tok.decode(ids_int.data(),
-                                static_cast<int>(ids_int.size())),
-                     "hello");
+        CHECK_STR_EQ(tok.decode(ids_int.data(), static_cast<int>(ids_int.size())), "hello");
     }
 
     // Decode: raw-bytes mode concatenates verbatim, no remap inversion.
     {
-        const int ids[] = {256, 257};
+        const int ids[] = { 256, 257 };
         CHECK_STR_EQ(tok.decode(ids, 2), std::string("hello") + k_eacute_raw);
     }
     // Out-of-range ids are silently skipped (defensive).
     {
-        const int ids[] = {256, 9999};
+        const int ids[] = { 256, 9999 };
         CHECK_STR_EQ(tok.decode(ids, 2), "hello");
     }
 }
 
 void test_empty_vocab_rejected() {
-    transcribe::Tokenizer tok;
+    transcribe::Tokenizer    tok;
     std::vector<std::string> empty;
     CHECK(tok.load_decode_only_gpt2(empty) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(tok.load_decode_only_raw_bytes(empty) == TRANSCRIBE_ERR_INVALID_ARG);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_gpt2_decode_only();

@@ -28,4 +28,4 @@ void apply_family_invariants(transcribe_model & model) {
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INITIAL_PROMPT, true);
 }
 
-} // namespace transcribe::voxtral
+}  // namespace transcribe::voxtral

@@ -40,19 +40,19 @@ constexpr float kLayerNormEps = 1e-12f;
 //   ffn_fc2_w       [d_ff, d_model]
 //   ffn_fc2_b       [d_model]
 struct SanmBlockView {
-    ggml_tensor * norm_attn_w  = nullptr;
-    ggml_tensor * norm_attn_b  = nullptr;
-    ggml_tensor * attn_qkv_w   = nullptr;
-    ggml_tensor * attn_qkv_b   = nullptr;
-    ggml_tensor * attn_out_w   = nullptr;
-    ggml_tensor * attn_out_b   = nullptr;
-    ggml_tensor * attn_fsmn_w  = nullptr;
-    ggml_tensor * norm_ffn_w   = nullptr;
-    ggml_tensor * norm_ffn_b   = nullptr;
-    ggml_tensor * ffn_fc1_w    = nullptr;
-    ggml_tensor * ffn_fc1_b    = nullptr;
-    ggml_tensor * ffn_fc2_w    = nullptr;
-    ggml_tensor * ffn_fc2_b    = nullptr;
+    ggml_tensor * norm_attn_w = nullptr;
+    ggml_tensor * norm_attn_b = nullptr;
+    ggml_tensor * attn_qkv_w  = nullptr;
+    ggml_tensor * attn_qkv_b  = nullptr;
+    ggml_tensor * attn_out_w  = nullptr;
+    ggml_tensor * attn_out_b  = nullptr;
+    ggml_tensor * attn_fsmn_w = nullptr;
+    ggml_tensor * norm_ffn_w  = nullptr;
+    ggml_tensor * norm_ffn_b  = nullptr;
+    ggml_tensor * ffn_fc1_w   = nullptr;
+    ggml_tensor * ffn_fc1_b   = nullptr;
+    ggml_tensor * ffn_fc2_w   = nullptr;
+    ggml_tensor * ffn_fc2_b   = nullptr;
 };
 
 // Per-call shape for the SAN-M block. The batch axis rides ne[2] (B derived
@@ -67,7 +67,7 @@ struct SanmBlockView {
 struct SanmBlockParams {
     int n_heads = 0;
     int d_model = 0;
-    int kernel  = 0;       // FSMN depthwise kernel width (sanm_shift=0)
+    int kernel  = 0;  // FSMN depthwise kernel width (sanm_shift=0)
 
     ggml_tensor * attn_pad_mask = nullptr;
     ggml_tensor * conv_pad_mask = nullptr;
@@ -75,10 +75,7 @@ struct SanmBlockParams {
 };
 
 // LayerNorm with kLayerNormEps. `beta` is optional (may be nullptr).
-ggml_tensor * sv_layer_norm(ggml_context * ctx,
-                            ggml_tensor *  x,
-                            ggml_tensor *  gamma,
-                            ggml_tensor *  beta);
+ggml_tensor * sv_layer_norm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * gamma, ggml_tensor * beta);
 
 // FSMN parallel branch: depthwise conv1d on V (kernel-symmetric padding)
 // + V residual. Input layout `v_pre` ne=[d_model, T, B]; output same shape
@@ -98,15 +95,10 @@ ggml_tensor * fsmn_branch(ggml_context * ctx,
 // Variable-length batches supply p.attn_pad_mask / p.conv_pad_mask; a
 // non-null attn_pad_mask forces the manual SDPA path. Same-length batches
 // (and single-shot) run the flash path with no mask.
-ggml_tensor * sanm_attention(ggml_context *          ctx,
-                             ggml_tensor *           x,
-                             const SanmBlockView &   b,
-                             const SanmBlockParams & p);
+ggml_tensor * sanm_attention(ggml_context * ctx, ggml_tensor * x, const SanmBlockView & b, const SanmBlockParams & p);
 
 // 2-layer ReLU FFN (no residual; caller adds it).
-ggml_tensor * sanm_ffn(ggml_context *        ctx,
-                       ggml_tensor *         x,
-                       const SanmBlockView & b);
+ggml_tensor * sanm_ffn(ggml_context * ctx, ggml_tensor * x, const SanmBlockView & b);
 
 // Residual SAN-M block (in==out width). Used by encoders[*] and
 // tp_encoders[*]. Adds attn-branch residual, then ffn residual.
@@ -135,8 +127,6 @@ ggml_tensor * sanm_block_projection(ggml_context *          ctx,
 //
 //   Matches funasr.SinusoidalPositionEncoder.encode (Vaswani-style
 //   additive PE with `torch.cat([sin, cos], dim=2)`).
-void build_sinusoidal_pe(std::vector<float> & out,
-                         int                  depth,
-                         int                  T);
+void build_sinusoidal_pe(std::vector<float> & out, int depth, int T);
 
-} // namespace transcribe::sanm
+}  // namespace transcribe::sanm

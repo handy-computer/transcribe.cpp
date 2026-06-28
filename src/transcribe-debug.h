@@ -102,9 +102,7 @@ void mark_tensor_for_dump(struct ggml_tensor * tensor);
 // error, malloc error), logs to stderr and returns without throwing.
 // Dumping is debug-only and must never affect compute correctness or
 // propagate errors out of a graph build.
-void dump_tensor(const char *               name,
-                 const struct ggml_tensor * tensor,
-                 const char *               stage = nullptr);
+void dump_tensor(const char * name, const struct ggml_tensor * tensor, const char * stage = nullptr);
 
 // Dump a host-side fp32 buffer to <dump_dir>/<name>.{f32,json}.
 //
@@ -116,11 +114,11 @@ void dump_tensor(const char *               name,
 // product(shape) == n_elem; pass `{n_elem}` for a 1D vector.
 //
 // Same name / stage / failure semantics as the ggml-tensor variant.
-void dump_host_f32(const char *           name,
-                   const float *          data,
-                   long long              n_elem,
-                   const long long *      shape,
-                   int                    n_dims,
-                   const char *           stage = nullptr);
+void dump_host_f32(const char *      name,
+                   const float *     data,
+                   long long         n_elem,
+                   const long long * shape,
+                   int               n_dims,
+                   const char *      stage = nullptr);
 
-} // namespace transcribe::debug
+}  // namespace transcribe::debug

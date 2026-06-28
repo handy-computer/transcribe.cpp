@@ -30,8 +30,7 @@ namespace transcribe {
 // Returns true iff every invocation returned true; a false return does not
 // stop the other indices (the caller handles partial failure — typically by
 // falling back to the per-utterance path).
-bool parallel_for_all(int n, int n_threads,
-                      const std::function<bool(int)> & work);
+bool parallel_for_all(int n, int n_threads, const std::function<bool(int)> & work);
 
 // Default CPU thread count for the ggml backends and the host parallel-for
 // when the caller passes n_threads <= 0. Counts the CPUs the process may
@@ -70,30 +69,23 @@ int configure_sched_n_threads(ggml_backend_sched_t sched, int requested);
 // src[c*lens[b] + t]); `dst` is sized n_ch * T_max * n with slab b laid out as
 // [T_max, n_ch] (element (t,c) at (b*n_ch + c)*T_max + t), matching the
 // conformer mel_in tensor ne = [T_max, n_ch, 1, B]. Padded tail left zero.
-void pack_pad_channel_major(
-    std::vector<float> &                    dst,
-    const std::vector<std::vector<float>> & src,
-    const std::vector<int> &                lens,
-    int                                     n_ch,
-    int                                     T_max);
+void pack_pad_channel_major(std::vector<float> &                    dst,
+                            const std::vector<std::vector<float>> & src,
+                            const std::vector<int> &                lens,
+                            int                                     n_ch,
+                            int                                     T_max);
 
 // Fill an attention key-padding mask (f32) of logical shape [T, .., n] with the
 // host ordering index b*T + k: 0.0 on real keys (k < real_lens[b]), -inf on
 // padded keys. No-op when `mask` is null. The element order is identical for
 // the conformer [T,1,1,n] and SAN-M [T,1,1,n] key-padding tensors.
-void fill_keypad_mask(ggml_tensor *            mask,
-                      const std::vector<int> & real_lens,
-                      int                      T,
-                      int                      n);
+void fill_keypad_mask(ggml_tensor * mask, const std::vector<int> & real_lens, int T, int n);
 
 // Fill a conv valid-frame mask (f32) with host ordering index b*T + t: 1.0 on
 // real frames (t < real_lens[b]), 0.0 on padded. No-op when `mask` is null.
 // The b*T + t order matches both the conformer [T,1,n,1] and SAN-M [1,T,n]
 // valid-frame tensors.
-void fill_valid_frame_mask(ggml_tensor *            mask,
-                           const std::vector<int> & real_lens,
-                           int                      T,
-                           int                      n);
+void fill_valid_frame_mask(ggml_tensor * mask, const std::vector<int> & real_lens, int T, int n);
 
 // Per-utterance decode loop for the batched-encoder fast path. For each
 // utterance b in [0, n): polls abort, resets the scratch result slot, then
@@ -102,14 +94,13 @@ void fill_valid_frame_mask(ggml_tensor *            mask,
 // amortization of the shared encode + total mel cost (so per-utt timings sum to
 // the real batch wall cost); decode_fn's return is the utterance's status.
 // Returns TRANSCRIBE_ERR_ABORTED if abort fires between utterances, else OK.
-transcribe_status decode_batch_slices(
-    transcribe_session *  session,
-    int                   n,
-    const float *         host_buf,
-    std::size_t           utt_elems,
-    int64_t               total_encode_us,
-    int64_t               total_mel_us,
-    const std::function<transcribe_status(int b, const float * slice)> & decode_fn);
+transcribe_status decode_batch_slices(transcribe_session * session,
+                                      int                  n,
+                                      const float *        host_buf,
+                                      std::size_t          utt_elems,
+                                      int64_t              total_encode_us,
+                                      int64_t              total_mel_us,
+                                      const std::function<transcribe_status(int b, const float * slice)> & decode_fn);
 
 // ---------------------------------------------------------------------------
 // Batched encoder-decoder greedy step loop (cohere / canary / moonshine)
@@ -154,20 +145,19 @@ using EncDecRebuildFn = std::function<bool(int win, EncDecStepIO & io)>;
 // (valid) row hit the generation budget (max_new) or the context window
 // (max_n_kv) BEFORE emitting eos_id (transcript truncated), else 0. Lets a
 // family report per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED from run_batch.
-transcribe_status run_batched_encdec_step_loop(
-    transcribe_session *                session,
-    ggml_backend_sched_t                sched,
-    const EncDecRebuildFn &             rebuild,
-    const std::vector<int32_t> &        prompt_ids,
-    int                                 prompt_len,
-    int                                 init_window,
-    int                                 max_new,
-    int                                 max_n_kv,
-    int32_t                             eos_id,
-    int                                 n_batch,
-    const std::vector<char> &           valid,
-    std::vector<std::vector<int32_t>> & generated,
-    int *                               n_steps_out = nullptr,
-    std::vector<char> *                 truncated_out = nullptr);
+transcribe_status run_batched_encdec_step_loop(transcribe_session *                session,
+                                               ggml_backend_sched_t                sched,
+                                               const EncDecRebuildFn &             rebuild,
+                                               const std::vector<int32_t> &        prompt_ids,
+                                               int                                 prompt_len,
+                                               int                                 init_window,
+                                               int                                 max_new,
+                                               int                                 max_n_kv,
+                                               int32_t                             eos_id,
+                                               int                                 n_batch,
+                                               const std::vector<char> &           valid,
+                                               std::vector<std::vector<int32_t>> & generated,
+                                               int *                               n_steps_out   = nullptr,
+                                               std::vector<char> *                 truncated_out = nullptr);
 
-} // namespace transcribe
+}  // namespace transcribe

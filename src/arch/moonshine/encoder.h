@@ -28,15 +28,15 @@ struct MoonshineHParams;
 struct MoonshineWeights;
 
 struct EncoderDumps {
-    ggml_tensor * audio_in     = nullptr;
-    ggml_tensor * conv1_out    = nullptr;   // tanh(conv0(audio))
-    ggml_tensor * groupnorm_out = nullptr;
-    ggml_tensor * conv2_out    = nullptr;   // gelu(conv1(.))
-    ggml_tensor * conv3_out    = nullptr;   // gelu(conv2(.)) (block input)
-    ggml_tensor * rope_cos     = nullptr;
-    ggml_tensor * rope_sin     = nullptr;
+    ggml_tensor *              audio_in      = nullptr;
+    ggml_tensor *              conv1_out     = nullptr;  // tanh(conv0(audio))
+    ggml_tensor *              groupnorm_out = nullptr;
+    ggml_tensor *              conv2_out     = nullptr;  // gelu(conv1(.))
+    ggml_tensor *              conv3_out     = nullptr;  // gelu(conv2(.)) (block input)
+    ggml_tensor *              rope_cos      = nullptr;
+    ggml_tensor *              rope_sin      = nullptr;
     std::vector<ggml_tensor *> block_outs;
-    ggml_tensor * final_out    = nullptr;
+    ggml_tensor *              final_out = nullptr;
 };
 
 struct EncoderBuild {
@@ -53,7 +53,7 @@ struct EncoderBuild {
     // Output: final encoder hidden state [d_model, T_enc] f32.
     ggml_tensor * out = nullptr;
 
-    EncoderDumps  dumps {};
+    EncoderDumps  dumps{};
     ggml_cgraph * graph = nullptr;
 
     // Number of encoder frames produced for the supplied n_samples.
@@ -79,4 +79,4 @@ EncoderBuild build_encoder_graph(ggml_context *           compute_ctx,
                                  int                      n_samples,
                                  bool                     use_flash = true);
 
-} // namespace transcribe::moonshine
+}  // namespace transcribe::moonshine

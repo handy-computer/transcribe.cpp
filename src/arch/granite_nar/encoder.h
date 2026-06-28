@@ -22,9 +22,8 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "ggml.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <vector>
@@ -33,48 +32,49 @@ struct ggml_context;
 struct ggml_tensor;
 struct ggml_cgraph;
 
-namespace transcribe { class MelFrontend; }
+namespace transcribe {
+class MelFrontend;
+}
 
 namespace transcribe::granite_nar {
 
 // Host-side mel + 2-frame stack. Reuses the AR granite implementation.
-transcribe_status compute_mel_encoder_input(
-    const transcribe::MelFrontend & mel,
-    const float *                   pcm,
-    int                             n_samples,
-    int                             n_threads,
-    std::vector<float> &            out_mel,
-    int &                           out_t_enc);
+transcribe_status compute_mel_encoder_input(const transcribe::MelFrontend & mel,
+                                            const float *                   pcm,
+                                            int                             n_samples,
+                                            int                             n_threads,
+                                            std::vector<float> &            out_mel,
+                                            int &                           out_t_enc);
 
 struct EncoderBuild {
     // Graph inputs (caller uploads at compute time).
-    ggml_tensor * mel_in           = nullptr;  // [input_dim, T_enc]
-    ggml_tensor * attention_dists  = nullptr;  // [ctx*ctx] i32
-    ggml_tensor * last_block_mask  = nullptr;  // [ctx, ctx, n_blocks_local]
-    ggml_tensor * zero_pad         = nullptr;  // optional [hidden, T_pad-T_enc]
+    ggml_tensor * mel_in          = nullptr;  // [input_dim, T_enc]
+    ggml_tensor * attention_dists = nullptr;  // [ctx*ctx] i32
+    ggml_tensor * last_block_mask = nullptr;  // [ctx, ctx, n_blocks_local]
+    ggml_tensor * zero_pad        = nullptr;  // optional [hidden, T_pad-T_enc]
 
     // Outputs.
-    ggml_tensor * cat_out          = nullptr;  // [num_enc_layers * hidden, T_enc]
-                                               //  the projector input
-    ggml_tensor * ctc_logits       = nullptr;  // [enc_out_dim=348, T_enc]
-    ggml_tensor * ctc_bpe_logits   = nullptr;  // [bpe_output_dim, T_enc]
-                                               //  raw frame-level (no pool)
-    ggml_tensor * mid_blank_probs  = nullptr;  // [T_enc] — softmax(mid_ctc)[blank].
-                                               //  Used host-side as the BPE pool's
-                                               //  importance weight (importance =
-                                               //  1 - blank_prob_mid).
+    ggml_tensor * cat_out         = nullptr;  // [num_enc_layers * hidden, T_enc]
+                                              //  the projector input
+    ggml_tensor * ctc_logits      = nullptr;  // [enc_out_dim=348, T_enc]
+    ggml_tensor * ctc_bpe_logits  = nullptr;  // [bpe_output_dim, T_enc]
+                                              //  raw frame-level (no pool)
+    ggml_tensor * mid_blank_probs = nullptr;  // [T_enc] — softmax(mid_ctc)[blank].
+                                              //  Used host-side as the BPE pool's
+                                              //  importance weight (importance =
+                                              //  1 - blank_prob_mid).
 
-    ggml_cgraph * graph            = nullptr;
+    ggml_cgraph * graph = nullptr;
 
     struct Dumps {
-        ggml_tensor * input_linear_out = nullptr;
-        ggml_tensor * block_0_out      = nullptr;
-        ggml_tensor * block_mid_pre    = nullptr;  // block (N/2 - 1) post-LN
-                                                   // (== `enc.block.7.out`)
-        ggml_tensor * block_mid_post   = nullptr;  // block (N/2)   post-LN
-                                                   // (== `enc.block.8.out`)
-        ggml_tensor * block_last_out   = nullptr;  // block (N-1)
-        ggml_tensor * ctc_logits       = nullptr;  // == ctc_logits, named
+        ggml_tensor * input_linear_out  = nullptr;
+        ggml_tensor * block_0_out       = nullptr;
+        ggml_tensor * block_mid_pre     = nullptr;  // block (N/2 - 1) post-LN
+                                                    // (== `enc.block.7.out`)
+        ggml_tensor * block_mid_post    = nullptr;  // block (N/2)   post-LN
+                                                    // (== `enc.block.8.out`)
+        ggml_tensor * block_last_out    = nullptr;  // block (N-1)
+        ggml_tensor * ctc_logits        = nullptr;  // == ctc_logits, named
         // Block-0 sub-step taps.
         ggml_tensor * block_0_post_ff1  = nullptr;
         ggml_tensor * block_0_post_attn = nullptr;
@@ -123,13 +123,12 @@ std::vector<float>   precompute_last_block_mask(int context_size, int t_enc_rema
 // window are weighted by the (softmaxed) CTC non-blank posterior, then a
 // greedy argmax + collapse-repeats + drop-blanks yields the hypothesis. See
 // the implementation in encoder.cpp.
-void compute_bpe_ctc_initial_hypothesis(
-    const std::vector<float> & importance_non_blank,
-    const std::vector<float> & ctc_bpe_logits,
-    int                        n_bpe_vocab,
-    int                        T_enc,
-    int                        pool_window,
-    int                        blank_id,
-    std::vector<int32_t> &     out_token_ids);
+void compute_bpe_ctc_initial_hypothesis(const std::vector<float> & importance_non_blank,
+                                        const std::vector<float> & ctc_bpe_logits,
+                                        int                        n_bpe_vocab,
+                                        int                        T_enc,
+                                        int                        pool_window,
+                                        int                        blank_id,
+                                        std::vector<int32_t> &     out_token_ids);
 
-} // namespace transcribe::granite_nar
+}  // namespace transcribe::granite_nar

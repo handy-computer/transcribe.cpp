@@ -11,11 +11,10 @@
 
 #pragma once
 
-#include "voxtral_realtime.h"
 #include "causal_lm/causal_lm.h"
-#include "weights.h"
-
 #include "ggml.h"
+#include "voxtral_realtime.h"
+#include "weights.h"
 
 struct ggml_context;
 struct ggml_cgraph;
@@ -39,22 +38,22 @@ struct PrefillBuild {
     ggml_tensor * positions_in = nullptr;  // [T] i32
     ggml_tensor * mask_in      = nullptr;  // [T, T] f16 causal
     ggml_tensor * out          = nullptr;  // logits ([vocab] last pos, or [vocab,T])
-    DecoderDumps  dumps {};
-    ggml_cgraph * graph        = nullptr;
-    int T = 0;
+    DecoderDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
+    int           T     = 0;
 };
 
 // Teacher-forced / prompt prefill over T positions with additive audio overlay.
 // want_all_logits=true exposes logits for every position (dump path: read
 // gen0/gen8 columns); false slices the last position (autoregressive prefill).
-PrefillBuild build_prefill_graph(ggml_context *                  ctx,
-                                 const Weights &                 weights,
-                                 const HParams &                 hp,
+PrefillBuild build_prefill_graph(ggml_context *                   ctx,
+                                 const Weights &                  weights,
+                                 const HParams &                  hp,
                                  transcribe::causal_lm::KvCache & kv_cache,
-                                 ggml_tensor *                   ada_scale_all,
-                                 int                             T,
-                                 bool                            use_flash,
-                                 bool                            want_all_logits);
+                                 ggml_tensor *                    ada_scale_all,
+                                 int                              T,
+                                 bool                             use_flash,
+                                 bool                             want_all_logits);
 
 struct StepBuild {
     ggml_tensor * input_id_in = nullptr;  // [1] i32
@@ -65,16 +64,16 @@ struct StepBuild {
     ggml_tensor * out         = nullptr;  // [1] i32 argmax
     ggml_tensor * logits      = nullptr;  // [vocab] f32
     ggml_cgraph * graph       = nullptr;
-    int max_n_kv = 0;
+    int           max_n_kv    = 0;
 };
 
-StepBuild build_step_graph(ggml_context *                  ctx,
-                           const Weights &                 weights,
-                           const HParams &                 hp,
+StepBuild build_step_graph(ggml_context *                   ctx,
+                           const Weights &                  weights,
+                           const HParams &                  hp,
                            transcribe::causal_lm::KvCache & kv_cache,
-                           ggml_tensor *                   ada_scale_all,
-                           int                             max_n_kv,
-                           bool                            use_flash);
+                           ggml_tensor *                    ada_scale_all,
+                           int                              max_n_kv,
+                           bool                             use_flash);
 
 // ---------------------------------------------------------------------------
 // Multi-position verify (speculative decode)
@@ -94,18 +93,18 @@ struct VerifyBuild {
     ggml_tensor * out          = nullptr;  // [T_verify] i32 argmax
     ggml_tensor * logits       = nullptr;  // [vocab, T_verify] f32
     ggml_cgraph * graph        = nullptr;
-    int T_verify = 0;
-    int max_n_kv = 0;
+    int           T_verify     = 0;
+    int           max_n_kv     = 0;
 };
 
-VerifyBuild build_verify_graph(ggml_context *                  ctx,
-                               const Weights &                 weights,
-                               const HParams &                 hp,
+VerifyBuild build_verify_graph(ggml_context *                   ctx,
+                               const Weights &                  weights,
+                               const HParams &                  hp,
                                transcribe::causal_lm::KvCache & kv_cache,
-                               ggml_tensor *                   ada_scale_all,
-                               int                             T_verify,
-                               int                             max_n_kv,
-                               bool                            use_flash);
+                               ggml_tensor *                    ada_scale_all,
+                               int                              T_verify,
+                               int                              max_n_kv,
+                               bool                             use_flash);
 
 // ---------------------------------------------------------------------------
 // Batched prefill / step (offline transcribe_run_batch)
@@ -129,19 +128,18 @@ struct PrefillBuildBatched {
     ggml_tensor * out            = nullptr;  // [B] i32 argmax (first generated token)
     ggml_tensor * logits         = nullptr;  // [vocab, B] f32
     ggml_cgraph * graph          = nullptr;
-    int T_prompt = 0;
-    int n_batch  = 0;
+    int           T_prompt       = 0;
+    int           n_batch        = 0;
 };
 
-PrefillBuildBatched build_prefill_graph_batched(
-    ggml_context *                  ctx,
-    const Weights &                 weights,
-    const HParams &                 hp,
-    transcribe::causal_lm::KvCache & kv_cache,
-    ggml_tensor *                   ada_scale_all,
-    int                             T_prompt,
-    int                             n_batch,
-    bool                            use_flash);
+PrefillBuildBatched build_prefill_graph_batched(ggml_context *                   ctx,
+                                                const Weights &                  weights,
+                                                const HParams &                  hp,
+                                                transcribe::causal_lm::KvCache & kv_cache,
+                                                ggml_tensor *                    ada_scale_all,
+                                                int                              T_prompt,
+                                                int                              n_batch,
+                                                bool                             use_flash);
 
 struct StepBuildBatched {
     ggml_tensor * input_ids_in = nullptr;  // [B] i32
@@ -152,18 +150,17 @@ struct StepBuildBatched {
     ggml_tensor * out          = nullptr;  // [B] i32 argmax
     ggml_tensor * logits       = nullptr;  // [vocab, B] f32
     ggml_cgraph * graph        = nullptr;
-    int max_n_kv = 0;
-    int n_batch  = 0;
+    int           max_n_kv     = 0;
+    int           n_batch      = 0;
 };
 
-StepBuildBatched build_step_graph_batched(
-    ggml_context *                  ctx,
-    const Weights &                 weights,
-    const HParams &                 hp,
-    transcribe::causal_lm::KvCache & kv_cache,
-    ggml_tensor *                   ada_scale_all,
-    int                             max_n_kv,
-    int                             n_batch,
-    bool                            use_flash);
+StepBuildBatched build_step_graph_batched(ggml_context *                   ctx,
+                                          const Weights &                  weights,
+                                          const HParams &                  hp,
+                                          transcribe::causal_lm::KvCache & kv_cache,
+                                          ggml_tensor *                    ada_scale_all,
+                                          int                              max_n_kv,
+                                          int                              n_batch,
+                                          bool                             use_flash);
 
-} // namespace transcribe::voxtral_realtime
+}  // namespace transcribe::voxtral_realtime

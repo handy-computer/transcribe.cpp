@@ -37,42 +37,43 @@
 namespace transcribe {
 
 struct KaldiFbankParams {
-    int  n_mels          = 0;      // 80
-    int  sample_rate     = 0;      // 16000
-    int  win_length      = 0;      // 400
-    int  hop_length      = 0;      // 160
-    int  lfr_m           = 0;      // 7
-    int  lfr_n           = 0;      // 6
-    int  d_input         = 0;      // n_mels * lfr_m, e.g. 560
-    bool upscale_samples = true;   // ×32768 PCM scale before framing
-    bool apply_cmvn      = false;  // gate the trailing CMVN step
+    int                n_mels          = 0;      // 80
+    int                sample_rate     = 0;      // 16000
+    int                win_length      = 0;      // 400
+    int                hop_length      = 0;      // 160
+    int                lfr_m           = 0;      // 7
+    int                lfr_n           = 0;      // 6
+    int                d_input         = 0;      // n_mels * lfr_m, e.g. 560
+    bool               upscale_samples = true;   // ×32768 PCM scale before framing
+    bool               apply_cmvn      = false;  // gate the trailing CMVN step
     // Required when apply_cmvn=true; ignored otherwise. Length d_input.
     std::vector<float> cmvn_shift;
     std::vector<float> cmvn_scale;
 };
 
 class KaldiFbankFrontend {
-public:
+  public:
     explicit KaldiFbankFrontend(KaldiFbankParams params);
 
     // Compute LFR (+ optional CMVN) features from raw [-1, 1] f32 PCM.
     // Output is row-major [T_lfr, d_input] stored in `out_features`.
     // Returns the number of LFR frames; 0 if the input is too short to
     // produce any LFR output (which means the model cannot run on it).
-    int compute(const float *        pcm,
-                size_t               n_samples,
-                std::vector<float> & out_features) const;
+    int compute(const float * pcm, size_t n_samples, std::vector<float> & out_features) const;
 
-    int  d_input()  const { return params_.d_input; }
-    int  n_mels()   const { return params_.n_mels; }
-    int  lfr_m()    const { return params_.lfr_m; }
-    int  lfr_n()    const { return params_.lfr_n; }
+    int d_input() const { return params_.d_input; }
 
-private:
+    int n_mels() const { return params_.n_mels; }
+
+    int lfr_m() const { return params_.lfr_m; }
+
+    int lfr_n() const { return params_.lfr_n; }
+
+  private:
     KaldiFbankParams   params_;
-    int                padded_n_fft_ = 0;   // next_pow2(win_length)
-    std::vector<float> mel_fb_;             // [n_mels, padded_n_fft/2 + 1]
-    std::vector<float> window_;             // [win_length]
+    int                padded_n_fft_ = 0;  // next_pow2(win_length)
+    std::vector<float> mel_fb_;            // [n_mels, padded_n_fft/2 + 1]
+    std::vector<float> window_;            // [win_length]
 };
 
-} // namespace transcribe
+}  // namespace transcribe

@@ -51,13 +51,11 @@
 // real value of THIS test is #7-#9, which only exist for the real
 // 0.6B dimensions.
 
-#include "transcribe.h"
-
 #include "arch/parakeet/parakeet.h"
 #include "arch/parakeet/weights.h"
-#include "transcribe-model.h"
-
 #include "ggml.h"
+#include "transcribe-model.h"
+#include "transcribe.h"
 
 #include <sys/stat.h>
 
@@ -70,51 +68,44 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ_INT(actual, expected)                                      \
-    do {                                                                    \
-        const long long _a = static_cast<long long>(actual);                \
-        const long long _e = static_cast<long long>(expected);              \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: %s = %lld, expected %lld\n",          \
-                         __FILE__, __LINE__, #actual, _a, _e);              \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ_INT(actual, expected)                                                                           \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
-#define CHECK_STR_EQ(a, b)                                                  \
-    do {                                                                    \
-        const std::string _av = (a);                                        \
-        const std::string _bv = (b);                                        \
-        if (_av != _bv) {                                                   \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: \"%s\" != \"%s\"\n",                  \
-                         __FILE__, __LINE__,                                \
-                         _av.c_str(), _bv.c_str());                         \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_STR_EQ(a, b)                                                                                        \
+    do {                                                                                                          \
+        const std::string _av = (a);                                                                              \
+        const std::string _bv = (b);                                                                              \
+        if (_av != _bv) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _av.c_str(), _bv.c_str()); \
+            ++g_failures;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
-const transcribe::parakeet::ParakeetModel *
-parakeet_view(const struct transcribe_model * m) {
+const transcribe::parakeet::ParakeetModel * parakeet_view(const struct transcribe_model * m) {
     return static_cast<const transcribe::parakeet::ParakeetModel *>(m);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * env = std::getenv("TRANSCRIBE_PARAKEET_GGUF");
@@ -130,21 +121,17 @@ int main() {
     const std::string fixture = env;
 
     if (!file_exists(fixture)) {
-        std::fprintf(stderr,
-                     "parakeet_real_smoke: file not found: %s\n",
-                     fixture.c_str());
+        std::fprintf(stderr, "parakeet_real_smoke: file not found: %s\n", fixture.c_str());
         return 77;
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
 
-    const transcribe_status st =
-        transcribe_model_load_file(fixture.c_str(), &mp, &model);
+    const transcribe_status st = transcribe_model_load_file(fixture.c_str(), &mp, &model);
     if (st != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "FAIL load: expected OK, got %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL load: expected OK, got %s\n", transcribe_status_string(st));
         return EXIT_FAILURE;
     }
     if (model == nullptr) {
@@ -160,8 +147,7 @@ int main() {
     {
         const std::string backend = transcribe_model_backend(model);
         if (backend.empty()) {
-            std::fprintf(stderr,
-                         "FAIL: backend = \"\" after step 1, expected non-empty\n");
+            std::fprintf(stderr, "FAIL: backend = \"\" after step 1, expected non-empty\n");
             ++g_failures;
         }
     }
@@ -169,19 +155,18 @@ int main() {
     // Variant must be one of the two the converter produces. Capture
     // which one for the variant-dependent assertions below.
     const std::string variant = transcribe_model_variant_string(model);
-    const bool is_v2 = (variant == "tdt-0.6b-v2");
-    const bool is_v3 = (variant == "tdt-0.6b-v3");
+    const bool        is_v2   = (variant == "tdt-0.6b-v2");
+    const bool        is_v3   = (variant == "tdt-0.6b-v3");
     if (!is_v2 && !is_v3) {
-        std::fprintf(stderr,
-                     "FAIL: unexpected variant \"%s\"\n", variant.c_str());
+        std::fprintf(stderr, "FAIL: unexpected variant \"%s\"\n", variant.c_str());
         ++g_failures;
     }
 
     // Family invariants.
-    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
-    const bool caps_ok =
-        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    transcribe_capabilities caps_buf;
+    transcribe_capabilities_init(&caps_buf);
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->native_sample_rate == 16000);
@@ -218,28 +203,28 @@ int main() {
     // (v2 and v3) shares these encoder / predictor / joint dims —
     // only the vocab size differs.
     const auto & hp = pm->hparams;
-    CHECK_EQ_INT(hp.enc_n_layers,             24);
-    CHECK_EQ_INT(hp.enc_d_model,              1024);
-    CHECK_EQ_INT(hp.enc_n_heads,              8);
-    CHECK_EQ_INT(hp.enc_d_ff,                 4096);
-    CHECK_EQ_INT(hp.enc_conv_kernel,          9);
-    CHECK_EQ_INT(hp.enc_subsampling_factor,   8);
+    CHECK_EQ_INT(hp.enc_n_layers, 24);
+    CHECK_EQ_INT(hp.enc_d_model, 1024);
+    CHECK_EQ_INT(hp.enc_n_heads, 8);
+    CHECK_EQ_INT(hp.enc_d_ff, 4096);
+    CHECK_EQ_INT(hp.enc_conv_kernel, 9);
+    CHECK_EQ_INT(hp.enc_subsampling_factor, 8);
     CHECK_EQ_INT(hp.enc_subsampling_channels, 256);
-    CHECK_EQ_INT(hp.enc_use_bias,             0);
-    CHECK_EQ_INT(hp.enc_head_dim(),           128); // 1024 / 8
-    CHECK_EQ_INT(hp.pred_hidden,              640);
-    CHECK_EQ_INT(hp.pred_n_layers,            2);
+    CHECK_EQ_INT(hp.enc_use_bias, 0);
+    CHECK_EQ_INT(hp.enc_head_dim(), 128);  // 1024 / 8
+    CHECK_EQ_INT(hp.pred_hidden, 640);
+    CHECK_EQ_INT(hp.pred_n_layers, 2);
     if (is_v2) {
-        CHECK_EQ_INT(hp.pred_vocab,           1025); // 1024 + 1 start row
-        CHECK_EQ_INT(hp.joint_n_classes(),    1030); // 1024 + 5 + 1
+        CHECK_EQ_INT(hp.pred_vocab, 1025);         // 1024 + 1 start row
+        CHECK_EQ_INT(hp.joint_n_classes(), 1030);  // 1024 + 5 + 1
     }
     if (is_v3) {
-        CHECK_EQ_INT(hp.pred_vocab,           8193); // 8192 + 1 start row
-        CHECK_EQ_INT(hp.joint_n_classes(),    8198); // 8192 + 5 + 1
+        CHECK_EQ_INT(hp.pred_vocab, 8193);         // 8192 + 1 start row
+        CHECK_EQ_INT(hp.joint_n_classes(), 8198);  // 8192 + 5 + 1
     }
-    CHECK_EQ_INT(hp.joint_hidden,             640);
-    CHECK_EQ_INT(hp.joint_num_extra_outputs,  5);
-    CHECK_STR_EQ(hp.joint_activation,         "relu");
+    CHECK_EQ_INT(hp.joint_hidden, 640);
+    CHECK_EQ_INT(hp.joint_num_extra_outputs, 5);
+    CHECK_STR_EQ(hp.joint_activation, "relu");
     // TDT durations: every published Parakeet 0.6B variant ships
     // [0, 1, 2, 3, 4]; loader cross-validates that the array length
     // matches num_extra_outputs.
@@ -249,19 +234,19 @@ int main() {
     CHECK_EQ_INT(hp.tdt_durations[2], 2);
     CHECK_EQ_INT(hp.tdt_durations[3], 3);
     CHECK_EQ_INT(hp.tdt_durations[4], 4);
-    CHECK_EQ_INT(hp.tdt_max_symbols,          10);
-    CHECK_EQ_INT(hp.fe_num_mels,              128);
-    CHECK_EQ_INT(hp.fe_sample_rate,           16000);
-    CHECK_STR_EQ(hp.fe_type,                  "mel");
-    CHECK_EQ_INT(hp.fe_n_fft,                 512);
-    CHECK_EQ_INT(hp.fe_win_length,            400);  // 0.025 s * 16000
-    CHECK_EQ_INT(hp.fe_hop_length,            160);  // 0.010 s * 16000
-    CHECK_STR_EQ(hp.fe_window,                "hann");
-    CHECK_STR_EQ(hp.fe_normalize,             "per_feature");
-    CHECK(hp.fe_dither       == 1e-5f);
+    CHECK_EQ_INT(hp.tdt_max_symbols, 10);
+    CHECK_EQ_INT(hp.fe_num_mels, 128);
+    CHECK_EQ_INT(hp.fe_sample_rate, 16000);
+    CHECK_STR_EQ(hp.fe_type, "mel");
+    CHECK_EQ_INT(hp.fe_n_fft, 512);
+    CHECK_EQ_INT(hp.fe_win_length, 400);  // 0.025 s * 16000
+    CHECK_EQ_INT(hp.fe_hop_length, 160);  // 0.010 s * 16000
+    CHECK_STR_EQ(hp.fe_window, "hann");
+    CHECK_STR_EQ(hp.fe_normalize, "per_feature");
+    CHECK(hp.fe_dither == 1e-5f);
     CHECK(hp.fe_pre_emphasis == 0.97f);
-    CHECK(hp.fe_f_min        == 0.0f);
-    CHECK(hp.fe_f_max        == 8000.0f);
+    CHECK(hp.fe_f_min == 0.0f);
+    CHECK(hp.fe_f_max == 8000.0f);
 
     // Block count matches the loader's read of enc_n_layers.
     CHECK_EQ_INT(pm->weights.blocks.size(), 24);
@@ -270,7 +255,7 @@ int main() {
     // (predictor: embed + 2*(Wx, Wh, bias)) + 6 (joint) = 697.
     {
         const int total = 12 + 24 * 28 + 7 + 6;
-        CHECK_EQ_INT(total, 697); // sanity on the formula itself
+        CHECK_EQ_INT(total, 697);  // sanity on the formula itself
     }
 
     // Spot-check a handful of tensor shapes against the per-block
@@ -300,16 +285,16 @@ int main() {
         const auto * t = pm->weights.predictor.embed_w;
         CHECK(t != nullptr);
         if (t != nullptr) {
-            CHECK_EQ_INT(t->ne[0], 640);                  // pred_hidden
-            CHECK_EQ_INT(t->ne[1], hp.pred_vocab);        // 1025 or 8193
+            CHECK_EQ_INT(t->ne[0], 640);            // pred_hidden
+            CHECK_EQ_INT(t->ne[1], hp.pred_vocab);  // 1025 or 8193
         }
     }
     {
         const auto * t = pm->weights.joint.out_w;
         CHECK(t != nullptr);
         if (t != nullptr) {
-            CHECK_EQ_INT(t->ne[0], 640);                  // joint_hidden
-            CHECK_EQ_INT(t->ne[1], hp.joint_n_classes()); // 1030 or 8198
+            CHECK_EQ_INT(t->ne[0], 640);                   // joint_hidden
+            CHECK_EQ_INT(t->ne[1], hp.joint_n_classes());  // 1030 or 8198
         }
     }
 
@@ -323,7 +308,6 @@ int main() {
         std::fprintf(stderr, "parakeet_real_smoke: %d failures\n", g_failures);
         return EXIT_FAILURE;
     }
-    std::fprintf(stdout,
-                 "parakeet_real_smoke: ok (%s)\n", variant.c_str());
+    std::fprintf(stdout, "parakeet_real_smoke: ok (%s)\n", variant.c_str());
     return EXIT_SUCCESS;
 }

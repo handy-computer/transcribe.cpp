@@ -26,8 +26,8 @@ namespace transcribe::unicode {
 
 namespace data {
 extern const std::initializer_list<std::pair<uint32_t, uint16_t>> ranges_flags;
-extern const std::unordered_set<uint32_t> set_whitespace;
-} // namespace data
+extern const std::unordered_set<uint32_t>                         set_whitespace;
+}  // namespace data
 
 // ---------------------------------------------------------------------------
 // UTF-8 codec.
@@ -80,21 +80,16 @@ uint32_t cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return b0;
     }
     if ((b0 & 0xE0u) == 0xC0u) {
-        if (offset + 1 >= utf8.size() ||
-            (static_cast<uint8_t>(utf8[offset + 1]) & 0xC0u) != 0x80u)
-        {
+        if (offset + 1 >= utf8.size() || (static_cast<uint8_t>(utf8[offset + 1]) & 0xC0u) != 0x80u) {
             throw std::invalid_argument("transcribe::unicode: malformed UTF-8 (2-byte)");
         }
-        uint32_t c = (static_cast<uint32_t>(b0 & 0x1Fu) << 6) |
-                     (static_cast<uint32_t>(utf8[offset + 1]) & 0x3Fu);
+        uint32_t c = (static_cast<uint32_t>(b0 & 0x1Fu) << 6) | (static_cast<uint32_t>(utf8[offset + 1]) & 0x3Fu);
         offset += 2;
         return c;
     }
     if ((b0 & 0xF0u) == 0xE0u) {
-        if (offset + 2 >= utf8.size() ||
-            (static_cast<uint8_t>(utf8[offset + 1]) & 0xC0u) != 0x80u ||
-            (static_cast<uint8_t>(utf8[offset + 2]) & 0xC0u) != 0x80u)
-        {
+        if (offset + 2 >= utf8.size() || (static_cast<uint8_t>(utf8[offset + 1]) & 0xC0u) != 0x80u ||
+            (static_cast<uint8_t>(utf8[offset + 2]) & 0xC0u) != 0x80u) {
             throw std::invalid_argument("transcribe::unicode: malformed UTF-8 (3-byte)");
         }
         uint32_t c = (static_cast<uint32_t>(b0 & 0x0Fu) << 12) |
@@ -104,16 +99,14 @@ uint32_t cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return c;
     }
     if ((b0 & 0xF8u) == 0xF0u) {
-        if (offset + 3 >= utf8.size() ||
-            (static_cast<uint8_t>(utf8[offset + 1]) & 0xC0u) != 0x80u ||
+        if (offset + 3 >= utf8.size() || (static_cast<uint8_t>(utf8[offset + 1]) & 0xC0u) != 0x80u ||
             (static_cast<uint8_t>(utf8[offset + 2]) & 0xC0u) != 0x80u ||
-            (static_cast<uint8_t>(utf8[offset + 3]) & 0xC0u) != 0x80u)
-        {
+            (static_cast<uint8_t>(utf8[offset + 3]) & 0xC0u) != 0x80u) {
             throw std::invalid_argument("transcribe::unicode: malformed UTF-8 (4-byte)");
         }
         uint32_t c = (static_cast<uint32_t>(b0 & 0x07u) << 18) |
                      ((static_cast<uint32_t>(utf8[offset + 1]) & 0x3Fu) << 12) |
-                     ((static_cast<uint32_t>(utf8[offset + 2]) & 0x3Fu) << 6)  |
+                     ((static_cast<uint32_t>(utf8[offset + 2]) & 0x3Fu) << 6) |
                      (static_cast<uint32_t>(utf8[offset + 3]) & 0x3Fu);
         offset += 4;
         return c;
@@ -155,7 +148,7 @@ constexpr uint32_t k_fast_path_limit = 0x10000u;  // BMP only
 
 struct FlagsTable {
     std::vector<std::pair<uint32_t, uint16_t>> ranges;
-    std::vector<uint16_t>                       fast;  // size = k_fast_path_limit
+    std::vector<uint16_t>                      fast;  // size = k_fast_path_limit
 
     FlagsTable() {
         ranges.reserve(data::ranges_flags.size());
@@ -169,11 +162,11 @@ struct FlagsTable {
         // Build the fast-path array.
         fast.assign(k_fast_path_limit, 0);
         for (size_t i = 1; i < ranges.size(); ++i) {
-            const auto begin = ranges[i - 1].first;
-            const auto end   = ranges[i].first;
-            const auto flag  = ranges[i - 1].second;
-            const uint32_t b = begin;
-            const uint32_t e = std::min<uint32_t>(end, k_fast_path_limit);
+            const auto     begin = ranges[i - 1].first;
+            const auto     end   = ranges[i].first;
+            const auto     flag  = ranges[i - 1].second;
+            const uint32_t b     = begin;
+            const uint32_t e     = std::min<uint32_t>(end, k_fast_path_limit);
             for (uint32_t c = b; c < e; ++c) {
                 fast[c] = flag;
             }
@@ -183,8 +176,7 @@ struct FlagsTable {
         }
         for (uint32_t ws : data::set_whitespace) {
             if (ws < k_fast_path_limit) {
-                fast[ws] = static_cast<uint16_t>(
-                    fast[ws] | CptFlags::WHITESPACE);
+                fast[ws] = static_cast<uint16_t>(fast[ws] | CptFlags::WHITESPACE);
             }
         }
     }
@@ -198,8 +190,11 @@ struct FlagsTable {
         size_t hi = ranges.size();
         while (lo + 1 < hi) {
             const size_t mid = (lo + hi) / 2;
-            if (ranges[mid].first <= cpt) lo = mid;
-            else                          hi = mid;
+            if (ranges[mid].first <= cpt) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
         }
         uint16_t f = ranges[lo].second;
         if (data::set_whitespace.count(cpt)) {
@@ -214,7 +209,7 @@ const FlagsTable & flags_table() {
     return t;
 }
 
-} // namespace
+}  // namespace
 
 CptFlags flags_from_cpt(uint32_t cpt) {
     CptFlags f;
@@ -253,8 +248,8 @@ uint32_t tolower_ascii(uint32_t cpt) {
 namespace {
 
 struct ByteMap {
-    std::string  fwd[256];      // byte -> utf-8 of mapped codepoint
-    uint32_t     cpt[256];      // byte -> mapped codepoint
+    std::string                           fwd[256];  // byte -> utf-8 of mapped codepoint
+    uint32_t                              cpt[256];  // byte -> mapped codepoint
     // Inverse: the mapped codepoints are dense in two ranges
     // (0x21..0xFF minus 0x7F/0xAD, plus 0x0100..0x0142). We pack the
     // inverse into a small open-addressing map keyed by codepoint.
@@ -264,12 +259,18 @@ struct ByteMap {
         // Build the "visible" byte list (bs) and the codepoint list (cs).
         std::vector<int> bs;
         bs.reserve(256);
-        for (int b = '!'; b <= '~';  ++b) bs.push_back(b);
-        for (int b = 0xA1; b <= 0xAC; ++b) bs.push_back(b);
-        for (int b = 0xAE; b <= 0xFF; ++b) bs.push_back(b);
+        for (int b = '!'; b <= '~'; ++b) {
+            bs.push_back(b);
+        }
+        for (int b = 0xA1; b <= 0xAC; ++b) {
+            bs.push_back(b);
+        }
+        for (int b = 0xAE; b <= 0xFF; ++b) {
+            bs.push_back(b);
+        }
 
         std::vector<int> cs = bs;
-        int n = 0;
+        int              n  = 0;
         for (int b = 0; b < 256; ++b) {
             if (std::find(bs.begin(), bs.end(), b) == bs.end()) {
                 bs.push_back(b);
@@ -281,8 +282,8 @@ struct ByteMap {
         for (size_t i = 0; i < bs.size(); ++i) {
             const uint8_t  byte = static_cast<uint8_t>(bs[i]);
             const uint32_t c    = static_cast<uint32_t>(cs[i]);
-            fwd[byte] = cpt_to_utf8(c);
-            cpt[byte] = c;
+            fwd[byte]           = cpt_to_utf8(c);
+            cpt[byte]           = c;
             inv.emplace(c, byte);
         }
     }
@@ -293,25 +294,31 @@ const ByteMap & byte_map() {
     return m;
 }
 
-} // namespace
+}  // namespace
 
 std::string byte_to_unicode(uint8_t byte) {
     return byte_map().fwd[byte];
 }
 
 int unicode_to_byte(const std::string & utf8) {
-    if (utf8.empty()) return -1;
-    size_t off = 0;
+    if (utf8.empty()) {
+        return -1;
+    }
+    size_t   off = 0;
     uint32_t c;
     try {
         c = cpt_from_utf8(utf8, off);
     } catch (const std::invalid_argument &) {
         return -1;
     }
-    if (off != utf8.size()) return -1;  // must be a single-codepoint piece
-    const auto & m = byte_map().inv;
-    const auto it = m.find(c);
-    if (it == m.end()) return -1;
+    if (off != utf8.size()) {
+        return -1;  // must be a single-codepoint piece
+    }
+    const auto & m  = byte_map().inv;
+    const auto   it = m.find(c);
+    if (it == m.end()) {
+        return -1;
+    }
     return static_cast<int>(it->second);
 }
 
@@ -335,10 +342,7 @@ constexpr uint32_t OOR = 0xFFFFFFFFu;
 // special-token partition step -- our inputs never contain <|...|>
 // special tokens (those live in the chat template ids we resolve
 // out of band).
-std::vector<size_t> qwen2_split_offsets(const std::vector<uint32_t> & cpts,
-                                        size_t begin,
-                                        size_t end)
-{
+std::vector<size_t> qwen2_split_offsets(const std::vector<uint32_t> & cpts, size_t begin, size_t end) {
     std::vector<size_t> out;
 
     auto get_cpt = [&](size_t p) -> uint32_t {
@@ -348,8 +352,8 @@ std::vector<size_t> qwen2_split_offsets(const std::vector<uint32_t> & cpts,
         return (begin <= p && p < end) ? flags_from_cpt(cpts[p]) : CptFlags{};
     };
 
-    size_t prev = begin;
-    auto push_upto = [&](size_t p) {
+    size_t prev      = begin;
+    auto   push_upto = [&](size_t p) {
         assert(prev <= p && p <= end);
         if (p > prev) {
             out.push_back(p);
@@ -372,10 +376,7 @@ std::vector<size_t> qwen2_split_offsets(const std::vector<uint32_t> & cpts,
             }
             if (pos + 2 < end) {
                 const uint32_t c2 = tolower_ascii(get_cpt(pos + 2));
-                if ((c1 == 'r' && c2 == 'e') ||
-                    (c1 == 'v' && c2 == 'e') ||
-                    (c1 == 'l' && c2 == 'l'))
-                {
+                if ((c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l')) {
                     pos += 3;
                     push_upto(pos);
                     continue;
@@ -427,8 +428,8 @@ std::vector<size_t> qwen2_split_offsets(const std::vector<uint32_t> & cpts,
         }
 
         // Whitespace handling: \s*[\r\n]+ | \s+(?!\S) | \s+
-        size_t ws_count       = 0;
-        size_t last_after_nl  = 0;  // "end-of-\s*[\r\n]+" if any
+        size_t ws_count      = 0;
+        size_t last_after_nl = 0;  // "end-of-\s*[\r\n]+" if any
         while (get_flags(pos + ws_count).is_whitespace()) {
             const uint32_t cw = get_cpt(pos + ws_count);
             if (cw == '\r' || cw == '\n') {
@@ -466,7 +467,7 @@ std::vector<size_t> qwen2_split_offsets(const std::vector<uint32_t> & cpts,
     return out;
 }
 
-} // namespace
+}  // namespace
 
 std::vector<std::string> pretokenize_qwen2(const std::string & text) {
     std::vector<std::string> out;
@@ -508,10 +509,7 @@ namespace {
 // tokenizers crate's interpretation of the granite tokenizer.json
 // regex (`tokenizers` Rust regex engine does not consume the
 // `[\r\n]*` here even though the Python `regex` module does).
-std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts,
-                                          size_t begin,
-                                          size_t end)
-{
+std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts, size_t begin, size_t end) {
     std::vector<size_t> out;
 
     auto get_cpt = [&](size_t p) -> uint32_t {
@@ -521,8 +519,8 @@ std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts,
         return (begin <= p && p < end) ? flags_from_cpt(cpts[p]) : CptFlags{};
     };
 
-    size_t prev = begin;
-    auto push_upto = [&](size_t p) {
+    size_t prev      = begin;
+    auto   push_upto = [&](size_t p) {
         assert(prev <= p && p <= end);
         if (p > prev) {
             out.push_back(p);
@@ -545,10 +543,7 @@ std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts,
             }
             if (pos + 2 < end) {
                 const uint32_t c2 = tolower_ascii(get_cpt(pos + 2));
-                if ((c1 == 'r' && c2 == 'e') ||
-                    (c1 == 'v' && c2 == 'e') ||
-                    (c1 == 'l' && c2 == 'l'))
-                {
+                if ((c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l')) {
                     pos += 3;
                     push_upto(pos);
                     continue;
@@ -574,7 +569,9 @@ std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts,
         // up to 3; HF granite uses {1,3}).
         if (flags.is_number()) {
             size_t n = 0;
-            while (n < 3 && get_flags(pos + n).is_number()) ++n;
+            while (n < 3 && get_flags(pos + n).is_number()) {
+                ++n;
+            }
             pos += n;
             push_upto(pos);
             continue;
@@ -599,8 +596,8 @@ std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts,
         }
 
         // Whitespace handling: \s*[\r\n]+ | \s+(?!\S) | \s+
-        size_t ws_count       = 0;
-        size_t last_after_nl  = 0;
+        size_t ws_count      = 0;
+        size_t last_after_nl = 0;
         while (get_flags(pos + ws_count).is_whitespace()) {
             const uint32_t cw = get_cpt(pos + ws_count);
             if (cw == '\r' || cw == '\n') {
@@ -632,7 +629,7 @@ std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts,
     return out;
 }
 
-} // namespace
+}  // namespace
 
 std::vector<std::string> pretokenize_granite(const std::string & text) {
     std::vector<std::string> out;
@@ -671,10 +668,7 @@ std::vector<std::string> pretokenize_granite(const std::string & text) {
 
 namespace {
 
-std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
-                                      size_t begin,
-                                      size_t end)
-{
+std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts, size_t begin, size_t end) {
     std::vector<size_t> out;
 
     auto get_cpt = [&](size_t p) -> uint32_t {
@@ -684,8 +678,8 @@ std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
         return (begin <= p && p < end) ? flags_from_cpt(cpts[p]) : CptFlags{};
     };
 
-    size_t prev = begin;
-    auto push_upto = [&](size_t p) {
+    size_t prev      = begin;
+    auto   push_upto = [&](size_t p) {
         assert(prev <= p && p <= end);
         if (p > prev) {
             out.push_back(p);
@@ -708,10 +702,7 @@ std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
             }
             if (pos + 2 < end) {
                 const uint32_t c2 = get_cpt(pos + 2);
-                if ((c1 == 'r' && c2 == 'e') ||
-                    (c1 == 'v' && c2 == 'e') ||
-                    (c1 == 'l' && c2 == 'l'))
-                {
+                if ((c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l')) {
                     pos += 3;
                     push_upto(pos);
                     continue;
@@ -721,11 +712,13 @@ std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
 
         // 2. Optional leading space + letter run:   ?\p{L}+
         {
-            const bool leading_space = (cpt == ' ');
-            const size_t body = pos + (leading_space ? 1 : 0);
+            const bool   leading_space = (cpt == ' ');
+            const size_t body          = pos + (leading_space ? 1 : 0);
             if (get_flags(body).is_letter()) {
                 size_t q = body;
-                while (get_flags(q).is_letter()) ++q;
+                while (get_flags(q).is_letter()) {
+                    ++q;
+                }
                 pos = q;
                 push_upto(pos);
                 continue;
@@ -736,11 +729,13 @@ std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
         //    This is the bit that matters for Whisper parity with HF
         //    — Qwen2 emits one pretoken per digit, GPT-2 merges the run.
         {
-            const bool leading_space = (cpt == ' ');
-            const size_t body = pos + (leading_space ? 1 : 0);
+            const bool   leading_space = (cpt == ' ');
+            const size_t body          = pos + (leading_space ? 1 : 0);
             if (get_flags(body).is_number()) {
                 size_t q = body;
-                while (get_flags(q).is_number()) ++q;
+                while (get_flags(q).is_number()) {
+                    ++q;
+                }
                 pos = q;
                 push_upto(pos);
                 continue;
@@ -751,20 +746,16 @@ std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
         //    "Symbols and punctuation", roughly. Stops as soon as a
         //    whitespace / letter / digit / OOR codepoint appears.
         {
-            const bool leading_space = (cpt == ' ');
-            const size_t body = pos + (leading_space ? 1 : 0);
-            const CptFlags fb = get_flags(body);
-            const bool body_ok =
-                body < end &&
-                !fb.is_whitespace() && !fb.is_letter() && !fb.is_number() &&
-                fb.has_category();
+            const bool     leading_space = (cpt == ' ');
+            const size_t   body          = pos + (leading_space ? 1 : 0);
+            const CptFlags fb            = get_flags(body);
+            const bool     body_ok =
+                body < end && !fb.is_whitespace() && !fb.is_letter() && !fb.is_number() && fb.has_category();
             if (body_ok) {
                 size_t q = body;
                 while (q < end) {
                     const CptFlags fx = get_flags(q);
-                    if (fx.is_whitespace() || fx.is_letter() || fx.is_number() ||
-                        !fx.has_category())
-                    {
+                    if (fx.is_whitespace() || fx.is_letter() || fx.is_number() || !fx.has_category()) {
                         break;
                     }
                     ++q;
@@ -799,10 +790,11 @@ std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
         //    space of the following letter/number/symbol pretoken).
         if (get_flags(pos).is_whitespace()) {
             size_t q = pos;
-            while (q < end && get_flags(q).is_whitespace()) ++q;
+            while (q < end && get_flags(q).is_whitespace()) {
+                ++q;
+            }
             // q is the end of the full whitespace run.
-            const bool followed_by_nonspace =
-                (q < end) && !get_flags(q).is_whitespace();
+            const bool followed_by_nonspace = (q < end) && !get_flags(q).is_whitespace();
             if (followed_by_nonspace) {
                 // Emit one pretoken per whitespace codepoint up to the
                 // second-to-last. The final whitespace is left for
@@ -847,7 +839,7 @@ std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
     return out;
 }
 
-} // namespace
+}  // namespace
 
 std::vector<std::string> pretokenize_gpt2(const std::string & text) {
     std::vector<std::string> out;
@@ -896,4 +888,4 @@ std::vector<std::string> pretokenize_gpt2_raw_bytes(const std::string & text) {
     return out;
 }
 
-} // namespace transcribe::unicode
+}  // namespace transcribe::unicode

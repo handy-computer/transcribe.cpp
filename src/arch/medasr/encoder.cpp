@@ -11,14 +11,12 @@
 
 #include "encoder.h"
 
-#include "weights.h"
-
 #include "conformer/conformer.h"
+#include "ggml.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-log.h"
-
-#include "ggml.h"
+#include "weights.h"
 
 #include <cmath>
 #include <cstdio>
@@ -38,10 +36,7 @@ namespace conf = transcribe::conformer;
 // overflows to NaN and every transcript comes back empty. GGML_PREC_F32
 // matches CPU/Metal's always-F32 accumulate. No-op on CPU/Metal and on
 // non-F16 weights (BF16 already COMPUTE_32F; quantized routes through MMQ).
-ggml_tensor * mul_mat_f32acc(ggml_context * ctx,
-                             ggml_tensor *  w,
-                             ggml_tensor *  x)
-{
+ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
     if (w->type == GGML_TYPE_F16) {
         ggml_mul_mat_set_prec(y, GGML_PREC_F32);
@@ -53,11 +48,7 @@ ggml_tensor * mul_mat_f32acc(ggml_context * ctx,
 // `nn.LayerNorm(hidden_size, layer_norm_eps, bias=False)` on every
 // encoder LN; eps is loaded from the GGUF (1e-6 for medasr) and is
 // distinct from the conformer helper's hardcoded 1e-5.
-ggml_tensor * lasr_layer_norm(ggml_context * ctx,
-                              ggml_tensor *  x,
-                              ggml_tensor *  scale,
-                              float          eps)
-{
+ggml_tensor * lasr_layer_norm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale, float eps) {
     x = ggml_norm(ctx, x, eps);
     if (scale != nullptr) {
         x = ggml_mul(ctx, x, scale);
@@ -67,11 +58,7 @@ ggml_tensor * lasr_layer_norm(ggml_context * ctx,
 
 // Two-linear feed forward with no biases: y = Linear2(SiLU(Linear1(x))).
 // Matches LASR's `LasrEncoderFeedForward` (SiLU activation via hidden_act).
-ggml_tensor * lasr_feed_forward(ggml_context * ctx,
-                                ggml_tensor *  x,
-                                ggml_tensor *  up_w,
-                                ggml_tensor *  down_w)
-{
+ggml_tensor * lasr_feed_forward(ggml_context * ctx, ggml_tensor * x, ggml_tensor * up_w, ggml_tensor * down_w) {
     x = mul_mat_f32acc(ctx, up_w, x);
     x = ggml_silu(ctx, x);
     x = mul_mat_f32acc(ctx, down_w, x);
@@ -81,14 +68,9 @@ ggml_tensor * lasr_feed_forward(ggml_context * ctx,
 // Scaled residual: out = w0 * residual + w1 * branch. Used for FF1/FF2
 // macaron (w0=1.5, w1=0.5) and conv (w0=2.0, w1=1.0). For the standard
 // w0=1.0 residual we just ggml_add directly.
-ggml_tensor * scaled_residual(ggml_context * ctx,
-                              ggml_tensor *  residual,
-                              ggml_tensor *  branch,
-                              float          w0,
-                              float          w1)
-{
+ggml_tensor * scaled_residual(ggml_context * ctx, ggml_tensor * residual, ggml_tensor * branch, float w0, float w1) {
     ggml_tensor * a = (w0 == 1.0f) ? residual : ggml_scale(ctx, residual, w0);
-    ggml_tensor * b = (w1 == 1.0f) ? branch   : ggml_scale(ctx, branch,   w1);
+    ggml_tensor * b = (w1 == 1.0f) ? branch : ggml_scale(ctx, branch, w1);
     return ggml_add(ctx, a, b);
 }
 
@@ -103,15 +85,13 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
                                 const MedAsrSubsampling & ss,
                                 ggml_tensor *             mel_in,
                                 const MedAsrHParams &     hp,
-                                const conf::ConvPolicy &  /*policy*/,
-                                EncoderDumps *            dumps = nullptr)
-{
+                                const conf::ConvPolicy & /*policy*/,
+                                EncoderDumps * dumps = nullptr) {
     const int sub_k = hp.enc_sub_kernel;
 
     // mel_in ne=[n_mels, T_mel, 1, B]. Squeeze the singleton ne[2] so
     // dense_0's mul_mat sees a clean [n_mels, T_mel, B].
-    ggml_tensor * x = ggml_reshape_3d(ctx, mel_in,
-                                      mel_in->ne[0], mel_in->ne[1], mel_in->ne[3]);
+    ggml_tensor * x = ggml_reshape_3d(ctx, mel_in, mel_in->ne[0], mel_in->ne[1], mel_in->ne[3]);
 
     // dense_0: Linear(n_mels -> d_model). mul_mat broadcasts over the
     // batch axis (ne[2]).
@@ -135,7 +115,7 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
                           /*padding=*/0, /*dilation=*/1);
     if (ss.conv0_b != nullptr) {
         ggml_tensor * bias_r = ggml_reshape_3d(ctx, ss.conv0_b, 1, x->ne[1], 1);
-        x = ggml_add(ctx, x, bias_r);
+        x                    = ggml_add(ctx, x, bias_r);
     }
     x = ggml_relu(ctx, x);
     if (dumps != nullptr) {
@@ -149,7 +129,7 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
                           /*padding=*/0, /*dilation=*/1);
     if (ss.conv1_b != nullptr) {
         ggml_tensor * bias_r = ggml_reshape_3d(ctx, ss.conv1_b, 1, x->ne[1], 1);
-        x = ggml_add(ctx, x, bias_r);
+        x                    = ggml_add(ctx, x, bias_r);
     }
     x = ggml_relu(ctx, x);
     if (dumps != nullptr) {
@@ -203,11 +183,10 @@ ggml_tensor * build_conv_module(ggml_context *           ctx,
                                 int                      d_model,
                                 int                      conv_kernel,
                                 const conf::ConvPolicy & policy,
-                                ggml_tensor *            conv_pad_mask)
-{
-    conf::BlockView bv {};
+                                ggml_tensor *            conv_pad_mask) {
+    conf::BlockView bv{};
     bv.conv_pw1_w          = b.conv_pw1_w;
-    bv.conv_pw1_b          = nullptr;   // bias=False on LASR conv layers
+    bv.conv_pw1_b          = nullptr;  // bias=False on LASR conv layers
     bv.conv_dw_w           = b.conv_dw_w;
     bv.conv_dw_b           = nullptr;
     bv.conv_pw2_w          = b.conv_pw2_w;
@@ -215,15 +194,15 @@ ggml_tensor * build_conv_module(ggml_context *           ctx,
     bv.conv_bn_fused_scale = bn_scale;
     bv.conv_bn_fused_bias  = bn_bias;
 
-    conf::BlockParams bp {};
+    conf::BlockParams bp{};
     bp.d_model            = d_model;
-    bp.n_head             = 0;          // unused in conv_module
+    bp.n_head             = 0;  // unused in conv_module
     bp.conv_kernel        = conv_kernel;
     bp.kv_type            = GGML_TYPE_F32;
-    bp.use_flash          = false;      // irrelevant for conv_module
+    bp.use_flash          = false;                                   // irrelevant for conv_module
     bp.policy             = policy;
-    bp.conv_context_left  = (conv_kernel - 1) / 2;       // 15 for k=32
-    bp.conv_context_right = conv_kernel - 1 - bp.conv_context_left; // 16
+    bp.conv_context_left  = (conv_kernel - 1) / 2;                   // 15 for k=32
+    bp.conv_context_right = conv_kernel - 1 - bp.conv_context_left;  // 16
     bp.conv_norm_type     = conf::BlockParams::ConvNormType::BatchNorm;
     bp.conv_pad_mask      = conv_pad_mask;
 
@@ -257,8 +236,7 @@ ggml_tensor * build_rope_attn(ggml_context *      ctx,
                               float               rope_theta,
                               int                 rope_max_pos,
                               bool                use_flash,
-                              ggml_tensor *       attn_pad_mask = nullptr)
-{
+                              ggml_tensor *       attn_pad_mask = nullptr) {
     const int     head_dim = d_model / n_head;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T        = x->ne[1];
@@ -307,20 +285,18 @@ ggml_tensor * build_rope_attn(ggml_context *      ctx,
 
     ggml_tensor * o;
     if (flash) {
-        o = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr,
-                                scale, 0.0f, 0.0f);
+        o = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr, scale, 0.0f, 0.0f);
         // ggml_flash_attn_ext returns [head_dim, n_head, T, B].
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
         o = ggml_cont(ctx, o);
     } else {
-        ggml_tensor * kq = ggml_mul_mat(ctx, k, q); // [T_k, T_q, n_head, B]
+        ggml_tensor * kq = ggml_mul_mat(ctx, k, q);  // [T_k, T_q, n_head, B]
         if (attn_pad_mask != nullptr) {
             kq = ggml_add(ctx, kq, attn_pad_mask);
         }
-        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr,
-                                                  scale, 0.0f);
-        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr, scale, 0.0f);
+        ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+        o                     = ggml_mul_mat(ctx, v_t, kq_soft);
     }
     // o: [head_dim, T, n_head, B] -> [head_dim, n_head, T, B] -> [d_model, T, B]
     o = ggml_permute(ctx, o, 0, 2, 1, 3);
@@ -353,59 +329,64 @@ ggml_tensor * build_block(ggml_context *           ctx,
                           bool                     use_flash,
                           ggml_tensor *            attn_pad_mask,
                           ggml_tensor *            conv_pad_mask,
-                          BlockObs *               obs)
-{
-    const int d_model    = hp.enc_hidden;
-    const int n_head     = hp.enc_n_heads;
-    const int conv_k     = hp.enc_conv_kernel;
+                          BlockObs *               obs) {
+    const int   d_model  = hp.enc_hidden;
+    const int   n_head   = hp.enc_n_heads;
+    const int   conv_k   = hp.enc_conv_kernel;
     const float ln_eps   = hp.enc_layer_norm_eps;
     const float rope_th  = hp.enc_rope_theta;
-    const int rope_max   = hp.enc_max_pos_emb;
-    const float ff_w0    = hp.enc_ff_resid_w0;   // 1.5
-    const float ff_w1    = hp.enc_ff_resid_w1;   // 0.5
-    const float conv_w0  = hp.enc_conv_resid_w0; // 2.0
-    const float conv_w1  = hp.enc_conv_resid_w1; // 1.0
+    const int   rope_max = hp.enc_max_pos_emb;
+    const float ff_w0    = hp.enc_ff_resid_w0;    // 1.5
+    const float ff_w1    = hp.enc_ff_resid_w1;    // 0.5
+    const float conv_w0  = hp.enc_conv_resid_w0;  // 2.0
+    const float conv_w1  = hp.enc_conv_resid_w1;  // 1.0
 
     // Macaron FF1.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_ff1_w, ln_eps);
-        y = lasr_feed_forward(ctx, y, b.ff1_up_w, b.ff1_down_w);
-        x = scaled_residual(ctx, x, y, ff_w0, ff_w1);
+        y               = lasr_feed_forward(ctx, y, b.ff1_up_w, b.ff1_down_w);
+        x               = scaled_residual(ctx, x, y, ff_w0, ff_w1);
     }
-    if (obs != nullptr) obs->post_ff1 = x;
+    if (obs != nullptr) {
+        obs->post_ff1 = x;
+    }
 
     // Self-attention.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_attn_w, ln_eps);
-        y = build_rope_attn(ctx, y, positions, b, d_model, n_head,
-                            rope_th, rope_max, use_flash, attn_pad_mask);
+        y = build_rope_attn(ctx, y, positions, b, d_model, n_head, rope_th, rope_max, use_flash, attn_pad_mask);
         x = ggml_add(ctx, x, y);
     }
-    if (obs != nullptr) obs->post_attn = x;
+    if (obs != nullptr) {
+        obs->post_attn = x;
+    }
 
     // Conv module.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_conv_w, ln_eps);
-        y = build_conv_module(ctx, y, b, bn_scale, bn_bias,
-                              d_model, conv_k, policy, conv_pad_mask);
-        x = scaled_residual(ctx, x, y, conv_w0, conv_w1);
+        y               = build_conv_module(ctx, y, b, bn_scale, bn_bias, d_model, conv_k, policy, conv_pad_mask);
+        x               = scaled_residual(ctx, x, y, conv_w0, conv_w1);
     }
-    if (obs != nullptr) obs->post_conv = x;
+    if (obs != nullptr) {
+        obs->post_conv = x;
+    }
 
     // Macaron FF2.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_ff2_w, ln_eps);
-        y = lasr_feed_forward(ctx, y, b.ff2_up_w, b.ff2_down_w);
-        x = scaled_residual(ctx, x, y, ff_w0, ff_w1);
+        y               = lasr_feed_forward(ctx, y, b.ff2_up_w, b.ff2_down_w);
+        x               = scaled_residual(ctx, x, y, ff_w0, ff_w1);
     }
-    if (obs != nullptr) obs->post_ff2 = x;
+    if (obs != nullptr) {
+        obs->post_ff2 = x;
+    }
 
     // Final per-block LN (= block output).
     x = lasr_layer_norm(ctx, x, b.norm_post_w, ln_eps);
     return x;
 }
 
-} // namespace
+}  // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *        ctx,
                                  const MedAsrWeights & w,
@@ -413,20 +394,21 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
                                  int                   n_mel_frames,
                                  const char *          backend_name,
                                  int                   n_batch,
-                                 bool                  batch_var_len)
-{
-    EncoderBuild eb {};
+                                 bool                  batch_var_len) {
+    EncoderBuild eb{};
     if (ctx == nullptr || n_mel_frames <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "medasr encoder: invalid arg "
-                     "(ctx=%p, n_mel_frames=%d)",
-                     static_cast<void *>(ctx), n_mel_frames);
+                "medasr encoder: invalid arg "
+                "(ctx=%p, n_mel_frames=%d)",
+                static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
-    if (n_batch < 1) n_batch = 1;
+    if (n_batch < 1) {
+        n_batch = 1;
+    }
     const bool var_len_masks = batch_var_len && n_batch > 1;
 
-    const int d_model = hp.enc_hidden;
+    const int d_model  = hp.enc_hidden;
     const int n_layers = hp.enc_n_layers;
 
     // Mel input. The LASR reference dumps `mel.in` as numpy [T_mel, n_mels]
@@ -435,9 +417,10 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     // ne=[n_mels, T_mel, 1, B]. The C++ MelFrontend writes the same
     // [T_mel, n_mels] row-major layout so the same upload byte stream
     // works in both modes.
-    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
-                                   hp.fe_num_mels, n_mel_frames, 1, n_batch);
-    if (eb.mel_in == nullptr) return eb;
+    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hp.fe_num_mels, n_mel_frames, 1, n_batch);
+    if (eb.mel_in == nullptr) {
+        return eb;
+    }
     ggml_set_name(eb.mel_in, "mel.in");
     ggml_set_input(eb.mel_in);
     transcribe::debug::mark_tensor_for_dump(eb.mel_in);
@@ -445,22 +428,23 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     // Conv policy. medasr's depthwise k=32 is too large for the direct
     // 2-D depthwise on some Metal kernels; use im2col im2col_dw to stay safe
     // until empirically profiled. Pointwise is always direct mul_mat.
-    conf::ConvPolicy policy {};
+    conf::ConvPolicy policy{};
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = true;
     policy.direct_dw_in_pre_encode = false;
     policy.causal_pre_encode       = false;
 
     // Build subsampling (passes dumps for stage-by-stage diagnostic).
-    ggml_tensor * x = build_subsampling(ctx, w.subsampling, eb.mel_in, hp,
-                                        policy, &eb.dumps);
-    if (x == nullptr) return eb;
+    ggml_tensor * x = build_subsampling(ctx, w.subsampling, eb.mel_in, hp, policy, &eb.dumps);
+    if (x == nullptr) {
+        return eb;
+    }
     ggml_set_name(x, "enc.subsampling.out");
     eb.dumps.subsampling_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
     if (n_layers <= 0) {
-        eb.out = x;
+        eb.out   = x;
         eb.graph = ggml_new_graph(ctx);
         ggml_build_forward_expand(eb.graph, x);
         return eb;
@@ -475,10 +459,8 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
 
     // Variable-length batch masks.
     if (var_len_masks) {
-        eb.attn_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
-                                                 T_enc, 1, 1, n_batch);
-        eb.conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
-                                                 T_enc, 1, n_batch, 1);
+        eb.attn_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, 1, 1, n_batch);
+        eb.conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, 1, n_batch, 1);
         ggml_set_name(eb.attn_pad_mask_in, "enc.attn_pad_mask");
         ggml_set_name(eb.conv_pad_mask_in, "enc.conv_pad_mask");
         ggml_set_input(eb.attn_pad_mask_in);
@@ -490,9 +472,11 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     eb.bn_scale_inputs.assign(n_layers, nullptr);
     eb.bn_bias_inputs.assign(n_layers, nullptr);
     for (int i = 0; i < n_layers; ++i) {
-        ggml_tensor * s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, d_model);
+        ggml_tensor * s  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, d_model);
         ggml_tensor * bt = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, d_model);
-        if (s == nullptr || bt == nullptr) return eb;
+        if (s == nullptr || bt == nullptr) {
+            return eb;
+        }
         char nm[64];
         std::snprintf(nm, sizeof(nm), "enc.block.%d.conv_bn.scale", i);
         ggml_set_name(s, nm);
@@ -515,27 +499,25 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     eb.dumps.all_block_outs.assign(n_layers, nullptr);
 
     for (int i = 0; i < n_layers; ++i) {
-        BlockObs obs{};
+        BlockObs   obs{};
         const bool with_obs = (i == 0);
-        x = build_block(ctx, x, eb.positions, w.blocks[i],
-                        eb.bn_scale_inputs[i], eb.bn_bias_inputs[i],
-                        hp, policy, use_flash,
-                        eb.attn_pad_mask_in, eb.conv_pad_mask_in,
-                        with_obs ? &obs : nullptr);
+        x = build_block(ctx, x, eb.positions, w.blocks[i], eb.bn_scale_inputs[i], eb.bn_bias_inputs[i], hp, policy,
+                        use_flash, eb.attn_pad_mask_in, eb.conv_pad_mask_in, with_obs ? &obs : nullptr);
 
         if (with_obs) {
             // Block 0 sub-steps.
-            const auto mark = [&](ggml_tensor * t, const char * nm,
-                                  ggml_tensor *& slot) {
-                if (t == nullptr) return;
+            const auto mark = [&](ggml_tensor * t, const char * nm, ggml_tensor *& slot) {
+                if (t == nullptr) {
+                    return;
+                }
                 ggml_set_name(t, nm);
                 transcribe::debug::mark_tensor_for_dump(t);
                 slot = t;
             };
-            mark(obs.post_ff1,  "enc.block.0.post_ff1",  eb.dumps.block0_post_ff1);
+            mark(obs.post_ff1, "enc.block.0.post_ff1", eb.dumps.block0_post_ff1);
             mark(obs.post_attn, "enc.block.0.post_attn", eb.dumps.block0_post_attn);
             mark(obs.post_conv, "enc.block.0.post_conv", eb.dumps.block0_post_conv);
-            mark(obs.post_ff2,  "enc.block.0.post_ff2",  eb.dumps.block0_post_ff2);
+            mark(obs.post_ff2, "enc.block.0.post_ff2", eb.dumps.block0_post_ff2);
         }
 
         char nm[32];
@@ -559,9 +541,8 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     // is byte-equivalent to numpy [T_enc, vocab] — handy for the decode
     // loop's per-frame argmax).
     {
-        ggml_tensor * proj_w = ggml_reshape_2d(ctx, w.ctc_head.proj_w,
-                                               d_model, hp.ctc_vocab_size);
-        x = mul_mat_f32acc(ctx, proj_w, x);
+        ggml_tensor * proj_w = ggml_reshape_2d(ctx, w.ctc_head.proj_w, d_model, hp.ctc_vocab_size);
+        x                    = mul_mat_f32acc(ctx, proj_w, x);
         if (w.ctc_head.proj_b != nullptr) {
             x = ggml_add(ctx, x, w.ctc_head.proj_b);
         }
@@ -588,8 +569,7 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     // CTC head ~ 1000 nodes; 8192 leaves ample headroom.
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "medasr encoder: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "medasr encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -602,4 +582,4 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     return eb;
 }
 
-} // namespace transcribe::medasr
+}  // namespace transcribe::medasr

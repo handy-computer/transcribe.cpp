@@ -24,6 +24,21 @@ uv run --project scripts/envs/<family> scripts/<script>.py ...
 cmake --build build --target transcribe-cli
 ```
 
+## Formatting
+
+- Format our C/C++ before committing. The formatter is pinned and fetched via
+  `uvx`, so do not rely on a system clang-format:
+
+```bash
+scripts/ci/clang-format.sh            # format our tree in place (default)
+scripts/ci/clang-format.sh --check    # verify, no changes
+```
+
+- Scope is our code only. Vendored trees (`ggml/`, `src/third_party/`) and
+  verbatim upstream copies (`src/transcribe-unicode-data.cpp`) are never
+  formatted. CI gates our C/C++ in
+  `.github/workflows/clang-format.yml`.
+
 ## Verification
 
 - End-to-end numerical checks:

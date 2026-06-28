@@ -23,16 +23,15 @@
 
 #pragma once
 
+#include "causal_lm/causal_lm.h"
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
-#include "causal_lm/causal_lm.h"
 #include "weights.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstdint>
 #include <optional>
@@ -57,20 +56,20 @@ void apply_family_invariants(transcribe_model & model);
 // piece is resolved ahead of time so vocab drift fails loudly at load instead
 // of mid-decode. All fields are resolved ids — looked up, not hardcoded.
 struct ChatTokens {
-    int32_t audio          = -1;   // <|audio|>
-    int32_t end_of_text    = -1;   // <|end_of_text|>  (also EOS / BOS)
-    int32_t pad            = -1;   // <|pad|>
-    int32_t start_of_role  = -1;   // <|start_of_role|>  (granite-4 chat only)
-    int32_t end_of_role    = -1;   // <|end_of_role|>    (granite-4 chat only)
+    int32_t audio         = -1;  // <|audio|>
+    int32_t end_of_text   = -1;  // <|end_of_text|>  (also EOS / BOS)
+    int32_t pad           = -1;  // <|pad|>
+    int32_t start_of_role = -1;  // <|start_of_role|>  (granite-4 chat only)
+    int32_t end_of_role   = -1;  // <|end_of_role|>    (granite-4 chat only)
 };
 
 // Model / Context.
 
 struct GraniteModel final : public transcribe_model {
-    Tokenizer        tok;
-    GraniteHParams   hparams;
-    GraniteWeights   weights;
-    ggml_context *   ctx_meta = nullptr;
+    Tokenizer      tok;
+    GraniteHParams hparams;
+    GraniteWeights weights;
+    ggml_context * ctx_meta = nullptr;
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
@@ -114,7 +113,6 @@ struct GraniteSession final : public transcribe_session {
     std::vector<float> audio_tokens_host;
     int32_t            n_audio_tokens = 0;
 
-
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
@@ -125,11 +123,11 @@ struct GraniteSession final : public transcribe_session {
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
     transcribe::causal_lm::KvCache kv_batch;
-    int                           kv_batch_cap   = 0;
-    int                           kv_batch_n_ctx = 0;
+    int                            kv_batch_cap   = 0;
+    int                            kv_batch_n_ctx = 0;
 
     GraniteSession() = default;
     ~GraniteSession() override;
 };
 
-} // namespace transcribe::granite
+}  // namespace transcribe::granite

@@ -18,11 +18,10 @@
 
 #pragma once
 
-#include "voxtral.h"
 #include "causal_lm/causal_lm.h"
-#include "weights.h"
-
 #include "ggml.h"
+#include "voxtral.h"
+#include "weights.h"
 
 struct ggml_context;
 struct ggml_cgraph;
@@ -46,8 +45,8 @@ struct PrefillBuild {
     ggml_tensor * positions_in = nullptr;  // [T_prompt] i32 for RoPE
     ggml_tensor * mask_in      = nullptr;  // [T_prompt, T_prompt] f16 causal
     ggml_tensor * out          = nullptr;  // [vocab] last-position logits
-    DecoderDumps  dumps {};
-    ggml_cgraph * graph        = nullptr;
+    DecoderDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
 
     int T_prompt   = 0;
     int T_enc      = 0;
@@ -58,16 +57,16 @@ struct PrefillBuild {
 // Prefill graph: token-embed the prompt, splice proj.out over the audio
 // placeholder run, run the LM blocks (writing KV [0,T_prompt)), final
 // RMSNorm + UNTIED head, output last-position logits.
-PrefillBuild build_prefill_graph(ggml_context *                  ctx,
-                                 const VoxtralWeights &          weights,
-                                 const VoxtralHParams &          hp,
+PrefillBuild build_prefill_graph(ggml_context *                   ctx,
+                                 const VoxtralWeights &           weights,
+                                 const VoxtralHParams &           hp,
                                  transcribe::causal_lm::KvCache & kv_cache,
-                                 int                             T_prompt,
-                                 int                             T_enc,
-                                 int                             prefix_len,
-                                 int                             suffix_len,
-                                 bool                            use_flash,
-                                 bool                            slice_last);
+                                 int                              T_prompt,
+                                 int                              T_enc,
+                                 int                              prefix_len,
+                                 int                              suffix_len,
+                                 bool                             use_flash,
+                                 bool                             slice_last);
 
 struct StepBuild {
     ggml_tensor * input_id_in = nullptr;  // [1] i32
@@ -82,12 +81,12 @@ struct StepBuild {
 };
 
 // Static-shape single-token step graph, reused across every step.
-StepBuild build_step_graph(ggml_context *                  ctx,
-                           const VoxtralWeights &          weights,
-                           const VoxtralHParams &          hp,
+StepBuild build_step_graph(ggml_context *                   ctx,
+                           const VoxtralWeights &           weights,
+                           const VoxtralHParams &           hp,
                            transcribe::causal_lm::KvCache & kv_cache,
-                           int                             max_n_kv,
-                           bool                            use_flash);
+                           int                              max_n_kv,
+                           bool                             use_flash);
 
 // ---------------------------------------------------------------------------
 // Batched prefill / step (offline transcribe_run_batch fast path)
@@ -109,28 +108,27 @@ struct PrefillBuildBatched {
     // split (forced by k-quant token_embd get_rows) cleanly, unlike a set_rows.
     ggml_tensor * audio_dense_in = nullptr;  // [dec_hidden, T_prompt_max*B] f32
     ggml_tensor * keep_mask_in   = nullptr;  // [1, T_prompt_max*B] f32 (0=audio,1=keep)
-    ggml_tensor * positions_in = nullptr;  // [T_prompt_max] i32 (shared)
-    ggml_tensor * mask_in      = nullptr;  // [T_prompt_max, T_prompt_max] f16 causal
-    ggml_tensor * kv_idx_in    = nullptr;  // [T_prompt_max, B] i64 (idx[t,b]=t)
-    ggml_tensor * last_idx_in  = nullptr;  // [1, B] i32 (real last position per utt)
-    ggml_tensor * out          = nullptr;  // [B] i32 argmax of last-position logits
-    ggml_tensor * logits       = nullptr;  // [vocab, B] f32
-    ggml_cgraph * graph        = nullptr;
+    ggml_tensor * positions_in   = nullptr;  // [T_prompt_max] i32 (shared)
+    ggml_tensor * mask_in        = nullptr;  // [T_prompt_max, T_prompt_max] f16 causal
+    ggml_tensor * kv_idx_in      = nullptr;  // [T_prompt_max, B] i64 (idx[t,b]=t)
+    ggml_tensor * last_idx_in    = nullptr;  // [1, B] i32 (real last position per utt)
+    ggml_tensor * out            = nullptr;  // [B] i32 argmax of last-position logits
+    ggml_tensor * logits         = nullptr;  // [vocab, B] f32
+    ggml_cgraph * graph          = nullptr;
 
     int T_prompt_max = 0;
     int T_audio_max  = 0;
     int n_batch      = 0;
 };
 
-PrefillBuildBatched build_prefill_graph_batched(
-    ggml_context *                  ctx,
-    const VoxtralWeights &          weights,
-    const VoxtralHParams &          hp,
-    transcribe::causal_lm::KvCache & kv_cache,
-    int                             T_prompt_max,
-    int                             T_audio_max,
-    int                             n_batch,
-    bool                            use_flash);
+PrefillBuildBatched build_prefill_graph_batched(ggml_context *                   ctx,
+                                                const VoxtralWeights &           weights,
+                                                const VoxtralHParams &           hp,
+                                                transcribe::causal_lm::KvCache & kv_cache,
+                                                int                              T_prompt_max,
+                                                int                              T_audio_max,
+                                                int                              n_batch,
+                                                bool                             use_flash);
 
 struct StepBuildBatched {
     ggml_tensor * input_ids_in = nullptr;  // [B] i32
@@ -145,13 +143,12 @@ struct StepBuildBatched {
     int n_batch  = 0;
 };
 
-StepBuildBatched build_step_graph_batched(
-    ggml_context *                  ctx,
-    const VoxtralWeights &          weights,
-    const VoxtralHParams &          hp,
-    transcribe::causal_lm::KvCache & kv_cache,
-    int                             max_n_kv,
-    int                             n_batch,
-    bool                            use_flash);
+StepBuildBatched build_step_graph_batched(ggml_context *                   ctx,
+                                          const VoxtralWeights &           weights,
+                                          const VoxtralHParams &           hp,
+                                          transcribe::causal_lm::KvCache & kv_cache,
+                                          int                              max_n_kv,
+                                          int                              n_batch,
+                                          bool                             use_flash);
 
-} // namespace transcribe::voxtral
+}  // namespace transcribe::voxtral

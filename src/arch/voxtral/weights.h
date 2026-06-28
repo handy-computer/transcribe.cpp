@@ -38,33 +38,33 @@ namespace transcribe::voxtral {
 
 struct VoxtralHParams {
     // Audio encoder (Whisper-large-v3 encoder).
-    int32_t enc_n_layers            = 0;
-    int32_t enc_d_model             = 0;
-    int32_t enc_n_heads             = 0;
-    int32_t enc_head_dim            = 0;
-    int32_t enc_ffn_dim             = 0;
-    int32_t enc_num_mel_bins        = 0;
-    int32_t enc_max_source_positions = 0;  // 1500
-    std::string enc_activation;             // "gelu"
+    int32_t     enc_n_layers             = 0;
+    int32_t     enc_d_model              = 0;
+    int32_t     enc_n_heads              = 0;
+    int32_t     enc_head_dim             = 0;
+    int32_t     enc_ffn_dim              = 0;
+    int32_t     enc_num_mel_bins         = 0;
+    int32_t     enc_max_source_positions = 0;  // 1500
+    std::string enc_activation;                // "gelu"
 
     // Projector (multi-modal).
-    int32_t proj_downsample = 0;  // 4x frame grouping
-    int32_t proj_in         = 0;  // enc_d_model * downsample (5120)
-    std::string proj_hidden_act;  // "gelu"
+    int32_t     proj_downsample = 0;  // 4x frame grouping
+    int32_t     proj_in         = 0;  // enc_d_model * downsample (5120)
+    std::string proj_hidden_act;      // "gelu"
 
     // Text LM (Llama / Ministral).
-    int32_t dec_n_layers            = 0;
-    int32_t dec_hidden              = 0;
-    int32_t dec_intermediate        = 0;
-    int32_t dec_n_heads             = 0;
-    int32_t dec_n_kv_heads          = 0;
-    int32_t dec_head_dim            = 0;
+    int32_t     dec_n_layers     = 0;
+    int32_t     dec_hidden       = 0;
+    int32_t     dec_intermediate = 0;
+    int32_t     dec_n_heads      = 0;
+    int32_t     dec_n_kv_heads   = 0;
+    int32_t     dec_head_dim     = 0;
     std::string dec_hidden_act;  // "silu"
-    float   dec_rms_norm_eps        = 0.0f;
-    float   dec_rope_theta          = 0.0f;
-    int32_t dec_max_position_embeddings = 0;
-    bool    dec_tie_word_embeddings = false;  // UNTIED for Voxtral
-    int32_t dec_vocab_size          = 0;
+    float       dec_rms_norm_eps            = 0.0f;
+    float       dec_rope_theta              = 0.0f;
+    int32_t     dec_max_position_embeddings = 0;
+    bool        dec_tie_word_embeddings     = false;  // UNTIED for Voxtral
+    int32_t     dec_vocab_size              = 0;
 
     // Audio-token injection id.
     int32_t audio_token_id = 0;  // [AUDIO] placeholder (24)
@@ -77,38 +77,34 @@ struct VoxtralHParams {
 
     // Frontend (Whisper feature extractor).
     std::string fe_type;
-    int32_t     fe_num_mels      = 0;
-    int32_t     fe_sample_rate   = 0;
-    int32_t     fe_n_fft         = 0;
-    int32_t     fe_win_length    = 0;
-    int32_t     fe_hop_length    = 0;
+    int32_t     fe_num_mels    = 0;
+    int32_t     fe_sample_rate = 0;
+    int32_t     fe_n_fft       = 0;
+    int32_t     fe_win_length  = 0;
+    int32_t     fe_hop_length  = 0;
     std::string fe_window;
     std::string fe_normalize;
-    float       fe_dither        = 0.0f;
-    float       fe_pre_emphasis  = 0.0f;
-    float       fe_f_min         = 0.0f;
-    float       fe_f_max         = 0.0f;
+    float       fe_dither       = 0.0f;
+    float       fe_pre_emphasis = 0.0f;
+    float       fe_f_min        = 0.0f;
+    float       fe_f_max        = 0.0f;
     std::string fe_pad_mode;
-    bool        fe_center        = true;
+    bool        fe_center = true;
     std::string fe_mel_norm;
-    int32_t     fe_chunk_length  = 0;   // 30 (seconds)
-    int32_t     fe_n_samples     = 0;   // 480000
-    int32_t     fe_nb_max_frames = 0;   // 3000
+    int32_t     fe_chunk_length  = 0;  // 30 (seconds)
+    int32_t     fe_n_samples     = 0;  // 480000
+    int32_t     fe_nb_max_frames = 0;  // 3000
 
     // Derived.
-    int32_t enc_head_dim_calc() const {
-        return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0;
-    }
+    int32_t enc_head_dim_calc() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
+
     // Audio tokens produced per 30 s chunk: enc frames (1500) / downsample.
     int32_t audio_tokens_per_chunk() const {
-        return (enc_max_source_positions > 0 && proj_downsample > 0)
-                   ? enc_max_source_positions / proj_downsample
-                   : 0;
+        return (enc_max_source_positions > 0 && proj_downsample > 0) ? enc_max_source_positions / proj_downsample : 0;
     }
 };
 
-transcribe_status read_voxtral_hparams(const gguf_context * gguf,
-                                       VoxtralHParams &     hp);
+transcribe_status read_voxtral_hparams(const gguf_context * gguf, VoxtralHParams & hp);
 
 // ---------------------------------------------------------------------------
 // Weight slots - audio encoder (Whisper-large-v3)
@@ -123,9 +119,9 @@ struct VoxtralEncStem {
 };
 
 struct VoxtralEncTop {
-    ggml_tensor * pos_emb_w  = nullptr;  // [d_model, max_source_positions] (F32)
-    ggml_tensor * ln_post_w  = nullptr;  // [d_model]
-    ggml_tensor * ln_post_b  = nullptr;  // [d_model]
+    ggml_tensor * pos_emb_w = nullptr;  // [d_model, max_source_positions] (F32)
+    ggml_tensor * ln_post_w = nullptr;  // [d_model]
+    ggml_tensor * ln_post_b = nullptr;  // [d_model]
 };
 
 // One encoder transformer block. q/v/out carry bias; k does NOT.
@@ -163,13 +159,13 @@ struct VoxtralDecEmbed {
 };
 
 struct VoxtralDecBlock {
-    ggml_tensor * norm_attn_w = nullptr;  // input_layernorm (RMSNorm)
-    ggml_tensor * norm_ffn_w  = nullptr;  // post_attention_layernorm
+    ggml_tensor * norm_attn_w   = nullptr;  // input_layernorm (RMSNorm)
+    ggml_tensor * norm_ffn_w    = nullptr;  // post_attention_layernorm
     // GQA projections; no biases, NO per-head Q/K norm (Llama, not Qwen3).
-    ggml_tensor * attn_q_w    = nullptr;  // [hidden, n_heads * head_dim]
-    ggml_tensor * attn_k_w    = nullptr;  // [hidden, n_kv_heads * head_dim]
-    ggml_tensor * attn_v_w    = nullptr;  // [hidden, n_kv_heads * head_dim]
-    ggml_tensor * attn_o_w    = nullptr;  // [n_heads * head_dim, hidden]
+    ggml_tensor * attn_q_w      = nullptr;  // [hidden, n_heads * head_dim]
+    ggml_tensor * attn_k_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
+    ggml_tensor * attn_v_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
+    ggml_tensor * attn_o_w      = nullptr;  // [n_heads * head_dim, hidden]
     // SwiGLU MLP.
     ggml_tensor * ffn_gate_w    = nullptr;  // [hidden, intermediate]
     ggml_tensor * ffn_up_w      = nullptr;  // [hidden, intermediate]
@@ -180,7 +176,7 @@ struct VoxtralDecBlock {
 };
 
 struct VoxtralDecFinal {
-    ggml_tensor * norm_w = nullptr;   // dec.output_norm.weight (RMSNorm)
+    ggml_tensor * norm_w = nullptr;  // dec.output_norm.weight (RMSNorm)
 };
 
 struct VoxtralWeights {
@@ -188,15 +184,13 @@ struct VoxtralWeights {
     VoxtralEncTop                enc_top;
     std::vector<VoxtralEncBlock> enc_blocks;
 
-    VoxtralProjector             proj;
+    VoxtralProjector proj;
 
     VoxtralDecEmbed              dec_embed;
     std::vector<VoxtralDecBlock> dec_blocks;
     VoxtralDecFinal              dec_final;
 };
 
-transcribe_status build_voxtral_weights(ggml_context *         ctx_meta,
-                                        const VoxtralHParams & hp,
-                                        VoxtralWeights &       weights);
+transcribe_status build_voxtral_weights(ggml_context * ctx_meta, const VoxtralHParams & hp, VoxtralWeights & weights);
 
-} // namespace transcribe::voxtral
+}  // namespace transcribe::voxtral

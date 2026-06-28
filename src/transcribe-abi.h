@@ -38,11 +38,10 @@ inline transcribe_status check_input_struct_size(uint64_t got, uint64_t want) {
 // library never writes past what the caller declared, and never reads
 // past what it staged. caller_size is uint64_t (matches the public
 // struct_size field type); library_size is size_t (always sizeof(T)).
-inline void copy_out_prefix(void * dst, const void * src,
-                            uint64_t caller_size, size_t library_size) {
+inline void copy_out_prefix(void * dst, const void * src, uint64_t caller_size, size_t library_size) {
     const uint64_t lib = static_cast<uint64_t>(library_size);
     const uint64_t n   = caller_size < lib ? caller_size : lib;
     std::memcpy(dst, src, static_cast<size_t>(n));
 }
 
-} // namespace transcribe
+}  // namespace transcribe

@@ -30,13 +30,12 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
@@ -50,27 +49,24 @@ struct Case {
 };
 
 void check_case(const struct transcribe_model * model, const Case & c) {
-    int32_t tokens[64];
+    int32_t   tokens[64];
     const int n = transcribe_tokenize(model, c.text, tokens, 64);
     if (n < 0 || static_cast<size_t>(n) != c.expected.size()) {
-        std::fprintf(stderr,
-                     "FAIL tokenize(%s): n=%d, expected size %zu\n",
-                     c.text, n, c.expected.size());
+        std::fprintf(stderr, "FAIL tokenize(%s): n=%d, expected size %zu\n", c.text, n, c.expected.size());
         ++g_failures;
         return;
     }
     for (int i = 0; i < n; ++i) {
         if (tokens[i] != c.expected[i]) {
-            std::fprintf(stderr,
-                         "FAIL tokenize(%s): tokens[%d]=%d, expected %d\n",
-                         c.text, i, tokens[i], c.expected[i]);
+            std::fprintf(stderr, "FAIL tokenize(%s): tokens[%d]=%d, expected %d\n", c.text, i, tokens[i],
+                         c.expected[i]);
             ++g_failures;
             return;
         }
     }
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * env = std::getenv("TRANSCRIBE_WHISPER_GGUF");
@@ -82,17 +78,15 @@ int main() {
     }
     const std::string model_path = env;
     if (!file_exists(model_path)) {
-        std::fprintf(stderr,
-                     "whisper_tokenize_parity: model not found: %s\n",
-                     model_path.c_str());
+        std::fprintf(stderr, "whisper_tokenize_parity: model not found: %s\n", model_path.c_str());
         return 77;
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
-    mp.backend = TRANSCRIBE_BACKEND_CPU;
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    mp.backend                      = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
-    const transcribe_status st = transcribe_model_load_file(
-        model_path.c_str(), &mp, &model);
+    const transcribe_status   st    = transcribe_model_load_file(model_path.c_str(), &mp, &model);
     if (st != TRANSCRIBE_OK || model == nullptr) {
         std::fprintf(stderr, "FAIL load: %s\n", transcribe_status_string(st));
         return EXIT_FAILURE;
@@ -103,17 +97,17 @@ int main() {
     // are the load-bearing ones — they exercise the GPT-2 `\p{N}+`
     // path that the Qwen2 pretok (single-digit) would get wrong.
     const std::vector<Case> cases = {
-        { "hello 123 world",    { 675, 1913, 34466, 1002 } },
-        { "The year is 2024.",  { 2278, 1064, 307, 45237, 13 } },
-        { "cost: $99.99",       { 27718, 25, 1848, 8494, 13, 8494 } },
-        { "  multi  spaces",    { 220, 4825, 220, 7673 } },
-        { "I'm going",          { 40, 478, 516 } },
-        { "she isn't here",     { 9611, 1943, 380, 510 } },
-        { "hello world",        { 675, 1913, 1002 } },
-        { "hello  world",       { 675, 1913, 220, 1002 } },
-        { "   triple   space",  { 220, 220, 15508, 220, 220, 1901 } },
-        { "42",                 { 15628 } },
-        { "",                   {} },
+        { "hello 123 world",   { 675, 1913, 34466, 1002 }          },
+        { "The year is 2024.", { 2278, 1064, 307, 45237, 13 }      },
+        { "cost: $99.99",      { 27718, 25, 1848, 8494, 13, 8494 } },
+        { "  multi  spaces",   { 220, 4825, 220, 7673 }            },
+        { "I'm going",         { 40, 478, 516 }                    },
+        { "she isn't here",    { 9611, 1943, 380, 510 }            },
+        { "hello world",       { 675, 1913, 1002 }                 },
+        { "hello  world",      { 675, 1913, 220, 1002 }            },
+        { "   triple   space", { 220, 220, 15508, 220, 220, 1901 } },
+        { "42",                { 15628 }                           },
+        { "",                  {}                                  },
     };
     for (const Case & c : cases) {
         check_case(model, c);
@@ -123,15 +117,15 @@ int main() {
     // return negative-of-N (mirrors whisper.cpp), leaving the caller
     // free to reallocate.
     {
-        const char * text = "hello 123 world"; // needs 4 tokens
-        int32_t tokens[2];
-        const int n = transcribe_tokenize(model, text, tokens, 2);
+        const char * text = "hello 123 world";  // needs 4 tokens
+        int32_t      tokens[2];
+        const int    n = transcribe_tokenize(model, text, tokens, 2);
         CHECK(n == -4);
     }
 
     // Empty text with any n_max returns 0 (success, nothing written).
     {
-        int32_t tokens[1];
+        int32_t   tokens[1];
         const int n = transcribe_tokenize(model, "", tokens, 1);
         CHECK(n == 0);
     }
@@ -145,8 +139,7 @@ int main() {
     transcribe_model_free(model);
 
     if (g_failures > 0) {
-        std::fprintf(stderr,
-                     "whisper_tokenize_parity: %d failures\n", g_failures);
+        std::fprintf(stderr, "whisper_tokenize_parity: %d failures\n", g_failures);
         return EXIT_FAILURE;
     }
     std::fprintf(stdout, "whisper_tokenize_parity: ok\n");

@@ -6,15 +6,14 @@
 
 #pragma once
 
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstdint>
 #include <optional>
@@ -86,13 +85,13 @@ struct CohereKvCache {
             ggml_free(ctx);
             ctx = nullptr;
         }
-        self_k = nullptr;
-        self_v = nullptr;
-        cross_k = nullptr;
-        cross_v = nullptr;
-        n = 0;
-        head = 0;
-        n_batch = 1;
+        self_k          = nullptr;
+        self_v          = nullptr;
+        cross_k         = nullptr;
+        cross_v         = nullptr;
+        n               = 0;
+        head            = 0;
+        n_batch         = 1;
         cross_populated = false;
     }
 };
@@ -125,10 +124,10 @@ bool kv_cache_init_batched(CohereKvCache & cache,
                            ggml_type       kv_type);
 
 struct CohereModel final : public transcribe_model {
-    Tokenizer       tok;
-    CohereHParams   hparams;
-    CohereWeights   weights;
-    ggml_context *  ctx_meta = nullptr;
+    Tokenizer      tok;
+    CohereHParams  hparams;
+    CohereWeights  weights;
+    ggml_context * ctx_meta = nullptr;
 
     // Runtime backend plan — see transcribe-backend.h. scheduler_list
     // holds the backend handles plus a classified primary kind.
@@ -136,14 +135,14 @@ struct CohereModel final : public transcribe_model {
     ggml_backend_buffer_t   backend_buffer = nullptr;
 
     // Fused BN parameters (same as Parakeet).
-    ggml_context *          bn_fused_ctx    = nullptr;
-    ggml_backend_buffer_t   bn_fused_buffer = nullptr;
+    ggml_context *        bn_fused_ctx    = nullptr;
+    ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
     // On CPU primary backend, the conformer 1×1 pointwise conv weights
     // are dequantized F16->F32 at load time (Zen 2 has no native F16
     // compute). Tensors live here; CohereBlock slots point at them.
-    ggml_context *          conv_pw_f32_ctx    = nullptr;
-    ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
+    ggml_context *        conv_pw_f32_ctx    = nullptr;
+    ggml_backend_buffer_t conv_pw_f32_buffer = nullptr;
 
     std::optional<transcribe::MelFrontend> mel;
 
@@ -154,9 +153,9 @@ struct CohereModel final : public transcribe_model {
 };
 
 struct CohereSession final : public transcribe_session {
-    ggml_context *        compute_ctx    = nullptr;
-    ggml_backend_sched_t  sched          = nullptr;
-    ggml_tensor *         encoder_out    = nullptr;
+    ggml_context *       compute_ctx = nullptr;
+    ggml_backend_sched_t sched       = nullptr;
+    ggml_tensor *        encoder_out = nullptr;
 
     // KV cache for the decoder.
     CohereKvCache kv_cache;
@@ -166,16 +165,15 @@ struct CohereSession final : public transcribe_session {
     std::vector<float> pos_div_term;
     std::vector<float> enc_host;
 
-
     // Flash-attn is per-stage: encoder dk=160 has no Metal flash_attn_ext
     // kernel (default OFF on Metal; manual path ties anyway); decoder
     // dk=128 works everywhere (default ON). TRANSCRIBE_NO_FLASH /
     // TRANSCRIBE_FORCE_FLASH apply to both stages at once.
-    bool               encoder_use_flash = true;
-    bool               decoder_use_flash = true;
+    bool encoder_use_flash = true;
+    bool decoder_use_flash = true;
 
     CohereSession() = default;
     ~CohereSession() override;
 };
 
-} // namespace transcribe::cohere
+}  // namespace transcribe::cohere

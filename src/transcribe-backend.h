@@ -13,14 +13,13 @@
 
 #pragma once
 
-#include "transcribe.h"
-
 #include "ggml-backend.h"
+#include "transcribe.h"
 
 #include <vector>
 
 struct ggml_backend;
-typedef struct ggml_backend *     ggml_backend_t;
+typedef struct ggml_backend * ggml_backend_t;
 struct ggml_backend_device;
 typedef struct ggml_backend_device * ggml_backend_dev_t;
 
@@ -45,8 +44,7 @@ const char * kind_name(BackendKind kind);
 
 // Unit-testable classification core. Production code normally calls
 // classify_device(), which fetches these two inputs from ggml.
-BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type,
-                                  const char * reg_name);
+BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type, const char * reg_name);
 
 // Classify a backend device into a BackendKind. Uses
 // ggml_backend_dev_type for the GPU/IGPU/ACCEL/CPU dimension and the
@@ -78,4 +76,4 @@ struct BackendPlan {
     std::vector<ggml_backend_t> scheduler_list;
 };
 
-} // namespace transcribe
+}  // namespace transcribe

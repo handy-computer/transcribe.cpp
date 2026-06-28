@@ -22,13 +22,13 @@ struct GigaamWeights;
 // recomputing from htk_hz_to_mel / Hann: torchaudio uses Float32 throughout, so
 // an fp64 C++ recomputation drifts at high-freq bin boundaries.
 struct GigaamMelFrontend {
-    int n_freq;                       // n_fft/2 + 1
-    int n_mels;
-    int n_fft;
-    int win_length;
-    int hop_length;
-    std::vector<float> hann;          // [win_length] periodic
-    std::vector<float> mel_fb;        // [n_mels, n_freq] row-major HTK
+    int                n_freq;  // n_fft/2 + 1
+    int                n_mels;
+    int                n_fft;
+    int                win_length;
+    int                hop_length;
+    std::vector<float> hann;    // [win_length] periodic
+    std::vector<float> mel_fb;  // [n_mels, n_freq] row-major HTK
 
     void init(const GigaamHParams & hp, const GigaamWeights & w);
 
@@ -43,4 +43,4 @@ struct GigaamMelFrontend {
                               int &                out_n_frames) const;
 };
 
-} // namespace transcribe::gigaam
+}  // namespace transcribe::gigaam

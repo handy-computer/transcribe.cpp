@@ -14,11 +14,10 @@
 //     nonzero GPU index exists, binds that exact registry device.
 //   - Invalid enum: returns TRANSCRIBE_ERR_INVALID_ARG.
 
-#include "transcribe-load-common.h"
-#include "transcribe-backend.h"
-
-#include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml.h"
+#include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 
 #include <cstddef>
 #include <cstdio>
@@ -28,58 +27,52 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ(actual, expected)                                          \
-    do {                                                                    \
-        const auto _a = (actual);                                           \
-        const auto _e = (expected);                                         \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr, "FAIL %s:%d: got %d, expected %d\n",       \
-                         __FILE__, __LINE__,                                \
-                         static_cast<int>(_a),                              \
-                         static_cast<int>(_e));                             \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ(actual, expected)                                                                              \
+    do {                                                                                                        \
+        const auto _a = (actual);                                                                               \
+        const auto _e = (expected);                                                                             \
+        if (_a != _e) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: got %d, expected %d\n", __FILE__, __LINE__, static_cast<int>(_a), \
+                         static_cast<int>(_e));                                                                 \
+            ++g_failures;                                                                                       \
+        }                                                                                                       \
     } while (0)
 
 // Bail macro for setup prerequisites: if the condition fails, log and
 // return EXIT_FAILURE immediately rather than crashing on a null deref.
-#define REQUIRE(cond)                                                       \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "SETUP FAIL %s:%d: %s\n",                  \
-                         __FILE__, __LINE__, #cond);                        \
-            return EXIT_FAILURE;                                            \
-        }                                                                   \
+#define REQUIRE(cond)                                                                  \
+    do {                                                                               \
+        if (!(cond)) {                                                                 \
+            std::fprintf(stderr, "SETUP FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            return EXIT_FAILURE;                                                       \
+        }                                                                              \
     } while (0)
 
 // Free every backend in the scheduler list. Mirrors what the model
 // destructor does: reverse order, then clear.
 void free_plan(transcribe::BackendPlan & plan) {
-    for (auto it = plan.scheduler_list.rbegin();
-         it != plan.scheduler_list.rend(); ++it) {
+    for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
         ggml_backend_free(*it);
     }
     plan.scheduler_list.clear();
-    plan.primary = nullptr;
+    plan.primary      = nullptr;
     plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
 bool is_gpu_device(ggml_backend_dev_t dev) {
     const auto type = ggml_backend_dev_type(dev);
-    return type == GGML_BACKEND_DEVICE_TYPE_GPU ||
-           type == GGML_BACKEND_DEVICE_TYPE_IGPU;
+    return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     using namespace transcribe;
@@ -89,9 +82,8 @@ int main() {
     // 1. Strict CPU
     // ---------------------------------------------------------------
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_CPU, 0, "test-cpu", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU, 0, "test-cpu", plan);
         REQUIRE(st == TRANSCRIBE_OK);
         CHECK_EQ(plan.primary_kind, BackendKind::Cpu);
         REQUIRE(plan.primary != nullptr);
@@ -99,8 +91,7 @@ int main() {
 
         // The sole scheduler handle must classify as CPU via the
         // device-level classifier, not string matching.
-        ggml_backend_dev_t dev =
-            ggml_backend_get_device(plan.scheduler_list[0]);
+        ggml_backend_dev_t dev = ggml_backend_get_device(plan.scheduler_list[0]);
         REQUIRE(dev != nullptr);
         CHECK_EQ(classify_device(dev), BackendKind::Cpu);
 
@@ -112,9 +103,8 @@ int main() {
     // include extra accel handles depending on what ggml registered.
     // ---------------------------------------------------------------
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_CPU_ACCEL, 0, "test-cpu-accel", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU_ACCEL, 0, "test-cpu-accel", plan);
         REQUIRE(st == TRANSCRIBE_OK);
         CHECK_EQ(plan.primary_kind, BackendKind::Cpu);
         REQUIRE(plan.primary != nullptr);
@@ -122,8 +112,7 @@ int main() {
 
         // CPU must sit last in the scheduler list (ggml requirement);
         // any additional handles ahead of it are accel devices.
-        ggml_backend_dev_t last_dev =
-            ggml_backend_get_device(plan.scheduler_list.back());
+        ggml_backend_dev_t last_dev = ggml_backend_get_device(plan.scheduler_list.back());
         REQUIRE(last_dev != nullptr);
         CHECK_EQ(classify_device(last_dev), BackendKind::Cpu);
 
@@ -139,9 +128,8 @@ int main() {
     // restrictions). We cannot pre-judge from the registry; instead
     // call init_backends() and assert based on what it returns.
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_METAL, 0, "test-metal", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_METAL, 0, "test-metal", plan);
 
         if (st == TRANSCRIBE_OK) {
             CHECK_EQ(plan.primary_kind, BackendKind::Metal);
@@ -157,9 +145,8 @@ int main() {
     // 3. Explicit Vulkan — same pattern as Metal
     // ---------------------------------------------------------------
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_VULKAN, 0, "test-vulkan", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_VULKAN, 0, "test-vulkan", plan);
 
         if (st == TRANSCRIBE_OK) {
             CHECK_EQ(plan.primary_kind, BackendKind::Vulkan);
@@ -175,9 +162,8 @@ int main() {
     // 4. Explicit CUDA — same pattern as Metal / Vulkan
     // ---------------------------------------------------------------
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_CUDA, 0, "test-cuda", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CUDA, 0, "test-cuda", plan);
 
         if (st == TRANSCRIBE_OK) {
             CHECK_EQ(plan.primary_kind, BackendKind::Cuda);
@@ -198,9 +184,8 @@ int main() {
     // fail initialization, so we assert based on the returned
     // primary_kind rather than pre-judging from the registry.
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_AUTO, 0, "test-auto", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test-auto", plan);
         REQUIRE(st == TRANSCRIBE_OK);
         CHECK(plan.primary != nullptr);
         CHECK(plan.primary_kind != BackendKind::Unknown);
@@ -221,10 +206,8 @@ int main() {
     // 6. Invalid enum — returns TRANSCRIBE_ERR_INVALID_ARG
     // ---------------------------------------------------------------
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            static_cast<transcribe_backend_request>(999),
-            0, "test-invalid", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(static_cast<transcribe_backend_request>(999), 0, "test-invalid", plan);
         CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
 
@@ -232,24 +215,19 @@ int main() {
     // 7. Explicit gpu_device validation
     // ---------------------------------------------------------------
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_AUTO, -1, "test-gpu-negative", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, -1, "test-gpu-negative", plan);
         CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
     {
-        BackendPlan plan;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_CPU, 1, "test-gpu-cpu-request", plan);
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU, 1, "test-gpu-cpu-request", plan);
         CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
     {
-        BackendPlan plan;
-        const int out_of_range =
-            static_cast<int>(ggml_backend_dev_count()) + 1;
-        transcribe_status st = init_backends(
-            TRANSCRIBE_BACKEND_AUTO, out_of_range,
-            "test-gpu-out-of-range", plan);
+        BackendPlan       plan;
+        const int         out_of_range = static_cast<int>(ggml_backend_dev_count()) + 1;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, out_of_range, "test-gpu-out-of-range", plan);
         CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
 
@@ -257,10 +235,9 @@ int main() {
     for (size_t i = 1; i < n_dev; ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
         if (dev != nullptr && !is_gpu_device(dev)) {
-            BackendPlan plan;
-            transcribe_status st = init_backends(
-                TRANSCRIBE_BACKEND_AUTO, static_cast<int>(i),
-                "test-gpu-non-gpu", plan);
+            BackendPlan       plan;
+            transcribe_status st =
+                init_backends(TRANSCRIBE_BACKEND_AUTO, static_cast<int>(i), "test-gpu-non-gpu", plan);
             CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
             break;
         }
@@ -269,10 +246,9 @@ int main() {
     for (size_t i = 1; i < n_dev; ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
         if (dev != nullptr && is_gpu_device(dev)) {
-            BackendPlan plan;
-            transcribe_status st = init_backends(
-                TRANSCRIBE_BACKEND_AUTO, static_cast<int>(i),
-                "test-gpu-explicit", plan);
+            BackendPlan       plan;
+            transcribe_status st =
+                init_backends(TRANSCRIBE_BACKEND_AUTO, static_cast<int>(i), "test-gpu-explicit", plan);
             if (st == TRANSCRIBE_OK) {
                 CHECK(plan.primary != nullptr);
                 CHECK(ggml_backend_get_device(plan.primary) == dev);

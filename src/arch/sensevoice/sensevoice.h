@@ -6,13 +6,12 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-kaldi-fbank.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <memory>
@@ -53,15 +52,14 @@ struct SenseVoiceSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
-
     // Reusable host scratch.
-    std::vector<float>   frontend_buf;   // [T_lfr, d_input]
-    std::vector<float>   pe_buf;         // [T, d_input]
-    std::vector<float>   logits_buf;     // [T, vocab] for greedy CTC
-    std::vector<int32_t> token_ids;      // post-collapse / post-blank-strip
+    std::vector<float>   frontend_buf;  // [T_lfr, d_input]
+    std::vector<float>   pe_buf;        // [T, d_input]
+    std::vector<float>   logits_buf;    // [T, vocab] for greedy CTC
+    std::vector<int32_t> token_ids;     // post-collapse / post-blank-strip
 
     SenseVoiceSession() = default;
     ~SenseVoiceSession() override;
 };
 
-} // namespace transcribe::sensevoice
+}  // namespace transcribe::sensevoice

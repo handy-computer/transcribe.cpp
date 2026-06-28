@@ -22,7 +22,7 @@
 namespace transcribe {
 struct Arch;
 class Tokenizer;
-} // namespace transcribe
+}  // namespace transcribe
 
 // Forward declaration for the resolved primary backend handle stored below.
 // The full type comes from ggml-backend.h in the .cpp that fills it.
@@ -93,7 +93,7 @@ struct transcribe_model {
         // n_ctx cap applies to (qwen3_asr, granite, voxtral, cohere, canary,
         // ...). When false the family has no decoder context cap and the
         // fields below stay zero.
-        bool    has_context_cap = false;
+        bool    has_context_cap        = false;
         // When true, effective_max_audio_ms comes straight from
         // caps.max_audio_ms rather than being derived from effective_n_ctx.
         // Set by families whose AUDIO bound is the encoder positional table
@@ -103,16 +103,16 @@ struct transcribe_model {
         // come from the decoder (n_ctx-sensitive). Left false by families
         // whose audio tokens consume the decoder context (qwen3_asr, granite,
         // voxtral, ...), where the audio bound legitimately scales with n_ctx.
-        bool    audio_from_caps = false;
+        bool    audio_from_caps        = false;
         // The model's trained decoder context window, in tokens.
-        int32_t model_max_ctx   = 0;
+        int32_t model_max_ctx          = 0;
         // Representative non-audio prompt token overhead (chat affixes etc.).
-        int32_t prompt_overhead = 0;
+        int32_t prompt_overhead        = 0;
         // Generation budget reserved when sizing the input bound.
-        int32_t gen_reserve     = 0;
+        int32_t gen_reserve            = 0;
         // Milliseconds of 16 kHz audio per audio token (inverse encoder rate),
         // used to turn an audio-token budget into effective_max_audio_ms.
-        double  ms_per_audio_token = 0.0;
+        double  ms_per_audio_token     = 0.0;
         // KV elements per context token (n_kv_heads * head_dim * n_layers * 2,
         // for K and V). The query multiplies by the session kv_type byte size
         // and effective_n_ctx to estimate max_kv_bytes.
@@ -160,7 +160,7 @@ struct transcribe_model {
     void set_translation_pairs(std::vector<std::string> pairs);
     bool allows_translation_pair(const char * src, const char * dst) const;
 
-private:
+  private:
     // Backing storage for the languages chain. Kept private so the only
     // way to mutate it is through set_languages(), which guarantees the
     // capability struct's pointer + count stay in sync.
@@ -186,9 +186,13 @@ namespace transcribe {
 // caller can pass any int, and loading an out-of-range value through the
 // enum type is UB in C++. Enum constants convert implicitly.
 inline void set_feature(transcribe_model * m, int f, bool on) {
-    if (m == nullptr) return;
+    if (m == nullptr) {
+        return;
+    }
     const unsigned bit = static_cast<unsigned>(f);
-    if (bit >= 64) return;
+    if (bit >= 64) {
+        return;
+    }
     const uint64_t mask = (uint64_t) 1 << bit;
     if (on) {
         m->feature_bits |= mask;
@@ -198,10 +202,14 @@ inline void set_feature(transcribe_model * m, int f, bool on) {
 }
 
 inline bool has_feature(const transcribe_model * m, int f) {
-    if (m == nullptr) return false;
+    if (m == nullptr) {
+        return false;
+    }
     const unsigned bit = static_cast<unsigned>(f);
-    if (bit >= 64) return false;
+    if (bit >= 64) {
+        return false;
+    }
     return (m->feature_bits & ((uint64_t) 1 << bit)) != 0;
 }
 
-} // namespace transcribe
+}  // namespace transcribe

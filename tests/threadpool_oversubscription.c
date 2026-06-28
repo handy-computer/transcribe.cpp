@@ -21,21 +21,23 @@
 // oversubscribes. A watchdog turns a hang into a test FAILURE (exit code 2)
 // instead of an indefinite hang.
 
-#include "ggml.h"
 #include "ggml-cpu.h"
+#include "ggml.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 
 #if defined(_WIN32)
-#include <windows.h>
+#    include <windows.h>
+
 static DWORD WINAPI watchdog_main(LPVOID arg) {
-    DWORD timeout_ms = (DWORD)(uintptr_t)arg;
+    DWORD timeout_ms = (DWORD) (uintptr_t) arg;
     Sleep(timeout_ms);
     fprintf(stderr,
-        "DEADLOCK: ggml_graph_compute did not finish within %lu ms "
-        "(ggml_barrier livelock under CPU oversubscription)\n", timeout_ms);
+            "DEADLOCK: ggml_graph_compute did not finish within %lu ms "
+            "(ggml_barrier livelock under CPU oversubscription)\n",
+            timeout_ms);
     fflush(stderr);
     ExitProcess(2);
     return 0;
@@ -43,30 +45,33 @@ static DWORD WINAPI watchdog_main(LPVOID arg) {
 #endif
 
 int main(int argc, char ** argv) {
-    const int n_threads = argc > 1 ? atoi(argv[1]) : 4;    // > available CPUs below
-    const int n_iters   = argc > 2 ? atoi(argv[2]) : 50;   // each does many barriers
-    const int chain     = argc > 3 ? atoi(argv[3]) : 64;   // graph nodes per compute
+    const int n_threads = argc > 1 ? atoi(argv[1]) : 4;   // > available CPUs below
+    const int n_iters   = argc > 2 ? atoi(argv[2]) : 50;  // each does many barriers
+    const int chain     = argc > 3 ? atoi(argv[3]) : 64;  // graph nodes per compute
 
 #if defined(_WIN32)
     // Force oversubscription: restrict the process to 2 logical CPUs, so the
     // default n_threads=4 has more threads than cores (what a 2-vCPU CI box has
     // naturally). Without this the bug only shows on machines with few cores.
-    if (!SetProcessAffinityMask(GetCurrentProcess(), (DWORD_PTR)0x3)) {
+    if (!SetProcessAffinityMask(GetCurrentProcess(), (DWORD_PTR) 0x3)) {
         fprintf(stderr, "warning: SetProcessAffinityMask failed (%lu)\n", GetLastError());
     }
     // 15s watchdog -> converts a hang into exit code 2 instead of hanging CI.
-    CreateThread(NULL, 0, watchdog_main, (LPVOID)(uintptr_t)15000, 0, NULL);
+    CreateThread(NULL, 0, watchdog_main, (LPVOID) (uintptr_t) 15000, 0, NULL);
 #endif
 
     struct ggml_init_params params = {
-        /*.mem_size   =*/ (size_t)512 * 1024 * 1024,
-        /*.mem_buffer =*/ NULL,
-        /*.no_alloc   =*/ false,
+        /*.mem_size   =*/(size_t) 512 * 1024 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/false,
     };
     struct ggml_context * ctx = ggml_init(params);
-    if (!ctx) { fprintf(stderr, "ggml_init failed\n"); return 1; }
+    if (!ctx) {
+        fprintf(stderr, "ggml_init failed\n");
+        return 1;
+    }
 
-    const int n = 1024;
+    const int            n = 1024;
     struct ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
     struct ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
     for (int i = 0; i < n; i++) {
@@ -84,8 +89,7 @@ int main(int argc, char ** argv) {
     struct ggml_cgraph * gf = ggml_new_graph(ctx);
     ggml_build_forward_expand(gf, cur);
 
-    printf("n_threads=%d iters=%d chain=%d (process pinned to 2 logical CPUs)\n",
-           n_threads, n_iters, chain);
+    printf("n_threads=%d iters=%d chain=%d (process pinned to 2 logical CPUs)\n", n_threads, n_iters, chain);
     fflush(stdout);
 
     for (int it = 0; it < n_iters; it++) {
@@ -94,7 +98,10 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "ggml_graph_compute failed at iter %d (status %d)\n", it, st);
             return 1;
         }
-        if ((it % 10) == 0) { printf("  iter %d ok\n", it); fflush(stdout); }
+        if ((it % 10) == 0) {
+            printf("  iter %d ok\n", it);
+            fflush(stdout);
+        }
     }
 
     printf("PASS: %d computes completed, no barrier deadlock\n", n_iters);

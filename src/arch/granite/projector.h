@@ -6,9 +6,8 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "ggml.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <vector>
@@ -21,13 +20,13 @@ namespace transcribe::granite {
 
 struct ProjectorBuild {
     // Graph inputs.
-    ggml_tensor * enc_in    = nullptr;  // [hidden_enc, T_enc]
-    ggml_tensor * enc_pad   = nullptr;  // [hidden_enc, pad_n], or nullptr
-                                        // when T_enc is aligned to
-                                        // window_size
+    ggml_tensor * enc_in  = nullptr;  // [hidden_enc, T_enc]
+    ggml_tensor * enc_pad = nullptr;  // [hidden_enc, pad_n], or nullptr
+                                      // when T_enc is aligned to
+                                      // window_size
 
     // Graph output.
-    ggml_tensor * out       = nullptr;  // [text_hidden, n_audio_tokens]
+    ggml_tensor * out = nullptr;  // [text_hidden, n_audio_tokens]
 
     // Dump points.
     struct {
@@ -35,11 +34,11 @@ struct ProjectorBuild {
         ggml_tensor * proj_out    = nullptr;  // == out, named "proj.out"
     } dumps;
 
-    ggml_cgraph * graph        = nullptr;
+    ggml_cgraph * graph = nullptr;
 
-    int nblocks                = 0;
-    int n_audio_tokens         = 0;
-    int t_enc_pad              = 0;   // pad_n = nblocks * window_size - T_enc
+    int nblocks        = 0;
+    int n_audio_tokens = 0;
+    int t_enc_pad      = 0;  // pad_n = nblocks * window_size - T_enc
 };
 
 ProjectorBuild build_projector_graph(ggml_context *         ctx,
@@ -47,4 +46,4 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
                                      const GraniteHParams & hp,
                                      int                    T_enc);
 
-} // namespace transcribe::granite
+}  // namespace transcribe::granite

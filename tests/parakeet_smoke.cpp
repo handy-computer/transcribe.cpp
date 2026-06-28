@@ -28,14 +28,12 @@
 // C ABI does not (and should not) expose ggml_tensor pointers
 // directly.
 
-#include "transcribe.h"
-
 #include "arch/parakeet/parakeet.h"
 #include "arch/parakeet/weights.h"
-#include "transcribe-model.h"
-
-#include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml.h"
+#include "transcribe-model.h"
+#include "transcribe.h"
 
 #include <sys/stat.h>
 
@@ -45,7 +43,7 @@
 #include <string>
 
 #ifndef TRANSCRIBE_TEST_FIXTURES_DIR
-#  error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
+#    error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
 #endif
 
 namespace {
@@ -54,42 +52,36 @@ const std::string g_fixtures_dir = TRANSCRIBE_TEST_FIXTURES_DIR;
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ_INT(actual, expected)                                      \
-    do {                                                                    \
-        const long long _a = static_cast<long long>(actual);                \
-        const long long _e = static_cast<long long>(expected);              \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: %s = %lld, expected %lld\n",          \
-                         __FILE__, __LINE__, #actual, _a, _e);              \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ_INT(actual, expected)                                                                           \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
-#define CHECK_STR_EQ(a, b)                                                  \
-    do {                                                                    \
-        const std::string _av = (a);                                        \
-        const std::string _bv = (b);                                        \
-        if (_av != _bv) {                                                   \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: \"%s\" != \"%s\"\n",                  \
-                         __FILE__, __LINE__,                                \
-                         _av.c_str(), _bv.c_str());                         \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_STR_EQ(a, b)                                                                                        \
+    do {                                                                                                          \
+        const std::string _av = (a);                                                                              \
+        const std::string _bv = (b);                                                                              \
+        if (_av != _bv) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _av.c_str(), _bv.c_str()); \
+            ++g_failures;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -98,12 +90,11 @@ bool file_exists(const std::string & path) {
 // from the parakeet handler because we just loaded a parakeet GGUF.
 // In real code the family handler keeps the downcast inside its own
 // init_context / run.
-const transcribe::parakeet::ParakeetModel *
-parakeet_view(const struct transcribe_model * m) {
+const transcribe::parakeet::ParakeetModel * parakeet_view(const struct transcribe_model * m) {
     return static_cast<const transcribe::parakeet::ParakeetModel *>(m);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const std::string fixture = g_fixtures_dir + "/tokenizer_minimal.gguf";
@@ -114,18 +105,16 @@ int main() {
                      "regenerate with:\n"
                      "  cmake --build build --target fixtures\n",
                      fixture.c_str());
-        return 77; // CTest "skipped"
+        return 77;  // CTest "skipped"
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
 
-    const transcribe_status st =
-        transcribe_model_load_file(fixture.c_str(), &mp, &model);
+    const transcribe_status st = transcribe_model_load_file(fixture.c_str(), &mp, &model);
     if (st != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "FAIL load: expected OK, got %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL load: expected OK, got %s\n", transcribe_status_string(st));
         return EXIT_FAILURE;
     }
     if (model == nullptr) {
@@ -144,8 +133,7 @@ int main() {
     {
         const char * backend = transcribe_model_backend(model);
         if (backend == nullptr || backend[0] == '\0') {
-            std::fprintf(stderr,
-                         "FAIL: backend = \"\" after step 1, expected non-empty\n");
+            std::fprintf(stderr, "FAIL: backend = \"\" after step 1, expected non-empty\n");
             ++g_failures;
         }
     }
@@ -160,49 +148,49 @@ int main() {
     // These match the values baked into make_gguf_fixtures.py
     // PARAKEET_HP. If either side drifts the test fails loudly.
     const auto & hp = pm->hparams;
-    CHECK_EQ_INT(hp.enc_n_layers,             2);
-    CHECK_EQ_INT(hp.enc_d_model,              8);
-    CHECK_EQ_INT(hp.enc_n_heads,              2);
-    CHECK_EQ_INT(hp.enc_d_ff,                 16);
-    CHECK_EQ_INT(hp.enc_conv_kernel,          3);
-    CHECK_EQ_INT(hp.enc_subsampling_factor,   2);
+    CHECK_EQ_INT(hp.enc_n_layers, 2);
+    CHECK_EQ_INT(hp.enc_d_model, 8);
+    CHECK_EQ_INT(hp.enc_n_heads, 2);
+    CHECK_EQ_INT(hp.enc_d_ff, 16);
+    CHECK_EQ_INT(hp.enc_conv_kernel, 3);
+    CHECK_EQ_INT(hp.enc_subsampling_factor, 2);
     CHECK_EQ_INT(hp.enc_subsampling_channels, 4);
-    CHECK_EQ_INT(hp.enc_pos_emb_max_len,      32);
-    CHECK_EQ_INT(hp.enc_use_bias,             0); // default false
-    CHECK_EQ_INT(hp.enc_head_dim(),           4); // 8 / 2
-    CHECK_EQ_INT(hp.pred_hidden,              4);
-    CHECK_EQ_INT(hp.pred_n_layers,            1);
-    CHECK_EQ_INT(hp.pred_vocab,               17);
-    CHECK_EQ_INT(hp.joint_hidden,             4);
-    CHECK_EQ_INT(hp.joint_num_extra_outputs,  2);
-    CHECK_EQ_INT(hp.joint_n_classes(),        19); // (17-1) + 2 + 1
-    CHECK_STR_EQ(hp.joint_activation,         "relu");
+    CHECK_EQ_INT(hp.enc_pos_emb_max_len, 32);
+    CHECK_EQ_INT(hp.enc_use_bias, 0);    // default false
+    CHECK_EQ_INT(hp.enc_head_dim(), 4);  // 8 / 2
+    CHECK_EQ_INT(hp.pred_hidden, 4);
+    CHECK_EQ_INT(hp.pred_n_layers, 1);
+    CHECK_EQ_INT(hp.pred_vocab, 17);
+    CHECK_EQ_INT(hp.joint_hidden, 4);
+    CHECK_EQ_INT(hp.joint_num_extra_outputs, 2);
+    CHECK_EQ_INT(hp.joint_n_classes(), 19);  // (17-1) + 2 + 1
+    CHECK_STR_EQ(hp.joint_activation, "relu");
     // TDT durations: 2 entries to match joint_num_extra_outputs.
     CHECK_EQ_INT(static_cast<int>(hp.tdt_durations.size()), 2);
     CHECK_EQ_INT(hp.tdt_durations[0], 0);
     CHECK_EQ_INT(hp.tdt_durations[1], 1);
-    CHECK_EQ_INT(hp.tdt_max_symbols,          10);
+    CHECK_EQ_INT(hp.tdt_max_symbols, 10);
     // Frontend hparams: full stt.frontend.* block. The synthetic
     // fixture's PARAKEET_HP and the loader's read_parakeet_hparams
     // both have to know about every field, and this assertion is the
     // gate that catches a future contributor who adds a key on one
     // side but forgets the other.
-    CHECK_STR_EQ(hp.fe_type,                  "mel");
-    CHECK_EQ_INT(hp.fe_num_mels,              4);
-    CHECK_EQ_INT(hp.fe_sample_rate,           16000);
-    CHECK_EQ_INT(hp.fe_n_fft,                 16);
-    CHECK_EQ_INT(hp.fe_win_length,            8);
-    CHECK_EQ_INT(hp.fe_hop_length,            4);
-    CHECK_STR_EQ(hp.fe_window,                "hann");
-    CHECK_STR_EQ(hp.fe_normalize,             "per_feature");
+    CHECK_STR_EQ(hp.fe_type, "mel");
+    CHECK_EQ_INT(hp.fe_num_mels, 4);
+    CHECK_EQ_INT(hp.fe_sample_rate, 16000);
+    CHECK_EQ_INT(hp.fe_n_fft, 16);
+    CHECK_EQ_INT(hp.fe_win_length, 8);
+    CHECK_EQ_INT(hp.fe_hop_length, 4);
+    CHECK_STR_EQ(hp.fe_window, "hann");
+    CHECK_STR_EQ(hp.fe_normalize, "per_feature");
     // f32 fields are checked exactly because the fixture writes
     // exact values and the round-trip is bit-perfect for these
     // sizes. If a future fixture starts using less round-friendly
     // values, switch to a fabs(diff) < epsilon check.
-    CHECK(hp.fe_dither       == 1e-5f);
+    CHECK(hp.fe_dither == 1e-5f);
     CHECK(hp.fe_pre_emphasis == 0.97f);
-    CHECK(hp.fe_f_min        == 0.0f);
-    CHECK(hp.fe_f_max        == 8000.0f);
+    CHECK(hp.fe_f_min == 0.0f);
+    CHECK(hp.fe_f_max == 8000.0f);
 
     // ----- Pre-encode slots populated -----
     const auto & pe = pm->weights.pre_encode;
@@ -216,8 +204,8 @@ int main() {
     CHECK(pe.conv5_b != nullptr);
     CHECK(pe.conv6_w != nullptr);
     CHECK(pe.conv6_b != nullptr);
-    CHECK(pe.out_w   != nullptr);
-    CHECK(pe.out_b   != nullptr);
+    CHECK(pe.out_w != nullptr);
+    CHECK(pe.out_b != nullptr);
 
     // ----- Encoder block slots populated for every layer -----
     CHECK_EQ_INT(pm->weights.blocks.size(), 2);
@@ -227,22 +215,22 @@ int main() {
         // every category got populated. Not exhaustive — the goal is
         // "the build_parakeet_weights walk visited every code path",
         // not "I am about to forget the names of all 28 tensors".
-        CHECK(b.norm_ff1_w  != nullptr);
-        CHECK(b.ff1_lin1_w  != nullptr);
+        CHECK(b.norm_ff1_w != nullptr);
+        CHECK(b.ff1_lin1_w != nullptr);
         CHECK(b.norm_attn_w != nullptr);
-        CHECK(b.attn_q_w    != nullptr);
-        CHECK(b.attn_pos_u  != nullptr);
-        CHECK(b.attn_pos_v  != nullptr);
+        CHECK(b.attn_q_w != nullptr);
+        CHECK(b.attn_pos_u != nullptr);
+        CHECK(b.attn_pos_v != nullptr);
         CHECK(b.norm_conv_w != nullptr);
-        CHECK(b.conv_pw1_w  != nullptr);
-        CHECK(b.conv_dw_w   != nullptr);
-        CHECK(b.conv_pw2_w  != nullptr);
-        CHECK(b.conv_bn_w   != nullptr);
-        CHECK(b.conv_bn_rm  != nullptr);
-        CHECK(b.conv_bn_rv  != nullptr);
-        CHECK(b.norm_ff2_w  != nullptr);
-        CHECK(b.ff2_lin1_w  != nullptr);
-        CHECK(b.norm_out_w  != nullptr);
+        CHECK(b.conv_pw1_w != nullptr);
+        CHECK(b.conv_dw_w != nullptr);
+        CHECK(b.conv_pw2_w != nullptr);
+        CHECK(b.conv_bn_w != nullptr);
+        CHECK(b.conv_bn_rm != nullptr);
+        CHECK(b.conv_bn_rv != nullptr);
+        CHECK(b.norm_ff2_w != nullptr);
+        CHECK(b.ff2_lin1_w != nullptr);
+        CHECK(b.norm_out_w != nullptr);
     }
 
     // ----- Predictor slots populated -----
@@ -252,16 +240,16 @@ int main() {
         const auto & l = pm->weights.predictor.lstm[0];
         CHECK(l.Wx != nullptr);
         CHECK(l.Wh != nullptr);
-        CHECK(l.b  != nullptr);
+        CHECK(l.b != nullptr);
     }
 
     // ----- Joint slots populated -----
-    CHECK(pm->weights.joint.enc_w  != nullptr);
-    CHECK(pm->weights.joint.enc_b  != nullptr);
+    CHECK(pm->weights.joint.enc_w != nullptr);
+    CHECK(pm->weights.joint.enc_b != nullptr);
     CHECK(pm->weights.joint.pred_w != nullptr);
     CHECK(pm->weights.joint.pred_b != nullptr);
-    CHECK(pm->weights.joint.out_w  != nullptr);
-    CHECK(pm->weights.joint.out_b  != nullptr);
+    CHECK(pm->weights.joint.out_w != nullptr);
+    CHECK(pm->weights.joint.out_b != nullptr);
 
     // ----- Spot-check tensor shapes against the catalog -----
     // The first pre_encode conv: ne should be [3, 3, 1, channels].
@@ -272,9 +260,7 @@ int main() {
         CHECK_EQ_INT(pe.conv0_w->ne[3], 4);
     }
     // The block-0 q projection should be square [d_model, d_model].
-    if (!pm->weights.blocks.empty() &&
-        pm->weights.blocks[0].attn_q_w != nullptr)
-    {
+    if (!pm->weights.blocks.empty() && pm->weights.blocks[0].attn_q_w != nullptr) {
         const auto * t = pm->weights.blocks[0].attn_q_w;
         CHECK_EQ_INT(t->ne[0], 8);
         CHECK_EQ_INT(t->ne[1], 8);
@@ -308,8 +294,7 @@ int main() {
         float v = 0.0f;
         ggml_backend_tensor_get(pe.conv0_w, &v, 0, sizeof(float));
         if (v != 0.0f) {
-            std::fprintf(stderr,
-                         "FAIL pre_encode.conv0_w[0]: got %f, expected 0.0\n", v);
+            std::fprintf(stderr, "FAIL pre_encode.conv0_w[0]: got %f, expected 0.0\n", v);
             ++g_failures;
         }
     } else {
@@ -320,8 +305,7 @@ int main() {
         float v = 0.0f;
         ggml_backend_tensor_get(pe.out_w, &v, 0, sizeof(float));
         if (v != 10.0f) {
-            std::fprintf(stderr,
-                         "FAIL pre_encode.out_w[0]: got %f, expected 10.0\n", v);
+            std::fprintf(stderr, "FAIL pre_encode.out_w[0]: got %f, expected 10.0\n", v);
             ++g_failures;
         }
     } else {

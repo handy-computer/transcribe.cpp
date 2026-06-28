@@ -25,4 +25,4 @@ void log_msg(transcribe_log_level level, const char * fmt, ...)
 #endif
     ;
 
-} // namespace transcribe
+}  // namespace transcribe

@@ -19,7 +19,7 @@ struct gguf_context;
 namespace transcribe {
 
 class Loader {
-public:
+  public:
     Loader() = default;
     ~Loader();
 
@@ -56,8 +56,10 @@ public:
     // Identification fields, populated on a successful open(). The arch
     // string is required by the GGUF schema we accept; the variant string
     // is optional and may be empty for older or partial files.
-    const std::string & path()    const { return path_; }
-    const std::string & arch()    const { return arch_; }
+    const std::string & path() const { return path_; }
+
+    const std::string & arch() const { return arch_; }
+
     const std::string & variant() const { return variant_; }
 
     // All scalar-string metadata KVs read on open(), keyed by GGUF key.
@@ -75,12 +77,12 @@ public:
     // gguf_free() it. The Loader is still safe to destroy.
     gguf_context * release_gguf();
 
-private:
-    std::string    path_;
-    std::string    arch_;
-    std::string    variant_;
+  private:
+    std::string                        path_;
+    std::string                        arch_;
+    std::string                        variant_;
     std::map<std::string, std::string> meta_;
-    gguf_context * gguf_ = nullptr;
+    gguf_context *                     gguf_ = nullptr;
 };
 
-} // namespace transcribe
+}  // namespace transcribe

@@ -8,8 +8,7 @@
 
 namespace transcribe::flash {
 
-void apply_env_overrides(bool & encoder_use_flash,
-                         bool & decoder_use_flash) {
+void apply_env_overrides(bool & encoder_use_flash, bool & decoder_use_flash) {
     if (transcribe::env::flag("TRANSCRIBE_NO_FLASH")) {
         encoder_use_flash = false;
         decoder_use_flash = false;
@@ -20,4 +19,4 @@ void apply_env_overrides(bool & encoder_use_flash,
     }
 }
 
-} // namespace transcribe::flash
+}  // namespace transcribe::flash

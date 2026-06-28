@@ -36,11 +36,10 @@
 
 #pragma once
 
-#include "granite.h"
-#include "causal_lm/causal_lm.h"   // reuse KvCache only
-#include "weights.h"
-
+#include "causal_lm/causal_lm.h"  // reuse KvCache only
 #include "ggml.h"
+#include "granite.h"
+#include "weights.h"
 
 struct ggml_context;
 struct ggml_cgraph;
@@ -64,8 +63,8 @@ struct PrefillBuild {
     ggml_tensor * positions_in   = nullptr;  // [T_prompt] i32 for RoPE
     ggml_tensor * mask_in        = nullptr;  // [T_prompt, T_prompt] f16 (causal)
     ggml_tensor * out            = nullptr;  // [vocab] — last-position logits
-    DecoderDumps  dumps {};
-    ggml_cgraph * graph          = nullptr;
+    DecoderDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
 
     int T_prompt       = 0;
     int n_audio_tokens = 0;
@@ -81,38 +80,38 @@ struct PrefillBuild {
 //
 // The kv_cache is WRITTEN by the graph. Callers should set
 // kv_cache.n = T_prompt and kv_cache.head = T_prompt after compute.
-PrefillBuild build_prefill_graph(ggml_context *                  ctx,
-                                 const GraniteWeights &          weights,
-                                 const GraniteHParams &          hp,
+PrefillBuild build_prefill_graph(ggml_context *                   ctx,
+                                 const GraniteWeights &           weights,
+                                 const GraniteHParams &           hp,
                                  transcribe::causal_lm::KvCache & kv_cache,
-                                 int                             T_prompt,
-                                 int                             n_audio_tokens,
-                                 int                             prefix_len,
-                                 int                             suffix_len,
-                                 bool                            use_flash,
-                                 bool                            slice_last);
+                                 int                              T_prompt,
+                                 int                              n_audio_tokens,
+                                 int                              prefix_len,
+                                 int                              suffix_len,
+                                 bool                             use_flash,
+                                 bool                             slice_last);
 
 // Step graph (one token).
 
 struct StepBuild {
-    ggml_tensor * input_id_in  = nullptr;  // [1] i32
-    ggml_tensor * position_in  = nullptr;  // [1] i32, value = n_past
-    ggml_tensor * kv_idx_in    = nullptr;  // [1] i64, KV write position
-    ggml_tensor * mask_in      = nullptr;  // [max_n_kv, 1] f16
-    ggml_tensor * out          = nullptr;  // [1] i32 — argmax token id
-    ggml_cgraph * graph        = nullptr;
+    ggml_tensor * input_id_in = nullptr;  // [1] i32
+    ggml_tensor * position_in = nullptr;  // [1] i32, value = n_past
+    ggml_tensor * kv_idx_in   = nullptr;  // [1] i64, KV write position
+    ggml_tensor * mask_in     = nullptr;  // [max_n_kv, 1] f16
+    ggml_tensor * out         = nullptr;  // [1] i32 — argmax token id
+    ggml_cgraph * graph       = nullptr;
 
     int max_n_kv = 0;
 };
 
 // Build a static-shape single-token step graph reusable across every
 // autoregressive step. Topology depends only on max_n_kv.
-StepBuild build_step_graph(ggml_context *                  ctx,
-                           const GraniteWeights &          weights,
-                           const GraniteHParams &          hp,
+StepBuild build_step_graph(ggml_context *                   ctx,
+                           const GraniteWeights &           weights,
+                           const GraniteHParams &           hp,
                            transcribe::causal_lm::KvCache & kv_cache,
-                           int                             max_n_kv,
-                           bool                            use_flash);
+                           int                              max_n_kv,
+                           bool                             use_flash);
 
 // Batched prefill / step (offline transcribe_run_batch).
 // Same recipe as the causal_lm families but with Granite block math (no Q/K
@@ -135,20 +134,19 @@ struct PrefillBuildBatched {
     ggml_tensor * logits         = nullptr;  // [vocab, B]
     ggml_tensor * out            = nullptr;  // [B] i32 argmax
     ggml_cgraph * graph          = nullptr;
-    int T_prompt_max   = 0;
-    int n_audio_max    = 0;
-    int n_batch        = 0;
+    int           T_prompt_max   = 0;
+    int           n_audio_max    = 0;
+    int           n_batch        = 0;
 };
 
-PrefillBuildBatched build_prefill_graph_batched(
-    ggml_context *                  ctx,
-    const GraniteWeights &          weights,
-    const GraniteHParams &          hp,
-    transcribe::causal_lm::KvCache & kv_cache,
-    int                             T_prompt_max,
-    int                             n_audio_max,
-    int                             n_batch,
-    bool                            use_flash);
+PrefillBuildBatched build_prefill_graph_batched(ggml_context *                   ctx,
+                                                const GraniteWeights &           weights,
+                                                const GraniteHParams &           hp,
+                                                transcribe::causal_lm::KvCache & kv_cache,
+                                                int                              T_prompt_max,
+                                                int                              n_audio_max,
+                                                int                              n_batch,
+                                                bool                             use_flash);
 
 struct StepBuildBatched {
     ggml_tensor * input_ids_in = nullptr;  // [B] i32
@@ -158,17 +156,16 @@ struct StepBuildBatched {
     ggml_tensor * logits       = nullptr;  // [vocab, B]
     ggml_tensor * out          = nullptr;  // [B] i32 argmax
     ggml_cgraph * graph        = nullptr;
-    int max_n_kv = 0;
-    int n_batch  = 0;
+    int           max_n_kv     = 0;
+    int           n_batch      = 0;
 };
 
-StepBuildBatched build_step_graph_batched(
-    ggml_context *                  ctx,
-    const GraniteWeights &          weights,
-    const GraniteHParams &          hp,
-    transcribe::causal_lm::KvCache & kv_cache,
-    int                             max_n_kv,
-    int                             n_batch,
-    bool                            use_flash);
+StepBuildBatched build_step_graph_batched(ggml_context *                   ctx,
+                                          const GraniteWeights &           weights,
+                                          const GraniteHParams &           hp,
+                                          transcribe::causal_lm::KvCache & kv_cache,
+                                          int                              max_n_kv,
+                                          int                              n_batch,
+                                          bool                             use_flash);
 
-} // namespace transcribe::granite
+}  // namespace transcribe::granite

@@ -33,14 +33,14 @@ namespace transcribe {
 // nemo128.onnx). Constructing a default-initialized MelConfig and
 // calling MelFrontend(cfg) gives a working extractor for v2 / v3.
 struct MelConfig {
-    int   sample_rate    = 16000;
-    int   num_mels       = 128;
-    int   n_fft          = 512;
-    int   win_length     = 400;
-    int   hop_length     = 160;
-    float pre_emphasis   = 0.97f;     // 0.0 disables
-    float f_min          = 0.0f;
-    float f_max          = 8000.0f;
+    int   sample_rate  = 16000;
+    int   num_mels     = 128;
+    int   n_fft        = 512;
+    int   win_length   = 400;
+    int   hop_length   = 160;
+    float pre_emphasis = 0.97f;  // 0.0 disables
+    float f_min        = 0.0f;
+    float f_max        = 8000.0f;
 
     // STFT input padding mode:
     //   "reflect"  — symmetric reflect-pad by n_fft/2 on both sides
@@ -104,7 +104,7 @@ struct MelConfig {
 // number of times. Thread-safety: const after construction; multiple
 // threads may call compute() concurrently.
 class MelFrontend {
-public:
+  public:
     explicit MelFrontend(const MelConfig & cfg);
 
     // Run the full pipeline. pcm must be 16 kHz mono float32 in
@@ -124,13 +124,12 @@ public:
     //                              short to produce >= 2 frames
     //                              (per-feature normalize divides by
     //                              n_frames - 1, which would NaN).
-    transcribe_status compute(
-        const float * pcm,
-        size_t n_samples,
-        std::vector<float> & out_mel,
-        int & out_n_mels,
-        int & out_n_frames,
-        int n_threads = 0) const;
+    transcribe_status compute(const float *        pcm,
+                              size_t               n_samples,
+                              std::vector<float> & out_mel,
+                              int &                out_n_mels,
+                              int &                out_n_frames,
+                              int                  n_threads = 0) const;
 
     // Number of mel bins (matches MelConfig::num_mels).
     int num_mels() const { return cfg_.num_mels; }
@@ -142,16 +141,19 @@ public:
     // Read-only accessors for unit tests. Not part of the runtime
     // API; the goal is to validate the precomputed buffers in
     // isolation without running the full pipeline.
-    const std::vector<double> & window()     const { return window_; }
-    const std::vector<float>  & filterbank() const { return mel_fb_; }
-    const MelConfig            & config()     const { return cfg_; }
-    int                          n_freq()     const { return n_freq_; }
+    const std::vector<double> & window() const { return window_; }
 
-private:
-    MelConfig cfg_;
-    int n_freq_;                      // n_fft/2 + 1
-    std::vector<double> window_;      // [n_fft], periodic hann zero-padded
-    std::vector<float>  mel_fb_;      // [num_mels * n_freq] row-major, Slaney
+    const std::vector<float> & filterbank() const { return mel_fb_; }
+
+    const MelConfig & config() const { return cfg_; }
+
+    int n_freq() const { return n_freq_; }
+
+  private:
+    MelConfig           cfg_;
+    int                 n_freq_;  // n_fft/2 + 1
+    std::vector<double> window_;  // [n_fft], periodic hann zero-padded
+    std::vector<float>  mel_fb_;  // [num_mels * n_freq] row-major, Slaney
 
     // sin/cos LUT for the mixed-radix FFT. Sized to n_fft so that every
     // recursion-level N (n_fft, n_fft/2, n_fft/4, ..., odd leaf) divides
@@ -164,4 +166,4 @@ private:
     std::vector<float> sin_lut_;
 };
 
-} // namespace transcribe
+}  // namespace transcribe

@@ -34,22 +34,22 @@ namespace transcribe::cohere {
 
 struct CohereHParams {
     // Encoder (Conformer).
-    int32_t enc_n_layers          = 0;
-    int32_t enc_d_model           = 0;
-    int32_t enc_n_heads           = 0;
-    int32_t enc_d_ff              = 0;
-    int32_t enc_conv_kernel       = 0;
+    int32_t enc_n_layers             = 0;
+    int32_t enc_d_model              = 0;
+    int32_t enc_n_heads              = 0;
+    int32_t enc_d_ff                 = 0;
+    int32_t enc_conv_kernel          = 0;
     int32_t enc_subsampling_factor   = 0;
     int32_t enc_subsampling_channels = 0;
-    int32_t enc_pos_emb_max_len   = 0;
-    bool    enc_use_bias          = false;
+    int32_t enc_pos_emb_max_len      = 0;
+    bool    enc_use_bias             = false;
 
     // Decoder (autoregressive Transformer).
-    int32_t dec_n_layers   = 0;
-    int32_t dec_hidden     = 0;
-    int32_t dec_n_heads    = 0;
-    int32_t dec_inner      = 0;
-    int32_t dec_max_seq    = 0;
+    int32_t     dec_n_layers = 0;
+    int32_t     dec_hidden   = 0;
+    int32_t     dec_n_heads  = 0;
+    int32_t     dec_inner    = 0;
+    int32_t     dec_max_seq  = 0;
     std::string dec_activation;  // "relu" or "silu"
 
     // Token IDs.
@@ -80,11 +80,11 @@ struct CohereHParams {
 
     // Derived.
     int32_t enc_head_dim() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
+
     int32_t dec_head_dim() const { return dec_n_heads > 0 ? dec_hidden / dec_n_heads : 0; }
 };
 
-transcribe_status read_cohere_hparams(const gguf_context * gguf,
-                                      CohereHParams &      hp);
+transcribe_status read_cohere_hparams(const gguf_context * gguf, CohereHParams & hp);
 
 struct CoherePreEncode {
     // Same structure as Parakeet: dw_striding subsampling.
@@ -113,33 +113,33 @@ struct CohereBlock {
     ggml_tensor * ff1_lin2_b = nullptr;
 
     // Self-attention with relative positional encoding.
-    ggml_tensor * norm_attn_w  = nullptr;
-    ggml_tensor * norm_attn_b  = nullptr;
-    ggml_tensor * attn_q_w     = nullptr;
-    ggml_tensor * attn_q_b     = nullptr;
-    ggml_tensor * attn_k_w     = nullptr;
-    ggml_tensor * attn_k_b     = nullptr;
-    ggml_tensor * attn_v_w     = nullptr;
-    ggml_tensor * attn_v_b     = nullptr;
-    ggml_tensor * attn_out_w   = nullptr;
-    ggml_tensor * attn_out_b   = nullptr;
-    ggml_tensor * attn_pos_w   = nullptr;  // linear_pos (no bias)
-    ggml_tensor * attn_pos_u   = nullptr;
-    ggml_tensor * attn_pos_v   = nullptr;
+    ggml_tensor * norm_attn_w = nullptr;
+    ggml_tensor * norm_attn_b = nullptr;
+    ggml_tensor * attn_q_w    = nullptr;
+    ggml_tensor * attn_q_b    = nullptr;
+    ggml_tensor * attn_k_w    = nullptr;
+    ggml_tensor * attn_k_b    = nullptr;
+    ggml_tensor * attn_v_w    = nullptr;
+    ggml_tensor * attn_v_b    = nullptr;
+    ggml_tensor * attn_out_w  = nullptr;
+    ggml_tensor * attn_out_b  = nullptr;
+    ggml_tensor * attn_pos_w  = nullptr;  // linear_pos (no bias)
+    ggml_tensor * attn_pos_u  = nullptr;
+    ggml_tensor * attn_pos_v  = nullptr;
 
     // Convolution module.
-    ggml_tensor * norm_conv_w  = nullptr;
-    ggml_tensor * norm_conv_b  = nullptr;
-    ggml_tensor * conv_pw1_w   = nullptr;
-    ggml_tensor * conv_pw1_b   = nullptr;
-    ggml_tensor * conv_dw_w    = nullptr;
-    ggml_tensor * conv_dw_b    = nullptr;
-    ggml_tensor * conv_pw2_w   = nullptr;
-    ggml_tensor * conv_pw2_b   = nullptr;
-    ggml_tensor * conv_bn_w    = nullptr;
-    ggml_tensor * conv_bn_b    = nullptr;
-    ggml_tensor * conv_bn_rm   = nullptr;
-    ggml_tensor * conv_bn_rv   = nullptr;
+    ggml_tensor * norm_conv_w         = nullptr;
+    ggml_tensor * norm_conv_b         = nullptr;
+    ggml_tensor * conv_pw1_w          = nullptr;
+    ggml_tensor * conv_pw1_b          = nullptr;
+    ggml_tensor * conv_dw_w           = nullptr;
+    ggml_tensor * conv_dw_b           = nullptr;
+    ggml_tensor * conv_pw2_w          = nullptr;
+    ggml_tensor * conv_pw2_b          = nullptr;
+    ggml_tensor * conv_bn_w           = nullptr;
+    ggml_tensor * conv_bn_b           = nullptr;
+    ggml_tensor * conv_bn_rm          = nullptr;
+    ggml_tensor * conv_bn_rv          = nullptr;
     // Fused BN (computed at load time).
     ggml_tensor * conv_bn_fused_scale = nullptr;
     ggml_tensor * conv_bn_fused_bias  = nullptr;
@@ -218,17 +218,15 @@ struct CohereHead {
 };
 
 struct CohereWeights {
-    CoherePreEncode              pre_encode;
-    std::vector<CohereBlock>     blocks;
-    CohereEncDecProj             enc_dec_proj;
-    CohereDecEmbed               dec_embed;
-    std::vector<CohereDecBlock>  dec_blocks;
-    CohereDecFinal               dec_final;
-    CohereHead                   head;
+    CoherePreEncode             pre_encode;
+    std::vector<CohereBlock>    blocks;
+    CohereEncDecProj            enc_dec_proj;
+    CohereDecEmbed              dec_embed;
+    std::vector<CohereDecBlock> dec_blocks;
+    CohereDecFinal              dec_final;
+    CohereHead                  head;
 };
 
-transcribe_status build_cohere_weights(ggml_context *         ctx_meta,
-                                       const CohereHParams &  hp,
-                                       CohereWeights &        weights);
+transcribe_status build_cohere_weights(ggml_context * ctx_meta, const CohereHParams & hp, CohereWeights & weights);
 
-} // namespace transcribe::cohere
+}  // namespace transcribe::cohere

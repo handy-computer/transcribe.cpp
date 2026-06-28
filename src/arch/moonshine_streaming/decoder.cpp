@@ -15,15 +15,13 @@
 
 #include "decoder.h"
 
-#include "encoder.h"
-#include "moonshine_streaming.h"
-#include "weights.h"
-
 #include "conformer/conformer.h"
+#include "encoder.h"
+#include "ggml.h"
+#include "moonshine_streaming.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-
-#include "ggml.h"
+#include "weights.h"
 
 #include <cmath>
 #include <cstdio>
@@ -33,21 +31,21 @@ namespace transcribe::moonshine_streaming {
 namespace {
 
 namespace conf = transcribe::conformer;
-using conf::named;
 using conf::layer_norm;
+using conf::named;
 
 ggml_tensor * pad_head_dim(ggml_context * ctx, ggml_tensor * t, int pad) {
-    if (pad <= 0) return t;
+    if (pad <= 0) {
+        return t;
+    }
     return ggml_pad(ctx, t, /*p0=*/pad, /*p1=*/0, /*p2=*/0, /*p3=*/0);
 }
 
-ggml_tensor * unpad_head_dim(ggml_context * ctx, ggml_tensor * t,
-                             int head_dim, int pad)
-{
-    if (pad <= 0) return t;
-    return ggml_view_3d(ctx, t,
-                        head_dim, t->ne[1], t->ne[2],
-                        t->nb[1], t->nb[2], 0);
+ggml_tensor * unpad_head_dim(ggml_context * ctx, ggml_tensor * t, int head_dim, int pad) {
+    if (pad <= 0) {
+        return t;
+    }
+    return ggml_view_3d(ctx, t, head_dim, t->ne[1], t->ne[2], t->nb[1], t->nb[2], 0);
 }
 
 // Decoder uses GPT-J / interleaved RoPE (`rotate_half` slices
@@ -56,44 +54,41 @@ ggml_tensor * apply_partial_rope(ggml_context *                    ctx,
                                  ggml_tensor *                     x,
                                  ggml_tensor *                     positions,
                                  const MoonshineStreamingHParams & hp,
-                                 int                               head_dim_rot)
-{
-    return ggml_rope_ext(
-        ctx, x, positions, /*c=*/nullptr,
-        head_dim_rot,
-        GGML_ROPE_TYPE_NORMAL,
-        /*n_ctx_orig=*/0,
-        hp.rope_theta,
-        /*freq_scale=*/1.0f,
-        /*ext_factor=*/0.0f,
-        /*attn_factor=*/1.0f,
-        /*beta_fast=*/32.0f,
-        /*beta_slow=*/1.0f);
+                                 int                               head_dim_rot) {
+    return ggml_rope_ext(ctx, x, positions, /*c=*/nullptr, head_dim_rot, GGML_ROPE_TYPE_NORMAL,
+                         /*n_ctx_orig=*/0, hp.rope_theta,
+                         /*freq_scale=*/1.0f,
+                         /*ext_factor=*/0.0f,
+                         /*attn_factor=*/1.0f,
+                         /*beta_fast=*/32.0f,
+                         /*beta_slow=*/1.0f);
 }
 
 // SwiGLU MLP: fc1 -> 2·ffn_dim, chunk(2, dim=-1) into [x_proj, gate]
 // (innermost dim = ggml ne[0]), out = silu(gate) * x_proj, fc2.
 ggml_tensor * ffn_decoder_swiglu(ggml_context * ctx,
                                  ggml_tensor *  x,
-                                 ggml_tensor *  fc1_w, ggml_tensor * fc1_b,
-                                 ggml_tensor *  fc2_w, ggml_tensor * fc2_b,
-                                 int            ffn_dim)
-{
+                                 ggml_tensor *  fc1_w,
+                                 ggml_tensor *  fc1_b,
+                                 ggml_tensor *  fc2_w,
+                                 ggml_tensor *  fc2_b,
+                                 int            ffn_dim) {
     ggml_tensor * h = ggml_mul_mat(ctx, fc1_w, x);
-    if (fc1_b != nullptr) h = ggml_add(ctx, h, fc1_b);
+    if (fc1_b != nullptr) {
+        h = ggml_add(ctx, h, fc1_b);
+    }
     const int64_t T          = h->ne[1];
     const size_t  el         = ggml_element_size(h);
     const size_t  half_bytes = static_cast<size_t>(ffn_dim) * el;
 
-    ggml_tensor * x_proj = ggml_view_2d(ctx, h, ffn_dim, T,
-                                        h->nb[1], 0);
-    ggml_tensor * gate   = ggml_view_2d(ctx, h, ffn_dim, T,
-                                        h->nb[1], half_bytes);
+    ggml_tensor * x_proj = ggml_view_2d(ctx, h, ffn_dim, T, h->nb[1], 0);
+    ggml_tensor * gate   = ggml_view_2d(ctx, h, ffn_dim, T, h->nb[1], half_bytes);
 
-    ggml_tensor * y = ggml_mul(ctx, ggml_silu(ctx, ggml_cont(ctx, gate)),
-                                    ggml_cont(ctx, x_proj));
+    ggml_tensor * y = ggml_mul(ctx, ggml_silu(ctx, ggml_cont(ctx, gate)), ggml_cont(ctx, x_proj));
     ggml_tensor * o = ggml_mul_mat(ctx, fc2_w, y);
-    if (fc2_b != nullptr) o = ggml_add(ctx, o, fc2_b);
+    if (fc2_b != nullptr) {
+        o = ggml_add(ctx, o, fc2_b);
+    }
     return o;
 }
 
@@ -114,8 +109,7 @@ ggml_tensor * mha_self_cached(ggml_context *                    ctx,
                               int                               n_past,
                               int                               n_tokens,
                               int                               n_kv,
-                              bool                              use_flash)
-{
+                              bool                              use_flash) {
     const int   head_dim     = d_model / n_heads;
     const int   head_dim_pad = hp.dec_head_dim_padded();
     const int   head_dim_rot = hp.dec_head_dim_rot();
@@ -143,42 +137,26 @@ ggml_tensor * mha_self_cached(ggml_context *                    ctx,
         const size_t k_elem = ggml_element_size(kv_cache.self_k);
         const size_t v_elem = ggml_element_size(kv_cache.self_v);
 
-        ggml_tensor * k_dst = ggml_view_1d(
-            ctx, kv_cache.self_k,
-            static_cast<int64_t>(n_tokens) * d_model,
-            k_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * n_ctx * d_model +
-                static_cast<int64_t>(n_past) * d_model));
-        ggml_tensor * v_dst = ggml_view_1d(
-            ctx, kv_cache.self_v,
-            static_cast<int64_t>(n_tokens) * d_model,
-            v_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * n_ctx * d_model +
-                static_cast<int64_t>(n_past) * d_model));
+        ggml_tensor * k_dst = ggml_view_1d(ctx, kv_cache.self_k, static_cast<int64_t>(n_tokens) * d_model,
+                                           k_elem * static_cast<size_t>(static_cast<int64_t>(il) * n_ctx * d_model +
+                                                                        static_cast<int64_t>(n_past) * d_model));
+        ggml_tensor * v_dst = ggml_view_1d(ctx, kv_cache.self_v, static_cast<int64_t>(n_tokens) * d_model,
+                                           v_elem * static_cast<size_t>(static_cast<int64_t>(il) * n_ctx * d_model +
+                                                                        static_cast<int64_t>(n_past) * d_model));
 
         ggml_build_forward_expand(gf, ggml_cpy(ctx, K_rope, k_dst));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx, Vcur,   v_dst));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx, Vcur, v_dst));
     }
 
-    const size_t k_elem = ggml_element_size(kv_cache.self_k);
-    ggml_tensor * K = ggml_view_3d(
-        ctx, kv_cache.self_k,
-        head_dim, n_kv, n_heads,
-        k_elem * d_model,
-        k_elem * head_dim,
-        k_elem * static_cast<size_t>(
-            static_cast<int64_t>(il) * n_ctx * d_model));
+    const size_t  k_elem = ggml_element_size(kv_cache.self_k);
+    ggml_tensor * K = ggml_view_3d(ctx, kv_cache.self_k, head_dim, n_kv, n_heads, k_elem * d_model, k_elem * head_dim,
+                                   k_elem * static_cast<size_t>(static_cast<int64_t>(il) * n_ctx * d_model));
 
-    const size_t v_elem = ggml_element_size(kv_cache.self_v);
-    ggml_tensor * V = ggml_view_3d(
-        ctx, kv_cache.self_v,
-        head_dim, n_kv, n_heads,
-        v_elem * d_model,
-        v_elem * head_dim,
-        v_elem * static_cast<size_t>(
-            static_cast<int64_t>(il) * n_ctx * d_model));
+    const size_t  v_elem = ggml_element_size(kv_cache.self_v);
+    ggml_tensor * V = ggml_view_3d(ctx, kv_cache.self_v, head_dim, n_kv, n_heads, v_elem * d_model, v_elem * head_dim,
+                                   v_elem * static_cast<size_t>(static_cast<int64_t>(il) * n_ctx * d_model));
 
-    ggml_tensor * Q = pad_head_dim(ctx, Q_unpad, pad);
+    ggml_tensor * Q   = pad_head_dim(ctx, Q_unpad, pad);
     ggml_tensor * K_p = pad_head_dim(ctx, ggml_cont(ctx, K), pad);
     ggml_tensor * V_p = pad_head_dim(ctx, ggml_cont(ctx, V), pad);
 
@@ -190,8 +168,8 @@ ggml_tensor * mha_self_cached(ggml_context *                    ctx,
     } else {
         ggml_tensor * kq      = ggml_mul_mat(ctx, K_p, Q);
         ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask, scale, 0.0f);
-        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, V_p, 1, 0, 2, 3));
-        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, V_p, 1, 0, 2, 3));
+        o                     = ggml_mul_mat(ctx, v_t, kq_soft);
     }
 
     if (pad > 0) {
@@ -217,53 +195,40 @@ ggml_tensor * mha_cross_cached(ggml_context *                    ctx,
                                int                               d_model,
                                int                               il,
                                int                               T_enc,
-                               bool                              use_flash)
-{
-    const int   head_dim     = d_model / n_heads;
-    const int   head_dim_pad = hp.dec_head_dim_padded();
-    const int   pad          = head_dim_pad - head_dim;
-    const float scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    const int64_t n_tokens   = x->ne[1];
+                               bool                              use_flash) {
+    const int     head_dim     = d_model / n_heads;
+    const int     head_dim_pad = hp.dec_head_dim_padded();
+    const int     pad          = head_dim_pad - head_dim;
+    const float   scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const int64_t n_tokens     = x->ne[1];
 
     ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
-    ggml_tensor * Q = ggml_reshape_3d(ctx, Qcur, head_dim, n_heads, n_tokens);
-    Q = ggml_permute(ctx, Q, 0, 2, 1, 3);
-    Q = ggml_cont(ctx, Q);
-    Q = pad_head_dim(ctx, Q, pad);
+    ggml_tensor * Q    = ggml_reshape_3d(ctx, Qcur, head_dim, n_heads, n_tokens);
+    Q                  = ggml_permute(ctx, Q, 0, 2, 1, 3);
+    Q                  = ggml_cont(ctx, Q);
+    Q                  = pad_head_dim(ctx, Q, pad);
 
-    const size_t k_elem = ggml_element_size(kv_cache.cross_k);
-    ggml_tensor * K = ggml_view_3d(
-        ctx, kv_cache.cross_k,
-        head_dim, T_enc, n_heads,
-        k_elem * d_model,
-        k_elem * head_dim,
-        k_elem * static_cast<size_t>(
-            static_cast<int64_t>(il) * T_enc * d_model));
+    const size_t  k_elem = ggml_element_size(kv_cache.cross_k);
+    ggml_tensor * K = ggml_view_3d(ctx, kv_cache.cross_k, head_dim, T_enc, n_heads, k_elem * d_model, k_elem * head_dim,
+                                   k_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc * d_model));
 
-    const size_t v_elem = ggml_element_size(kv_cache.cross_v);
-    ggml_tensor * V = ggml_view_3d(
-        ctx, kv_cache.cross_v,
-        head_dim, T_enc, n_heads,
-        v_elem * d_model,
-        v_elem * head_dim,
-        v_elem * static_cast<size_t>(
-            static_cast<int64_t>(il) * T_enc * d_model));
+    const size_t  v_elem = ggml_element_size(kv_cache.cross_v);
+    ggml_tensor * V = ggml_view_3d(ctx, kv_cache.cross_v, head_dim, T_enc, n_heads, v_elem * d_model, v_elem * head_dim,
+                                   v_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc * d_model));
 
     ggml_tensor * K_p = pad_head_dim(ctx, ggml_cont(ctx, K), pad);
     ggml_tensor * V_p = pad_head_dim(ctx, ggml_cont(ctx, V), pad);
 
     ggml_tensor * o;
     if (use_flash) {
-        o = ggml_flash_attn_ext(ctx, Q, K_p, V_p, /*mask=*/nullptr,
-                                scale, 0.0f, 0.0f);
+        o = ggml_flash_attn_ext(ctx, Q, K_p, V_p, /*mask=*/nullptr, scale, 0.0f, 0.0f);
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
         o = ggml_cont(ctx, o);
     } else {
         ggml_tensor * kq      = ggml_mul_mat(ctx, K_p, Q);
-        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr,
-                                                  scale, 0.0f);
-        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, V_p, 1, 0, 2, 3));
-        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr, scale, 0.0f);
+        ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, V_p, 1, 0, 2, 3));
+        o                     = ggml_mul_mat(ctx, v_t, kq_soft);
     }
 
     if (pad > 0) {
@@ -277,20 +242,18 @@ ggml_tensor * mha_cross_cached(ggml_context *                    ctx,
     return o;
 }
 
-} // namespace
+}  // namespace
 
 // Adapter graph.
-AdapterBuild build_adapter_graph(ggml_context *                       ctx,
-                                 const MoonshineStreamingWeights &    w,
-                                 const MoonshineStreamingHParams &    hp,
-                                 int                                  T_enc)
-{
-    AdapterBuild ab {};
+AdapterBuild build_adapter_graph(ggml_context *                    ctx,
+                                 const MoonshineStreamingWeights & w,
+                                 const MoonshineStreamingHParams & hp,
+                                 int                               T_enc) {
+    AdapterBuild ab{};
 
     if (ctx == nullptr || T_enc <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming adapter: invalid arg (ctx=%p, T_enc=%d)",
-                     static_cast<void *>(ctx), T_enc);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming adapter: invalid arg (ctx=%p, T_enc=%d)",
+                static_cast<void *>(ctx), T_enc);
         return ab;
     }
 
@@ -317,8 +280,7 @@ AdapterBuild build_adapter_graph(ggml_context *                       ctx,
         y = ggml_mul_mat(ctx, w.adapter.proj_w, y);
     } else if (enc_h != dec_h) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming adapter: enc_h (%d) != dec_h (%d) but adapter_has_proj=false",
-                     enc_h, dec_h);
+                "moonshine_streaming adapter: enc_h (%d) != dec_h (%d) but adapter_has_proj=false", enc_h, dec_h);
         return ab;
     }
     named(y, "adapter.out");
@@ -328,8 +290,7 @@ AdapterBuild build_adapter_graph(ggml_context *                       ctx,
 
     ab.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (ab.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming adapter: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming adapter: ggml_new_graph_custom failed");
         return ab;
     }
     // Build forward through both pos_emb (for the dump) and out.
@@ -340,18 +301,16 @@ AdapterBuild build_adapter_graph(ggml_context *                       ctx,
 }
 
 // Cross-KV precompute graph.
-DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
-                                  const MoonshineStreamingWeights &    w,
-                                  const MoonshineStreamingHParams &    hp,
-                                  MoonshineStreamingKvCache &          kv_cache,
-                                  int                                  T_enc)
-{
-    DecoderBuild db {};
+DecoderBuild build_cross_kv_graph(ggml_context *                    ctx,
+                                  const MoonshineStreamingWeights & w,
+                                  const MoonshineStreamingHParams & hp,
+                                  MoonshineStreamingKvCache &       kv_cache,
+                                  int                               T_enc) {
+    DecoderBuild db{};
 
     if (ctx == nullptr || T_enc <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming cross_kv: invalid arg (ctx=%p, T_enc=%d)",
-                     static_cast<void *>(ctx), T_enc);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv: invalid arg (ctx=%p, T_enc=%d)",
+                static_cast<void *>(ctx), T_enc);
         return db;
     }
 
@@ -364,8 +323,7 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
 
     db.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (db.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming cross_kv: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv: ggml_new_graph_custom failed");
         return db;
     }
 
@@ -379,16 +337,10 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
         const size_t k_elem = ggml_element_size(kv_cache.cross_k);
         const size_t v_elem = ggml_element_size(kv_cache.cross_v);
 
-        ggml_tensor * k_dst = ggml_view_1d(
-            ctx, kv_cache.cross_k,
-            static_cast<int64_t>(T_enc) * d_model,
-            k_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * T_enc * d_model));
-        ggml_tensor * v_dst = ggml_view_1d(
-            ctx, kv_cache.cross_v,
-            static_cast<int64_t>(T_enc) * d_model,
-            v_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * T_enc * d_model));
+        ggml_tensor * k_dst = ggml_view_1d(ctx, kv_cache.cross_k, static_cast<int64_t>(T_enc) * d_model,
+                                           k_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc * d_model));
+        ggml_tensor * v_dst = ggml_view_1d(ctx, kv_cache.cross_v, static_cast<int64_t>(T_enc) * d_model,
+                                           v_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc * d_model));
 
         ggml_build_forward_expand(db.graph, ggml_cpy(ctx, Kcross, k_dst));
         ggml_build_forward_expand(db.graph, ggml_cpy(ctx, Vcross, v_dst));
@@ -398,19 +350,17 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
 }
 
 // Cross-KV projection (incremental streaming).
-CrossKVProjectionBuild build_cross_kv_projection_graph(
-    ggml_context *                       ctx,
-    const MoonshineStreamingWeights &    w,
-    const MoonshineStreamingHParams &    hp,
-    int                                  n_frames)
-{
-    CrossKVProjectionBuild pb {};
+CrossKVProjectionBuild build_cross_kv_projection_graph(ggml_context *                    ctx,
+                                                       const MoonshineStreamingWeights & w,
+                                                       const MoonshineStreamingHParams & hp,
+                                                       int                               n_frames) {
+    CrossKVProjectionBuild pb{};
 
     if (ctx == nullptr || n_frames <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming cross_kv_proj: invalid arg "
-                     "(ctx=%p, n_frames=%d)",
-                     static_cast<void *>(ctx), n_frames);
+                "moonshine_streaming cross_kv_proj: invalid arg "
+                "(ctx=%p, n_frames=%d)",
+                static_cast<void *>(ctx), n_frames);
         return pb;
     }
 
@@ -422,8 +372,7 @@ CrossKVProjectionBuild build_cross_kv_projection_graph(
 
     pb.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (pb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming cross_kv_proj: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv_proj: ggml_new_graph_custom failed");
         return pb;
     }
 
@@ -455,31 +404,25 @@ CrossKVProjectionBuild build_cross_kv_projection_graph(
 }
 
 // Cross-KV commit (host buffers → persistent cache).
-CrossKVCommitBuild build_cross_kv_commit_graph(
-    ggml_context *                       ctx,
-    const MoonshineStreamingHParams &    hp,
-    MoonshineStreamingKvCache &          kv_cache,
-    int                                  T_enc)
-{
-    CrossKVCommitBuild cb {};
+CrossKVCommitBuild build_cross_kv_commit_graph(ggml_context *                    ctx,
+                                               const MoonshineStreamingHParams & hp,
+                                               MoonshineStreamingKvCache &       kv_cache,
+                                               int                               T_enc) {
+    CrossKVCommitBuild cb{};
 
-    if (ctx == nullptr || T_enc <= 0 || kv_cache.cross_k == nullptr ||
-        kv_cache.cross_v == nullptr)
-    {
+    if (ctx == nullptr || T_enc <= 0 || kv_cache.cross_k == nullptr || kv_cache.cross_v == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming cross_kv_commit: invalid arg "
-                     "(ctx=%p, T_enc=%d, cache=%s)",
-                     static_cast<void *>(ctx), T_enc,
-                     (kv_cache.cross_k == nullptr ||
-                      kv_cache.cross_v == nullptr) ? "null" : "ok");
+                "moonshine_streaming cross_kv_commit: invalid arg "
+                "(ctx=%p, T_enc=%d, cache=%s)",
+                static_cast<void *>(ctx), T_enc,
+                (kv_cache.cross_k == nullptr || kv_cache.cross_v == nullptr) ? "null" : "ok");
         return cb;
     }
 
     const int d_model = hp.dec_d_model;
-    cb.graph = ggml_new_graph_custom(ctx, 4096, false);
+    cb.graph          = ggml_new_graph_custom(ctx, 4096, false);
     if (cb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming cross_kv_commit: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv_commit: ggml_new_graph_custom failed");
         return cb;
     }
 
@@ -493,7 +436,7 @@ CrossKVCommitBuild build_cross_kv_commit_graph(
     for (int il = 0; il < n_layers; ++il) {
         ggml_tensor * K_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_enc);
         ggml_tensor * V_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_enc);
-        char kname[64], vname[64];
+        char          kname[64], vname[64];
         std::snprintf(kname, sizeof(kname), "xkv.commit.k_in.%d", il);
         std::snprintf(vname, sizeof(vname), "xkv.commit.v_in.%d", il);
         named(K_in, kname);
@@ -503,16 +446,10 @@ CrossKVCommitBuild build_cross_kv_commit_graph(
         cb.per_layer_k_in.push_back(K_in);
         cb.per_layer_v_in.push_back(V_in);
 
-        ggml_tensor * k_dst = ggml_view_1d(
-            ctx, kv_cache.cross_k,
-            static_cast<int64_t>(T_enc) * d_model,
-            k_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * T_enc * d_model));
-        ggml_tensor * v_dst = ggml_view_1d(
-            ctx, kv_cache.cross_v,
-            static_cast<int64_t>(T_enc) * d_model,
-            v_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * T_enc * d_model));
+        ggml_tensor * k_dst = ggml_view_1d(ctx, kv_cache.cross_k, static_cast<int64_t>(T_enc) * d_model,
+                                           k_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc * d_model));
+        ggml_tensor * v_dst = ggml_view_1d(ctx, kv_cache.cross_v, static_cast<int64_t>(T_enc) * d_model,
+                                           v_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc * d_model));
 
         ggml_build_forward_expand(cb.graph, ggml_cpy(ctx, K_in, k_dst));
         ggml_build_forward_expand(cb.graph, ggml_cpy(ctx, V_in, v_dst));
@@ -522,30 +459,28 @@ CrossKVCommitBuild build_cross_kv_commit_graph(
 }
 
 // KV-cached decoder graph (prompt + step).
-DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
-                                    const MoonshineStreamingWeights &    w,
-                                    const MoonshineStreamingHParams &    hp,
-                                    MoonshineStreamingKvCache &          kv_cache,
-                                    int                                  n_tokens,
-                                    int                                  n_past,
-                                    int                                  T_enc,
-                                    bool                                 skip_log_softmax,
-                                    bool                                 use_flash)
-{
-    DecoderBuild db {};
+DecoderBuild build_decoder_graph_kv(ggml_context *                    ctx,
+                                    const MoonshineStreamingWeights & w,
+                                    const MoonshineStreamingHParams & hp,
+                                    MoonshineStreamingKvCache &       kv_cache,
+                                    int                               n_tokens,
+                                    int                               n_past,
+                                    int                               T_enc,
+                                    bool                              skip_log_softmax,
+                                    bool                              use_flash) {
+    DecoderBuild db{};
 
     if (ctx == nullptr || n_tokens <= 0 || T_enc <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming decoder_kv: invalid arg "
-                     "(ctx=%p, n_tokens=%d, T_enc=%d)",
-                     static_cast<void *>(ctx), n_tokens, T_enc);
+                "moonshine_streaming decoder_kv: invalid arg "
+                "(ctx=%p, n_tokens=%d, T_enc=%d)",
+                static_cast<void *>(ctx), n_tokens, T_enc);
         return db;
     }
     const int n_kv = n_past + n_tokens;
     if (n_kv > kv_cache.n_ctx) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming decoder_kv: n_kv=%d exceeds n_ctx=%d",
-                     n_kv, kv_cache.n_ctx);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming decoder_kv: n_kv=%d exceeds n_ctx=%d", n_kv,
+                kv_cache.n_ctx);
         return db;
     }
 
@@ -561,7 +496,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
     ggml_set_input(db.pos_ids_in);
 
     ggml_tensor * causal_mask = nullptr;
-    const bool need_mask = (n_tokens > 1);
+    const bool    need_mask   = (n_tokens > 1);
     if (need_mask) {
         db.causal_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, n_tokens);
         named(db.causal_mask_in, "dec.causal_mask");
@@ -569,8 +504,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
         causal_mask = ggml_cast(ctx, db.causal_mask_in, GGML_TYPE_F16);
     }
 
-    ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_top.token_embd_w,
-                                          db.token_ids_in);
+    ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_top.token_embd_w, db.token_ids_in);
     named(tok_emb, "dec.token_emb");
     if (n_past == 0) {
         transcribe::debug::mark_tensor_for_dump(tok_emb);
@@ -590,8 +524,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
 
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (db.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "moonshine_streaming decoder_kv: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming decoder_kv: ggml_new_graph_custom failed");
         return db;
     }
 
@@ -602,27 +535,19 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
 
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, /*beta=*/nullptr);
-            y = mha_self_cached(
-                ctx, db.graph, y, kv_cache, db.pos_ids_in, causal_mask,
-                b.self_q_w, b.self_k_w, b.self_v_w, b.self_out_w,
-                hp, n_heads, d_model,
-                i, n_past, n_tokens, n_kv, use_flash);
+            y = mha_self_cached(ctx, db.graph, y, kv_cache, db.pos_ids_in, causal_mask, b.self_q_w, b.self_k_w,
+                                b.self_v_w, b.self_out_w, hp, n_heads, d_model, i, n_past, n_tokens, n_kv, use_flash);
             x = ggml_add(ctx, x, y);
         }
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, /*beta=*/nullptr);
-            y = mha_cross_cached(
-                ctx, y, kv_cache,
-                b.cross_q_w, b.cross_out_w,
-                hp, n_heads, d_model, i, T_enc, use_flash);
+            y = mha_cross_cached(ctx, y, kv_cache, b.cross_q_w, b.cross_out_w, hp, n_heads, d_model, i, T_enc,
+                                 use_flash);
             x = ggml_add(ctx, x, y);
         }
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
-            y = ffn_decoder_swiglu(ctx, y,
-                                   b.ffn_fc1_w, b.ffn_fc1_b,
-                                   b.ffn_fc2_w, b.ffn_fc2_b,
-                                   hp.dec_ffn_dim);
+            y = ffn_decoder_swiglu(ctx, y, b.ffn_fc1_w, b.ffn_fc1_b, b.ffn_fc2_w, b.ffn_fc2_b, hp.dec_ffn_dim);
             x = ggml_add(ctx, x, y);
         }
 
@@ -673,12 +598,9 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
         ggml_tensor * last_logits = logits;
         if (n_tokens > 1) {
             const int64_t vocab     = logits->ne[0];
-            const size_t  row_bytes = ggml_element_size(logits) *
-                                      static_cast<size_t>(vocab);
-            last_logits = ggml_view_2d(ctx, logits,
-                                       vocab, /*n=*/1,
-                                       row_bytes,
-                                       row_bytes * static_cast<size_t>(n_tokens - 1));
+            const size_t  row_bytes = ggml_element_size(logits) * static_cast<size_t>(vocab);
+            last_logits =
+                ggml_view_2d(ctx, logits, vocab, /*n=*/1, row_bytes, row_bytes * static_cast<size_t>(n_tokens - 1));
             last_logits = ggml_cont(ctx, last_logits);
         }
         db.argmax_out = ggml_argmax(ctx, last_logits);
@@ -695,121 +617,134 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
 // Offline batched decode (B utterances).
 namespace {
 
-ggml_tensor * unpad_head_dim_4d(ggml_context * ctx, ggml_tensor * t,
-                                int head_dim, int pad) {
-    if (pad <= 0) return t;
-    return ggml_view_4d(ctx, t, head_dim, t->ne[1], t->ne[2], t->ne[3],
-                        t->nb[1], t->nb[2], t->nb[3], 0);
+ggml_tensor * unpad_head_dim_4d(ggml_context * ctx, ggml_tensor * t, int head_dim, int pad) {
+    if (pad <= 0) {
+        return t;
+    }
+    return ggml_view_4d(ctx, t, head_dim, t->ne[1], t->ne[2], t->ne[3], t->nb[1], t->nb[2], t->nb[3], 0);
 }
 
-ggml_tensor * mha_self_step_batched(
-    ggml_context * ctx, ggml_cgraph * gf, ggml_tensor * x,
-    MoonshineStreamingKvCache & kv_cache, ggml_tensor * pos_ids, ggml_tensor * kv_idx,
-    ggml_tensor * mask,
-    ggml_tensor * q_w, ggml_tensor * k_w, ggml_tensor * v_w, ggml_tensor * out_w,
-    const MoonshineStreamingHParams & hp, int n_heads, int d_model,
-    int il, int max_n_kv, int B)
-{
-    const int   head_dim     = d_model / n_heads;
-    const int   head_dim_pad = hp.dec_head_dim_padded();
-    const int   head_dim_rot = hp.dec_head_dim_rot();
-    const int   pad          = head_dim_pad - head_dim;
-    const int64_t n_ctx      = kv_cache.n_ctx;
-    const float scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    const size_t k_elem = ggml_element_size(kv_cache.self_k);
-    const size_t v_elem = ggml_element_size(kv_cache.self_v);
+ggml_tensor * mha_self_step_batched(ggml_context *                    ctx,
+                                    ggml_cgraph *                     gf,
+                                    ggml_tensor *                     x,
+                                    MoonshineStreamingKvCache &       kv_cache,
+                                    ggml_tensor *                     pos_ids,
+                                    ggml_tensor *                     kv_idx,
+                                    ggml_tensor *                     mask,
+                                    ggml_tensor *                     q_w,
+                                    ggml_tensor *                     k_w,
+                                    ggml_tensor *                     v_w,
+                                    ggml_tensor *                     out_w,
+                                    const MoonshineStreamingHParams & hp,
+                                    int                               n_heads,
+                                    int                               d_model,
+                                    int                               il,
+                                    int                               max_n_kv,
+                                    int                               B) {
+    const int     head_dim     = d_model / n_heads;
+    const int     head_dim_pad = hp.dec_head_dim_padded();
+    const int     head_dim_rot = hp.dec_head_dim_rot();
+    const int     pad          = head_dim_pad - head_dim;
+    const int64_t n_ctx        = kv_cache.n_ctx;
+    const float   scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const size_t  k_elem       = ggml_element_size(kv_cache.self_k);
+    const size_t  v_elem       = ggml_element_size(kv_cache.self_v);
 
     ggml_tensor * Q = ggml_mul_mat(ctx, q_w, x);
     ggml_tensor * K = ggml_mul_mat(ctx, k_w, x);
     ggml_tensor * V = ggml_mul_mat(ctx, v_w, x);
-    Q = ggml_reshape_3d(ctx, Q, head_dim, n_heads, B);
-    K = ggml_reshape_3d(ctx, K, head_dim, n_heads, B);
-    V = ggml_reshape_3d(ctx, V, head_dim, n_heads, B);
-    Q = apply_partial_rope(ctx, Q, pos_ids, hp, head_dim_rot);
-    K = apply_partial_rope(ctx, K, pos_ids, hp, head_dim_rot);
+    Q               = ggml_reshape_3d(ctx, Q, head_dim, n_heads, B);
+    K               = ggml_reshape_3d(ctx, K, head_dim, n_heads, B);
+    V               = ggml_reshape_3d(ctx, V, head_dim, n_heads, B);
+    Q               = apply_partial_rope(ctx, Q, pos_ids, hp, head_dim_rot);
+    K               = apply_partial_rope(ctx, K, pos_ids, hp, head_dim_rot);
 
     {
-        const size_t off_k = k_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
-        const size_t off_v = v_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
-        ggml_tensor * k_layer = ggml_view_3d(ctx, kv_cache.self_k,
-            d_model, n_ctx, B, k_elem * d_model, k_elem * d_model * n_ctx, off_k);
-        ggml_tensor * v_layer = ggml_view_3d(ctx, kv_cache.self_v,
-            d_model, n_ctx, B, v_elem * d_model, v_elem * d_model * n_ctx, off_v);
+        const size_t  off_k = k_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
+        const size_t  off_v = v_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
+        ggml_tensor * k_layer =
+            ggml_view_3d(ctx, kv_cache.self_k, d_model, n_ctx, B, k_elem * d_model, k_elem * d_model * n_ctx, off_k);
+        ggml_tensor * v_layer =
+            ggml_view_3d(ctx, kv_cache.self_v, d_model, n_ctx, B, v_elem * d_model, v_elem * d_model * n_ctx, off_v);
         ggml_tensor * K_row = ggml_reshape_3d(ctx, ggml_cont(ctx, K), d_model, 1, B);
         ggml_tensor * V_row = ggml_reshape_3d(ctx, ggml_cont(ctx, V), d_model, 1, B);
         ggml_build_forward_expand(gf, ggml_set_rows(ctx, k_layer, K_row, kv_idx));
         ggml_build_forward_expand(gf, ggml_set_rows(ctx, v_layer, V_row, kv_idx));
     }
 
-    const size_t off_k = k_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
-    const size_t off_v = v_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
-    ggml_tensor * K_att = ggml_view_4d(ctx, kv_cache.self_k,
-        head_dim, max_n_kv, n_heads, B,
-        k_elem * d_model, k_elem * head_dim, k_elem * d_model * n_ctx, off_k);
-    ggml_tensor * V_att = ggml_view_4d(ctx, kv_cache.self_v,
-        head_dim, max_n_kv, n_heads, B,
-        v_elem * d_model, v_elem * head_dim, v_elem * d_model * n_ctx, off_v);
+    const size_t  off_k = k_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
+    const size_t  off_v = v_elem * static_cast<size_t>(il) * n_ctx * d_model * B;
+    ggml_tensor * K_att = ggml_view_4d(ctx, kv_cache.self_k, head_dim, max_n_kv, n_heads, B, k_elem * d_model,
+                                       k_elem * head_dim, k_elem * d_model * n_ctx, off_k);
+    ggml_tensor * V_att = ggml_view_4d(ctx, kv_cache.self_v, head_dim, max_n_kv, n_heads, B, v_elem * d_model,
+                                       v_elem * head_dim, v_elem * d_model * n_ctx, off_v);
 
     ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 3, 1));
-    ggml_tensor * Qp = pad_head_dim(ctx, Q_att, pad);
-    ggml_tensor * Kp = pad_head_dim(ctx, ggml_cont(ctx, K_att), pad);
-    ggml_tensor * Vp = pad_head_dim(ctx, ggml_cont(ctx, V_att), pad);
+    ggml_tensor * Qp    = pad_head_dim(ctx, Q_att, pad);
+    ggml_tensor * Kp    = pad_head_dim(ctx, ggml_cont(ctx, K_att), pad);
+    ggml_tensor * Vp    = pad_head_dim(ctx, ggml_cont(ctx, V_att), pad);
 
     ggml_tensor * o = ggml_flash_attn_ext(ctx, Qp, Kp, Vp, mask, scale, 0.0f, 0.0f);
-    o = ggml_cont(ctx, unpad_head_dim_4d(ctx, o, head_dim, pad));
-    o = ggml_reshape_2d(ctx, o, d_model, B);
+    o               = ggml_cont(ctx, unpad_head_dim_4d(ctx, o, head_dim, pad));
+    o               = ggml_reshape_2d(ctx, o, d_model, B);
 
     o = ggml_mul_mat(ctx, out_w, o);
     return o;
 }
 
-ggml_tensor * mha_cross_step_batched(
-    ggml_context * ctx, ggml_tensor * x, MoonshineStreamingKvCache & kv_cache,
-    ggml_tensor * cross_mask, ggml_tensor * q_w, ggml_tensor * out_w,
-    const MoonshineStreamingHParams & hp, int n_heads, int d_model, int il, int T_enc_max, int B)
-{
-    const int   head_dim     = d_model / n_heads;
-    const int   head_dim_pad = hp.dec_head_dim_padded();
-    const int   pad          = head_dim_pad - head_dim;
-    const float scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    const size_t k_elem = ggml_element_size(kv_cache.cross_k);
-    const size_t v_elem = ggml_element_size(kv_cache.cross_v);
+ggml_tensor * mha_cross_step_batched(ggml_context *                    ctx,
+                                     ggml_tensor *                     x,
+                                     MoonshineStreamingKvCache &       kv_cache,
+                                     ggml_tensor *                     cross_mask,
+                                     ggml_tensor *                     q_w,
+                                     ggml_tensor *                     out_w,
+                                     const MoonshineStreamingHParams & hp,
+                                     int                               n_heads,
+                                     int                               d_model,
+                                     int                               il,
+                                     int                               T_enc_max,
+                                     int                               B) {
+    const int    head_dim     = d_model / n_heads;
+    const int    head_dim_pad = hp.dec_head_dim_padded();
+    const int    pad          = head_dim_pad - head_dim;
+    const float  scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const size_t k_elem       = ggml_element_size(kv_cache.cross_k);
+    const size_t v_elem       = ggml_element_size(kv_cache.cross_v);
 
-    ggml_tensor * Q = ggml_mul_mat(ctx, q_w, x);
-    Q = ggml_reshape_3d(ctx, Q, head_dim, n_heads, B);
+    ggml_tensor * Q     = ggml_mul_mat(ctx, q_w, x);
+    Q                   = ggml_reshape_3d(ctx, Q, head_dim, n_heads, B);
     ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 3, 1));
-    ggml_tensor * Qp = pad_head_dim(ctx, Q_att, pad);
+    ggml_tensor * Qp    = pad_head_dim(ctx, Q_att, pad);
 
-    const size_t off_k = k_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
-    const size_t off_v = v_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
-    ggml_tensor * K = ggml_view_4d(ctx, kv_cache.cross_k,
-        head_dim, T_enc_max, n_heads, B,
-        k_elem * d_model, k_elem * head_dim, k_elem * d_model * T_enc_max, off_k);
-    ggml_tensor * V = ggml_view_4d(ctx, kv_cache.cross_v,
-        head_dim, T_enc_max, n_heads, B,
-        v_elem * d_model, v_elem * head_dim, v_elem * d_model * T_enc_max, off_v);
-    ggml_tensor * Kp = pad_head_dim(ctx, ggml_cont(ctx, K), pad);
-    ggml_tensor * Vp = pad_head_dim(ctx, ggml_cont(ctx, V), pad);
+    const size_t  off_k = k_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
+    const size_t  off_v = v_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
+    ggml_tensor * K     = ggml_view_4d(ctx, kv_cache.cross_k, head_dim, T_enc_max, n_heads, B, k_elem * d_model,
+                                       k_elem * head_dim, k_elem * d_model * T_enc_max, off_k);
+    ggml_tensor * V     = ggml_view_4d(ctx, kv_cache.cross_v, head_dim, T_enc_max, n_heads, B, v_elem * d_model,
+                                       v_elem * head_dim, v_elem * d_model * T_enc_max, off_v);
+    ggml_tensor * Kp    = pad_head_dim(ctx, ggml_cont(ctx, K), pad);
+    ggml_tensor * Vp    = pad_head_dim(ctx, ggml_cont(ctx, V), pad);
 
     ggml_tensor * o = ggml_flash_attn_ext(ctx, Qp, Kp, Vp, cross_mask, scale, 0.0f, 0.0f);
-    o = ggml_cont(ctx, unpad_head_dim_4d(ctx, o, head_dim, pad));
-    o = ggml_reshape_2d(ctx, o, d_model, B);
+    o               = ggml_cont(ctx, unpad_head_dim_4d(ctx, o, head_dim, pad));
+    o               = ggml_reshape_2d(ctx, o, d_model, B);
 
     o = ggml_mul_mat(ctx, out_w, o);
     return o;
 }
 
-} // namespace
+}  // namespace
 
 DecoderBuild build_cross_kv_graph_batched(ggml_context *                    ctx,
                                           const MoonshineStreamingWeights & w,
                                           const MoonshineStreamingHParams & hp,
                                           MoonshineStreamingKvCache &       kv_cache,
                                           int                               T_enc_max,
-                                          int                               n_batch)
-{
-    DecoderBuild db {};
-    if (ctx == nullptr || T_enc_max <= 0 || n_batch <= 0) return db;
+                                          int                               n_batch) {
+    DecoderBuild db{};
+    if (ctx == nullptr || T_enc_max <= 0 || n_batch <= 0) {
+        return db;
+    }
 
     const int d_model = hp.dec_d_model;
     const int B       = n_batch;
@@ -819,22 +754,24 @@ DecoderBuild build_cross_kv_graph_batched(ggml_context *                    ctx,
     ggml_set_input(db.encoder_out_in);
 
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
-    if (db.graph == nullptr) return db;
+    if (db.graph == nullptr) {
+        return db;
+    }
 
     const size_t k_elem = ggml_element_size(kv_cache.cross_k);
     const size_t v_elem = ggml_element_size(kv_cache.cross_v);
 
     const int n_layers = static_cast<int>(w.dec_blocks.size());
     for (int il = 0; il < n_layers; ++il) {
-        const auto & blk = w.dec_blocks[il];
-        ggml_tensor * Kc = ggml_mul_mat(ctx, blk.cross_k_w, db.encoder_out_in);
-        ggml_tensor * Vc = ggml_mul_mat(ctx, blk.cross_v_w, db.encoder_out_in);
-        const size_t off_k = k_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
-        const size_t off_v = v_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
-        ggml_tensor * k_dst = ggml_view_3d(ctx, kv_cache.cross_k,
-            d_model, T_enc_max, B, k_elem * d_model, k_elem * d_model * T_enc_max, off_k);
-        ggml_tensor * v_dst = ggml_view_3d(ctx, kv_cache.cross_v,
-            d_model, T_enc_max, B, v_elem * d_model, v_elem * d_model * T_enc_max, off_v);
+        const auto &  blk   = w.dec_blocks[il];
+        ggml_tensor * Kc    = ggml_mul_mat(ctx, blk.cross_k_w, db.encoder_out_in);
+        ggml_tensor * Vc    = ggml_mul_mat(ctx, blk.cross_v_w, db.encoder_out_in);
+        const size_t  off_k = k_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
+        const size_t  off_v = v_elem * static_cast<size_t>(il) * T_enc_max * d_model * B;
+        ggml_tensor * k_dst = ggml_view_3d(ctx, kv_cache.cross_k, d_model, T_enc_max, B, k_elem * d_model,
+                                           k_elem * d_model * T_enc_max, off_k);
+        ggml_tensor * v_dst = ggml_view_3d(ctx, kv_cache.cross_v, d_model, T_enc_max, B, v_elem * d_model,
+                                           v_elem * d_model * T_enc_max, off_v);
         ggml_build_forward_expand(db.graph, ggml_cpy(ctx, Kc, k_dst));
         ggml_build_forward_expand(db.graph, ggml_cpy(ctx, Vc, v_dst));
     }
@@ -848,12 +785,13 @@ StepBuildBatched build_step_graph_batched(ggml_context *                    ctx,
                                           int                               max_n_kv,
                                           int                               T_enc_max,
                                           int                               n_batch,
-                                          bool                              use_flash)
-{
-    StepBuildBatched sb {};
+                                          bool                              use_flash) {
+    StepBuildBatched sb{};
     sb.max_n_kv = max_n_kv;
     sb.n_batch  = n_batch;
-    if (ctx == nullptr || max_n_kv <= 0 || T_enc_max <= 0 || n_batch <= 0) return sb;
+    if (ctx == nullptr || max_n_kv <= 0 || T_enc_max <= 0 || n_batch <= 0) {
+        return sb;
+    }
     if (!use_flash) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming step(batched): requires flash path");
         return sb;
@@ -864,18 +802,25 @@ StepBuildBatched build_step_graph_batched(ggml_context *                    ctx,
     const int B       = n_batch;
 
     sb.token_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, B);
-    ggml_set_name(sb.token_ids_in, "step.token_ids"); ggml_set_input(sb.token_ids_in);
+    ggml_set_name(sb.token_ids_in, "step.token_ids");
+    ggml_set_input(sb.token_ids_in);
     sb.pos_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, B);
-    ggml_set_name(sb.pos_ids_in, "step.pos_ids"); ggml_set_input(sb.pos_ids_in);
+    ggml_set_name(sb.pos_ids_in, "step.pos_ids");
+    ggml_set_input(sb.pos_ids_in);
     sb.kv_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, 1, B);
-    ggml_set_name(sb.kv_idx_in, "step.kv_idx"); ggml_set_input(sb.kv_idx_in);
+    ggml_set_name(sb.kv_idx_in, "step.kv_idx");
+    ggml_set_input(sb.kv_idx_in);
     sb.self_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, max_n_kv, 1, 1, B);
-    ggml_set_name(sb.self_mask_in, "step.self_mask"); ggml_set_input(sb.self_mask_in);
+    ggml_set_name(sb.self_mask_in, "step.self_mask");
+    ggml_set_input(sb.self_mask_in);
     sb.cross_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, T_enc_max, 1, 1, B);
-    ggml_set_name(sb.cross_mask_in, "step.cross_mask"); ggml_set_input(sb.cross_mask_in);
+    ggml_set_name(sb.cross_mask_in, "step.cross_mask");
+    ggml_set_input(sb.cross_mask_in);
 
     sb.graph = ggml_new_graph_custom(ctx, 16384, false);
-    if (sb.graph == nullptr) return sb;
+    if (sb.graph == nullptr) {
+        return sb;
+    }
 
     ggml_tensor * x = ggml_get_rows(ctx, w.dec_top.token_embd_w, sb.token_ids_in);
 
@@ -884,35 +829,32 @@ StepBuildBatched build_step_graph_batched(ggml_context *                    ctx,
         const auto & b = w.dec_blocks[i];
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, /*beta=*/nullptr);
-            y = mha_self_step_batched(
-                ctx, sb.graph, y, kv_cache, sb.pos_ids_in, sb.kv_idx_in, sb.self_mask_in,
-                b.self_q_w, b.self_k_w, b.self_v_w, b.self_out_w,
-                hp, n_heads, d_model, i, max_n_kv, B);
+            y = mha_self_step_batched(ctx, sb.graph, y, kv_cache, sb.pos_ids_in, sb.kv_idx_in, sb.self_mask_in,
+                                      b.self_q_w, b.self_k_w, b.self_v_w, b.self_out_w, hp, n_heads, d_model, i,
+                                      max_n_kv, B);
             x = ggml_add(ctx, x, y);
         }
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, /*beta=*/nullptr);
-            y = mha_cross_step_batched(
-                ctx, y, kv_cache, sb.cross_mask_in, b.cross_q_w, b.cross_out_w,
-                hp, n_heads, d_model, i, T_enc_max, B);
+            y = mha_cross_step_batched(ctx, y, kv_cache, sb.cross_mask_in, b.cross_q_w, b.cross_out_w, hp, n_heads,
+                                       d_model, i, T_enc_max, B);
             x = ggml_add(ctx, x, y);
         }
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
-            y = ffn_decoder_swiglu(ctx, y, b.ffn_fc1_w, b.ffn_fc1_b,
-                                   b.ffn_fc2_w, b.ffn_fc2_b, hp.dec_ffn_dim);
+            y = ffn_decoder_swiglu(ctx, y, b.ffn_fc1_w, b.ffn_fc1_b, b.ffn_fc2_w, b.ffn_fc2_b, hp.dec_ffn_dim);
             x = ggml_add(ctx, x, y);
         }
     }
 
-    x = layer_norm(ctx, x, w.dec_top.final_norm_w, /*beta=*/nullptr);
+    x                    = layer_norm(ctx, x, w.dec_top.final_norm_w, /*beta=*/nullptr);
     ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_top.lm_head_w, x);  // untied head
 
-    sb.argmax_out = ggml_argmax(ctx, logits);  // [B]
+    sb.argmax_out = ggml_argmax(ctx, logits);                          // [B]
     ggml_set_name(sb.argmax_out, "step.argmax");
     ggml_set_output(sb.argmax_out);
     ggml_build_forward_expand(sb.graph, sb.argmax_out);
     return sb;
 }
 
-} // namespace transcribe::moonshine_streaming
+}  // namespace transcribe::moonshine_streaming

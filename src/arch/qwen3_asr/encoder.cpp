@@ -5,10 +5,9 @@
 
 #include "encoder.h"
 
+#include "ggml.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-
-#include "ggml.h"
 
 #include <cmath>
 #include <cstdio>
@@ -24,44 +23,46 @@ int32_t aftercnn_len(int32_t mel_len) {
     // Three rounds of Conv2d(stride=2, pad=1, kernel=3):
     //   out = floor((L + 2*1 - 3) / 2) + 1 = floor((L-1)/2) + 1
     // which equals (L + 1) / 2 for L >= 1 under C integer division.
-    auto step = [](int32_t L) { return (L + 1) / 2; };
+    auto step = [](int32_t L) {
+        return (L + 1) / 2;
+    };
     return step(step(step(mel_len)));
 }
 
-EncoderTiming compute_encoder_timing(int32_t n_mel_frames,
-                                     const QwenAsrHParams & hp)
-{
-    EncoderTiming t {};
+EncoderTiming compute_encoder_timing(int32_t n_mel_frames, const QwenAsrHParams & hp) {
+    EncoderTiming t{};
     t.n_mel_frames  = n_mel_frames;
     t.mel_per_chunk = hp.enc_n_window * 2;
     if (n_mel_frames <= 0 || t.mel_per_chunk <= 0) {
         return t;
     }
-    t.n_chunks = (n_mel_frames + t.mel_per_chunk - 1) / t.mel_per_chunk;
+    t.n_chunks   = (n_mel_frames + t.mel_per_chunk - 1) / t.mel_per_chunk;
     int32_t last = n_mel_frames - (t.n_chunks - 1) * t.mel_per_chunk;
-    if (last == 0) last = t.mel_per_chunk;
-    t.last_chunk_real_mel  = last;
-    t.per_chunk_aftercnn   = aftercnn_len(t.mel_per_chunk);
-    t.last_chunk_aftercnn  = aftercnn_len(last);
-    t.T_enc_padded         = t.n_chunks * t.per_chunk_aftercnn;
-    t.T_enc                = (t.n_chunks - 1) * t.per_chunk_aftercnn + t.last_chunk_aftercnn;
-    t.aftercnn_lens_total  = aftercnn_len(n_mel_frames);
+    if (last == 0) {
+        last = t.mel_per_chunk;
+    }
+    t.last_chunk_real_mel = last;
+    t.per_chunk_aftercnn  = aftercnn_len(t.mel_per_chunk);
+    t.last_chunk_aftercnn = aftercnn_len(last);
+    t.T_enc_padded        = t.n_chunks * t.per_chunk_aftercnn;
+    t.T_enc               = (t.n_chunks - 1) * t.per_chunk_aftercnn + t.last_chunk_aftercnn;
+    t.aftercnn_lens_total = aftercnn_len(n_mel_frames);
     return t;
 }
 
-std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length,
-                                     double max_timescale)
-{
+std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length, double max_timescale) {
     std::vector<float> pe(static_cast<size_t>(d_model) * length, 0.0f);
-    if (d_model <= 0 || length <= 0 || (d_model % 2) != 0) return pe;
+    if (d_model <= 0 || length <= 0 || (d_model % 2) != 0) {
+        return pe;
+    }
 
-    const int32_t half = d_model / 2;
-    const double log_ts = std::log(max_timescale) / (half - 1);
+    const int32_t half   = d_model / 2;
+    const double  log_ts = std::log(max_timescale) / (half - 1);
 
     for (int32_t p = 0; p < length; ++p) {
         for (int32_t k = 0; k < half; ++k) {
-            const double inv_ts = std::exp(-log_ts * k);
-            const double scaled = static_cast<double>(p) * inv_ts;
+            const double inv_ts                             = std::exp(-log_ts * k);
+            const double scaled                             = static_cast<double>(p) * inv_ts;
             pe[static_cast<size_t>(p) * d_model + k]        = static_cast<float>(std::sin(scaled));
             pe[static_cast<size_t>(p) * d_model + k + half] = static_cast<float>(std::cos(scaled));
         }
@@ -69,10 +70,8 @@ std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length,
     return pe;
 }
 
-std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t,
-                                         const QwenAsrHParams & hp)
-{
-    (void)hp;
+std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t, const QwenAsrHParams & hp) {
+    (void) hp;
     const int32_t T = t.T_enc;
     // Full attention over the valid aftercnn rows. The measured
     // upstream reference (qwen_asr 0.0.6 + transformers eager / sdpa)
@@ -102,29 +101,23 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
     return t;
 }
 
-ggml_tensor * add_conv_bias(ggml_context * ctx, ggml_tensor * x,
-                            ggml_tensor * bias)
-{
+ggml_tensor * add_conv_bias(ggml_context * ctx, ggml_tensor * x, ggml_tensor * bias) {
     // bias is [channels]; reshape to [1, 1, channels, 1] to broadcast
     // across the spatial and batch axes of conv output [W, H, C, N].
     ggml_tensor * b4 = ggml_reshape_4d(ctx, bias, 1, 1, bias->ne[0], 1);
     return ggml_add(ctx, x, b4);
 }
 
-ggml_tensor * layer_norm(ggml_context * ctx, ggml_tensor * x,
-                         ggml_tensor * gamma, ggml_tensor * beta)
-{
+ggml_tensor * layer_norm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * gamma, ggml_tensor * beta) {
     ggml_tensor * y = ggml_norm(ctx, x, kLayerNormEps);
-    y = ggml_mul(ctx, y, gamma);
+    y               = ggml_mul(ctx, y, gamma);
     if (beta != nullptr) {
         y = ggml_add(ctx, y, beta);
     }
     return y;
 }
 
-ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
-                     ggml_tensor * w, ggml_tensor * b)
-{
+ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
     if (b != nullptr) {
         y = ggml_add(ctx, y, b);
@@ -135,14 +128,13 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
 // One encoder block: pre-LN self-attention (bidirectional, full-
 // sequence mask supplied by the caller) + pre-LN GELU FFN. Residuals
 // are full 1.0.
-ggml_tensor * build_enc_block(ggml_context *         ctx,
-                              ggml_tensor *          x,
-                              ggml_tensor *          mask,
+ggml_tensor * build_enc_block(ggml_context *          ctx,
+                              ggml_tensor *           x,
+                              ggml_tensor *           mask,
                               const QwenAsrEncBlock & w,
-                              int                    d_model,
-                              int                    n_heads,
-                              bool                   use_flash)
-{
+                              int                     d_model,
+                              int                     n_heads,
+                              bool                    use_flash) {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T        = x->ne[1];
@@ -170,20 +162,16 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
 
     ggml_tensor * o;
     if (use_flash) {
-        o = ggml_flash_attn_ext(ctx, q, k, v, mask,
-                                scale, /*max_bias=*/0.0f,
+        o = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, /*max_bias=*/0.0f,
                                 /*logit_softcap=*/0.0f);
-        o = (B == 1) ? ggml_reshape_2d(ctx, o, d_model, T)
-                     : ggml_reshape_3d(ctx, o, d_model, T, B);
+        o = (B == 1) ? ggml_reshape_2d(ctx, o, d_model, T) : ggml_reshape_3d(ctx, o, d_model, T, B);
     } else {
-        ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-        ggml_tensor * kq_soft =
-            ggml_soft_max_ext(ctx, kq, mask, scale, /*max_bias=*/0.0f);
-        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-        o = ggml_mul_mat(ctx, v_t, kq_soft);
-        o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
-        o = (B == 1) ? ggml_reshape_2d(ctx, o, d_model, T)
-                     : ggml_reshape_3d(ctx, o, d_model, T, B);
+        ggml_tensor * kq      = ggml_mul_mat(ctx, k, q);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask, scale, /*max_bias=*/0.0f);
+        ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+        o                     = ggml_mul_mat(ctx, v_t, kq_soft);
+        o                     = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
+        o                     = (B == 1) ? ggml_reshape_2d(ctx, o, d_model, T) : ggml_reshape_3d(ctx, o, d_model, T, B);
     }
 
     o = linear(ctx, o, w.attn_out_w, w.attn_out_b);
@@ -192,30 +180,29 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
 
     // ----- FFN sub-layer -----
     ggml_tensor * y = layer_norm(ctx, x, w.norm_ffn_w, w.norm_ffn_b);
-    y = linear(ctx, y, w.fc1_w, w.fc1_b);
+    y               = linear(ctx, y, w.fc1_w, w.fc1_b);
     // PyTorch F.gelu default is the exact erf GELU.
-    y = ggml_gelu_erf(ctx, y);
-    y = linear(ctx, y, w.fc2_w, w.fc2_b);
+    y               = ggml_gelu_erf(ctx, y);
+    y               = linear(ctx, y, w.fc2_w, w.fc2_b);
 
     return ggml_add(ctx, x, y);
 }
 
-} // namespace
+}  // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  const QwenAsrWeights & weights,
                                  const QwenAsrHParams & hp,
                                  const EncoderTiming &  timing,
-                                 bool                   use_flash)
-{
-    EncoderBuild eb {};
+                                 bool                   use_flash) {
+    EncoderBuild eb{};
     eb.timing = timing;
 
     if (ctx == nullptr || timing.n_chunks <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "qwen3_asr encoder: invalid arg "
-                     "(ctx=%p, n_chunks=%d)",
-                     static_cast<void *>(ctx), timing.n_chunks);
+                "qwen3_asr encoder: invalid arg "
+                "(ctx=%p, n_chunks=%d)",
+                static_cast<void *>(ctx), timing.n_chunks);
         return eb;
     }
 
@@ -231,15 +218,15 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // shape see T_enc (not T_enc_padded). This matches the reference
     // byte-for-byte at the pos_add.out boundary and upward.
 
-    const int64_t d_model        = hp.enc_d_model;
-    const int64_t n_heads        = hp.enc_n_heads;
-    const int64_t ds_h           = hp.enc_downsample_hidden;
-    const int64_t n_mels         = hp.enc_num_mel_bins;
-    const int64_t mel_per_chunk  = timing.mel_per_chunk;
-    const int64_t n_chunks       = timing.n_chunks;
-    const int64_t T_per_chunk    = timing.per_chunk_aftercnn;
-    const int64_t T_enc_padded   = timing.T_enc_padded;
-    const int64_t T_enc          = timing.T_enc;
+    const int64_t d_model       = hp.enc_d_model;
+    const int64_t n_heads       = hp.enc_n_heads;
+    const int64_t ds_h          = hp.enc_downsample_hidden;
+    const int64_t n_mels        = hp.enc_num_mel_bins;
+    const int64_t mel_per_chunk = timing.mel_per_chunk;
+    const int64_t n_chunks      = timing.n_chunks;
+    const int64_t T_per_chunk   = timing.per_chunk_aftercnn;
+    const int64_t T_enc_padded  = timing.T_enc_padded;
+    const int64_t T_enc         = timing.T_enc;
 
     // ----- Graph inputs -----
     // mel layout: ggml fast-to-slow ne=[mel_per_chunk, n_mels, 1, n_chunks]
@@ -247,20 +234,16 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // symmetric 3×3 kernel and symmetric stride/pad is invariant under
     // a W/H swap, so this is equivalent to Cohere's time-along-H
     // convention.
-    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
-                                   mel_per_chunk, n_mels, 1, n_chunks);
+    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, mel_per_chunk, n_mels, 1, n_chunks);
     named(eb.mel_in, "enc.mel_in");
     ggml_set_input(eb.mel_in);
     eb.dumps.mel_in = eb.mel_in;
 
-    eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                       d_model, T_per_chunk);
+    eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_per_chunk);
     named(eb.pos_emb_in, "enc.pos_emb.in");
     ggml_set_input(eb.pos_emb_in);
 
-    eb.mask_in = ggml_new_tensor_2d(ctx,
-                                    use_flash ? GGML_TYPE_F16 : GGML_TYPE_F32,
-                                    T_enc, T_enc);
+    eb.mask_in = ggml_new_tensor_2d(ctx, use_flash ? GGML_TYPE_F16 : GGML_TYPE_F32, T_enc, T_enc);
     named(eb.mask_in, "enc.attn_mask.in");
     ggml_set_input(eb.mask_in);
 
@@ -277,13 +260,11 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     x = add_conv_bias(ctx, x, weights.enc_subsample.conv0_b);
     x = ggml_gelu_erf(ctx, x);
 
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x,
-                     2, 2, 1, 1, 1, 1);
+    x = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x, 2, 2, 1, 1, 1, 1);
     x = add_conv_bias(ctx, x, weights.enc_subsample.conv1_b);
     x = ggml_gelu_erf(ctx, x);
 
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x,
-                     2, 2, 1, 1, 1, 1);
+    x = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x, 2, 2, 1, 1, 1, 1);
     x = add_conv_bias(ctx, x, weights.enc_subsample.conv2_b);
     x = ggml_gelu_erf(ctx, x);
     // Now ne = [W=mel_ds, H=n_mels_ds, C=ds_h, N=n_chunks].
@@ -292,10 +273,9 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     const int64_t H_ds = x->ne[1];
     if (W_ds != T_per_chunk) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "qwen3_asr encoder: post-conv W=%lld does not match "
-                     "per_chunk_aftercnn=%lld",
-                     static_cast<long long>(W_ds),
-                     static_cast<long long>(T_per_chunk));
+                "qwen3_asr encoder: post-conv W=%lld does not match "
+                "per_chunk_aftercnn=%lld",
+                static_cast<long long>(W_ds), static_cast<long long>(T_per_chunk));
         return eb;
     }
 
@@ -366,10 +346,8 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // ----- 18 encoder blocks -----
     const int n_layers = static_cast<int>(weights.enc_blocks.size());
     for (int i = 0; i < n_layers; ++i) {
-        x = build_enc_block(ctx, x, eb.mask_in, weights.enc_blocks[i],
-                            static_cast<int>(d_model),
-                            static_cast<int>(n_heads),
-                            use_flash);
+        x = build_enc_block(ctx, x, eb.mask_in, weights.enc_blocks[i], static_cast<int>(d_model),
+                            static_cast<int>(n_heads), use_flash);
         if (i == 0) {
             named(x, "enc.block.0.out");
             eb.dumps.block_0_out = x;
@@ -403,20 +381,31 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // leaves headroom for debug-name nodes.
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "qwen3_asr encoder: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
 
     // Force evaluation of non-output debug tensors so they survive the
     // scheduler's live-range packing and are readable after compute.
-    if (eb.dumps.subsample_out)  ggml_build_forward_expand(eb.graph, eb.dumps.subsample_out);
-    if (eb.dumps.pos_add_out)    ggml_build_forward_expand(eb.graph, eb.dumps.pos_add_out);
-    if (eb.dumps.block_0_out)    ggml_build_forward_expand(eb.graph, eb.dumps.block_0_out);
-    if (eb.dumps.block_last_out) ggml_build_forward_expand(eb.graph, eb.dumps.block_last_out);
-    if (eb.dumps.ln_post_out)    ggml_build_forward_expand(eb.graph, eb.dumps.ln_post_out);
-    if (eb.dumps.proj_out)       ggml_build_forward_expand(eb.graph, eb.dumps.proj_out);
+    if (eb.dumps.subsample_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.subsample_out);
+    }
+    if (eb.dumps.pos_add_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.pos_add_out);
+    }
+    if (eb.dumps.block_0_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_0_out);
+    }
+    if (eb.dumps.block_last_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_last_out);
+    }
+    if (eb.dumps.ln_post_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.ln_post_out);
+    }
+    if (eb.dumps.proj_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.proj_out);
+    }
 
     return eb;
 }
@@ -426,13 +415,13 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
                                                 const QwenAsrHParams & hp,
                                                 int                    n_chunks_max,
                                                 int                    n_batch,
-                                                bool                   use_flash)
-{
-    EncoderBuildBatched eb {};
+                                                bool                   use_flash) {
+    EncoderBuildBatched eb{};
     if (ctx == nullptr || n_chunks_max <= 0 || n_batch <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "qwen3_asr encoder(batched): invalid arg "
-                     "(n_chunks_max=%d, n_batch=%d)", n_chunks_max, n_batch);
+                "qwen3_asr encoder(batched): invalid arg "
+                "(n_chunks_max=%d, n_batch=%d)",
+                n_chunks_max, n_batch);
         return eb;
     }
 
@@ -443,7 +432,7 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
     const int64_t mel_per_chunk = hp.enc_n_window * 2;
     const int64_t T_per_chunk   = aftercnn_len(static_cast<int32_t>(mel_per_chunk));
     const int64_t B             = n_batch;
-    const int64_t N             = B * n_chunks_max;          // packed conv batch
+    const int64_t N             = B * n_chunks_max;  // packed conv batch
     const int64_t T_pad_max     = n_chunks_max * T_per_chunk;
 
     eb.n_batch      = n_batch;
@@ -452,8 +441,7 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
     eb.T_pad_max    = static_cast<int>(T_pad_max);
 
     // ----- Graph inputs -----
-    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
-                                   mel_per_chunk, n_mels, 1, N);
+    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, mel_per_chunk, n_mels, 1, N);
     named(eb.mel_in, "enc.mel_in");
     ggml_set_input(eb.mel_in);
 
@@ -462,33 +450,30 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
     ggml_set_input(eb.pos_emb_in);
 
     // Key-pad mask: per-utterance [T_pad_max, T_pad_max, 1, B]. Built host-side.
-    eb.mask_in = ggml_new_tensor_4d(ctx,
-                                    use_flash ? GGML_TYPE_F16 : GGML_TYPE_F32,
-                                    T_pad_max, T_pad_max, 1, B);
+    eb.mask_in = ggml_new_tensor_4d(ctx, use_flash ? GGML_TYPE_F16 : GGML_TYPE_F32, T_pad_max, T_pad_max, 1, B);
     named(eb.mask_in, "enc.attn_mask.in");
     ggml_set_input(eb.mask_in);
 
     // ----- Subsample: 3x Conv2d + GELU (per-chunk over N = B*n_chunks_max) -----
     ggml_tensor * x = eb.mel_in;
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv0_w, x, 2, 2, 1, 1, 1, 1);
-    x = add_conv_bias(ctx, x, weights.enc_subsample.conv0_b);
-    x = ggml_gelu_erf(ctx, x);
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x, 2, 2, 1, 1, 1, 1);
-    x = add_conv_bias(ctx, x, weights.enc_subsample.conv1_b);
-    x = ggml_gelu_erf(ctx, x);
-    x = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x, 2, 2, 1, 1, 1, 1);
-    x = add_conv_bias(ctx, x, weights.enc_subsample.conv2_b);
-    x = ggml_gelu_erf(ctx, x);
+    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv0_w, x, 2, 2, 1, 1, 1, 1);
+    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv0_b);
+    x               = ggml_gelu_erf(ctx, x);
+    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x, 2, 2, 1, 1, 1, 1);
+    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv1_b);
+    x               = ggml_gelu_erf(ctx, x);
+    x               = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x, 2, 2, 1, 1, 1, 1);
+    x               = add_conv_bias(ctx, x, weights.enc_subsample.conv2_b);
+    x               = ggml_gelu_erf(ctx, x);
     // ne = [W=T_per_chunk, H=n_mels_ds, C=ds_h, N].
 
     const int64_t W_ds = x->ne[0];
     const int64_t H_ds = x->ne[1];
     if (W_ds != T_per_chunk) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "qwen3_asr encoder(batched): post-conv W=%lld != "
-                     "per_chunk_aftercnn=%lld",
-                     static_cast<long long>(W_ds),
-                     static_cast<long long>(T_per_chunk));
+                "qwen3_asr encoder(batched): post-conv W=%lld != "
+                "per_chunk_aftercnn=%lld",
+                static_cast<long long>(W_ds), static_cast<long long>(T_per_chunk));
         return eb;
     }
 
@@ -511,8 +496,7 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
     // ----- 18 encoder blocks (batch on ne[2], per-utterance key-pad mask) -----
     const int n_layers = static_cast<int>(weights.enc_blocks.size());
     for (int i = 0; i < n_layers; ++i) {
-        x = build_enc_block(ctx, x, eb.mask_in, weights.enc_blocks[i],
-                            static_cast<int>(d_model),
+        x = build_enc_block(ctx, x, eb.mask_in, weights.enc_blocks[i], static_cast<int>(d_model),
                             static_cast<int>(n_heads), use_flash);
     }
 
@@ -528,12 +512,11 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "qwen3_asr encoder(batched): ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr encoder(batched): ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
     return eb;
 }
 
-} // namespace transcribe::qwen3_asr
+}  // namespace transcribe::qwen3_asr

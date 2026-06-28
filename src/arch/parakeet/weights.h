@@ -51,19 +51,19 @@ struct ParakeetHParams {
     HeadKind head_kind = HeadKind::TDT;
 
     // Encoder (Conformer).
-    int32_t enc_n_layers          = 0;
-    int32_t enc_d_model           = 0;
-    int32_t enc_n_heads           = 0;
-    int32_t enc_d_ff              = 0; // d_model * ff_expansion_factor
-    int32_t enc_conv_kernel       = 0; // depthwise conv kernel inside the Conformer block
-    int32_t enc_subsampling_factor   = 0; // total downsampling on the time axis
-    int32_t enc_subsampling_channels = 0; // intermediate channel count in pre_encode
-    int32_t enc_pos_emb_max_len   = 0;
-    bool    enc_use_bias          = false;
+    int32_t enc_n_layers             = 0;
+    int32_t enc_d_model              = 0;
+    int32_t enc_n_heads              = 0;
+    int32_t enc_d_ff                 = 0;  // d_model * ff_expansion_factor
+    int32_t enc_conv_kernel          = 0;  // depthwise conv kernel inside the Conformer block
+    int32_t enc_subsampling_factor   = 0;  // total downsampling on the time axis
+    int32_t enc_subsampling_channels = 0;  // intermediate channel count in pre_encode
+    int32_t enc_pos_emb_max_len      = 0;
+    bool    enc_use_bias             = false;
     // NeMo's RelPositionalEncoding multiplies x by sqrt(d_model) when
     // xscaling=True. Default false so legacy GGUFs (v2/v3, xscaling=False)
     // keep working unchanged.
-    bool    enc_xscaling          = false;
+    bool    enc_xscaling             = false;
     // Local attention window. -1/-1 = full attention (most variants).
     // When non-negative, each query attends to keys within [left, right]
     // per enc_att_context_style below:
@@ -73,8 +73,8 @@ struct ParakeetHParams {
     //   ChunkedLimited — full RelPositionalEncoding (pos_emb 2T-1) plus a
     //     host-side chunked mask; chunk_size = right+1, left_chunks =
     //     left/chunk_size. nemotron-speech-streaming-en-0.6b ([70, 13]).
-    int32_t enc_att_context_left  = -1;
-    int32_t enc_att_context_right = -1;
+    int32_t enc_att_context_left     = -1;
+    int32_t enc_att_context_right    = -1;
 
     // Multi-lookahead training menu for cache-aware streaming models. A
     // flat GGUF int32 array [L0,R0,L1,R1,...]; index 0 is the default
@@ -144,12 +144,12 @@ struct ParakeetHParams {
     // Predictor (RNN-T prediction network). TDT and RNNT only; zero for CTC.
     int32_t pred_hidden   = 0;
     int32_t pred_n_layers = 0;
-    int32_t pred_vocab    = 0; // includes the +1 "start" / blank-row entry of the embed matrix
-                               // (raw token vocab size is pred_vocab - 1)
+    int32_t pred_vocab    = 0;  // includes the +1 "start" / blank-row entry of the embed matrix
+                                // (raw token vocab size is pred_vocab - 1)
 
     // Joint network. TDT and RNNT only; zero for CTC.
-    int32_t joint_hidden            = 0;
-    int32_t joint_num_extra_outputs = 0; // TDT durations count; 0 for RNNT
+    int32_t     joint_hidden            = 0;
+    int32_t     joint_num_extra_outputs = 0;  // TDT durations count; 0 for RNNT
     // Joint output activation (stt.parakeet.joint.activation), validated
     // against the C++ joint forward's allow-list at load. v2/v3 ship
     // "relu". Read so the C++ side doesn't hard-code an activation and
@@ -172,14 +172,14 @@ struct ParakeetHParams {
     // the converter emits and the C++ frontend reads; the loader gates on
     // it. CMVN/LFR fields are omitted (no published Parakeet variant uses
     // them).
-    std::string fe_type;          // "mel" for parakeet
+    std::string fe_type;  // "mel" for parakeet
     int32_t     fe_num_mels    = 0;
     int32_t     fe_sample_rate = 0;
     int32_t     fe_n_fft       = 0;
-    int32_t     fe_win_length  = 0;  // samples
-    int32_t     fe_hop_length  = 0;  // samples
-    std::string fe_window;        // "hann" for parakeet
-    std::string fe_normalize;     // "per_feature" for parakeet
+    int32_t     fe_win_length  = 0;      // samples
+    int32_t     fe_hop_length  = 0;      // samples
+    std::string fe_window;               // "hann" for parakeet
+    std::string fe_normalize;            // "per_feature" for parakeet
     float       fe_dither       = 0.0f;
     float       fe_pre_emphasis = 0.0f;  // 0.0 == disabled
     float       fe_f_min        = 0.0f;
@@ -200,25 +200,25 @@ struct ParakeetHParams {
     //   enc_out := y
     // Gated on has_prompt (stt.parakeet.prompt.num_prompts present).
     // Today: nemotron-3.5-asr-streaming-0.6b.
-    bool                       has_prompt              = false;
-    int32_t                    prompt_num_prompts      = 0;
-    int32_t                    prompt_hidden           = 0;
-    std::string                prompt_field;
-    std::string                prompt_activation;
-    std::vector<std::string>   prompt_dictionary_locales;
-    std::vector<int32_t>       prompt_dictionary_indices;
-    int32_t                    prompt_auto_id          = -1;
+    bool                     has_prompt         = false;
+    int32_t                  prompt_num_prompts = 0;
+    int32_t                  prompt_hidden      = 0;
+    std::string              prompt_field;
+    std::string              prompt_activation;
+    std::vector<std::string> prompt_dictionary_locales;
+    std::vector<int32_t>     prompt_dictionary_indices;
+    int32_t                  prompt_auto_id = -1;
 
     // Derived. Convenience accessors keyed off the above.
     int32_t enc_head_dim() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
+
     int32_t joint_n_classes() const { return (pred_vocab - 1) + joint_num_extra_outputs + 1; }
 };
 
 // Read every required stt.parakeet.* / stt.frontend.* KV into hp.
 // Returns INVALID_ARG if gguf is null, ERR_GGUF on a missing/wrong-type
 // key or a cross-field invariant failure (e.g. d_model % n_heads != 0).
-transcribe_status read_parakeet_hparams(const gguf_context * gguf,
-                                        ParakeetHParams &    hp);
+transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHParams & hp);
 
 // Weight slots. Every ggml_tensor* below is borrowed into the model's
 // ggml_context and is invalidated when the model is freed.
@@ -227,16 +227,16 @@ struct ParakeetPreEncode {
     // dw_striding subsampling: 1 standard conv + 2 depthwise-separable
     // conv pairs = 8x time downsampling. Indices follow NeMo's
     // torch.nn.Sequential (1 and 4 are activation modules, skipped).
-    ggml_tensor * conv0_w = nullptr; // [out=channels,        in=1,        kh=3, kw=3]
-    ggml_tensor * conv0_b = nullptr; // [channels]
-    ggml_tensor * conv2_w = nullptr; // [out=channels,        in=1 (dw),   kh=3, kw=3]
-    ggml_tensor * conv2_b = nullptr; // [channels]
-    ggml_tensor * conv3_w = nullptr; // [out=channels,        in=channels, kh=1, kw=1]
-    ggml_tensor * conv3_b = nullptr; // [channels]
-    ggml_tensor * conv5_w = nullptr; // [out=channels,        in=1 (dw),   kh=3, kw=3]
-    ggml_tensor * conv5_b = nullptr; // [channels]
-    ggml_tensor * conv6_w = nullptr; // [out=channels,        in=channels, kh=1, kw=1]
-    ggml_tensor * conv6_b = nullptr; // [channels]
+    ggml_tensor * conv0_w = nullptr;  // [out=channels,        in=1,        kh=3, kw=3]
+    ggml_tensor * conv0_b = nullptr;  // [channels]
+    ggml_tensor * conv2_w = nullptr;  // [out=channels,        in=1 (dw),   kh=3, kw=3]
+    ggml_tensor * conv2_b = nullptr;  // [channels]
+    ggml_tensor * conv3_w = nullptr;  // [out=channels,        in=channels, kh=1, kw=1]
+    ggml_tensor * conv3_b = nullptr;  // [channels]
+    ggml_tensor * conv5_w = nullptr;  // [out=channels,        in=1 (dw),   kh=3, kw=3]
+    ggml_tensor * conv5_b = nullptr;  // [channels]
+    ggml_tensor * conv6_w = nullptr;  // [out=channels,        in=channels, kh=1, kw=1]
+    ggml_tensor * conv6_b = nullptr;  // [channels]
     // Final projection from flattened [channels * (num_mels / subsampling)] to d_model.
     ggml_tensor * out_w   = nullptr;
     ggml_tensor * out_b   = nullptr;
@@ -247,90 +247,93 @@ struct ParakeetPreEncode {
 // populated only when enc_use_bias=true; null for the v2/v3 baseline.
 struct ParakeetBlock {
     // Macaron feed-forward 1.
-    ggml_tensor * norm_ff1_w = nullptr; // [d_model]
-    ggml_tensor * norm_ff1_b = nullptr; // [d_model]
-    ggml_tensor * ff1_lin1_w = nullptr; // [d_ff,    d_model]
-    ggml_tensor * ff1_lin1_b = nullptr; // [d_ff],    nullable (use_bias)
-    ggml_tensor * ff1_lin2_w = nullptr; // [d_model, d_ff]
-    ggml_tensor * ff1_lin2_b = nullptr; // [d_model], nullable (use_bias)
+    ggml_tensor * norm_ff1_w = nullptr;  // [d_model]
+    ggml_tensor * norm_ff1_b = nullptr;  // [d_model]
+    ggml_tensor * ff1_lin1_w = nullptr;  // [d_ff,    d_model]
+    ggml_tensor * ff1_lin1_b = nullptr;  // [d_ff],    nullable (use_bias)
+    ggml_tensor * ff1_lin2_w = nullptr;  // [d_model, d_ff]
+    ggml_tensor * ff1_lin2_b = nullptr;  // [d_model], nullable (use_bias)
 
     // Self-attention with relative positional encoding.
-    ggml_tensor * norm_attn_w  = nullptr; // [d_model]
-    ggml_tensor * norm_attn_b  = nullptr; // [d_model]
-    ggml_tensor * attn_q_w     = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_q_b     = nullptr; // [d_model], nullable (use_bias)
-    ggml_tensor * attn_k_w     = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_k_b     = nullptr; // [d_model], nullable (use_bias)
-    ggml_tensor * attn_v_w     = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_v_b     = nullptr; // [d_model], nullable (use_bias)
-    ggml_tensor * attn_out_w   = nullptr; // [d_model, d_model]
-    ggml_tensor * attn_out_b   = nullptr; // [d_model], nullable (use_bias)
-    ggml_tensor * attn_pos_w   = nullptr; // [d_model, d_model]   (linear_pos is bias-free in NeMo even when use_bias=true)
-    ggml_tensor * attn_pos_u   = nullptr; // [n_heads, head_dim]   learned rel-pos bias u
-    ggml_tensor * attn_pos_v   = nullptr; // [n_heads, head_dim]   learned rel-pos bias v
+    ggml_tensor * norm_attn_w = nullptr;  // [d_model]
+    ggml_tensor * norm_attn_b = nullptr;  // [d_model]
+    ggml_tensor * attn_q_w    = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_q_b    = nullptr;  // [d_model], nullable (use_bias)
+    ggml_tensor * attn_k_w    = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_k_b    = nullptr;  // [d_model], nullable (use_bias)
+    ggml_tensor * attn_v_w    = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_v_b    = nullptr;  // [d_model], nullable (use_bias)
+    ggml_tensor * attn_out_w  = nullptr;  // [d_model, d_model]
+    ggml_tensor * attn_out_b  = nullptr;  // [d_model], nullable (use_bias)
+    ggml_tensor * attn_pos_w =
+        nullptr;  // [d_model, d_model]   (linear_pos is bias-free in NeMo even when use_bias=true)
+    ggml_tensor * attn_pos_u = nullptr;  // [n_heads, head_dim]   learned rel-pos bias u
+    ggml_tensor * attn_pos_v = nullptr;  // [n_heads, head_dim]   learned rel-pos bias v
 
     // Convolution module: pointwise -> GLU -> depthwise -> BN -> activation -> pointwise.
-    ggml_tensor * norm_conv_w  = nullptr; // [d_model]
-    ggml_tensor * norm_conv_b  = nullptr; // [d_model]
-    ggml_tensor * conv_pw1_w   = nullptr; // [2*d_model, d_model, 1]   conv1d k=1; 2x for GLU
-    ggml_tensor * conv_pw1_b   = nullptr; // [2*d_model], nullable (use_bias)
-    ggml_tensor * conv_dw_w    = nullptr; // [d_model,   1,       k]   depthwise conv1d
-    ggml_tensor * conv_dw_b    = nullptr; // [d_model],   nullable (use_bias)
-    ggml_tensor * conv_pw2_w   = nullptr; // [d_model,   d_model, 1]   conv1d k=1
-    ggml_tensor * conv_pw2_b   = nullptr; // [d_model],   nullable (use_bias)
-    ggml_tensor * conv_bn_w    = nullptr; // [d_model]   BN scale
-    ggml_tensor * conv_bn_b    = nullptr; // [d_model]   BN shift
-    ggml_tensor * conv_bn_rm   = nullptr; // [d_model]   running_mean
-    ggml_tensor * conv_bn_rv   = nullptr; // [d_model]   running_var
+    ggml_tensor * norm_conv_w = nullptr;  // [d_model]
+    ggml_tensor * norm_conv_b = nullptr;  // [d_model]
+    ggml_tensor * conv_pw1_w  = nullptr;  // [2*d_model, d_model, 1]   conv1d k=1; 2x for GLU
+    ggml_tensor * conv_pw1_b  = nullptr;  // [2*d_model], nullable (use_bias)
+    ggml_tensor * conv_dw_w   = nullptr;  // [d_model,   1,       k]   depthwise conv1d
+    ggml_tensor * conv_dw_b   = nullptr;  // [d_model],   nullable (use_bias)
+    ggml_tensor * conv_pw2_w  = nullptr;  // [d_model,   d_model, 1]   conv1d k=1
+    ggml_tensor * conv_pw2_b  = nullptr;  // [d_model],   nullable (use_bias)
+    ggml_tensor * conv_bn_w   = nullptr;  // [d_model]   BN scale
+    ggml_tensor * conv_bn_b   = nullptr;  // [d_model]   BN shift
+    ggml_tensor * conv_bn_rm  = nullptr;  // [d_model]   running_mean
+    ggml_tensor * conv_bn_rv  = nullptr;  // [d_model]   running_var
 
     // Fused BN parameters (computed at load time, replaces batch_norm()
     // in the graph with a single mul + add):
     //   fused_scale = bn_w / sqrt(bn_rv + eps)
     //   fused_bias  = bn_b - bn_rm * fused_scale
-    ggml_tensor * conv_bn_fused_scale = nullptr; // [d_model]
-    ggml_tensor * conv_bn_fused_bias  = nullptr; // [d_model]
+    ggml_tensor * conv_bn_fused_scale = nullptr;  // [d_model]
+    ggml_tensor * conv_bn_fused_bias  = nullptr;  // [d_model]
 
     // Macaron feed-forward 2.
-    ggml_tensor * norm_ff2_w = nullptr; // [d_model]
-    ggml_tensor * norm_ff2_b = nullptr; // [d_model]
-    ggml_tensor * ff2_lin1_w = nullptr; // [d_ff,    d_model]
-    ggml_tensor * ff2_lin1_b = nullptr; // [d_ff],    nullable (use_bias)
-    ggml_tensor * ff2_lin2_w = nullptr; // [d_model, d_ff]
-    ggml_tensor * ff2_lin2_b = nullptr; // [d_model], nullable (use_bias)
+    ggml_tensor * norm_ff2_w = nullptr;  // [d_model]
+    ggml_tensor * norm_ff2_b = nullptr;  // [d_model]
+    ggml_tensor * ff2_lin1_w = nullptr;  // [d_ff,    d_model]
+    ggml_tensor * ff2_lin1_b = nullptr;  // [d_ff],    nullable (use_bias)
+    ggml_tensor * ff2_lin2_w = nullptr;  // [d_model, d_ff]
+    ggml_tensor * ff2_lin2_b = nullptr;  // [d_model], nullable (use_bias)
 
     // Final per-block layer norm.
-    ggml_tensor * norm_out_w = nullptr; // [d_model]
-    ggml_tensor * norm_out_b = nullptr; // [d_model]
+    ggml_tensor * norm_out_w = nullptr;  // [d_model]
+    ggml_tensor * norm_out_b = nullptr;  // [d_model]
 };
 
 struct ParakeetPredictor {
     // Token embedding; the +1 row is NeMo's "start of sequence" embedding.
-    ggml_tensor * embed_w = nullptr; // [pred_vocab, pred_hidden]
+    ggml_tensor * embed_w = nullptr;  // [pred_vocab, pred_hidden]
 
     // 2-layer LSTM (v2/v3 0.6b). Concatenated gate weights in PyTorch
     // (i, f, g, o) order, 4*pred_hidden rows.
     struct LstmLayer {
-        ggml_tensor * Wx = nullptr; // [4*pred_hidden, pred_hidden]   (input-to-hidden, layer 0 input dim is pred_hidden because of the embed)
-        ggml_tensor * Wh = nullptr; // [4*pred_hidden, pred_hidden]   (hidden-to-hidden)
-        ggml_tensor * b  = nullptr; // [4*pred_hidden]
+        ggml_tensor * Wx =
+            nullptr;  // [4*pred_hidden, pred_hidden]   (input-to-hidden, layer 0 input dim is pred_hidden because of the embed)
+        ggml_tensor * Wh = nullptr;  // [4*pred_hidden, pred_hidden]   (hidden-to-hidden)
+        ggml_tensor * b  = nullptr;  // [4*pred_hidden]
     };
-    std::vector<LstmLayer> lstm; // pred_n_layers entries
+
+    std::vector<LstmLayer> lstm;  // pred_n_layers entries
 };
 
 struct ParakeetJoint {
-    ggml_tensor * enc_w  = nullptr; // [joint_hidden, enc_d_model]
-    ggml_tensor * enc_b  = nullptr; // [joint_hidden]
-    ggml_tensor * pred_w = nullptr; // [joint_hidden, pred_hidden]
-    ggml_tensor * pred_b = nullptr; // [joint_hidden]
-    ggml_tensor * out_w  = nullptr; // [joint_n_classes, joint_hidden]
-    ggml_tensor * out_b  = nullptr; // [joint_n_classes]
+    ggml_tensor * enc_w  = nullptr;  // [joint_hidden, enc_d_model]
+    ggml_tensor * enc_b  = nullptr;  // [joint_hidden]
+    ggml_tensor * pred_w = nullptr;  // [joint_hidden, pred_hidden]
+    ggml_tensor * pred_b = nullptr;  // [joint_hidden]
+    ggml_tensor * out_w  = nullptr;  // [joint_n_classes, joint_hidden]
+    ggml_tensor * out_b  = nullptr;  // [joint_n_classes]
 };
 
 // CTC head. Single 1×1 Conv1d projecting d_model -> vocab+1. Loaded
 // only when head_kind=CTC; predictor + joint stay empty in that case.
 struct ParakeetCtcHead {
-    ggml_tensor * weight = nullptr; // [vocab+1, d_model, 1]   conv1d k=1
-    ggml_tensor * bias   = nullptr; // [vocab+1]
+    ggml_tensor * weight = nullptr;  // [vocab+1, d_model, 1]   conv1d k=1
+    ggml_tensor * bias   = nullptr;  // [vocab+1]
 };
 
 // Language-conditioning prompt MLP (multilingual variants). NeMo's
@@ -339,19 +342,19 @@ struct ParakeetCtcHead {
 // Loaded only when hp.has_prompt is true; otherwise the slots stay
 // null and the encoder skips the prompt path.
 struct ParakeetPromptMlp {
-    ggml_tensor * mlp0_w = nullptr; // [prompt_hidden, d_model + num_prompts]
-    ggml_tensor * mlp0_b = nullptr; // [prompt_hidden]
-    ggml_tensor * mlp2_w = nullptr; // [d_model, prompt_hidden]
-    ggml_tensor * mlp2_b = nullptr; // [d_model]
+    ggml_tensor * mlp0_w = nullptr;  // [prompt_hidden, d_model + num_prompts]
+    ggml_tensor * mlp0_b = nullptr;  // [prompt_hidden]
+    ggml_tensor * mlp2_w = nullptr;  // [d_model, prompt_hidden]
+    ggml_tensor * mlp2_b = nullptr;  // [d_model]
 };
 
 struct ParakeetWeights {
     ParakeetPreEncode          pre_encode;
-    std::vector<ParakeetBlock> blocks; // hp.enc_n_layers entries
-    ParakeetPredictor          predictor; // empty when head_kind=CTC
-    ParakeetJoint              joint;     // empty when head_kind=CTC
-    ParakeetCtcHead            ctc_head;  // populated when head_kind=CTC
-    ParakeetPromptMlp          prompt;    // populated when hp.has_prompt
+    std::vector<ParakeetBlock> blocks;     // hp.enc_n_layers entries
+    ParakeetPredictor          predictor;  // empty when head_kind=CTC
+    ParakeetJoint              joint;      // empty when head_kind=CTC
+    ParakeetCtcHead            ctc_head;   // populated when head_kind=CTC
+    ParakeetPromptMlp          prompt;     // populated when hp.has_prompt
 };
 
 // Walk the canonical tensor list, look up each tensor by name, validate
@@ -364,4 +367,4 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
                                          const ParakeetHParams & hp,
                                          ParakeetWeights &       weights);
 
-} // namespace transcribe::parakeet
+}  // namespace transcribe::parakeet

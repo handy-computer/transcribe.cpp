@@ -26,7 +26,7 @@ void apply_family_invariants(transcribe_model & model) {
     // unset and a non-DEFAULT itn against canary triggers the
     // advisory WARN.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
-    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_PNC,          true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_PNC, true);
 }
 
-} // namespace transcribe::canary
+}  // namespace transcribe::canary

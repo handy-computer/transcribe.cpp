@@ -32,13 +32,13 @@ struct WhisperWeights;
 struct WhisperKvCache;
 
 struct DecoderDumps {
-    ggml_tensor * token_emb       = nullptr;
-    ggml_tensor * pos_emb         = nullptr;
-    ggml_tensor * embed_sum       = nullptr;
-    std::vector<ggml_tensor *> block_outs;       // per-layer residual stream
-    ggml_tensor * out_before_head = nullptr;     // post final LN
-    ggml_tensor * logits_raw      = nullptr;     // pre log-softmax logits
-    ggml_tensor * logits          = nullptr;     // log-softmax(logits_raw)
+    ggml_tensor *              token_emb = nullptr;
+    ggml_tensor *              pos_emb   = nullptr;
+    ggml_tensor *              embed_sum = nullptr;
+    std::vector<ggml_tensor *> block_outs;                 // per-layer residual stream
+    ggml_tensor *              out_before_head = nullptr;  // post final LN
+    ggml_tensor *              logits_raw      = nullptr;  // pre log-softmax logits
+    ggml_tensor *              logits          = nullptr;  // log-softmax(logits_raw)
 };
 
 struct DecoderBuild {
@@ -52,12 +52,12 @@ struct DecoderBuild {
     // (cast to f16 inside). Caller populates with 0 for k in [0,
     // T_enc) and -inf for k in [T_enc, T_enc_pad), so the unmasked
     // padded slots do not contribute to the cross-attn output.
-    ggml_tensor * cross_mask_in  = nullptr;
+    ggml_tensor * cross_mask_in = nullptr;
 
     // Output: log-softmax logits [vocab_size, seq_len].
     ggml_tensor * out = nullptr;
 
-    DecoderDumps  dumps {};
+    DecoderDumps  dumps{};
     ggml_cgraph * graph = nullptr;
 };
 
@@ -128,14 +128,14 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
 // the in-graph argmax shortcut from canary/cohere/moonshine doesn't
 // apply.
 struct StepBuild {
-    ggml_tensor * token_id_in    = nullptr;  // i32 [1]
-    ggml_tensor * pos_id_in      = nullptr;  // i32 [1]
-    ggml_tensor * kv_idx_in      = nullptr;  // i64 [1]
-    ggml_tensor * mask_in        = nullptr;  // f16 [max_n_kv, 1]
-    ggml_tensor * cross_mask_in  = nullptr;  // f32 [T_enc_pad, 1], may be null
-    ggml_tensor * logits_out     = nullptr;  // f32 [vocab, 1] raw logits
-    int           max_n_kv       = 0;
-    ggml_cgraph * graph          = nullptr;
+    ggml_tensor * token_id_in   = nullptr;  // i32 [1]
+    ggml_tensor * pos_id_in     = nullptr;  // i32 [1]
+    ggml_tensor * kv_idx_in     = nullptr;  // i64 [1]
+    ggml_tensor * mask_in       = nullptr;  // f16 [max_n_kv, 1]
+    ggml_tensor * cross_mask_in = nullptr;  // f32 [T_enc_pad, 1], may be null
+    ggml_tensor * logits_out    = nullptr;  // f32 [vocab, 1] raw logits
+    int           max_n_kv      = 0;
+    ggml_cgraph * graph         = nullptr;
 };
 
 StepBuild build_step_graph(ggml_context *         compute_ctx,
@@ -183,4 +183,4 @@ StepBuildBatched build_step_graph_batched(ggml_context *         compute_ctx,
                                           int                    n_batch,
                                           bool                   use_flash = true);
 
-} // namespace transcribe::whisper
+}  // namespace transcribe::whisper

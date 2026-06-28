@@ -5,14 +5,13 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "causal_lm/causal_lm.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-kaldi-fbank.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <memory>
@@ -49,13 +48,13 @@ struct ChatTokens {
 // ---------------------------------------------------------------------------
 
 struct FunAsrNanoModel final : public transcribe_model {
-    Tokenizer            tok;
-    FunAsrNanoHParams    hparams;
-    FunAsrNanoWeights    weights;
-    ggml_context *       ctx_meta = nullptr;
+    Tokenizer         tok;
+    FunAsrNanoHParams hparams;
+    FunAsrNanoWeights weights;
+    ggml_context *    ctx_meta = nullptr;
 
-    transcribe::BackendPlan       plan;
-    ggml_backend_buffer_t         backend_buffer = nullptr;
+    transcribe::BackendPlan                    plan;
+    ggml_backend_buffer_t                      backend_buffer = nullptr;
     transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     // Constructed once at load() time; const-after-construction. Kaldi
@@ -82,15 +81,14 @@ struct FunAsrNanoSession final : public transcribe_session {
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
     transcribe::causal_lm::KvCache kv_cache_batch;
-    int                           kv_batch_cap   = 0;
-    int                           kv_batch_n_ctx = 0;
-
+    int                            kv_batch_cap   = 0;
+    int                            kv_batch_n_ctx = 0;
 
     // Reusable host scratch.
-    std::vector<float> frontend_buf;   // [T_lfr, d_input]
-    std::vector<float> pe_buf;         // [T_lfr, d_input]  sinusoidal PE
-    std::vector<float> enc_host;       // encoder output [d_model, T_lfr]
-    std::vector<float> adaptor_host;   // adaptor output [llm_dim, T_lfr]
+    std::vector<float> frontend_buf;  // [T_lfr, d_input]
+    std::vector<float> pe_buf;        // [T_lfr, d_input]  sinusoidal PE
+    std::vector<float> enc_host;      // encoder output [d_model, T_lfr]
+    std::vector<float> adaptor_host;  // adaptor output [llm_dim, T_lfr]
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
@@ -99,4 +97,4 @@ struct FunAsrNanoSession final : public transcribe_session {
     ~FunAsrNanoSession() override;
 };
 
-} // namespace transcribe::funasr_nano
+}  // namespace transcribe::funasr_nano

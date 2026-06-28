@@ -14,9 +14,8 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "ggml.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <vector>
@@ -28,20 +27,20 @@ struct ggml_cgraph;
 namespace transcribe::granite_nar {
 
 struct ProjectorBuild {
-    ggml_tensor * enc_in    = nullptr;  // [num_layers * enc_hidden, T_enc]
-    ggml_tensor * enc_pad   = nullptr;  // optional [num_layers * enc_hidden, pad_n]
+    ggml_tensor * enc_in  = nullptr;  // [num_layers * enc_hidden, T_enc]
+    ggml_tensor * enc_pad = nullptr;  // optional [num_layers * enc_hidden, pad_n]
 
-    ggml_tensor * out       = nullptr;  // [llm_dim, n_audio_tokens]
+    ggml_tensor * out = nullptr;      // [llm_dim, n_audio_tokens]
 
     struct {
         ggml_tensor * qformer_out = nullptr;  // [llm_dim, n_query, nblocks]
         ggml_tensor * proj_out    = nullptr;  // == out
     } dumps;
 
-    ggml_cgraph * graph = nullptr;
-    int nblocks         = 0;
-    int n_audio_tokens  = 0;
-    int t_enc_pad       = 0;
+    ggml_cgraph * graph          = nullptr;
+    int           nblocks        = 0;
+    int           n_audio_tokens = 0;
+    int           t_enc_pad      = 0;
 };
 
 ProjectorBuild build_projector_graph(ggml_context *            ctx,
@@ -49,4 +48,4 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
                                      const GraniteNarHParams & hp,
                                      int                       T_enc);
 
-} // namespace transcribe::granite_nar
+}  // namespace transcribe::granite_nar

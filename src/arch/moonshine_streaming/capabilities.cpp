@@ -26,7 +26,7 @@ void apply_family_invariants(transcribe_model & model) {
     // stream_finalize only tops up the trailing tail and runs a final AR
     // decode when frames advanced past the last partial (otherwise it just
     // commits the last partial transcript).
-    caps.supports_streaming            = true;
+    caps.supports_streaming = true;
 
     // Streaming latency characteristics (≈240 ms cumulative encoder
     // right-context, natural 20 ms emit unit, family-recommended 80 ms
@@ -40,4 +40,4 @@ void apply_family_invariants(transcribe_model & model) {
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
-} // namespace transcribe::moonshine_streaming
+}  // namespace transcribe::moonshine_streaming

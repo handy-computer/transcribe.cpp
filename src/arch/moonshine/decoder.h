@@ -35,12 +35,12 @@ struct MoonshineWeights;
 struct MoonshineKvCache;
 
 struct DecoderDumps {
-    ggml_tensor * token_emb       = nullptr;   // dec.token_emb
-    ggml_tensor * embed_sum       = nullptr;   // dec.embed_sum (= token_emb)
-    std::vector<ggml_tensor *> block_outs;     // dec.block.{i}.out
-    ggml_tensor * out_before_head = nullptr;   // dec.out_before_head
-    ggml_tensor * logits_raw      = nullptr;   // dec.logits_raw
-    ggml_tensor * logits          = nullptr;   // dec.logits (log_softmax)
+    ggml_tensor *              token_emb = nullptr;        // dec.token_emb
+    ggml_tensor *              embed_sum = nullptr;        // dec.embed_sum (= token_emb)
+    std::vector<ggml_tensor *> block_outs;                 // dec.block.{i}.out
+    ggml_tensor *              out_before_head = nullptr;  // dec.out_before_head
+    ggml_tensor *              logits_raw      = nullptr;  // dec.logits_raw
+    ggml_tensor *              logits          = nullptr;  // dec.logits (log_softmax)
 };
 
 struct DecoderBuild {
@@ -49,10 +49,10 @@ struct DecoderBuild {
     ggml_tensor * encoder_out_in = nullptr;  // [d_model, T_enc] f32 (cross_kv graph only)
     ggml_tensor * causal_mask_in = nullptr;  // [n_kv, n_tokens] f32 (n_tokens>1 only)
 
-    ggml_tensor * out         = nullptr;     // logits or log-softmax depending on flag
-    ggml_tensor * argmax_out  = nullptr;     // [n_tokens] i32, set when skip_log_softmax
+    ggml_tensor * out        = nullptr;      // logits or log-softmax depending on flag
+    ggml_tensor * argmax_out = nullptr;      // [n_tokens] i32, set when skip_log_softmax
 
-    DecoderDumps  dumps {};
+    DecoderDumps  dumps{};
     ggml_cgraph * graph = nullptr;
 };
 
@@ -149,4 +149,4 @@ StepBuildBatched build_step_graph_batched(ggml_context *           ctx,
                                           int                      n_batch,
                                           bool                     use_flash = true);
 
-} // namespace transcribe::moonshine
+}  // namespace transcribe::moonshine
