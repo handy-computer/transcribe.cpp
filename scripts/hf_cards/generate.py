@@ -50,20 +50,28 @@ def build_transcribe_cpp_block(spec: dict) -> str:
         return ""
 
     caps = spec.get("capabilities", {})
-    dataset_key = spec["wer"].get("metadata_key", "librispeech_test_clean")
-    block: dict = {
-        f"wer_{dataset_key}": {
-            q["name"].lower(): float(str(q["wer"]).rstrip("%")) for q in spec["quants"]
-        },
-        **{
-            f"rtf_{machine.replace('-', '_')}": backends
-            for machine, backends in spec["perf"].items()
-        },
-        "streaming": bool(caps.get("streaming", False)),
-        "translate": bool(caps.get("translate", False)),
-        "lang_detect": bool(caps.get("lang_detect", False)),
-        "timestamps": caps.get("timestamps", "none"),
+    wer = spec["wer"]
+    dataset_key = wer.get("metadata_key", "librispeech_test_clean")
+    block: dict = {}
+    # Headline dataset: per-quant WER taken from the `quants:` column.
+    block[f"wer_{dataset_key}"] = {
+        q["name"].lower(): float(str(q["wer"]).rstrip("%")) for q in spec["quants"]
     }
+    # Any additional per-quant WER maps listed inline under `wer:` (keyed by
+    # dataset name, e.g. `librispeech_test_clean:`) are emitted as their own
+    # `wer_<dataset>` blocks. Only dict values count as datasets; scalar keys
+    # (metadata_key, source, notes) are skipped.
+    for key, per_quant in wer.items():
+        if isinstance(per_quant, dict):
+            block[f"wer_{key}"] = {
+                str(q).lower(): float(str(v).rstrip("%")) for q, v in per_quant.items()
+            }
+    for machine, backends in spec["perf"].items():
+        block[f"rtf_{machine.replace('-', '_')}"] = backends
+    block["streaming"] = bool(caps.get("streaming", False))
+    block["translate"] = bool(caps.get("translate", False))
+    block["lang_detect"] = bool(caps.get("lang_detect", False))
+    block["timestamps"] = caps.get("timestamps", "none")
     dumped = yaml.safe_dump(
         {"transcribe_cpp": block}, sort_keys=False, default_flow_style=False
     )
