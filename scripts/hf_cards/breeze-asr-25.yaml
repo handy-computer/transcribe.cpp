@@ -1,0 +1,141 @@
+# Spec for the HF README of handy-computer/Breeze-ASR-25-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: MediaTek-Research/Breeze-ASR-25
+target_repo: handy-computer/Breeze-ASR-25-gguf
+# Pure fine-tune of whisper-large-v2 (identical architecture), so the model
+# page points at the whisper-large-v2 doc rather than a Breeze-specific one.
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-large-v2.md
+
+# Pinned at download (the snapshot the GGUFs were converted from).
+upstream_commit: cffe7ccb404d025296a00758d0a33468bec3a9d0
+pin_date: 2026-06-29
+
+validation:
+  reference: transformers
+  commit: 3848875
+  date: 2026-06-29
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+
+# Breeze-ASR-25 is a Whisper-large-v2 fine-tune. It inherits Whisper's
+# 99-language tokenizer, but MediaTek optimized and validated it for
+# Taiwanese Mandarin (Traditional Chinese) and English only, so we advertise
+# just those two — listing all 99 would overclaim coverage the fine-tune
+# does not target.
+languages:
+  - zh
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - whisper
+  - mediatek
+  - mandarin
+  - traditional-chinese
+  - code-switching
+
+summary: |
+  MediaTek Research's Breeze-ASR-25 — a fine-tune of OpenAI Whisper large-v2,
+  converted to GGUF for transcribe.cpp. Optimized for Taiwanese Mandarin
+  (it emits **Traditional Chinese**) and English, with explicit support for
+  Mandarin-English code-switching (intra- and inter-sentential). Trained on
+  ~11,749 hours: 10,000 h synthetic Mandarin (ODC Synth), 1,738 h English
+  (CommonVoice17) and 11 h real code-switch (NTUML2021). Architecturally
+  identical to Whisper large-v2 (encoder-decoder transformer, 30-second
+  windows with chunked long-form decoding); it retains Whisper's 99-language
+  tokenizer, but only Mandarin and English are optimized and validated —
+  other languages remain technically accessible but out of scope.
+
+default_quant_index: 2  # Q8_0
+
+# Capability flags for the transcribe_cpp metadata block. Same Whisper
+# code path as whisper-large-v2 (the library exposes translation, language
+# detection and segment timestamps for any Whisper GGUF), though this
+# fine-tune is specialized for zh/en transcription.
+capabilities:
+  streaming: false
+  translate: true
+  lang_detect: true
+  timestamps: segment  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, published raw as rtf_<machine>
+# in the metadata block. Breeze-ASR-25 is byte-for-byte the same architecture
+# and tensor shapes as Whisper large-v2 (1.5B params, 32+32 layers,
+# d_model 1280); RTF is a function of shapes/quant/backend, not weight values,
+# so these are inherited verbatim from whisper-large-v2 rather than re-benched.
+perf:
+  m4-max:
+    metal: 23.7
+    cpu: 1.5
+  ryzen-4750u:
+    vulkan: 2.1
+    cpu: 0.6
+
+wer:
+  source: LibriSpeech test-clean
+  metadata_key: librispeech_test_clean
+  source2: FLEURS zh
+  notes: |
+    Two benchmarks, both full test splits, decoded on a Modal L40S with the
+    transcribe.cpp default recipe (greedy + temperature fallback,
+    suppress_tokens, segment timestamps), batch 1.
+
+    **English — WER, LibriSpeech test-clean (2620 utterances).** Standard
+    Whisper/`EnglishTextNormalizer` scoring.
+
+    **Chinese — CER, FLEURS `cmn_hans_cn` test (945 utterances).** Breeze
+    emits **Traditional** Chinese while FLEURS references are **Simplified**,
+    so the CER reported here is computed after folding *both* hypothesis and
+    reference to Simplified with OpenCC (`t2s`) — otherwise the raw,
+    script-mismatched CER is ~35% and meaningless. FLEURS ships no Traditional
+    Mandarin split, which is why a script-normalized Simplified set is used.
+
+    Quantization is effectively free on both languages: every quant down to
+    Q4_K_M (1.0 GB) sits within run-to-run noise of the BF16 reference
+    (English 2.25-2.29%, Chinese 8.08-8.12%).
+
+  # Secondary per-quant metric → wer_fleurs_zh in the metadata block.
+  fleurs_zh:
+    bf16: 8.12
+    f16: 8.11
+    q8_0: 8.10
+    q6_k: 8.12
+    q5_k_m: 8.12
+    q4_k_m: 8.08
+
+quants:
+  - name: BF16
+    filename: Breeze-ASR-25-BF16.gguf
+    size: 3.10 GB
+    wer: 2.29%
+    wer2: 8.12%
+  - name: F16
+    filename: Breeze-ASR-25-F16.gguf
+    size: 3.11 GB
+    wer: 2.29%
+    wer2: 8.11%
+  - name: Q8_0
+    filename: Breeze-ASR-25-Q8_0.gguf
+    size: 1.67 GB
+    wer: 2.27%
+    wer2: 8.10%
+  - name: Q6_K
+    filename: Breeze-ASR-25-Q6_K.gguf
+    size: 1.30 GB
+    wer: 2.29%
+    wer2: 8.12%
+  - name: Q5_K_M
+    filename: Breeze-ASR-25-Q5_K_M.gguf
+    size: 1.16 GB
+    wer: 2.25%
+    wer2: 8.12%
+  - name: Q4_K_M
+    filename: Breeze-ASR-25-Q4_K_M.gguf
+    size: 1.00 GB
+    wer: 2.26%
+    wer2: 8.08%
