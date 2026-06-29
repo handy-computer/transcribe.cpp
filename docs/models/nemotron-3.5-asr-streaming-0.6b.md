@@ -74,15 +74,15 @@ context, NVIDIA's self-reported FLEURS en-US WER is **7.91%** (and an
 | --- | ---: | ---: |
 | Reference (NeMo) | 7.99 | 3.03 |
 | F32    | 7.97 | 3.04 |
-| F16    | 7.97 | 3.04 |
-| Q8_0   | 7.88 | 3.05 |
-| Q6_K   | 8.02 | 3.08 |
+| F16    | 7.97 | 3.03 |
+| Q8_0   | 7.88 | 3.06 |
+| Q6_K   | 8.02 | 3.07 |
 | Q5_K_M | 8.15 | 3.10 |
-| Q4_K_M | 8.49 | 3.30 |
+| Q4_K_M | 8.49 | 3.28 |
 
 The F32 reference dtype meets the measured-Oracle gate on both datasets.
 F16/Q8_0/Q6_K/Q5_K_M land inside the reference 95% CI; Q4_K_M carries the
-largest quantization loss (+0.50 on FLEURS, +0.27 on LibriSpeech) but is
+largest quantization loss (+0.50 on FLEURS, +0.25 on LibriSpeech) but is
 accepted for shipping.
 
 ## Quick Start

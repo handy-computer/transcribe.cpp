@@ -90,7 +90,7 @@ wer:
   metadata_key: fleurs_en
   source: FLEURS test en (en-US), offline att_context_size=[56, 13]
   notes: |
-    WER measured on FLEURS test en (647 utterances), greedy RNN-T, --language en-US, whisper-normalizer scoring; the per-quant column is FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports 7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32 3.04 / F16 3.04 / Q8_0 3.05 / Q6_K 3.08 / Q5_K_M 3.10 / Q4_K_M 3.30, against a 3.03% NeMo reference.
+    WER measured on FLEURS test en (647 utterances), greedy RNN-T, --language en-US, whisper-normalizer scoring; the per-quant column is FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports 7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32 3.04 / F16 3.03 / Q8_0 3.06 / Q6_K 3.07 / Q5_K_M 3.10 / Q4_K_M 3.28, against a 3.03% NeMo reference.
 
 quants:
   - name: F32
