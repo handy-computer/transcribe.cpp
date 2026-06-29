@@ -121,7 +121,7 @@ def resolve_dataset(repo: Path, spec: str) -> tuple[Path, str | None]:
     and the default BCP-47 language for the dataset.
 
     Supported specs:
-      fleurs:<code>        e.g. fleurs:es, fleurs:zh-tw
+      fleurs:<code>        e.g. fleurs:es, fleurs:zh
       librispeech:<split>  e.g. librispeech:test-clean
       eka-medical-asr:<code>
 

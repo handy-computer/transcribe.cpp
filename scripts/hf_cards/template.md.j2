@@ -39,10 +39,10 @@ on {{ validation.date }}.
 
 ## Downloads
 
-| Quantization | Download | Size | {{ metric|default("WER") }} ({{ wer.source }}) |
-| --- | --- | ---: | ---: |
+| Quantization | Download | Size | {{ metric|default("WER") }} ({{ wer.source }}){% if wer.source2 is defined %} | {{ metric2|default("CER") }} ({{ wer.source2 }}){% endif %} |
+| --- | --- | ---: | ---:{% if wer.source2 is defined %} | ---:{% endif %} |
 {%- for q in quants %}
-| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer }} |
+| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer }}{% if wer.source2 is defined %} | {{ q.wer2 }}{% endif %} |
 {%- endfor %}
 
 {{ wer.notes }}

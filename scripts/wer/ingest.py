@@ -18,7 +18,7 @@ Sources:
 Usage:
   uv run scripts/wer/ingest.py librispeech [--split test-clean]
   uv run scripts/wer/ingest.py fleurs --lang es [--split test]
-  uv run scripts/wer/ingest.py fleurs --lang zh-tw
+  uv run scripts/wer/ingest.py fleurs --lang zh
 
 Output paths (consistent across sources):
   samples/wer/<source>-<id>/<utt>.wav        16-bit PCM mono 16 kHz
@@ -49,7 +49,7 @@ import soundfile as sf
 #
 # FLEURS uses underscore-region codes. Region-ambiguous BCP-47 codes
 # (zh, no) pick a sensible default; explicit regional aliases live
-# alongside (zh-cn, zh-tw). FLEURS only ships one regional variant for
+# alongside (zh-cn). FLEURS only ships one regional variant for
 # most languages, so most entries are unambiguous.
 #
 # Full FLEURS coverage (102 languages). Add aliases here when a new
@@ -78,7 +78,9 @@ FLEURS_LANGS: dict[str, str] = {
     # Chinese / Cantonese
     "zh": "cmn_hans_cn",           # simplified Mandarin (default)
     "zh-cn": "cmn_hans_cn",        # simplified Mandarin (explicit)
-    "zh-tw": "cmn_hant_tw",        # traditional Mandarin
+    # FLEURS has no Traditional Mandarin, so zh-tw is intentionally unmapped.
+    # Traditional-script models are scored against cmn_hans_cn with both sides
+    # OpenCC-folded to one script; see docs/tools/wer.md.
     "yue": "yue_hant_hk",          # Cantonese (traditional)
     # Central Asian
     "az": "az_az", "kk": "kk_kz", "ky": "ky_kg", "mn": "mn_mn",

@@ -170,6 +170,11 @@ def detect_reference_dtype(safetensors_path: Path) -> tuple[str, LlamaFileType, 
         return ("F32", LlamaFileType.ALL_F32, GGMLQuantizationType.F32)
     if dtypes == {"F16"}:
         return ("F16", LlamaFileType.MOSTLY_F16, GGMLQuantizationType.F16)
+    if dtypes == {"BF16"}:
+        # Fine-tunes (e.g. MediaTek's Breeze-ASR-25) ship bfloat16. Preserve
+        # it as the reference dtype; reference_dtype_for() downgrades the
+        # conv stem to F16 (loader has no BF16 conv kernel).
+        return ("BF16", LlamaFileType.MOSTLY_BF16, GGMLQuantizationType.BF16)
     if dtypes <= {"F32", "F16"}:
         # Mixed F32 + F16 — promote to F32 reference. Upcast on load.
         return ("F32", LlamaFileType.ALL_F32, GGMLQuantizationType.F32)
@@ -460,6 +465,7 @@ VARIANT_DISPLAY_NAMES: dict[str, str] = {
     "whisper-large-v2":       "Whisper Large v2",
     "whisper-large-v3":       "Whisper Large v3",
     "whisper-large-v3-turbo": "Whisper Large v3 Turbo",
+    "breeze-asr-25":          "Breeze-ASR-25",
 }
 
 
@@ -523,6 +529,14 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
                 f"unknown whisper variant slug: {variant!r}; "
                 f"add it to VARIANT_DISPLAY_NAMES"
             )
+        # Stock Whisper variants are OpenAI's; community fine-tunes (e.g.
+        # MediaTek's Breeze-ASR-25) carry their own author/org, derived from
+        # the source repo so the metadata names the actual publisher.
+        org = repo_id.split("/")[0] if repo_id else "openai"
+        if org.lower() == "openai":
+            author, organization = "OpenAI", "openai"
+        else:
+            author, organization = org, org
         add_general_identity(
             writer,
             name=VARIANT_DISPLAY_NAMES[variant],
@@ -530,8 +544,8 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
             size_label=size_label,
             file_type=REFERENCE_FILE_TYPE,
             languages=hp["languages"],
-            author="OpenAI",
-            organization="openai",
+            author=author,
+            organization=organization,
             license="apache-2.0",
             license_name="Apache License 2.0",
             license_link="https://www.apache.org/licenses/LICENSE-2.0",
@@ -687,11 +701,12 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
             if src_name not in st_keys:
                 raise KeyError(f"safetensors missing tensor: {src_name!r}")
             t = st.get_tensor(src_name)
-            if t.dtype not in (torch.float32, torch.float16):
+            if t.dtype not in (torch.float32, torch.float16, torch.bfloat16):
                 raise ValueError(
-                    f"{src_name}: expected float32 or float16, got {t.dtype}"
+                    f"{src_name}: expected float32, float16, or bfloat16, "
+                    f"got {t.dtype}"
                 )
-            # encode_for_gguf wants fp32 input. F16 → F32 is exact, so we
+            # encode_for_gguf wants fp32 input. F16/BF16 → F32 is exact, so we
             # upcast on read and let encode_for_gguf re-pack to the
             # per-tensor target dtype (which respects REFERENCE_GGML_TYPE).
             arr = transform(t.float().numpy())
