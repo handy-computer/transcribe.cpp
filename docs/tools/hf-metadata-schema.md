@@ -43,7 +43,11 @@ transcribe_cpp:
 
 The `<dataset>` suffix is the spec's `wer.metadata_key` (default
 `librispeech_test_clean`); the `<machine>` suffix is the `perf:` rig key with `-`
-mapped to `_`. Standard HF keys (`license`, `language`, `pipeline_tag`,
+mapped to `_`. A spec can also publish secondary benchmarks inline: any dataset-named key
+under `wer:` whose value is a `{quant: wer%}` map (e.g. `librispeech_test_clean:`)
+is emitted as its own `wer_<dataset>` block alongside the headline one — so a
+model whose per-quant column is e.g. FLEURS can still expose LibriSpeech
+machine-readably. Add a dataset by adding a key; no wrapper needed. Standard HF keys (`license`, `language`, `pipeline_tag`,
 `base_model`, `tags`, …) are emitted alongside and unchanged by this block.
 
 ## Reading it

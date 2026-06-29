@@ -243,6 +243,21 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (const transcribe_status st = read_capability_kv(loader.gguf(), m->caps); st != TRANSCRIBE_OK) {
         return st;
     }
+
+    // Only -plus exposes word timestamps; lower the WORD family default to NONE
+    // when the GGUF does not advertise stt.capability.word_timestamps.
+    {
+        bool word_ts = false;
+        if (const transcribe_status st =
+                read_optional_bool_kv(loader.gguf(), "stt.capability.word_timestamps", "granite", false, word_ts);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (!word_ts) {
+            m->caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        }
+    }
+
     if (const transcribe_status st = read_languages_kv(loader.gguf(), *m); st != TRANSCRIBE_OK) {
         return st;
     }
@@ -512,9 +527,13 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
             instruction = std::string("can you translate the speech into ") + lang_name + "?";
-        } else if (params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD ||
-                   params->timestamps == TRANSCRIBE_TIMESTAMPS_AUTO) {
-            instruction = "transcribe the speech with timestamps in [SS:MS] format";
+        } else if (params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
+            // -plus only (1b/2b advertise NONE, gated out upstream). AUTO does
+            // NOT request timestamps. IBM's verbatim prompt; the model emits
+            // per-word "[T:N]" centisecond markers (parsed in run()).
+            instruction =
+                " Timestamps: Transcribe the speech. After each word, add a timestamp tag "
+                "showing the end time in centiseconds, e.g. hello [T:45] world [T:82]";
         }
     }
 
@@ -581,6 +600,117 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
         }
     }
     return TRANSCRIBE_OK;
+}
+
+// Parse -plus inline "<word> [T:N]" markers (N = preceding word's end in
+// centiseconds, mod 1000 / 10 s rollover) into structured words + one segment.
+// "_" items are silence placeholders (advance the clock, not emitted). Returns
+// the clean transcript; leaves the vectors empty on marker-free output.
+static std::string parse_granite_word_timestamps(const std::string &                             raw,
+                                                 int64_t                                         audio_ms,
+                                                 std::vector<transcribe_session::WordEntry> &    out_words,
+                                                 std::vector<transcribe_session::SegmentEntry> & out_segments) {
+    auto is_space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+    };
+    auto trim = [&](const std::string & s) -> std::string {
+        size_t a = 0, b = s.size();
+        while (a < b && is_space(s[a])) {
+            ++a;
+        }
+        while (b > a && is_space(s[b - 1])) {
+            --b;
+        }
+        return s.substr(a, b - a);
+    };
+
+    std::string pending;
+    int         rollover    = 0;   // count of 10 s (1000 cs) wraps seen so far
+    long        last_raw    = -1;  // previous raw centisecond value (pre-unwrap)
+    int64_t     prev_end_ms = 0;   // end of the previous marker (word or "_")
+
+    const size_t n = raw.size();
+    size_t       i = 0;
+    while (i < n) {
+        // Recognize a "[T:<digits>]" marker (tolerate spaces around the digits).
+        if (raw[i] == '[' && i + 2 < n && raw[i + 1] == 'T' && raw[i + 2] == ':') {
+            size_t j = i + 3;
+            while (j < n && is_space(raw[j])) {
+                ++j;
+            }
+            long val       = 0;
+            bool has_digit = false;
+            while (j < n && raw[j] >= '0' && raw[j] <= '9') {
+                val       = val * 10 + (raw[j] - '0');
+                has_digit = true;
+                ++j;
+            }
+            while (j < n && is_space(raw[j])) {
+                ++j;
+            }
+            if (has_digit && j < n && raw[j] == ']') {
+                ++j;  // consume ']'
+                if (last_raw >= 0 && val < last_raw) {
+                    ++rollover;
+                }
+                last_raw                 = val;
+                const int64_t     end_ms = (static_cast<int64_t>(val) + static_cast<int64_t>(rollover) * 1000) * 10;
+                const std::string w      = trim(pending);
+                if (!w.empty() && w != "_") {
+                    transcribe_session::WordEntry we;
+                    we.text        = w;
+                    we.t0_ms       = prev_end_ms;
+                    we.t1_ms       = end_ms;
+                    we.seg_index   = 0;
+                    we.first_token = 0;
+                    we.n_tokens    = 0;
+                    out_words.push_back(std::move(we));
+                }
+                prev_end_ms = end_ms;
+                pending.clear();
+                i = j;
+                continue;
+            }
+            // Not a well-formed marker — fall through and treat '[' as text.
+        }
+        pending.push_back(raw[i]);
+        ++i;
+    }
+
+    // A trailing word with no marker keeps its text but has no model end time;
+    // bound it by the audio duration.
+    if (const std::string w = trim(pending); !w.empty() && w != "_") {
+        transcribe_session::WordEntry we;
+        we.text        = w;
+        we.t0_ms       = prev_end_ms;
+        we.t1_ms       = audio_ms > prev_end_ms ? audio_ms : prev_end_ms;
+        we.seg_index   = 0;
+        we.first_token = 0;
+        we.n_tokens    = 0;
+        out_words.push_back(std::move(we));
+    }
+
+    std::string clean;
+    for (size_t k = 0; k < out_words.size(); ++k) {
+        if (k != 0) {
+            clean.push_back(' ');
+        }
+        clean += out_words[k].text;
+    }
+
+    if (!out_words.empty()) {
+        transcribe_session::SegmentEntry seg;
+        seg.text        = clean;
+        seg.t0_ms       = out_words.front().t0_ms;
+        seg.t1_ms       = out_words.back().t1_ms;
+        seg.first_word  = 0;
+        seg.n_words     = static_cast<int>(out_words.size());
+        seg.first_token = 0;
+        seg.n_tokens    = 0;
+        out_segments.push_back(std::move(seg));
+    }
+
+    return clean;
 }
 
 transcribe_status run(transcribe_session *          ctx_base,
@@ -820,9 +950,8 @@ transcribe_status run(transcribe_session *          ctx_base,
     //   granite-speech-4.1-2b-plus       : " can you transcribe the speech into a written format?"
     //                                       (leading space matters: BPE token IDs differ)
     //                                       PLUS a Granite-specific system prompt (see use_granite4_chat below).
-    //   word-timestamps task             : "transcribe the speech with timestamps in [SS:MS] format"
-    //                                       (only -plus emits the [SS:N] markers; 1b/2b
-    //                                       fall back to plain transcript)
+    //   word-timestamps task (-plus)     : IBM's verbatim timestamps prompt; the model emits
+    //                                       per-word "[T:N]" centisecond markers (1b/2b: NONE).
     //   translate task                   : "can you translate the speech into <Language>?"
     std::vector<int32_t> prefix_ids;
     std::vector<int32_t> suffix_ids;
@@ -1098,15 +1227,26 @@ transcribe_status run(transcribe_session *          ctx_base,
     }
 
     // Detokenize.
-    cc->full_text = cm->tok.decode(gen_ids.data(), static_cast<int>(gen_ids.size()));
+    const std::string raw_text = cm->tok.decode(gen_ids.data(), static_cast<int>(gen_ids.size()));
+    const int64_t audio_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
 
-    cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-    cc->has_result  = true;
-    transcribe_session::SegmentEntry seg{};
-    seg.text  = cc->full_text;
-    seg.t0_ms = 0;
-    seg.t1_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
-    cc->segments.push_back(std::move(seg));
+    cc->has_result = true;
+    // -plus word timestamps: parse "[T:N]" markers into words, else plain text.
+    if (params != nullptr && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
+        cc->full_text = parse_granite_word_timestamps(raw_text, audio_ms, cc->words, cc->segments);
+        if (!cc->words.empty()) {
+            cc->result_kind = TRANSCRIBE_TIMESTAMPS_WORD;
+        }
+    }
+    if (cc->words.empty()) {
+        cc->full_text   = raw_text;
+        cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        transcribe_session::SegmentEntry seg{};
+        seg.text  = cc->full_text;
+        seg.t0_ms = 0;
+        seg.t1_ms = audio_ms;
+        cc->segments.push_back(std::move(seg));
+    }
 
     // Output truncation (decode hit the generation budget / context ceiling
     // before EOS) is a hard status, not a silent success: surface it so the
@@ -1597,17 +1737,27 @@ transcribe_status run_batch(transcribe_session *          session,
         if (!gen.empty() && gen.back() == eos_id) {
             gen.pop_back();
         }
-        std::string                   transcript = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
+        const std::string transcript = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
+        const int64_t audio_ms = static_cast<int64_t>(n_samples[b]) * 1000 / static_cast<int64_t>(hp.fe_sample_rate);
         transcribe_session::ResultSet rs;
-        rs.full_text   = transcript;
-        rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-        rs.has_result  = true;
-        rs.status      = TRANSCRIBE_OK;
-        transcribe_session::SegmentEntry seg{};
-        seg.text  = transcript;
-        seg.t0_ms = 0;
-        seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000 / static_cast<int64_t>(hp.fe_sample_rate);
-        rs.segments.push_back(std::move(seg));
+        rs.has_result = true;
+        rs.status     = TRANSCRIBE_OK;
+        // Same as run(): parse -plus "[T:N]" word markers, else plain-text segment.
+        if (params != nullptr && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
+            rs.full_text = parse_granite_word_timestamps(transcript, audio_ms, rs.words, rs.segments);
+            if (!rs.words.empty()) {
+                rs.result_kind = TRANSCRIBE_TIMESTAMPS_WORD;
+            }
+        }
+        if (rs.words.empty()) {
+            rs.full_text   = transcript;
+            rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+            transcribe_session::SegmentEntry seg{};
+            seg.text  = transcript;
+            seg.t0_ms = 0;
+            seg.t1_ms = audio_ms;
+            rs.segments.push_back(std::move(seg));
+        }
         // Per-utterance truncation parity with single-shot run(): a row cut at
         // the generation budget / KV window before eos reports
         // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only

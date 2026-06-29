@@ -41,8 +41,9 @@ summary: |
   decoder) with two changes: the encoder concatenates mid-layer (idx 3) and
   final-layer hidden states (`cat_hidden_layers=[3]`, doubling the projector
   K/V input from 1024 to 2048), and the LM token embeddings are tied with
-  the lm_head. Takes a 16 kHz mono WAV and produces a transcript, optionally
-  interleaved with `[SS:N]` word-timestamp markers. Transcribes English,
+  the lm_head. Takes a 16 kHz mono WAV and produces a transcript, with
+  `--timestamps word` returning structured per-word timestamps (parsed from the
+  model's `[T:N]` centisecond markers). Transcribes English,
   French, German, Spanish, and Portuguese (no Japanese on this variant).
   This variant is transcription-only: unlike the base granite-speech-4.1-2b,
   it does not perform speech translation.
@@ -66,6 +67,7 @@ perf:
     metal: 11
     cpu: 5
   ryzen-4750u:
+    vulkan: 2.75
     cpu: 1.4
 
 wer:

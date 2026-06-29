@@ -50,7 +50,7 @@ capabilities:
   streaming: false
   translate: true
   lang_detect: false
-  timestamps: word  # none | segment | word | token
+  timestamps: none  # none | segment | word | token
 
 # Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
 # raw as rtf_<machine> in the metadata block.
@@ -62,6 +62,7 @@ perf:
     metal: 11
     cpu: 5
   ryzen-4750u:
+    vulkan: 2.95
     cpu: 1.6
 
 wer:
