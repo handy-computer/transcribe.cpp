@@ -12,9 +12,10 @@ final-layer hidden states (doubling the projector K/V input from 1024 to
 
 Offline multilingual speech-to-text with word-level timestamps. Covers
 English plus French, German, Spanish, and Portuguese (no Japanese on this
-variant). Takes a 16 kHz mono WAV and produces a transcript, optionally
-interleaved with `[SS:N]` word-timestamp markers (centiseconds since
-segment start).
+variant). Takes a 16 kHz mono WAV and produces a transcript; with
+`--timestamps word` it returns per-word start/end times. Internally the model
+emits `[T:N]` end-of-word centisecond markers; the runtime parses them into
+structured word timestamps and returns a clean transcript.
 
 This variant is transcription-only. Unlike the base
 [`granite-speech-4.1-2b`](granite-speech-4.1-2b.md), it does not perform
@@ -74,11 +75,20 @@ build/bin/transcribe-cli \
   samples/jfk.wav
 ```
 
-Output includes `[SS:N]` markers (centiseconds since segment start)
-interleaved with words:
+The runtime returns a clean transcript plus structured per-word start/end
+times. (Internally the model emits `[T:N]` markers giving each word's end time
+in centiseconds, modulo 1000 with a 10 s rollover that the runtime unwraps; the
+markers are stripped from the returned text.)
 
 ```
-[SS:23] And [SS:52] so [SS:92] my [SS:121] fellow [SS:154] Americans ...
+text: and so my fellow americans ask not what your country can do for you ask what you can do for your country
+words: 22
+  [   0.30 ->    0.57] and
+  [   0.57 ->    0.95] so
+  [   0.95 ->    1.25] my
+  [   1.25 ->    1.60] fellow
+  [   1.60 ->    2.13] americans
+  ...
 ```
 
 ## Performance
@@ -143,7 +153,7 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 | Transcribe (English)        | Yes    |
 | Transcribe (fr/de/es/pt)    | Yes    |
 | Translate                   | No (ASR-only variant; use the base [granite-speech-4.1-2b](granite-speech-4.1-2b.md) for translation) |
-| Word-level timestamps       | Yes (`--timestamps word`, `[SS:N]` markers) |
+| Word-level timestamps       | Yes (`--timestamps word`, structured per-word t0/t1 parsed from the model's `[T:N]` markers) |
 | Speaker diarization         | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
 
 ## Numerical Validation

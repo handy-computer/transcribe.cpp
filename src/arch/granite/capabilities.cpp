@@ -9,14 +9,9 @@ void apply_family_invariants(transcribe_model & model) {
 
     caps.native_sample_rate = 16000;
 
-    // Word timestamps are advertised on the -plus variant (the
-    // timestamps prompt template emits inline `<|n.nn|> word` markers).
-    // The 1b / 2b variants only emit transcript text. The runtime
-    // distinguishes via a per-variant capability KV (the converter sets
-    // stt.capability.word_timestamps appropriately); apply_family_invariants
-    // sets the default upper bound here so the loader's
-    // read_capability_kv step can lower it for variants that do not
-    // expose timestamps.
+    // Only -plus exposes word timestamps ("[T:N]" markers). WORD is the family
+    // upper bound; granite::load() lowers it to NONE per variant from the GGUF's
+    // stt.capability.word_timestamps.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_WORD;
 
     // Translation is advertised on the 1b / 2b variants via a separate

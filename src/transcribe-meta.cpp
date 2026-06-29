@@ -312,10 +312,9 @@ transcribe_status read_capability_kv(const gguf_context * gguf, transcribe_capab
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Timestamp granularity (max_timestamp_kind) is deliberately NOT read
-    // here: every family has a fixed, code-set ceiling and no converter
-    // emits stt.capability.timestamps. A KV-driven override (which could
-    // only lower the ceiling, never raise it) is a future change.
+    // max_timestamp_kind is NOT read here: converters emit timestamp-capability
+    // KVs (canary stt.capability.timestamps, granite stt.capability.word_timestamps),
+    // but the ceiling is variant-specific and applied in each family's load().
     if (auto st = read_capability_bool(gguf, "stt.capability.translate", caps.supports_translate);
         st != TRANSCRIBE_OK) {
         return st;

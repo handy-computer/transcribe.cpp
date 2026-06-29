@@ -22,7 +22,7 @@ perspective they are one family of GGUFs.
   LLM head, autoregressive; 1.31% BF16 / 1.32% Q8_0 WER on LibriSpeech
   test-clean. Improved punctuation and casing over 4.0-1b.
 - **Most features.** `granite-speech-4.1-2b-plus` — same 4.1 base plus
-  word-level timestamps (`[SS:N]` centisecond markers). Encoder
+  word-level timestamps (parsed from the model's `[T:N]` centisecond markers). Encoder
   concatenates a mid-layer and the final layer (`cat_hidden_layers=[3]`),
   doubling projector K/V width.
 - **Fastest, ASR-only.** `granite-speech-4.1-2b-nar` — non-autoregressive
@@ -101,8 +101,8 @@ Translation (`granite-4.0-1b-speech`, `granite-speech-4.1-2b`):
   from the audio. The `-plus` variant is ASR-only and does not translate.
 
 Plus only (`granite-speech-4.1-2b-plus`):
-- **Word-level timestamps** as `[SS:N]` centisecond markers interleaved
-  with words (`--timestamps word`).
+- **Word-level timestamps** via `--timestamps word` — structured per-word
+  start/end times, parsed from the model's `[T:N]` centisecond markers.
 
 NAR only (`granite-speech-4.1-2b-nar`):
 - **Single-pass non-autoregressive decode** — fastest of the four.
