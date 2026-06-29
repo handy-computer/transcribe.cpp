@@ -67,6 +67,7 @@ perf:
     metal: 11
     cpu: 5
   ryzen-4750u:
+    vulkan: 2.75
     cpu: 1.4
 
 wer:
