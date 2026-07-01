@@ -1,6 +1,8 @@
 # transcribe.cpp
 
-C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, with Metal, Vulkan, and CUDA backends for fast GPU inference.
+C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, with Metal, Vulkan, and CUDA backends for fast GPU inference plus a tinyBLAS-accelerated CPU path.
+
+16 model families and 60+ variants, streaming and batch. Every model we publish under [`handy-computer`](https://huggingface.co/handy-computer) is numerically verified and WER-tested against its reference implementation
 
 **Supported models:**
 
@@ -52,6 +54,8 @@ cmake --build build
 ```
 
 `libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
+
+tinyBLAS (Justine Tunney's `llamafile_sgemm` kernels) is on by default.
 
 To build the quantization tool:
 
@@ -107,6 +111,20 @@ Input must be 16 kHz mono WAV. Use `ffmpeg` or `sox` to convert other formats:
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
+
+## Bindings
+
+Official bindings wrap the C API for other languages:
+
+| Language | Path |
+| --- | --- |
+| Python | [bindings/python](bindings/python) |
+| TypeScript / JavaScript | [bindings/typescript](bindings/typescript) |
+| Rust | [bindings/rust/transcribe-cpp](bindings/rust/transcribe-cpp) |
+| Swift / ObjC | [bindings/swift](bindings/swift) |
+
+See [`docs/bindings.md`](docs/bindings.md) for how the bindings are generated
+and kept in sync with the header.
 
 ## Tests
 
@@ -168,6 +186,7 @@ src/arch/parakeet/         Parakeet family implementation
 src/arch/cohere/           Cohere Transcribe family implementation
 examples/cli/              CLI binary source
 tools/transcribe-quantize/ Quantization tool source
+bindings/                  Python, TypeScript, Rust, and Swift bindings
 docs/                      Porting and validation guidance
 scripts/                   Python converter + test tooling
 ggml/                      Vendored ggml (see ggml/UPSTREAM for pinned SHA)
