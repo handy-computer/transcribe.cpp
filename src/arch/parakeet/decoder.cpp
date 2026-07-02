@@ -119,7 +119,7 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w) {
 
     auto fail = [&]() -> bool {
         if (j.w_buf != nullptr) {
-            ggml_backend_buffer_free(j.w_buf);
+            safe_buffer_free(j.w_buf);
             j.w_buf = nullptr;
         }
         if (j.w_ctx != nullptr) {
@@ -127,7 +127,7 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w) {
             j.w_ctx = nullptr;
         }
         if (j.w_backend != nullptr) {
-            ggml_backend_free(j.w_backend);
+            safe_backend_free(j.w_backend);
             j.w_backend = nullptr;
         }
         j.g_enc_w  = nullptr;
@@ -210,7 +210,7 @@ bool build_pred_weights(HostPredictor & p) {
 
     auto fail = [&]() -> bool {
         if (p.lstm_w_buf != nullptr) {
-            ggml_backend_buffer_free(p.lstm_w_buf);
+            safe_buffer_free(p.lstm_w_buf);
             p.lstm_w_buf = nullptr;
         }
         if (p.lstm_w_ctx != nullptr) {
@@ -218,7 +218,7 @@ bool build_pred_weights(HostPredictor & p) {
             p.lstm_w_ctx = nullptr;
         }
         if (p.lstm_w_backend != nullptr) {
-            ggml_backend_free(p.lstm_w_backend);
+            safe_backend_free(p.lstm_w_backend);
             p.lstm_w_backend = nullptr;
         }
         for (auto & lh : p.lstm) {
@@ -301,7 +301,7 @@ struct JointGraph {
 
     ~JointGraph() {
         if (buf != nullptr) {
-            ggml_backend_buffer_free(buf);
+            safe_buffer_free(buf);
         }
         if (ctx != nullptr) {
             ggml_free(ctx);
@@ -328,7 +328,7 @@ bool build_joint_graph(JointGraph & g, const HostJoint & j, ggml_backend_t backe
 
     auto fail = [&]() -> bool {
         if (g.buf != nullptr) {
-            ggml_backend_buffer_free(g.buf);
+            safe_buffer_free(g.buf);
             g.buf = nullptr;
         }
         if (g.ctx != nullptr) {
@@ -435,14 +435,14 @@ struct PredGraph {
 
     ~PredGraph() {
         if (buf != nullptr) {
-            ggml_backend_buffer_free(buf);
+            safe_buffer_free(buf);
         }
         if (ctx != nullptr) {
             ggml_free(ctx);
         }
-        free_cpu_threadpool(backend, tp);  // before ggml_backend_free(backend)
+        free_cpu_threadpool(backend, tp);  // before safe_backend_free(backend)
         if (backend != nullptr) {
-            ggml_backend_free(backend);
+            safe_backend_free(backend);
         }
     }
 
@@ -465,7 +465,7 @@ bool build_pred_graph(PredGraph & g, const HostPredictor & p, int n_threads) {
 
     auto fail = [&]() -> bool {
         if (g.buf != nullptr) {
-            ggml_backend_buffer_free(g.buf);
+            safe_buffer_free(g.buf);
             g.buf = nullptr;
         }
         if (g.ctx != nullptr) {
@@ -475,7 +475,7 @@ bool build_pred_graph(PredGraph & g, const HostPredictor & p, int n_threads) {
         free_cpu_threadpool(g.backend, g.tp);
         g.tp = nullptr;  // before freeing backend
         if (g.backend != nullptr) {
-            ggml_backend_free(g.backend);
+            safe_backend_free(g.backend);
             g.backend = nullptr;
         }
         g.x     = nullptr;
@@ -585,25 +585,25 @@ bool build_pred_graph(PredGraph & g, const HostPredictor & p, int n_threads) {
 
 HostJoint::~HostJoint() {
     if (w_buf != nullptr) {
-        ggml_backend_buffer_free(w_buf);
+        safe_buffer_free(w_buf);
     }
     if (w_ctx != nullptr) {
         ggml_free(w_ctx);
     }
     if (w_backend != nullptr) {
-        ggml_backend_free(w_backend);
+        safe_backend_free(w_backend);
     }
 }
 
 HostPredictor::~HostPredictor() {
     if (lstm_w_buf != nullptr) {
-        ggml_backend_buffer_free(lstm_w_buf);
+        safe_buffer_free(lstm_w_buf);
     }
     if (lstm_w_ctx != nullptr) {
         ggml_free(lstm_w_ctx);
     }
     if (lstm_w_backend != nullptr) {
-        ggml_backend_free(lstm_w_backend);
+        safe_backend_free(lstm_w_backend);
     }
 }
 
@@ -928,14 +928,14 @@ bool precompute_enc_proj_ggml(const HostJoint &    j,
     ggml_cgraph * graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, res);
     if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
-        ggml_backend_buffer_free(buf);
+        safe_buffer_free(buf);
         ggml_free(ctx);
         return false;
     }
 
     ggml_backend_tensor_get(res, out.data(), 0, static_cast<size_t>(T) * static_cast<size_t>(joint_h) * sizeof(float));
 
-    ggml_backend_buffer_free(buf);
+    safe_buffer_free(buf);
     ggml_free(ctx);
     return true;
 }

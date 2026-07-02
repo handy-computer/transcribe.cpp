@@ -14,14 +14,43 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <ios>
+#include <stdexcept>
 #include <vector>
 
 namespace transcribe::load_common {
 
 namespace {
+
+// Device init can throw from GPU drivers. Treat that like nullptr so AUTO can
+// keep probing and explicit backend requests fail cleanly.
+//
+// Test hook: TRANSCRIBE_TEST_DEV_INIT_THROW is inert when unset or empty,
+// "*" matches every device, otherwise it matches by device-name substring.
+ggml_backend_t dev_init_checked(ggml_backend_dev_t dev, const char * error_tag) {
+    const char * name = "?";
+    try {
+        if (const char * n = ggml_backend_dev_name(dev); n != nullptr) {
+            name = n;
+        }
+        if (const char * match = std::getenv("TRANSCRIBE_TEST_DEV_INIT_THROW"); match != nullptr && match[0] != '\0') {
+            if (std::strcmp(match, "*") == 0 || std::strstr(name, match) != nullptr) {
+                throw std::runtime_error("TRANSCRIBE_TEST_DEV_INIT_THROW fault injection");
+            }
+        }
+        return ggml_backend_dev_init(dev, nullptr);
+    } catch (const std::exception & e) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: device \"%s\" init threw: %s - skipping it", error_tag, name, e.what());
+        return nullptr;
+    } catch (...) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: device \"%s\" init threw an unknown exception - skipping it", error_tag,
+                name);
+        return nullptr;
+    }
+}
 
 // Try to discover and initialize the first device whose classified
 // BackendKind matches `wanted`. On success returns the initialized
@@ -51,7 +80,7 @@ ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, Backend
             continue;
         }
 
-        ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
+        ggml_backend_t be = dev_init_checked(dev, error_tag);
         if (be == nullptr) {
             continue;
         }
@@ -77,7 +106,7 @@ void append_accel_backends(std::vector<ggml_backend_t> & out, const char * error
         if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_ACCEL) {
             continue;
         }
-        ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
+        ggml_backend_t be = dev_init_checked(dev, error_tag);
         if (be == nullptr) {
             continue;
         }
@@ -161,7 +190,7 @@ transcribe_status init_backends_explicit_index(transcribe_backend_request reques
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    ggml_backend_t gpu_be = ggml_backend_dev_init(dev, nullptr);
+    ggml_backend_t gpu_be = dev_init_checked(dev, error_tag);
     if (gpu_be == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to initialize gpu_device %d (%s)", error_tag, dev_index,
                 ggml_backend_dev_name(dev));
@@ -457,7 +486,7 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(const BackendPlan &         
         // Partial success: the ctx + buffer are already allocated but
         // unused. Free them so the caller's outparams stay nullptr,
         // matching the "do nothing" contract.
-        ggml_backend_buffer_free(buffer);
+        safe_buffer_free(buffer);
         ggml_free(ctx);
         return TRANSCRIBE_OK;
     }

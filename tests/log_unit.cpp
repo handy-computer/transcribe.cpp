@@ -23,6 +23,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -57,6 +58,29 @@ void test_callback_receives_log_msg() {
     CHECK(rec.size() == 1);
     CHECK(rec[0].first == TRANSCRIBE_LOG_LEVEL_WARN);
     CHECK(rec[0].second == "answer=42");
+}
+
+void throwing_cb(transcribe_log_level, const char *, void * userdata) {
+    // Count the invocation before throwing so the test can tell "contained"
+    // from "never called".
+    ++(*static_cast<int *>(userdata));
+    throw std::runtime_error("host log callback bug");
+}
+
+void test_throwing_callback_is_contained() {
+    // If containment is broken, the throw escapes log_msg and the test dies.
+    int calls = 0;
+    transcribe_log_set(throwing_cb, &calls);
+    transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "emitted into a throwing callback");
+    CHECK(calls == 1);
+
+    // The sink must remain functional afterwards for a well-behaved
+    // callback.
+    Record rec;
+    transcribe_log_set(recording_cb, &rec);
+    transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "recovered");
+    CHECK(rec.size() == 1);
+    CHECK(rec[0].second == "recovered");
 }
 
 void test_null_disables_then_reinstall_restores() {
@@ -164,6 +188,7 @@ void test_ggml_bridge_honors_disable() {
 
 int main() {
     test_callback_receives_log_msg();
+    test_throwing_callback_is_contained();
     test_null_disables_then_reinstall_restores();
     test_ggml_bridge_installed_and_maps_levels();
     test_init_backends_emits_device_summary();

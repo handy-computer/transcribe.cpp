@@ -59,7 +59,7 @@ ParakeetSession::~ParakeetSession() {
     // Tear down per-call compute state before the model's backend plan
     // (which outlives the context): scheduler, then context.
     if (sched != nullptr) {
-        ggml_backend_sched_free(sched);
+        safe_sched_free(sched);
         sched = nullptr;
     }
     if (compute_ctx != nullptr) {
@@ -71,7 +71,7 @@ ParakeetSession::~ParakeetSession() {
     // Streaming cache tensors live in their own ggml_context + backend
     // buffer. Free buffer first (may hold a backend ref), then the ctx.
     if (stream_caches.buffer != nullptr) {
-        ggml_backend_buffer_free(stream_caches.buffer);
+        safe_buffer_free(stream_caches.buffer);
         stream_caches.buffer = nullptr;
     }
     if (stream_caches.ctx != nullptr) {
@@ -80,7 +80,7 @@ ParakeetSession::~ParakeetSession() {
     }
     // Rel-pos projection memo (own ctx + buffer; geometry-keyed).
     if (stream_caches.pos_proj_buf != nullptr) {
-        ggml_backend_buffer_free(stream_caches.pos_proj_buf);
+        safe_buffer_free(stream_caches.pos_proj_buf);
         stream_caches.pos_proj_buf = nullptr;
     }
     if (stream_caches.pos_proj_ctx != nullptr) {
@@ -105,7 +105,7 @@ ParakeetModel::~ParakeetModel() {
         bn_fused_ctx = nullptr;
     }
     if (bn_fused_buffer != nullptr) {
-        ggml_backend_buffer_free(bn_fused_buffer);
+        safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
     // CPU conv_pw F32 promotion ctx + buffer (non-null only when
@@ -115,7 +115,7 @@ ParakeetModel::~ParakeetModel() {
         conv_pw_f32_ctx = nullptr;
     }
     if (conv_pw_f32_buffer != nullptr) {
-        ggml_backend_buffer_free(conv_pw_f32_buffer);
+        safe_buffer_free(conv_pw_f32_buffer);
         conv_pw_f32_buffer = nullptr;
     }
     if (ctx_meta != nullptr) {
@@ -123,11 +123,11 @@ ParakeetModel::~ParakeetModel() {
         ctx_meta = nullptr;
     }
     if (backend_buffer != nullptr) {
-        ggml_backend_buffer_free(backend_buffer);
+        safe_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
-        ggml_backend_free(*it);
+        safe_backend_free(*it);
     }
     plan.scheduler_list.clear();
     plan.primary      = nullptr;
@@ -1645,7 +1645,7 @@ transcribe_status ensure_pos_proj_cache(ParakeetSession * pc, ParakeetModel * pm
 
     auto & sc = pc->stream_caches;
     if (sc.pos_proj_buf != nullptr) {
-        ggml_backend_buffer_free(sc.pos_proj_buf);
+        safe_buffer_free(sc.pos_proj_buf);
         sc.pos_proj_buf = nullptr;
     }
     if (sc.pos_proj_ctx != nullptr) {

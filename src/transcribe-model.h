@@ -22,6 +22,10 @@
 namespace transcribe {
 struct Arch;
 class Tokenizer;
+
+// Transparent comparator keeps transcribe_model_meta_val_str allocation-free.
+// Loader and model must use the same map type for assignment.
+using MetaMap = std::map<std::string, std::string, std::less<>>;
 }  // namespace transcribe
 
 // Forward declaration for the resolved primary backend handle stored below.
@@ -48,7 +52,7 @@ struct transcribe_model {
     // outlives that call, so no family handler has to populate this. Exposed
     // read-only via transcribe_model_meta_val_str(); this mirrors llama.cpp's
     // single generic metadata accessor rather than a typed accessor per field.
-    std::map<std::string, std::string> meta;
+    transcribe::MetaMap meta;
 
     // Runtime backend currently bound to this model. Empty string means
     // "no backend bound" (both pre-binding and the model == NULL case

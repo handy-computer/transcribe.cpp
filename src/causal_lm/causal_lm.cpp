@@ -5,6 +5,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "transcribe-backend.h"
 #include "transcribe-log.h"
 #include "transcribe-session.h"
 
@@ -42,7 +43,7 @@ ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * 
 
 void KvCache::free() {
     if (buffer != nullptr) {
-        ggml_backend_buffer_free(buffer);
+        safe_buffer_free(buffer);
         buffer = nullptr;
     }
     if (ctx != nullptr) {
@@ -746,7 +747,7 @@ ggml_tensor * block_prefill_batched(ggml_context *      ctx,
 
 void PackedGateUpHandles::free() {
     if (buffer != nullptr) {
-        ggml_backend_buffer_free(buffer);
+        safe_buffer_free(buffer);
         buffer = nullptr;
     }
     if (ctx != nullptr) {

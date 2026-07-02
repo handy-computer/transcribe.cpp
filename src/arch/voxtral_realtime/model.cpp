@@ -54,7 +54,7 @@ Session::~Session() {
     enc_kv.free();
     ada_scale.clear();
     if (ada_buffer != nullptr) {
-        ggml_backend_buffer_free(ada_buffer);
+        safe_buffer_free(ada_buffer);
         ada_buffer = nullptr;
     }
     if (ada_ctx != nullptr) {
@@ -62,7 +62,7 @@ Session::~Session() {
         ada_ctx = nullptr;
     }
     if (sched != nullptr) {
-        ggml_backend_sched_free(sched);
+        safe_sched_free(sched);
         sched = nullptr;
     }
     if (compute_ctx != nullptr) {
@@ -77,12 +77,12 @@ Model::~Model() {
         ctx_meta = nullptr;
     }
     if (backend_buffer != nullptr) {
-        ggml_backend_buffer_free(backend_buffer);
+        safe_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
     packed_gate_up.free();
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
-        ggml_backend_free(*it);
+        safe_backend_free(*it);
     }
     plan.scheduler_list.clear();
     plan.primary      = nullptr;
@@ -365,7 +365,7 @@ transcribe_status compute_ada_scales(Session * cc, Model * cm, int num_delay) {
 
     // Persistent ada_scale_all.
     if (cc->ada_buffer != nullptr) {
-        ggml_backend_buffer_free(cc->ada_buffer);
+        safe_buffer_free(cc->ada_buffer);
         cc->ada_buffer = nullptr;
     }
     if (cc->ada_ctx != nullptr) {

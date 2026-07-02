@@ -6,7 +6,11 @@
 
 #include "transcribe-backend.h"
 
+#include "transcribe-log.h"
+
+#include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 
 namespace transcribe {
 
@@ -80,6 +84,48 @@ BackendKind classify_device(ggml_backend_dev_t dev) {
     ggml_backend_reg_t reg      = ggml_backend_dev_backend_reg(dev);
     const char *       reg_name = (reg != nullptr) ? ggml_backend_reg_name(reg) : nullptr;
     return classify_backend_type(dev_type, reg_name);
+}
+
+namespace {
+
+// Shared body for safe_* teardown wrappers. The test hook fires after the
+// real free; present-but-empty is inert.
+template <typename Fn> void contained_free(const char * what, Fn && do_free) noexcept {
+    try {
+        do_free();
+        if (const char * hook = std::getenv("TRANSCRIBE_TEST_TEARDOWN_THROW"); hook != nullptr && hook[0] != '\0') {
+            throw std::runtime_error("TRANSCRIBE_TEST_TEARDOWN_THROW fault injection");
+        }
+    } catch (const std::exception & e) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s threw during teardown (contained; resource may leak): %s", what,
+                e.what());
+    } catch (...) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "%s threw an unknown exception during teardown (contained; resource may leak)", what);
+    }
+}
+
+}  // namespace
+
+void safe_backend_free(ggml_backend_t backend) noexcept {
+    if (backend == nullptr) {
+        return;
+    }
+    contained_free("ggml_backend_free", [&] { ggml_backend_free(backend); });
+}
+
+void safe_buffer_free(ggml_backend_buffer_t buffer) noexcept {
+    if (buffer == nullptr) {
+        return;
+    }
+    contained_free("ggml_backend_buffer_free", [&] { ggml_backend_buffer_free(buffer); });
+}
+
+void safe_sched_free(ggml_backend_sched_t sched) noexcept {
+    if (sched == nullptr) {
+        return;
+    }
+    contained_free("ggml_backend_sched_free", [&] { ggml_backend_sched_free(sched); });
 }
 
 }  // namespace transcribe

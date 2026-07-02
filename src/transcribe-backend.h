@@ -76,4 +76,14 @@ struct BackendPlan {
     std::vector<ggml_backend_t> scheduler_list;
 };
 
+// No-throw wrappers for ggml backend teardown. Family destructors are
+// implicitly noexcept, so raw backend frees must not appear in library code;
+// tests/lint_teardown.cmake enforces this. NULL is a no-op.
+//
+// Test hook: non-empty TRANSCRIBE_TEST_TEARDOWN_THROW injects an internal
+// throw after the real free, proving containment without leaking the handle.
+void safe_backend_free(ggml_backend_t backend) noexcept;
+void safe_buffer_free(ggml_backend_buffer_t buffer) noexcept;
+void safe_sched_free(ggml_backend_sched_t sched) noexcept;
+
 }  // namespace transcribe
