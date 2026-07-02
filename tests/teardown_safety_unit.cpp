@@ -65,8 +65,12 @@ void test_wrappers_contain_injected_throw() {
     g_log.clear();
     set_env("TRANSCRIBE_TEST_TEARDOWN_THROW", "1");
     // If a wrapper leaks the injected throw, this noexcept call terminates.
-    [&]() noexcept { transcribe::safe_buffer_free(buf); }();
-    [&]() noexcept { transcribe::safe_backend_free(be); }();
+    [&]() noexcept {
+        transcribe::safe_buffer_free(buf);
+    }();
+    [&]() noexcept {
+        transcribe::safe_backend_free(be);
+    }();
     unset_env("TRANSCRIBE_TEST_TEARDOWN_THROW");
     // The warning proves the hook fired and was contained.
     CHECK(log_contains("fault injection"));
@@ -91,7 +95,9 @@ void test_empty_hook_value_is_inert() {
     CHECK(be != nullptr);
     g_log.clear();
     set_env("TRANSCRIBE_TEST_TEARDOWN_THROW", "");
-    [&]() noexcept { transcribe::safe_backend_free(be); }();
+    [&]() noexcept {
+        transcribe::safe_backend_free(be);
+    }();
     unset_env("TRANSCRIBE_TEST_TEARDOWN_THROW");
     CHECK(!log_contains("fault injection"));
 }
