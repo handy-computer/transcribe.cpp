@@ -52,6 +52,12 @@
  *   releases. Consumers should rebuild against matching headers and
  *   should not assume any layout, enum value, or symbol set is frozen.
  *
+ * Exception safety (C ABI):
+ * - No C++ exception escapes a public entry point. Allocation failure maps
+ *   to TRANSCRIBE_ERR_OOM, backend/driver failure to TRANSCRIBE_ERR_BACKEND,
+ *   and free/teardown functions never fail. The log callback receives
+ *   exception detail when available.
+ *
  * Params (size-aware structs):
  * - Every caller-owned public struct crossing the ABI carries `struct_size`
  *   as field 0, both for inputs (params, family extensions) and outputs
@@ -406,6 +412,10 @@ typedef void (*transcribe_log_callback)(transcribe_log_level level, const char *
  *                         the transcribe_backend_* device accessors.
  *   cb == NULL            logging explicitly disabled: library and ggml
  *                         messages are dropped, nothing goes to stderr.
+ *
+ * The callback must not throw. If it does anyway, the exception is contained
+ * at the emission site, the message is dropped, and a note is written to
+ * stderr.
  *
  * Call once at process startup (see the threading contract above).
  */
@@ -1433,6 +1443,10 @@ TRANSCRIBE_API const struct transcribe_model * transcribe_get_model(const struct
  * On success, results are populated on the session and may be read via
  * the accessors below. Calling transcribe_run() again replaces the
  * previous result on the same session.
+ *
+ * TRANSCRIBE_ERR_BACKEND from this function (and batch/streaming run calls)
+ * is recoverable in-process: free the session and model, reload with
+ * transcribe_model_load_params::backend = TRANSCRIBE_BACKEND_CPU, and retry.
  */
 TRANSCRIBE_API transcribe_status transcribe_run(struct transcribe_session *          session,
                                                 const float *                        pcm,

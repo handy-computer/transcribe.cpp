@@ -61,7 +61,7 @@ CanaryQwenSession::~CanaryQwenSession() {
     kv_cache.free();
     kv_cache_batch.free();
     if (sched != nullptr) {
-        ggml_backend_sched_free(sched);
+        safe_sched_free(sched);
         sched = nullptr;
     }
     if (compute_ctx != nullptr) {
@@ -76,11 +76,11 @@ CanaryQwenModel::~CanaryQwenModel() {
         ctx_meta = nullptr;
     }
     if (backend_buffer != nullptr) {
-        ggml_backend_buffer_free(backend_buffer);
+        safe_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
     if (bn_fused_buffer != nullptr) {
-        ggml_backend_buffer_free(bn_fused_buffer);
+        safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
     if (bn_fused_ctx != nullptr) {
@@ -88,7 +88,7 @@ CanaryQwenModel::~CanaryQwenModel() {
         bn_fused_ctx = nullptr;
     }
     if (conv_pw_f32_buffer != nullptr) {
-        ggml_backend_buffer_free(conv_pw_f32_buffer);
+        safe_buffer_free(conv_pw_f32_buffer);
         conv_pw_f32_buffer = nullptr;
     }
     if (conv_pw_f32_ctx != nullptr) {
@@ -96,7 +96,7 @@ CanaryQwenModel::~CanaryQwenModel() {
         conv_pw_f32_ctx = nullptr;
     }
     if (linear_f32_buffer != nullptr) {
-        ggml_backend_buffer_free(linear_f32_buffer);
+        safe_buffer_free(linear_f32_buffer);
         linear_f32_buffer = nullptr;
     }
     if (linear_f32_ctx != nullptr) {
@@ -105,7 +105,7 @@ CanaryQwenModel::~CanaryQwenModel() {
     }
     packed_gate_up.free();
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
-        ggml_backend_free(*it);
+        safe_backend_free(*it);
     }
     plan.scheduler_list.clear();
     plan.primary      = nullptr;
@@ -357,7 +357,7 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
     const auto * f16_traits = ggml_get_type_traits(GGML_TYPE_F16);
     if (f16_traits == nullptr || f16_traits->to_float == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "canary_qwen: no f16 to_float trait — skipping conv promotion");
-        ggml_backend_buffer_free(m.conv_pw_f32_buffer);
+        safe_buffer_free(m.conv_pw_f32_buffer);
         m.conv_pw_f32_buffer = nullptr;
         ggml_free(m.conv_pw_f32_ctx);
         m.conv_pw_f32_ctx = nullptr;
@@ -483,7 +483,7 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
     const auto * bf16_traits = ggml_get_type_traits(GGML_TYPE_BF16);
     if (bf16_traits == nullptr || bf16_traits->to_float == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "canary_qwen: no bf16 to_float trait — skipping linear promotion");
-        ggml_backend_buffer_free(m.linear_f32_buffer);
+        safe_buffer_free(m.linear_f32_buffer);
         m.linear_f32_buffer = nullptr;
         ggml_free(m.linear_f32_ctx);
         m.linear_f32_ctx = nullptr;

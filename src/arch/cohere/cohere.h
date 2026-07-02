@@ -78,7 +78,7 @@ struct CohereKvCache {
 
     void free() {
         if (buffer != nullptr) {
-            ggml_backend_buffer_free(buffer);
+            safe_buffer_free(buffer);
             buffer = nullptr;
         }
         if (ctx != nullptr) {

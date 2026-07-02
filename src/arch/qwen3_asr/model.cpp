@@ -44,7 +44,7 @@ QwenAsrSession::~QwenAsrSession() {
     kv_cache.free();
     kv_cache_batch.free();
     if (sched != nullptr) {
-        ggml_backend_sched_free(sched);
+        safe_sched_free(sched);
         sched = nullptr;
     }
     if (compute_ctx != nullptr) {
@@ -59,12 +59,12 @@ QwenAsrModel::~QwenAsrModel() {
         ctx_meta = nullptr;
     }
     if (backend_buffer != nullptr) {
-        ggml_backend_buffer_free(backend_buffer);
+        safe_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
     packed_gate_up.free();
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
-        ggml_backend_free(*it);
+        safe_backend_free(*it);
     }
     plan.scheduler_list.clear();
     plan.primary      = nullptr;

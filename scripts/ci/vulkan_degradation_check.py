@@ -15,7 +15,10 @@ Tiers (one invocation per machine state):
 
   loader      A loader (+ driver, e.g. lavapipe or a real GPU) is present.
               The SAME artifacts must discover a Vulkan device. With
-              --model: a real transcription runs with backend="vulkan".
+              --model: a real transcription runs with backend="vulkan";
+              then, with TRANSCRIBE_TEST_DEV_INIT_THROW=* injecting a
+              device-init throw, explicit vulkan fails cleanly and default
+              backend falls back to CPU.
 
 Used by: provider-dl-vulkan (python-bindings.yml, hand-assembled provider
 dir), clean-install (python-wheels.yml, the shipped wheel — ships in the
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import os
 import sys
 import wave
 
@@ -97,6 +101,26 @@ def main() -> int:
             text = transcribe(t, args.model, args.audio, backend="vulkan")
             print("text (vulkan):", text.strip())
             assert "country" in text.lower(), text
+
+            # Same shipped artifact, injected device-init failure.
+            os.environ["TRANSCRIBE_TEST_DEV_INIT_THROW"] = "*"
+            try:
+                try:
+                    t.Model(args.model, backend="vulkan")
+                except t.TranscribeError as exc:
+                    print("throwing vulkan device correctly rejected:", exc)
+                else:
+                    raise AssertionError(
+                        "backend='vulkan' must fail when device init throws")
+                with t.Model(args.model) as m:
+                    assert m.backend == "cpu", m.backend
+                    with m.session() as s:
+                        text = s.run(load_pcm(args.audio)).text
+                print("text (throwing devices, default backend):",
+                      text.strip())
+                assert "country" in text.lower(), text
+            finally:
+                del os.environ["TRANSCRIBE_TEST_DEV_INIT_THROW"]
         print("ok: loader present — the same artifacts discovered Vulkan")
     return 0
 

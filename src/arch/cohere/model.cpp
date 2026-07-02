@@ -49,7 +49,7 @@ static_assert(std::is_base_of_v<transcribe_session, CohereSession>);
 CohereSession::~CohereSession() {
     kv_cache.free();
     if (sched != nullptr) {
-        ggml_backend_sched_free(sched);
+        safe_sched_free(sched);
         sched = nullptr;
     }
     if (compute_ctx != nullptr) {
@@ -193,7 +193,7 @@ CohereModel::~CohereModel() {
         bn_fused_ctx = nullptr;
     }
     if (bn_fused_buffer != nullptr) {
-        ggml_backend_buffer_free(bn_fused_buffer);
+        safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
     if (conv_pw_f32_ctx != nullptr) {
@@ -201,7 +201,7 @@ CohereModel::~CohereModel() {
         conv_pw_f32_ctx = nullptr;
     }
     if (conv_pw_f32_buffer != nullptr) {
-        ggml_backend_buffer_free(conv_pw_f32_buffer);
+        safe_buffer_free(conv_pw_f32_buffer);
         conv_pw_f32_buffer = nullptr;
     }
     if (ctx_meta != nullptr) {
@@ -209,11 +209,11 @@ CohereModel::~CohereModel() {
         ctx_meta = nullptr;
     }
     if (backend_buffer != nullptr) {
-        ggml_backend_buffer_free(backend_buffer);
+        safe_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
-        ggml_backend_free(*it);
+        safe_backend_free(*it);
     }
     plan.scheduler_list.clear();
     plan.primary      = nullptr;

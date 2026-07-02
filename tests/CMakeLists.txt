@@ -249,6 +249,50 @@ add_test(NAME transcribe_thread_default_unit
     COMMAND transcribe_thread_default_unit)
 
 # -----------------------------------------------------------------------------
+# Device-init exception containment
+# -----------------------------------------------------------------------------
+#
+# Pins throw -> skip -> CPU-fallback behavior in backend probing.
+
+add_executable(transcribe_backend_init_throw_unit
+    backend_init_throw_unit.cpp)
+
+target_link_libraries(transcribe_backend_init_throw_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_init_throw_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_init_throw_unit)
+
+add_test(NAME transcribe_backend_init_throw_unit
+    COMMAND transcribe_backend_init_throw_unit)
+
+# -----------------------------------------------------------------------------
+# No-throw teardown wrappers (safe_backend_free & co.)
+# -----------------------------------------------------------------------------
+#
+# The unit test proves safe_* contains injected throws under noexcept callers.
+# The lint keeps raw ggml backend teardown calls out of src/**.
+
+add_executable(transcribe_teardown_safety_unit
+    teardown_safety_unit.cpp)
+
+target_link_libraries(transcribe_teardown_safety_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_teardown_safety_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_teardown_safety_unit)
+
+add_test(NAME transcribe_teardown_safety_unit
+    COMMAND transcribe_teardown_safety_unit)
+
+add_test(NAME transcribe_lint_teardown
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC_DIR=${CMAKE_SOURCE_DIR}/src
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/lint_teardown.cmake)
+
+# -----------------------------------------------------------------------------
 # Threadpool barrier under CPU oversubscription (regression for the MSVC
 # non-OpenMP ggml_barrier livelock; see ggml-cpu.c ggml_thread_yield)
 # -----------------------------------------------------------------------------

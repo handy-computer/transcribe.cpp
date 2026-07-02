@@ -41,7 +41,7 @@ GraniteSession::~GraniteSession() {
     kv.free();
     kv_batch.free();
     if (sched != nullptr) {
-        ggml_backend_sched_free(sched);
+        safe_sched_free(sched);
         sched = nullptr;
     }
     if (compute_ctx != nullptr) {
@@ -56,7 +56,7 @@ GraniteModel::~GraniteModel() {
         bn_fused_ctx = nullptr;
     }
     if (bn_fused_buffer != nullptr) {
-        ggml_backend_buffer_free(bn_fused_buffer);
+        safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
     packed_gate_up.free();
@@ -65,11 +65,11 @@ GraniteModel::~GraniteModel() {
         ctx_meta = nullptr;
     }
     if (backend_buffer != nullptr) {
-        ggml_backend_buffer_free(backend_buffer);
+        safe_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
-        ggml_backend_free(*it);
+        safe_backend_free(*it);
     }
     plan.scheduler_list.clear();
     plan.primary      = nullptr;

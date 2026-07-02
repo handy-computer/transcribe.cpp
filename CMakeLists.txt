@@ -387,6 +387,15 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
     set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 endif()
 
+# MSVC: use /EHs so exceptions thrown by ggml's C-ABI frames unwind to
+# transcribe.cpp's public-entry guards. Apply before ggml and src are added.
+if(MSVC)
+    string(REPLACE "/EHsc" "/EHs" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    if(NOT CMAKE_CXX_FLAGS MATCHES "/EHs")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHs")
+    endif()
+endif()
+
 # ggml's CMake declares its own warning flags; let it.
 add_subdirectory(ggml)
 
