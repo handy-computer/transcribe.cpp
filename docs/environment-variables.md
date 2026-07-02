@@ -15,6 +15,13 @@ copies and writes raw activations to disk, so it carries I/O cost and a
 data-leak surface. Leave it unset in production unless you are deliberately
 collecting dumps.
 
+The two `TRANSCRIBE_TEST_*_THROW` fault-injection hooks also ship in release
+binaries on purpose: wheel clean-install CI proves exception containment
+against the exact artifact users install (see `AGENTS.md`, "C ABI Exception
+Discipline"). Unlike the boolean convention above, **any** non-empty value
+arms them (including `0`); unset or empty is inert. Leave them unset outside
+of tests.
+
 | Variable | Effect |
 | --- | --- |
 | `TRANSCRIBE_NO_FLASH` | Disable flash attention on encoder and decoder (forces the manual F32 path). |
@@ -24,6 +31,8 @@ collecting dumps.
 | `TRANSCRIBE_DUMP_DIR=<dir>` | Enable the per-stage tensor dumper; writes `<name>.f32` + `<name>.json` per dumped tensor into `<dir>`. The basis for the numerical-comparison harness (`scripts/compare_tensors.py`). |
 | `TRANSCRIBE_PERF_DEBUG` | Print a per-stage timing breakdown to stderr (DEBUG log) on the families that profile (`cohere`, `granite`, `canary`, `canary_qwen`, `moonshine`, `moonshine_streaming`, `qwen3_asr`, `whisper`). For whisper, a value containing `cpu` or `all` additionally prints the CPU sub-section breakdown. |
 | `TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING` | Print a per-component streaming wall-time breakdown at stream finalize (voxtral_realtime). |
+| `TRANSCRIBE_TEST_DEV_INIT_THROW=<match>` | Fault injection: backend device init (`ggml_backend_dev_init`) throws for devices whose name contains `<match>` (`*` matches every device). Exercises throw → skip → CPU-fallback in backend probing; an explicit backend request fails with `TRANSCRIBE_ERR_BACKEND`. Used by `backend_init_throw_unit` and `scripts/ci/vulkan_degradation_check.py`. |
+| `TRANSCRIBE_TEST_TEARDOWN_THROW` | Fault injection: any non-empty value injects a throw after each real free inside the `transcribe::safe_*` teardown wrappers, proving containment without leaking the handle. Used by `teardown_safety_unit`. |
 
 ## Tier 2 — validation hooks
 
