@@ -113,7 +113,9 @@ def main() -> int:
                     raise AssertionError(
                         "backend='vulkan' must fail when device init throws")
                 with t.Model(args.model) as m:
-                    assert m.backend == "cpu", m.backend
+                    # m.backend is the ggml backend name ("CPU", "Vulkan0"),
+                    # not a lowercase kind string.
+                    assert m.backend.lower() == "cpu", m.backend
                     with m.session() as s:
                         text = s.run(load_pcm(args.audio)).text
                 print("text (throwing devices, default backend):",

@@ -1011,11 +1011,11 @@ static transcribe_status transcribe_get_backend_device_impl(int index, struct tr
     return TRANSCRIBE_OK;
 }
 
-static bool transcribe_backend_available_impl(transcribe_backend_request kind) {
-    // Raw read before any enum-typed load (see enum_field_raw); unknown
-    // values answer false per the documented probe contract.
-    const int    raw = enum_field_raw(&kind);
-    const size_t n   = ggml_backend_dev_count();
+// Takes the request pre-read as a raw int (see enum_field_raw in the
+// forwarder) so no enum-typed load of an unknown probe value ever happens;
+// unknown values answer false per the documented probe contract.
+static bool transcribe_backend_available_impl(int raw) {
+    const size_t n = ggml_backend_dev_count();
     if (raw == TRANSCRIBE_BACKEND_AUTO) {
         return n > 0;
     }
@@ -3017,8 +3017,11 @@ extern "C" transcribe_status transcribe_get_backend_device(int index, struct tra
 }
 
 extern "C" bool transcribe_backend_available(transcribe_backend_request kind) {
+    // Raw read before any enum-typed load (see enum_field_raw): the lambda
+    // must not read `kind` as an enum, or an unknown probe value is UB.
+    const int raw = enum_field_raw(&kind);
     return api_guard_value("transcribe_backend_available", false,
-                           [&] { return transcribe_backend_available_impl(kind); });
+                           [&] { return transcribe_backend_available_impl(raw); });
 }
 
 extern "C" transcribe_status transcribe_model_load_file(const char *                                path,
