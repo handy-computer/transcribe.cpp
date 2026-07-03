@@ -719,6 +719,9 @@ typedef enum {
  * is automatic under the supported usage (call once, before the first
  * model load).
  *
+ * artifact_dir is UTF-8, like every path crossing this API; on Windows
+ * it is converted to a wide path internally.
+ *
  * Returns:
  *   TRANSCRIBE_ERR_INVALID_ARG     artifact_dir is NULL or empty.
  *   TRANSCRIBE_ERR_FILE_NOT_FOUND  artifact_dir is not an existing directory.
@@ -1334,6 +1337,11 @@ TRANSCRIBE_API const char * transcribe_model_meta_val_str(const struct transcrib
 
 /*
  * Load a GGUF model from disk.
+ *
+ * path is UTF-8, like every path crossing this API. On Windows it is
+ * converted to a wide path internally, so paths containing non-ASCII
+ * characters (e.g. a user profile such as C:\Users\Jerôme\...) load
+ * correctly regardless of the process ANSI code page.
  *
  * params may be NULL for all library defaults. To customize, initialize
  * a struct with transcribe_model_load_params_init() and set fields. A

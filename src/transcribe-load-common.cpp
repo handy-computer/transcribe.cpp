@@ -11,6 +11,7 @@
 #include "gguf.h"
 #include "transcribe-backend.h"
 #include "transcribe-log.h"
+#include "transcribe-path.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -382,7 +383,7 @@ transcribe_status stream_tensor_data(const std::string &  path,
     // time: ifstream::seekg takes a streamoff (signed 64-bit on every
     // platform we target), so multi-GB tensor offsets work without
     // #ifdef'ing fseeko vs _fseeki64.
-    std::ifstream fin(path, std::ios::binary);
+    std::ifstream fin(path_from_utf8(path), std::ios::binary);
     if (!fin) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen %s for tensor data", error_tag, path.c_str());
         return TRANSCRIBE_ERR_GGUF;
@@ -574,7 +575,7 @@ ReadF32Result read_f32_tensor_checked(gguf_context *       gguf_ctx,
     const size_t data_off = gguf_get_data_offset(gguf_ctx);
     const size_t t_off    = gguf_get_tensor_offset(gguf_ctx, idx);
 
-    std::ifstream fin(gguf_path, std::ios::binary);
+    std::ifstream fin(path_from_utf8(gguf_path), std::ios::binary);
     if (!fin) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to open %s for tensor \"%s\"", error_tag, gguf_path.c_str(),
                 tensor_name);
