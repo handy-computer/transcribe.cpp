@@ -33,10 +33,9 @@ transcribe_status Loader::open(const char * path) {
 
     path_ = path;
 
-    // Pre-check whose ONLY job is to distinguish "the file is not at
-    // this path" (-> FILE_NOT_FOUND) from every other reason
-    // gguf_init_from_file might return nullptr (-> ERR_GGUF). See
-    // transcribe-path.h for the exact semantics.
+    // Distinguishes "the file is not at this path" (-> FILE_NOT_FOUND)
+    // from every other reason gguf_init_from_file might return nullptr
+    // (-> ERR_GGUF). Exact semantics in transcribe-path.h.
     if (!path_is_present(path)) {
         return TRANSCRIBE_ERR_FILE_NOT_FOUND;
     }

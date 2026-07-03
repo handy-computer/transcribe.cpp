@@ -1338,9 +1338,8 @@ TRANSCRIBE_API const char * transcribe_model_meta_val_str(const struct transcrib
 /*
  * Load a GGUF model from disk.
  *
- * path is UTF-8, like every path crossing this API. On Windows it is
- * converted to a wide path internally, so paths containing non-ASCII
- * characters (e.g. a user profile such as C:\Users\Jerôme\...) load
+ * path is UTF-8, like every path crossing this API; on Windows it is
+ * converted to a wide path internally, so non-ASCII paths load
  * correctly regardless of the process ANSI code page.
  *
  * params may be NULL for all library defaults. To customize, initialize

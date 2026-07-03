@@ -396,15 +396,14 @@ endif()
 # Non-ASCII (UTF-8) path handling through the public C ABI
 # -----------------------------------------------------------------------------
 #
-# Regression test for Handy issue #1585: on Windows, paths containing
-# non-ASCII characters (e.g. C:\Users\Jerôme\...) failed model load and
-# backend-dir validation because narrow stat()/ifstream calls read the
-# UTF-8 bytes in the ANSI code page. Copies two fixtures into a
-# non-ASCII-named temp directory and drives transcribe_model_load_file /
-# transcribe_init_backends through it. On POSIX this pins the UTF-8
-# contract; on Windows it exercises the wide-path conversion in
-# src/transcribe-path.h. Public-API only. Fixture-dependent, so gated
-# on uv like loader_smoke.
+# Regression test for Handy issue #1585: on Windows, non-ASCII paths
+# failed model load and backend-dir validation because narrow
+# stat()/ifstream calls read the UTF-8 bytes in the ANSI code page.
+# Copies two fixtures into a non-ASCII-named temp directory and drives
+# transcribe_model_load_file / transcribe_init_backends through it. On
+# POSIX this pins the UTF-8 contract; on Windows it exercises the
+# wide-path conversion in src/transcribe-path.h. Public-API only.
+# Fixture-dependent, so gated on uv like loader_smoke.
 
 if(TRANSCRIBE_UV)
     add_executable(transcribe_utf8_path_unit

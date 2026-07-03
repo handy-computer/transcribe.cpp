@@ -2,13 +2,12 @@
 // public C ABI.
 //
 // Regression test for Handy issue #1585: on Windows, model loading and
-// backend artifact-dir validation failed for any path containing a
-// non-ASCII character (e.g. C:\Users\Jerôme\...), because the library's
-// ::stat() / ifstream(const std::string &) calls interpreted the UTF-8
-// path bytes in the process ANSI code page. The contract
-// (include/transcribe.h) is that every path crossing the C ABI is
-// UTF-8; src/transcribe-path.h now routes all file access through an
-// explicit UTF-8 -> wide conversion on Windows.
+// backend artifact-dir validation failed for any non-ASCII path,
+// because the library's ::stat() / ifstream(const std::string &) calls
+// interpreted the UTF-8 path bytes in the process ANSI code page. The
+// contract (include/transcribe.h) is that every path crossing the C
+// ABI is UTF-8; src/transcribe-path.h now routes all file access
+// through an explicit UTF-8 -> wide conversion on Windows.
 //
 // The test copies two build-time fixtures into a directory whose name
 // contains non-ASCII characters and asserts, via the public API only:
@@ -32,7 +31,7 @@
 //
 // The directory name is spelled in escaped UTF-8 bytes, not literal
 // characters, so the test is immune to source-charset differences
-// across compilers ("Jerôme-日本語").
+// across compilers ("café-日本語").
 
 #include "transcribe.h"
 
@@ -50,9 +49,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// "transcribe-utf8-Jerôme-日本語" in escaped UTF-8 bytes.
+// "transcribe-utf8-café-日本語" in escaped UTF-8 bytes.
 constexpr const char * kDirName =
-    "transcribe-utf8-Jer\xC3\xB4me-\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E";
+    "transcribe-utf8-caf\xC3\xA9-\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E";
 
 int g_failures = 0;
 
