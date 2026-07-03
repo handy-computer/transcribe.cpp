@@ -50,8 +50,7 @@ namespace fs = std::filesystem;
 namespace {
 
 // "transcribe-utf8-café-日本語" in escaped UTF-8 bytes.
-constexpr const char * kDirName =
-    "transcribe-utf8-caf\xC3\xA9-\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E";
+constexpr const char * kDirName = "transcribe-utf8-caf\xC3\xA9-\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E";
 
 int g_failures = 0;
 
