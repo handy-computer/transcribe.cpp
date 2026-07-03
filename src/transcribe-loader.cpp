@@ -9,10 +9,7 @@
 
 #include "gguf.h"
 #include "transcribe-meta.h"
-
-#include <sys/stat.h>
-
-#include <cerrno>
+#include "transcribe-path.h"
 
 namespace transcribe {
 
@@ -29,44 +26,6 @@ gguf_context * Loader::release_gguf() {
     return out;
 }
 
-namespace {
-
-// Narrow stat-based pre-check whose ONLY job is to distinguish
-// "the file is not at this path" from every other reason
-// gguf_init_from_file might return nullptr.
-//
-// We deliberately do not check S_ISREG here. If stat() succeeds and the
-// path points at a directory (or a fifo, or a socket), the file IS at
-// that path — it's just not a usable GGUF. fopen() inside ggml will
-// return EISDIR / etc. and we will surface that as TRANSCRIBE_ERR_GGUF,
-// which is strictly more accurate than collapsing it into FILE_NOT_FOUND.
-//
-// We also deliberately only short-circuit on ENOENT / ENOTDIR. Other
-// stat() failures (EACCES, ENAMETOOLONG, ELOOP, EIO, ...) do NOT
-// conclusively prove the file is missing — they prove we can't reach
-// it. Returning FILE_NOT_FOUND for those would be wrong. We let
-// gguf_init_from_file try and surface whatever it returns as ERR_GGUF.
-//
-// Returns true if the path either exists OR if we cannot prove it
-// doesn't (in which case the caller should hand off to
-// gguf_init_from_file unchanged).
-bool path_is_present(const char * path) {
-    struct stat st{};
-    if (::stat(path, &st) == 0) {
-        return true;
-    }
-    // ENOENT: the named file does not exist.
-    // ENOTDIR: a non-final component of the path is not a directory,
-    //          which is the same observable failure mode as "the file
-    //          is not at this path."
-    if (errno == ENOENT || errno == ENOTDIR) {
-        return false;
-    }
-    return true;
-}
-
-}  // namespace
-
 transcribe_status Loader::open(const char * path) {
     if (path == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -74,6 +33,9 @@ transcribe_status Loader::open(const char * path) {
 
     path_ = path;
 
+    // Distinguishes "the file is not at this path" (-> FILE_NOT_FOUND)
+    // from every other reason gguf_init_from_file might return nullptr
+    // (-> ERR_GGUF). Exact semantics in transcribe-path.h.
     if (!path_is_present(path)) {
         return TRANSCRIBE_ERR_FILE_NOT_FOUND;
     }

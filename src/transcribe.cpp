@@ -24,6 +24,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-model.h"
+#include "transcribe-path.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "transcribe/whisper.h"
@@ -40,17 +41,8 @@
 #    include <dlfcn.h>
 #endif
 
-#include <sys/stat.h>
-
-// MSVC's <sys/stat.h> has the _S_IFDIR mode bits but not the POSIX
-// S_ISDIR() macro.
-#if defined(_WIN32) && !defined(S_ISDIR)
-#    define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
-#endif
-
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <climits>
 #include <cmath>
 #include <cstdarg>
@@ -864,8 +856,8 @@ static transcribe_status transcribe_init_backends_impl(const char * artifact_dir
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     {
-        struct stat st{};
-        if (::stat(artifact_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(transcribe::path_from_utf8(artifact_dir), ec)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_init_backends: %s is not an existing directory",
                                 artifact_dir);
             return TRANSCRIBE_ERR_FILE_NOT_FOUND;
@@ -880,8 +872,8 @@ static transcribe_status transcribe_init_backends_impl(const char * artifact_dir
     std::lock_guard<std::mutex>  lock(s_mutex);
 
     std::error_code       ec;
-    std::filesystem::path canonical = std::filesystem::weakly_canonical(artifact_dir, ec);
-    const std::string     key       = ec ? std::string(artifact_dir) : canonical.string();
+    std::filesystem::path canonical = std::filesystem::weakly_canonical(transcribe::path_from_utf8(artifact_dir), ec);
+    const std::string     key       = ec ? std::string(artifact_dir) : canonical.u8string();
     if (s_loaded_dirs.find(key) == s_loaded_dirs.end()) {
         ggml_backend_load_all_from_path(artifact_dir);
         s_loaded_dirs.insert(key);
@@ -1419,22 +1411,15 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
     // which HF/users mislabel): GGUF magic 0x46554747 is the canonical path,
     // ggml magic 0x67676d6c is a legacy whisper.cpp .bin. Public contract:
     // missing path -> ERR_FILE_NOT_FOUND; every other failure -> ERR_GGUF.
-    {
-        struct stat st{};
-        if (::stat(path, &st) != 0) {
-            if (errno == ENOENT || errno == ENOTDIR) {
-                return TRANSCRIBE_ERR_FILE_NOT_FOUND;
-            }
-            // Other stat() failures (EACCES, etc.) are not "not found";
-            // the open below will surface them as ERR_GGUF.
-        }
+    if (!transcribe::path_is_present(path)) {
+        return TRANSCRIBE_ERR_FILE_NOT_FOUND;
     }
     uint32_t magic = 0;
     {
-        std::ifstream fin(path, std::ios::binary);
+        std::ifstream fin(transcribe::path_from_utf8(path), std::ios::binary);
         if (!fin) {
-            // stat() said the path is reachable but ifstream couldn't
-            // open it — permissions / type issue. Treat as a generic
+            // The existence pre-check said the path is reachable but
+            // the open failed — permissions / type issue. Treat as a generic
             // load failure rather than FILE_NOT_FOUND.
             return TRANSCRIBE_ERR_GGUF;
         }

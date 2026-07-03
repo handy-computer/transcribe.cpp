@@ -393,6 +393,37 @@ if(TRANSCRIBE_UV)
 endif()
 
 # -----------------------------------------------------------------------------
+# Non-ASCII (UTF-8) path handling through the public C ABI
+# -----------------------------------------------------------------------------
+#
+# Regression test for Handy issue #1585: on Windows, non-ASCII paths
+# failed model load and backend-dir validation because narrow
+# stat()/ifstream calls read the UTF-8 bytes in the ANSI code page.
+# Copies two fixtures into a non-ASCII-named temp directory and drives
+# transcribe_model_load_file / transcribe_init_backends through it. On
+# POSIX this pins the UTF-8 contract; on Windows it exercises the
+# wide-path conversion in src/transcribe-path.h. Public-API only.
+# Fixture-dependent, so gated on uv like loader_smoke.
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_utf8_path_unit
+        utf8_path_unit.cpp)
+
+    target_link_libraries(transcribe_utf8_path_unit PRIVATE transcribe)
+
+    target_compile_definitions(transcribe_utf8_path_unit PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_utf8_path_unit)
+
+    add_dependencies(transcribe_utf8_path_unit fixtures)
+
+    add_test(NAME transcribe_utf8_path_unit COMMAND transcribe_utf8_path_unit)
+    set_tests_properties(transcribe_utf8_path_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Tokenizer ingest smoke (success path through the public ABI)
 # -----------------------------------------------------------------------------
 #

@@ -5,10 +5,8 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe-log.h"
+#include "transcribe-path.h"
 
-#include <sys/stat.h>
-
-#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -19,21 +17,6 @@ namespace transcribe::bin_loader {
 namespace {
 
 constexpr const char * kTag = "whisper-bin";
-
-// Same path-existence check transcribe-loader uses for GGUFs: ENOENT /
-// ENOTDIR are conclusive "file is not at this path"; anything else
-// means we couldn't reach the path and the open below should surface
-// the underlying error.
-bool path_is_present(const char * path) {
-    struct stat st{};
-    if (::stat(path, &st) == 0) {
-        return true;
-    }
-    if (errno == ENOENT || errno == ENOTDIR) {
-        return false;
-    }
-    return true;
-}
 
 // Read sizeof(T) bytes into `out`. Returns false on short read or
 // stream failure.
@@ -158,7 +141,7 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
     }
     out.path = path;
 
-    std::ifstream fin(path, std::ios::binary);
+    std::ifstream fin(path_from_utf8(path), std::ios::binary);
     if (!fin) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to open %s", kTag, path);
         return TRANSCRIBE_ERR_GGUF;
@@ -395,7 +378,7 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
 transcribe_status stream_tensor_data_from_bin(const std::string &                path,
                                               const std::vector<BinStreamSlot> & slots,
                                               const char *                       error_tag) {
-    std::ifstream fin(path, std::ios::binary);
+    std::ifstream fin(path_from_utf8(path), std::ios::binary);
     if (!fin) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen %s for tensor data", error_tag, path.c_str());
         return TRANSCRIBE_ERR_GGUF;
