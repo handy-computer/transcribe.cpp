@@ -386,7 +386,7 @@ wheels = [
 
 [[package]]
 name = "transcribe-cpp"
-version = "0.0.1"
+version = "0.1.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -402,8 +402,8 @@ test = [
 requires-dist = [
     { name = "numpy", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
-    { name = "transcribe-cpp-native", specifier = "==0.0.1.*" },
-    { name = "transcribe-cpp-native-cu12", marker = "extra == 'cu12'", specifier = "==0.0.1.*" },
+    { name = "transcribe-cpp-native", specifier = "==0.1.1.*" },
+    { name = "transcribe-cpp-native-cu12", marker = "extra == 'cu12'", specifier = "==0.1.1.*" },
 ]
 
 [[package]]

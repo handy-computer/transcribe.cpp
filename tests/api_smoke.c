@@ -234,6 +234,8 @@ static void test_init_macros(void) {
     CHECK(rp_macro.target_language == NULL);
     CHECK(rp_macro.keep_special_tags == false);
     CHECK(rp_macro.family == NULL);
+    CHECK(rp_macro.spec_k_drafts == -1);
+    CHECK(rp_macro.context == NULL);
 
     struct transcribe_stream_params sp_macro;
     transcribe_stream_params_init(&sp_macro);

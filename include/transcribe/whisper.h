@@ -102,6 +102,11 @@ struct transcribe_whisper_run_ext {
      *       rejected with TRANSCRIBE_ERR_INVALID_ARG, mirroring HF's
      *       own check.
      *
+     *   Else: the core transcribe_run_params::context string, when set,
+     *       feeds this same path (identical tokenization and special-token
+     *       rejection). The ext fields, being the more specific surface,
+     *       always win over the core field.
+     *
      *   Else: no initial prompt.
      */
     const char *    initial_prompt;

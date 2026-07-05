@@ -776,6 +776,7 @@ export class Session {
     if (opts.keepSpecialTags !== undefined)
       p.keep_special_tags = opts.keepSpecialTags;
     if (opts.specKDrafts !== undefined) p.spec_k_drafts = opts.specKDrafts;
+    if (opts.context !== undefined) p.context = opts.context;
     if (opts.family)
       p.family = buildFamily(n, this.#model.handle, opts.family, "run");
     return p;
@@ -872,6 +873,7 @@ export class Session {
       timestamps: opts.timestamps,
       keepSpecialTags: opts.keepSpecialTags,
       specKDrafts: -1,
+      context: opts.context,
     });
     const sp: any = {};
     F.streamParamsInit(sp);

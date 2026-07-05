@@ -20,6 +20,11 @@ void apply_family_invariants(transcribe_model & model) {
     // Cancellation is wired at the per-run level. No PNC/ITN toggle; the
     // Whisper-specific features do not apply here.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+
+    // transcribe_run_params::context is honored: the string rides the chat
+    // template's system slot, Qwen3-ASR's trained biasing channel (the
+    // reference's TranscribeArgs context / _build_messages system message).
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INITIAL_PROMPT, true);
 }
 
 }  // namespace transcribe::qwen3_asr

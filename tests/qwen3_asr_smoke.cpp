@@ -169,6 +169,9 @@ int main() {
         CHECK_EQ_INT(caps->n_languages, 4);
         CHECK(caps->languages != nullptr);
         CHECK_EQ_INT(caps->max_timestamp_kind, TRANSCRIBE_TIMESTAMPS_NONE);
+        // run_params::context is honored (system-slot biasing) — the
+        // family invariant advertises it via the feature probe.
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_INITIAL_PROMPT) == true);
     }
 
     // Internal-view assertions.

@@ -38,6 +38,25 @@ inline int32_t transcribe_session_params_n_ctx(const struct transcribe_session_p
     return params->n_ctx;
 }
 
+// Read transcribe_run_params::context with the same struct_size guard:
+// context is a trailing field (appended after spec_k_drafts), so an older
+// caller's smaller struct may not include it. Returns nullptr for a NULL
+// params, a pre-context struct, or an empty string, so families need only
+// one non-null check to mean "caller supplied context text".
+inline const char * transcribe_run_params_context(const struct transcribe_run_params * params) {
+    if (params == nullptr) {
+        return nullptr;
+    }
+    const size_t field_end = offsetof(struct transcribe_run_params, context) + sizeof(params->context);
+    if (params->struct_size < static_cast<uint64_t>(field_end)) {
+        return nullptr;
+    }
+    if (params->context == nullptr || params->context[0] == '\0') {
+        return nullptr;
+    }
+    return params->context;
+}
+
 struct transcribe_session {
     // The model this session was constructed from. Borrowed pointer:
     // the caller is required (per the public threading contract) to keep
@@ -241,6 +260,7 @@ struct transcribe_session {
     // next begin mutates them.
     std::string stream_language_owned;
     std::string stream_target_language_owned;
+    std::string stream_context_owned;
 
     // UI-facing streaming text state. `full_text` above remains the raw
     // model hypothesis. `stream_committed_text` is the append-only public

@@ -136,6 +136,11 @@ export interface TranscribeOptions {
   keepSpecialTags?: boolean;
   /** Speculative-decode draft count; -1 = family default. */
   specKDrafts?: number;
+  /** Free-text recognition-biasing context (names, jargon, prior
+   *  transcript). Honored by models advertising the initial-prompt
+   *  feature (whisper, qwen3_asr, funasr_nano); the output remains a
+   *  transcript, and unsupported models warn and ignore it. */
+  context?: string;
   /** Cancel the run cooperatively. */
   signal?: AbortSignal;
   /** A run-slot family extension (e.g. whisper). */
@@ -181,6 +186,8 @@ export interface StreamOptions {
   targetLanguage?: string;
   timestamps?: TimestampKind;
   keepSpecialTags?: boolean;
+  /** Free-text recognition-biasing context; see TranscribeOptions.context. */
+  context?: string;
   commitPolicy?: CommitPolicy;
   stablePrefixAgreementN?: number;
   /** A stream-slot family extension (moonshine, parakeet, voxtral). */

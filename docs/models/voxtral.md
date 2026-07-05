@@ -42,5 +42,10 @@ reports the exact per-session value. See the
 - The 24B is the larger sibling — same architecture, scaled decoder. It is a
   GPU-class model (BF16/F16 need ~50 GB) and should be run at **batch size
   ≤ 8**; see its [card](voxtral-small-24b-2507.md) for details.
+- **No context biasing**: Voxtral's transcription template has no slot for
+  `transcribe_run_params::context` (a supplied context warns and is
+  ignored). The model's free-text instruct mode exists upstream but changes
+  the task rather than biasing recognition, so it is not mapped onto the
+  core context field; if exposed later it would be a voxtral run extension.
 - Upstream: [`mistralai/Voxtral-Mini-3B-2507`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507),
   [`mistralai/Voxtral-Small-24B-2507`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507).

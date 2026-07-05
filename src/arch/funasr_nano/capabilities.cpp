@@ -24,6 +24,11 @@ void apply_family_invariants(transcribe_model & model) {
     // runtime toggle.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN, true);
+
+    // transcribe_run_params::context is honored: the string fills the
+    // hotword/context slot of the trained prompt template (the reference's
+    // FunASRNano.get_prompt hotwords path — 热词列表：[...]).
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INITIAL_PROMPT, true);
 }
 
 }  // namespace transcribe::funasr_nano
