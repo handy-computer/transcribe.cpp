@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "multitalker-parakeet-streaming-0.6b-v1",
+  "source_model": {
+    "hf_repo": "nvidia/multitalker-parakeet-streaming-0.6b-v1",
+    "hf_revision": "8749fc71fd6e2d88ef230159bbf2aea69b524ee1"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}

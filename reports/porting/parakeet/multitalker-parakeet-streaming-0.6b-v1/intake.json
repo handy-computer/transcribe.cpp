@@ -1,0 +1,232 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/multitalker-parakeet-streaming-0.6b-v1",
+  "hf_revision": "8749fc71fd6e2d88ef230159bbf2aea69b524ee1",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "nemo_model_config": {
+      "kind": "hf_file",
+      "path": "multitalker-parakeet-streaming-0.6b-v1.nemo::model_config.yaml",
+      "status": "found",
+      "detail": "streamed from the .nemo tar; canonical for frontend/tokenizer/encoder/decoder/joint and the speaker-kernel additions"
+    }
+  },
+  "variants": [
+    {
+      "name": "multitalker-parakeet-streaming-0.6b-v1",
+      "memory_gb": 2.32,
+      "files": [
+        "multitalker-parakeet-streaming-0.6b-v1.nemo"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "architectures": [
+        "EncDecMultiTalkerRNNTBPEModel"
+      ],
+      "target": "nemo.collections.asr.models.multitalker_asr_models.EncDecMultiTalkerRNNTBPEModel",
+      "model_type": "parakeet_multitalker_rnnt_cache_aware",
+      "nemo_version": "2.6.0rc0",
+      "based_on": "nvidia/nemotron-speech-streaming-en-0.6b (fine-tuned; ASR backbone identical)",
+      "encoder.type": "Cache-Aware FastConformer (chunked_limited attention + chunked causal convs) + speaker-kernel injection",
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.conv_context_size": "causal",
+      "encoder.conv_norm_type": "layer_norm",
+      "encoder.use_bias": false,
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.causal_downsampling": true,
+      "encoder.self_attention_model": "rel_pos",
+      "encoder.att_context_style": "chunked_limited",
+      "encoder.att_context_size.options": [
+        [
+          70,
+          13
+        ],
+        [
+          70,
+          6
+        ],
+        [
+          70,
+          1
+        ],
+        [
+          70,
+          0
+        ]
+      ],
+      "encoder.att_context_size.units": "80ms frames",
+      "encoder.att_context_size.default": [
+        70,
+        13
+      ],
+      "encoder.feat_in": 128,
+      "decoder.type": "RNNTDecoder (predictor)",
+      "decoder.pred_rnn_layers": 2,
+      "decoder.pred_hidden": 640,
+      "decoder.blank_as_pad": true,
+      "joint.type": "RNNTJoint",
+      "joint.joint_hidden": 640,
+      "joint.durations": null,
+      "joint.num_extra_outputs": 0,
+      "tokenizer.type": "bpe",
+      "tokenizer.vocab_size": 1024,
+      "tokenizer.has_punctuation_capitalization": true,
+      "decoding.strategy": "greedy_batch",
+      "decoding.greedy.max_symbols": 10,
+      "multitalker.spk_kernel_type": "ff",
+      "multitalker.spk_kernel_layers": [
+        0
+      ],
+      "multitalker.add_bg_spk_kernel": true,
+      "multitalker.freeze_diar": true,
+      "multitalker.spk_supervision_strategy": "rttm (train) / diar (inference)",
+      "multitalker.num_speakers": 4,
+      "multitalker.num_mel_frame_per_asr_frame": 8,
+      "multitalker.external_diar_model": "nvidia/diar_streaming_sortformer_4spk-v2.1 (Streaming Sortformer; NOT shipped in this repo)",
+      "multitalker.output_format": "SegLST (speaker-tagged segments)"
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo archive ships the model as a float32 PyTorch state_dict (no safetensors), consistent with every parakeet-family variant in this repo including the base nemotron-speech-streaming-en-0.6b it is fine-tuned from.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word"
+    ],
+    "streaming": true,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean (single_speaker_mode=True, 1.12s chunk)",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.19,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1",
+      "notes": "Single-speaker-mode ASR path (multitalker disabled). This is the LibriSpeech-comparable English acceptance target for a first port. whisper-normalizer PnC-stripped scoring, same as the base model."
+    },
+    {
+      "dataset": "LibriSpeech test-other (single_speaker_mode=True, 1.12s chunk)",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.76,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1",
+      "notes": "Single-speaker-mode ASR path."
+    },
+    {
+      "dataset": "Open ASR Leaderboard (8-set avg, single_speaker_mode=True)",
+      "language": "en",
+      "metric": "wer",
+      "score": 7.44,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1",
+      "notes": "Single-speaker mode. Base nemotron-speech-streaming-en-0.6b is 7.16; the multitalker fine-tune preserves single-speaker performance (+0.28 avg)."
+    },
+    {
+      "dataset": "AMI-IHM (multitalker, Streaming Sortformer v2 diarization)",
+      "language": "en",
+      "metric": "other",
+      "score": 21.26,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1",
+      "notes": "metric=cpWER (concatenated minimum-permutation WER). MULTITALKER path (context only, NOT a v1 gate). cpWER requires external Sortformer diarization + per-speaker instances + SegLST. AMI-SDM 37.44, CH109 15.81, Mixer6 23.81."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NVIDIA NeMo first-party framework. Same rationale as the rest of the parakeet family and the base model it is fine-tuned from, nemotron-speech-streaming-en-0.6b: the HF repo ships only a `.nemo` tar archive (consumable by nemo.collections.asr.models.ASRModel.from_pretrained) plus helper scripts; there is no Transformers modeling class and no safetensors. The class is EncDecMultiTalkerRNNTBPEModel. The multitalker oracle is NeMo's `examples/asr/asr_cache_aware_streaming/speech_to_text_multitalker_streaming_infer.py` plus the SpeakerTaggedASR helper in `nemo.collections.asr.parts.utils.multispk_transcribe_utils` and the shipped `multitalker_transcript_config.py`. CRITICAL: the multitalker path additionally requires a SEPARATE external streaming diarization model (nvidia/diar_streaming_sortformer_4spk-v2.1, a Sortformer EncLabelModel) that is NOT part of this checkpoint; without it only single_speaker_mode is runnable. The base ASR backbone (frontend, cache-aware FastConformer encoder, RNN-T decoder/joint, tokenizer) is byte-for-byte the same shape as the already-ported nemotron-speech-streaming-en-0.6b.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "MULTITALKER core mechanism (speaker-kernel injection). The only weight-level addition vs the base streaming model is a learnable speaker kernel of type `ff` injected at encoder layer 0 (`spk_kernel_layers=[0]`), plus a background-speaker kernel (`add_bg_spk_kernel=true`). The kernel is generated from per-frame per-speaker speech-activity supervision (diarization). At inference the supervision comes from an external Sortformer diarizer (spk_supervision='diar'). This injection modulates the pre-encode features so the encoder locks onto one target speaker. Porting it requires (a) new GGUF tensors for the speaker-kernel FF module + bg kernel, (b) a per-frame speaker-activity input to the encoder, (c) applying the kernel at layer 0. This is the central new architecture and has NO analogue in the existing parakeet code.",
+    "EXTERNAL diarization dependency (hard blocker for the multitalker path). Multitalker/speaker-attributed ASR is UNUSABLE without a streaming speaker diarization model (nvidia/diar_streaming_sortformer_4spk-v2.1, a NEST/Sortformer EncLabelModel) that is a completely separate checkpoint and architecture (Sortformer, not FastConformer-RNNT). transcribe.cpp has no diarization runtime today. A first port either (a) ports only single_speaker_mode (no diarization, collapses to plain streaming ASR), or (b) takes on the much larger scope of also porting Sortformer + the streaming speaker cache. This scope split is the primary decision for the family and is the subject of the accompanying brief.",
+    "MULTI-INSTANCE orchestration. The model runs ONE encoder instance per speaker (max_num_of_spks=4, num_speakers=4): every instance sees the same audio but a different speaker kernel, and produces that speaker's transcript. Runtime must fan out N encoder+decoder passes per chunk, each with its own cache-aware K/V + conv + decoder state, then merge per-speaker hypotheses into a single speaker-tagged transcript. This is an orchestration layer above the single-model runtime, plus per-speaker cache management (`cache_gating`, `cache_gating_buffer_size=2`) and a `parallel_speaker_strategy` flag.",
+    "OUTPUT contract is SegLST, not a flat transcript. Multitalker output is speaker-tagged segments (SegLST: {session_id, speaker, start_time, end_time, words}) merged across instances and across streaming chunks, with sentence-break heuristics (word_window=50, sent_break_sec=30, fix_prev_words_count=5). transcribe.cpp's current output contract is a single flat transcript; exposing multitalker means a new output shape and CLI surface (per-speaker channels / diarized JSON).",
+    "single_speaker_mode is the LibriSpeech-comparable path. Setting single_speaker_mode=True disables the multitalker machinery and the model behaves as a plain cache-aware streaming RNN-T (LS test-clean 2.19 / test-other 4.76). This path reuses the existing nemotron-speech-streaming-en-0.6b runtime almost entirely and is the realistic v1 acceptance target. Confirm at convert time whether single_speaker_mode requires a specific speaker-kernel input (e.g. all-active / bg kernel) or fully bypasses layer-0 injection.",
+    "Encoder attention is chunked_limited (carried from the base). att_context_style='chunked_limited', att_context_size menu [[70,13],[70,6],[70,1],[70,0]] in 80ms frames, default [70,13] = 1.12s latency. Frames are grouped into chunks of R+1 and each chunk sees itself + floor(L/(R+1)) prior chunks; this is NOT a per-frame sliding window. Already implemented for nemotron-speech-streaming-en-0.6b; reuse verbatim.",
+    "Chunked causal depthwise convolutions (carried from the base). conv_context_size='causal', causal_downsampling=true. Per-chunk causal conv with state carried across chunks; in one-shot mode the state zero-inits but the causal pattern must still be applied. Already handled by the existing cache-aware parakeet code.",
+    "Frontend has NO normalization and NO preemphasis (carried from the base, confirmed from model_config.yaml: normalize='NA'). Differs from every non-streaming parakeet variant (which use preemphasis=0.97 + per_feature norm). The converter must emit the 'no frontend normalization' GGUF KV and the C++ frontend must skip per-feature norm; a silent fall-through degrades WER without changing shapes. Already handled for nemotron-speech-streaming-en-0.6b.",
+    "RNN-T backbone is identical to nemotron-speech-streaming-en-0.6b: 24L / d=1024 / 8h / kernel=9 / dw_striding x8 / subsampling_conv_channels=256, RNNTDecoder 2x640, RNNTJoint 640 (no duration head, joint.durations=None), BPE vocab 1024 with blank at 1024, PnC in vocab. The existing convert-parakeet.py + src/arch/parakeet handle all of this; only the speaker-kernel tensors and the multitalker forward path are new.",
+    "WER normalization: whisper-normalizer (PnC strip + lowercase + NFC + number norm) on both hyp and ref, same as the base model, required for the single-speaker LibriSpeech numbers to be comparable.",
+    "License: NVIDIA Open Model License (not Apache-2.0), same as the base. Affects the Stage 8 HF card YAML."
+  ],
+  "intake_gaps": []
+}
