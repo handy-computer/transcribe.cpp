@@ -9,6 +9,13 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf.h"
+// Metal-specific capability query, used only to gate AUTO device selection
+// (see metal_backend_lacks_simdgroup_mm). Available only when the Metal
+// backend is statically linked; under GGML_BACKEND_DL the symbol lives in a
+// loadable module and is not link-visible here, so the query is compiled out.
+#if defined(TRANSCRIBE_HAS_METAL) && !defined(TRANSCRIBE_GGML_BACKEND_DL)
+#    include "ggml-metal.h"
+#endif
 #include "transcribe-backend.h"
 #include "transcribe-log.h"
 #include "transcribe-path.h"
@@ -23,6 +30,40 @@
 #include <vector>
 
 namespace transcribe::load_common {
+
+// Some Metal devices cannot do simdgroup matrix multiply — every GPU below
+// MTLGPUFamilyApple7, which on macOS means Intel integrated GPUs and AMD GPUs
+// on Intel Macs. On whisper-class, matmul-heavy graphs these devices run the
+// vector fallback matmul kernels, which on this hardware silently produce
+// garbage: the decoder collapses onto token 0 and emits an unbroken run of
+// "!" at ~0.01x realtime (Handy issue #1608). The signal is Metal-specific —
+// no generic ggml capability exposes it, since MUL_MAT's supports_op gates on
+// simdgroup *reduction*, which these GPUs do report — so the query is compiled
+// in only for a statically-linked Metal backend and is a no-op otherwise.
+//
+// has_simdgroup_mm is `supportsFamily:MTLGPUFamilyApple7`; the public metal
+// query indexes Apple families 1-based, so Apple7 is family 7.
+bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev) {
+    // Test hook: force the "missing" verdict for a device whose name matches,
+    // so the fallback path can be exercised on hardware that actually has
+    // simdgroup mm. Inert when unset/empty; "*" matches any device.
+    if (const char * match = std::getenv("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM");
+        match != nullptr && match[0] != '\0') {
+        const char * name = ggml_backend_dev_name(dev);
+        if (std::strcmp(match, "*") == 0 || (name != nullptr && std::strstr(name, match) != nullptr)) {
+            return true;
+        }
+    }
+#if defined(TRANSCRIBE_HAS_METAL) && !defined(TRANSCRIBE_GGML_BACKEND_DL)
+    // ggml_backend_metal_supports_family asserts the backend is Metal; guard
+    // so a classify/is_metal disagreement can never abort the process.
+    if (ggml_backend_is_metal(be)) {
+        return !ggml_backend_metal_supports_family(be, /*MTLGPUFamilyApple7=*/7);
+    }
+#endif
+    (void) be;
+    return false;
+}
 
 namespace {
 
@@ -87,6 +128,28 @@ ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, Backend
         }
 
         const BackendKind kind = classify_device(dev);
+
+        // Reject a Metal device that can't do simdgroup matrix multiply: it
+        // yields garbage transcripts on whisper-class graphs (see
+        // metal_backend_lacks_simdgroup_mm). Under AUTO ("any GPU") skip it so
+        // selection falls through to CPU; on an explicit Metal request, honour
+        // the device the caller named but warn loudly.
+        if (kind == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(be, dev)) {
+            const char * dname = ggml_backend_dev_name(dev);
+            if (wanted == BackendKind::OtherGpu) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                        "%s: skipping Metal device \"%s\": no simdgroup matrix multiply "
+                        "(pre-Apple7 GPU) — falling back to CPU",
+                        error_tag, dname != nullptr ? dname : "?");
+                safe_backend_free(be);
+                continue;
+            }
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                    "%s: Metal device \"%s\" has no simdgroup matrix multiply "
+                    "(pre-Apple7 GPU); transcription may be incorrect and very slow",
+                    error_tag, dname != nullptr ? dname : "?");
+        }
+
         log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend: %s", error_tag, kind_name(kind),
                 ggml_backend_dev_name(dev));
         out_kind = kind;
@@ -199,6 +262,16 @@ transcribe_status init_backends_explicit_index(transcribe_backend_request reques
     }
     log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend (gpu_device %d): %s", error_tag, kind_name(got), dev_index,
             ggml_backend_dev_name(dev));
+
+    // Same gate as try_init_kind, but an explicit device index — like an
+    // explicit Metal request — is always honored: warn only.
+    if (got == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(gpu_be, dev)) {
+        const char * dname = ggml_backend_dev_name(dev);
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "%s: Metal device \"%s\" has no simdgroup matrix multiply "
+                "(pre-Apple7 GPU); transcription may be incorrect and very slow",
+                error_tag, dname != nullptr ? dname : "?");
+    }
 
     out.primary      = gpu_be;
     out.primary_kind = got;

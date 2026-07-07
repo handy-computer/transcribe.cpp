@@ -26,11 +26,26 @@ struct ggml_backend;
 typedef struct ggml_backend * ggml_backend_t;
 struct ggml_backend_buffer;
 typedef struct ggml_backend_buffer * ggml_backend_buffer_t;
+struct ggml_backend_device;
+typedef struct ggml_backend_device * ggml_backend_dev_t;
 struct ggml_context;
 struct ggml_tensor;
 struct gguf_context;
 
 namespace transcribe::load_common {
+
+// True when `dev` is a Metal device with no simdgroup matrix multiply
+// (below MTLGPUFamilyApple7 — Intel iGPUs and AMD dGPUs on Intel Macs).
+// Such devices silently produce garbage transcripts (Handy issue #1608),
+// so init_backends skips them under AUTO and warns on any explicit
+// selection. `be` must be the initialized backend for `dev`.
+//
+// Honors the TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM hook (device-name
+// substring match; "*" matches all). Returns false for non-Metal backends
+// and when the Metal query is compiled out (non-Metal or GGML_BACKEND_DL
+// builds). Exposed so the unit test can align its baseline expectations
+// with the real hardware verdict instead of assuming Metal always wins.
+bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev);
 
 // Resolve a BackendPlan from a caller's backend request by walking
 // ggml's device registry.
