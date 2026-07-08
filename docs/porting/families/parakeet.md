@@ -190,6 +190,24 @@ be resolved before the corresponding port enters porting-3-convert:
    convert time from `model.cfg.preprocessor.features` inside the
    .nemo archive. Wrong default silently degrades WER without
    changing tensor shapes elsewhere.
+5. **Layer-0 speaker-kernel injection** (`multitalker-parakeet-streaming-0.6b-v1`):
+   RESOLVED at Stage 2. The single-speaker path is NOT numerically identical
+   to `nemotron-speech-streaming-en-0.6b`. `EncDecMultiTalkerRNNTBPEModel`
+   registers a `forward_pre_hook` on `encoder.layers[0]` (from
+   `SpeakerKernelMixin`, `spk_kernel_layers=[0]`) that fires
+   **unconditionally** — even with no diarization / speaker targets. In
+   single-speaker mode the hook computes, at the INPUT of conformer layer 0:
+   `x += spk_kernels.0(x)` (speaker mask defaults to all-ones) then
+   `x += bg_spk_kernels.0(0)` (background mask defaults to zeros → a constant
+   bias vector). Each kernel is an FF block:
+   `Linear(1024,1024) → ReLU → Dropout(id at eval) → Linear(1024,1024)` with
+   bias. Stage 3 MUST export `spk_kernels.0.{0,3}.{weight,bias}` and
+   `bg_spk_kernels.0.{0,3}.{weight,bias}` (2 FF modules) and emit a GGUF KV
+   marking layer-0 injection; Stage 4 MUST apply the injection at the layer-0
+   input. Skipping it silently degrades single-speaker WER (a structural-cfg
+   distinction, not a shape change). The full multitalker path (per-frame
+   diarization mask instead of all-ones, N-instance orchestration, SegLST) is
+   OUT OF SCOPE per Stage 1 — see the multitalker integration brief.
 
 ## Tooling: NeMo-aware preflight
 

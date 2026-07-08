@@ -1,0 +1,91 @@
+{
+  "_comment": [
+    "multitalker-parakeet-streaming-0.6b-v1 PROVISIONAL per-tensor tolerances (Stage 2 oracle).",
+    "",
+    "Magnitude-aware: max_abs = max(1e-4 * p99_abs, 1e-6);",
+    "                 mean_abs = max(1e-5 * rms, 1e-6).",
+    "When a tensor name appears in multiple (case, stage_dir) sidecars the",
+    "MAX p99_abs / rms across them is used.",
+    "",
+    "PROVISIONAL: Stage 4 finalizes against observed C++ drift. Every entry",
+    "carries _provisional: true. DO NOT ship while _provisional entries remain.",
+    "",
+    "Model note: this is EncDecMultiTalkerRNNTBPEModel run in SINGLE-SPEAKER",
+    "mode. The base ASR backbone is identical to nemotron-speech-streaming-en-0.6b,",
+    "BUT a speaker-kernel FF residual is applied at the INPUT of conformer",
+    "layer 0 (forward_pre_hook, applied unconditionally): x += spk_ff(x) with an",
+    "all-ones mask, then x += bg_ff(0) (constant bias). Stage 3 MUST convert",
+    "spk_kernels.0.* and bg_spk_kernels.0.* and Stage 4 MUST apply this injection;",
+    "the single-speaker path is NOT numerically identical to the base model."
+  ],
+  "dec.embed.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "dec.enc_out": {
+    "max_abs": 1.9078139215707727e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "dec.joint.0": {
+    "max_abs": 0.005523143569946289,
+    "mean_abs": 0.00032965458532807114,
+    "_provisional": true
+  },
+  "dec.lstm.0.c.0": {
+    "max_abs": 7.170465892553333e-05,
+    "mean_abs": 2.375066490445493e-06,
+    "_provisional": true
+  },
+  "dec.lstm.0.h.0": {
+    "max_abs": 3.142599546909333e-05,
+    "mean_abs": 1.0800957467118525e-06,
+    "_provisional": true
+  },
+  "dec.lstm.1.c.0": {
+    "max_abs": 8.615481072664261e-05,
+    "mean_abs": 4.230338949264561e-06,
+    "_provisional": true
+  },
+  "dec.lstm.1.h.0": {
+    "max_abs": 3.389731752872467e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.003004386568069458,
+    "mean_abs": 8.872089894130494e-05,
+    "_provisional": true
+  },
+  "enc.block.12.out": {
+    "max_abs": 0.003371430587768542,
+    "mean_abs": 7.71841725708955e-05,
+    "_provisional": true
+  },
+  "enc.block.23.out": {
+    "max_abs": 1.9078139215707727e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.final": {
+    "max_abs": 1.9078139215707727e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.mel.in": {
+    "max_abs": 0.0016611215076446535,
+    "mean_abs": 0.0001012863475937363,
+    "_provisional": true
+  },
+  "enc.pos_emb": {
+    "max_abs": 9.999976158142091e-05,
+    "mean_abs": 7.071067828517533e-06,
+    "_provisional": true
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 0.06187373504638646,
+    "mean_abs": 0.0017322517756891871,
+    "_provisional": true
+  }
+}
