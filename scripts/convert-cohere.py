@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -203,7 +204,9 @@ def read_hparams(config: dict, gen_config: dict) -> dict:
         "dec_max_seq":    int(dec["max_sequence_length"]),
         "dec_activation": str(dec["hidden_act"]).lower(),
 
-        "vocab_size":             int(config["vocab_size"]),
+        # arabic-07-2026 omits the top-level vocab_size; head.num_classes
+        # carries the same value in every Cohere ASR config.
+        "vocab_size":             int(config.get("vocab_size", config["head"]["num_classes"])),
         "decoder_start_token_id": int(gen_config["decoder_start_token_id"]),
         "bos_token_id":           int(gen_config["bos_token_id"]),
         "eos_token_id":           int(gen_config["eos_token_id"]),
@@ -427,8 +430,14 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
 
     hp = read_hparams(config, gen_config)
 
+    variant = slug_from_repo_id(repo_id) if repo_id else "cohere-transcribe-03-2026"
+    # Variants are named <basename>-<MM-YYYY>; split the release tag off the
+    # end for general.version / general.basename.
+    m = re.match(r"^(.+)-(\d{2}-\d{4})$", variant)
+    basename, version = (m.group(1), m.group(2)) if m else (variant, None)
+
     print(f"vocab_size = {hp['vocab_size']}")
-    print(f"Variant: cohere-transcribe-03-2026")
+    print(f"Variant: {variant}")
 
     print(f"Reading tokenizer from {tokenizer_path}")
     tok = extract_tokenizer(tokenizer_path)
@@ -463,8 +472,8 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
         add_general_identity(
             writer,
             name="Cohere Transcribe",
-            version="03-2026",
-            basename="cohere-transcribe",
+            version=version,
+            basename=basename,
             size_label=size_label,
             file_type=REFERENCE_FILE_TYPE,
             languages=hp["languages"],
@@ -477,7 +486,7 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
         )
 
         # ----- stt.variant -----
-        writer.add_string("stt.variant", "cohere-transcribe-03-2026")
+        writer.add_string("stt.variant", variant)
 
         # ----- tokenizer.ggml.* -----
         writer.add_string("tokenizer.ggml.model", "bpe")

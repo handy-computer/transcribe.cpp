@@ -9,7 +9,11 @@ native Transformers. C++ CPU validation passes locally.
 - Upstream architecture string: `cohere_asr`
 - Current source directory shape: Hugging Face-style
   `cohere-transcribe-03-2026/`
-- Variant: `cohere-transcribe-03-2026`
+- Variants: `cohere-transcribe-03-2026`,
+  `cohere-transcribe-arabic-07-2026` (retrained Arabic-focused
+  checkpoint, identical architecture and tensor layout; languages
+  `[en, ar]`; config omits top-level `vocab_size` — the converter falls
+  back to `head.num_classes`; upstream repo is gated)
 
 ## References
 
@@ -72,3 +76,10 @@ TRANSCRIBE_COHERE_GGUF=models/cohere-transcribe-03-2026/cohere-transcribe-03-202
 
 - Manifest records `hf_revision` but not local artifact hashes.
 - Reference hardware should still be captured for benchmark reports.
+- `cohere-transcribe-arabic-07-2026` has no per-variant golden tensor
+  manifest, converter report, or bench run; it is validated end-to-end by
+  WER parity against the native Transformers reference on FLEURS Arabic
+  (C++ BF16 11.02% vs reference 11.00%, 428 utts, batch 8, L40S; see
+  `reports/wer/cohere-transcribe-arabic-07-2026-*.fleurs-ar.b8.*`). The
+  WER baseline runner is
+  `scripts/wer/run_reference_cohere_transformers.py`.
