@@ -348,6 +348,38 @@ VARIANT_PROFILES: dict[str, dict] = {
         "license_name": "openmdw-1.1",
         "license_link": "https://openmdw.ai/license/1-1/",
     },
+    # 0.6B English cache-aware streaming MULTI-TALKER RNN-T. Same
+    # FastConformer streaming encoder as nemotron-speech-streaming-en-0.6b
+    # (24L / d_model=1024 / 8h / kernel=9 / subsampling=8,
+    # att_context_style=chunked_limited, layer_norm conv, [70,13] default)
+    # fine-tuned with a SpeakerKernelMixin (NeMo class
+    # EncDecMultiTalkerRNNTBPEModel). At each layer in spk_kernel_layers it
+    # injects a per-speaker FF kernel (`spk_kernels.<L>`) plus a
+    # background-speaker FF kernel (`bg_spk_kernels.<L>`, add_bg_spk_kernel).
+    # The injection is a forward_pre_hook that runs UNCONDITIONALLY: even
+    # single-speaker inference adds spk_kernels.<L>(x) (all-ones speaker
+    # mask) + bg_spk_kernels.<L>(0) (zeros mask -> constant bias), so these
+    # tensors are load-bearing for the in-scope single-speaker path, not
+    # just multi-speaker decoding. v1 port targets single-speaker mode at
+    # [70,13]; multi-speaker decoding (external Sortformer diarization,
+    # SegLST speaker-tagged output) is a deferred Stage B workstream.
+    # spk_kernel_layers present on the profile is the switch that turns on
+    # kernel-tensor emission + the stt.parakeet.encoder.spk_kernel_* KV.
+    "multitalker-parakeet-streaming-0.6b-v1": {
+        "variant": "multitalker-parakeet-streaming-0.6b-v1",
+        "display_name": "Multitalker Parakeet Streaming EN",
+        "version": "v1",
+        "size_label": "0.6B",
+        "basename": "parakeet-rnnt",
+        "head_kind": "rnnt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+        "spk_kernel_layers": [0],
+        "license": "other",
+        "license_name": "nvidia-open-model-license",
+        "license_link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+    },
 }
 
 
@@ -1166,6 +1198,35 @@ PROMPT_MLP_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# Speaker-kernel FF tensors (multitalker-parakeet-streaming-0.6b-v1).
+# NeMo's SpeakerKernelMixin attaches, at each layer index in
+# spk_kernel_layers, a per-speaker FF kernel `spk_kernels.<L>` and (when
+# add_bg_spk_kernel) a background-speaker FF kernel `bg_spk_kernels.<L>`.
+# Both are top-level state_dict modules (NOT under `encoder.`) shaped
+# nn.Sequential(Linear(d,d), ReLU, Dropout, Linear(d,d)) -- only the .0
+# and .3 Linear slots carry tensors; .1 (ReLU) / .2 (Dropout) are
+# parameter-free, mirroring PRE_ENCODE_TABLE's index convention. The gguf
+# names take the loader's `enc.` prefix and keep the source layer index so
+# the loader can bind per-layer and apply the always-on injection at the
+# right block. See src/arch/parakeet family doc open-decision #5.
+def spk_kernel_table(layer: int) -> list[tuple[str, str]]:
+    return [
+        (f"spk_kernels.{layer}.0.weight", f"enc.spk_kernel.{layer}.0.weight"),
+        (f"spk_kernels.{layer}.0.bias",   f"enc.spk_kernel.{layer}.0.bias"),
+        (f"spk_kernels.{layer}.3.weight", f"enc.spk_kernel.{layer}.3.weight"),
+        (f"spk_kernels.{layer}.3.bias",   f"enc.spk_kernel.{layer}.3.bias"),
+    ]
+
+
+def bg_spk_kernel_table(layer: int) -> list[tuple[str, str]]:
+    return [
+        (f"bg_spk_kernels.{layer}.0.weight", f"enc.bg_spk_kernel.{layer}.0.weight"),
+        (f"bg_spk_kernels.{layer}.0.bias",   f"enc.bg_spk_kernel.{layer}.0.bias"),
+        (f"bg_spk_kernels.{layer}.3.weight", f"enc.bg_spk_kernel.{layer}.3.weight"),
+        (f"bg_spk_kernels.{layer}.3.bias",   f"enc.bg_spk_kernel.{layer}.3.bias"),
+    ]
+
+
 # NeMo state_dict contains buffers and preprocessor tables that the
 # loader computes itself at runtime. Skipping them silently keeps the
 # unused-key check meaningful for genuine misses.
@@ -1246,8 +1307,14 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
     prefer_direct = bool(profile.get("prefer_direct_load", False))
     drop_aux_ctc = "tdt_ctc" in slug  # hybrid checkpoints carry an aux CTC head we drop
     has_prompt = bool(profile.get("has_prompt", False))
+    # Speaker-kernel FF injection (multitalker variants). spk_kernel_layers
+    # on the profile is the switch; add_bg_spk_kernel is read from the live
+    # cfg so it can never disagree with the checkpoint's kernel set.
+    spk_kernel_layers = [int(l) for l in (profile.get("spk_kernel_layers") or [])]
+    has_spk_kernels = bool(spk_kernel_layers)
     print(f"Variant: {profile['variant']} (head_kind={head_kind}"
-          f"{', prompt=on' if has_prompt else ''})")
+          f"{', prompt=on' if has_prompt else ''}"
+          f"{', spk_kernels=on' if has_spk_kernels else ''})")
 
     model = load_nemo_model(model_spec, prefer_direct=prefer_direct)
 
@@ -1515,6 +1582,21 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
                 int(hp["enc_stream_sampling_frames_first"]),
             )
 
+    # Speaker-kernel FF injection (multitalker variants). These KVs tell
+    # the loader which encoder layers carry an always-on speaker-kernel
+    # injection and whether the background kernel is present, so Stage 4
+    # can bind enc.spk_kernel.* / enc.bg_spk_kernel.* and replay the
+    # forward_pre_hook. spk_kernel_type / add_bg_spk_kernel are read from
+    # the live cfg; spk_kernel_layers comes from the profile switch.
+    add_bg_spk_kernel = bool(config.get("add_bg_spk_kernel", False))
+    if has_spk_kernels:
+        writer.add_string("stt.parakeet.encoder.spk_kernel_type",
+                          str(config.get("spk_kernel_type", "ff")))
+        writer.add_array("stt.parakeet.encoder.spk_kernel_layers",
+                         [int(l) for l in spk_kernel_layers])
+        writer.add_bool("stt.parakeet.encoder.add_bg_spk_kernel",
+                        add_bg_spk_kernel)
+
     if head_kind != "ctc":
         writer.add_uint32("stt.parakeet.predictor.hidden",   hp["pred_hidden"])
         writer.add_uint32("stt.parakeet.predictor.n_layers", hp["pred_n_layers"])
@@ -1698,6 +1780,17 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
         for nemo_name, gguf_name in PROMPT_MLP_TABLE:
             add(nemo_name, gguf_name)
 
+    # Speaker-kernel FF tensors (multitalker variants). One (Linear.0,
+    # Linear.3) pair per layer, plus the background kernel when the
+    # checkpoint carries it. Emitted verbatim (fp32 passthrough).
+    if has_spk_kernels:
+        for layer in spk_kernel_layers:
+            for nemo_name, gguf_name in spk_kernel_table(layer):
+                add(nemo_name, gguf_name)
+            if add_bg_spk_kernel:
+                for nemo_name, gguf_name in bg_spk_kernel_table(layer):
+                    add(nemo_name, gguf_name)
+
     per_layer_tensors = len(ENCODER_BLOCK_TABLE) + (
         len(ENCODER_BLOCK_BIAS_TABLE) if hp["enc_use_bias"] else 0
     )
@@ -1714,11 +1807,19 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
             + len(JOINT_TABLE)
         )
     prompt_tensors = len(PROMPT_MLP_TABLE) if has_prompt else 0
+    if has_spk_kernels:
+        per_spk_layer = len(spk_kernel_table(0)) + (
+            len(bg_spk_kernel_table(0)) if add_bg_spk_kernel else 0
+        )
+        spk_tensors = len(spk_kernel_layers) * per_spk_layer
+    else:
+        spk_tensors = 0
     expected = (
         len(PRE_ENCODE_TABLE)
         + hp["enc_n_layers"] * per_layer_tensors
         + head_tensors
         + prompt_tensors
+        + spk_tensors
     )
     if n_added != expected:
         raise RuntimeError(

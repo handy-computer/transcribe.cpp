@@ -209,6 +209,24 @@ be resolved before the corresponding port enters porting-3-convert:
    diarization mask instead of all-ones, N-instance orchestration, SegLST) is
    OUT OF SCOPE per Stage 1 — see the multitalker integration brief.
 
+   **Stage 3 resolution (DONE).** `convert-parakeet.py` gates emission on a
+   `spk_kernel_layers` profile key. The 8 source tensors are emitted verbatim
+   (fp32 passthrough) under the loader's `enc.` prefix, keeping the source
+   layer index and the parameter-free `.1`/`.2` Sequential slots implicit:
+   - `spk_kernels.<L>.{0,3}.{weight,bias}` → `enc.spk_kernel.<L>.{0,3}.{weight,bias}`
+   - `bg_spk_kernels.<L>.{0,3}.{weight,bias}` → `enc.bg_spk_kernel.<L>.{0,3}.{weight,bias}`
+
+   Both Linear slots are `[1024,1024]` + `[1024]` bias. The layer-0 injection
+   is marked by three KVs Stage 4 reads:
+   `stt.parakeet.encoder.spk_kernel_type` (`"ff"`),
+   `stt.parakeet.encoder.spk_kernel_layers` (int array, `[0]`),
+   `stt.parakeet.encoder.add_bg_spk_kernel` (bool, `true`). The current loader
+   ignores the extra tensors + KVs and runs this GGUF on the existing
+   `nemotron-speech-streaming` path; the jfk smoke still decodes correctly
+   because clean single-speaker greedy decode is robust to the (unapplied)
+   injection drift — Stage 4 applies it for numerical parity against the
+   oracle.
+
 ## Tooling: NeMo-aware preflight
 
 `scripts/preflight.py` knows how to read `.nemo` archives when the
