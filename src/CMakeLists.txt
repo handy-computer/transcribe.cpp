@@ -151,6 +151,12 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
     endif()
 endif()
 
+# Lets the loader call the Metal capability query behind the AUTO-selection
+# gate (see metal_backend_lacks_simdgroup_mm in transcribe-load-common.cpp).
+if(GGML_METAL)
+    target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_METAL=1)
+endif()
+
 if(TRANSCRIBE_ENABLE_VALIDATION_HOOKS)
     target_compile_definitions(transcribe PRIVATE TRANSCRIBE_ENABLE_VALIDATION_HOOKS)
 endif()

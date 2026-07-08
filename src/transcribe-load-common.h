@@ -26,11 +26,21 @@ struct ggml_backend;
 typedef struct ggml_backend * ggml_backend_t;
 struct ggml_backend_buffer;
 typedef struct ggml_backend_buffer * ggml_backend_buffer_t;
+struct ggml_backend_device;
+typedef struct ggml_backend_device * ggml_backend_dev_t;
 struct ggml_context;
 struct ggml_tensor;
 struct gguf_context;
 
 namespace transcribe::load_common {
+
+// True when `dev` is a Metal device with no simdgroup matrix multiply (below
+// MTLGPUFamilyApple7), which silently produces garbage transcripts (Handy
+// issue #1608). `be` must be the initialized backend for `dev`. Honors the
+// TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM hook; returns false when the Metal
+// query is compiled out (non-Metal or GGML_BACKEND_DL builds). Exposed for
+// the gate unit test.
+bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev);
 
 // Resolve a BackendPlan from a caller's backend request by walking
 // ggml's device registry.

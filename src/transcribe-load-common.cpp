@@ -9,6 +9,11 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf.h"
+// Under GGML_BACKEND_DL the Metal symbols live in a loadable module and are
+// not link-visible here, so the capability query below is compiled out.
+#if defined(TRANSCRIBE_HAS_METAL) && !defined(TRANSCRIBE_GGML_BACKEND_DL)
+#    include "ggml-metal.h"
+#endif
 #include "transcribe-backend.h"
 #include "transcribe-log.h"
 #include "transcribe-path.h"
@@ -23,6 +28,32 @@
 #include <vector>
 
 namespace transcribe::load_common {
+
+// GPUs below MTLGPUFamilyApple7 (Intel iGPUs, AMD dGPUs on Intel Macs) have
+// no simdgroup matrix multiply; ggml's fallback matmul kernels silently
+// produce garbage transcripts there (Handy issue #1608). No generic ggml
+// capability exposes this — MUL_MAT's supports_op only needs simdgroup
+// *reduction*, which these GPUs do report — so ask Metal directly.
+bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev) {
+    // Test hook: force the "missing" verdict by device-name substring
+    // ("*" matches any) so the gate can be exercised on healthy hardware.
+    if (const char * match = std::getenv("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM");
+        match != nullptr && match[0] != '\0') {
+        const char * name = ggml_backend_dev_name(dev);
+        if (std::strcmp(match, "*") == 0 || (name != nullptr && std::strstr(name, match) != nullptr)) {
+            return true;
+        }
+    }
+#if defined(TRANSCRIBE_HAS_METAL) && !defined(TRANSCRIBE_GGML_BACKEND_DL)
+    // ggml_backend_metal_supports_family asserts the backend is Metal; guard
+    // so a classify/is_metal disagreement can never abort the process.
+    if (ggml_backend_is_metal(be)) {
+        return !ggml_backend_metal_supports_family(be, /*MTLGPUFamilyApple7=*/7);
+    }
+#endif
+    (void) be;
+    return false;
+}
 
 namespace {
 
@@ -87,6 +118,26 @@ ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, Backend
         }
 
         const BackendKind kind = classify_device(dev);
+
+        // A Metal device without simdgroup matmul yields garbage transcripts
+        // (see metal_backend_lacks_simdgroup_mm): skip it under AUTO, honor
+        // an explicit Metal request with a warning.
+        if (kind == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(be, dev)) {
+            const char * dname = ggml_backend_dev_name(dev);
+            if (wanted == BackendKind::OtherGpu) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                        "%s: skipping Metal device \"%s\": no simdgroup matrix multiply "
+                        "(pre-Apple7 GPU)",
+                        error_tag, dname != nullptr ? dname : "?");
+                safe_backend_free(be);
+                continue;
+            }
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                    "%s: Metal device \"%s\" has no simdgroup matrix multiply "
+                    "(pre-Apple7 GPU); transcription may be incorrect and very slow",
+                    error_tag, dname != nullptr ? dname : "?");
+        }
+
         log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend: %s", error_tag, kind_name(kind),
                 ggml_backend_dev_name(dev));
         out_kind = kind;
@@ -199,6 +250,16 @@ transcribe_status init_backends_explicit_index(transcribe_backend_request reques
     }
     log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend (gpu_device %d): %s", error_tag, kind_name(got), dev_index,
             ggml_backend_dev_name(dev));
+
+    // An explicit device index is always honored: warn only (same gate as
+    // try_init_kind).
+    if (got == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(gpu_be, dev)) {
+        const char * dname = ggml_backend_dev_name(dev);
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "%s: Metal device \"%s\" has no simdgroup matrix multiply "
+                "(pre-Apple7 GPU); transcription may be incorrect and very slow",
+                error_tag, dname != nullptr ? dname : "?");
+    }
 
     out.primary      = gpu_be;
     out.primary_kind = got;
