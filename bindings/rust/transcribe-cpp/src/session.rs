@@ -38,6 +38,8 @@ pub struct RunOptions {
     pub keep_special_tags: bool,
     /// Speculative-decode draft length. `-1` = family default, `0` = disabled.
     pub spec_k_drafts: i32,
+    /// Maximum transcript tokens to generate. `-1` = family default.
+    pub max_new_tokens: i32,
     /// Optional family-specific run extension (e.g. whisper decode knobs).
     pub family: Option<RunExtension>,
 }
@@ -53,6 +55,7 @@ impl Default for RunOptions {
             target_language: None,
             keep_special_tags: false,
             spec_k_drafts: -1,
+            max_new_tokens: -1,
             family: None,
         }
     }
@@ -412,6 +415,7 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
     params.itn = o.itn.to_raw();
     params.keep_special_tags = o.keep_special_tags;
     params.spec_k_drafts = o.spec_k_drafts;
+    params.max_new_tokens = o.max_new_tokens;
 
     let lang = o.language.as_deref().map(CString::new).transpose()?;
     let target = o.target_language.as_deref().map(CString::new).transpose()?;

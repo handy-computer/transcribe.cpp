@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -226,6 +227,17 @@ constexpr float kBnEps = 1e-5f;
 // FastConformer pre-encode downsamples time via stride-2, kernel-3, pad-1
 // convs; each stage maps T_in -> floor((T_in-1)/2)+1. We fold that exact
 // per-stage recurrence so the prediction matches the graph's T_enc.
+constexpr int k_default_max_new = 512;
+
+int canary_max_new_tokens(const transcribe_run_params * params) {
+    if (params != nullptr &&
+        params->struct_size >= offsetof(transcribe_run_params, max_new_tokens) + sizeof(params->max_new_tokens) &&
+        params->max_new_tokens > 0) {
+        return params->max_new_tokens;
+    }
+    return k_default_max_new;
+}
+
 int canary_predict_t_enc(int mel_n_frames, int subsampling_factor) {
     if (mel_n_frames <= 0 || subsampling_factor <= 0) {
         return 0;
@@ -1094,7 +1106,7 @@ transcribe_status run(transcribe_session *          session,
         cc->clear_result();
 
         const int eos_id     = cm->hparams.eos_token_id;
-        const int max_tokens = std::min(512, cc->kv_cache.n_ctx - prompt_len);
+        const int max_tokens = std::min(canary_max_new_tokens(params), cc->kv_cache.n_ctx - prompt_len);
 
         int next_token = 0;
         if (prompt_skip_softmax && db.argmax_out != nullptr) {
@@ -1610,7 +1622,7 @@ transcribe_status run_batch(transcribe_session *          session,
     }
 
     // Batched KV cache.
-    const int max_new  = 512;
+    const int max_new  = canary_max_new_tokens(params);
     int       max_n_kv = 1024;
     while (max_n_kv < prompt_len + max_new) {
         max_n_kv *= 2;

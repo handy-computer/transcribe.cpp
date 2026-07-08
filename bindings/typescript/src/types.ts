@@ -136,6 +136,8 @@ export interface TranscribeOptions {
   keepSpecialTags?: boolean;
   /** Speculative-decode draft count; -1 = family default. */
   specKDrafts?: number;
+  /** Maximum transcript tokens to generate; -1 = family default. */
+  maxNewTokens?: number;
   /** Cancel the run cooperatively. */
   signal?: AbortSignal;
   /** A run-slot family extension (e.g. whisper). */

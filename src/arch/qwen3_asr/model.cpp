@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -82,8 +83,17 @@ constexpr const char k_default_variant[] = "qwen3-asr";
 // transcript that fills the generation budget before end-of-stream is flagged
 // via transcribe_was_truncated().
 
-// Per-run generation budget (matches the reference dumper default).
+// Default per-run generation budget (matches the reference dumper default).
 constexpr int k_max_new = 256;
+
+int qwen3_max_new_tokens(const transcribe_run_params * params) {
+    if (params != nullptr &&
+        params->struct_size >= offsetof(transcribe_run_params, max_new_tokens) + sizeof(params->max_new_tokens) &&
+        params->max_new_tokens > 0) {
+        return params->max_new_tokens;
+    }
+    return k_max_new;
+}
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
 // optionally lowered — never raised — by the caller's session n_ctx knob.
@@ -734,13 +744,14 @@ transcribe_status run(transcribe_session *          session,
     // Input-length gate: audio + prompt + generation must fit the decoder
     // context window. Reject an over-length clip here, before prefill/decode.
     const int ceiling = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
-    if (T_prompt + k_max_new > ceiling) {
+    const int max_new = qwen3_max_new_tokens(params);
+    if (T_prompt + max_new > ceiling) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "qwen3_asr run: input too long — %d audio + %d prompt tokens "
                             "leave no room for output within the %d-token context (need %d). "
                             "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
                             "split it into segments.",
-                            T_enc, prefix_len + suffix_len, ceiling, T_prompt + k_max_new);
+                            T_enc, prefix_len + suffix_len, ceiling, T_prompt + max_new);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
@@ -749,7 +760,7 @@ transcribe_status run(transcribe_session *          session,
     // graph's flash-attn path wants pow2 attention width). A pre-allocated
     // smaller cache is freed and re-allocated.
     int want_n_ctx = 1024;
-    while (want_n_ctx < T_prompt + k_max_new) {
+    while (want_n_ctx < T_prompt + max_new) {
         want_n_ctx *= 2;
     }
     if (want_n_ctx > ceiling) {
@@ -879,7 +890,6 @@ transcribe_status run(transcribe_session *          session,
 
     // Step loop.
     const int32_t eos_id   = cm->hparams.eos_token_id;
-    const int32_t max_new  = k_max_new;
     int           cur_past = T_prompt;
 
     // Build the step graph ONCE and reuse every step, sized for the actual
@@ -1550,7 +1560,7 @@ transcribe_status run_batch(transcribe_session *          session,
 
     // Prompt length bound → max_n_kv and batched-cache n_ctx. Build and keep
     // each utterance's prompt token ids for the batched prefill.
-    const int                         max_new      = 256;
+    const int                         max_new      = qwen3_max_new_tokens(params);
     int                               max_T_prompt = 0;
     int                               prefix_len   = 0;
     // Per-utterance terminal status for rejected rows. Defaults to INVALID_ARG;

@@ -582,11 +582,16 @@ def _stream_update_from(u) -> StreamUpdate:
 
 
 def _build_run_params(task, language, target_language, timestamps,
-                      keep_special_tags, spec_k_drafts):
+                      keep_special_tags, spec_k_drafts, max_new_tokens):
     if not isinstance(spec_k_drafts, int) or spec_k_drafts < -1:
         raise InvalidArgument(
             f"spec_k_drafts must be -1 (family default), 0 (disabled), or a "
             f"positive draft length; got {spec_k_drafts!r}"
+        )
+    if not isinstance(max_new_tokens, int) or max_new_tokens < -1:
+        raise InvalidArgument(
+            f"max_new_tokens must be -1 (family default), 0 (family default), "
+            f"or a positive generation budget; got {max_new_tokens!r}"
         )
     params = _RunParams()
     _lib.transcribe_run_params_init(_byref(params))
@@ -596,6 +601,7 @@ def _build_run_params(task, language, target_language, timestamps,
     params.target_language = target_language.encode("utf-8") if target_language else None
     params.keep_special_tags = keep_special_tags
     params.spec_k_drafts = spec_k_drafts
+    params.max_new_tokens = max_new_tokens
     return params
 
 
@@ -984,6 +990,7 @@ class Session:
             timestamps: Timestamps = "auto",
             keep_special_tags: bool = False,
             spec_k_drafts: int = -1,
+            max_new_tokens: int = -1,
             family: FamilyExtension | None = None) -> Result:
         """Transcribe 16 kHz mono float32 PCM and return a materialized Result.
 
@@ -992,6 +999,8 @@ class Session:
         ``spec_k_drafts`` tunes speculative decoding on models whose
         capabilities advertise ``supports_spec_decode`` (-1 = family default,
         0 = disabled, >0 = draft length; silently ignored elsewhere).
+        ``max_new_tokens`` overrides the family default autoregressive output
+        budget where supported (-1 = family default).
 
         On ``Aborted`` (via :meth:`cancel`) and ``OutputTruncated`` the
         partial transcript is preserved and attached to the exception as
@@ -999,7 +1008,8 @@ class Session:
         self._cancel.clear()
         array, n_samples = _pcm_to_carray(pcm)
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts)
+                                   keep_special_tags, spec_k_drafts,
+                                   max_new_tokens)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1020,6 +1030,7 @@ class Session:
                   timestamps: Timestamps = "auto",
                   keep_special_tags: bool = False,
                   spec_k_drafts: int = -1,
+                  max_new_tokens: int = -1,
                   family: FamilyExtension | None = None,
                   return_exceptions: bool = False) -> list[Result | TranscribeError]:
         """Transcribe several utterances in one dispatch — one Result each.
@@ -1054,7 +1065,8 @@ class Session:
             counts[k] = n
 
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts)
+                                   keep_special_tags, spec_k_drafts,
+                                   max_new_tokens)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1119,7 +1131,7 @@ class Session:
         # spec_k_drafts is an offline-decode knob; streaming always uses the
         # family default (-1).
         run_params = _build_run_params(task, language, target_language, timestamps,
-                                       keep_special_tags, -1)
+                                       keep_special_tags, -1, -1)
         sp = _StreamParams()
         _lib.transcribe_stream_params_init(_byref(sp))
         sp.commit_policy = _enum(_COMMIT_POLICIES, commit_policy, "commit_policy")
