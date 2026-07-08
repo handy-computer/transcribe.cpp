@@ -127,7 +127,7 @@ ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, Backend
             if (wanted == BackendKind::OtherGpu) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                         "%s: skipping Metal device \"%s\": no simdgroup matrix multiply "
-                        "(pre-Apple7 GPU) — falling back to CPU",
+                        "(pre-Apple7 GPU)",
                         error_tag, dname != nullptr ? dname : "?");
                 safe_backend_free(be);
                 continue;
