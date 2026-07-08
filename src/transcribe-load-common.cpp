@@ -9,10 +9,8 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf.h"
-// Metal-specific capability query, used only to gate AUTO device selection
-// (see metal_backend_lacks_simdgroup_mm). Available only when the Metal
-// backend is statically linked; under GGML_BACKEND_DL the symbol lives in a
-// loadable module and is not link-visible here, so the query is compiled out.
+// Under GGML_BACKEND_DL the Metal symbols live in a loadable module and are
+// not link-visible here, so the capability query below is compiled out.
 #if defined(TRANSCRIBE_HAS_METAL) && !defined(TRANSCRIBE_GGML_BACKEND_DL)
 #    include "ggml-metal.h"
 #endif
@@ -31,22 +29,14 @@
 
 namespace transcribe::load_common {
 
-// Some Metal devices cannot do simdgroup matrix multiply — every GPU below
-// MTLGPUFamilyApple7, which on macOS means Intel integrated GPUs and AMD GPUs
-// on Intel Macs. On whisper-class, matmul-heavy graphs these devices run the
-// vector fallback matmul kernels, which on this hardware silently produce
-// garbage: the decoder collapses onto token 0 and emits an unbroken run of
-// "!" at ~0.01x realtime (Handy issue #1608). The signal is Metal-specific —
-// no generic ggml capability exposes it, since MUL_MAT's supports_op gates on
-// simdgroup *reduction*, which these GPUs do report — so the query is compiled
-// in only for a statically-linked Metal backend and is a no-op otherwise.
-//
-// has_simdgroup_mm is `supportsFamily:MTLGPUFamilyApple7`; the public metal
-// query indexes Apple families 1-based, so Apple7 is family 7.
+// GPUs below MTLGPUFamilyApple7 (Intel iGPUs, AMD dGPUs on Intel Macs) have
+// no simdgroup matrix multiply; ggml's fallback matmul kernels silently
+// produce garbage transcripts there (Handy issue #1608). No generic ggml
+// capability exposes this — MUL_MAT's supports_op only needs simdgroup
+// *reduction*, which these GPUs do report — so ask Metal directly.
 bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev) {
-    // Test hook: force the "missing" verdict for a device whose name matches,
-    // so the fallback path can be exercised on hardware that actually has
-    // simdgroup mm. Inert when unset/empty; "*" matches any device.
+    // Test hook: force the "missing" verdict by device-name substring
+    // ("*" matches any) so the gate can be exercised on healthy hardware.
     if (const char * match = std::getenv("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM");
         match != nullptr && match[0] != '\0') {
         const char * name = ggml_backend_dev_name(dev);
@@ -129,11 +119,9 @@ ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, Backend
 
         const BackendKind kind = classify_device(dev);
 
-        // Reject a Metal device that can't do simdgroup matrix multiply: it
-        // yields garbage transcripts on whisper-class graphs (see
-        // metal_backend_lacks_simdgroup_mm). Under AUTO ("any GPU") skip it so
-        // selection falls through to CPU; on an explicit Metal request, honour
-        // the device the caller named but warn loudly.
+        // A Metal device without simdgroup matmul yields garbage transcripts
+        // (see metal_backend_lacks_simdgroup_mm): skip it under AUTO, honor
+        // an explicit Metal request with a warning.
         if (kind == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(be, dev)) {
             const char * dname = ggml_backend_dev_name(dev);
             if (wanted == BackendKind::OtherGpu) {
@@ -263,8 +251,8 @@ transcribe_status init_backends_explicit_index(transcribe_backend_request reques
     log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend (gpu_device %d): %s", error_tag, kind_name(got), dev_index,
             ggml_backend_dev_name(dev));
 
-    // Same gate as try_init_kind, but an explicit device index — like an
-    // explicit Metal request — is always honored: warn only.
+    // An explicit device index is always honored: warn only (same gate as
+    // try_init_kind).
     if (got == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(gpu_be, dev)) {
         const char * dname = ggml_backend_dev_name(dev);
         log_msg(TRANSCRIBE_LOG_LEVEL_WARN,

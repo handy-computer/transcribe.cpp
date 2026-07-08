@@ -1,23 +1,16 @@
 // backend_metal_simdgroup_gate_unit.cpp - AUTO device selection skips a Metal
-// device that lacks simdgroup matrix multiply.
+// device that lacks simdgroup matrix multiply (Handy issue #1608).
 //
-// A pre-Apple7 Metal GPU (Intel integrated / AMD on Intel Macs) runs
-// whisper-class matmul graphs through vector fallback kernels that silently
-// produce garbage ("!!!!!") at ~0.01x realtime (Handy issue #1608). The loader
-// gates it via metal_backend_lacks_simdgroup_mm; here we force that verdict
-// with the TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM hook and pin the behavior:
+// Forces the gate's verdict via the TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM
+// hook and pins the behavior:
 //
 //   AUTO           -> skip the gated Metal device and fall back to CPU.
 //   explicit METAL -> honor the device the caller named (warn only).
-//   hook unset / non-matching -> selection matches the real hardware verdict.
+//   hook unset / non-matching -> selection matches the real hardware verdict,
+//                                probed once in main() (on a real pre-Apple7
+//                                GPU the gate fires with the hook unset).
 //
-// The baselines can't assume "Metal always wins": on an actual pre-Apple7
-// Intel Mac the real gate fires with the hook unset, so AUTO lands on CPU
-// there. main() probes the hardware verdict once (hook cleared) and the
-// baselines assert against it.
-//
-// Every case is a no-op on machines with no Metal device (e.g. Linux CI), so
-// the test passes trivially where the gate can't apply.
+// Every case is a no-op on machines with no Metal device (e.g. Linux CI).
 
 #include "ggml-backend.h"
 #include "transcribe-backend.h"
@@ -62,11 +55,9 @@ void free_plan(transcribe::BackendPlan & plan) {
     plan = transcribe::BackendPlan{};
 }
 
-// The real hardware verdict for the first Metal device, probed once in
-// main() with the hook cleared. On simdgroup-mm hardware (Apple Silicon)
-// an unhooked AUTO must pick Metal; on gated hardware (pre-Apple7 GPUs)
-// the real gate fires and AUTO must land on CPU — the same outcome the
-// forced-hook case pins.
+// Real hardware verdict for the first Metal device, probed once in main()
+// with the hook cleared. Baselines assert against it because on a real
+// pre-Apple7 GPU the gate sends AUTO to CPU even with the hook unset.
 enum class MetalProbe { None, HasSimdgroupMM, LacksSimdgroupMM };
 
 MetalProbe g_probe = MetalProbe::None;
@@ -80,8 +71,8 @@ MetalProbe probe_metal_device() {
         }
         ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
         if (be == nullptr) {
-            // A Metal device that can't init never reaches the gate; the
-            // loader's AUTO probe skips it the same way. Treat as absent.
+            // A Metal device that can't init never reaches the gate; treat
+            // as absent.
             return MetalProbe::None;
         }
         const bool lacks = transcribe::load_common::metal_backend_lacks_simdgroup_mm(be, dev);
@@ -155,8 +146,7 @@ void test_explicit_metal_is_honored_despite_gate() {
 int main() {
     transcribe_init_backends_default();
 
-    // The hook may leak in from the caller's environment; clear it so the
-    // probe and the baselines see the real hardware verdict.
+    // Clear any inherited hook so the probe sees the real hardware verdict.
     unset_env("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM");
     g_probe = probe_metal_device();
 

@@ -151,13 +151,8 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
     endif()
 endif()
 
-# Metal is Apple-only and, in the default build, statically linked into ggml.
-# Expose a define so the loader can call the Metal-specific capability query
-# that gates AUTO device selection against GPUs with no simdgroup matrix
-# multiply (pre-Apple7 Intel/AMD GPUs), which otherwise produce garbage
-# transcripts (Handy issue #1608). Under GGML_BACKEND_DL the metal symbols
-# live in a loadable module and are not link-visible, so the loader compiles
-# the query out (keyed off TRANSCRIBE_GGML_BACKEND_DL).
+# Lets the loader call the Metal capability query behind the AUTO-selection
+# gate (see metal_backend_lacks_simdgroup_mm in transcribe-load-common.cpp).
 if(GGML_METAL)
     target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_METAL=1)
 endif()
