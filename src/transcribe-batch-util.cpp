@@ -145,12 +145,25 @@ void fill_keypad_mask(ggml_tensor * mask, const std::vector<int> & real_lens, in
     if (mask == nullptr) {
         return;
     }
-    const float        ninf = -std::numeric_limits<float>::infinity();
+    // Padded keys get a large FINITE negative, not -inf. A finite sentinel is
+    // bit-exact with -inf for any query that has at least one non-masked key
+    // (expf(-1e30 - finite_row_max) underflows to exactly 0.0f, same as
+    // exp(-inf)), and it casts to -inf in F16 so the flash path is unchanged.
+    // The reason it must be finite: in a variable-length batch a padded QUERY
+    // row (a frame past the real length) can have its entire chunked-attention
+    // window fall on padded keys. With -inf that row is all -inf and the
+    // manual (non-flash) softmax computes 0/0 = NaN, which then poisons real
+    // frames at the next layer via 0*NaN (a masked padded key still multiplies
+    // its NaN value). A finite sentinel makes such a row softmax to a finite
+    // (near-uniform) value instead, so no NaN is ever created or propagated.
+    // Flash attention skips masked keys and never hit this; this keeps the
+    // manual/bit-exact path robust for diverse-length batches too.
+    const float        kMaskNeg = -1e30f;
     std::vector<float> buf(static_cast<size_t>(T) * n);
     for (int b = 0; b < n; ++b) {
         const int real = real_lens[static_cast<size_t>(b)];
         for (int k = 0; k < T; ++k) {
-            buf[static_cast<size_t>(b) * T + k] = (k < real) ? 0.0f : ninf;
+            buf[static_cast<size_t>(b) * T + k] = (k < real) ? 0.0f : kMaskNeg;
         }
     }
     ggml_backend_tensor_set(mask, buf.data(), 0, buf.size() * sizeof(float));

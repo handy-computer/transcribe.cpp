@@ -209,6 +209,29 @@ struct ParakeetHParams {
     std::vector<int32_t>     prompt_dictionary_indices;
     int32_t                  prompt_auto_id = -1;
 
+    // Speaker-kernel FF injection (multitalker variants, NeMo
+    // EncDecMultiTalkerRNNTBPEModel / SpeakerKernelMixin). At each layer in
+    // spk_kernel_layers, an always-on forward_pre_hook injects a per-speaker
+    // FF kernel plus (when add_bg_spk_kernel) a background FF kernel into the
+    // block input. The hook fires UNCONDITIONALLY: even single-speaker
+    // inference (no diarization targets) applies it, so it is load-bearing for
+    // the single-speaker path, not just multi-speaker decoding. In
+    // single-speaker mode the layer-0 injection reduces to a deterministic
+    // transform of the block-0 input (post pre-encode + xscale):
+    //   x += W3·relu(W0·x + b0) + b3               (spk kernel, per frame)
+    //   x += W3_bg·relu(b0_bg) + b3_bg             (bg kernel; NeMo masks the
+    //                                               bg input to all-zeros, so
+    //                                               its output is a constant
+    //                                               vector broadcast over time)
+    // Gated on has_spk_kernel (stt.parakeet.encoder.spk_kernel_layers
+    // present). Only layer-0 injection is implemented (this variant ships
+    // spk_kernel_layers=[0]); NeMo's idx>0 post-hook path is rejected at load.
+    // Today: multitalker-parakeet-streaming-0.6b-v1.
+    bool                 has_spk_kernel = false;
+    std::string          spk_kernel_type;         // "ff"
+    std::vector<int32_t> spk_kernel_layers;        // e.g. [0]
+    bool                 add_bg_spk_kernel = false;
+
     // Derived. Convenience accessors keyed off the above.
     int32_t enc_head_dim() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
 
@@ -348,13 +371,34 @@ struct ParakeetPromptMlp {
     ggml_tensor * mlp2_b = nullptr;  // [d_model]
 };
 
+// Speaker-kernel FF module (multitalker variants). NeMo
+// nn.Sequential(Linear.0, ReLU, Dropout, Linear.3); the .1 (ReLU) / .2
+// (Dropout, identity at eval) slots are parameter-free, so only the two
+// Linears carry tensors. Both are [d_model, d_model] + [d_model] bias.
+struct ParakeetSpkKernelFF {
+    ggml_tensor * lin0_w = nullptr;  // [d_model, d_model]
+    ggml_tensor * lin0_b = nullptr;  // [d_model]
+    ggml_tensor * lin3_w = nullptr;  // [d_model, d_model]
+    ggml_tensor * lin3_b = nullptr;  // [d_model]
+};
+
+// One (spk, optional bg) kernel pair bound to an encoder layer index.
+// Loaded only when hp.has_spk_kernel.
+struct ParakeetSpkKernel {
+    int32_t             layer  = -1;
+    ParakeetSpkKernelFF spk;           // enc.spk_kernel.<L>.*
+    bool                has_bg = false;
+    ParakeetSpkKernelFF bg;            // enc.bg_spk_kernel.<L>.* (add_bg_spk_kernel)
+};
+
 struct ParakeetWeights {
-    ParakeetPreEncode          pre_encode;
-    std::vector<ParakeetBlock> blocks;     // hp.enc_n_layers entries
-    ParakeetPredictor          predictor;  // empty when head_kind=CTC
-    ParakeetJoint              joint;      // empty when head_kind=CTC
-    ParakeetCtcHead            ctc_head;   // populated when head_kind=CTC
-    ParakeetPromptMlp          prompt;     // populated when hp.has_prompt
+    ParakeetPreEncode              pre_encode;
+    std::vector<ParakeetBlock>     blocks;      // hp.enc_n_layers entries
+    ParakeetPredictor              predictor;   // empty when head_kind=CTC
+    ParakeetJoint                  joint;       // empty when head_kind=CTC
+    ParakeetCtcHead                ctc_head;    // populated when head_kind=CTC
+    ParakeetPromptMlp              prompt;      // populated when hp.has_prompt
+    std::vector<ParakeetSpkKernel> spk_kernels; // populated when hp.has_spk_kernel
 };
 
 // Walk the canonical tensor list, look up each tensor by name, validate

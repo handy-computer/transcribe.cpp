@@ -247,6 +247,54 @@ std::vector<int> parse_sub_block_env(int n_layers) {
     return out;
 }
 
+// Speaker-kernel FF forward (multitalker variants): returns
+// W3·relu(W0·x + b0) + b3. x ne = [d_model, T]; the two Linears keep
+// d_model → d_model. Matches NeMo get_spk_kernel_class('ff') at eval
+// (Dropout is identity).
+ggml_tensor * build_spk_kernel_ff(ggml_context * ctx, ggml_tensor * x, const ParakeetSpkKernelFF & ff) {
+    ggml_tensor * h = ggml_mul_mat(ctx, ff.lin0_w, x);
+    h               = ggml_add(ctx, h, ff.lin0_b);
+    h               = ggml_relu(ctx, h);
+    ggml_tensor * y = ggml_mul_mat(ctx, ff.lin3_w, h);
+    y               = ggml_add(ctx, y, ff.lin3_b);
+    return y;
+}
+
+// Apply the always-on layer-0 speaker-kernel injection to the block-0
+// input `x` (post pre-encode + xscale). Mirrors
+// multitalker_asr_mixins.py::_get_spk_kernel_hook_pre_layer in
+// single-speaker mode (spk_targets / bg_spk_targets both None):
+//   x += spk_kernel(x)                        (all-ones speaker mask → x)
+//   x += bg_spk_kernel(0)                     (all-zeros bg mask → constant)
+// The bg input is exactly zeros, so bg_spk_kernel(0) = W3_bg·relu(b0_bg) +
+// b3_bg is a per-channel constant [d_model] broadcast over the time axis.
+// No-op when hp.has_spk_kernel is false. See family doc open-decision #5.
+ggml_tensor * apply_spk_kernel_injection(ggml_context *          ctx,
+                                         ggml_tensor *           x,
+                                         const ParakeetWeights & w,
+                                         const ParakeetHParams & hp) {
+    if (!hp.has_spk_kernel) {
+        return x;
+    }
+    for (const auto & kernel : w.spk_kernels) {
+        if (kernel.layer != 0) {
+            continue;  // loader rejects non-zero layers; defensive
+        }
+        ggml_tensor * x_spk = build_spk_kernel_ff(ctx, x, kernel.spk);
+        x                   = ggml_add(ctx, x, x_spk);
+        if (kernel.has_bg) {
+            // bg input is all-zeros → relu(W0_bg·0 + b0_bg) = relu(b0_bg);
+            // W3_bg·relu(b0_bg) + b3_bg is a [d_model] constant broadcast
+            // over the T axis by ggml_add.
+            ggml_tensor * hb   = ggml_relu(ctx, kernel.bg.lin0_b);
+            ggml_tensor * c_bg = ggml_mul_mat(ctx, kernel.bg.lin3_w, hb);
+            c_bg               = ggml_add(ctx, c_bg, kernel.bg.lin3_b);
+            x                  = ggml_add(ctx, x, c_bg);
+        }
+    }
+    return x;
+}
+
 }  // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *                     ctx,
@@ -314,10 +362,18 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     transcribe::debug::mark_tensor_for_dump(eb.mel_in);
 
     // Build the pre_encode subgraph. Variable-length offline batching
-    // enables masked subsampling (zero each conv intermediate's padded
-    // time region). Only the non-causal pre-encode is masked.
+    // enables masked subsampling (zero each conv intermediate's padded time
+    // region after every ReLU). Required for BOTH the non-causal and the
+    // causal (cache-aware streaming) pre-encode: conv0 adds a bias, so the
+    // zero-padded mel tail relu's to a NON-zero constant, and the causal
+    // convs' right-context (right = stride-1) then pulls that constant into
+    // the last valid encoder frame — a large boundary-frame drift vs
+    // single-shot (which has no padding tail). Masking after each ReLU
+    // re-zeroes the padded region so the boundary matches single-shot. The
+    // per-stage valid lengths are computed causal-aware in model.cpp
+    // (pre_encode_t_out), so the same masks are correct for either padding.
     conf::PreEncodeValidMasks pe_masks;
-    const bool                mask_pre_encode = var_len_masks && !policy.causal_pre_encode;
+    const bool                mask_pre_encode = var_len_masks;
     ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode), eb.mel_in, policy,
                                              /*name_prefix=*/"enc.pre_encode",
                                              /*error_tag=*/"parakeet", mask_pre_encode ? &pe_masks : nullptr);
@@ -346,6 +402,15 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         const float scale = std::sqrt(static_cast<float>(hp.enc_d_model));
         x                 = ggml_scale(ctx, x, scale);
         x                 = conf::named(x, "enc.pre_encode.xscaled");
+    }
+
+    // ----- speaker-kernel injection (multitalker variants) -----
+    // Always-on layer-0 pre-hook: injects the speaker + background FF kernels
+    // into the block-0 input. NeMo applies it to the post-pos-enc (post
+    // xscale) audio_signal, exactly here. No-op unless hp.has_spk_kernel.
+    if (hp.has_spk_kernel) {
+        x = apply_spk_kernel_injection(ctx, x, w, hp);
+        x = conf::named(x, "enc.pre_encode.spk_injected");
     }
 
     // ----- Conformer blocks -----
@@ -421,13 +486,15 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         bparams.n_head      = hp.enc_n_heads;
         bparams.conv_kernel = hp.enc_conv_kernel;
         bparams.kv_type     = kv_type;
-        // Flash attention by default. Flash batches correctly (the batched
-        // encoder output is bit-identical to single-shot flash), so the batch
-        // axis does not change the path. TRANSCRIBE_NO_FLASH forces the manual
-        // F32 mul_mat + soft_max path — used by the bit-exact CPU tensor gate
-        // (flash casts the rel-pos mask to F16, manual stays F32);
-        // TRANSCRIBE_FORCE_FLASH forces it back on. Parakeet has no attention
-        // decoder, so the decoder flag is a throwaway.
+        // Flash attention by default. Same-length batches are bit-identical to
+        // single-shot; variable-length batches rely on the attn_pad_mask +
+        // conv_pad_mask to isolate utterances (a small boundary-frame drift
+        // remains vs single-shot on the cache-aware streaming chunked path —
+        // see the parakeet family doc). TRANSCRIBE_NO_FLASH forces the manual
+        // F32 mul_mat + soft_max path —
+        // used by the bit-exact CPU tensor gate (flash casts the rel-pos mask
+        // to F16, manual stays F32); TRANSCRIBE_FORCE_FLASH forces it back on.
+        // Parakeet has no attention decoder, so the decoder flag is a throwaway.
         bool enc_use_flash = true, dec_use_flash = false;
         transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
         bparams.use_flash          = enc_use_flash;
@@ -679,6 +746,14 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
         }
         x = ggml_view_2d(ctx, x, x->ne[0], T_pre - drop_extra_pre_encoded, x->nb[1], drop_extra_pre_encoded * x->nb[1]);
         x = ggml_cont(ctx, x);
+    }
+
+    // ----- speaker-kernel injection (multitalker variants) -----
+    // Same always-on layer-0 pre-hook as the offline path, applied to the
+    // per-chunk block-0 input (post pre-encode + xscale + drop-extra slice).
+    // No-op unless hp.has_spk_kernel.
+    if (hp.has_spk_kernel) {
+        x = apply_spk_kernel_injection(ctx, x, w, hp);
     }
 
     const int64_t T_q_new = x->ne[1];
