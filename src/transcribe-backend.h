@@ -52,6 +52,15 @@ BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type, const cha
 // vendor. Never returns Unknown for a valid device pointer.
 BackendKind classify_device(ggml_backend_dev_t dev);
 
+// Probe order for GPU device selection. `dev_types` holds the ggml
+// device type of every registry device, indexed by registry position;
+// the returned indices are the candidates to try: every discrete GPU
+// (registry order) before any integrated GPU (registry order), non-GPU
+// devices excluded. Discrete-first matters because Vulkan enumeration
+// on hybrid-graphics machines often lists the display iGPU before the
+// dGPU. Unit-testable core for try_init_kind.
+std::vector<size_t> gpu_probe_order(const std::vector<enum ggml_backend_dev_type> & dev_types);
+
 // A resolved backend plan. Produced by load_common::init_backends
 // from a transcribe_backend_request and consumed by every helper
 // that needs to know where the graph will run.

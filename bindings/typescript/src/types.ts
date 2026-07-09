@@ -104,18 +104,20 @@ export interface BackendInfo {
    *  to refresh; backend-defined and not comparable across device kinds. */
   memoryFree: number;
   /** Registry index of this device — the value to pass as
-   *  {@link ModelOptions.gpuDevice} to select it (0 selects the auto / first
-   *  device). `null` when this came from `model.device`, since
-   *  `transcribe_model_get_device` does not expose an index; correlate such a
-   *  device back to {@link getAvailableBackends} by `deviceId` / `name`
-   *  instead. Order-dependent and not stable across driver updates or hosts. */
+   *  {@link ModelOptions.gpuDevice} to select it (0 means auto: discrete
+   *  GPUs are probed before integrated). `null` when this came from
+   *  `model.device`, since `transcribe_model_get_device` does not expose an
+   *  index; correlate such a device back to {@link getAvailableBackends} by
+   *  `deviceId` / `name` instead. Order-dependent and not stable across
+   *  driver updates or hosts. */
   index: number | null;
 }
 
 export interface ModelOptions {
   /** "auto" (default), or an explicit backend. */
   backend?: Backend;
-  /** GPU device registry index. 0 means auto / first matching device. */
+  /** GPU device registry index. 0 means auto: the first device that
+   *  initializes, probing discrete GPUs before integrated. */
   gpuDevice?: number;
 }
 
