@@ -16,22 +16,22 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK_ORDER(types, expected)                                                     \
-    do {                                                                                 \
-        const std::vector<size_t> _got = transcribe::gpu_probe_order(types);             \
-        const std::vector<size_t> _exp = (expected);                                     \
-        if (_got != _exp) {                                                              \
-            std::fprintf(stderr, "FAIL %s:%d: got {", __FILE__, __LINE__);               \
-            for (size_t v : _got) {                                                     \
-                std::fprintf(stderr, " %zu", v);                                         \
-            }                                                                            \
-            std::fprintf(stderr, " }, expected {");                                      \
-            for (size_t v : _exp) {                                                     \
-                std::fprintf(stderr, " %zu", v);                                         \
-            }                                                                            \
-            std::fprintf(stderr, " }\n");                                                \
-            ++g_failures;                                                                \
-        }                                                                                \
+#define CHECK_ORDER(types, expected)                                         \
+    do {                                                                     \
+        const std::vector<size_t> _got = transcribe::gpu_probe_order(types); \
+        const std::vector<size_t> _exp = (expected);                         \
+        if (_got != _exp) {                                                  \
+            std::fprintf(stderr, "FAIL %s:%d: got {", __FILE__, __LINE__);   \
+            for (size_t v : _got) {                                          \
+                std::fprintf(stderr, " %zu", v);                             \
+            }                                                                \
+            std::fprintf(stderr, " }, expected {");                          \
+            for (size_t v : _exp) {                                          \
+                std::fprintf(stderr, " %zu", v);                             \
+            }                                                                \
+            std::fprintf(stderr, " }\n");                                    \
+            ++g_failures;                                                    \
+        }                                                                    \
     } while (0)
 
 }  // namespace
@@ -52,14 +52,12 @@ int main() {
     // The hybrid-graphics case that motivated the tiering: the iGPU
     // enumerates first, but the discrete GPU must be probed first.
     CHECK_ORDER((DevTypes{ GGML_BACKEND_DEVICE_TYPE_IGPU, GGML_BACKEND_DEVICE_TYPE_GPU }), (Order{ 1, 0 }));
-    CHECK_ORDER((DevTypes{ GGML_BACKEND_DEVICE_TYPE_IGPU, GGML_BACKEND_DEVICE_TYPE_CPU,
-                           GGML_BACKEND_DEVICE_TYPE_GPU }),
+    CHECK_ORDER((DevTypes{ GGML_BACKEND_DEVICE_TYPE_IGPU, GGML_BACKEND_DEVICE_TYPE_CPU, GGML_BACKEND_DEVICE_TYPE_GPU }),
                 (Order{ 2, 0 }));
 
     // Registry order is preserved within each tier.
-    CHECK_ORDER((DevTypes{ GGML_BACKEND_DEVICE_TYPE_GPU, GGML_BACKEND_DEVICE_TYPE_IGPU,
-                           GGML_BACKEND_DEVICE_TYPE_GPU, GGML_BACKEND_DEVICE_TYPE_CPU,
-                           GGML_BACKEND_DEVICE_TYPE_IGPU }),
+    CHECK_ORDER((DevTypes{ GGML_BACKEND_DEVICE_TYPE_GPU, GGML_BACKEND_DEVICE_TYPE_IGPU, GGML_BACKEND_DEVICE_TYPE_GPU,
+                           GGML_BACKEND_DEVICE_TYPE_CPU, GGML_BACKEND_DEVICE_TYPE_IGPU }),
                 (Order{ 0, 2, 1, 4 }));
 
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
