@@ -75,11 +75,11 @@ pub struct Device {
     pub memory_free: u64,
     /// Registry index of this device — the value to pass as
     /// [`ModelOptions::gpu_device`](crate::ModelOptions) to select it (0
-    /// selects the auto / first device). `None` when this `Device` came from
-    /// [`crate::Model::device`], since `transcribe_model_get_device` does not
-    /// expose an index; correlate such a device back to [`devices`] by
-    /// `device_id` / `name` instead. Order-dependent and not stable across
-    /// driver updates or hosts.
+    /// means auto: discrete GPUs are probed before integrated). `None` when
+    /// this `Device` came from [`crate::Model::device`], since
+    /// `transcribe_model_get_device` does not expose an index; correlate such
+    /// a device back to [`devices`] by `device_id` / `name` instead.
+    /// Order-dependent and not stable across driver updates or hosts.
     pub index: Option<usize>,
 }
 

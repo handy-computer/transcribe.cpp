@@ -85,30 +85,31 @@ ggml_backend_t dev_init_checked(ggml_backend_dev_t dev, const char * error_tag) 
 }
 
 // Try to discover and initialize the first device whose classified
-// BackendKind matches `wanted`. On success returns the initialized
-// backend and writes the classified kind of the device that actually
-// succeeded to out_kind (which may differ from `wanted` when
-// `wanted == BackendKind::OtherGpu`). Returns nullptr if no matching
-// device initializes.
+// BackendKind matches `wanted`, visiting candidates in gpu_probe_order
+// (every discrete GPU before any integrated GPU). On success returns
+// the initialized backend and writes the classified kind of the device
+// that actually succeeded to out_kind (which may differ from `wanted`
+// when `wanted == BackendKind::OtherGpu`). Returns nullptr if no
+// matching device initializes.
 //
-// When `wanted == BackendKind::OtherGpu`, this acts as a "first GPU
-// or IGPU of any vendor" probe — used by the AUTO path. Critically,
-// out_kind is derived from the device that actually initialized, not
-// from a separate post-hoc registry walk, so a failing first-GPU
-// followed by a succeeding second-GPU yields the correct kind.
+// When `wanted == BackendKind::OtherGpu`, this acts as an "any GPU of
+// any vendor" probe — used by the AUTO path. Critically, out_kind is
+// derived from the device that actually initialized, not from a
+// separate post-hoc registry walk, so a failing first-GPU followed by
+// a succeeding second-GPU yields the correct kind.
 ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, BackendKind & out_kind) {
     const size_t n = ggml_backend_dev_count();
+
+    std::vector<enum ggml_backend_dev_type> dev_types;
+    dev_types.reserve(n);
     for (size_t i = 0; i < n; ++i) {
+        dev_types.push_back(ggml_backend_dev_type(ggml_backend_dev_get(i)));
+    }
+
+    for (const size_t i : gpu_probe_order(dev_types)) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
-        if (wanted == BackendKind::OtherGpu) {
-            // "Any GPU" probe: accept the first GPU/IGPU device,
-            // regardless of vendor.
-            const auto dev_type = ggml_backend_dev_type(dev);
-            if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU && dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                continue;
-            }
-        } else if (classify_device(dev) != wanted) {
+        if (wanted != BackendKind::OtherGpu && classify_device(dev) != wanted) {
             continue;
         }
 
@@ -389,12 +390,10 @@ transcribe_status init_backends(transcribe_backend_request requested,
 
         case TRANSCRIBE_BACKEND_AUTO:
             {
-                // AUTO: take the first GPU/IGPU device that successfully
-                // initializes, regardless of vendor. ggml registers devices
-                // in build-time priority order (Metal on Apple, Vulkan on
-                // Linux, etc.), which matches the documented preference.
-                // If every GPU fails init or none is compiled in, fall
-                // through to CPU + ACCEL.
+                // AUTO: take the first GPU device that successfully
+                // initializes, regardless of vendor, in gpu_probe_order
+                // (discrete before integrated). If every GPU fails init
+                // or none is compiled in, fall through to CPU + ACCEL.
                 //
                 // try_init_kind yields the classified kind of the device
                 // that actually succeeded, so a failing-then-succeeding probe

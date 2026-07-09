@@ -634,15 +634,17 @@ TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(const struct transcribe_mo
 /*
  * Backend request.
  *
- * AUTO    Pick the best available backend. Takes the first GPU/IGPU
- *         device that successfully initializes in ggml's device
- *         registry order — which is build-time prioritized (Metal on
- *         Apple, Vulkan / CUDA / SYCL on Linux, …). Host-memory
- *         accelerators (BLAS, AMX, …) are additionally layered onto
- *         the scheduler when present — they run on the same memory
- *         as the CPU backend and are orthogonal to the GPU/CPU split.
- *         Always succeeds: CPU is the final fallback when no GPU
- *         initializes.
+ * AUTO    Pick the best available backend. Takes the first GPU device
+ *         that successfully initializes, probing every discrete GPU
+ *         before any integrated GPU; within a tier, devices are tried
+ *         in ggml's device registry order — which is build-time
+ *         prioritized (Metal on Apple, Vulkan / CUDA / SYCL on
+ *         Linux, …). An integrated GPU is selected only when no
+ *         discrete GPU initializes. Host-memory accelerators (BLAS,
+ *         AMX, …) are additionally layered onto the scheduler when
+ *         present — they run on the same memory as the CPU backend
+ *         and are orthogonal to the GPU/CPU split. Always succeeds:
+ *         CPU is the final fallback when no GPU initializes.
  *
  * CPU     Strict CPU only. No GPU, no IGPU, and no host-memory
  *         accelerators (BLAS/AMX). This is the right choice for
@@ -875,9 +877,11 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_device(const struct transc
  *             for the semantics of each value. Default is AUTO.
  *
  * gpu_device: Multi-GPU selector. 0 (the default) means "auto / the first
- *             device of the chosen kind": AUTO picks the first GPU/IGPU in
- *             ggml's registry order, and explicit METAL/VULKAN/CUDA requests
- *             pick the first matching device, as before.
+ *             device of the chosen kind": AUTO picks the first GPU that
+ *             initializes, and explicit METAL/VULKAN/CUDA requests pick the
+ *             first matching device — in both cases probing every discrete
+ *             GPU before any integrated GPU, in ggml's registry order
+ *             within each tier.
  *
  *             A value > 0 selects the GPU/IGPU device at that global ggml
  *             registry index — the same index space transcribe_get_backend_device()
@@ -895,8 +899,9 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_device(const struct transc
  *             device whose vendor doesn't match an explicit GPU request, or
  *             is non-zero alongside a CPU / CPU_ACCEL request (there is no
  *             GPU to select). Note there is no way to explicitly select the
- *             device at registry index 0; that is exactly what AUTO /
- *             first-of-kind already picks.
+ *             device at registry index 0 — 0 is the auto sentinel. An
+ *             integrated GPU sitting at index 0 is therefore reachable only
+ *             via the probe order, when no discrete GPU initializes.
  */
 struct transcribe_model_load_params {
     uint64_t                   struct_size;

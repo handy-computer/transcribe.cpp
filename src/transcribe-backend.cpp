@@ -86,6 +86,22 @@ BackendKind classify_device(ggml_backend_dev_t dev) {
     return classify_backend_type(dev_type, reg_name);
 }
 
+std::vector<size_t> gpu_probe_order(const std::vector<enum ggml_backend_dev_type> & dev_types) {
+    std::vector<size_t> order;
+    order.reserve(dev_types.size());
+    for (size_t i = 0; i < dev_types.size(); ++i) {
+        if (dev_types[i] == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            order.push_back(i);
+        }
+    }
+    for (size_t i = 0; i < dev_types.size(); ++i) {
+        if (dev_types[i] == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            order.push_back(i);
+        }
+    }
+    return order;
+}
+
 namespace {
 
 // Shared body for safe_* teardown wrappers. The test hook fires after the

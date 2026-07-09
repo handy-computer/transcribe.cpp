@@ -270,7 +270,8 @@ class BackendDevice:
     # comparable across device kinds.
     memory_free: int
     # Registry index of this device — the value to pass as ``Model(...,
-    # gpu_device=index)`` to select it (0 selects the auto / first device).
+    # gpu_device=index)`` to select it (0 means auto: discrete GPUs are
+    # probed before integrated).
     # None when the device came from Model.device, since the underlying
     # transcribe_model_get_device() does not expose an index; correlate such a
     # device back to backends() by device_id / name instead. The index is

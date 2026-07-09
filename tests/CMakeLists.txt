@@ -102,6 +102,27 @@ add_test(NAME transcribe_backend_classification_unit
     COMMAND transcribe_backend_classification_unit)
 
 # -----------------------------------------------------------------------------
+# Backend GPU probe order unit test
+# -----------------------------------------------------------------------------
+#
+# Covers the pure discrete-before-integrated GPU ordering used by the
+# runtime backend selector, so the policy stays tested without requiring
+# a hybrid-graphics (iGPU + dGPU) machine in CI.
+
+add_executable(transcribe_backend_probe_order_unit
+    backend_probe_order_unit.cpp)
+
+target_link_libraries(transcribe_backend_probe_order_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_probe_order_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_probe_order_unit)
+
+add_test(NAME transcribe_backend_probe_order_unit
+    COMMAND transcribe_backend_probe_order_unit)
+
+# -----------------------------------------------------------------------------
 # Backend init_backends() runtime behavior
 # -----------------------------------------------------------------------------
 #
