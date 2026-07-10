@@ -22,6 +22,11 @@
 //! Escape hatch: anything else CMake accepts can be passed via the
 //! TRANSCRIBE_CMAKE_ARGS (or CMAKE_ARGS) env var — see the passthrough at the
 //! end of main(). This is the "no Cargo feature is a hard ceiling" guarantee.
+//!
+//! Windows: the native build runs through a short NTFS junction to OUT_DIR,
+//! so a stock machine (no LongPathsEnabled, no admin) builds the Vulkan
+//! backend from any checkout depth — see windows_short_out_dir for the
+//! MAX_PATH story.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -116,6 +121,16 @@ fn main() {
             cfg.cflag(flag);
             cfg.cxxflag(flag);
         }
+        // NOTE: do NOT set TrackFileAccess=false here (the llama-cpp-sys-2
+        // MAX_PATH workaround). MSBuild sequences a project's CustomBuild
+        // items through its FileTracker machinery, and with tracking off the
+        // ExternalProject steps of ggml-vulkan's vulkan-shaders-gen RACE:
+        // the build step launches while configure is still generating
+        // (MSB1009 "ALL_BUILD.vcxproj does not exist", install: "Not a file:
+        // cmake_install.cmake"). Reproduced deterministically on fresh build
+        // trees with VS 17.14 / CMake 4.3. The short-junction build root
+        // (windows_short_out_dir) keeps tracker paths under the legacy limit
+        // instead, which removes the FTK1011 failure that workaround targets.
     }
 
     // Dynamic backend modules: each compute backend becomes a loadable module
@@ -196,12 +211,129 @@ fn main() {
         }
     }
 
+    // Windows: build through a short NTFS junction instead of the deep
+    // OUT_DIR, so every path the native build creates stays under the
+    // 260-char legacy limit on a STOCK machine (no LongPathsEnabled, no
+    // admin). See windows_short_out_dir for the failure modes this dodges.
+    // The junction points AT OUT_DIR, so the files physically live where
+    // cargo expects them; only the paths the C++ toolchain sees are short.
+    let short = windows_short_out_dir();
+    if let Some(short) = &short {
+        cfg.out_dir(short);
+    }
+
     // Builds + installs into OUT_DIR; the returned path IS the install prefix.
     let prefix = cfg.build();
+    // Everything emitted downstream (rustc-link-search, DEP_* metadata, DLL
+    // staging) must reference the DURABLE OUT_DIR, not the junction: cargo
+    // caches these strings across builds without re-running this script, so a
+    // deleted %LOCALAPPDATA%\tcs must not be able to break later links. The
+    // junction and OUT_DIR are the same directory, so this is a pure rename.
+    let prefix = if short.is_some() {
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"))
+    } else {
+        prefix
+    };
 
     let manifest = find_manifest(&prefix)
         .unwrap_or_else(|| panic!("transcribe-link.json not found under {}", prefix.display()));
     emit_link_lines(&prefix, &manifest);
+}
+
+/// Windows MAX_PATH mitigation: return a SHORT path that resolves to OUT_DIR
+/// (an NTFS junction under `%LOCALAPPDATA%\tcs\<hash>`), or None to build in
+/// OUT_DIR directly (non-Windows hosts, or best-effort failure).
+///
+/// Why: cargo's OUT_DIR is deep (`<target>/<profile>/build/<crate>-<hash>/out`,
+/// ~100 chars in a normal checkout) and the Vulkan backend's shader generator
+/// builds as a nested CMake ExternalProject whose compiler-detection scratch
+/// stacks ~185 more (`build/ggml/src/ggml-vulkan/.../CMakeScratch/
+/// TryCompile-*/cmTC_*.tlog/...`). Past 260 chars, MSVC tooling fails in ways
+/// no user-side setting fully cures: MSBuild's native FileTracker ignores the
+/// OS LongPathsEnabled flag (FTK1011), and with the flag unset the managed
+/// side throws too (MSB3491/MSB6003). A ~40-char build root keeps the worst
+/// path near ~230 on a stock machine. Junctions need NO admin rights or
+/// Developer Mode (unlike symlinks), which is why one is used here.
+///
+/// Idempotent: an existing junction that already resolves to OUT_DIR is
+/// reused; a stale or dangling one (e.g. after `cargo clean`) is removed and
+/// recreated. The junction name is an FNV-1a hash of OUT_DIR, so concurrent
+/// builds in different checkouts never collide, and a given OUT_DIR always
+/// maps back to the same junction rather than accreting new ones.
+fn windows_short_out_dir() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    // Backslash-normalize: OUT_DIR inherits CARGO_TARGET_DIR verbatim, which
+    // MSYS/Git-Bash setups hand over with forward slashes — cmd's mklink
+    // parses those as switches and refuses the link.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").ok()?.replace('/', "\\"));
+    let base = env::var_os("LOCALAPPDATA")
+        .or_else(|| env::var_os("TEMP"))
+        .map(PathBuf::from)?
+        .join("tcs");
+
+    let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a: stable across rustc versions
+    for b in out_dir.to_string_lossy().bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let link = base.join(format!("{hash:016x}"));
+
+    // The junction target must exist before mklink, and canonicalize() needs
+    // both sides real to prove the link resolves to OUT_DIR.
+    std::fs::create_dir_all(&out_dir).ok()?;
+    // symlink_metadata (not exists()) so a DANGLING junction is detected: a
+    // reparse point whose target is gone traverses to "not found".
+    if std::fs::symlink_metadata(&link).is_ok() {
+        match (
+            std::fs::canonicalize(&link),
+            std::fs::canonicalize(&out_dir),
+        ) {
+            (Ok(a), Ok(b)) if a == b => return Some(link),
+            // remove_dir deletes the junction itself, never the target's contents
+            _ => std::fs::remove_dir(&link).ok()?,
+        }
+    }
+    std::fs::create_dir_all(&base).ok()?;
+
+    // No std API creates junctions; cmd's mklink /J does, with no extra deps.
+    let output = std::process::Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(&link)
+        .arg(&out_dir)
+        .output();
+    let created = output.as_ref().map(|o| o.status.success()).unwrap_or(false);
+    let verified = created
+        && matches!(
+            (std::fs::canonicalize(&link), std::fs::canonicalize(&out_dir)),
+            (Ok(a), Ok(b)) if a == b
+        );
+    if !verified {
+        // Best-effort: fall back to the deep OUT_DIR (prior behavior). The
+        // build may still succeed (shallow checkout, long paths enabled).
+        let detail = output
+            .map(|o| {
+                String::from_utf8_lossy(if o.stderr.is_empty() {
+                    &o.stdout
+                } else {
+                    &o.stderr
+                })
+                .trim()
+                .to_string()
+            })
+            .unwrap_or_else(|e| e.to_string());
+        println!(
+            "cargo:warning=transcribe-cpp-sys: could not create short build junction {} -> {} ({detail}); \
+             building in OUT_DIR (may exceed Windows MAX_PATH in deep checkouts)",
+            link.display(),
+            out_dir.display()
+        );
+        return None;
+    }
+    Some(link)
 }
 
 /// GNUInstallDirs picks `lib` or `lib64`; find the manifest under either.

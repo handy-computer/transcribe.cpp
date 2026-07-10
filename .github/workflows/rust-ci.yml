@@ -251,3 +251,71 @@ jobs:
       - name: ccache stats
         if: runner.os == 'Linux'
         run: ccache -s | head -8
+
+  # The consumer-environment MAX_PATH gate. Every other Windows lane in this
+  # repo sets CMAKE_GENERATOR=Ninja, which never touches MSBuild — but a stock
+  # cargo consumer has no Ninja, so the cmake crate picks the Visual Studio
+  # generator, whose native FileTracker enforces the legacy 260-char path
+  # limit EVEN WHEN the OS LongPathsEnabled flag is on (FTK1011). This lane
+  # reproduces that consumer exactly: default generator (no vcvars, no Ninja),
+  # LongPathsEnabled forced OFF, Vulkan + dynamic-backends (the deepest tree —
+  # the vulkan-shaders-gen ExternalProject), built into a target dir padded to
+  # a realistic-worst checkout depth. It guards the short-junction build root
+  # in bindings/rust/sys/build.rs (windows_short_out_dir) and the EP_PREFIX
+  # relocation in the root CMakeLists.txt; without those this build fails in
+  # minutes. Do NOT "fix" a failure here with TrackFileAccess=false — that
+  # races ExternalProject steps (see the NOTE in build.rs).
+  rust-windows-deep-path:
+    runs-on: blacksmith-2vcpu-windows-2025
+    timeout-minutes: 60
+    env:
+      # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
+      VULKAN_VERSION: "1.4.350.0"
+    steps:
+      # Stock-Windows posture. Registry is read at process start, so every
+      # later step (each its own process) sees the legacy 260-char behavior.
+      - name: Force stock path limits (LongPathsEnabled=0)
+        shell: pwsh
+        run: Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 0 -Type DWord
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
+        shell: pwsh
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+      - name: Build from a deep consumer path (default VS generator)
+        shell: pwsh
+        run: |
+          # Pad the target root to ~120 chars — past the ~75-char threshold
+          # where the un-fixed build overflows 260 (base + the ~185-char
+          # ExternalProject/TryCompile suffix), but under the depth where
+          # rustc's own MSVC linking of build scripts hits LNK1104 (~230).
+          $pad = "deep-consumer-path-padding-" + ("a" * [Math]::Max(1, 120 - $env:GITHUB_WORKSPACE.Length - 36))
+          $env:CARGO_TARGET_DIR = "$env:GITHUB_WORKSPACE\$pad\target"
+          "target root: $($env:CARGO_TARGET_DIR.Length) chars"
+          cargo build -p transcribe-cpp-sys --features vulkan,dynamic-backends --verbose
+      - name: "-sys smoke through the durable link paths"
+        # Proves the emitted rustc-link-search/DLL staging reference OUT_DIR
+        # (not the junction): the test binary must link and run even though
+        # the junction is only guaranteed to exist during the native build.
+        shell: pwsh
+        run: |
+          $pad = "deep-consumer-path-padding-" + ("a" * [Math]::Max(1, 120 - $env:GITHUB_WORKSPACE.Length - 36))
+          $env:CARGO_TARGET_DIR = "$env:GITHUB_WORKSPACE\$pad\target"
+          cargo test -p transcribe-cpp-sys --features vulkan,dynamic-backends
+      - name: Assert MAX_PATH margin (junction tree stayed under 260)
+        # The whole point: nothing the MSVC toolchain touched may approach the
+        # stock limit. 240 leaves headroom for longer usernames than the
+        # runner's.
+        shell: pwsh
+        run: |
+          $max = 0; $worst = ""
+          Get-ChildItem "$env:LOCALAPPDATA\tcs" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.FullName.Length -gt $max) { $max = $_.FullName.Length; $worst = $_.FullName }
+          }
+          "longest build path: $max chars"
+          $worst
+          if ($max -gt 240) { throw "build path margin eroded: $max > 240" }
