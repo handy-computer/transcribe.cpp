@@ -119,8 +119,6 @@ fn main() {
             cfg.cflag(flag);
             cfg.cxxflag(flag);
         }
-        // NOTE: never set TrackFileAccess=false here (llama-cpp-sys-2's MAX_PATH
-        // workaround) — it races ExternalProject steps under the VS generator (MSB1009).
     }
 
     // Dynamic backend modules: each compute backend becomes a loadable module
