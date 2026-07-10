@@ -396,18 +396,9 @@ if(MSVC)
     endif()
 endif()
 
-# Windows MAX_PATH: ExternalProject's default PREFIX nests
-# <caller-binary-dir>/<name>-prefix/src/<name>-build under the calling
-# directory. For ggml-vulkan's vulkan-shaders-gen that caller is already
-# .../ggml/src/ggml-vulkan/, and the sub-build's own compiler-detection
-# scratch (CMakeFiles/CMakeScratch/TryCompile-*/... *.tlog) stacks another
-# ~100 characters on top — pushing MSVC builds past the 260-char legacy path
-# limit whenever the build tree isn't shallow (a cargo OUT_DIR or a pip temp
-# dir, typically). EP_PREFIX is a directory property inherited by
-# add_subdirectory, so setting it here relocates every ExternalProject to the
-# flat <build>/e/src/<name>-build layout without editing the vendored ggml
-# tree (ggml/UPSTREAM: local edits are overwritten on sync). Windows-only to
-# leave other platforms' build layouts untouched.
+# Windows MAX_PATH: relocate ExternalProjects (vulkan-shaders-gen) to a flat
+# <build>/e/src/ layout; inherited by add_subdirectory, so the vendored ggml
+# tree stays untouched.
 if(WIN32)
     set_property(DIRECTORY PROPERTY EP_PREFIX "${CMAKE_BINARY_DIR}/e")
 endif()
