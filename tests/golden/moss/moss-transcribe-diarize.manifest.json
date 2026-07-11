@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "moss",
+  "variant": "moss-transcribe-diarize",
+  "source_model": {
+    "hf_repo": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+    "hf_revision": "d7231bbae2587a4af278735eb765b318c4f64edd"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "_skeleton": true
+}

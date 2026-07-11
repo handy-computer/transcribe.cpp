@@ -1,0 +1,1152 @@
+############ README.md ############
+---
+license: apache-2.0
+library_name: transformers
+language:
+- en
+- zh
+tags:
+- moss
+- audio
+- speech
+- asr
+- diarization
+- timestamp-asr
+- long-form-audio
+- multimodal
+- custom_code
+pipeline_tag: audio-text-to-text
+---
+
+# MOSS-Transcribe-Diarize
+
+<div align="center">
+  <a href="https://github.com/OpenMOSS/MOSS-Transcribe-Diarize"><img src="https://img.shields.io/badge/GitHub-OpenMOSS%2FMOSS--Transcribe--Diarize-black?logo=github"></a>
+  <a href="https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize"><img src="https://img.shields.io/badge/HuggingFace-Model-orange?logo=huggingface"></a>
+  <a href="https://arxiv.org/abs/2601.01554"><img src="https://img.shields.io/badge/arXiv-2601.01554-b31b1b?logo=arxiv"></a>
+</div>
+
+MOSS-Transcribe-Diarize 0.9B is an end-to-end audio understanding model for long-form multi-speaker transcription, diarization, timestamps, and acoustic event awareness.
+
+Given an audio or video file, the model generates a compact speaker-aware transcript in one pass, including timestamps and anonymous speaker labels such as `[S01]`, `[S02]`, and beyond.
+
+## News
+
+* 2026-07-09: Released MOSS-Transcribe-Diarize 0.9B.
+
+## Contents
+
+- [Introduction](#introduction)
+- [Model Architecture](#model-architecture)
+- [Evaluation](#evaluation)
+- [Quickstart](#quickstart)
+  - [Environment Setup](#environment-setup)
+  - [Python Usage](#python-usage)
+  - [Custom Prompt and Hotwords](#custom-prompt-and-hotwords)
+  - [Serve with vLLM and SGLang](#serve-with-vllm-and-sglang)
+  - [Subtitle Web App](#subtitle-web-app)
+- [Output Format](#output-format)
+- [More Information](#more-information)
+- [License](#license)
+- [Citation](#citation)
+
+## Introduction
+
+MOSS-Transcribe-Diarize 0.9B turns real-world long-form audio into structured, speaker-aware transcripts in one pass. Instead of stitching together separate ASR and diarization systems, it jointly performs speech transcription and speaker diarization, producing time-aligned text with consistent speaker labels.
+
+The model is built for meetings, calls, podcasts, interviews, lectures, videos, and other long or messy multi-speaker recordings. It can also emit acoustic event annotations, giving downstream systems a richer view of what happened, who spoke, and when.
+
+Core capabilities:
+
+* **Long-form transcription**: Converts long audio or video recordings into timestamped text.
+* **Speaker-aware diarization**: Assigns anonymous speaker labels such as `[S01]` and `[S02]` without a separate diarization pipeline.
+* **Promptable generation**: Supports custom transcription instructions, hotwords, and acoustic event annotations.
+
+## Model Architecture
+
+<p align="center">
+  <img src="Model_Architecture.png" alt="MOSS-Transcribe-Diarize 0.9B model architecture" width="900">
+</p>
+
+| Component | Specification |
+|---|---|
+| Text backbone | Qwen3-0.6B style causal decoder |
+| Audio encoder | Whisper-Medium encoder configuration |
+| Audio frontend | `WhisperFeatureExtractor`, 16 kHz, 80 mel bins, 30 s chunks |
+| Audio-text bridge | 4x temporal merge + MLP adaptor |
+| Fusion | Audio features replace <code>&lt;&#124;audio_pad&#124;&gt;</code> embeddings via `masked_scatter` |
+| Output format | Compact `[start][Sxx]text[end]` transcript with speaker tags such as `[S01]` |
+
+This Hugging Face repository includes the custom Transformers remote code required to load the model with `trust_remote_code=True`.
+
+## Evaluation
+
+We evaluate MOSS-Transcribe-Diarize using three objective metrics: Character Error Rate (CER), concatenated minimum-permutation Character Error Rate (cpCER), and Delta-cp. Lower is better for all metrics. A dash (`-`) indicates that the result is unavailable.
+
+<div style="overflow-x: auto;">
+<table style="white-space: nowrap;">
+  <thead>
+    <tr>
+      <th rowspan="2" style="min-width: 220px;">Model</th>
+      <th colspan="3" style="text-align:center;">AISHELL&#8209;4</th>
+      <th colspan="3" style="text-align:center;">Alimeeting</th>
+      <th colspan="3" style="text-align:center;">Podcast</th>
+      <th colspan="3" style="text-align:center;">Movies</th>
+    </tr>
+    <tr>
+      <th>CER↓</th><th>cpCER↓</th><th>Δcp↓</th>
+      <th>CER↓</th><th>cpCER↓</th><th>Δcp↓</th>
+      <th>CER↓</th><th>cpCER↓</th><th>Δcp↓</th>
+      <th>CER↓</th><th>cpCER↓</th><th>Δcp↓</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="white-space: nowrap;">Doubao</td>
+      <td>18.18</td><td>27.86</td><td>9.68</td>
+      <td>25.25</td><td>37.57</td><td>12.31</td>
+      <td>7.93</td><td>10.54</td><td>2.61</td>
+      <td>9.94</td><td>30.88</td><td>20.94</td>
+    </tr>
+    <tr>
+      <td style="white-space: nowrap;">ElevenLabs</td>
+      <td>19.58</td><td>37.95</td><td>18.36</td>
+      <td>25.70</td><td>36.69</td><td>10.99</td>
+      <td>8.50</td><td>11.34</td><td>2.85</td>
+      <td>11.49</td><td>17.85</td><td>6.37</td>
+    </tr>
+    <tr>
+      <td style="white-space: nowrap;">GPT-4o</td>
+      <td>-</td><td>-</td><td>-</td>
+      <td>-</td><td>-</td><td>-</td>
+      <td>-</td><td>-</td><td>-</td>
+      <td>14.37</td><td>23.67</td><td>9.31</td>
+    </tr>
+    <tr>
+      <td style="white-space: nowrap;">Gemini 2.5 Pro</td>
+      <td>42.70</td><td>53.42</td><td>10.72</td>
+      <td>27.43</td><td>41.64</td><td>14.21</td>
+      <td>7.38</td><td>10.23</td><td>2.85</td>
+      <td>15.46</td><td>24.15</td><td>8.69</td>
+    </tr>
+    <tr>
+      <td style="white-space: nowrap;">Gemini 3 Pro</td>
+      <td>22.75</td><td>27.43</td><td>4.68</td>
+      <td>26.75</td><td>32.84</td><td>6.09</td>
+      <td>-</td><td>-</td><td>-</td>
+      <td>8.62</td><td>14.73</td><td><u>6.11</u></td>
+    </tr>
+    <tr>
+      <td style="white-space: nowrap;">VIBEVOICE ASR</td>
+      <td>21.40</td><td>24.99</td><td>3.59</td>
+      <td>27.40</td><td>29.33</td><td>1.93</td>
+      <td>27.94</td><td>48.30</td><td>20.36</td>
+      <td>14.59</td><td>42.54</td><td>27.94</td>
+    </tr>
+    <tr>
+      <td style="white-space: nowrap;"><b>MOSS Transcribe Diarize 0.9B</b></td>
+      <td><u>14.84</u></td><td><u>15.83</u></td><td><u>0.99</u></td>
+      <td><u>24.86</u></td><td><u>22.17</u></td><td><u>-2.69</u></td>
+      <td><u>5.97</u></td><td><u>7.37</u></td><td><b>1.40</b></td>
+      <td><u>6.36</u></td><td><u>12.76</u></td><td>6.40</td>
+    </tr>
+    <tr>
+      <td style="white-space: nowrap;"><b>MOSS Transcribe Diarize Pro</b></td>
+      <td><b>13.78</b></td><td><b>14.02</b></td><td><b>0.24</b></td>
+      <td><b>18.22</b></td><td><b>13.94</b></td><td><b>-4.27</b></td>
+      <td><b>4.46</b></td><td><b>6.97</b></td><td><u>2.51</u></td>
+      <td><b>5.86</b></td><td><b>11.78</b></td><td><b>5.92</b></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+## Quickstart
+
+### Environment Setup
+
+Use a clean Python environment. The model uses custom Transformers code, so load the model and processor with `trust_remote_code=True`.
+
+```bash
+conda create -n moss-transcribe-diarize python=3.12 -y
+conda activate moss-transcribe-diarize
+
+git clone https://github.com/OpenMOSS/MOSS-Transcribe-Diarize.git
+cd MOSS-Transcribe-Diarize
+
+pip install --index-url https://download.pytorch.org/whl/cu128 torch torchaudio
+pip install -e .
+```
+
+The GitHub package provides helper utilities such as audio/video loading, transcription message construction, transcript parsing, CLI inference, and the subtitle web app. The model weights and remote-code model files are loaded from this Hugging Face repository.
+
+### Python Usage
+
+```python
+import torch
+from transformers import AutoModelForCausalLM, AutoProcessor
+
+from moss_transcribe_diarize import parse_transcript
+from moss_transcribe_diarize.inference_utils import (
+    build_transcription_messages,
+    generate_transcription,
+    resolve_device,
+)
+
+model_id = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+audio_path = "audio.wav"
+
+device = resolve_device("auto")
+dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+    dtype="auto",
+).to(dtype=dtype).to(device).eval()
+
+processor = AutoProcessor.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+)
+
+messages = build_transcription_messages(audio_path)
+result = generate_transcription(
+    model,
+    processor,
+    messages,
+    max_new_tokens=2048,
+    do_sample=False,
+    device=device,
+    dtype=dtype,
+)
+
+print(result["text"])
+
+for segment in parse_transcript(result["text"]):
+    print(segment.start, segment.end, segment.speaker, segment.text)
+```
+
+The message flow follows the common Qwen multimodal pattern:
+
+1. `processor.apply_chat_template(messages, tokenize=False)` renders text with audio placeholders.
+2. The helper utilities load audio waveforms from the same messages.
+3. `processor(text=text, audio=audios)` computes Whisper input features and expands audio placeholders.
+4. `model.generate(...)` produces timestamped transcription and diarization text.
+
+### Custom Prompt and Hotwords
+
+The default prompt is optimized for timestamped transcription and speaker diarization:
+
+```text
+请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，并在段末标注结束时间戳，以清晰标明该段语音范围。
+```
+
+To add hotwords, append a short hint to the default prompt:
+
+```text
+请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，并在段末标注结束时间戳，以清晰标明该段语音范围。热词提示：热词1, 热词2, 热词3
+```
+
+More prompt recipes are available in the GitHub repository: <https://github.com/OpenMOSS/MOSS-Transcribe-Diarize/blob/main/examples/prompts.md>
+
+### Serve with vLLM and SGLang
+
+MOSS-Transcribe-Diarize supports vLLM serving through the OpenAI-compatible transcription API. Use a pinned vLLM nightly build that includes the MOSS-Transcribe-Diarize model registration. Choose one of the following commands: for CUDA 12 environments, use `cu129`; for CUDA 13 environments, use `cu130`.
+
+```bash
+uv pip install -U vllm \
+  --torch-backend=auto \
+  --extra-index-url https://wheels.vllm.ai/68b4a1d582818e67adc903bf1b8fc5a5447da2fa/cu129
+```
+
+or:
+
+```bash
+uv pip install -U vllm \
+  --torch-backend=auto \
+  --extra-index-url https://wheels.vllm.ai/68b4a1d582818e67adc903bf1b8fc5a5447da2fa/cu130
+```
+
+```bash
+vllm serve OpenMOSS-Team/MOSS-Transcribe-Diarize --trust-remote-code
+```
+
+```bash
+curl http://localhost:8000/v1/audio/transcriptions \
+  -F model="OpenMOSS-Team/MOSS-Transcribe-Diarize" \
+  -F file=@"audio.wav" \
+  -F response_format="json" \
+  -F temperature="0"
+```
+
+The recommended way to serve MOSS-Transcribe-Diarize is [SGLang Omni](https://github.com/sgl-project/sglang-omni) through the OpenAI-compatible `/v1/audio/transcriptions` endpoint. Install `sglang-omni` by following the [installation guide](https://github.com/sgl-project/sglang-omni/blob/main/docs/get_started/installation.md), then download the model:
+
+```bash
+hf download OpenMOSS-Team/MOSS-Transcribe-Diarize
+```
+
+Serve the model:
+
+```bash
+sgl-omni serve \
+  --model-path OpenMOSS-Team/MOSS-Transcribe-Diarize \
+  --port 8000 \
+  --max-running-requests 16 \
+  --cuda-graph-max-bs 16 \
+  --mem-fraction-static 0.80
+```
+
+Use `response_format=verbose_json` when you need parsed speaker segments. `json` returns the raw transcript text only.
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/transcriptions \
+  -F model=OpenMOSS-Team/MOSS-Transcribe-Diarize \
+  -F file=@audio.wav \
+  -F response_format=verbose_json
+```
+
+```python
+import requests
+
+with open("audio.wav", "rb") as f:
+    resp = requests.post(
+        "http://localhost:8000/v1/audio/transcriptions",
+        data={
+            "model": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+            "response_format": "verbose_json",
+        },
+        files={"file": ("audio.wav", f, "audio/wav")},
+        timeout=300,
+    )
+
+resp.raise_for_status()
+payload = resp.json()
+print(payload["text"])
+for segment in payload.get("segments", []):
+    print(f"[{segment['start']:.2f}-{segment['end']:.2f}] {segment['text']}")
+```
+
+For longer multi-speaker audio, raise `max_new_tokens` so the decoder can finish the full diarized transcript:
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/transcriptions \
+  -F model=OpenMOSS-Team/MOSS-Transcribe-Diarize \
+  -F file=@audio.wav \
+  -F response_format=verbose_json \
+  -F max_new_tokens=65536
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `file` | file | required | Audio file uploaded as multipart form data |
+| `model` | string | server default | Model identifier |
+| `language` | string | unset | Optional language hint |
+| `response_format` | string | `json` | `json`, `verbose_json`, or `text` |
+| `temperature` | float | model default (`0.0`) | Sampling temperature |
+| `max_new_tokens` | int | `5120` | Max generated tokens; raise for long audio, for example `65536` |
+| `prompt` | string | unset | Optional instruction override; omit to use the built-in transcribe+diarize prompt |
+
+For benchmarking, performance numbers, and implementation details, see the [SGLang Omni cookbook](https://github.com/sgl-project/sglang-omni/blob/main/docs/cookbook/moss_transcribe_diarize.md). The following single-H100 results are reported for short- and long-sequence multi-speaker ASR tasks.
+
+`movies` short-sequence ASR:
+
+| Concurrency | Throughput (req/s) | Mean latency (s) | RTF mean | audio_s/s |
+|---:|---:|---:|---:|---:|
+| 1 | 2.57 | 0.388 | 0.0612 | 29.76 |
+| 2 | 4.89 | 0.409 | 0.0659 | 56.55 |
+| 4 | 6.62 | 0.513 | 0.0790 | 76.64 |
+| 8 | 6.80 | 0.533 | 0.0810 | 78.70 |
+| 16 | 7.08 | 0.659 | 0.0922 | 81.98 |
+
+`aishell4_long` long-sequence ASR:
+
+| Concurrency | Throughput (req/s) | Mean latency (s) | RTF mean | audio_s/s |
+|---:|---:|---:|---:|---:|
+| 1 | 0.022 | 45.2 | 0.0197 | 50.64 |
+| 2 | 0.032 | 60.7 | 0.0265 | 74.25 |
+| 4 | 0.036 | 105.6 | 0.0461 | 81.64 |
+| 8 | 0.040 | 172.6 | 0.0754 | 90.62 |
+| 16 | 0.043 | 282.8 | 0.1237 | 98.83 |
+
+### Subtitle Web App
+
+The source package includes a local subtitle workflow for upload, review, subtitle export, and optional FFmpeg burn-in:
+
+```bash
+mtd-subtitle-web \
+  --model OpenMOSS-Team/MOSS-Transcribe-Diarize \
+  --host 127.0.0.1 \
+  --port 7860
+```
+
+Open `http://127.0.0.1:7860`, upload an audio/video file, review the parsed subtitle segments, then download JSON/SRT/ASS or burn an MP4 if `ffmpeg` and `ffprobe` are available on `PATH`.
+
+For batch processing:
+
+```bash
+mtd-subtitle /path/to/input.mp4 \
+  --model OpenMOSS-Team/MOSS-Transcribe-Diarize \
+  --out-dir runs/example \
+  --render
+```
+
+## Output Format
+
+The canonical output format is:
+
+```text
+[start_time][Sxx]transcribed speech[end_time]
+```
+
+Example:
+
+```text
+[0.48][S01]Welcome everyone[1.66][12.26][S02]The new transcription pipeline is ready for evaluation[13.81][14.36][S01]Great, include the diarization results in the report[18.76]
+```
+
+In this format:
+
+* `start_time` and `end_time` are timestamps in seconds.
+* `[S01]`, `[S02]`, and similar labels are anonymous model-generated speaker labels.
+* Speaker labels are relative labels within the input audio and should not be interpreted as real speaker identities.
+
+## More Information
+
+* **GitHub**: <https://github.com/OpenMOSS/MOSS-Transcribe-Diarize>
+* **MOSI.AI**: <https://mosi.cn>
+* **OpenMOSS**: <https://www.open-moss.com>
+
+## License
+
+MOSS-Transcribe-Diarize 0.9B is licensed under the Apache License 2.0.
+
+## Citation
+
+If you use MOSS-Transcribe-Diarize 0.9B, please cite the technical report:
+
+```bibtex
+@misc{moss_transcribe_diarize_2026,
+  title={MOSS Transcribe Diarize Technical Report},
+  author={{MOSI.AI}},
+  year={2026},
+  eprint={2601.01554},
+  archivePrefix={arXiv},
+  primaryClass={cs.SD},
+  url={https://arxiv.org/abs/2601.01554}
+}
+```
+
+############ modeling_moss_transcribe_diarize.py ############
+"""MossTranscribeDiarizeForConditionalGeneration: Whisper-Medium + VQAdaptor + Qwen3-0.6B.
+
+Architecture:
+    log-mel input_features -> HF WhisperEncoder
+             -> 4x time merge  (B, T, 1024) -> (B, T/4, 4096)
+             -> VQAdaptor       (4096 -> 1024)
+             -> masked_scatter into text embeddings
+             -> Qwen3-0.6B decoder -> logits
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import torch
+from torch import nn
+from transformers import GenerationMixin, PreTrainedModel
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.models.qwen3.modeling_qwen3 import Qwen3Model
+from transformers.models.whisper.modeling_whisper import WhisperEncoder
+from transformers.utils import torch_compilable_check
+
+from .configuration_moss_transcribe_diarize import MossTranscribeDiarizeConfig
+
+
+class VQAdaptor(nn.Module):
+    """Projects merged Whisper features to LM hidden dim.
+
+    ``Linear(in → hidden) → SiLU → Linear(hidden → hidden) → LayerNorm``
+    """
+
+    def __init__(self, input_dim: int, hidden_size: int, norm_eps: float = 1e-6):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True),
+            nn.LayerNorm(hidden_size, eps=norm_eps, bias=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+
+class MossTranscribeDiarizePreTrainedModel(PreTrainedModel):
+    config_class = MossTranscribeDiarizeConfig
+    base_model_prefix = "model"
+    input_modalities = ("audio", "text")
+    _no_split_modules = ["Qwen3DecoderLayer", "WhisperEncoderLayer"]
+    _skip_keys_device_placement = "past_key_values"
+    supports_gradient_checkpointing = True
+    _supports_sdpa = True
+    _supports_attention_backend = True
+
+
+class MossTranscribeDiarizeModel(MossTranscribeDiarizePreTrainedModel):
+    base_model_prefix = "model"
+
+    """Single-stream multimodal backbone: Whisper-Medium encoder + Qwen3-0.6B.
+
+    Audio features are injected into text embeddings via ``masked_scatter`` at
+    positions marked by ``audio_token_id`` in ``input_ids``.
+    """
+
+    def __init__(self, config: MossTranscribeDiarizeConfig):
+        super().__init__(config)
+
+        self.language_model: nn.Module = Qwen3Model(config.text_config)
+        self.whisper_encoder: nn.Module = WhisperEncoder(config.audio_config)
+        self.vq_adaptor: VQAdaptor = VQAdaptor(
+            input_dim=config.adaptor_input_dim,
+            hidden_size=config.text_config.hidden_size,
+            norm_eps=config.text_config.rms_norm_eps,
+        )
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.language_model.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.language_model.embed_tokens = value
+
+    # ---- 4x time merge ---------------------------------------------------
+
+    def time_merge(self, features: torch.Tensor) -> torch.Tensor:
+        """``(B, T, D) -> (B, T//M, D*M)`` where M is ``audio_merge_size``."""
+        B, T, D = features.shape
+        merge_size = int(self.config.audio_merge_size)
+        T_trim = (T // merge_size) * merge_size
+        return features[:, :T_trim, :].reshape(B, T_trim // merge_size, D * merge_size)
+
+    # ---- audio feature extraction -----------------------------------------
+
+    def get_audio_features(
+        self,
+        input_features: torch.Tensor,
+        audio_feature_lengths: torch.LongTensor,
+        audio_chunk_mapping: Optional[torch.LongTensor] = None,
+    ) -> list[torch.Tensor]:
+        """Whisper encoder -> 4x time merge -> VQAdaptor.
+
+        Returns list of ``(1, N_tokens, hidden_size)`` tensors.
+        """
+        if input_features is None:
+            raise ValueError("input_features must be provided for audio feature extraction.")
+        if audio_feature_lengths is None:
+            raise ValueError("audio_feature_lengths must be provided with input_features.")
+
+        device = next(self.whisper_encoder.parameters()).device
+        encoder_dtype = next(self.whisper_encoder.parameters()).dtype
+        input_features = input_features.to(device=device, dtype=encoder_dtype)
+        audio_feature_lengths = audio_feature_lengths.to(device=device)
+        if audio_feature_lengths.numel() != input_features.shape[0]:
+            raise ValueError(
+                "audio_feature_lengths must contain one length per input_features chunk: "
+                f"got {audio_feature_lengths.numel()} lengths for {input_features.shape[0]} chunks."
+            )
+
+        whisper_features = self.whisper_encoder(input_features, return_dict=True).last_hidden_state
+
+        chunk_mapping = (
+            audio_chunk_mapping.to(device=device)
+            if audio_chunk_mapping is not None
+            else torch.zeros(input_features.shape[0], dtype=torch.long, device=device)
+        )
+        if chunk_mapping.numel() != input_features.shape[0]:
+            raise ValueError(
+                "audio_chunk_mapping must contain one sample index per input_features chunk: "
+                f"got {chunk_mapping.numel()} indices for {input_features.shape[0]} chunks."
+            )
+
+        num_audios = int(chunk_mapping.max().item()) + 1 if chunk_mapping.numel() else 0
+        per_audio_chunks = [[] for _ in range(num_audios)]
+        for chunk_idx, token_len in enumerate(audio_feature_lengths.tolist()):
+            sample_idx = int(chunk_mapping[chunk_idx].item())
+            per_audio_chunks[sample_idx].append(
+                whisper_features[chunk_idx : chunk_idx + 1, : int(token_len) * 4]
+            )
+
+        adapted = []
+        for parts in per_audio_chunks:
+            feat = torch.cat(parts, dim=1)
+            feat = feat.to(self.dtype)
+            merged = self.time_merge(feat)
+            adapted.append(self.vq_adaptor(merged))
+        return adapted
+
+    # ---- inject audio into text embeddings --------------------------------
+
+    def get_placeholder_mask(
+        self,
+        input_ids: Optional[torch.LongTensor],
+        inputs_embeds: torch.FloatTensor,
+        audio_features: torch.Tensor,
+    ) -> torch.BoolTensor:
+        """Return the expanded audio placeholder mask and validate feature count."""
+        if input_ids is None:
+            special_audio_mask = inputs_embeds == self.get_input_embeddings()(
+                torch.tensor(self.config.audio_token_id, dtype=torch.long, device=inputs_embeds.device)
+            )
+            special_audio_mask = special_audio_mask.all(-1)
+        else:
+            special_audio_mask = input_ids.to(device=inputs_embeds.device) == self.config.audio_token_id
+
+        if special_audio_mask.shape != inputs_embeds.shape[:2]:
+            raise ValueError(
+                "input_ids shape must match the first two dimensions of inputs_embeds: "
+                f"got {tuple(special_audio_mask.shape)} and {tuple(inputs_embeds.shape[:2])}."
+            )
+
+        n_audio_tokens = special_audio_mask.sum()
+        special_audio_mask = special_audio_mask.unsqueeze(-1).expand_as(inputs_embeds).to(inputs_embeds.device)
+        torch_compilable_check(
+            inputs_embeds[special_audio_mask].numel() == audio_features.numel(),
+            (
+                f"Audio features and audio tokens do not match: "
+                f"tokens: {n_audio_tokens}, features {audio_features.shape[0]}"
+            ),
+        )
+        return special_audio_mask
+
+    def inject_audio_features(
+        self,
+        input_ids,
+        inputs_embeds,
+        input_features,
+        audio_feature_lengths,
+        audio_chunk_mapping,
+    ):
+        """Replace audio placeholder positions with projected audio features."""
+        if input_features is None:
+            return inputs_embeds
+        audio_features = self.get_audio_features(
+            input_features=input_features,
+            audio_feature_lengths=audio_feature_lengths,
+            audio_chunk_mapping=audio_chunk_mapping,
+        )
+        audio_embeds = torch.cat([f.squeeze(0) for f in audio_features], dim=0)
+        audio_embeds = audio_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+        audio_mask = self.get_placeholder_mask(input_ids, inputs_embeds, audio_embeds)
+        return inputs_embeds.masked_scatter(audio_mask, audio_embeds)
+
+    # ---- forward ----------------------------------------------------------
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values=None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        input_features: Optional[torch.FloatTensor] = None,
+        audio_feature_lengths: Optional[torch.LongTensor] = None,
+        audio_chunk_mapping: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ):
+        return_dict = True if return_dict is None else return_dict
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("You must specify one of input_ids or inputs_embeds.")
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You must specify only one of input_ids or inputs_embeds.")
+
+        if inputs_embeds is None:
+            inputs_embeds = self.get_input_embeddings()(input_ids)
+        inputs_embeds = self.inject_audio_features(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            input_features=input_features,
+            audio_feature_lengths=audio_feature_lengths,
+            audio_chunk_mapping=audio_chunk_mapping,
+        )
+        if output_attentions is not None:
+            kwargs["output_attentions"] = output_attentions
+        if output_hidden_states is not None:
+            kwargs["output_hidden_states"] = output_hidden_states
+
+        outputs = self.language_model(
+            input_ids=None, attention_mask=attention_mask, position_ids=position_ids,
+            past_key_values=past_key_values, inputs_embeds=inputs_embeds,
+            use_cache=use_cache, **kwargs,
+        )
+        if not return_dict:
+            return outputs.to_tuple()
+        return outputs
+
+
+class MossTranscribeDiarizeForConditionalGeneration(MossTranscribeDiarizePreTrainedModel, GenerationMixin):
+    _tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
+
+    def __init__(self, config: MossTranscribeDiarizeConfig):
+        super().__init__(config)
+        self.model = MossTranscribeDiarizeModel(config)
+        self.vocab_size = config.text_config.vocab_size
+        self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.model.get_input_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.model.set_input_embeddings(value)
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def set_output_embeddings(self, new_embeddings):
+        self.lm_head = new_embeddings
+
+    def get_audio_features(
+        self,
+        input_features: torch.Tensor,
+        audio_feature_lengths: torch.LongTensor,
+        audio_chunk_mapping: Optional[torch.LongTensor] = None,
+    ) -> list[torch.Tensor]:
+        return self.model.get_audio_features(
+            input_features=input_features,
+            audio_feature_lengths=audio_feature_lengths,
+            audio_chunk_mapping=audio_chunk_mapping,
+        )
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values=None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        input_features: Optional[torch.FloatTensor] = None,
+        audio_feature_lengths: Optional[torch.LongTensor] = None,
+        audio_chunk_mapping: Optional[torch.LongTensor] = None,
+        logits_to_keep: int | torch.Tensor = 0,
+        **kwargs,
+    ):
+        return_dict = True if return_dict is None else return_dict
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+            input_features=input_features,
+            audio_feature_lengths=audio_feature_lengths,
+            audio_chunk_mapping=audio_chunk_mapping,
+            **kwargs,
+        )
+
+        hidden_states = outputs.last_hidden_state
+        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        logits = self.lm_head(hidden_states[:, slice_indices, :])
+
+        loss = None
+        if labels is not None:
+            loss = self.loss_function(
+                logits=logits,
+                labels=labels,
+                vocab_size=self.config.text_config.vocab_size,
+                **kwargs,
+            )
+
+        if not return_dict:
+            output = (logits,) + outputs[1:]
+            return (loss,) + output if loss is not None else output
+        return CausalLMOutputWithPast(
+            loss=loss, logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+    # ---- generation support -----------------------------------------------
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        input_features=None,
+        audio_feature_lengths=None,
+        audio_chunk_mapping=None,
+        is_first_iteration=False,
+        use_cache=True,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask, inputs_embeds=inputs_embeds,
+            is_first_iteration=is_first_iteration, use_cache=use_cache, **kwargs,
+        )
+        if input_features is not None and (is_first_iteration or not use_cache):
+            model_inputs["input_features"] = input_features
+            model_inputs["audio_feature_lengths"] = audio_feature_lengths
+            model_inputs["audio_chunk_mapping"] = audio_chunk_mapping
+        return model_inputs
+
+############ configuration_moss_transcribe_diarize.py ############
+from transformers import PretrainedConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+from transformers.models.whisper.configuration_whisper import WhisperConfig
+
+
+class MossTranscribeDiarizeConfig(PretrainedConfig):
+    """Configuration for MOSS-Transcribe-Diarize: Qwen3 text backbone + Whisper audio encoder."""
+
+    model_type = "moss_transcribe_diarize"
+    sub_configs = {"text_config": Qwen3Config, "audio_config": WhisperConfig}
+    keys_to_ignore_at_inference = ["past_key_values"]
+
+    def __init__(
+        self,
+        text_config=None,
+        audio_config=None,
+        audio_token_id: int = 151671,
+        audio_merge_size: int = 4,
+        adaptor_input_dim: int | None = None,
+        tie_word_embeddings: bool = True,
+        **kwargs,
+    ):
+        if text_config is None:
+            text_config = Qwen3Config(
+                vocab_size=151936,
+                hidden_size=1024,
+                intermediate_size=3072,
+                num_hidden_layers=28,
+                num_attention_heads=16,
+                num_key_value_heads=8,
+                head_dim=128,
+                max_position_embeddings=40960,
+                tie_word_embeddings=tie_word_embeddings,
+                rope_theta=1_000_000.0,
+                layer_types=["full_attention"] * 28,
+            )
+        elif isinstance(text_config, dict):
+            text_config = self.sub_configs["text_config"](**text_config)
+
+        if audio_config is None:
+            audio_config = WhisperConfig(
+                num_mel_bins=80,
+                d_model=1024,
+                encoder_layers=24,
+                encoder_attention_heads=16,
+                encoder_ffn_dim=4096,
+                max_source_positions=1500,
+                dropout=0.0,
+                attention_dropout=0.0,
+                activation_dropout=0.0,
+                activation_function="gelu",
+                encoder_layerdrop=0.0,
+                scale_embedding=False,
+            )
+        elif isinstance(audio_config, dict):
+            audio_config = self.sub_configs["audio_config"](**audio_config)
+
+        text_config.tie_word_embeddings = tie_word_embeddings
+        if not getattr(text_config, "layer_types", None):
+            text_config.layer_types = ["full_attention"] * text_config.num_hidden_layers
+
+        self.text_config = text_config
+        self.audio_config = audio_config
+        self.audio_token_id = audio_token_id
+        self.audio_merge_size = audio_merge_size
+        self.adaptor_input_dim = adaptor_input_dim or audio_config.d_model * audio_merge_size
+        super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
+
+############ processing_moss_transcribe_diarize.py ############
+"""Processor for MOSS-Transcribe-Diarize audio-text inference."""
+
+from __future__ import annotations
+
+from typing import Optional, Union
+
+import numpy as np
+import torch
+from transformers.feature_extraction_utils import BatchFeature
+from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
+
+
+AUDIO_PAD_TOKEN = "<|audio_pad|>"
+AUDIO_START_TOKEN = "<|audio_start|>"
+AUDIO_END_TOKEN = "<|audio_end|>"
+WHISPER_ENCODER_STRIDE = 2
+
+
+class MossTranscribeDiarizeProcessorKwargs(ProcessingKwargs, total=False):
+    _defaults = {
+        "common_kwargs": {
+            "return_tensors": "pt",
+        },
+        "audio_kwargs": {},
+    }
+
+
+def _audio_to_numpy(audio: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
+    if torch.is_tensor(audio):
+        audio = audio.detach().cpu().numpy()
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim > 1:
+        audio = np.squeeze(audio)
+    if audio.ndim == 0:
+        audio = audio.reshape(1)
+    if audio.ndim != 1:
+        raise ValueError(f"Expected mono audio with shape (num_samples,), got shape {audio.shape}.")
+    if audio.shape[0] == 0:
+        raise ValueError("Audio must contain at least one sample.")
+    return audio
+
+
+def _pad_or_trim_audio(audio: np.ndarray, length: int) -> np.ndarray:
+    if audio.shape[0] > length:
+        audio = audio[:length]
+    elif audio.shape[0] < length:
+        audio = np.pad(audio, (0, length - audio.shape[0]))
+    return audio.astype(np.float32, copy=False)
+
+
+def _compute_audio_token_length(num_samples: int, feature_extractor, audio_merge_size: int) -> int:
+    stride = int(feature_extractor.hop_length) * WHISPER_ENCODER_STRIDE * int(audio_merge_size)
+    return (int(num_samples) - 1) // stride + 1
+
+
+def _chunk_audio(
+    feature_extractor,
+    audio: Union[np.ndarray, torch.Tensor],
+    audio_merge_size: int,
+) -> tuple[np.ndarray, list[int]]:
+    audio = _audio_to_numpy(audio)
+    n_samples = int(feature_extractor.n_samples)
+
+    chunks, token_lengths = [], []
+    for start in range(0, audio.shape[0], n_samples):
+        chunk = audio[start : start + n_samples]
+        token_lengths.append(_compute_audio_token_length(chunk.shape[0], feature_extractor, audio_merge_size))
+        chunks.append(_pad_or_trim_audio(chunk, n_samples))
+    return np.stack(chunks), token_lengths
+
+
+def _audios_to_input_features(
+    feature_extractor,
+    audios: list[Union[np.ndarray, torch.Tensor]],
+    *,
+    audio_merge_size: int,
+    feature_extractor_kwargs: Optional[dict] = None,
+) -> tuple[torch.Tensor, torch.LongTensor, torch.LongTensor]:
+    feature_batches, feature_lengths, chunk_mapping = [], [], []
+    feature_extractor_kwargs = dict(feature_extractor_kwargs or {})
+    feature_extractor_kwargs.update(
+        {
+            "sampling_rate": int(feature_extractor.sampling_rate),
+            "padding": "max_length",
+            "return_tensors": "pt",
+        }
+    )
+
+    for audio_idx, audio in enumerate(audios):
+        chunks, token_lengths = _chunk_audio(feature_extractor, audio, audio_merge_size)
+        features = feature_extractor(
+            list(chunks),
+            **feature_extractor_kwargs,
+        )["input_features"]
+        feature_batches.append(features)
+        feature_lengths.extend(token_lengths)
+        chunk_mapping.extend([audio_idx] * len(token_lengths))
+
+    if feature_batches:
+        input_features = torch.cat(feature_batches, dim=0)
+    else:
+        input_features = torch.empty(
+            (0, int(feature_extractor.feature_size), int(feature_extractor.nb_max_frames)),
+        )
+
+    length_device = input_features.device
+    return (
+        input_features,
+        torch.tensor(feature_lengths, dtype=torch.long, device=length_device),
+        torch.tensor(chunk_mapping, dtype=torch.long, device=length_device),
+    )
+
+
+class MossTranscribeDiarizeProcessor(ProcessorMixin):
+    """Build MOSS-Transcribe-Diarize model inputs from text prompts and raw waveforms.
+
+    The model consumes log-mel ``input_features``. This processor owns the raw
+    waveform preprocessing, audio placeholder expansion, and optional numeric
+    time anchors inside the audio span.
+    """
+
+    attributes = ["feature_extractor", "tokenizer"]
+    feature_extractor_class = "AutoFeatureExtractor"
+    tokenizer_class = "AutoTokenizer"
+
+    model_input_names = [
+        "input_ids",
+        "attention_mask",
+        "input_features",
+        "audio_feature_lengths",
+        "audio_chunk_mapping",
+    ]
+
+    def __init__(
+        self,
+        feature_extractor=None,
+        tokenizer=None,
+        audio_tokens_per_second: float = 12.5,
+        audio_merge_size: int = 4,
+        time_marker_every_seconds: int = 2,
+        enable_time_marker: bool = True,
+        chat_template: Optional[str] = None,
+    ):
+        if feature_extractor is None:
+            raise ValueError("MossTranscribeDiarizeProcessor requires a feature_extractor.")
+        if tokenizer is None:
+            raise ValueError("MossTranscribeDiarizeProcessor requires a tokenizer.")
+        super().__init__(feature_extractor, tokenizer, chat_template=chat_template)
+        self.audio_tokens_per_second = audio_tokens_per_second
+        self.audio_merge_size = int(audio_merge_size)
+        self.time_marker_every_seconds = time_marker_every_seconds
+        self.enable_time_marker = enable_time_marker
+        self.audio_token = AUDIO_PAD_TOKEN if not hasattr(tokenizer, "audio_token") else tokenizer.audio_token
+        self.audio_start_token = (
+            AUDIO_START_TOKEN if not hasattr(tokenizer, "audio_start_token") else tokenizer.audio_start_token
+        )
+        self.audio_end_token = AUDIO_END_TOKEN if not hasattr(tokenizer, "audio_end_token") else tokenizer.audio_end_token
+        resolved_audio_token_id = tokenizer.convert_tokens_to_ids(self.audio_token)
+        if resolved_audio_token_id is None:
+            raise ValueError(f"Tokenizer is missing required audio placeholder token {self.audio_token!r}.")
+        self.audio_token_id = int(resolved_audio_token_id)
+        self.digit_token_ids = self._get_digit_token_ids()
+
+    def _get_digit_token_ids(self) -> dict[str, int]:
+        digit_token_ids = {}
+        for digit in "0123456789":
+            ids = self.tokenizer.encode(digit, add_special_tokens=False)
+            if len(ids) != 1:
+                raise ValueError(f"Digit {digit!r} is not a single token: {ids}")
+            digit_token_ids[digit] = int(ids[0])
+        return digit_token_ids
+
+    def _audio_span_ids(self, audio_seq_len: int) -> list[int]:
+        audio_seq_len = int(audio_seq_len)
+        if not self.enable_time_marker or audio_seq_len <= 0 or self.time_marker_every_seconds <= 0:
+            return [self.audio_token_id] * max(audio_seq_len, 0)
+
+        tokens_per_marker = int(self.audio_tokens_per_second * self.time_marker_every_seconds)
+        if tokens_per_marker <= 0:
+            return [self.audio_token_id] * audio_seq_len
+
+        duration = audio_seq_len / float(self.audio_tokens_per_second)
+        output, consumed = [], 0
+        for sec in range(self.time_marker_every_seconds, int(duration) + 1, self.time_marker_every_seconds):
+            pos = (sec // self.time_marker_every_seconds) * tokens_per_marker
+            segment_len = pos - consumed
+            if segment_len > 0:
+                output.extend([self.audio_token_id] * segment_len)
+                consumed += segment_len
+            marker_ids = [self.digit_token_ids[digit] for digit in str(sec)]
+            output.extend(marker_ids)
+
+        remainder = audio_seq_len - consumed
+        if remainder > 0:
+            output.extend([self.audio_token_id] * remainder)
+        return output
+
+    def _expand_audio_token(self, text: str, num_audio_tokens: int, max_length: int) -> list[int]:
+        audio_ids = self._audio_span_ids(num_audio_tokens)
+        audio_token_count = text.count(self.audio_token)
+        if audio_token_count != 1:
+            raise ValueError(
+                f"Expected exactly one {self.audio_token!r} token per text sample, got {audio_token_count}."
+            )
+        before_audio, after_audio = text.split(self.audio_token, maxsplit=1)
+        before_ids = self.tokenizer.encode(before_audio, add_special_tokens=False)
+        after_ids = self.tokenizer.encode(after_audio, add_special_tokens=False)
+
+        input_ids = before_ids + audio_ids + after_ids
+
+        if len(input_ids) > max_length:
+            raise ValueError(f"Prompt/audio sequence exceeds max_length={max_length}")
+        return input_ids
+
+    def __call__(
+        self,
+        text: Union[str, list[str]],
+        audio,
+        *,
+        max_length: int = 131072,
+        **kwargs: Unpack[MossTranscribeDiarizeProcessorKwargs],
+    ) -> BatchFeature:
+        return_tensors = kwargs.pop("return_tensors", "pt")
+        output_kwargs = self._merge_kwargs(
+            MossTranscribeDiarizeProcessorKwargs,
+            tokenizer_init_kwargs=self.tokenizer.init_kwargs,
+            **kwargs,
+        )
+        if isinstance(text, str):
+            texts = [text]
+        else:
+            texts = list(text)
+        audios = audio if isinstance(audio, list) else [audio]
+        if len(texts) != len(audios):
+            raise ValueError(f"Expected one audio per text prompt, got {len(audios)} audios and {len(texts)} prompts.")
+
+        input_features, audio_feature_lengths, audio_chunk_mapping = _audios_to_input_features(
+            self.feature_extractor,
+            audios,
+            audio_merge_size=self.audio_merge_size,
+            feature_extractor_kwargs=output_kwargs["audio_kwargs"],
+        )
+        audio_token_counts = torch.zeros(len(audios), dtype=torch.long, device=audio_feature_lengths.device)
+        audio_token_counts.scatter_add_(0, audio_chunk_mapping, audio_feature_lengths)
+
+        encoded = [
+            self._expand_audio_token(prompt, int(num_audio_tokens.item()), max_length)
+            for prompt, num_audio_tokens in zip(texts, audio_token_counts)
+        ]
+        max_seq_len = max(len(ids) for ids in encoded)
+        pad_token_id = self.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = self.tokenizer.eos_token_id or 0
+
+        input_ids, attention_mask = [], []
+        for ids in encoded:
+            pad_len = max_seq_len - len(ids)
+            input_ids.append(ids + [pad_token_id] * pad_len)
+            attention_mask.append([1] * len(ids) + [0] * pad_len)
+
+        target_device = input_features.device
+        data = {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long, device=target_device),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.long, device=target_device),
+            "input_features": input_features,
+            "audio_feature_lengths": audio_feature_lengths,
+            "audio_chunk_mapping": audio_chunk_mapping,
+        }
+        return BatchFeature(data=data, tensor_type=return_tensors)
+
+
+__all__ = ["MossTranscribeDiarizeProcessor"]
+
