@@ -50,6 +50,11 @@ is the safe wrapper.
 Backends are selected with cargo features forwarded to `transcribe-cpp-sys`:
 `metal` (default on Apple), `vulkan`, `cuda`, and `openmp`.
 
+On Windows, `vulkan` requires the Vulkan SDK. Deep Cargo output paths are
+shortened automatically during the native build; see the
+[Windows Vulkan build notes](https://github.com/handy-computer/transcribe.cpp/blob/main/bindings/rust/sys/README.md#windows-vulkan-builds)
+for prerequisites and the short `CARGO_TARGET_DIR` fallback.
+
 The default link is static and self-contained. Advanced packaging modes are
 available through `shared` and `dynamic-backends`; see the `transcribe-cpp-sys`
 README if you need runtime-loaded backend modules or custom

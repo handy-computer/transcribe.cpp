@@ -36,6 +36,31 @@ vcpkg setup is required on any platform. The static link is the default; the
   `libtranscribe`, or `transcribe_init_backends(dir)` for a custom provider
   directory. Implies `shared`.
 
+## Windows Vulkan builds
+
+The `vulkan` feature requires the
+[Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) on Windows. Once the
+SDK is installed and a new terminal sees `VULKAN_SDK`, build normally:
+
+```powershell
+cargo build --features vulkan
+```
+
+Windows' legacy path limit can otherwise break ggml's nested Vulkan shader
+build. The build script handles this automatically by compiling through a
+short, per-build NTFS junction under `%LOCALAPPDATA%\tcs`; installed artifacts
+and Cargo metadata still use the durable `OUT_DIR` paths. Junction creation
+does not require administrator rights.
+
+If junction creation is blocked by filesystem or corporate policy, the build
+prints a warning and falls back to the original `OUT_DIR`. Set a short Cargo
+target directory to avoid `MAX_PATH` in that case:
+
+```powershell
+$env:CARGO_TARGET_DIR = "C:\tc-target"
+cargo build --features vulkan
+```
+
 ## Build-flag escape hatch
 
 The features above cover the common, tested configurations. Anything else CMake

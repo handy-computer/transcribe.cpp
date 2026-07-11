@@ -232,10 +232,17 @@ fn windows_short_out_dir() -> Option<PathBuf> {
     }
     // Backslash-normalize: mklink rejects forward slashes (MSYS-style CARGO_TARGET_DIR).
     let out_dir = PathBuf::from(env::var("OUT_DIR").ok()?.replace('/', "\\"));
-    let base = env::var_os("LOCALAPPDATA")
+    let Some(base) = env::var_os("LOCALAPPDATA")
         .or_else(|| env::var_os("TEMP"))
-        .map(PathBuf::from)?
-        .join("tcs");
+        .map(PathBuf::from)
+    else {
+        println!(
+            "cargo:warning=transcribe-cpp-sys: neither LOCALAPPDATA nor TEMP is set; \
+             building in OUT_DIR (may exceed Windows MAX_PATH in deep checkouts)"
+        );
+        return None;
+    };
+    let base = base.join("tcs");
 
     let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a: stable across rustc versions
     for b in out_dir.to_string_lossy().bytes() {
@@ -244,7 +251,11 @@ fn windows_short_out_dir() -> Option<PathBuf> {
     }
     let link = base.join(format!("{hash:016x}"));
 
-    std::fs::create_dir_all(&out_dir).ok()?;
+    warn_fallback(
+        std::fs::create_dir_all(&out_dir),
+        "create junction target",
+        &out_dir,
+    )?;
     // symlink_metadata (not exists()) so a dangling junction is detected and reclaimed.
     if std::fs::symlink_metadata(&link).is_ok() {
         match (
@@ -252,10 +263,17 @@ fn windows_short_out_dir() -> Option<PathBuf> {
             std::fs::canonicalize(&out_dir),
         ) {
             (Ok(a), Ok(b)) if a == b => return Some(link),
-            _ => std::fs::remove_dir(&link).ok()?,
+            // remove_dir fails if something non-junction squats here (e.g. a
+            // backup tool materialized it as a real tree); the warning names
+            // the path so the user knows what to delete.
+            _ => warn_fallback(std::fs::remove_dir(&link), "remove stale junction", &link)?,
         }
     }
-    std::fs::create_dir_all(&base).ok()?;
+    warn_fallback(
+        std::fs::create_dir_all(&base),
+        "create junction parent",
+        &base,
+    )?;
 
     // No std API creates junctions; mklink /J needs no extra deps.
     let output = std::process::Command::new("cmd")
@@ -293,6 +311,28 @@ fn windows_short_out_dir() -> Option<PathBuf> {
         return None;
     }
     Some(link)
+}
+
+/// Best-effort junction setup step: on failure, warn like the mklink branch
+/// and bail to the deep-OUT_DIR fallback via `?`. Cargo hides build-script
+/// warnings for registry crates unless the build fails — so this is silent on
+/// success and visible exactly when a deep-path build dies of MAX_PATH.
+fn warn_fallback<T, E: std::fmt::Display>(
+    res: Result<T, E>,
+    action: &str,
+    path: &Path,
+) -> Option<T> {
+    match res {
+        Ok(v) => Some(v),
+        Err(e) => {
+            println!(
+                "cargo:warning=transcribe-cpp-sys: could not {action} {} ({e}); \
+                 building in OUT_DIR (may exceed Windows MAX_PATH in deep checkouts)",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// GNUInstallDirs picks `lib` or `lib64`; find the manifest under either.

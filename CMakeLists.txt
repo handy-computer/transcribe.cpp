@@ -398,9 +398,18 @@ endif()
 
 # Windows MAX_PATH: relocate ExternalProjects (vulkan-shaders-gen) to a flat
 # <build>/e/src/ layout; inherited by add_subdirectory, so the vendored ggml
-# tree stays untouched.
+# tree stays untouched. Anchored at CMAKE_CURRENT_BINARY_DIR so an embedding
+# project's build root stays clean, and skipped entirely when the embedder
+# already declared its own ExternalProject layout.
 if(WIN32)
-    set_property(DIRECTORY PROPERTY EP_PREFIX "${CMAKE_BINARY_DIR}/e")
+    # The module defines EP_PREFIX/EP_BASE as INHERITED directory properties;
+    # without it the get below cannot see a value set by an embedding project.
+    include(ExternalProject)
+    get_directory_property(_ep_prefix EP_PREFIX)
+    get_directory_property(_ep_base EP_BASE)
+    if(NOT _ep_prefix AND NOT _ep_base)
+        set_property(DIRECTORY PROPERTY EP_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/e")
+    endif()
 endif()
 
 # ggml's CMake declares its own warning flags; let it.
