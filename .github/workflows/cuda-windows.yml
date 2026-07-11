@@ -51,7 +51,8 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       CMAKE_GENERATOR: Ninja
       # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
-      # Keep in lockstep with wheel-windows (python-wheels.yml).
+      # Keep in lockstep with wheel-windows (python-wheels.yml) and
+      # rust-windows-deep-path (rust-ci.yml).
       VULKAN_VERSION: "1.4.350.0"
     steps:
       - uses: actions/checkout@v6
