@@ -17,7 +17,7 @@ public enum Transcribe {
     /// Version this binding was built against. Pinned here for the pre-1.0
     /// base-version load gate; the version-sync milestone will generate it from
     /// `include/transcribe.h` (the single source of truth) rather than hardcode.
-    public static let compiledVersion = "0.1.2"
+    public static let compiledVersion = "0.1.3"
 
     /// `MAJOR.MINOR.PATCH` of the linked native library.
     public static func version() -> String { String(cString: transcribe_version()) }
