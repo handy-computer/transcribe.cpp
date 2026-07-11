@@ -227,6 +227,7 @@ jobs:
       # (the test phase runs on the host here, not in a container).
       TRANSCRIBE_WHEEL_LANE: cpu-vulkan
       # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
+      # Keep in lockstep with cuda-windows.yml and rust-windows-deep-path (rust-ci.yml).
       VULKAN_VERSION: "1.4.350.0"
       # The hf CLI prints ✓ marks; Windows' default cp1252 console codec
       # chokes on them (charmap codec error). Force UTF-8 for all Python.

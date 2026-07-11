@@ -45,6 +45,10 @@ cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
 ```
 
+On Windows, see the [complete build guide](docs/build-windows.md) for Vulkan
+SDK setup, Visual Studio commands, and the short-build-root fallback for
+unusually deep checkouts.
+
 For CUDA (Linux + NVIDIA GPU):
 
 ```bash

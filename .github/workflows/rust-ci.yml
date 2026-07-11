@@ -58,6 +58,7 @@ on:
       - "cmake/**"
       - "CMakeLists.txt"
       - "CMakePresets.json"
+      - "tests/cmake/ep-prefix-parent/**"
       - "scripts/ci/rust_package_audit.py"
       - "bindings/python/_generate/check_version_sync.py"
       - ".github/workflows/rust-ci.yml"
@@ -251,3 +252,87 @@ jobs:
       - name: ccache stats
         if: runner.os == 'Linux'
         run: ccache -s | head -8
+
+  # Consumer-environment MAX_PATH gates: default VS generator (other Windows
+  # lanes use Ninja and never exercise MSBuild), long paths OFF, and deep build
+  # roots. The direct CMake build isolates EP_PREFIX; the Cargo build isolates
+  # windows_short_out_dir. Do NOT use TrackFileAccess=false here: it races the
+  # vulkan-shaders-gen ExternalProject steps.
+  rust-windows-deep-path:
+    runs-on: blacksmith-2vcpu-windows-2025
+    timeout-minutes: 60
+    env:
+      # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
+      # Keep in lockstep with cuda-windows.yml and wheel-windows (python-wheels.yml).
+      VULKAN_VERSION: "1.4.350.0"
+    steps:
+      # Registry is read at process start, so all later steps see stock limits.
+      - name: Force stock path limits (LongPathsEnabled=0)
+        shell: pwsh
+        run: Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 0 -Type DWord
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
+        shell: pwsh
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+      - name: Direct CMake Vulkan build from a deep path (no Cargo junction)
+        shell: pwsh
+        run: |
+          # Long enough to overflow ggml's original nested ExternalProject
+          # layout, while the flattened <build>\e\src layout remains safe.
+          $stem = "$env:GITHUB_WORKSPACE\native-cmake-deep-\build"
+          $pad = "n" * [Math]::Max(1, 105 - $stem.Length)
+          $nativeBuild = "$env:GITHUB_WORKSPACE\native-cmake-deep-$pad\build"
+          "native CMake build root: $($nativeBuild.Length) chars"
+          cmake -S . -B "$nativeBuild" -G "Visual Studio 17 2022" -A x64 `
+            -DTRANSCRIBE_VULKAN=ON `
+            -DTRANSCRIBE_BUILD_TESTS=OFF `
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF `
+            -DTRANSCRIBE_BUILD_TOOLS=OFF
+          # This target includes the nested shader-generator ExternalProject
+          # and every generated shader, without recompiling the full ASR tree.
+          cmake --build "$nativeBuild" --target ggml-vulkan --config Release --parallel 2
+          $shaderBuild = "$nativeBuild\e\src\vulkan-shaders-gen-build"
+          if (-not (Test-Path $shaderBuild)) {
+            throw "flattened Vulkan shader build directory not found: $shaderBuild"
+          }
+      - name: Embedded project preserves its ExternalProject prefix
+        shell: pwsh
+        run: |
+          cmake `
+            -S tests/cmake/ep-prefix-parent `
+            -B "$env:RUNNER_TEMP\ep-prefix-parent-build" `
+            -DTRANSCRIBE_SOURCE_DIR="$env:GITHUB_WORKSPACE"
+      - name: Build from a deep consumer path (default VS generator)
+        shell: pwsh
+        run: |
+          # ~120-char target root: fails un-fixed (>75 overflows 260), but
+          # under rustc's own MSVC link ceiling (~230, LNK1104).
+          $pad = "deep-consumer-path-padding-" + ("a" * [Math]::Max(1, 120 - $env:GITHUB_WORKSPACE.Length - 36))
+          $env:CARGO_TARGET_DIR = "$env:GITHUB_WORKSPACE\$pad\target"
+          Add-Content $env:GITHUB_ENV "CARGO_TARGET_DIR=$env:CARGO_TARGET_DIR"
+          "target root: $($env:CARGO_TARGET_DIR.Length) chars"
+          cargo build -p transcribe-cpp-sys --features vulkan,dynamic-backends --verbose
+      - name: "-sys smoke through the durable link paths"
+        # Proves link paths reference OUT_DIR, not the junction.
+        # CARGO_TARGET_DIR carries over from the build step via GITHUB_ENV.
+        shell: pwsh
+        run: cargo test -p transcribe-cpp-sys --features vulkan,dynamic-backends
+      - name: Assert MAX_PATH margin (junction tree stayed under 260)
+        # 240 leaves headroom for longer usernames than the runner's.
+        # -FollowSymlink: junctions are reparse points; without it pwsh never
+        # descends into the build tree and the gate measures nothing.
+        shell: pwsh
+        run: |
+          $max = 0; $worst = ""
+          Get-ChildItem "$env:LOCALAPPDATA\tcs" -Recurse -FollowSymlink -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.FullName.Length -gt $max) { $max = $_.FullName.Length; $worst = $_.FullName }
+          }
+          "longest build path: $max chars"
+          $worst
+          if ($max -eq 0) { throw "no junction tree under $env:LOCALAPPDATA\tcs - the gate measured nothing" }
+          if ($max -gt 240) { throw "build path margin eroded: $max > 240" }
