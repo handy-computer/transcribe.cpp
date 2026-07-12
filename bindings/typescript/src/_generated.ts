@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "86b16dd97ad1cb58";
+export const PUBLIC_HEADER_HASH = "feccc60c3c350c4f";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -101,6 +101,7 @@ export const TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS = 1;
 export const TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM = 1414746957;
 export const TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM = 1396853584;
 export const TRANSCRIBE_EXT_KIND_PARAKEET_STREAM = 1414744912;
+export const TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN = 1314009937;
 export const TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM = 1414746710;
 export const TRANSCRIBE_EXT_KIND_WHISPER_RUN = 1314015319;
 
@@ -123,6 +124,7 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_moonshine_streaming_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'min_decode_interval_ms': 16} },
   'transcribe_parakeet_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'att_context_right': 16} },
   'transcribe_parakeet_buffered_stream_ext': { size: 32, align: 8, offsets: {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24} },
+  'transcribe_qwen3_asr_run_ext': { size: 24, align: 8, offsets: {'ext': 0, 'context': 16} },
   'transcribe_voxtral_realtime_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'num_delay_tokens': 16, 'min_decode_interval_ms': 20} },
   'transcribe_whisper_run_ext': { size: 80, align: 8, offsets: {'ext': 0, 'initial_prompt': 16, 'prompt_tokens': 24, 'n_prompt_tokens': 32, 'prompt_condition': 40, 'condition_on_prev_tokens': 44, 'max_prev_context_tokens': 48, 'temperature': 52, 'temperature_inc': 56, 'compression_ratio_thold': 60, 'logprob_thold': 64, 'no_speech_thold': 68, 'seed': 72, 'max_initial_timestamp': 76} },
   'transcribe_whisper_chunk_trace': { size: 48, align: 8, offsets: {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'temperature_used': 24, 'compression_ratio': 28, 'avg_logprob': 32, 'no_speech_prob': 36, 'no_speech_triggered': 40, 'n_fallbacks': 44} },
@@ -165,6 +167,7 @@ export function defineTypes(koffi: any): Record<string, any> {
   T['transcribe_moonshine_streaming_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], min_decode_interval_ms: 'int32_t' });
   T['transcribe_parakeet_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], att_context_right: 'int32_t' });
   T['transcribe_parakeet_buffered_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], left_ms: 'int32_t', chunk_ms: 'int32_t', right_ms: 'int32_t' });
+  T['transcribe_qwen3_asr_run_ext'] = koffi.struct({ ext: T['transcribe_ext'], context: 'char *' });
   T['transcribe_voxtral_realtime_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], num_delay_tokens: 'int32_t', min_decode_interval_ms: 'int32_t' });
   T['transcribe_whisper_run_ext'] = koffi.struct({ ext: T['transcribe_ext'], initial_prompt: 'char *', prompt_tokens: 'void *', n_prompt_tokens: 'size_t', prompt_condition: 'int', condition_on_prev_tokens: 'bool', max_prev_context_tokens: 'int32_t', temperature: 'float', temperature_inc: 'float', compression_ratio_thold: 'float', logprob_thold: 'float', no_speech_thold: 'float', seed: 'uint32_t', max_initial_timestamp: 'float' });
   T['transcribe_whisper_chunk_trace'] = koffi.struct({ struct_size: 'uint64_t', t0_ms: 'int64_t', t1_ms: 'int64_t', temperature_used: 'float', compression_ratio: 'float', avg_logprob: 'float', no_speech_prob: 'float', no_speech_triggered: 'bool', n_fallbacks: 'int32_t' });
@@ -225,6 +228,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_parakeet_buffered_stream_ext_init': { ret: 'void', args: ['struct transcribe_parakeet_buffered_stream_ext *'] },
   'transcribe_parakeet_stream_ext_init': { ret: 'void', args: ['struct transcribe_parakeet_stream_ext *'] },
   'transcribe_print_timings': { ret: 'void', args: ['const struct transcribe_session *'] },
+  'transcribe_qwen3_asr_run_ext_init': { ret: 'void', args: ['struct transcribe_qwen3_asr_run_ext *'] },
   'transcribe_reset_timings': { ret: 'void', args: ['struct transcribe_session *'] },
   'transcribe_returned_timestamp_kind': { ret: 'transcribe_timestamp_kind', args: ['const struct transcribe_session *'] },
   'transcribe_run': { ret: 'transcribe_status', args: ['struct transcribe_session *', 'const float *', 'int', 'const struct transcribe_run_params *'] },

@@ -17,6 +17,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe/qwen3_asr.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -368,12 +369,16 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok, ChatTok
 //   <|im_start|>user\n<|audio_start|><|audio_pad|>*T_enc<|audio_end|><|im_end|>\n
 //   <|im_start|>assistant\n[language {Name}<asr_text>]?
 //
-// System prompt is empty. A non-null `lang_prefix_ids` (resolved via
-// encode_language_prefix) is appended after the trailing newline to force an
-// output language; kept out of here so this stays a pure token-id assembler.
+// A non-null `context_ids` fills the system-message body. A non-null
+// `lang_prefix_ids` (resolved via encode_language_prefix) is appended after
+// the trailing assistant newline to force an output language; kept out of here
+// so this stays a pure token-id assembler.
+}  // namespace
+
 void build_prompt_tokens(const QwenAsrHParams &       hp,
                          const ChatTokens &           ct,
                          int                          T_enc,
+                         const std::vector<int32_t> * context_ids,
                          const std::vector<int32_t> * lang_prefix_ids,
                          std::vector<int32_t> &       out_ids,
                          std::vector<int64_t> &       out_audio_positions) {
@@ -383,6 +388,9 @@ void build_prompt_tokens(const QwenAsrHParams &       hp,
     out_ids.push_back(ct.im_start);
     out_ids.push_back(ct.role_system);
     out_ids.push_back(ct.newline);
+    if (context_ids != nullptr && !context_ids->empty()) {
+        out_ids.insert(out_ids.end(), context_ids->begin(), context_ids->end());
+    }
     out_ids.push_back(ct.im_end);
     out_ids.push_back(ct.newline);
 
@@ -409,8 +417,6 @@ void build_prompt_tokens(const QwenAsrHParams &       hp,
         out_ids.insert(out_ids.end(), lang_prefix_ids->begin(), lang_prefix_ids->end());
     }
 }
-
-}  // namespace
 
 // below; encode_language_prefix matches the qwen3_asr.h declaration.)
 
@@ -507,6 +513,57 @@ transcribe_status encode_language_prefix(const transcribe::Tokenizer & tok,
 
 namespace {  // reopen anon for the rest of the file's helpers.
 
+bool context_has_qwen_control_marker(const char * context) {
+    return context != nullptr && (std::strstr(context, "<|") != nullptr || std::strstr(context, "|>") != nullptr);
+}
+
+// Decode the public run extension once per invocation. Its text is tokenized
+// with the loaded Qwen tokenizer so callers cannot manufacture chat/audio
+// control tokens by hand. NULL/empty keeps the historical empty system turn.
+transcribe_status resolve_context_ids(const QwenAsrModel &          model,
+                                      const transcribe_run_params * params,
+                                      std::vector<int32_t> &        out_ids) {
+    if (const transcribe_status st =
+            transcribe_ext_check(params != nullptr ? params->family : nullptr, TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN,
+                                 sizeof(struct transcribe_qwen3_asr_run_ext));
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    out_ids.clear();
+    if (params == nullptr || params->family == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+    const auto * ext = reinterpret_cast<const transcribe_qwen3_asr_run_ext *>(params->family);
+    if (ext->context == nullptr || ext->context[0] == '\0') {
+        return TRANSCRIBE_OK;
+    }
+    if (context_has_qwen_control_marker(ext->context)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: context contains a reserved chat control marker");
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    return model.tok.encode(ext->context, out_ids);
+}
+
+bool qwen3_asr_accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot slot, uint32_t kind) {
+    (void) model;
+    return slot == TRANSCRIBE_EXT_SLOT_RUN && kind == TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN;
+}
+
+transcribe_status qwen3_asr_run_validate(const transcribe_session * ctx, const transcribe_run_params * params) {
+    (void) ctx;
+    if (const transcribe_status st =
+            transcribe_ext_check(params != nullptr ? params->family : nullptr, TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN,
+                                 sizeof(struct transcribe_qwen3_asr_run_ext));
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (params == nullptr || params->family == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+    const auto * ext = reinterpret_cast<const transcribe_qwen3_asr_run_ext *>(params->family);
+    return context_has_qwen_control_marker(ext->context) ? TRANSCRIBE_ERR_INVALID_ARG : TRANSCRIBE_OK;
+}
+
 // Host-side pack [n_mels, T_mel] mel into batched chunks
 // [mel_per_chunk, n_mels, 1, n_chunks]. Chunks shorter than
 // mel_per_chunk are zero-padded.
@@ -543,6 +600,12 @@ transcribe_status run(transcribe_session *          session,
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+
+    std::vector<int32_t> context_ids;
+    if (const transcribe_status st = resolve_context_ids(*cm, params, context_ids); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const std::vector<int32_t> * context_ptr = context_ids.empty() ? nullptr : &context_ids;
 
     // Pre-run abort check (Qwen3-ASR is single-shot, so this is the only
     // observation point).
@@ -725,7 +788,7 @@ transcribe_status run(transcribe_session *          session,
     // Prompt construction.
     std::vector<int32_t> prompt_ids;
     std::vector<int64_t> audio_positions;
-    build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc, lang_prefix_ptr, prompt_ids, audio_positions);
+    build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc, context_ptr, lang_prefix_ptr, prompt_ids, audio_positions);
     const int T_prompt   = static_cast<int>(prompt_ids.size());
     const int prefix_len = audio_positions.empty() ? 0 : static_cast<int>(audio_positions.front());
     const int suffix_len = T_prompt - prefix_len - T_enc;
@@ -1518,6 +1581,12 @@ transcribe_status run_batch(transcribe_session *          session,
 
     transcribe::debug::init();
 
+    std::vector<int32_t> context_ids;
+    if (const transcribe_status st = resolve_context_ids(*cm, params, context_ids); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const std::vector<int32_t> * context_ptr = context_ids.empty() ? nullptr : &context_ids;
+
     // Shared language hint (v1: one run_params across the batch).
     std::vector<int32_t>         lang_prefix_ids;
     const std::vector<int32_t> * lang_prefix_ptr = nullptr;
@@ -1563,7 +1632,7 @@ transcribe_status run_batch(transcribe_session *          session,
             continue;
         }
         std::vector<int64_t> ap;
-        build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc[b], lang_prefix_ptr, prompt_ids[b], ap);
+        build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc[b], context_ptr, lang_prefix_ptr, prompt_ids[b], ap);
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
         prefix_len  = ap.empty() ? 0 : static_cast<int>(ap.front());
         // Same gate as single-shot run(); the rest of the batch still runs.
@@ -1723,7 +1792,8 @@ extern const Arch arch = {
     /* .stream_feed      = */ nullptr,
     /* .stream_finalize  = */ nullptr,
     /* .stream_reset     = */ nullptr,
-    /* .accepts_ext_kind = */ nullptr,
+    /* .accepts_ext_kind = */ qwen3_asr_accepts_ext_kind,
+    /* .run_validate     = */ qwen3_asr_run_validate,
 };
 
 }  // namespace transcribe::qwen3_asr

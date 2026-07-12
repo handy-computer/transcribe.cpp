@@ -70,6 +70,17 @@ struct ChatTokens {
     int32_t role_assistant = -1;
 };
 
+// Assemble the Qwen chat template used by this family. context_ids, when
+// present, form the system-message body; lang_prefix_ids seed the assistant
+// turn. Keeping this pure makes prompt ordering fixture-testable.
+void build_prompt_tokens(const QwenAsrHParams &       hp,
+                         const ChatTokens &           ct,
+                         int                          T_enc,
+                         const std::vector<int32_t> * context_ids,
+                         const std::vector<int32_t> * lang_prefix_ids,
+                         std::vector<int32_t> &       out_ids,
+                         std::vector<int64_t> &       out_audio_positions);
+
 struct QwenAsrModel final : public transcribe_model {
     Tokenizer      tok;
     QwenAsrHParams hparams;

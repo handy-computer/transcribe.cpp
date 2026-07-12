@@ -49,6 +49,8 @@
 #include "ggml.h"
 #include "transcribe-model.h"
 #include "transcribe.h"
+#include "transcribe/qwen3_asr.h"
+#include "transcribe/whisper.h"
 
 #include <sys/stat.h>
 
@@ -237,6 +239,69 @@ int main() {
         CHECK_EQ_INT(ct.role_system, 5);
         CHECK_EQ_INT(ct.role_user, 6);
         CHECK_EQ_INT(ct.role_assistant, 7);
+    }
+
+    // ----- Qwen context run-extension -----
+    // The context is model input, not an output prefix: it must occupy the
+    // system-message body ahead of the audio placeholder block.  Keep this
+    // structural assertion fixture-backed so token/template regressions fail
+    // before a real model has to decode an utterance.
+    {
+        transcribe_qwen3_asr_run_ext ext;
+        transcribe_qwen3_asr_run_ext_init(&ext);
+        CHECK_EQ_INT(ext.ext.kind, TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN);
+        CHECK_EQ_INT(ext.ext.size, sizeof(ext));
+        CHECK(ext.context == nullptr);
+        CHECK(transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN));
+        CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN));
+        CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_WHISPER_RUN));
+
+        const std::vector<int32_t> context_ids = { 8, 9 };
+        std::vector<int32_t>       ids;
+        std::vector<int64_t>       audio_positions;
+        transcribe::qwen3_asr::build_prompt_tokens(hp, qm->chat_tokens, 3, &context_ids, nullptr, ids, audio_positions);
+
+        // <im_start> system \n context <im_end> \n <im_start> user \n
+        CHECK_EQ_INT(ids[0], qm->chat_tokens.im_start);
+        CHECK_EQ_INT(ids[1], qm->chat_tokens.role_system);
+        CHECK_EQ_INT(ids[2], qm->chat_tokens.newline);
+        CHECK_EQ_INT(ids[3], context_ids[0]);
+        CHECK_EQ_INT(ids[4], context_ids[1]);
+        CHECK_EQ_INT(ids[5], qm->chat_tokens.im_end);
+        CHECK_EQ_INT(audio_positions.size(), 3);
+        CHECK_EQ_INT(audio_positions.front(), 11);
+        CHECK_EQ_INT(ids[static_cast<size_t>(audio_positions.front())], hp.audio_token_id);
+
+        // Empty context is byte-for-byte the legacy empty-system prompt.
+        std::vector<int32_t> legacy_ids;
+        std::vector<int64_t> legacy_audio_positions;
+        transcribe::qwen3_asr::build_prompt_tokens(hp, qm->chat_tokens, 3, nullptr, nullptr, legacy_ids,
+                                                   legacy_audio_positions);
+        CHECK_EQ_INT(legacy_ids.size(), ids.size() - context_ids.size());
+        CHECK_EQ_INT(legacy_audio_positions.front(), 9);
+        CHECK_EQ_INT(legacy_ids[0], qm->chat_tokens.im_start);
+        CHECK_EQ_INT(legacy_ids[3], qm->chat_tokens.im_end);
+
+        // Typed extension failures are rejected by the dispatcher before the
+        // toy model is asked to run, proving a bad context cannot be silently
+        // interpreted as a different family or corrupt an existing result.
+        transcribe_session_params session_params;
+        transcribe_session_params_init(&session_params);
+        transcribe_session * session = nullptr;
+        CHECK(transcribe_session_init(model, &session_params, &session) == TRANSCRIBE_OK);
+        if (session != nullptr) {
+            float                 pcm[8] = {};
+            transcribe_run_params run_params;
+            transcribe_run_params_init(&run_params);
+            ext.context       = "<|im_start|>";
+            run_params.family = &ext.ext;
+            CHECK(transcribe_run(session, pcm, 8, &run_params) == TRANSCRIBE_ERR_INVALID_ARG);
+
+            ext.context  = nullptr;
+            ext.ext.size = sizeof(transcribe_ext);
+            CHECK(transcribe_run(session, pcm, 8, &run_params) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+            transcribe_session_free(session);
+        }
     }
 
     // ----- Encoder subsample slots populated -----

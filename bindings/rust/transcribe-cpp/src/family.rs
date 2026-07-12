@@ -33,6 +33,14 @@ pub struct WhisperRunOptions {
     pub max_initial_timestamp: Option<f32>,
 }
 
+/// Qwen3-ASR run-extension knobs. The optional context becomes the body of
+/// Qwen's system message; audio remains in the user message. `None` keeps the
+/// historical empty system message.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Qwen3AsrRunOptions {
+    pub context: Option<String>,
+}
+
 /// Moonshine-streaming stream-extension knobs (stream slot).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MoonshineStreamingOptions {
@@ -65,6 +73,7 @@ pub struct VoxtralRealtimeStreamOptions {
 #[non_exhaustive]
 pub enum RunExtension {
     Whisper(WhisperRunOptions),
+    Qwen3Asr(Qwen3AsrRunOptions),
 }
 
 /// A family extension for the stream slot.
@@ -86,6 +95,10 @@ pub(crate) enum RunExtRaw {
         ext: Box<sys::transcribe_whisper_run_ext>,
         _prompt: Option<CString>,
     },
+    Qwen3Asr {
+        ext: Box<sys::transcribe_qwen3_asr_run_ext>,
+        _context: Option<CString>,
+    },
 }
 
 impl RunExtRaw {
@@ -94,6 +107,9 @@ impl RunExtRaw {
             // `ext` is field 0, so &ext == &the family struct.
             RunExtRaw::Whisper { ext, .. } => {
                 (&**ext) as *const sys::transcribe_whisper_run_ext as *const sys::transcribe_ext
+            }
+            RunExtRaw::Qwen3Asr { ext, .. } => {
+                (&**ext) as *const sys::transcribe_qwen3_asr_run_ext as *const sys::transcribe_ext
             }
         }
     }
@@ -126,6 +142,20 @@ impl RunExtension {
                 Ok(RunExtRaw::Whisper {
                     ext: Box::new(ext),
                     _prompt: prompt,
+                })
+            }
+            RunExtension::Qwen3Asr(o) => {
+                let mut ext: sys::transcribe_qwen3_asr_run_ext = unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_qwen3_asr_run_ext_init(&mut ext) };
+                // Keep the C string alive with the boxed extension through the
+                // native call; interior NUL remains a surfaced Error::Nul.
+                let context = o.context.as_deref().map(CString::new).transpose()?;
+                if let Some(c) = context.as_ref() {
+                    ext.context = c.as_ptr();
+                }
+                Ok(RunExtRaw::Qwen3Asr {
+                    ext: Box::new(ext),
+                    _context: context,
                 })
             }
         }
@@ -203,5 +233,30 @@ impl StreamExtension {
 fn set<T>(slot: &mut T, value: Option<T>) {
     if let Some(v) = value {
         *slot = v;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Qwen3AsrRunOptions, RunExtRaw, RunExtension};
+    use transcribe_cpp_sys as sys;
+
+    #[test]
+    fn qwen_context_materializes_as_its_own_run_extension() {
+        let raw = RunExtension::Qwen3Asr(Qwen3AsrRunOptions {
+            context: Some("Inputia, Qwen3-ASR".to_string()),
+        })
+        .materialize()
+        .unwrap();
+
+        let RunExtRaw::Qwen3Asr { ext, _context } = raw else {
+            panic!("unexpected run-extension variant");
+        };
+        assert_eq!(ext.ext.kind, sys::TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN);
+        assert_eq!(
+            ext.ext.size as usize,
+            std::mem::size_of::<sys::transcribe_qwen3_asr_run_ext>()
+        );
+        assert!(!ext.context.is_null());
     }
 }

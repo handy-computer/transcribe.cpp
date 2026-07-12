@@ -353,6 +353,12 @@ static void test_init_macros(void) {
     CHECK(wrx.seed == 0u);
     CHECK(wrx.max_initial_timestamp == 1.0f);
 
+    struct transcribe_qwen3_asr_run_ext qrx;
+    transcribe_qwen3_asr_run_ext_init(&qrx);
+    CHECK(qrx.ext.size == sizeof(struct transcribe_qwen3_asr_run_ext));
+    CHECK(qrx.ext.kind == TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN);
+    CHECK(qrx.context == NULL);
+
     /* The disabled-sentinel defines must be usable as compile-time
      * constants with the right signs. */
     CHECK(TRANSCRIBE_WHISPER_THOLD_DISABLED > 0.0f);
@@ -520,6 +526,7 @@ static void test_model_introspection_null(void) {
     CHECK(transcribe_model_accepts_ext_kind(NULL, TRANSCRIBE_EXT_SLOT_STREAM, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM) ==
           false);
     CHECK(transcribe_model_accepts_ext_kind(NULL, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_WHISPER_RUN) == false);
+    CHECK(transcribe_model_accepts_ext_kind(NULL, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN) == false);
 
     /* The feature probe is also NULL-safe and returns false for every
      * known feature value plus any out-of-range enum. */
@@ -560,6 +567,13 @@ static void test_ext_check(void) {
     pk_small.ext.size = sizeof(struct transcribe_ext); /* below the struct's prefix */
     CHECK(transcribe_ext_check(&pk_small.ext, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM,
                                sizeof(struct transcribe_parakeet_stream_ext)) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+
+    /* Qwen uses the same generic header but has its own typed minimum. */
+    struct transcribe_qwen3_asr_run_ext qrx;
+    transcribe_qwen3_asr_run_ext_init(&qrx);
+    qrx.ext.size = sizeof(struct transcribe_ext);
+    CHECK(transcribe_ext_check(&qrx.ext, TRANSCRIBE_EXT_KIND_QWEN3_ASR_RUN,
+                               sizeof(struct transcribe_qwen3_asr_run_ext)) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
 }
 
 static void test_tokenize_null(void) {
