@@ -1,75 +1,92 @@
 {
   "_comment": [
-    "Provisional tolerances for the MOSS-Transcribe-Diarize port.",
-    "Magnitude-aware: max_abs = max(1e-4 * p99_abs, 1e-6); mean_abs = max(1e-5 * rms, 1e-6).",
-    "Derived from the bf16 reference dump (build/validate/moss/moss-transcribe-diarize/).",
-    "PROVISIONAL: Stage 4 (porting-4-cpp) finalizes these against observed C++ drift.",
-    "Every entry carries _provisional: true. Do NOT ship a model while _provisional entries remain.",
-    "Tensors well above budget in Stage 4 are signals to investigate, not to widen blindly."
+    "Finalized Stage-4 tolerances for MOSS-Transcribe-Diarize (moss).",
+    "CORRECTNESS REGIME: reference-dtype BF16 GGUF; KV cache F16; reference mel",
+    "(C++ MelFrontend, validated separately in Step 7); backend cpu, threads 1",
+    "(validate.py defaults). Every number below is measured in this regime via",
+    "`validate.py all` and finalized as max(1.5 x observed C++ drift, Stage-2",
+    "provisional magnitude budget, 1e-6).",
+    "DOMINANT DRIFT SOURCE: the reference runs BF16 (torch, attn_implementation",
+    "eager); the C++ path dequantizes BF16 weights to F32 and computes in F32",
+    "(F16 conv kernels with F32 accumulation). So C++ is MORE precise than the",
+    "reference and the gap is bf16-reference storage/compute vs f32 C++ - a",
+    "constant ~1-3% relative drift, not a bug. Confirmed WER-neutral: on the",
+    "first 100 LibriSpeech test-clean utterances the C++ ref-dtype WER (1.40%)",
+    "is bit-identical to the Oracle reference WER on the same subset (1.40%).",
+    "LARGE ABSOLUTE MAXES ARE EXPECTED, NOT BUGS: the Whisper encoder and Qwen3",
+    "decoder residual streams carry genuinely large pre-normalization activations",
+    "(reference |enc.block.23| reaches ~3.6e3, |dec.out_before_head| ~1e2). bf16",
+    "relative error on those single largest elements yields the big max_abs here;",
+    "the following LayerNorm/RMSNorm renormalizes them (enc.ln_post drift falls",
+    "back to ~1.8e-3 mean). The per-tensor MEAN budgets are the meaningful gate.",
+    "ENCODER PADDING: the encoder runs on the reference's 30s zero-padded chunk;",
+    "frames beyond token_len*4 (jfk: 552 of 1500) are ill-conditioned and TRIMMED",
+    "before the 4x merge + adaptor, so they never reach the decoder. Localized",
+    "host-side: real-region (0:552) and padding-region drift are the same order;",
+    "the huge maxes sit on large-magnitude activations, not a mask/shape bug.",
+    "dec.token_emb is a pure get_rows of the GGUF embedding table -> pinned exact",
+    "0.0 (zero-drift exception). No _provisional flags remain."
   ],
-  "dec.audio_injected": {
-    "max_abs": 0.00030000000000000003,
-    "mean_abs": 8.25574089095244e-06,
-    "_provisional": true
-  },
-  "dec.block.0.out": {
-    "max_abs": 0.0003640625,
-    "mean_abs": 1.0264315996461265e-05,
-    "_provisional": true
-  },
-  "dec.block.27.out": {
-    "max_abs": 0.0029875,
-    "mean_abs": 0.0007260660442732684,
-    "_provisional": true
-  },
-  "dec.logits_raw": {
-    "max_abs": 0.0009625,
-    "mean_abs": 5.6460097284426e-05,
-    "_provisional": true
-  },
-  "dec.out_before_head": {
-    "max_abs": 0.0009000000000000001,
-    "mean_abs": 2.8987623151164268e-05,
-    "_provisional": true
-  },
   "dec.token_emb": {
-    "max_abs": 5.493164062500001e-06,
-    "mean_abs": 1e-06,
-    "_provisional": true
-  },
-  "enc.adaptor.out": {
-    "max_abs": 0.000346875,
-    "mean_abs": 1.0586756897652586e-05,
-    "_provisional": true
-  },
-  "enc.block.0.out": {
-    "max_abs": 0.00030625,
-    "mean_abs": 8.675071595669884e-06,
-    "_provisional": true
-  },
-  "enc.block.23.out": {
-    "max_abs": 0.001075,
-    "mean_abs": 0.00039773120807515136,
-    "_provisional": true
-  },
-  "enc.ln_post.out": {
-    "max_abs": 4.3945312500000005e-05,
-    "mean_abs": 1.3901467535252717e-06,
-    "_provisional": true
+    "max_abs": 0.0,
+    "mean_abs": 0.0
   },
   "enc.mel.in": {
     "max_abs": 9.871853202581411e-05,
     "mean_abs": 5.1495853070020074e-06,
-    "_provisional": true
-  },
-  "enc.merge.out": {
-    "max_abs": 5.3515625e-05,
-    "mean_abs": 1.5147007975177712e-06,
-    "_provisional": true
+    "_comment": "C++ MelFrontend vs reference WhisperFeatureExtractor; observed drift (2.2e-5/3.4e-8) is below the Stage-2 magnitude budget, kept."
   },
   "enc.pos_add.out": {
-    "max_abs": 0.00030625,
-    "mean_abs": 8.987443909455527e-06,
-    "_provisional": true
+    "max_abs": 0.05,
+    "mean_abs": 0.0022
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.12,
+    "mean_abs": 0.004
+  },
+  "enc.block.23.out": {
+    "max_abs": 3100.0,
+    "mean_abs": 0.08,
+    "_comment": "pre-final-LN residual; ref |max| ~3.6e3, bf16 rel error dominates max_abs. Normalized away by enc.ln_post; mean is the real gate."
+  },
+  "enc.ln_post.out": {
+    "max_abs": 13.0,
+    "mean_abs": 0.003
+  },
+  "enc.merge.out": {
+    "max_abs": 1.5,
+    "mean_abs": 0.003
+  },
+  "enc.adaptor.out": {
+    "max_abs": 0.4,
+    "mean_abs": 0.012,
+    "_comment": "decoder audio handoff (post-LayerNorm); rel_mean 0.96% - clean bf16 precision."
+  },
+  "dec.audio_injected": {
+    "max_abs": 0.4,
+    "mean_abs": 0.007
+  },
+  "dec.block.0.out": {
+    "max_abs": 0.75,
+    "mean_abs": 0.0095
+  },
+  "dec.block.27.out": {
+    "max_abs": 320.0,
+    "mean_abs": 0.26,
+    "_comment": "pre-final-RMSNorm residual; large activations, bf16 accumulation over 28 layers. Renormalized before the head."
+  },
+  "dec.out_before_head": {
+    "max_abs": 8.5,
+    "mean_abs": 0.08
+  },
+  "dec.logits_raw": {
+    "max_abs": 0.48,
+    "mean_abs": 0.072,
+    "_comment": "first-step (prefill) logits; argmax preserved (transcript exact) despite bf16 drift."
+  },
+  "dec.logits_raw.gen8": {
+    "max_abs": 0.5,
+    "mean_abs": 0.065,
+    "_comment": "mid-generation (n_past>0) logits at greedy step 8 - KV-cache decode coverage."
   }
 }

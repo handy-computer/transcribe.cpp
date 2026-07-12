@@ -443,6 +443,11 @@ def cmd_decode(args: argparse.Namespace) -> int:
         flush(name, hook.value, stage=name)
     if gen.scores:
         flush("dec.logits_raw", gen.scores[0], stage="dec.logits_raw")
+    # Mid-generation logits (n_past > 0) — KV-cache decode coverage. Step 8 =
+    # the logits that select the 9th generated token; the C++ runner dumps the
+    # matching step (greedy paths agree, so the tokens line up).
+    if len(gen.scores) > 8:
+        flush("dec.logits_raw.gen8", gen.scores[8], stage="dec.logits_raw.gen")
 
     transcript = {
         "schema": "transcribe-reference-transcript-v1",

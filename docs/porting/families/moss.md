@@ -70,22 +70,45 @@ TODO  # porting-6-bench
 
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |------------|------|----------------|---------------------|--------|--------|
-| Transcribe | auto / no language hint (en) | `build/bin/transcribe-cli -m models/moss-transcribe-diarize/moss-transcribe-diarize-<REFDTYPE>.gguf samples/jfk.wav` | non-empty plausible English transcript | MUST PASS | TODO |
-| Transcribe | auto / no language hint (zh) | `build/bin/transcribe-cli -m models/moss-transcribe-diarize/moss-transcribe-diarize-<REFDTYPE>.gguf <zh sample>` | non-empty plausible Chinese transcript | MUST PASS | TODO |
-| Transcribe | explicit language hint | `build/bin/transcribe-cli -m ... --language en samples/jfk.wav` | non-empty plausible transcript | OUT OF SCOPE — no first-class language token; language is inferred from audio and steered only by prompt text. Back in scope if the runtime exposes a prompt/language selector. | TODO |
-| Speaker diarization | default diarize prompt | `build/bin/transcribe-cli -m ... <multi-speaker sample>` | `[Sxx]` speaker tags present in the raw transcript | OUT OF SCOPE — diarized `[Sxx]` output is produced correctly in the raw transcript (rides the same output format the Segment-timestamps row gates), but there is no runtime API surface to expose diarization as a distinct capability; a dedicated API surface is out of scope for this PR. Back in scope when that API lands. | TODO |
-| Segment timestamps | default diarize prompt | `build/bin/transcribe-cli -m ... samples/jfk.wav` | output contains `[start]...[end]` numeric timestamps | MUST PASS | TODO |
-| Word timestamps | — | — | word-granularity timestamps | OUT OF SCOPE — model emits segment-level `[start][end]` only; no word alignment. | TODO |
-| Long-form audio | >30s multi-chunk | `build/bin/transcribe-cli -m ... <audio >30s>` | full transcript across 30s chunk boundaries | MUST PASS | TODO |
-| Promptable / hotwords | custom prompt append | `<prompt override>` | hotword-biased transcript | OUT OF SCOPE — custom prompt/hotword injection is not part of the core transcribe path. Back in scope if a prompt-override flag ships. | TODO |
-| Acoustic event annotation | promptable | `<prompt override>` | event annotations in output | OUT OF SCOPE — optional promptable feature, not the core transcribe path. | TODO |
-| Translate | — | — | English output on non-English audio | OUT OF SCOPE — transcription-only model; no translation capability. | TODO |
-| Language detection | — | — | detected language surfaced | OUT OF SCOPE — no detection branch/token; language is not surfaced by the runtime. | TODO |
-| Streaming | — | — | streaming path | OUT OF SCOPE — offline model; `capabilities.streaming: false`. | TODO |
-| Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model models/moss-transcribe-diarize/moss-transcribe-diarize-<REFDTYPE>.gguf --samples-dir samples/wer/<dataset> --batch-sizes 2,4,8 --backend cpu` | byte-identical hypotheses + CPU tensor parity | MUST PASS | TODO |
+| Transcribe | auto / no language hint (en) | `build/bin/transcribe-cli -m models/MOSS-Transcribe-Diarize/MOSS-Transcribe-Diarize-BF16.gguf samples/jfk.wav` | non-empty plausible English transcript | MUST PASS | **PASS** — `[0.28][S01] And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.[10.59]` |
+| Transcribe | auto / no language hint (zh) | `build/bin/transcribe-cli -m models/MOSS-Transcribe-Diarize/MOSS-Transcribe-Diarize-BF16.gguf samples/zh.wav` | non-empty plausible Chinese transcript | MUST PASS | **PASS** — `[0.65][S01]开放时间早上九点至下午五点[5.22]` |
+| Transcribe | explicit language hint | `build/bin/transcribe-cli -m ... --language en samples/jfk.wav` | non-empty plausible transcript | OUT OF SCOPE — no first-class language token; language is inferred from audio and steered only by prompt text. Back in scope if the runtime exposes a prompt/language selector. | **SKIP — not exposed by runtime** (`--language` is accepted but ignored; the prompt is the fixed baked instruction) |
+| Speaker diarization | default diarize prompt | `build/bin/transcribe-cli -m ... samples/jfk.wav` | `[Sxx]` speaker tags present in the raw transcript | OUT OF SCOPE — diarized `[Sxx]` output is produced correctly in the raw transcript (rides the same output format the Segment-timestamps row gates), but there is no runtime API surface to expose diarization as a distinct capability; a dedicated API surface is out of scope for this PR. Back in scope when that API lands. | **ACCEPTED GAP — `[S01]` tags present in the raw transcript, no distinct diarization API** (unblocked when a diarization API surface lands) |
+| Segment timestamps | default diarize prompt | `build/bin/transcribe-cli -m ... samples/jfk.wav` | output contains `[start]...[end]` numeric timestamps | MUST PASS | **PASS** — output carries inline `[0.28]…[10.59]` segment timestamps |
+| Word timestamps | — | — | word-granularity timestamps | OUT OF SCOPE — model emits segment-level `[start][end]` only; no word alignment. | **SKIP — not exposed by runtime** |
+| Long-form audio | >30s multi-chunk | `build/bin/transcribe-cli -m ... samples/whole-earth.wav` | full transcript across 30s chunk boundaries | MUST PASS | **PASS** — 84s clip transcribed in full across 3 chunks to EOS (`…Thank you all very much.[83.47]`) |
+| Promptable / hotwords | custom prompt append | `<prompt override>` | hotword-biased transcript | OUT OF SCOPE — custom prompt/hotword injection is not part of the core transcribe path. Back in scope if a prompt-override flag ships. | **SKIP — not exposed by runtime** |
+| Acoustic event annotation | promptable | `<prompt override>` | event annotations in output | OUT OF SCOPE — optional promptable feature, not the core transcribe path. | **SKIP — not exposed by runtime** |
+| Translate | — | — | English output on non-English audio | OUT OF SCOPE — transcription-only model; no translation capability. | **SKIP — not exposed by runtime** |
+| Language detection | — | — | detected language surfaced | OUT OF SCOPE — no detection branch/token; language is not surfaced by the runtime. | **SKIP — not exposed by runtime** |
+| Streaming | — | — | streaming path | OUT OF SCOPE — offline model; `capabilities.streaming: false`. | **SKIP — not exposed by runtime** |
+| Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model models/MOSS-Transcribe-Diarize/MOSS-Transcribe-Diarize-BF16.gguf --list <wavs> --batch-sizes 2,4,8 --backend cpu` | byte-identical hypotheses + CPU tensor parity | MUST PASS | **PASS** — text parity byte-identical at batch 2/4/8 vs serial (12 utts, CPU); golden fixture `tests/golden/batch/moss-transcribe-diarize.cpu.json`. Encoder tensor parity is structural (see Notes). |
 
 ## Notes
 
+- **Ref-dtype WER (LibriSpeech test-clean, 2620 utts).** C++ BF16 GGUF: batch 1
+  = **2.09%**, batch 8 = **2.09%** (batching WER-neutral, 0.00pp). Oracle
+  reference (our own BF16 run): 2.07%. Delta +0.02pp = 0.01pp over the strict
+  `Oracle + 0.01pp` gate. Cause: 27/2621 utts (1.03%) flip a single word under
+  bf16(ref)-vs-f32(cpp) precision (homophones / proper nouns: parquet↔parakeet,
+  berksen↔bergson, ...), several arguably more correct in the C++ output. CIs
+  overlap ~99% ([1.84,2.41] vs [1.82,2.40]). Root-caused, not assumed: re-running
+  the reference in **F32** on all 27 flip utts resolves 26/27 to exactly the C++
+  output (C++(f32) == reference-F32), i.e. the gap is the reference's own BF16
+  imprecision, not a port bug. At each flip the two candidate tokens are a
+  near-tie whose logit gap (~0.05-0.25, e.g. an exact 0.000 bf16 tie for
+  save/saved) sits inside the measured `dec.logits` bf16 noise band; several C++
+  picks are the more correct word (parakeet, bergson, specialty, neighbour). The
+  0.01pp gate is below this model's bf16 precision floor.
+- **Batch (offline) design.** `run_batch` batches the *decoder* (batched KV
+  cache + `block_prefill_batched` + `run_batched_step_loop`) — the dominant cost
+  of transcription. The *encoder* runs per-utterance (`encode_one`) in both the
+  serial and batched paths, so the per-utterance encoder output is bit-exact by
+  construction. That is why `scripts/batch_tensor_parity.py` (which compares a
+  *fused* batched-encoder dump `<name>.b{i}` against the single-shot, as
+  parakeet/qwen3_asr produce) does not apply here — MOSS has no fused batched
+  encoder. Batched correctness is gated by `batch_parity.py`: byte-identical
+  hypotheses at batch 2/4/8 vs serial, which exercises the real batched decoder.
 - Acceptance dataset (user-signed): **LibriSpeech test-clean** (English) as the
   ref-dtype gate, **plus a Chinese diarization set** (Stage 2 picks the specific
   corpus, e.g. AISHELL-4 / Alimeeting) as an on-target companion. The model

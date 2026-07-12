@@ -1,0 +1,19 @@
+{
+  "model": "models/MOSS-Transcribe-Diarize/MOSS-Transcribe-Diarize-BF16.gguf",
+  "backend": "cpu",
+  "language": "en",
+  "texts": {
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0000.wav": "[0.48][S01] He hoped there would be stew for dinner, turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick peppered flour, fat and sauce.[10.36]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0001.wav": "[0.29][S01] Stuff it into you, his belly counselled him.[2.81]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0002.wav": "[0.35][S01] After early nightfall, the yellow lamps would light up here and there the squalid quarter of the brothels.[6.01]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0003.wav": "[0.35][S01] Hello, bertie. Any good in your mind?[2.62]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0004.wav": "[0.15][S01] Number ten fresh nellie is waiting on you. Good night, husband.[4.99]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0005.wav": "[0.35][S01] The music came nearer, and he recalled the words, the words of shelley's fragment upon the moon, wandering companionless pale for weariness.[9.61]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0006.wav": "[0.48][S01] The dull light fell more faintly upon the page, whereon another equation began to unfold itself slowly and to spread abroad its widening tail.[10.32]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0007.wav": "[0.48][S01] A cold lucid indifference reigned in his soul.[3.98]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0008.wav": "[0.48][S01] The chaos in which his ardour extinguished itself was a cold indifferent knowledge of himself.[5.98]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0009.wav": "[0.35][S01] At most by an alms given to a beggar whose blessing he fled from, he might hope wearily to win for himself some measure of actual grace.[10.01]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0010.wav": "[0.51][S01] Well, now, ennis, i declare you have a head, and so has my stick.[3.99]",
+    "/Users/cj/code/handy-computer/transcribe.cpp/samples/wer/librispeech-test-clean/1089-134686-0011.wav": "[0.53][S01] On saturday mornings, when the sodality met in the chapel to recite the little office, his place was a cushioned kneeling desk at the right of the altar, from which he led his wing of boys through the responses.[12.11]"
+  }
+}

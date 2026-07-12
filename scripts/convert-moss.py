@@ -133,6 +133,20 @@ from lib.gguf_common import (  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Canonical timestamped+diarize instruction from the OpenMOSS GitHub inference
+# harness (moss_transcribe_diarize/inference_utils.py DEFAULT_PROMPT). The model
+# has no language/task token; this Chinese instruction is used for all audio.
+# Language/prompt override is OUT OF SCOPE for this port, so the prompt wrapper
+# (chat template + this instruction) is fixed and its token ids are baked into
+# the GGUF here. The C++ prompt builder concatenates
+#   prompt_prefix_tokens + audio_span(host int math) + prompt_suffix_tokens
+# and never runs a Chinese BPE / Jinja renderer at inference time.
+DEFAULT_PROMPT = (
+    "请将音频转写为文本，每一段需以起始时间戳和说话人编号"
+    "（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，"
+    "并在段末标注结束时间戳，以清晰标明该段语音范围。"
+)
+
 REFERENCE_DTYPE_LABEL = "BF16"
 REFERENCE_FILE_TYPE = LlamaFileType.MOSTLY_BF16
 REFERENCE_GGML_TYPE = GGMLQuantizationType.BF16
@@ -351,6 +365,53 @@ DEC_BLOCK_TABLE: list[tuple[str, str]] = [
 SKIP_EXACT: set[str] = set()
 
 
+def compute_prompt_tokens(model_dir: Path) -> dict:
+    """Bake the fixed prompt token ids via the reference processor.
+
+    Mirrors processing_moss_transcribe_diarize._expand_audio_token: render the
+    chat prompt (system + user + audio placeholder + DEFAULT_PROMPT +
+    add_generation_prompt), split on the single <|audio_pad|> token, and encode
+    the before/after halves with add_special_tokens=False. The C++ prompt
+    builder inserts the deterministic audio span (audio_span_ids) between them,
+    so the reconstructed input_ids are identical to the reference processor's.
+    Also bakes the single-token ids for digits 0..9 (marker construction).
+    """
+    from transformers import AutoProcessor
+
+    proc = AutoProcessor.from_pretrained(
+        str(model_dir), trust_remote_code=True, local_files_only=True)
+    tokenizer = proc.tokenizer
+    audio_tok = getattr(proc, "audio_token", "<|audio_pad|>")
+
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "audio", "audio": "audio.wav"},
+            {"type": "text", "text": DEFAULT_PROMPT},
+        ],
+    }]
+    prompt_text = proc.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True)
+    if prompt_text.count(audio_tok) != 1:
+        raise ValueError(
+            f"expected exactly one {audio_tok!r} in rendered prompt, "
+            f"got {prompt_text.count(audio_tok)}")
+    before_audio, after_audio = prompt_text.split(audio_tok, maxsplit=1)
+    prefix_ids = [int(i) for i in tokenizer.encode(before_audio, add_special_tokens=False)]
+    suffix_ids = [int(i) for i in tokenizer.encode(after_audio, add_special_tokens=False)]
+
+    digit_ids = []
+    for d in "0123456789":
+        ids = tokenizer.encode(d, add_special_tokens=False)
+        if len(ids) != 1:
+            raise ValueError(f"digit {d!r} is not a single token: {ids}")
+        digit_ids.append(int(ids[0]))
+
+    print(f"Prompt tokens: prefix={len(prefix_ids)} suffix={len(suffix_ids)} "
+          f"digits={digit_ids}")
+    return {"prefix_ids": prefix_ids, "suffix_ids": suffix_ids, "digit_ids": digit_ids}
+
+
 def compute_size_label(total_params: int) -> str:
     if total_params >= 1_000_000_000:
         return f"{total_params / 1_000_000_000:.1f}B"
@@ -403,6 +464,9 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         raise ValueError(
             f"audio_pad token id mismatch: config={hp['audio_token_id']} "
             f"tokenizer={tok['audio_pad_id']}")
+
+    print("Baking fixed prompt token ids from the reference processor")
+    prompt = compute_prompt_tokens(model_dir)
 
     print(f"Opening safetensors under {model_dir}")
     with _ShardedSafetensors(model_dir) as st:
@@ -482,6 +546,12 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         writer.add_float32("stt.moss.audio_tokens_per_second", hp["audio_tokens_per_second"])
         writer.add_uint32("stt.moss.time_marker_every_seconds", hp["time_marker_every_seconds"])
         writer.add_bool("stt.moss.enable_time_marker",       hp["enable_time_marker"])
+
+        # ---- baked fixed prompt (see compute_prompt_tokens) ----
+        # C++ builds input_ids = prompt_prefix_tokens + audio_span + prompt_suffix_tokens.
+        writer.add_array("stt.moss.prompt_prefix_tokens", prompt["prefix_ids"])
+        writer.add_array("stt.moss.prompt_suffix_tokens", prompt["suffix_ids"])
+        writer.add_array("stt.moss.digit_tokens",         prompt["digit_ids"])
 
         # ---- stt.frontend.* (Whisper feature extractor) ----
         writer.add_string("stt.frontend.type",          "mel")
