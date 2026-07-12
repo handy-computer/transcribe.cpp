@@ -102,9 +102,44 @@ TODO  # porting-6-bench
 - The default instruction prompt is Chinese and is used for English audio too;
   there is no language/task token (`has_language_tokens: false`).
 - Prompt/audio-span construction is non-trivial: the processor interleaves
-  literal second-count digit tokens into the `<|audio_pad|>` span every 2s
-  (`audio_tokens_per_second=12.5`, `time_marker_every_seconds=2`). See
+  literal second-count digit tokens into the `<|audio_pad|>` span. The
+  authoritative cadence is **every 5s** (`processor_config.json`:
+  `audio_tokens_per_second=12.5`, `time_marker_every_seconds=5`,
+  `enable_time_marker=true`) — the constructor default of 2s is overridden by
+  the saved processor config. These are emitted as `stt.moss.*` KV. See
   `known_risks` in the intake.
 - See `reports/porting/moss/moss-transcribe-diarize/intake.json` and
   `reports/porting/moss/moss-transcribe-diarize/_research_dump.txt` (model card +
   reference code).
+
+## Stage 3 conversion — tensor-mapping decisions
+
+- **Encoder names reuse the `whisper` family**, decoder names reuse the
+  `qwen3_asr` text LM. MOSS's `model.whisper_encoder.*` is a stock HF
+  `WhisperEncoder`, so it maps to `enc.conv.{0,1}`, `enc.pos_emb`,
+  `enc.final_norm`, `enc.blocks.N.{norm_attn,attn.{q,k,v,out},norm_ffn,ffn.{fc1,fc2}}`
+  (q/v/out have bias, k does not). The Qwen3 LM maps to
+  `dec.token_embd`, `dec.output_norm`,
+  `dec.blocks.N.{norm_attn,norm_ffn,attn.{q,k,v,o,q_norm,k_norm},ffn.{gate,up,down}}`.
+  This lets Stage 4 share the whisper encoder graph and a Qwen3 decoder graph.
+- **VQAdaptor** (`model.vq_adaptor.layers.{0,2,3}`) maps to `adaptor.fc1`
+  (Linear 4096→1024), `adaptor.fc2` (Linear 1024→1024), `adaptor.norm_out`
+  (final LayerNorm). `norm_out` is deliberately named so the `"norm_"` rule in
+  `reference_dtype_for` keeps the LayerNorm scale at F32.
+- **Tied head:** `tie_word_embeddings=true` and `lm_head.weight` is absent from
+  the state dict; the loader reuses `dec.token_embd.weight` for the output
+  projection. No SKIP list needed.
+- **Vocab padded to 151936.** The tokenizer names 151672 tokens but the
+  embedding/logit width is `text_config.vocab_size=151936`; the token table is
+  padded with `<|unused_N|>` so its length matches the logits. Intake +
+  manifest `vocab_size` corrected from 151672 to 151936 accordingly.
+- **Conv1d kernels → F16.** Reference dtype is BF16 but the loader has no BF16
+  conv kernel, so `enc.conv.{0,1}.weight` are stored F16 per
+  `reference_dtype_for`. No `policy.cpp` change was needed — every MOSS tensor
+  name hits an existing bucket rule (quant-policy sync passes 5/5).
+- **Frontend buffers baked in:** `frontend.mel_filterbank` (slaney) and
+  `frontend.window` (periodic Hann) are written as F32 tensors so the C++
+  MelFrontend is bit-identical.
+- GGUF path is `models/MOSS-Transcribe-Diarize/MOSS-Transcribe-Diarize-BF16.gguf`
+  (upstream-slug convention, matches `Qwen3-ASR-0.6B/` etc.); `stt.variant` is
+  the lowercase `moss-transcribe-diarize`.

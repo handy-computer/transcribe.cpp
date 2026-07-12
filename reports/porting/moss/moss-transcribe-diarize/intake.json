@@ -80,7 +80,7 @@
   },
   "tokenizer": {
     "type": "bpe",
-    "vocab_size": 151672,
+    "vocab_size": 151936,
     "special_tokens": {
       "bos": 151643,
       "eos": 151645,
@@ -153,7 +153,7 @@
   "architecture_pattern": "audio-llm",
   "known_risks": [
     "Composite three-part audio-LLM with heterogeneous norms and activations: WhisperEncoder (24 layers, gelu, LayerNorm) -> 4x temporal merge (1024 -> 4096) -> VQAdaptor MLP (Linear 4096->1024, SiLU, Linear 1024->1024, LayerNorm with bias) -> Qwen3-0.6B decoder (28 layers, silu, RMSNorm). Mixed LayerNorm-vs-RMSNorm and gelu-vs-silu across sub-blocks; each must be wired to the right normalization/activation.",
-    "Time-marker digit injection into the audio placeholder span. The processor does NOT emit a uniform run of <|audio_pad|> (id 151671) tokens: with enable_time_marker=True, audio_tokens_per_second=12.5, time_marker_every_seconds=2, it interleaves literal second-count digit tokens (e.g. '2','4','6', ...) among the audio placeholders at fixed positions. The C++ prompt builder must reproduce this interleaving exactly or timestamp emission and the masked_scatter feature count both break.",
+    "Time-marker digit injection into the audio placeholder span. The processor does NOT emit a uniform run of <|audio_pad|> (id 151671) tokens: with enable_time_marker=True, audio_tokens_per_second=12.5, time_marker_every_seconds=5 (authoritative value from processor_config.json; the constructor default of 2 is overridden), it interleaves literal second-count digit tokens (e.g. '5','10','15', ...) among the audio placeholders at fixed positions. The C++ prompt builder must reproduce this interleaving exactly or timestamp emission and the masked_scatter feature count both break.",
     "Audio token-length formula couples frontend hop, Whisper conv stride (2), and merge size (4): tokens_per_chunk = (num_samples - 1) // (hop_length * 2 * merge_size) + 1 = (n - 1) // 1280 + 1. masked_scatter requires the number of audio placeholders to exactly equal the number of adaptor output features; any off-by-one here is a hard runtime error, not silent drift.",
     "Long-form handling is chunk-based, not a single encode. Audio is split into 480000-sample (30s) chunks, each padded to 30s and encoded by Whisper independently; per-chunk features are trimmed to token_len*4 then concatenated per-audio before the 4x merge and adaptor. Chunk-boundary trimming and per-audio concatenation are core to the long-form capability and easy to get wrong.",
     "Diarization and timestamps are emergent plain-text output in the canonical format [start][Sxx]text[end] (e.g. [0.48][S01]Welcome[1.66]), not special tokens. There is no structural token boundary; WER/CER scoring must parse and strip speaker labels and numeric timestamps from generated text.",

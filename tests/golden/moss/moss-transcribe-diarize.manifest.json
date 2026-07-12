@@ -27,7 +27,7 @@
   },
   "tokenizer_summary": {
     "type": "bpe",
-    "vocab_size": 151672,
+    "vocab_size": 151936,
     "special_tokens": {
       "bos": 151643,
       "eos": 151645,
