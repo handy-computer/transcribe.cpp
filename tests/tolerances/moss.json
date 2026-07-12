@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "Provisional tolerances for the MOSS-Transcribe-Diarize port.",
+    "Magnitude-aware: max_abs = max(1e-4 * p99_abs, 1e-6); mean_abs = max(1e-5 * rms, 1e-6).",
+    "Derived from the bf16 reference dump (build/validate/moss/moss-transcribe-diarize/).",
+    "PROVISIONAL: Stage 4 (porting-4-cpp) finalizes these against observed C++ drift.",
+    "Every entry carries _provisional: true. Do NOT ship a model while _provisional entries remain.",
+    "Tensors well above budget in Stage 4 are signals to investigate, not to widen blindly."
+  ],
+  "dec.audio_injected": {
+    "max_abs": 0.00030000000000000003,
+    "mean_abs": 8.25574089095244e-06,
+    "_provisional": true
+  },
+  "dec.block.0.out": {
+    "max_abs": 0.0003640625,
+    "mean_abs": 1.0264315996461265e-05,
+    "_provisional": true
+  },
+  "dec.block.27.out": {
+    "max_abs": 0.0029875,
+    "mean_abs": 0.0007260660442732684,
+    "_provisional": true
+  },
+  "dec.logits_raw": {
+    "max_abs": 0.0009625,
+    "mean_abs": 5.6460097284426e-05,
+    "_provisional": true
+  },
+  "dec.out_before_head": {
+    "max_abs": 0.0009000000000000001,
+    "mean_abs": 2.8987623151164268e-05,
+    "_provisional": true
+  },
+  "dec.token_emb": {
+    "max_abs": 5.493164062500001e-06,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.adaptor.out": {
+    "max_abs": 0.000346875,
+    "mean_abs": 1.0586756897652586e-05,
+    "_provisional": true
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.00030625,
+    "mean_abs": 8.675071595669884e-06,
+    "_provisional": true
+  },
+  "enc.block.23.out": {
+    "max_abs": 0.001075,
+    "mean_abs": 0.00039773120807515136,
+    "_provisional": true
+  },
+  "enc.ln_post.out": {
+    "max_abs": 4.3945312500000005e-05,
+    "mean_abs": 1.3901467535252717e-06,
+    "_provisional": true
+  },
+  "enc.mel.in": {
+    "max_abs": 9.871853202581411e-05,
+    "mean_abs": 5.1495853070020074e-06,
+    "_provisional": true
+  },
+  "enc.merge.out": {
+    "max_abs": 5.3515625e-05,
+    "mean_abs": 1.5147007975177712e-06,
+    "_provisional": true
+  },
+  "enc.pos_add.out": {
+    "max_abs": 0.00030625,
+    "mean_abs": 8.987443909455527e-06,
+    "_provisional": true
+  }
+}

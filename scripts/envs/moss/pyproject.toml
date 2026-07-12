@@ -1,0 +1,17 @@
+[project]
+name = "transcribe-moss-env"
+version = "0.1.0"
+description = "Python env for MOSS-Transcribe-Diarize reference dumps and WER (trust_remote_code)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.2",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "librosa>=0.10",
+    "numpy>=1.26",
+    "protobuf>=4.25",
+    "safetensors>=0.4",
+    "soundfile>=0.12",
+    "transformers==5.12.1",
+    "accelerate>=1.0",
+]
