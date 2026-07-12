@@ -103,3 +103,46 @@ present in `models/<variant>/` for each listed quant — missing files
 are skipped with a warning, not an error. Some models ship `BF16`
 instead of `F16` (e.g. Qwen3-ASR); pass `--quants bf16,q8_0,q4_k_m`
 for those.
+
+## Remote benching (the bench fleet)
+
+`.github/workflows/bench.yml` runs the same `run.py` matrix on the
+self-hosted bench machines via `workflow_dispatch`:
+
+| Machine        | Runner labels                        | Backends                     |
+|----------------|--------------------------------------|------------------------------|
+| M4 Mac mini    | `[self-hosted, macOS, ARM64]`        | `metal,cpu`                  |
+| T14 (4750U)    | `[self-hosted, Linux, X64, vulkan]`  | `vulkan,cpu` (RADV, k10temp cooldown gate) |
+
+Each job checks out the dispatched ref, builds `transcribe-bench`,
+pulls the requested quants from the private HF repo
+(`handy-computer/<variant>-gguf`, the Stage 5 upload target) into a
+persistent per-machine store, runs `run.py` with explicit
+`--backends`, and uploads the new reports as a `perf-<machine>`
+artifact.
+
+`scripts/bench/remote.py` wraps the round trip from a dev machine:
+
+```bash
+uv run scripts/bench/remote.py --models <variant> --name <variant>-publication
+uv run scripts/bench/remote.py --models <variant> --machines t14-vulkan
+uv run scripts/bench/remote.py --fetch <run-id>     # download-only
+```
+
+It dispatches on the current branch (unpushed local commits are a hard
+error — the fleet benches the remote state), watches the run, then
+merges the artifacts into local `reports/perf/`. Machine-slug report
+directories keep fleet results and local results from colliding.
+
+Caveats:
+
+- Dispatch requires write access. The workflow is `workflow_dispatch`
+  only and must stay that way — it targets self-hosted runners in a
+  public repo.
+- GitHub only registers the workflow once it exists on the default
+  branch; after that `--ref` can point at any pushed branch.
+- Quants must already be published to HF (Stage 5) — the fleet pulls
+  models from HF, not from your working tree.
+- The same machines serve CI and dev use. The runner queue keeps jobs
+  serial per machine, but treat numbers from a busy box with suspicion
+  (`uptime` is echoed at the top of every job).

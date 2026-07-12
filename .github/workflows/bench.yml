@@ -1,0 +1,190 @@
+# Performance benchmarks on the owned bench fleet (M4 mini + T14/4750U).
+#
+# SECURITY: workflow_dispatch ONLY. These jobs run on the self-hosted bench
+# machines; dispatching requires write access to the repo, and that is the
+# entire access-control story. Never add push/pull_request triggers here.
+#
+# Each job checks out the dispatched ref, builds transcribe-bench from
+# source, pulls the requested quants from the private HF GGUF repo
+# (handy-computer/<variant>-gguf — Stage 5's upload target), runs
+# scripts/bench/run.py at the requested scope, and uploads the new
+# reports as a perf-<machine> artifact. scripts/bench/remote.py wraps the
+# dispatch → watch → download-and-merge round trip from a dev machine.
+
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Variant slug(s), comma-separated (dir names under models/, e.g. parakeet-tdt-0.6b-v3)"
+        required: true
+        type: string
+      quants:
+        description: "Quant presets, comma-separated"
+        type: string
+        default: "q8_0,q4_k_m"
+      samples:
+        description: "Sample stems under samples/"
+        type: string
+        default: "jfk,dots"
+      iters:
+        description: "Measured iterations per cell"
+        type: string
+        default: "3"
+      warmup:
+        description: "Warmup iterations per cell"
+        type: string
+        default: "1"
+      name:
+        description: "Stable report label (empty = timestamp filenames)"
+        type: string
+        default: ""
+      machines:
+        description: "Which bench machines to run"
+        type: choice
+        options: [all, m4-mini, t14-vulkan]
+        default: all
+      hf_repo:
+        description: "HF GGUF repo override (default: handy-computer/<variant>-gguf per variant)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # The runner queue already serializes jobs per machine (one runner
+  # instance each); this just coalesces duplicate pending dispatches.
+  group: bench-${{ github.ref }}
+
+jobs:
+  plan:
+    # The matrix context is not available in a job-level `if`, so machine
+    # selection happens here by emitting the include list dynamically.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    outputs:
+      matrix: ${{ steps.emit.outputs.matrix }}
+    steps:
+      - id: emit
+        env:
+          MACHINES: ${{ inputs.machines }}
+        run: |
+          mini='{"id":"m4-mini","runner":["self-hosted","macOS","ARM64"],"backends":"metal,cpu","extra_args":""}'
+          t14='{"id":"t14-vulkan","runner":["self-hosted","Linux","X64","vulkan"],"backends":"vulkan,cpu","extra_args":"--cooldown-tctl-c 55"}'
+          case "$MACHINES" in
+            all)        include="$mini,$t14" ;;
+            m4-mini)    include="$mini" ;;
+            t14-vulkan) include="$t14" ;;
+            *) echo "::error::unknown machines value: $MACHINES"; exit 1 ;;
+          esac
+          echo "matrix={\"include\":[$include]}" >> "$GITHUB_OUTPUT"
+
+  bench:
+    name: bench (${{ matrix.id }})
+    needs: plan
+    strategy:
+      fail-fast: false  # a T14 hiccup must not kill the mini's numbers
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90  # bound the run if a self-hosted machine wedges
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Machine load (informational — these boxes also serve CI and dev use)
+        run: uptime
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja
+          command -v ccache >/dev/null || brew install ccache
+
+      - name: Check build deps (Linux, self-hosted — preinstalled; fail loud if not)
+        if: runner.os == 'Linux'
+        run: |
+          for tool in cmake ninja ccache glslc; do
+            command -v "$tool" >/dev/null || {
+              echo "::error::$tool missing on $(hostname) — install it (dnf install $tool)"; exit 1; }
+          done
+
+      - name: Configure + build transcribe-bench
+        # Metal embedded on macOS (matches native-ci / the shipped wheel
+        # posture); unified Vulkan build on Linux so build/bin serves both
+        # the cpu and vulkan backends (run.py gets --backends explicitly).
+        run: |
+          extra=""
+          if [ "$RUNNER_OS" = "macOS" ]; then extra="-DGGML_METAL_EMBED_LIBRARY=ON"; fi
+          if [ "$RUNNER_OS" = "Linux" ]; then extra="-DGGML_VULKAN=ON"; fi
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release $extra \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --target transcribe-bench -j
+
+      - name: Fetch GGUFs from the private HF repo
+        # Stage 5 uploads the quant matrix to handy-computer/<variant>-gguf
+        # with files at the repo root (<variant>-<QUANT>.gguf). Downloads
+        # land in a persistent per-machine store OUTSIDE the workspace
+        # (checkout wipes untracked files each run) and models/<variant>
+        # is symlinked to it, so re-runs are incremental no-ops.
+        env:
+          IN_MODELS: ${{ inputs.models }}
+          IN_QUANTS: ${{ inputs.quants }}
+          IN_HF_REPO: ${{ inputs.hf_repo }}
+        run: |
+          IFS=',' read -ra variants <<< "$IN_MODELS"
+          IFS=',' read -ra quants <<< "$IN_QUANTS"
+          includes=()  # --include is a repeatable flag, one pattern each
+          for q in "${quants[@]}"; do
+            includes+=("--include" "*-$(printf '%s' "$q" | tr '[:lower:]' '[:upper:]').gguf")
+          done
+          mkdir -p models
+          for variant in "${variants[@]}"; do
+            variant="${variant##*/}"  # strip HF-style org prefix
+            repo="$IN_HF_REPO"
+            if [ -z "$repo" ]; then repo="handy-computer/${variant}-gguf"; fi
+            store="$HOME/.cache/transcribe-bench/models/$variant"
+            mkdir -p "$store"
+            ln -sfn "$store" "models/$variant"
+            uvx --from huggingface_hub hf download "$repo" \
+              "${includes[@]}" --local-dir "$store"
+            ls -l "models/$variant/"
+          done
+
+      - name: Bench
+        env:
+          IN_MODELS: ${{ inputs.models }}
+          IN_QUANTS: ${{ inputs.quants }}
+          IN_SAMPLES: ${{ inputs.samples }}
+          IN_ITERS: ${{ inputs.iters }}
+          IN_WARMUP: ${{ inputs.warmup }}
+          IN_NAME: ${{ inputs.name }}
+          IN_BACKENDS: ${{ matrix.backends }}
+          IN_EXTRA_ARGS: ${{ matrix.extra_args }}
+        run: |
+          set -o pipefail
+          name_arg=()
+          if [ -n "$IN_NAME" ]; then name_arg=(--name "$IN_NAME"); fi
+          # --out-dir keeps CI results separate from any reports already
+          # tracked in the checkout, so the artifact contains ONLY this
+          # run's reports. remote.py merges them into local reports/perf/.
+          uv run scripts/bench/run.py \
+            --models "$IN_MODELS" \
+            --quants "$IN_QUANTS" \
+            --samples "$IN_SAMPLES" \
+            --iters "$IN_ITERS" \
+            --warmup "$IN_WARMUP" \
+            --backends "$IN_BACKENDS" \
+            --out-dir reports/perf-ci \
+            $IN_EXTRA_ARGS \
+            "${name_arg[@]}" | tee bench-summary.txt
+          { echo '```'; cat bench-summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: perf-${{ matrix.id }}
+          path: reports/perf-ci/
+          if-no-files-found: error
