@@ -1210,12 +1210,6 @@ transcribe_status run(transcribe_session *          session,
 // batches build attn key-padding + conv valid-frame masks so a padded
 // tail can't corrupt real frames and decode each at its own T_enc;
 // same-length batches skip the masks and are bit-identical to single-shot.
-static int pre_encode_t_out(int in, bool causal) {
-    // Stride-2, kernel-3 output length. Causal padding (2, 1) produces one
-    // more frame than symmetric pad-1 for even inputs.
-    return causal ? (in / 2 + 1) : ((in - 1) / 2 + 1);
-}
-
 static transcribe_status run_batch_encode(ParakeetSession *                       pc,
                                           ParakeetModel *                         pm,
                                           const std::vector<std::vector<float>> & mels,
@@ -1296,9 +1290,9 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
     if (var_len) {
         for (int b = 0; b < n; ++b) {
             int t        = nf[b];
-            t            = pre_encode_t_out(t, causal_pre_encode);
-            t            = pre_encode_t_out(t, causal_pre_encode);
-            t            = pre_encode_t_out(t, causal_pre_encode);
+            t            = pre_encode_time_out(t, causal_pre_encode);
+            t            = pre_encode_time_out(t, causal_pre_encode);
+            t            = pre_encode_time_out(t, causal_pre_encode);
             real_tenc[b] = std::min(t, T_enc);
         }
         // Attention key-padding mask [T_enc, 1, 1, n] (0 real / -INF padded)
@@ -1317,7 +1311,7 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
             for (int b = 0; b < n; ++b) {
                 int v = nf[b];
                 for (int d = 0; d < n_down; ++d) {
-                    v = pre_encode_t_out(v, causal_pre_encode);
+                    v = pre_encode_time_out(v, causal_pre_encode);
                 }
                 if (v > H) {
                     v = H;
