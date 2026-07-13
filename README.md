@@ -25,6 +25,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Voxtral | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` (audio-LLM; transcription + translation) | [docs/models/voxtral.md](docs/models/voxtral.md) |
 | Voxtral Realtime | `voxtral-mini-4b-realtime-2602` (streaming audio-LLM) | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |
 | MedASR | `medasr` (Conformer + CTC, English medical-dictation, gated) | [docs/models/medasr.md](docs/models/medasr.md) |
+| MOSS Transcribe-Diarize | `moss-transcribe-diarize` (audio-LLM; English + Chinese ASR with inline speaker diarization) | [docs/models/moss-transcribe-diarize.md](docs/models/moss-transcribe-diarize.md) |
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
