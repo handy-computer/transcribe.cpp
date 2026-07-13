@@ -26,10 +26,10 @@ int g_failures = 0;
     } while (0)
 
 struct Parsed {
-    bool                                                  ok = false;
-    std::vector<transcribe_session::SegmentEntry>         segments;
+    bool                                                 ok = false;
+    std::vector<transcribe_session::SegmentEntry>        segments;
     std::vector<transcribe_session::SpeakerSegmentEntry> speakers;
-    std::string                                           full_text;
+    std::string                                          full_text;
 };
 
 Parsed parse(const std::string & raw, int64_t audio_ms = 10000) {

@@ -533,19 +533,26 @@ enum transcribe_itn_mode {
  * transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION)
  * returns false emit a WARN and proceed with default behavior.
  *
- * Diarization here is host-side parsing of the model's own speaker
- * markers into structured results: segment rows carry speaker_id and
- * the speaker-segment accessors (transcribe_n_speaker_segments /
- * transcribe_get_speaker_segment) are populated. It never changes what
- * the model computes; OFF returns the model's raw text untouched.
+ * When ON resolves, the model's speaker markers are parsed into
+ * structured results: segment rows carry speaker_id and the
+ * speaker-segment accessors (transcribe_n_speaker_segments /
+ * transcribe_get_speaker_segment) are populated, with the markers
+ * stripped from the text. How a family produces markers is
+ * family-specific: moss always emits them (parsing is pure host-side
+ * post-processing), while granite-speech-4.1-2b-plus emits them only
+ * when its prompt requests the speaker-attribution task, so there ON
+ * changes the instruction the model is given. See each family doc.
  *
- *   DEFAULT (0): family default. Zero-init gives this value. For
- *                families whose model always emits speaker markers
- *                (moss, granite-speech-4.1-2b-plus) the default is ON.
- *   OFF:         raw passthrough. The model's speaker/timestamp markers
- *                stay verbatim in the transcript text; no speaker rows.
- *   ON:          parse speaker markers into segment speaker_id + speaker
- *                segments; markers are stripped from the text.
+ *   DEFAULT (0): family default (the behavior its shipped WER numbers
+ *                were measured against). Zero-init gives this value.
+ *                moss: ON (its markers are always present and its gates
+ *                score dediarized text). granite-plus: OFF (plain
+ *                transcription task).
+ *   OFF:         no speaker parsing. moss: raw passthrough with markers
+ *                verbatim in the text. Families where diarization is a
+ *                requested task simply do not request it.
+ *   ON:          request (if needed) and parse speaker markers into
+ *                segment speaker_id + speaker segments.
  */
 enum transcribe_diarize_mode {
     TRANSCRIBE_DIARIZE_MODE_DEFAULT = 0,

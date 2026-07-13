@@ -37,9 +37,9 @@ bool try_time(const std::string & raw, size_t i, int64_t & out_ms, size_t & out_
         int_part = int_part * 10 + (raw[j] - '0');
         ++j;
     }
-    int64_t frac_ms   = 0;
-    int     n_frac    = 0;
-    bool    round_up  = false;
+    int64_t frac_ms  = 0;
+    int     n_frac   = 0;
+    bool    round_up = false;
     if (j < n && raw[j] == '.') {
         ++j;
         if (j >= n || !is_ascii_digit(raw[j])) {
@@ -112,8 +112,8 @@ std::string trimmed(const std::string & s) {
 }
 
 struct Turn {
-    int64_t     t0 = k_unknown_ms;
-    int64_t     t1 = k_unknown_ms;
+    int64_t     t0  = k_unknown_ms;
+    int64_t     t1  = k_unknown_ms;
     int32_t     spk = 0;
     std::string text;
 };
@@ -130,11 +130,11 @@ bool diarize_resolves_on(const transcribe_run_params * params) {
     return params->diarize != TRANSCRIBE_DIARIZE_MODE_OFF;
 }
 
-bool parse_diarized_transcript(const std::string &                                     raw,
-                               int64_t                                                 audio_ms,
-                               std::vector<transcribe_session::SegmentEntry> &         out_segments,
+bool parse_diarized_transcript(const std::string &                                    raw,
+                               int64_t                                                audio_ms,
+                               std::vector<transcribe_session::SegmentEntry> &        out_segments,
                                std::vector<transcribe_session::SpeakerSegmentEntry> & out_speaker_segments,
-                               std::string &                                           out_full_text) {
+                               std::string &                                          out_full_text) {
     std::vector<Turn> turns;
     std::string       pre_text;  // verbatim text before the first turn
 
@@ -142,7 +142,9 @@ bool parse_diarized_transcript(const std::string &                              
     bool         has_open = false;
     Turn         open;
 
-    auto text_sink = [&]() -> std::string & { return has_open ? open.text : pre_text; };
+    auto text_sink = [&]() -> std::string & {
+        return has_open ? open.text : pre_text;
+    };
 
     auto close_open = [&](int64_t t1) {
         open.t1 = t1;

@@ -51,10 +51,10 @@ bool diarize_resolves_on(const transcribe_run_params * params);
 // out_full_text is the trimmed turn texts joined with single spaces —
 // the same shape scripts/wer/score.py's dediarize() produces, so the
 // default full_text matches what the WER gates scored.
-bool parse_diarized_transcript(const std::string &                                     raw,
-                               int64_t                                                 audio_ms,
-                               std::vector<transcribe_session::SegmentEntry> &         out_segments,
+bool parse_diarized_transcript(const std::string &                                    raw,
+                               int64_t                                                audio_ms,
+                               std::vector<transcribe_session::SegmentEntry> &        out_segments,
                                std::vector<transcribe_session::SpeakerSegmentEntry> & out_speaker_segments,
-                               std::string &                                           out_full_text);
+                               std::string &                                          out_full_text);
 
 }  // namespace transcribe::moss

@@ -108,6 +108,7 @@ add_library(transcribe
     arch/gigaam/decoder.cpp
     arch/gigaam/mel.cpp
     arch/granite/model.cpp
+    arch/granite/diarize.cpp
     arch/granite/capabilities.cpp
     arch/granite/weights.cpp
     arch/granite/encoder.cpp
