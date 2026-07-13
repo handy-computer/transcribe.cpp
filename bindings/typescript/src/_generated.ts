@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "86b16dd97ad1cb58";
+export const PUBLIC_HEADER_HASH = "1565e5182ce97326";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -47,6 +47,7 @@ export const TRANSCRIBE_ABI_STREAM_TEXT = 10;
 export const TRANSCRIBE_ABI_SESSION_LIMITS = 11;
 export const TRANSCRIBE_ABI_EXT = 12;
 export const TRANSCRIBE_ABI_BACKEND_DEVICE = 13;
+export const TRANSCRIBE_ABI_SPEAKER_SEGMENT = 14;
 export const TRANSCRIBE_LOG_LEVEL_NONE = 0;
 export const TRANSCRIBE_LOG_LEVEL_INFO = 1;
 export const TRANSCRIBE_LOG_LEVEL_WARN = 2;
@@ -69,6 +70,9 @@ export const TRANSCRIBE_PNC_MODE_ON = 2;
 export const TRANSCRIBE_ITN_MODE_DEFAULT = 0;
 export const TRANSCRIBE_ITN_MODE_OFF = 1;
 export const TRANSCRIBE_ITN_MODE_ON = 2;
+export const TRANSCRIBE_DIARIZE_MODE_DEFAULT = 0;
+export const TRANSCRIBE_DIARIZE_MODE_OFF = 1;
+export const TRANSCRIBE_DIARIZE_MODE_ON = 2;
 export const TRANSCRIBE_EXT_SLOT_RUN = 0;
 export const TRANSCRIBE_EXT_SLOT_STREAM = 1;
 export const TRANSCRIBE_BACKEND_AUTO = 0;
@@ -87,6 +91,7 @@ export const TRANSCRIBE_FEATURE_LONG_FORM = 2;
 export const TRANSCRIBE_FEATURE_CANCELLATION = 3;
 export const TRANSCRIBE_FEATURE_PNC = 4;
 export const TRANSCRIBE_FEATURE_ITN = 5;
+export const TRANSCRIBE_FEATURE_DIARIZATION = 6;
 export const TRANSCRIBE_STREAM_IDLE = 0;
 export const TRANSCRIBE_STREAM_ACTIVE = 1;
 export const TRANSCRIBE_STREAM_FINISHED = 2;
@@ -110,16 +115,17 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_backend_device': { size: 64, align: 8, offsets: {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24, 'device_id': 32, 'memory_total': 40, 'memory_free': 48, 'device_type': 56} },
   'transcribe_model_load_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'backend': 8, 'gpu_device': 12} },
   'transcribe_session_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'n_threads': 8, 'kv_type': 12, 'n_ctx': 16} },
-  'transcribe_run_params': { size: 64, align: 8, offsets: {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'language': 24, 'target_language': 32, 'keep_special_tags': 40, 'family': 48, 'spec_k_drafts': 56} },
+  'transcribe_run_params': { size: 72, align: 8, offsets: {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'diarize': 24, 'language': 32, 'target_language': 40, 'keep_special_tags': 48, 'family': 56, 'spec_k_drafts': 64} },
   'transcribe_capabilities': { size: 56, align: 8, offsets: {'struct_size': 0, 'native_sample_rate': 8, 'n_languages': 12, 'languages': 16, 'max_timestamp_kind': 24, 'supports_language_detect': 28, 'supports_translate': 29, 'supports_streaming': 30, 'supports_spec_decode': 31, 'max_audio_ms': 32, 'n_translate_target_languages': 40, 'translate_target_languages': 48} },
   'transcribe_session_limits': { size: 32, align: 8, offsets: {'struct_size': 0, 'effective_n_ctx': 8, 'effective_max_audio_ms': 16, 'max_kv_bytes': 24} },
   'transcribe_stream_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'family': 8, 'commit_policy': 16, 'stable_prefix_agreement_n': 20} },
   'transcribe_stream_update': { size: 48, align: 8, offsets: {'struct_size': 0, 'result_changed': 8, 'is_final': 9, 'revision': 12, 'input_received_ms': 16, 'audio_committed_ms': 24, 'buffered_ms': 32, 'committed_changed': 40, 'tentative_changed': 41} },
   'transcribe_stream_text': { size: 64, align: 8, offsets: {'struct_size': 0, 'full_text': 8, 'full_text_bytes': 16, 'committed_text': 24, 'committed_text_bytes': 32, 'tentative_text': 40, 'tentative_text_bytes': 48, 'raw_tentative_start_bytes': 56} },
   'transcribe_timings': { size: 24, align: 8, offsets: {'struct_size': 0, 'load_ms': 8, 'mel_ms': 12, 'encode_ms': 16, 'decode_ms': 20} },
-  'transcribe_segment': { size: 48, align: 8, offsets: {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'first_word': 24, 'n_words': 28, 'first_token': 32, 'n_tokens': 36, 'text': 40} },
+  'transcribe_segment': { size: 56, align: 8, offsets: {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'first_word': 24, 'n_words': 28, 'first_token': 32, 'n_tokens': 36, 'text': 40, 'speaker_id': 48} },
   'transcribe_word': { size: 48, align: 8, offsets: {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'seg_index': 24, 'first_token': 28, 'n_tokens': 32, 'text': 40} },
   'transcribe_token': { size: 48, align: 8, offsets: {'struct_size': 0, 'id': 8, 'p': 12, 't0_ms': 16, 't1_ms': 24, 'seg_index': 32, 'word_index': 36, 'text': 40} },
+  'transcribe_speaker_segment': { size: 32, align: 8, offsets: {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'speaker_id': 24, 'p': 28} },
   'transcribe_moonshine_streaming_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'min_decode_interval_ms': 16} },
   'transcribe_parakeet_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'att_context_right': 16} },
   'transcribe_parakeet_buffered_stream_ext': { size: 32, align: 8, offsets: {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24} },
@@ -143,6 +149,7 @@ export const ABI_STRUCT_IDS: Record<string, number> = {
   'transcribe_segment': 6,
   'transcribe_word': 7,
   'transcribe_token': 8,
+  'transcribe_speaker_segment': 14,
 };
 
 // Build koffi struct types; returns a name -> koffi.IKoffiCType map.
@@ -152,16 +159,17 @@ export function defineTypes(koffi: any): Record<string, any> {
   T['transcribe_backend_device'] = koffi.struct({ struct_size: 'uint64_t', name: 'char *', description: 'char *', kind: 'char *', device_id: 'char *', memory_total: 'uint64_t', memory_free: 'uint64_t', device_type: 'int' });
   T['transcribe_model_load_params'] = koffi.struct({ struct_size: 'uint64_t', backend: 'int', gpu_device: 'int' });
   T['transcribe_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int', kv_type: 'int', n_ctx: 'int32_t' });
-  T['transcribe_run_params'] = koffi.struct({ struct_size: 'uint64_t', task: 'int', timestamps: 'int', pnc: 'int', itn: 'int', language: 'char *', target_language: 'char *', keep_special_tags: 'bool', family: 'void *', spec_k_drafts: 'int32_t' });
+  T['transcribe_run_params'] = koffi.struct({ struct_size: 'uint64_t', task: 'int', timestamps: 'int', pnc: 'int', itn: 'int', diarize: 'int', language: 'char *', target_language: 'char *', keep_special_tags: 'bool', family: 'void *', spec_k_drafts: 'int32_t' });
   T['transcribe_capabilities'] = koffi.struct({ struct_size: 'uint64_t', native_sample_rate: 'int32_t', n_languages: 'int', languages: 'void *', max_timestamp_kind: 'int', supports_language_detect: 'bool', supports_translate: 'bool', supports_streaming: 'bool', supports_spec_decode: 'bool', max_audio_ms: 'int64_t', n_translate_target_languages: 'int', translate_target_languages: 'void *' });
   T['transcribe_session_limits'] = koffi.struct({ struct_size: 'uint64_t', effective_n_ctx: 'int32_t', effective_max_audio_ms: 'int64_t', max_kv_bytes: 'int64_t' });
   T['transcribe_stream_params'] = koffi.struct({ struct_size: 'uint64_t', family: 'void *', commit_policy: 'int', stable_prefix_agreement_n: 'uint32_t' });
   T['transcribe_stream_update'] = koffi.struct({ struct_size: 'uint64_t', result_changed: 'bool', is_final: 'bool', revision: 'int32_t', input_received_ms: 'int64_t', audio_committed_ms: 'int64_t', buffered_ms: 'int64_t', committed_changed: 'bool', tentative_changed: 'bool' });
   T['transcribe_stream_text'] = koffi.struct({ struct_size: 'uint64_t', full_text: 'char *', full_text_bytes: 'uint64_t', committed_text: 'char *', committed_text_bytes: 'uint64_t', tentative_text: 'char *', tentative_text_bytes: 'uint64_t', raw_tentative_start_bytes: 'uint64_t' });
   T['transcribe_timings'] = koffi.struct({ struct_size: 'uint64_t', load_ms: 'float', mel_ms: 'float', encode_ms: 'float', decode_ms: 'float' });
-  T['transcribe_segment'] = koffi.struct({ struct_size: 'uint64_t', t0_ms: 'int64_t', t1_ms: 'int64_t', first_word: 'int', n_words: 'int', first_token: 'int', n_tokens: 'int', text: 'char *' });
+  T['transcribe_segment'] = koffi.struct({ struct_size: 'uint64_t', t0_ms: 'int64_t', t1_ms: 'int64_t', first_word: 'int', n_words: 'int', first_token: 'int', n_tokens: 'int', text: 'char *', speaker_id: 'int32_t' });
   T['transcribe_word'] = koffi.struct({ struct_size: 'uint64_t', t0_ms: 'int64_t', t1_ms: 'int64_t', seg_index: 'int', first_token: 'int', n_tokens: 'int', text: 'char *' });
   T['transcribe_token'] = koffi.struct({ struct_size: 'uint64_t', id: 'int', p: 'float', t0_ms: 'int64_t', t1_ms: 'int64_t', seg_index: 'int', word_index: 'int', text: 'char *' });
+  T['transcribe_speaker_segment'] = koffi.struct({ struct_size: 'uint64_t', t0_ms: 'int64_t', t1_ms: 'int64_t', speaker_id: 'int32_t', p: 'float' });
   T['transcribe_moonshine_streaming_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], min_decode_interval_ms: 'int32_t' });
   T['transcribe_parakeet_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], att_context_right: 'int32_t' });
   T['transcribe_parakeet_buffered_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], left_ms: 'int32_t', chunk_ms: 'int32_t', right_ms: 'int32_t' });
@@ -181,11 +189,13 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_batch_detected_language': { ret: 'const char *', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_full_text': { ret: 'const char *', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_get_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'int', 'struct transcribe_segment *'] },
+  'transcribe_batch_get_speaker_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'int', 'struct transcribe_speaker_segment *'] },
   'transcribe_batch_get_timings': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'struct transcribe_timings *'] },
   'transcribe_batch_get_token': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'int', 'struct transcribe_token *'] },
   'transcribe_batch_get_word': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'int', 'struct transcribe_word *'] },
   'transcribe_batch_n_results': { ret: 'int', args: ['const struct transcribe_session *'] },
   'transcribe_batch_n_segments': { ret: 'int', args: ['const struct transcribe_session *', 'int'] },
+  'transcribe_batch_n_speaker_segments': { ret: 'int', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_n_tokens': { ret: 'int', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_n_words': { ret: 'int', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_returned_timestamp_kind': { ret: 'transcribe_timestamp_kind', args: ['const struct transcribe_session *', 'int'] },
@@ -198,6 +208,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_get_backend_device': { ret: 'transcribe_status', args: ['int', 'struct transcribe_backend_device *'] },
   'transcribe_get_model': { ret: 'const struct transcribe_model *', args: ['const struct transcribe_session *'] },
   'transcribe_get_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'struct transcribe_segment *'] },
+  'transcribe_get_speaker_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'struct transcribe_speaker_segment *'] },
   'transcribe_get_timings': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'struct transcribe_timings *'] },
   'transcribe_get_token': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'struct transcribe_token *'] },
   'transcribe_get_whisper_chunk_count': { ret: 'int', args: ['const struct transcribe_session *'] },
@@ -219,6 +230,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_model_variant_string': { ret: 'const char *', args: ['const struct transcribe_model *'] },
   'transcribe_moonshine_streaming_stream_ext_init': { ret: 'void', args: ['struct transcribe_moonshine_streaming_stream_ext *'] },
   'transcribe_n_segments': { ret: 'int', args: ['const struct transcribe_session *'] },
+  'transcribe_n_speaker_segments': { ret: 'int', args: ['const struct transcribe_session *'] },
   'transcribe_n_tokens': { ret: 'int', args: ['const struct transcribe_session *'] },
   'transcribe_n_words': { ret: 'int', args: ['const struct transcribe_session *'] },
   'transcribe_open': { ret: 'transcribe_status', args: ['const char *', 'const struct transcribe_model_load_params *', 'const struct transcribe_session_params *', 'struct transcribe_session **'] },
@@ -237,6 +249,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_session_limits_init': { ret: 'void', args: ['struct transcribe_session_limits *'] },
   'transcribe_session_params_init': { ret: 'void', args: ['struct transcribe_session_params *'] },
   'transcribe_set_abort_callback': { ret: 'void', args: ['struct transcribe_session *', 'transcribe_abort_callback', 'void *'] },
+  'transcribe_speaker_segment_init': { ret: 'void', args: ['struct transcribe_speaker_segment *'] },
   'transcribe_status_string': { ret: 'const char *', args: ['int'] },
   'transcribe_stream_begin': { ret: 'transcribe_status', args: ['struct transcribe_session *', 'const struct transcribe_run_params *', 'const struct transcribe_stream_params *'] },
   'transcribe_stream_feed': { ret: 'transcribe_status', args: ['struct transcribe_session *', 'const float *', 'int', 'struct transcribe_stream_update *'] },
