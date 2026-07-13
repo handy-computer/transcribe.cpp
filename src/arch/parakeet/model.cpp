@@ -1211,15 +1211,8 @@ transcribe_status run(transcribe_session *          session,
 // tail can't corrupt real frames and decode each at its own T_enc;
 // same-length batches skip the masks and are bit-identical to single-shot.
 static int pre_encode_t_out(int in, bool causal) {
-    // One stride-2, kernel-3 conv on the time axis. The padding — and hence
-    // the output length — depends on whether the pre-encode is causal:
-    //   non-causal (offline): symmetric pad-1      -> floor((in + 2 - 3)/2) + 1 = floor((in-1)/2)+1
-    //   causal (cache-aware streaming): pad (k-1, s-1) = (2, 1) -> floor((in + 3 - 3)/2) + 1 = floor(in/2)+1
-    // The single-shot graph applies the correct causal conv, so the batched
-    // valid-length bookkeeping MUST use the matching formula or it undercounts
-    // causal variants by one frame per stage (dropping the last encoder frame
-    // and mis-sizing the pad masks). Mirrors ConvPolicy::causal_pre_encode /
-    // pre_encode_F_prime in weights.cpp.
+    // Stride-2, kernel-3 output length. Causal padding (2, 1) produces one
+    // more frame than symmetric pad-1 for even inputs.
     return causal ? (in / 2 + 1) : ((in - 1) / 2 + 1);
 }
 
@@ -1296,10 +1289,7 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Per-utterance valid encoder-frame count (the same subsample the conv
-    // stack applies: 3 stride-2 convs on the time axis). Causal pre-encode
-    // (cache-aware streaming variants) uses a different output-length formula
-    // than the offline non-causal path; see pre_encode_t_out.
+    // Match each utterance's valid length to the three subsampling convs.
     const bool causal_pre_encode =
         (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
     std::vector<int> real_tenc(static_cast<size_t>(n), T_enc);
@@ -1316,10 +1306,8 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
         transcribe::fill_keypad_mask(eb.attn_pad_mask_in, real_tenc, T_enc, n);
         transcribe::fill_valid_frame_mask(eb.conv_pad_mask_in, real_tenc, T_enc, n);
 
-        // Pre-encode valid-frame masks (masked subsampling). One per ReLU
-        // stage; the valid time length at stage k is the per-utterance mel
-        // length downsampled k times by the (in-1)/2+1 conv formula. Each
-        // mask is ne=[1, H_stage, 1, n] -> host index b*H_stage + h.
+        // One valid-frame mask per subsampling ReLU. Each mask is
+        // ne=[1, H_stage, 1, n], with host index b*H_stage + h.
         auto fill_pe_mask = [&](ggml_tensor * mask, int n_down) {
             if (mask == nullptr) {
                 return;

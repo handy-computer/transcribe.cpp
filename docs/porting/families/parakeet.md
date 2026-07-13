@@ -157,7 +157,7 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | multitalker-parakeet-streaming-0.6b-v1 | Streaming (single_speaker_mode, cache reuse across chunks) | streaming | `build/bin/transcribe-cli -m <gguf> --language en --backend cpu --threads 1 --stream-chunk-ms 1120 --stream-att-right 13 samples/jfk.wav` | byte-equal transcript vs single-speaker one-shot at the default `att_context_size=[70,13]` (1.12s chunk) | PASS |
 | multitalker-parakeet-streaming-0.6b-v1 | Other latency settings ([70,0]/[70,1]/[70,6]/[70,13]) | runtime-selectable att_context_size | `… --stream-chunk-ms 1120 --stream-att-right {0,1,6,13} …` | all four R settings stream a valid single-speaker transcript; R=6/13 byte-equal to one-shot, R=0/1 differ only in trailing punctuation (lower lookahead) | PASS |
 | multitalker-parakeet-streaming-0.6b-v1 | Batch (offline, single_speaker_mode) | run_batch fast path | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --batch-sizes 2,4,8 --backend cpu --language en` + `uv run scripts/batch_tensor_parity.py --model <gguf> --wav samples/jfk.wav --batch 4 --backend cpu` | text byte-equal vs serial at sizes 2/4/8 (golden frozen at `tests/golden/batch/multitalker-parakeet-streaming-0.6b-v1.cpu.json`); same-length CPU tensor parity bit-exact (max_abs=0.0) at batch=4 on jfk.wav; **diverse-length** flash tensor parity bit-exact (max_abs=0.0) across arbitrary length mixes; full test-clean batch-8 WER == batch-1 (2.19%) after the causal var-len pre-encode masking fix (see forward-map Deviations) | PASS |
-| multitalker-parakeet-streaming-0.6b-v1 | Multitalker / speaker-attributed ASR (speaker-kernel injection + external Sortformer diarization + multi-instance + SegLST) | multitalker | (no runtime surface today) | per-speaker cpWER vs NeMo `speech_to_text_multitalker_streaming_infer.py` on AMI/CH109/Mixer6 | SKIP — not exposed by runtime (OUT OF SCOPE) — requires (1) a ported streaming Sortformer diarizer, (2) speaker-kernel injection tensors + layer-0 forward, (3) N-instance-per-speaker orchestration, (4) a SegLST speaker-tagged output contract; none exist in transcribe.cpp today. Brought back in scope by a dedicated multitalker workstream (see the accompanying brief). |
+| multitalker-parakeet-streaming-0.6b-v1 | Multitalker / speaker-attributed ASR (speaker-kernel injection + external Sortformer diarization + multi-instance + SegLST) | multitalker | (no runtime surface today) | per-speaker cpWER vs NeMo `speech_to_text_multitalker_streaming_infer.py` on AMI/CH109/Mixer6 | SKIP — not exposed by runtime (OUT OF SCOPE) — the single-speaker kernel path is implemented, but full speaker attribution still requires (1) a ported streaming Sortformer diarizer, (2) target-driven per-frame kernel masks, (3) N-instance-per-speaker orchestration, and (4) a SegLST speaker-tagged output contract. |
 | multitalker-parakeet-streaming-0.6b-v1 | Speaker diarization (produce speaker turns) | diarization | (not a capability of this checkpoint) | n/a | SKIP — not exposed by runtime (OUT OF SCOPE) — this checkpoint CONSUMES external diarization (Sortformer); it does not produce speaker turns. Brought back in scope only if a Sortformer diarizer is ported as a separate family. |
 | all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |
 
@@ -224,13 +224,10 @@ be resolved before the corresponding port enters porting-3-convert:
    Both Linear slots are `[1024,1024]` + `[1024]` bias. The layer-0 injection
    is marked by three KVs Stage 4 reads:
    `stt.parakeet.encoder.spk_kernel_type` (`"ff"`),
-   `stt.parakeet.encoder.spk_kernel_layers` (int array, `[0]`),
-   `stt.parakeet.encoder.add_bg_spk_kernel` (bool, `true`). The current loader
-   ignores the extra tensors + KVs and runs this GGUF on the existing
-   `nemotron-speech-streaming` path; the jfk smoke still decodes correctly
-   because clean single-speaker greedy decode is robust to the (unapplied)
-   injection drift — Stage 4 applies it for numerical parity against the
-   oracle.
+   `stt.parakeet.encoder.spk_kernel_layers` (int array, `[0]`), and
+   `stt.parakeet.encoder.add_bg_spk_kernel` (bool, `true`). The loader binds
+   these tensors and applies the injection in both offline and streaming
+   encoder graphs.
 
 ## Tooling: NeMo-aware preflight
 

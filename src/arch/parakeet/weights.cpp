@@ -501,9 +501,7 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         }
     }
 
-    // Speaker-kernel FF injection. Optional (multitalker variants only).
-    // Presence of stt.parakeet.encoder.spk_kernel_layers is the gate; absent
-    // leaves has_spk_kernel false and the encoder skips the injection.
+    // Speaker-kernel metadata is optional; absent means no injection.
     if (gguf_find_key(gguf, "stt.parakeet.encoder.spk_kernel_layers") >= 0) {
         switch (read_int32_array_kv(gguf, "stt.parakeet.encoder.spk_kernel_layers", hp.spk_kernel_layers)) {
             case KvResult::Ok:
@@ -523,8 +521,7 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
                 st != TRANSCRIBE_OK) {
                 return st;
             }
-            // Only the FF kernel (nn.Sequential Linear-ReLU-Dropout-Linear) is
-            // implemented; NeMo leaves conv2d/mha kernels as TODO.
+            // NeMo's other advertised kernel types are not implemented.
             if (hp.spk_kernel_type != "ff") {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                         "parakeet: unsupported spk_kernel_type \"%s\" "
@@ -537,10 +534,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
                 st != TRANSCRIBE_OK) {
                 return st;
             }
-            // Only layer-0 pre-hook injection is implemented. NeMo registers a
-            // forward_pre_hook for idx==0 and a post-hook (after layer idx-1)
-            // for idx>0; the post path is untested here and this variant ships
-            // spk_kernel_layers=[0].
+            // Layer 0 uses a pre-hook; later layers require a different
+            // post-hook placement that is not implemented.
             for (int32_t l : hp.spk_kernel_layers) {
                 if (l != 0) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -921,9 +916,7 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_F32(weights.prompt.mlp2_b, "prompt.mlp.2.bias", d_model);
     }
 
-    // ----- speaker-kernel FF (multitalker variants, has_spk_kernel only) -----
-    // Two Linears per kernel (nn.Sequential .0 / .3), both [d_model, d_model]
-    // + [d_model] bias; the optional bg kernel mirrors the spk kernel.
+    // ----- optional speaker-kernel FF -----
     if (hp.has_spk_kernel) {
         weights.spk_kernels.clear();
         weights.spk_kernels.reserve(hp.spk_kernel_layers.size());

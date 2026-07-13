@@ -16,27 +16,12 @@ transcribe several overlapping speakers into per-speaker channels. That
 path depends on machinery this port does **not** ship (see
 [Known limitations](#known-limitations)). transcribe.cpp exposes only the
 model's `single_speaker_mode` ASR path, which disables the multitalker
-machinery and runs the checkpoint as a plain cache-aware streaming RNN-T:
-identical frontend, encoder, decoder, and tokenizer as its
-`nemotron-speech-streaming-en-0.6b` base. This is the LibriSpeech-comparable
-path (upstream reports test-clean 2.19% in this mode).
+machinery and runs the checkpoint as a cache-aware streaming RNN-T with
+the base model's frontend, encoder backbone, decoder, and tokenizer plus
+the checkpoint's always-on layer-0 speaker-kernel injection.
 
 This port runs the model in both **offline** and **cache-aware streaming**
-modes:
-
-- Offline (`transcribe_run`): the full audio is consumed in one pass.
-  The encoder preserves the upstream `att_context_size=[70, 13]` (1.12s)
-  cache-aware attention mask end-to-end. The always-on layer-0
-  speaker-kernel FF injection is applied with the single-speaker (all-active)
-  supervision, matching NeMo's `single_speaker_mode`.
-- Streaming (`transcribe_stream_{begin,feed,finalize}` /
-  `transcribe-cli --stream-chunk-ms N`): incremental PCM feeds drive
-  per-chunk encoder forward passes with `cache_last_channel` /
-  `cache_last_time` carried across calls, and an LSTM-state-carrying
-  RNN-T greedy decoder. All four latency settings from the upstream
-  multi-lookahead training menu are selectable via
-  `--stream-att-right R ∈ {0, 1, 6, 13}` (lookahead 0 / 80 / 480 /
-  1040 ms respectively). Default = `13` (max accuracy).
+modes.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1)
 for training data, intended use, the multitalker methodology, and the full
@@ -63,8 +48,7 @@ in `single_speaker_mode` with greedy RNN-T decoding, whisper-normalizer
 scoring (PnC-stripped), and no external LM. F32 reference baseline: 2.19%.
 The measured NeMo `single_speaker_mode` reference on the same split is
 2.19%, and NVIDIA's self-reported number is 2.19% (from the
-[HF model card](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1)),
-so every quant matches the upstream reference within rounding.
+[HF model card](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1)).
 
 ## Streaming parity
 
