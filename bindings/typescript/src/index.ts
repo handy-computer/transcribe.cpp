@@ -776,6 +776,7 @@ export class Session {
     if (opts.keepSpecialTags !== undefined)
       p.keep_special_tags = opts.keepSpecialTags;
     if (opts.specKDrafts !== undefined) p.spec_k_drafts = opts.specKDrafts;
+    if (opts.maxNewTokens !== undefined) p.max_new_tokens = opts.maxNewTokens;
     if (opts.family)
       p.family = buildFamily(n, this.#model.handle, opts.family, "run");
     return p;

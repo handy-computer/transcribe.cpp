@@ -1049,6 +1049,19 @@ struct transcribe_run_params {
      *   to know whether the field will take effect.
      */
     int32_t spec_k_drafts;
+
+    /*
+     * max_new_tokens: maximum autoregressive transcript tokens to generate
+     * before reporting TRANSCRIBE_ERR_OUTPUT_TRUNCATED.
+     *
+     *   Convention:
+     *     -1: family default.
+     *      0: family default.
+     *     >0: requested per-run generation budget, clamped by the model's
+     *         actual decoder context. Families without an autoregressive
+     *         output budget ignore this field.
+     */
+    int32_t max_new_tokens;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);

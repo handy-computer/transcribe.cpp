@@ -121,6 +121,8 @@ public struct RunOptions: Sendable {
     public var keepSpecialTags: Bool
     /// Speculative-decode draft length: -1 = family default, 0 = disabled.
     public var specKDrafts: Int32
+    /// Maximum transcript tokens to generate: -1 = family default.
+    public var maxNewTokens: Int32
     /// Family-specific run extension (whisper run options); M3.
     public var family: RunExtension?
 
@@ -136,6 +138,7 @@ public struct RunOptions: Sendable {
         targetLanguage: String? = nil,
         keepSpecialTags: Bool = false,
         specKDrafts: Int32 = -1,
+        maxNewTokens: Int32 = -1,
         family: RunExtension? = nil
     ) {
         self.task = task
@@ -146,6 +149,7 @@ public struct RunOptions: Sendable {
         self.targetLanguage = targetLanguage
         self.keepSpecialTags = keepSpecialTags
         self.specKDrafts = specKDrafts
+        self.maxNewTokens = maxNewTokens
         self.family = family
     }
 
@@ -161,6 +165,7 @@ public struct RunOptions: Sendable {
         params.itn = itn.cValue
         params.keep_special_tags = keepSpecialTags
         params.spec_k_drafts = specKDrafts
+        params.max_new_tokens = maxNewTokens
         return try withOptionalCString(language) { lang in
             params.language = lang
             return try withOptionalCString(targetLanguage) { tgt in
