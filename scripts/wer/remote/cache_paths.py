@@ -16,6 +16,7 @@ def hyp_cache_paths(
     language: str = "",
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
+    env_extra: str = "",
 ) -> tuple[str, str]:
     """Deterministic Volume paths for the (model, dataset, subset, batch,
     sort) tuple.
@@ -45,8 +46,14 @@ def hyp_cache_paths(
     # default R), no tag so it stays compatible with already-cached entries;
     # any explicit R gets its own slot so e.g. R=13 and R=0 never collide.
     r_tag = "" if stream_att_right < 0 else f".r{stream_att_right}"
+    # Extra TRANSCRIBE_* env vars injected into the CLI run (A/B attribution
+    # sweeps). Default "" carries no tag so it stays compatible with
+    # already-cached entries; any override gets its own slot.
+    env_tag = ""
+    if env_extra:
+        env_tag = "." + hashlib.sha256(env_extra.encode()).hexdigest()[:8]
     base = (f"/data/wer/hyps/{hyp_fp}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}{stream_tag}{r_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}{stream_tag}{r_tag}{env_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 

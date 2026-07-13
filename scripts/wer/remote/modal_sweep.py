@@ -401,6 +401,7 @@ def _run_wer_impl(
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
     dataset_status: dict | None = None,
+    env_extra: str = "",
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
     hyp JSONL contents + a summary dict back to the dispatcher.
@@ -419,7 +420,7 @@ def _run_wer_impl(
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = hyp_cache_paths(
         HYP_FP, model_file, dataset_spec, n_utts, batch_size, sort_by_length,
-        timestamps, language, stream_chunk_ms, stream_att_right)
+        timestamps, language, stream_chunk_ms, stream_att_right, env_extra)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         _log_prepared_dataset("wer", dataset_status)
@@ -459,6 +460,13 @@ def _run_wer_impl(
 
     # Force per-line stdout flushing so progress streams live to Modal logs.
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    # A/B attribution overrides ("K=V,K2=V2"): injected into the CLI env.
+    if env_extra:
+        for pair in env_extra.split(","):
+            k, _, v = pair.strip().partition("=")
+            if k:
+                env[k] = v
+        print(f"[wer] env_extra: {env_extra}")
     cmd = [
         "uv", "run", "scripts/wer/run.py",
         "--cli", cli_path,
@@ -577,6 +585,7 @@ def _register_runner(gpu_id: str):
         stream_chunk_ms: int = 0,
         stream_att_right: int = -1,
         dataset_status: dict | None = None,
+        env_extra: str = "",
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -590,6 +599,7 @@ def _register_runner(gpu_id: str):
             stream_chunk_ms=stream_chunk_ms,
             stream_att_right=stream_att_right,
             dataset_status=dataset_status,
+            env_extra=env_extra,
         )
 
     runner.__name__ = name
@@ -830,6 +840,7 @@ def sweep(
     language: str = "",
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
+    env_extra: str = "",
 ) -> None:
     """Fan WER across one or more models on one GPU class.
 
@@ -914,7 +925,7 @@ def sweep(
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
                              c["bs"], sort_by_length, build_dir, timestamps,
                              language, stream_chunk_ms, stream_att_right,
-                             dataset_status))
+                             dataset_status, env_extra))
             for c in cells]
 
     rows, failures = [], []

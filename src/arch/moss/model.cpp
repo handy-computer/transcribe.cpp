@@ -38,6 +38,66 @@ namespace transcribe::moss {
 
 extern const Arch arch;
 
+// ---------------------------------------------------------------------------
+// Perf profiling (TRANSCRIBE_PERF_DEBUG). Per-op-type wall-time accounting via
+// the scheduler eval callback. Attaching a callback makes the sched run the
+// graph node-by-node (so it can time each op), which disables CPU op fusion and
+// slightly inflates absolute time — but the RELATIVE per-op breakdown it yields
+// is what we want when hunting for the bottleneck. Zero cost unless the env flag
+// is set (the callback is never attached otherwise). CPU-accurate; on an async
+// GPU backend the "after" callback fires at submit time, so treat GPU per-op
+// numbers as node-dispatch counts, not wall time.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct OpProf {
+    int64_t us[GGML_OP_COUNT]  = { 0 };
+    int64_t cnt[GGML_OP_COUNT] = { 0 };
+    int64_t t0                 = 0;  // start stamp of the in-flight node
+};
+
+bool op_prof_eval_cb(ggml_tensor * t, bool ask, void * ud) {
+    auto * p = static_cast<OpProf *>(ud);
+    if (p == nullptr) {
+        return true;
+    }
+    if (ask) {
+        p->t0 = ggml_time_us();
+        return true;  // request the post-op callback
+    }
+    const int op = static_cast<int>(t->op);
+    if (op >= 0 && op < GGML_OP_COUNT) {
+        p->us[op] += ggml_time_us() - p->t0;
+        p->cnt[op] += 1;
+    }
+    return true;
+}
+
+void op_prof_report(const char * label, const OpProf & p) {
+    int64_t total_us = 0;
+    for (int o = 0; o < GGML_OP_COUNT; ++o) {
+        total_us += p.us[o];
+    }
+    int order[GGML_OP_COUNT];
+    for (int o = 0; o < GGML_OP_COUNT; ++o) {
+        order[o] = o;
+    }
+    std::sort(order, order + GGML_OP_COUNT, [&](int a, int b) { return p.us[a] > p.us[b]; });
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "[profile] %s per-op wall (node-by-node) total=%.2f ms:", label,
+            total_us / 1000.0);
+    for (int i = 0; i < GGML_OP_COUNT; ++i) {
+        const int o = order[i];
+        if (p.us[o] <= 0) {
+            break;
+        }
+        const double pct = total_us > 0 ? (100.0 * p.us[o] / total_us) : 0.0;
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "[profile]   %-20s %8.2f ms  %5.1f%%  x%lld", ggml_op_name(static_cast<ggml_op>(o)),
+                p.us[o] / 1000.0, pct, static_cast<long long>(p.cnt[o]));
+    }
+}
+
+}  // namespace
+
 static_assert(std::is_base_of_v<transcribe_model, MossModel>);
 static_assert(std::is_base_of_v<transcribe_session, MossSession>);
 
@@ -314,7 +374,11 @@ transcribe_status init_context(transcribe_model *                model,
     cc->kv_type   = params->kv_type;
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
-    cc->encoder_use_flash = false;
+    // Encoder flash matches the whisper family default (identical attention
+    // graph, head_dim 64): drops the materialized [T,T,heads] score matrix.
+    // Measured on the 4750U reference machine: −25% CPU encode, transcript-
+    // neutral on jfk/dots/zh/whole-earth at Q8_0.
+    cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
@@ -558,6 +622,21 @@ transcribe_status run(transcribe_session *          session,
     transcribe::debug::init();
     const bool dumps_on = transcribe::debug::enabled();
 
+    // Perf profiling: attach the per-op timer to the encode region. The
+    // callback persists across ggml_backend_sched_reset (encode runs several
+    // chunk + adaptor graphs), and is re-pointed at the decode accumulator
+    // below. Only attached under the env flag (perturbs execution, see OpProf).
+    const bool perf_debug = transcribe::env::flag("TRANSCRIBE_PERF_DEBUG");
+    OpProf     enc_prof, dec_prof;
+    if (perf_debug) {
+        // The sched is created lazily on the first reset_compute_ctx; force it
+        // now so the encode-region callback has something to attach to.
+        if (const transcribe_status st = ensure_sched(cc, cm); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        ggml_backend_sched_set_eval_callback(cc->sched, op_prof_eval_cb, &enc_prof);
+    }
+
     // Encoder.
     int T_enc = 0;
     if (const transcribe_status st =
@@ -567,6 +646,9 @@ transcribe_status run(transcribe_session *          session,
     }
 
     const int64_t t_dec_start = ggml_time_us();
+    if (perf_debug) {
+        ggml_backend_sched_set_eval_callback(cc->sched, op_prof_eval_cb, &dec_prof);
+    }
 
     // Prompt.
     std::vector<int32_t> prompt_ids;
@@ -659,10 +741,12 @@ transcribe_status run(transcribe_session *          session,
         ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
     }
 
+    const int64_t t_pf0 = perf_debug ? ggml_time_us() : 0;
     if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss run: prefill compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
+    const int64_t t_prefill_us = perf_debug ? (ggml_time_us() - t_pf0) : 0;
     cc->kv_cache.n    = T_prompt;
     cc->kv_cache.head = T_prompt;
 
@@ -725,7 +809,17 @@ transcribe_status run(transcribe_session *          session,
         gen_dump_step = 8;  // dec.logits_raw.gen8 (mid-generation, n_past>0 coverage)
     }
 
+    int64_t              t_step_input_us   = 0;  // host->device tensor_set per step
+    int64_t              t_step_compute_us = 0;  // graph compute per step
+    int64_t              t_step_get_us     = 0;  // device->host argmax read per step
+    int                  n_steps           = 0;
+    std::vector<int64_t> per_step_us;
+    if (perf_debug) {
+        per_step_us.reserve(512);
+    }
+
     while (next_tok != eos_id && static_cast<int32_t>(generated_ids.size()) < gen_budget && cur_past + 1 <= max_n_kv) {
+        const int64_t t_i0 = perf_debug ? ggml_time_us() : 0;
         ggml_backend_tensor_set(sb.input_id_in, &next_tok, 0, sizeof(int32_t));
         const int32_t pos_val = cur_past;
         ggml_backend_tensor_set(sb.position_in, &pos_val, 0, sizeof(int32_t));
@@ -737,10 +831,20 @@ transcribe_status run(transcribe_session *          session,
             step_mask[cur_past] = mz;
         }
         ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0, static_cast<size_t>(max_n_kv) * sizeof(ggml_fp16_t));
+        const int64_t t_c0 = perf_debug ? ggml_time_us() : 0;
+        if (perf_debug) {
+            t_step_input_us += t_c0 - t_i0;
+        }
 
         if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss step: graph compute failed");
             return TRANSCRIBE_ERR_GGUF;
+        }
+        if (perf_debug) {
+            const int64_t dt = ggml_time_us() - t_c0;
+            t_step_compute_us += dt;
+            per_step_us.push_back(dt);
+            ++n_steps;
         }
 
         // Mid-generation logits dump (n_past>0 coverage) at a fixed step.
@@ -751,8 +855,12 @@ transcribe_status run(transcribe_session *          session,
             transcribe::debug::dump_tensor(nm, sb.logits, "dec.logits_raw.gen");
         }
 
-        int32_t argmax_tok = 0;
+        const int64_t t_g0       = perf_debug ? ggml_time_us() : 0;
+        int32_t       argmax_tok = 0;
         ggml_backend_tensor_get(sb.out, &argmax_tok, 0, sizeof(int32_t));
+        if (perf_debug) {
+            t_step_get_us += ggml_time_us() - t_g0;
+        }
         next_tok = argmax_tok;
         generated_ids.push_back(next_tok);
         cur_past += 1;
@@ -777,6 +885,36 @@ transcribe_status run(transcribe_session *          session,
     std::string raw_text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
 
     cc->t_decode_us = ggml_time_us() - t_dec_start;
+
+    if (perf_debug) {
+        ggml_backend_sched_set_eval_callback(cc->sched, nullptr, nullptr);
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                "[profile] === MOSS run: mel=%.1f ms  encode(graph)=%.1f ms  decode=%.1f ms  "
+                "(decoder_use_flash=%d encoder_use_flash=%d)",
+                cc->t_mel_us / 1000.0, cc->t_encode_us / 1000.0, cc->t_decode_us / 1000.0,
+                cc->decoder_use_flash ? 1 : 0, cc->encoder_use_flash ? 1 : 0);
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "[profile] decode: prefill=%.1f ms  steps=%d  T_prompt=%d  T_enc=%d",
+                t_prefill_us / 1000.0, n_steps, T_prompt, T_enc);
+        if (n_steps > 0) {
+            std::vector<int64_t> sorted = per_step_us;
+            std::sort(sorted.begin(), sorted.end());
+            const auto pct = [&](double p) {
+                size_t idx = static_cast<size_t>(p * (n_steps - 1));
+                return sorted[std::min(idx, sorted.size() - 1)] / 1000.0;
+            };
+            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                    "[profile] step compute total=%.1f ms  per-step mean=%.3f p50=%.3f p90=%.3f p99=%.3f max=%.3f ms",
+                    t_step_compute_us / 1000.0, (t_step_compute_us / 1000.0) / n_steps, pct(0.50), pct(0.90),
+                    pct(0.99), sorted.back() / 1000.0);
+            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                    "[profile] step overhead: input_set total=%.1f ms (%.3f/step)  argmax_get total=%.1f ms (%.3f/step)",
+                    t_step_input_us / 1000.0, (t_step_input_us / 1000.0) / n_steps, t_step_get_us / 1000.0,
+                    (t_step_get_us / 1000.0) / n_steps);
+        }
+        op_prof_report("ENCODE", enc_prof);
+        op_prof_report("DECODE", dec_prof);
+    }
+
     cc->full_text   = raw_text;
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result  = true;
