@@ -99,6 +99,18 @@ above (2 decimal places).
 
 macOS 26.5.1, transcribe.cpp `e745720`.
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  3.88 s (2.8×) |  3.68 s (3.0×) |
+| Vulkan  | dots (35.3s) | 11.38 s (3.1×) | 10.68 s (3.3×) |
+| CPU     | jfk (11.0s)  |  7.49 s (1.5×) |  7.06 s (1.6×) |
+| CPU     | dots (35.3s) | 21.20 s (1.7×) | 19.22 s (1.8×) |
+
+Fedora Linux 43, transcribe.cpp `e745720`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash

@@ -55,6 +55,9 @@ perf:
   m4-max:
     metal: 28.1
     cpu: 5.8
+  ryzen-4750u:
+    vulkan: 3.0
+    cpu: 1.6
 
 wer:
   source: LibriSpeech test-clean
