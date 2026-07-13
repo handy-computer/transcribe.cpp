@@ -7,6 +7,7 @@
 
 #include "causal_lm/causal_lm.h"
 #include "decoder.h"
+#include "diarize.h"
 #include "encoder.h"
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -592,11 +593,35 @@ int32_t argmax_vec(const std::vector<float> & v) {
     return best;
 }
 
+// Install the decoded transcript into a result target (the session's
+// scratch slot or a batch ResultSet — both carry identically-named result
+// members). When diarization resolves ON and the emergent
+// [start][Sxx]text[end] markers parse, the result is structured per-turn
+// segments + speaker rows with dediarized full text (kind SEGMENT).
+// Otherwise: today's raw passthrough (one segment, kind NONE).
+template <typename Result>
+void install_transcript(Result &                      out,
+                        const transcribe_run_params * params,
+                        const std::string &           raw_text,
+                        int64_t                       audio_ms) {
+    if (diarize_resolves_on(params) &&
+        parse_diarized_transcript(raw_text, audio_ms, out.segments, out.speaker_segments, out.full_text)) {
+        out.result_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+        return;
+    }
+    out.full_text   = raw_text;
+    out.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    transcribe_session::SegmentEntry seg{};
+    seg.text  = raw_text;
+    seg.t0_ms = 0;
+    seg.t1_ms = audio_ms;
+    out.segments.push_back(std::move(seg));
+}
+
 transcribe_status run(transcribe_session *          session,
                       const float *                 pcm,
                       int                           n_samples,
                       const transcribe_run_params * params) {
-    (void) params;
     if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -901,14 +926,9 @@ transcribe_status run(transcribe_session *          session,
         op_prof_report("DECODE", dec_prof);
     }
 
-    cc->full_text   = raw_text;
-    cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-    cc->has_result  = true;
-    transcribe_session::SegmentEntry seg{};
-    seg.text  = raw_text;
-    seg.t0_ms = 0;
-    seg.t1_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
-    cc->segments.push_back(std::move(seg));
+    const int64_t audio_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
+    install_transcript(*cc, params, raw_text, audio_ms);
+    cc->has_result = true;
 
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
 }
@@ -918,22 +938,20 @@ transcribe_status run(transcribe_session *          session,
 // slabs) or a batched prefill, then a batched step loop.
 // ---------------------------------------------------------------------------
 
-transcribe_session::ResultSet finalize_utterance(MossModel * cm, std::vector<int32_t> generated_ids, int n_samples) {
+transcribe_session::ResultSet finalize_utterance(MossModel *                   cm,
+                                                 const transcribe_run_params * params,
+                                                 std::vector<int32_t>          generated_ids,
+                                                 int                           n_samples) {
     transcribe_session::ResultSet rs;
     const int32_t                 eos_id = cm->hparams.eos_token_id;
     if (!generated_ids.empty() && generated_ids.back() == eos_id) {
         generated_ids.pop_back();
     }
-    std::string raw_text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
-    rs.full_text         = raw_text;
-    rs.result_kind       = TRANSCRIBE_TIMESTAMPS_NONE;
-    rs.has_result        = true;
-    rs.status            = TRANSCRIBE_OK;
-    transcribe_session::SegmentEntry seg{};
-    seg.text  = raw_text;
-    seg.t0_ms = 0;
-    seg.t1_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
-    rs.segments.push_back(std::move(seg));
+    const std::string raw_text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
+    const int64_t audio_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
+    install_transcript(rs, params, raw_text, audio_ms);
+    rs.has_result = true;
+    rs.status     = TRANSCRIBE_OK;
     return rs;
 }
 
@@ -985,7 +1003,6 @@ transcribe_status run_batch(transcribe_session *          session,
     if (!cc->decoder_use_flash || transcribe::debug::enabled() || n == 1) {
         return run_batch_serial(cc, pcm, n_samples, n, params);
     }
-    (void) params;
     transcribe::debug::init();
 
     const int hidden = cm->hparams.dec_hidden;
@@ -1206,7 +1223,7 @@ transcribe_status run_batch(transcribe_session *          session,
             cc->batch_results.push_back(std::move(rs));
             continue;
         }
-        transcribe_session::ResultSet rs = finalize_utterance(cm, generated[b], n_samples[b]);
+        transcribe_session::ResultSet rs = finalize_utterance(cm, params, generated[b], n_samples[b]);
         if (b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
             rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;

@@ -55,6 +55,7 @@ add_library(transcribe
     arch/qwen3_asr/decoder.cpp
     arch/moss/model.cpp
     arch/moss/capabilities.cpp
+    arch/moss/diarize.cpp
     arch/moss/weights.cpp
     arch/moss/encoder.cpp
     arch/moss/decoder.cpp
