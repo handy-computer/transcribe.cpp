@@ -47,19 +47,19 @@ int main() {
     }
 
     ggml_init_params params{};
-    params.mem_size = 1024 * 1024;
-    params.no_alloc = true;
+    params.mem_size    = 1024 * 1024;
+    params.no_alloc    = true;
     ggml_context * ctx = ggml_init(params);
     if (ctx == nullptr) {
         ggml_backend_free(backend);
         return EXIT_FAILURE;
     }
 
-    constexpr int T = 4;
-    constexpr int B = 2;
+    constexpr int T       = 4;
+    constexpr int B       = 2;
     ggml_tensor * mask    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, T, B);
     ggml_tensor * softmax = ggml_soft_max(ctx, mask);
-    ggml_cgraph *  graph   = ggml_new_graph(ctx);
+    ggml_cgraph * graph   = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, softmax);
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
