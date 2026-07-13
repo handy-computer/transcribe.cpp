@@ -228,8 +228,8 @@ struct ParakeetHParams {
     // spk_kernel_layers=[0]); NeMo's idx>0 post-hook path is rejected at load.
     // Today: multitalker-parakeet-streaming-0.6b-v1.
     bool                 has_spk_kernel = false;
-    std::string          spk_kernel_type;         // "ff"
-    std::vector<int32_t> spk_kernel_layers;        // e.g. [0]
+    std::string          spk_kernel_type;    // "ff"
+    std::vector<int32_t> spk_kernel_layers;  // e.g. [0]
     bool                 add_bg_spk_kernel = false;
 
     // Derived. Convenience accessors keyed off the above.
@@ -385,20 +385,20 @@ struct ParakeetSpkKernelFF {
 // One (spk, optional bg) kernel pair bound to an encoder layer index.
 // Loaded only when hp.has_spk_kernel.
 struct ParakeetSpkKernel {
-    int32_t             layer  = -1;
-    ParakeetSpkKernelFF spk;           // enc.spk_kernel.<L>.*
+    int32_t             layer = -1;
+    ParakeetSpkKernelFF spk;  // enc.spk_kernel.<L>.*
     bool                has_bg = false;
-    ParakeetSpkKernelFF bg;            // enc.bg_spk_kernel.<L>.* (add_bg_spk_kernel)
+    ParakeetSpkKernelFF bg;   // enc.bg_spk_kernel.<L>.* (add_bg_spk_kernel)
 };
 
 struct ParakeetWeights {
     ParakeetPreEncode              pre_encode;
-    std::vector<ParakeetBlock>     blocks;      // hp.enc_n_layers entries
-    ParakeetPredictor              predictor;   // empty when head_kind=CTC
-    ParakeetJoint                  joint;       // empty when head_kind=CTC
-    ParakeetCtcHead                ctc_head;    // populated when head_kind=CTC
-    ParakeetPromptMlp              prompt;      // populated when hp.has_prompt
-    std::vector<ParakeetSpkKernel> spk_kernels; // populated when hp.has_spk_kernel
+    std::vector<ParakeetBlock>     blocks;       // hp.enc_n_layers entries
+    ParakeetPredictor              predictor;    // empty when head_kind=CTC
+    ParakeetJoint                  joint;        // empty when head_kind=CTC
+    ParakeetCtcHead                ctc_head;     // populated when head_kind=CTC
+    ParakeetPromptMlp              prompt;       // populated when hp.has_prompt
+    std::vector<ParakeetSpkKernel> spk_kernels;  // populated when hp.has_spk_kernel
 };
 
 // Walk the canonical tensor list, look up each tensor by name, validate
