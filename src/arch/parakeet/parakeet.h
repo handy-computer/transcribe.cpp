@@ -31,6 +31,11 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::parakeet {
 
+// Output length of one stride-2, kernel-3 pre-encode convolution.
+inline int pre_encode_time_out(int input_frames, bool causal) {
+    return causal ? (input_frames / 2 + 1) : ((input_frames - 1) / 2 + 1);
+}
+
 // Host-side attention-mask helpers for the streaming paths. Declared
 // here so the per-mask unit tests can call them without a ggml backend
 // or a GGUF on disk.

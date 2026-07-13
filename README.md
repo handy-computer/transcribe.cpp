@@ -21,6 +21,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
 | Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
 | Nemotron 3.5 ASR Streaming | `nemotron-3.5-asr-streaming-0.6b` (multilingual, 40 locales) | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
+| Multitalker Parakeet Streaming | `multitalker-parakeet-streaming-0.6b-v1` (single-speaker ASR path only) | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
 | Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b{,-plus,-nar}` | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
 | Voxtral | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` (audio-LLM; transcription + translation) | [docs/models/voxtral.md](docs/models/voxtral.md) |
 | Voxtral Realtime | `voxtral-mini-4b-realtime-2602` (streaming audio-LLM) | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |

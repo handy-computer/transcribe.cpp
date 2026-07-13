@@ -209,6 +209,14 @@ struct ParakeetHParams {
     std::vector<int32_t>     prompt_dictionary_indices;
     int32_t                  prompt_auto_id = -1;
 
+    // Optional single-speaker FF injection at the block-0 input. The speaker
+    // kernel sees x; the background kernel sees zeros and adds a constant.
+    // Nonzero layer indices are rejected during loading.
+    bool                 has_spk_kernel = false;
+    std::string          spk_kernel_type;    // "ff"
+    std::vector<int32_t> spk_kernel_layers;  // e.g. [0]
+    bool                 add_bg_spk_kernel = false;
+
     // Derived. Convenience accessors keyed off the above.
     int32_t enc_head_dim() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
 
@@ -348,13 +356,31 @@ struct ParakeetPromptMlp {
     ggml_tensor * mlp2_b = nullptr;  // [d_model]
 };
 
+// NeMo Sequential(Linear, ReLU, Dropout, Linear); dropout is inactive at
+// inference and only the two Linear slots carry tensors.
+struct ParakeetSpkKernelFF {
+    ggml_tensor * lin0_w = nullptr;  // [d_model, d_model]
+    ggml_tensor * lin0_b = nullptr;  // [d_model]
+    ggml_tensor * lin3_w = nullptr;  // [d_model, d_model]
+    ggml_tensor * lin3_b = nullptr;  // [d_model]
+};
+
+// Speaker and optional background kernels for one encoder layer.
+struct ParakeetSpkKernel {
+    int32_t             layer = -1;
+    ParakeetSpkKernelFF spk;  // enc.spk_kernel.<L>.*
+    bool                has_bg = false;
+    ParakeetSpkKernelFF bg;   // enc.bg_spk_kernel.<L>.* (add_bg_spk_kernel)
+};
+
 struct ParakeetWeights {
-    ParakeetPreEncode          pre_encode;
-    std::vector<ParakeetBlock> blocks;     // hp.enc_n_layers entries
-    ParakeetPredictor          predictor;  // empty when head_kind=CTC
-    ParakeetJoint              joint;      // empty when head_kind=CTC
-    ParakeetCtcHead            ctc_head;   // populated when head_kind=CTC
-    ParakeetPromptMlp          prompt;     // populated when hp.has_prompt
+    ParakeetPreEncode              pre_encode;
+    std::vector<ParakeetBlock>     blocks;       // hp.enc_n_layers entries
+    ParakeetPredictor              predictor;    // empty when head_kind=CTC
+    ParakeetJoint                  joint;        // empty when head_kind=CTC
+    ParakeetCtcHead                ctc_head;     // populated when head_kind=CTC
+    ParakeetPromptMlp              prompt;       // populated when hp.has_prompt
+    std::vector<ParakeetSpkKernel> spk_kernels;  // populated when hp.has_spk_kernel
 };
 
 // Walk the canonical tensor list, look up each tensor by name, validate

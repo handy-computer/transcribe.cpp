@@ -1,0 +1,15 @@
+{
+  "model": "models/multitalker-parakeet-streaming-0.6b-v1/multitalker-parakeet-streaming-0.6b-v1-F32.gguf",
+  "backend": "cpu",
+  "language": "en",
+  "texts": {
+    "samples/wer/fleurs-en/fleurs-en-1003119935936341070.wav": "However, due to the slow communication channels, styles in the West could lag behind by 25 to 30 years.",
+    "samples/wer/fleurs-en/fleurs-en-10052240106321793346.wav": "All nouns alongside the world say for you always begin with a capital letter even in the middle of a sentence",
+    "samples/wer/fleurs-en/fleurs-en-10167324587744183095.wav": "to the north and within easy reach is a romantic and fascinating town of Sintra in which was made famous to foreigners after a glowing account of its splendor as recorded by Lord Byron.",
+    "samples/wer/fleurs-en/fleurs-en-10197164397713068203.wav": "the cabbage juice changes color depending on how acidic basic alkaline the chemical is.",
+    "samples/wer/fleurs-en/fleurs-en-10233995782544396174.wav": "Many people don't think about them as dinosaurs because they have feathers and can fly.",
+    "samples/wer/fleurs-en/fleurs-en-10235738076911595987.wav": "The hospital has followed protocol for infection control, including separating the patient from others to prevent possible infection of others.",
+    "samples/wer/fleurs-en/fleurs-en-10323357556845456822.wav": "The Northern Marianas Emergency Management Office said that there were no damages reported in the nation.",
+    "samples/wer/fleurs-en/fleurs-en-10335587906469246566.wav": "Twentieth Century research has shown that there are two pools of genetic variation hidden in expressed."
+  }
+}

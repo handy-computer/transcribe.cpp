@@ -1,0 +1,93 @@
+# Spec for the HF README of handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: nvidia/multitalker-parakeet-streaming-0.6b-v1
+target_repo: handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/multitalker-parakeet-streaming-0.6b-v1.md
+
+upstream_commit: 8749fc7
+pin_date: 2026-07-12
+
+# Validation pin for the most recent upload. Updated on each release;
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: NeMo
+  commit: c55a09d
+  date: 2026-07-12
+
+# Upstream is the NVIDIA Open Model License (not a standard SPDX id), so
+# the HF `license` field gets `other` and `license_name` / `license_link`
+# carry the actual identifier + URL into the YAML frontmatter (HF prefers
+# this when license=other). `license_display` is the human-facing form
+# rendered in the README body.
+license: other
+license_name: nvidia-open-model-license
+license_link: https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/
+license_display: NVIDIA Open Model License
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - rnnt
+  - streaming
+  - cache-aware
+
+summary: |
+  Offline and cache-aware streaming English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder, fine-tuned from nvidia/nemotron-speech-streaming-en-0.6b. Upstream this is a multitalker (speaker-attributed) checkpoint, but transcribe.cpp ships only its single_speaker_mode ASR path: the multitalker machinery (external Sortformer diarization, per-speaker instances, speaker-tagged SegLST output) is not ported, so this port produces a single flat transcript and does not separate speakers. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask; all four latency lookahead settings are selectable.
+
+default_quant_index: 2  # Q8_0
+
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: true
+  translate: false
+  lang_detect: false
+  timestamps: token  # none | segment | word | token
+
+# Speedup-over-realtime (xRT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block. Values average the Q8_0 jfk and
+# dots publication cells.
+perf:
+  m4-max:
+    metal: 178.3
+    cpu: 34.6
+  ryzen-4750u:
+    cpu: 13
+    vulkan: 25
+
+wer:
+  source: LibriSpeech test-clean, offline
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) in single_speaker_mode with greedy RNN-T decoding and whisper-normalizer (PnC-stripped) scoring. F32 reference baseline: 2.19%. The measured NeMo single_speaker_mode reference and NVIDIA's self-reported number on the same split are both 2.19%. The multitalker / speaker-attribution path is not ported; see the transcribe.cpp model page for details.
+
+quants:
+  - name: F32
+    filename: multitalker-parakeet-streaming-0.6b-v1-F32.gguf
+    size: 2.49 GB
+    wer: 2.19%
+  - name: F16
+    filename: multitalker-parakeet-streaming-0.6b-v1-F16.gguf
+    size: 1.25 GB
+    wer: 2.19%
+  - name: Q8_0
+    filename: multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf
+    size: 734 MB
+    wer: 2.18%
+  - name: Q6_K
+    filename: multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf
+    size: 604 MB
+    wer: 2.20%
+  - name: Q5_K_M
+    filename: multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf
+    size: 542 MB
+    wer: 2.18%
+  - name: Q4_K_M
+    filename: multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf
+    size: 478 MB
+    wer: 2.18%

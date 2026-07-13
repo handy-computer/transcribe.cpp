@@ -145,12 +145,15 @@ void fill_keypad_mask(ggml_tensor * mask, const std::vector<int> & real_lens, in
     if (mask == nullptr) {
         return;
     }
-    const float        ninf = -std::numeric_limits<float>::infinity();
+    // Keep fully masked rows finite on the manual softmax path; -inf would
+    // produce NaNs. For rows with a valid key, exp(-1e30) still underflows to
+    // zero, and F16 conversion preserves the flash path's -inf sentinel.
+    const float        mask_neg = -1e30f;
     std::vector<float> buf(static_cast<size_t>(T) * n);
     for (int b = 0; b < n; ++b) {
         const int real = real_lens[static_cast<size_t>(b)];
         for (int k = 0; k < T; ++k) {
-            buf[static_cast<size_t>(b) * T + k] = (k < real) ? 0.0f : ninf;
+            buf[static_cast<size_t>(b) * T + k] = (k < real) ? 0.0f : mask_neg;
         }
     }
     ggml_backend_tensor_set(mask, buf.data(), 0, buf.size() * sizeof(float));

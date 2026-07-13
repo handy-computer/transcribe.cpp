@@ -501,6 +501,53 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         }
     }
 
+    // Speaker-kernel metadata is optional; absent means no injection.
+    if (gguf_find_key(gguf, "stt.parakeet.encoder.spk_kernel_layers") >= 0) {
+        switch (read_int32_array_kv(gguf, "stt.parakeet.encoder.spk_kernel_layers", hp.spk_kernel_layers)) {
+            case KvResult::Ok:
+                break;
+            case KvResult::Absent:
+                break;  // find_key said present; unreachable
+            case KvResult::BadType:
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "parakeet: stt.parakeet.encoder.spk_kernel_layers "
+                        "has wrong type (expected int32 array)");
+                return TRANSCRIBE_ERR_GGUF;
+        }
+        if (!hp.spk_kernel_layers.empty()) {
+            hp.has_spk_kernel = true;
+            if (auto st = read_required_string_kv(gguf, "stt.parakeet.encoder.spk_kernel_type", kFamilyTag,
+                                                  hp.spk_kernel_type);
+                st != TRANSCRIBE_OK) {
+                return st;
+            }
+            // NeMo's other advertised kernel types are not implemented.
+            if (hp.spk_kernel_type != "ff") {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "parakeet: unsupported spk_kernel_type \"%s\" "
+                        "(only \"ff\" is implemented)",
+                        hp.spk_kernel_type.c_str());
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            if (auto st = read_optional_bool_kv(gguf, "stt.parakeet.encoder.add_bg_spk_kernel", kFamilyTag,
+                                                /*default_value=*/false, hp.add_bg_spk_kernel);
+                st != TRANSCRIBE_OK) {
+                return st;
+            }
+            // Layer 0 uses a pre-hook; later layers require a different
+            // post-hook placement that is not implemented.
+            for (int32_t l : hp.spk_kernel_layers) {
+                if (l != 0) {
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                            "parakeet: spk_kernel_layers entry %d unsupported "
+                            "(only layer-0 injection implemented)",
+                            l);
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+            }
+        }
+    }
+
     // Cross-field invariants — caught here rather than surfacing as
     // confusing shape mismatches downstream.
     if (hp.enc_n_layers <= 0 || hp.enc_d_model <= 0 || hp.enc_n_heads <= 0 || hp.enc_d_ff <= 0 ||
@@ -867,6 +914,28 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_F32(weights.prompt.mlp0_b, "prompt.mlp.0.bias", prompt_h);
         GET_LIN(weights.prompt.mlp2_w, "prompt.mlp.2.weight", prompt_h, d_model);
         GET_F32(weights.prompt.mlp2_b, "prompt.mlp.2.bias", d_model);
+    }
+
+    // ----- optional speaker-kernel FF -----
+    if (hp.has_spk_kernel) {
+        weights.spk_kernels.clear();
+        weights.spk_kernels.reserve(hp.spk_kernel_layers.size());
+        for (int32_t layer : hp.spk_kernel_layers) {
+            ParakeetSpkKernel kernel{};
+            kernel.layer  = layer;
+            kernel.has_bg = hp.add_bg_spk_kernel;
+            GET_LIN(kernel.spk.lin0_w, lname("enc.spk_kernel.%d.0.weight", layer), d_model, d_model);
+            GET_F32(kernel.spk.lin0_b, lname("enc.spk_kernel.%d.0.bias", layer), d_model);
+            GET_LIN(kernel.spk.lin3_w, lname("enc.spk_kernel.%d.3.weight", layer), d_model, d_model);
+            GET_F32(kernel.spk.lin3_b, lname("enc.spk_kernel.%d.3.bias", layer), d_model);
+            if (hp.add_bg_spk_kernel) {
+                GET_LIN(kernel.bg.lin0_w, lname("enc.bg_spk_kernel.%d.0.weight", layer), d_model, d_model);
+                GET_F32(kernel.bg.lin0_b, lname("enc.bg_spk_kernel.%d.0.bias", layer), d_model);
+                GET_LIN(kernel.bg.lin3_w, lname("enc.bg_spk_kernel.%d.3.weight", layer), d_model, d_model);
+                GET_F32(kernel.bg.lin3_b, lname("enc.bg_spk_kernel.%d.3.bias", layer), d_model);
+            }
+            weights.spk_kernels.push_back(kernel);
+        }
     }
 
     return TRANSCRIBE_OK;

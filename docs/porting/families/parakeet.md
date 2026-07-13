@@ -31,7 +31,12 @@ CI-overlap grounds; see the family WER summary for rationale.
   - **Cache-aware streaming RNN-T (encoder-transducer)**:
     `nemotron-speech-streaming-en-0.6b` (English-only),
     `nemotron-3.5-asr-streaming-0.6b` (multilingual, 40 locales,
-    language one-hot conditioning) — intake only, Stages 2-8 TODO
+    language one-hot conditioning) — intake only, Stages 2-8 TODO,
+    `multitalker-parakeet-streaming-0.6b-v1` (English-only, fine-tuned
+    from `nemotron-speech-streaming-en-0.6b`; ships the
+    `single_speaker_mode` ASR path only — the multitalker /
+    speaker-attribution machinery is out of scope, see Capability
+    Validation rows)
 
 Per-variant intake JSON: `reports/porting/parakeet/<variant>/intake.json`.
 
@@ -146,6 +151,14 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | nemotron-3.5-asr-streaming-0.6b | Batch (offline) | run_batch fast path | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --batch-sizes 2,4,8 --backend cpu --language en-US` + `uv run scripts/batch_tensor_parity.py --model <gguf> --wav samples/jfk.wav --batch 4 --backend cpu` | text byte-equal vs serial at sizes 2/4/8 (golden frozen at `tests/golden/batch/nemotron-3.5-asr-streaming-0.6b.cpu.json`); CPU tensor parity bit-exact (max_abs=0.0) at batch=4 on jfk.wav | PASS |
 | ctc-1.1b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
 | ctc-0.6b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
+| multitalker-parakeet-streaming-0.6b-v1 | Transcribe (single_speaker_mode, offline / cache-aware att_context_size=[70,13], 1.12s chunk) | explicit en | `build/bin/transcribe-cli -m models/multitalker-parakeet-streaming-0.6b-v1/multitalker-parakeet-streaming-0.6b-v1-F32.gguf --language en samples/jfk.wav` | English transcript with PnC | PASS |
+| multitalker-parakeet-streaming-0.6b-v1 | Transcribe (single_speaker_mode) — no-hint | auto/default | `build/bin/transcribe-cli -m <gguf> samples/jfk.wav` (no `--language`; English-only checkpoint) | English transcript with PnC | PASS |
+| multitalker-parakeet-streaming-0.6b-v1 | Punctuation/casing | output | same as the explicit-en row | output contains capital letters and `,.?!` | PASS |
+| multitalker-parakeet-streaming-0.6b-v1 | Streaming (single_speaker_mode, cache reuse across chunks) | streaming | `build/bin/transcribe-cli -m <gguf> --language en --backend cpu --threads 1 --stream-chunk-ms 1120 --stream-att-right 13 samples/jfk.wav` | byte-equal transcript vs single-speaker one-shot at the default `att_context_size=[70,13]` (1.12s chunk) | PASS |
+| multitalker-parakeet-streaming-0.6b-v1 | Other latency settings ([70,0]/[70,1]/[70,6]/[70,13]) | runtime-selectable att_context_size | `… --stream-chunk-ms 1120 --stream-att-right {0,1,6,13} …` | all four R settings stream a valid single-speaker transcript; R=6/13 byte-equal to one-shot, R=0/1 differ only in trailing punctuation (lower lookahead) | PASS |
+| multitalker-parakeet-streaming-0.6b-v1 | Batch (offline, single_speaker_mode) | run_batch fast path | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --batch-sizes 2,4,8 --backend cpu --language en` + `uv run scripts/batch_tensor_parity.py --model <gguf> --wav samples/jfk.wav --batch 4 --backend cpu` | text byte-equal vs serial at sizes 2/4/8 (golden frozen at `tests/golden/batch/multitalker-parakeet-streaming-0.6b-v1.cpu.json`); same-length CPU tensor parity bit-exact (max_abs=0.0) at batch=4 on jfk.wav; **diverse-length** flash tensor parity bit-exact (max_abs=0.0) across arbitrary length mixes; full test-clean batch-8 WER == batch-1 (2.19%) after the causal var-len pre-encode masking fix (see forward-map Deviations) | PASS |
+| multitalker-parakeet-streaming-0.6b-v1 | Multitalker / speaker-attributed ASR (speaker-kernel injection + external Sortformer diarization + multi-instance + SegLST) | multitalker | (no runtime surface today) | per-speaker cpWER vs NeMo `speech_to_text_multitalker_streaming_infer.py` on AMI/CH109/Mixer6 | SKIP — not exposed by runtime (OUT OF SCOPE) — the single-speaker kernel path is implemented, but full speaker attribution still requires (1) a ported streaming Sortformer diarizer, (2) target-driven per-frame kernel masks, (3) N-instance-per-speaker orchestration, and (4) a SegLST speaker-tagged output contract. |
+| multitalker-parakeet-streaming-0.6b-v1 | Speaker diarization (produce speaker turns) | diarization | (not a capability of this checkpoint) | n/a | SKIP — not exposed by runtime (OUT OF SCOPE) — this checkpoint CONSUMES external diarization (Sortformer); it does not produce speaker turns. Brought back in scope only if a Sortformer diarizer is ported as a separate family. |
 | all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |
 
 ## Open decisions before Stage 3 (convert)
@@ -182,6 +195,39 @@ be resolved before the corresponding port enters porting-3-convert:
    convert time from `model.cfg.preprocessor.features` inside the
    .nemo archive. Wrong default silently degrades WER without
    changing tensor shapes elsewhere.
+5. **Layer-0 speaker-kernel injection** (`multitalker-parakeet-streaming-0.6b-v1`):
+   RESOLVED at Stage 2. The single-speaker path is NOT numerically identical
+   to `nemotron-speech-streaming-en-0.6b`. `EncDecMultiTalkerRNNTBPEModel`
+   registers a `forward_pre_hook` on `encoder.layers[0]` (from
+   `SpeakerKernelMixin`, `spk_kernel_layers=[0]`) that fires
+   **unconditionally** — even with no diarization / speaker targets. In
+   single-speaker mode the hook computes, at the INPUT of conformer layer 0:
+   `x += spk_kernels.0(x)` (speaker mask defaults to all-ones) then
+   `x += bg_spk_kernels.0(0)` (background mask defaults to zeros → a constant
+   bias vector). Each kernel is an FF block:
+   `Linear(1024,1024) → ReLU → Dropout(id at eval) → Linear(1024,1024)` with
+   bias. Stage 3 MUST export `spk_kernels.0.{0,3}.{weight,bias}` and
+   `bg_spk_kernels.0.{0,3}.{weight,bias}` (2 FF modules) and emit a GGUF KV
+   marking layer-0 injection; Stage 4 MUST apply the injection at the layer-0
+   input. Skipping it silently degrades single-speaker WER (a structural-cfg
+   distinction, not a shape change). The full multitalker path (per-frame
+   diarization mask instead of all-ones, N-instance orchestration, SegLST) is
+   OUT OF SCOPE per Stage 1 — see the multitalker integration brief.
+
+   **Stage 3 resolution (DONE).** `convert-parakeet.py` gates emission on a
+   `spk_kernel_layers` profile key. The 8 source tensors are emitted verbatim
+   (fp32 passthrough) under the loader's `enc.` prefix, keeping the source
+   layer index and the parameter-free `.1`/`.2` Sequential slots implicit:
+   - `spk_kernels.<L>.{0,3}.{weight,bias}` → `enc.spk_kernel.<L>.{0,3}.{weight,bias}`
+   - `bg_spk_kernels.<L>.{0,3}.{weight,bias}` → `enc.bg_spk_kernel.<L>.{0,3}.{weight,bias}`
+
+   Both Linear slots are `[1024,1024]` + `[1024]` bias. The layer-0 injection
+   is marked by three KVs Stage 4 reads:
+   `stt.parakeet.encoder.spk_kernel_type` (`"ff"`),
+   `stt.parakeet.encoder.spk_kernel_layers` (int array, `[0]`), and
+   `stt.parakeet.encoder.add_bg_spk_kernel` (bool, `true`). The loader binds
+   these tensors and applies the injection in both offline and streaming
+   encoder graphs.
 
 ## Tooling: NeMo-aware preflight
 
