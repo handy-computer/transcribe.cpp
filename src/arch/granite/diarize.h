@@ -49,9 +49,9 @@ bool diarize_requested(const transcribe_model * model, const transcribe_run_para
 //
 // Returns false when no marker is present; outputs are untouched and
 // the caller keeps the plain single-segment path.
-bool split_speaker_turns(const std::string &                                     raw,
-                         std::vector<transcribe_session::SegmentEntry> &         out_segments,
+bool split_speaker_turns(const std::string &                                    raw,
+                         std::vector<transcribe_session::SegmentEntry> &        out_segments,
                          std::vector<transcribe_session::SpeakerSegmentEntry> & out_speaker_segments,
-                         std::string &                                           out_full_text);
+                         std::string &                                          out_full_text);
 
 }  // namespace transcribe::granite
