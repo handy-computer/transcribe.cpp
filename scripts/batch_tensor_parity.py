@@ -6,21 +6,18 @@
 """
 batch_tensor_parity.py - numerical gate for the parakeet batched encoder.
 
-Proves that the per-utterance encoder output of transcribe_run_batch is
-identical, tensor-for-tensor, to the single-shot encoder output for the same
-wav. This is the gate the variable-length padding mask must keep green: a
-wrong mask perturbs real frames and shows up here as drift, where WER alone
-would miss it.
+Proves that each per-utterance encoder output from transcribe_run_batch
+matches its single-shot output. A list of varied-length WAVs exercises padding
+masks and causal subsampling lengths; repeating one WAV covers same-length
+batching.
 
-Apples-to-apples requires both paths on the SAME attention kernel. The
-single-shot path defaults to flash attention (which casts the rel-pos mask to
-F16); the batched path always runs the manual F32 attention. We force the
-single-shot path to manual with TRANSCRIBE_NO_FLASH=1 so the comparison is
-exact on CPU.
+Apples-to-apples requires both paths on the same attention kernel. Manual F32
+attention remains the default for this tool; --flash validates the production
+flash-attention policy separately.
 
-Mechanism (TRANSCRIBE_DUMP_DIR): single-shot dumps `dec.enc_out`; the batched
-run dumps `dec.enc_out.b{i}` per utterance. We feed B copies of one clip and
-assert every batched slice equals the single-shot dump.
+Mechanism (TRANSCRIBE_DUMP_DIR): each single-shot run dumps `dec.enc_out`;
+the batched run dumps `dec.enc_out.b{i}`. The valid slices must have identical
+sizes and values.
 
 Usage:
     uv run scripts/batch_tensor_parity.py \\
@@ -53,7 +50,11 @@ def run(cli, model, args, dump_dir, backend, extra_env=None):
     env = dict(os.environ)
     env["TRANSCRIBE_DUMP_DIR"] = str(dump_dir)
     if extra_env:
-        env.update(extra_env)
+        for key, value in extra_env.items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
     cmd = [str(cli), "-m", str(model), "--backend", backend, "-q"] + args
     r = subprocess.run(cmd, env=env, capture_output=True, text=True)
     if r.returncode != 0:
@@ -69,7 +70,11 @@ def main() -> int:
     repo = find_repo_root(Path(__file__))
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", type=Path, required=True)
-    ap.add_argument("--wav", type=Path, default=repo / "samples/jfk.wav")
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--wav", type=Path,
+                     help="single WAV repeated --batch times (default: samples/jfk.wav)")
+    src.add_argument("--list", type=Path,
+                     help="varied-length WAV list; its length must equal --batch")
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--cli", type=Path, default=repo / "build/bin/transcribe-cli")
     ap.add_argument("--backend", default="cpu")
@@ -80,47 +85,69 @@ def main() -> int:
                          "run writes <name>.b{i} per utterance. parakeet uses "
                          "dec.enc_out; sensevoice (no host decoder) uses "
                          "ctc.log_probs.")
-    ap.add_argument("--no-flash", dest="no_flash", action="store_true",
-                    default=None,
-                    help="force TRANSCRIBE_NO_FLASH=1 on both paths (parakeet "
-                         "needs this for a bit-exact gate; sensevoice runs flash "
-                         "on both same-length paths so it is not required)")
+    attn = ap.add_mutually_exclusive_group()
+    attn.add_argument("--no-flash", action="store_true",
+                      help="force the manual F32 attention path (the default)")
+    attn.add_argument("--flash", action="store_true",
+                      help="use the default production flash-attention policy")
     args = ap.parse_args()
 
-    for p in (args.model, args.wav, args.cli):
+    for p in (args.model, args.cli):
         if not Path(p).exists():
             raise SystemExit(f"missing: {p}")
+    if args.batch < 1:
+        raise SystemExit("--batch must be positive")
 
-    # parakeet's bit-exact gate needs manual attention on both paths (flash
-    # casts the rel-pos mask to F16); sensevoice has no rel-pos mask and runs
-    # flash on both same-length paths, so the env is a harmless no-op there.
-    no_flash = True if args.no_flash is None else args.no_flash
-    env = {"TRANSCRIBE_NO_FLASH": "1"} if no_flash else None
+    if args.list:
+        if not args.list.exists():
+            raise SystemExit(f"missing: {args.list}")
+        wavs = [Path(line.strip()) for line in args.list.read_text().splitlines()
+                if line.strip() and not line.lstrip().startswith("#")]
+        if len(wavs) != args.batch:
+            raise SystemExit(
+                f"--list has {len(wavs)} entries; expected --batch={args.batch}")
+    else:
+        wav = args.wav or (repo / "samples/jfk.wav")
+        wavs = [wav] * args.batch
+    for wav in wavs:
+        if not wav.exists():
+            raise SystemExit(f"missing: {wav}")
 
-    with tempfile.TemporaryDirectory() as td:
+    # Manual attention remains the default for backward compatibility. The
+    # --flash mode separately validates the production policy.
+    env = {"TRANSCRIBE_NO_FLASH": None} if args.flash else {"TRANSCRIBE_NO_FLASH": "1"}
+
+    tmp_root = repo / "tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=tmp_root) as td:
         td = Path(td)
-        single_dir = td / "single"
         batch_dir = td / "batch"
-        single_dir.mkdir(); batch_dir.mkdir()
+        batch_dir.mkdir()
 
-        # Single-shot.
-        run(args.cli, args.model, [str(args.wav)], single_dir, args.backend,
-            extra_env=env)
+        singles = []
+        for i, wav in enumerate(wavs):
+            single_dir = td / f"single-{i}"
+            single_dir.mkdir()
+            run(args.cli, args.model, [str(wav)], single_dir, args.backend,
+                extra_env=env)
+            single = load(single_dir, args.dump_name)
+            singles.append(single)
+            print(f"single {i}: {wav}  {single.size} elems  "
+                  f"rms={np.sqrt((single**2).mean()):.4e}")
 
-        # Batched run of B copies (same length -> the real fused encoder).
         list_file = td / "list.txt"
-        list_file.write_text("\n".join([str(args.wav)] * args.batch) + "\n")
+        list_file.write_text("\n".join(str(wav) for wav in wavs) + "\n")
         run(args.cli, args.model,
             ["--batch", str(list_file), "--batch-size", str(args.batch)],
             batch_dir, args.backend, extra_env=env)
 
-        single = load(single_dir, args.dump_name)
-        print(f"single-shot {args.dump_name}: {single.size} elems  "
-              f"rms={np.sqrt((single**2).mean()):.4e}")
-
         ok = True
-        for i in range(args.batch):
+        for i, single in enumerate(singles):
             b = load(batch_dir, f"{args.dump_name}.b{i}")
+            if not np.isfinite(b).all():
+                print(f"  [FAIL] utt {i}: batched dump contains non-finite values")
+                ok = False
+                continue
             if b.size != single.size:
                 print(f"  [FAIL] utt {i}: size {b.size} != {single.size}")
                 ok = False

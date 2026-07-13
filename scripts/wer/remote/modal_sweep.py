@@ -972,6 +972,7 @@ def batch_sweep(
     n_utts: int = 128,
     batch_sizes: str = "1,2,4,8,16",
     sort_by_length: bool = True,
+    language: str = "",
     clean: bool = False,
 ) -> None:
     """Throughput sweep of transcribe_run_batch across batch sizes for ONE
@@ -992,6 +993,7 @@ def batch_sweep(
                     Pass --no-sort-by-length to measure the naive case where
                     the manifest order is arbitrary and each batch pads to its
                     longest clip (shows the cost of NOT bucketing).
+    --language      optional language/locale override for every utterance.
     --clean         force a clean build.
 
       modal run scripts/wer/remote/modal_sweep.py::batch_sweep \\
@@ -1022,6 +1024,7 @@ def batch_sweep(
     print(f"  n_utts   = {n_utts}")
     print(f"  batches  = {sizes}")
     print(f"  sort     = {'length-sorted' if sort_by_length else 'NAIVE (unsorted)'}")
+    print(f"  language = {language or 'manifest/default'}")
     print("============================================================")
 
     print(f">>> build (arch sm_{arch} -> {build_dir})")
@@ -1036,7 +1039,7 @@ def batch_sweep(
     # Launch all batch sizes in parallel (each its own container). Pass the
     # locally-computed build_dir so the runner reads exactly what build() wrote.
     futs = [(bs, runner.spawn(repo, model_file, dataset, n, bs, sort_by_length,
-                              build_dir, "none", 0, dataset_status))
+                              build_dir, "none", language, 0, -1, dataset_status))
             for bs in sizes]
 
     rows: list[tuple] = []

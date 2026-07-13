@@ -1,0 +1,96 @@
+{
+  "_comment": [
+    "multitalker-parakeet-streaming-0.6b-v1 FINALIZED per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Correctness regime (Stage 4 contract):",
+    "  - reference-dtype GGUF (F32) at models/multitalker-parakeet-streaming-0.6b-v1/*-F32.gguf",
+    "  - C++ build: CPU backend, --threads 1 (default validate.py invocation)",
+    "  - KV cache type: AUTO (resolves to F32 on the F32 weights)",
+    "  - mel frontend: C++ transcribe-mel (no env-var ref injection); enc.mel.in",
+    "    carries a real production-mel budget, not a pinned 0.0.",
+    "  - reference: NeMo 2.8.0rc0 fp32 inference via",
+    "    scripts/dump_reference_parakeet_nemo.py (offline mode, native",
+    "    att_context_style='chunked_limited', single-speaker).",
+    "",
+    "Model note: this is EncDecMultiTalkerRNNTBPEModel run in SINGLE-SPEAKER mode.",
+    "The base ASR backbone is identical to nemotron-speech-streaming-en-0.6b, but a",
+    "speaker-kernel FF residual is injected at the INPUT of conformer layer 0",
+    "(NeMo forward_pre_hook, applied unconditionally): x += spk_ff(x) (all-ones",
+    "mask) then x += bg_ff(0) (a constant bias). The C++ path implements this in",
+    "src/arch/parakeet/encoder.cpp::apply_spk_kernel_injection.",
+    "",
+    "Dominant drift source: CPU F32 conformer accumulation order across 24 blocks,",
+    "plus the added layer-0 FF injection. All drift is well-understood accumulation,",
+    "NOT a localized mask/position bug (transcript is exact; drift peaks mid-stack",
+    "and shrinks at enc.final via the per-block LayerNorm). Cross-check: every",
+    "shared encoder tensor drifts LESS than the finalized budget of the",
+    "nemotron-speech-streaming-en-0.6b sibling (same encoder, no spk-kernel):",
+    "enc.final 1.9e-3 vs sibling 7.0e-3; block.0 8.4e-3 vs 6.5e-1; block.12",
+    "3.9e-2 vs 5.7e-1. Since a subtly wrong injection would drift ABOVE the",
+    "sibling, not below, this bounds the injection as correct.",
+    "",
+    "Widened vs Stage 2 provisional (recipe finalized = max(1.5*observed, provisional)):",
+    "  - enc.block.0.out : 3.0e-3 -> 1.3e-2  (~4.3x; injection + block-0 accumulation)",
+    "  - enc.block.12.out: 3.4e-3 -> 6.0e-2  (~18x; mid-stack peak, ~0.11% relative)",
+    "  - enc.final / enc.block.23.out / dec.enc_out: 1.9e-5 -> 3.0e-3 (final encoder",
+    "    output, one underlying tensor; ~1.0% relative, vs 3.7% absorbed by the sibling)",
+    "All other tensors: observed drift below the magnitude budget -> provisional kept.",
+    "dec.embed.0 is a pure GGUF embedding read -> pinned to exact 0.0."
+  ],
+  "dec.embed.0": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "dec.enc_out": {
+    "max_abs": 0.003,
+    "mean_abs": 7e-05
+  },
+  "dec.joint.0": {
+    "max_abs": 0.005523143569946289,
+    "mean_abs": 0.00032965458532807114
+  },
+  "dec.lstm.0.c.0": {
+    "max_abs": 7.170465892553333e-05,
+    "mean_abs": 2.375066490445493e-06
+  },
+  "dec.lstm.0.h.0": {
+    "max_abs": 3.142599546909333e-05,
+    "mean_abs": 1.0800957467118525e-06
+  },
+  "dec.lstm.1.c.0": {
+    "max_abs": 8.615481072664261e-05,
+    "mean_abs": 4.230338949264561e-06
+  },
+  "dec.lstm.1.h.0": {
+    "max_abs": 3.389731752872467e-05,
+    "mean_abs": 1e-06
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.013,
+    "mean_abs": 0.0005
+  },
+  "enc.block.12.out": {
+    "max_abs": 0.06,
+    "mean_abs": 0.002
+  },
+  "enc.block.23.out": {
+    "max_abs": 0.003,
+    "mean_abs": 7e-05
+  },
+  "enc.final": {
+    "max_abs": 0.003,
+    "mean_abs": 7e-05
+  },
+  "enc.mel.in": {
+    "max_abs": 0.0016611215076446535,
+    "mean_abs": 0.0001012863475937363
+  },
+  "enc.pos_emb": {
+    "max_abs": 9.999976158142091e-05,
+    "mean_abs": 7.071067828517533e-06
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 0.06187373504638646,
+    "mean_abs": 0.0017322517756891871
+  }
+}

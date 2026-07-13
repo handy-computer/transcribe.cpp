@@ -75,10 +75,10 @@ void pack_pad_channel_major(std::vector<float> &                    dst,
                             int                                     n_ch,
                             int                                     T_max);
 
-// Fill an attention key-padding mask (f32) of logical shape [T, .., n] with the
-// host ordering index b*T + k: 0.0 on real keys (k < real_lens[b]), -inf on
-// padded keys. No-op when `mask` is null. The element order is identical for
-// the conformer [T,1,1,n] and SAN-M [T,1,1,n] key-padding tensors.
+// Fill an attention key-padding mask (f32) of logical shape [T, .., n] with
+// host ordering index b*T + k: 0.0 on real keys and a large finite negative on
+// padded keys. The finite sentinel prevents NaNs on fully masked manual-softmax
+// rows. No-op when `mask` is null.
 void fill_keypad_mask(ggml_tensor * mask, const std::vector<int> & real_lens, int T, int n);
 
 // Fill a conv valid-frame mask (f32) with host ordering index b*T + t: 1.0 on
