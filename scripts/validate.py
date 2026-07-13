@@ -160,12 +160,22 @@ def case_transcript_compare(manifest: dict[str, Any], case) -> str:
     if value is None:
         value = "exact"
     mode = str(value).lower()
-    if mode not in {"exact", "normalized"}:
+    if mode not in {"exact", "normalized", "dediarized"}:
         raise SystemExit(
             f"error: unsupported transcript_compare={value!r}; "
-            "expected 'exact' or 'normalized'"
+            "expected 'exact', 'normalized', or 'dediarized'"
         )
     return mode
+
+
+def dediarize_text(text: str) -> str:
+    """Strip inline [start]/[Sxx]/[end] bracket spans from an emergent-diarization
+    transcript, then normalize. The reference `text` field is already de-diarized,
+    so this is a no-op there; the C++ runtime returns the raw diarized transcript,
+    so bracket spans (whose numeric timestamps carry bf16-vs-f32 digit jitter) are
+    removed before comparison. Mirrors the WER harness de-diarization."""
+    stripped = re.sub(r"\[[^\]]*\]", " ", text)
+    return normalize_text_for_compare(stripped)
 
 
 def find_gguf(repo: Path, family: str, slug: str | None = None,
@@ -613,6 +623,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
             if transcript_compare == "exact":
                 ref_compare = ref_text
                 cpp_compare = cpp_text
+            elif transcript_compare == "dediarized":
+                ref_compare = dediarize_text(ref_text)
+                cpp_compare = dediarize_text(cpp_text)
             else:
                 ref_compare = normalize_text_for_compare(ref_text)
                 cpp_compare = normalize_text_for_compare(cpp_text)

@@ -1,0 +1,59 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "moss",
+  "variant": "moss-transcribe-diarize",
+  "source_model": {
+    "hf_repo": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+    "hf_revision": "d7231bbae2587a4af278735eb765b318c4f64edd"
+  },
+  "reference": {
+    "kind": "author_repo_moss",
+    "source": "https://github.com/OpenMOSS/MOSS-Transcribe-Diarize",
+    "revision": "main",
+    "entrypoint": "scripts/dump_reference_moss_author.py"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {
+      "bos": 151643,
+      "eos": 151645,
+      "pad": 151643,
+      "audio_pad": 151671
+    }
+  },
+  "capabilities": {
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": true
+  },
+  "tolerance_file": "tests/tolerances/moss.json",
+  "transcript_compare": "dediarized",
+  "cases": [
+    {
+      "audio": "jfk",
+      "language": "auto"
+    }
+  ]
+}

@@ -1,0 +1,164 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "moss",
+  "hf_repo": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+  "hf_revision": "d7231bbae2587a4af278735eb765b318c4f64edd",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    }
+  },
+  "variants": [
+    {
+      "name": "moss-transcribe-diarize",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-decoder"
+    ],
+    "key_fields": {
+      "architectures": [
+        "MossTranscribeDiarizeForConditionalGeneration"
+      ],
+      "model_type": "moss_transcribe_diarize"
+    }
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "config",
+    "evidence": "config dtype bfloat16",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 683
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {
+      "bos": 151643,
+      "eos": 151645,
+      "pad": 151643
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "36c3749fd3c87e2402f612459b45ae4e6ce5488a3ecde47a8a3ea3ed3d5dda5a"
+  },
+  "capabilities": {
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": true
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "source": "model card",
+      "notes": "Publisher reports no English LibriSpeech number. This is a Chinese/English long-form multi-speaker diarization model; all published metrics are Chinese diarization CER/cpCER. LibriSpeech is used as the default English acceptance set only; downstream gates use the measured Oracle reference baseline, not a publisher score."
+    },
+    {
+      "dataset": "AISHELL-4",
+      "language": "zh",
+      "metric": "cer",
+      "score": 14.84,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "MOSS-Transcribe-Diarize 0.9B (non-Pro). cpCER 15.83, Delta-cp 0.99. Multi-speaker meeting corpus."
+    },
+    {
+      "dataset": "Alimeeting",
+      "language": "zh",
+      "metric": "cer",
+      "score": 24.86,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "MOSS-Transcribe-Diarize 0.9B (non-Pro). cpCER 22.17, Delta-cp -2.69."
+    },
+    {
+      "dataset": "Podcast",
+      "language": "zh",
+      "metric": "cer",
+      "score": 5.97,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "MOSS-Transcribe-Diarize 0.9B (non-Pro). cpCER 7.37, Delta-cp 1.40."
+    },
+    {
+      "dataset": "Movies",
+      "language": "zh",
+      "metric": "cer",
+      "score": 6.36,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "MOSS-Transcribe-Diarize 0.9B (non-Pro). cpCER 12.76, Delta-cp 6.40."
+    }
+  ],
+  "reference_framework": "author_repo_moss",
+  "reference_rationale": "The model is not part of upstream Transformers: it loads only via trust_remote_code from OpenMOSS's custom modeling_moss_transcribe_diarize.py, configuration, and processing_moss_transcribe_diarize.py files, and the OpenMOSS/MOSS-Transcribe-Diarize GitHub repo supplies the reference inference harness (build_transcription_messages, generate_transcription, audio/video loading, transcript parsing). Those custom files plus the GitHub harness are the sole source of truth for the forward pass, the audio-placeholder / time-marker prompt construction, and the 30s chunking. No NeMo path exists. Stock Transformers cannot load the model without the remote code, so the reference is the author custom code rather than the transformers library itself.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "Composite three-part audio-LLM with heterogeneous norms and activations: WhisperEncoder (24 layers, gelu, LayerNorm) -> 4x temporal merge (1024 -> 4096) -> VQAdaptor MLP (Linear 4096->1024, SiLU, Linear 1024->1024, LayerNorm with bias) -> Qwen3-0.6B decoder (28 layers, silu, RMSNorm). Mixed LayerNorm-vs-RMSNorm and gelu-vs-silu across sub-blocks; each must be wired to the right normalization/activation.",
+    "Time-marker digit injection into the audio placeholder span. The processor does NOT emit a uniform run of <|audio_pad|> (id 151671) tokens: with enable_time_marker=True, audio_tokens_per_second=12.5, time_marker_every_seconds=5 (authoritative value from processor_config.json; the constructor default of 2 is overridden), it interleaves literal second-count digit tokens (e.g. '5','10','15', ...) among the audio placeholders at fixed positions. The C++ prompt builder must reproduce this interleaving exactly or timestamp emission and the masked_scatter feature count both break.",
+    "Audio token-length formula couples frontend hop, Whisper conv stride (2), and merge size (4): tokens_per_chunk = (num_samples - 1) // (hop_length * 2 * merge_size) + 1 = (n - 1) // 1280 + 1. masked_scatter requires the number of audio placeholders to exactly equal the number of adaptor output features; any off-by-one here is a hard runtime error, not silent drift.",
+    "Long-form handling is chunk-based, not a single encode. Audio is split into 480000-sample (30s) chunks, each padded to 30s and encoded by Whisper independently; per-chunk features are trimmed to token_len*4 then concatenated per-audio before the 4x merge and adaptor. Chunk-boundary trimming and per-audio concatenation are core to the long-form capability and easy to get wrong.",
+    "Diarization and timestamps are emergent plain-text output in the canonical format [start][Sxx]text[end] (e.g. [0.48][S01]Welcome[1.66]), not special tokens. There is no structural token boundary; WER/CER scoring must parse and strip speaker labels and numeric timestamps from generated text.",
+    "tie_word_embeddings=true: lm_head.weight is tied to model.language_model.embed_tokens.weight. The converter must emit a single shared tensor and not duplicate or diverge the two.",
+    "Language selection is prompt-text-only; has_language_tokens=false and there is no language/task token or detection branch. The default instruction prompt is Chinese and is used for English audio as well. English acceptance (LibriSpeech) therefore runs the model with a Chinese timestamp+diarize instruction, and the single-speaker English hypotheses must be de-diarized/de-timestamped before scoring."
+  ],
+  "intake_gaps": []
+}

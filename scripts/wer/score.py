@@ -19,6 +19,7 @@ Region suffixes (zh-tw, pt-br, ...) are stripped for routing, so
 
 Usage:
     uv run scripts/wer/score.py reports/wer/<...>.jsonl
+    uv run scripts/wer/score.py reports/wer/<...>.jsonl --dediarize
     uv run scripts/wer/score.py reports/wer/<...>.jsonl --language vi
     uv run scripts/wer/score.py reports/wer/<...>.jsonl --language zh --metric cer
 
@@ -37,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Callable
@@ -49,6 +51,21 @@ from whisper_normalizer.english import EnglishTextNormalizer
 # Languages where CER is the canonical metric. Region suffix is stripped
 # before lookup so zh / zh-cn / zh-tw all resolve to the same set entry.
 CER_LANGUAGES = {"zh", "yue", "ja", "ko", "th"}
+
+
+# Optional diarization metadata spans: timestamps `[6.98]`, speaker tags
+# `[S01]`, and annotations such as `[laughter]` / `<unk>`. Whether these count
+# as transcription content is dataset-specific, so removal is opt-in.
+_METADATA_SPAN = re.compile(r"[\[<][^\]>]*[\]>]")
+
+
+def dediarize(text: str | None) -> str:
+    """Replace bracketed metadata spans with a space, then collapse runs.
+
+    Diarizing models such as MOSS emit `[start][Sxx]text[end]`. Replacing the
+    spans with spaces avoids fusing words on either side during normalization.
+    """
+    return " ".join(_METADATA_SPAN.sub(" ", text or "").split())
 
 
 def base_language(lang: str | None) -> str | None:
@@ -119,6 +136,9 @@ def main() -> int:
                    default="auto",
                    help="Error metric. 'auto' picks CER for "
                         "zh/yue/ja/ko/th and WER otherwise (default: auto)")
+    p.add_argument("--dediarize", action="store_true",
+                   help="Remove bracketed timestamps, speaker labels, and "
+                        "annotations before normalization (opt-in)")
     args = p.parse_args()
 
     if not args.report.exists():
@@ -165,9 +185,13 @@ def main() -> int:
         print("error: report is empty", file=sys.stderr)
         return 2
 
-    # Normalize refs and hyps.
-    refs_raw  = [e["ref_text"] for e in entries]
-    hyps_raw  = [e["hyp_text"] for e in entries]
+    # Normalize refs and hyps. Diarization metadata removal is opt-in because
+    # bracketed annotations may be scoring content in other datasets.
+    refs_raw = [e["ref_text"] for e in entries]
+    hyps_raw = [e["hyp_text"] for e in entries]
+    if args.dediarize:
+        refs_raw = [dediarize(r) for r in refs_raw]
+        hyps_raw = [dediarize(h) for h in hyps_raw]
     refs_norm = [normalizer(r) for r in refs_raw]
     hyps_norm = [normalizer(h) for h in hyps_raw]
 
@@ -245,6 +269,7 @@ def main() -> int:
     score = {
         "metric": metric,
         "language": language,
+        "dediarized": args.dediarize,
         "error_rate": round(global_rate, 6),
         "error_rate_pct": round(global_rate * 100, 2),
         "error_rate_ci_lo": round(ci_lo, 6),

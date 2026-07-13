@@ -121,6 +121,16 @@ alongside the input:
 `wer_ci_lo` / `wer_ci_hi` are a 95% bootstrap CI (1000 resamples,
 seed=42 — deterministic).
 
+Diarizing models may emit inline timestamps and speaker labels. Remove those
+spans explicitly when the evaluation contract treats them as metadata:
+
+```bash
+uv run scripts/wer/score.py reports/wer/<report>.jsonl --dediarize
+```
+
+This is opt-in because bracketed annotations such as `[laughter]` or `<unk>`
+may be meaningful scoring content in other datasets.
+
 ## `compare.py` — delta table
 
 ```bash

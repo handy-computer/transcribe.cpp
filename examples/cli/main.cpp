@@ -734,8 +734,9 @@ int main(int argc, char ** argv) {
             std::fflush(stdout);
         }
 
-        int n_ok   = 0;
-        int n_fail = 0;
+        int n_ok        = 0;
+        int n_truncated = 0;  // result-bearing: hit the generation cap, partial hyp emitted
+        int n_fail      = 0;  // no usable result (wav load / backend / unsupported / whole-batch)
 
         // Offline batched path: group up to batch_size utterances into one
         // transcribe_run_batch call. Mutually exclusive with the streaming
@@ -802,15 +803,25 @@ int main(int argc, char ** argv) {
                 }
 
                 for (size_t k = 0; k < src_index.size(); ++k) {
-                    const std::string &     wav  = wav_paths[src_index[k]];
-                    const transcribe_status ust  = transcribe_batch_status(ctx, static_cast<int>(k));
-                    const char *            text = "";
-                    if (ust == TRANSCRIBE_OK) {
+                    const std::string &     wav = wav_paths[src_index[k]];
+                    const transcribe_status ust = transcribe_batch_status(ctx, static_cast<int>(k));
+                    // OUTPUT_TRUNCATED is result-bearing: the partial transcript is
+                    // preserved and readable via transcribe_batch_full_text (see
+                    // transcribe.h). Emit it as the hyp so downstream tooling scores
+                    // the partial rather than an empty string; the error field below
+                    // still tags it so the truncation stays visible.
+                    const bool   result_present = ust == TRANSCRIBE_OK || ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+                    const char * text           = "";
+                    if (result_present) {
                         const char * t = transcribe_batch_full_text(ctx, static_cast<int>(k));
                         if (t && *t) {
                             text = t;
                         }
+                    }
+                    if (ust == TRANSCRIBE_OK) {
                         ++n_ok;
+                    } else if (ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+                        ++n_truncated;
                     } else {
                         ++n_fail;
                     }
@@ -838,10 +849,12 @@ int main(int argc, char ** argv) {
                             (double) tm.decode_ms, err_field.c_str());
                     } else {
                         std::printf("[%zu/%zu] %s", src_index[k] + 1, total, wav.c_str());
-                        if (ust != TRANSCRIBE_OK) {
-                            std::printf("  ERROR: %s\n", transcribe_status_string(ust));
-                        } else {
+                        if (ust == TRANSCRIBE_OK) {
                             std::printf("\n  text: %s\n", text);
+                        } else if (ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+                            std::printf("  (truncated)\n  text: %s\n", text);
+                        } else {
+                            std::printf("  ERROR: %s\n", transcribe_status_string(ust));
                         }
                     }
                     std::fflush(stdout);
@@ -924,13 +937,23 @@ int main(int argc, char ** argv) {
                     run_st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
                 }
 
-                const char * text = "";
-                if (run_st == TRANSCRIBE_OK) {
+                // OUTPUT_TRUNCATED is result-bearing: the partial transcript is
+                // preserved and readable via transcribe_full_text (see transcribe.h).
+                // Emit it as the hyp so downstream tooling scores the partial rather
+                // than an empty string; the error field below still tags it so the
+                // truncation stays visible.
+                const bool   result_present = run_st == TRANSCRIBE_OK || run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+                const char * text           = "";
+                if (result_present) {
                     const char * t = transcribe_full_text(ctx);
                     if (t && *t) {
                         text = t;
                     }
+                }
+                if (run_st == TRANSCRIBE_OK) {
                     ++n_ok;
+                } else if (run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+                    ++n_truncated;
                 } else {
                     ++n_fail;
                 }
@@ -962,10 +985,12 @@ int main(int argc, char ** argv) {
                         (double) tm.decode_ms, err_field.c_str());
                 } else {
                     std::printf("[%zu/%zu] %s", i + 1, wav_paths.size(), wav.c_str());
-                    if (run_st != TRANSCRIBE_OK) {
-                        std::printf("  ERROR: %s\n", transcribe_status_string(run_st));
-                    } else {
+                    if (run_st == TRANSCRIBE_OK) {
                         std::printf("\n  text: %s\n", text);
+                    } else if (run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+                        std::printf("  (truncated)\n  text: %s\n", text);
+                    } else {
+                        std::printf("  ERROR: %s\n", transcribe_status_string(run_st));
                     }
                 }
                 std::fflush(stdout);
@@ -973,11 +998,14 @@ int main(int argc, char ** argv) {
         }
 
         if (!args.batch_jsonl) {
-            std::fprintf(stderr, "batch: %d ok, %d failed out of %zu\n", n_ok, n_fail, wav_paths.size());
+            std::fprintf(stderr, "batch: %d ok, %d truncated, %d failed out of %zu\n", n_ok, n_truncated, n_fail,
+                         wav_paths.size());
         }
 
         transcribe_session_free(ctx);
         transcribe_model_free(model);
+        // OUTPUT_TRUNCATED is result-bearing and does not fail the batch, but
+        // hard per-utterance failures must remain visible to automation.
         return n_fail > 0 ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
