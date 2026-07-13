@@ -111,8 +111,23 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-_Publication benchmarks are pending; they are collected on reference
-machines and will be filled here once available._ Reproduce with:
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
+
+### AMD Ryzen 7 4750U Pro
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  466 ms (24×) |  475 ms (23×) |
+| Vulkan  | dots (35.3s) |  1.36 s (26×) |  1.39 s (26×) |
+| CPU     | jfk (11.0s)  |  751 ms (15×) |  816 ms (13×) |
+| CPU     | dots (35.3s) |  2.99 s (12×) |  3.12 s (11×) |
+
+Fedora 43, transcribe.cpp `c55a09d`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \

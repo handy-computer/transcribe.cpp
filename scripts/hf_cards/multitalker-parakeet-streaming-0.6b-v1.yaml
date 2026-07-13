@@ -50,12 +50,14 @@ capabilities:
   lang_detect: false
   timestamps: token  # none | segment | word | token
 
-# NOTE: `perf` is intentionally omitted until publication benchmarks are
-# collected on the reference machines. Without `perf`, generate.py skips the
-# machine-readable `transcribe_cpp:` metadata block (RTF + WER + capability
-# flags); the human-readable Download/WER table below still renders. Add a
-# `perf:` block (see nemotron-speech-streaming-en-0.6b.yaml) and re-render
-# once the bench numbers land.
+# Speedup-over-realtime (xRT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block. Values average the Q8_0 jfk and
+# dots publication cells. Only the 4750U reference machine has been benched
+# so far (no Apple/Metal run yet).
+perf:
+  ryzen-4750u:
+    cpu: 13
+    vulkan: 25
 
 wer:
   source: LibriSpeech test-clean, offline
