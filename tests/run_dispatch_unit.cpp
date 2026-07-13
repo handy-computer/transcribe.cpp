@@ -169,6 +169,46 @@ void test_run_validate_success_clears_and_runs() {
 }
 
 // ---------------------------------------------------------------------------
+// diarize enum validation: an out-of-range raw value is rejected with
+// INVALID_ARG before the snapshot is cleared (mirrors the pnc/itn raw-enum
+// gate in validate_run_params_common); a well-formed non-DEFAULT value
+// passes validation and reaches the run hook (unsupported models only WARN).
+// ---------------------------------------------------------------------------
+
+void test_diarize_enum_validation() {
+    transcribe_model model;
+    model.arch = &run_validate_arch();
+
+    transcribe_session session;
+    session.model      = &model;
+    session.full_text  = "previous result";
+    session.has_result = true;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+    const int bad_raw = 9999;
+    std::memcpy(&params.diarize, &bad_raw, sizeof(bad_raw));
+
+    g_run_called          = false;
+    g_run_validate_status = TRANSCRIBE_OK;
+
+    float             pcm = 0.0f;
+    transcribe_status st  = transcribe_run(&session, &pcm, 1, &params);
+
+    CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(g_run_called == false);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous result");
+
+    // Well-formed ON passes the gate (feature-less model WARNs, proceeds).
+    transcribe_run_params_init(&params);
+    params.diarize = TRANSCRIBE_DIARIZE_MODE_ON;
+    st             = transcribe_run(&session, &pcm, 1, &params);
+    CHECK(st == TRANSCRIBE_OK);
+    CHECK(g_run_called == true);
+}
+
+// ---------------------------------------------------------------------------
 // Batch abort padding: a batch that aborts partway must still expose exactly
 // n result slots. Utterances completed before the abort keep their real
 // status; missing slots report TRANSCRIBE_ERR_ABORTED ("did not complete
@@ -300,6 +340,7 @@ int main() {
     test_no_run_hook_clears_and_not_implemented();
     test_run_validate_failure_preserves_snapshot();
     test_run_validate_success_clears_and_runs();
+    test_diarize_enum_validation();
     test_batch_abort_pads_missing_to_n();
     test_batch_fastpath_abort_pads_missing_to_n();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

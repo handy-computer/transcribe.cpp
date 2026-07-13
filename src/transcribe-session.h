@@ -12,6 +12,7 @@
 
 #include "transcribe.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -113,12 +114,25 @@ struct transcribe_session {
         int         n_words     = 0;
         int         first_token = 0;
         int         n_tokens    = 0;
+        int32_t     speaker_id  = 0;  // 1-based; 0 = no attribution
     };
 
-    std::vector<TokenEntry>   tokens;
-    std::vector<WordEntry>    words;
-    std::vector<SegmentEntry> segments;
-    std::string               full_text;
+    // "Who spoke when" rows (diarization). Populated only when a run
+    // resolves diarize ON for a supporting family; may overlap in time.
+    // t0_ms == t1_ms == 0 means the family attributes text but has no
+    // timing information for the turn.
+    struct SpeakerSegmentEntry {
+        int64_t t0_ms      = 0;
+        int64_t t1_ms      = 0;
+        int32_t speaker_id = 0;  // 1-based
+        float   p          = NAN;
+    };
+
+    std::vector<TokenEntry>          tokens;
+    std::vector<WordEntry>           words;
+    std::vector<SegmentEntry>        segments;
+    std::vector<SpeakerSegmentEntry> speaker_segments;
+    std::string                      full_text;
 
     // Offline batch results (transcribe_run_batch). The scratch fields
     // above are the single "current result" slot every run() writes into
@@ -137,22 +151,23 @@ struct transcribe_session {
     // snapshot, so a run() inside the fallback loop does not erase
     // already-accumulated entries).
     struct ResultSet {
-        std::vector<TokenEntry>   tokens;
-        std::vector<WordEntry>    words;
-        std::vector<SegmentEntry> segments;
-        std::string               full_text;
-        std::string               detected_language;
-        transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-        bool                      has_result  = false;
-        transcribe_status         status      = TRANSCRIBE_OK;
+        std::vector<TokenEntry>          tokens;
+        std::vector<WordEntry>           words;
+        std::vector<SegmentEntry>        segments;
+        std::vector<SpeakerSegmentEntry> speaker_segments;
+        std::string                      full_text;
+        std::string                      detected_language;
+        transcribe_timestamp_kind        result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        bool                             has_result  = false;
+        transcribe_status                status      = TRANSCRIBE_OK;
         // Per-utterance timings (us). For a batched run the encoder is one
         // shared dispatch, so a family amortizes its total encode time across
         // the batch (sum over utterances == the real batch encode time);
         // decode is genuinely per-utterance. Lets transcribe_batch_get_timings
         // expose where time goes (encoder vs host decode) per utterance.
-        int64_t                   t_mel_us    = 0;
-        int64_t                   t_encode_us = 0;
-        int64_t                   t_decode_us = 0;
+        int64_t                          t_mel_us    = 0;
+        int64_t                          t_encode_us = 0;
+        int64_t                          t_decode_us = 0;
     };
 
     std::vector<ResultSet> batch_results;
@@ -167,6 +182,7 @@ struct transcribe_session {
         rs.tokens            = tokens;
         rs.words             = words;
         rs.segments          = segments;
+        rs.speaker_segments  = speaker_segments;
         rs.full_text         = full_text;
         rs.detected_language = detected_language;
         rs.result_kind       = result_kind;

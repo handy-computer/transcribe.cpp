@@ -363,6 +363,7 @@ typedef enum {
     TRANSCRIBE_ABI_SESSION_LIMITS    = 11,
     TRANSCRIBE_ABI_EXT               = 12,
     TRANSCRIBE_ABI_BACKEND_DEVICE    = 13,
+    TRANSCRIBE_ABI_SPEAKER_SEGMENT   = 14,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.
@@ -520,6 +521,36 @@ enum transcribe_itn_mode {
     TRANSCRIBE_ITN_MODE_DEFAULT = 0,
     TRANSCRIBE_ITN_MODE_OFF     = 1,
     TRANSCRIBE_ITN_MODE_ON      = 2,
+};
+
+/*
+ * Speaker-diarization toggle on the run params.
+ *
+ * Symmetric semantics to transcribe_pnc_mode / transcribe_itn_mode but
+ * for speaker attribution. Families whose model emits speaker-attributed
+ * output read this field; families that do not ignore it. Non-DEFAULT
+ * values against a model for which
+ * transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION)
+ * returns false emit a WARN and proceed with default behavior.
+ *
+ * Diarization here is host-side parsing of the model's own speaker
+ * markers into structured results: segment rows carry speaker_id and
+ * the speaker-segment accessors (transcribe_n_speaker_segments /
+ * transcribe_get_speaker_segment) are populated. It never changes what
+ * the model computes; OFF returns the model's raw text untouched.
+ *
+ *   DEFAULT (0): family default. Zero-init gives this value. For
+ *                families whose model always emits speaker markers
+ *                (moss, granite-speech-4.1-2b-plus) the default is ON.
+ *   OFF:         raw passthrough. The model's speaker/timestamp markers
+ *                stay verbatim in the transcript text; no speaker rows.
+ *   ON:          parse speaker markers into segment speaker_id + speaker
+ *                segments; markers are stripped from the text.
+ */
+enum transcribe_diarize_mode {
+    TRANSCRIBE_DIARIZE_MODE_DEFAULT = 0,
+    TRANSCRIBE_DIARIZE_MODE_OFF     = 1,
+    TRANSCRIBE_DIARIZE_MODE_ON      = 2,
 };
 
 /* ----------------------------------------------------------------------- */
@@ -984,6 +1015,13 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *              false emit a WARN and proceed with the model's default
  *              behavior.
  *
+ * diarize:     speaker-attribution runtime toggle. See
+ *              transcribe_diarize_mode. DEFAULT is always safe. Non-DEFAULT
+ *              values against models for which
+ *              transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION)
+ *              is false emit a WARN and proceed with the model's default
+ *              behavior.
+ *
  * language:        source language hint as a BCP-47-ish short code, or
  *                  NULL to autodetect (only if the model supports it).
  *
@@ -1022,6 +1060,7 @@ struct transcribe_run_params {
     transcribe_timestamp_kind     timestamps;
     enum transcribe_pnc_mode      pnc;
     enum transcribe_itn_mode      itn;
+    enum transcribe_diarize_mode  diarize;
     const char *                  language;
     const char *                  target_language;
     bool                          keep_special_tags;
@@ -1266,6 +1305,17 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct 
  *                        vs does-emit" distinction as PNC; non-DEFAULT
  *                        itn against an unsupported model warns.
  *
+ *   DIARIZATION          The model emits speaker-attributed output and
+ *                        the runtime exposes a toggle via
+ *                        transcribe_run_params::diarize. When true,
+ *                        segment rows carry speaker_id and the
+ *                        speaker-segment accessors are populated (mode
+ *                        permitting). False does NOT mean multi-speaker
+ *                        audio is mis-transcribed — only that speaker
+ *                        attribution is unavailable. Non-DEFAULT diarize
+ *                        against a model where this returns false emits
+ *                        a WARN and proceeds.
+ *
  * Returns false on NULL model or unknown feature enum.
  */
 typedef enum {
@@ -1275,6 +1325,7 @@ typedef enum {
     TRANSCRIBE_FEATURE_CANCELLATION         = 3,
     TRANSCRIBE_FEATURE_PNC                  = 4,
     TRANSCRIBE_FEATURE_ITN                  = 5,
+    TRANSCRIBE_FEATURE_DIARIZATION          = 6,
 } transcribe_feature;
 
 TRANSCRIBE_API bool transcribe_model_supports(const struct transcribe_model * model, transcribe_feature feature);
@@ -2327,7 +2378,8 @@ struct transcribe_segment {
     int          n_words;
     int          first_token;
     int          n_tokens;
-    const char * text; /* session-owned; see lifetime note above */
+    const char * text;       /* session-owned; see lifetime note above */
+    int32_t      speaker_id; /* 1-based; 0 = no speaker attribution */
 };
 
 TRANSCRIBE_API void transcribe_segment_init(struct transcribe_segment * out);
@@ -2393,6 +2445,53 @@ TRANSCRIBE_API transcribe_status transcribe_get_word(const struct transcribe_ses
 TRANSCRIBE_API transcribe_status transcribe_get_token(const struct transcribe_session * session,
                                                       int                               i,
                                                       struct transcribe_token *         out);
+
+/* ----------------------------------------------------------------------- */
+/* Speaker-segment results (diarization)                                   */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * "Who spoke when" rows, populated when the run resolved diarization ON
+ * for a model with TRANSCRIBE_FEATURE_DIARIZATION (see
+ * transcribe_diarize_mode). Rows are ordered by emission order of the
+ * model's speaker turns; rows MAY overlap in time (two speakers talking
+ * at once are two overlapping rows). A model that attributes text but
+ * carries no timing information reports t0_ms == t1_ms == 0 ("absent"
+ * per the zero-sentinel rule).
+ *
+ * These rows are the transcript-independent view of speaker activity.
+ * The transcript-attached view is transcribe_segment::speaker_id.
+ *
+ * p is the attribution confidence when the model produces one, or NaN
+ * when it does not (same convention as transcribe_token::p). On
+ * out-of-range index `p` follows the zero-init rule (0.0f, not NaN);
+ * inspect `speaker_id != 0` to distinguish a present row.
+ *
+ * Empty (count 0) whenever diarization did not run: unsupported family,
+ * diarize mode OFF, or no speaker markers recognized in this result.
+ */
+struct transcribe_speaker_segment {
+    uint64_t struct_size;
+    int64_t  t0_ms;
+    int64_t  t1_ms;
+    int32_t  speaker_id; /* 1-based; 0 = row not present */
+    float    p;          /* confidence hint; NaN = not produced */
+};
+
+TRANSCRIBE_API void transcribe_speaker_segment_init(struct transcribe_speaker_segment * out);
+
+/* 0 before any run, on NULL session, or when diarization did not run. */
+TRANSCRIBE_API int transcribe_n_speaker_segments(const struct transcribe_session * session);
+
+/*
+ * Read one speaker-segment row into caller-owned storage. Same contract
+ * as transcribe_get_segment: INVALID_ARG on NULL out, BAD_STRUCT_SIZE on
+ * a zero/short struct_size, otherwise OK with the struct written when i
+ * is in range and left zero-initialized when it is not.
+ */
+TRANSCRIBE_API transcribe_status transcribe_get_speaker_segment(const struct transcribe_session *   session,
+                                                                int                                 i,
+                                                                struct transcribe_speaker_segment * out);
 
 /* ----------------------------------------------------------------------- */
 /* Batch result accessors                                                  */
@@ -2483,6 +2582,14 @@ TRANSCRIBE_API transcribe_status transcribe_batch_get_token(const struct transcr
                                                             int                               i,
                                                             int                               j,
                                                             struct transcribe_token *         out);
+
+/* Speaker-segment batch mirrors; same contracts as the single-result pair. */
+TRANSCRIBE_API int transcribe_batch_n_speaker_segments(const struct transcribe_session * session, int i);
+
+TRANSCRIBE_API transcribe_status transcribe_batch_get_speaker_segment(const struct transcribe_session *   session,
+                                                                      int                                 i,
+                                                                      int                                 j,
+                                                                      struct transcribe_speaker_segment * out);
 
 /*
  * Per-utterance timings for a batched run. Mirrors transcribe_get_timings but

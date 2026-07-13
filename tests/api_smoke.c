@@ -124,6 +124,8 @@ static void test_abi_metadata(void) {
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_RUN_PARAMS) == _Alignof(struct transcribe_run_params));
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_CAPABILITIES) == sizeof(struct transcribe_capabilities));
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_SEGMENT) == sizeof(struct transcribe_segment));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_SPEAKER_SEGMENT) == sizeof(struct transcribe_speaker_segment));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_SPEAKER_SEGMENT) == _Alignof(struct transcribe_speaker_segment));
     CHECK(transcribe_abi_struct_size((transcribe_abi_struct) 9999) == 0);
     CHECK(transcribe_abi_struct_align((transcribe_abi_struct) 9999) == 0);
 
@@ -529,6 +531,7 @@ static void test_model_introspection_null(void) {
     CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_CANCELLATION) == false);
     CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_PNC) == false);
     CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_ITN) == false);
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_DIARIZATION) == false);
     CHECK(transcribe_model_supports(NULL, (transcribe_feature) 9999) == false);
 }
 
@@ -678,14 +681,40 @@ static void test_result_accessors_null(void) {
     CHECK(tok.seg_index == 0);
     CHECK(tok.word_index == 0);
 
+    /* Speaker-segment row: NULL ctx → OK, struct stays zero-init. The
+     * count accessor is NULL-safe like its segment/word/token siblings.
+     * p is 0.0f (not NaN) on the zero-init path; a present row is
+     * signaled by speaker_id != 0. */
+    CHECK(transcribe_n_speaker_segments(ctx) == 0);
+    struct transcribe_speaker_segment spk;
+    transcribe_speaker_segment_init(&spk);
+    CHECK(spk.struct_size == sizeof(struct transcribe_speaker_segment));
+    CHECK(transcribe_get_speaker_segment(ctx, 0, &spk) == TRANSCRIBE_OK);
+    CHECK(spk.t0_ms == 0);
+    CHECK(spk.t1_ms == 0);
+    CHECK(spk.speaker_id == 0);
+    CHECK(spk.p == 0.0f);
+
+    /* Batch mirrors share the same sentinels. */
+    CHECK(transcribe_batch_n_speaker_segments(ctx, 0) == 0);
+    struct transcribe_speaker_segment spk_b;
+    transcribe_speaker_segment_init(&spk_b);
+    CHECK(transcribe_batch_get_speaker_segment(ctx, 0, 0, &spk_b) == TRANSCRIBE_OK);
+    CHECK(spk_b.speaker_id == 0);
+
     /* NULL out_ptr -> INVALID_ARG. */
     CHECK(transcribe_get_segment(ctx, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(transcribe_get_word(ctx, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(transcribe_get_token(ctx, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_get_speaker_segment(ctx, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_batch_get_speaker_segment(ctx, 0, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
 
     /* Uninitialized struct_size (== 0) -> BAD_STRUCT_SIZE. */
     struct transcribe_segment seg_bad = { 0 };
     CHECK(transcribe_get_segment(ctx, 0, &seg_bad) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    struct transcribe_speaker_segment spk_bad = { 0 };
+    CHECK(transcribe_get_speaker_segment(ctx, 0, &spk_bad) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(transcribe_batch_get_speaker_segment(ctx, 0, 0, &spk_bad) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
 }
 
 static void test_stream_state_values(void) {

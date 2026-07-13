@@ -228,6 +228,8 @@ extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
             return sizeof(struct transcribe_ext);
         case TRANSCRIBE_ABI_BACKEND_DEVICE:
             return sizeof(struct transcribe_backend_device);
+        case TRANSCRIBE_ABI_SPEAKER_SEGMENT:
+            return sizeof(struct transcribe_speaker_segment);
     }
     return 0;  // unknown id: "cannot verify", never a real size
 }
@@ -262,6 +264,8 @@ extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
             return alignof(struct transcribe_ext);
         case TRANSCRIBE_ABI_BACKEND_DEVICE:
             return alignof(struct transcribe_backend_device);
+        case TRANSCRIBE_ABI_SPEAKER_SEGMENT:
+            return alignof(struct transcribe_speaker_segment);
     }
     return 0;
 }
@@ -326,6 +330,14 @@ transcribe_status validate_run_params_common(const transcribe_session * session,
         case TRANSCRIBE_ITN_MODE_DEFAULT:
         case TRANSCRIBE_ITN_MODE_OFF:
         case TRANSCRIBE_ITN_MODE_ON:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (enum_field_raw(&params->diarize)) {
+        case TRANSCRIBE_DIARIZE_MODE_DEFAULT:
+        case TRANSCRIBE_DIARIZE_MODE_OFF:
+        case TRANSCRIBE_DIARIZE_MODE_ON:
             break;
         default:
             return TRANSCRIBE_ERR_INVALID_ARG;
@@ -661,6 +673,14 @@ extern "C" void transcribe_token_init(struct transcribe_token * p) {
     p->struct_size = sizeof(*p);
 }
 
+extern "C" void transcribe_speaker_segment_init(struct transcribe_speaker_segment * p) {
+    if (p == nullptr) {
+        return;
+    }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
 // Whisper telemetry + run-extension init and chunk-trace accessors live in
 // arch/whisper/public.cpp so this dispatcher stays family-agnostic. Whisper
 // run knobs are in transcribe_whisper_run_ext (via run_params::family);
@@ -727,14 +747,15 @@ constexpr size_t k_stream_update_committed_changed_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_update, committed_changed);
 constexpr size_t k_stream_update_tentative_changed_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_update, tentative_changed);
-constexpr size_t k_min_stream_text_size    = TRANSCRIBE_FIELD_END(transcribe_stream_text, raw_tentative_start_bytes);
-constexpr size_t k_min_capabilities_size   = TRANSCRIBE_FIELD_END(transcribe_capabilities, supports_streaming);
-constexpr size_t k_min_session_limits_size = TRANSCRIBE_FIELD_END(transcribe_session_limits, max_kv_bytes);
-constexpr size_t k_min_segment_size        = TRANSCRIBE_FIELD_END(transcribe_segment, text);
-constexpr size_t k_min_word_size           = TRANSCRIBE_FIELD_END(transcribe_word, text);
-constexpr size_t k_min_token_size          = TRANSCRIBE_FIELD_END(transcribe_token, text);
-constexpr size_t k_min_timings_size        = TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
-constexpr size_t k_min_backend_device_size = TRANSCRIBE_FIELD_END(transcribe_backend_device, kind);
+constexpr size_t k_min_stream_text_size     = TRANSCRIBE_FIELD_END(transcribe_stream_text, raw_tentative_start_bytes);
+constexpr size_t k_min_capabilities_size    = TRANSCRIBE_FIELD_END(transcribe_capabilities, supports_streaming);
+constexpr size_t k_min_session_limits_size  = TRANSCRIBE_FIELD_END(transcribe_session_limits, max_kv_bytes);
+constexpr size_t k_min_segment_size         = TRANSCRIBE_FIELD_END(transcribe_segment, text);
+constexpr size_t k_min_word_size            = TRANSCRIBE_FIELD_END(transcribe_word, text);
+constexpr size_t k_min_token_size           = TRANSCRIBE_FIELD_END(transcribe_token, text);
+constexpr size_t k_min_speaker_segment_size = TRANSCRIBE_FIELD_END(transcribe_speaker_segment, p);
+constexpr size_t k_min_timings_size         = TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
+constexpr size_t k_min_backend_device_size  = TRANSCRIBE_FIELD_END(transcribe_backend_device, kind);
 // k_min_whisper_chunk_trace_size lives in arch/whisper/public.cpp with
 // the chunk-trace accessor that uses it.
 
@@ -1348,6 +1369,18 @@ void warn_unsupported_advisory(const struct transcribe_model * model, const stru
                       "the model's default behavior. Use "
                       "transcribe_model_supports(model, TRANSCRIBE_FEATURE_ITN) to "
                       "pre-check.",
+                      req, arch_name, variant);
+        transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
+    }
+    if (rp->diarize != TRANSCRIBE_DIARIZE_MODE_DEFAULT &&
+        !transcribe::has_feature(model, TRANSCRIBE_FEATURE_DIARIZATION)) {
+        const char * req = (rp->diarize == TRANSCRIBE_DIARIZE_MODE_ON) ? "ON" : "OFF";
+        std::snprintf(buf, sizeof(buf),
+                      "transcribe_run: caller requested diarize=%s but model '%s' "
+                      "(variant '%s') does not support diarization control; output "
+                      "will use the model's default behavior. Use "
+                      "transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION) "
+                      "to pre-check.",
                       req, arch_name, variant);
         transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
     }
@@ -2170,6 +2203,7 @@ transcribe_session::ResultSet snapshot_scratch_result(const transcribe_session *
     rs.tokens            = s->tokens;
     rs.words             = s->words;
     rs.segments          = s->segments;
+    rs.speaker_segments  = s->speaker_segments;
     rs.full_text         = s->full_text;
     rs.detected_language = s->detected_language;
     rs.result_kind       = s->result_kind;
@@ -2197,6 +2231,7 @@ void restore_scratch_from_result(transcribe_session * s, const transcribe_sessio
     s->tokens            = rs.tokens;
     s->words             = rs.words;
     s->segments          = rs.segments;
+    s->speaker_segments  = rs.speaker_segments;
     s->full_text         = rs.full_text;
     s->detected_language = rs.detected_language;
     s->result_kind       = rs.result_kind;
@@ -2624,6 +2659,13 @@ extern "C" int transcribe_n_tokens(const struct transcribe_session * session) {
     return static_cast<int>(session->tokens.size());
 }
 
+extern "C" int transcribe_n_speaker_segments(const struct transcribe_session * session) {
+    if (session == nullptr || !session->has_result) {
+        return 0;
+    }
+    return static_cast<int>(session->speaker_segments.size());
+}
+
 // Result accessors - per-item rows
 //
 // Copy-out accessors backed by the context's segments / words / tokens
@@ -2663,6 +2705,7 @@ extern "C" transcribe_status transcribe_get_segment(const struct transcribe_sess
     staged.first_token = s.first_token;
     staged.n_tokens    = s.n_tokens;
     staged.text        = s.text.c_str();
+    staged.speaker_id  = s.speaker_id;
     copy_out_prefix(out, &staged, caller_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }
@@ -2726,6 +2769,34 @@ extern "C" transcribe_status transcribe_get_token(const struct transcribe_sessio
     return TRANSCRIBE_OK;
 }
 
+extern "C" transcribe_status transcribe_get_speaker_segment(const struct transcribe_session *   session,
+                                                            int                                 i,
+                                                            struct transcribe_speaker_segment * out) {
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_speaker_segment_size); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const uint64_t             caller_size = out->struct_size;
+    transcribe_speaker_segment zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    if (session == nullptr || !session->has_result || i < 0 ||
+        static_cast<size_t>(i) >= session->speaker_segments.size()) {
+        return TRANSCRIBE_OK;
+    }
+    const auto &               s = session->speaker_segments[static_cast<size_t>(i)];
+    transcribe_speaker_segment staged{};
+    staged.struct_size = caller_size;
+    staged.t0_ms       = s.t0_ms;
+    staged.t1_ms       = s.t1_ms;
+    staged.speaker_id  = s.speaker_id;
+    staged.p           = s.p;
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
 // Batch result accessors
 //
 // These index session->batch_results when a batch run populated it, and
@@ -2738,13 +2809,14 @@ namespace {
 // Non-owning view of one utterance's result. valid == false means "no such
 // utterance / empty result" and the accessors return their safe sentinels.
 struct BatchResultView {
-    const std::vector<transcribe_session::TokenEntry> *   tokens            = nullptr;
-    const std::vector<transcribe_session::WordEntry> *    words             = nullptr;
-    const std::vector<transcribe_session::SegmentEntry> * segments          = nullptr;
-    const std::string *                                   full_text         = nullptr;
-    const std::string *                                   detected_language = nullptr;
-    transcribe_timestamp_kind                             result_kind       = TRANSCRIBE_TIMESTAMPS_NONE;
-    bool                                                  valid             = false;
+    const std::vector<transcribe_session::TokenEntry> *          tokens            = nullptr;
+    const std::vector<transcribe_session::WordEntry> *           words             = nullptr;
+    const std::vector<transcribe_session::SegmentEntry> *        segments          = nullptr;
+    const std::vector<transcribe_session::SpeakerSegmentEntry> * speaker_segments  = nullptr;
+    const std::string *                                          full_text         = nullptr;
+    const std::string *                                          detected_language = nullptr;
+    transcribe_timestamp_kind                                    result_kind       = TRANSCRIBE_TIMESTAMPS_NONE;
+    bool                                                         valid             = false;
 };
 
 int batch_result_count(const transcribe_session * s) {
@@ -2773,6 +2845,7 @@ BatchResultView batch_result_view(const transcribe_session * s, int i) {
         v.tokens            = &rs.tokens;
         v.words             = &rs.words;
         v.segments          = &rs.segments;
+        v.speaker_segments  = &rs.speaker_segments;
         v.full_text         = &rs.full_text;
         v.detected_language = &rs.detected_language;
         v.result_kind       = rs.result_kind;
@@ -2783,6 +2856,7 @@ BatchResultView batch_result_view(const transcribe_session * s, int i) {
         v.tokens            = &s->tokens;
         v.words             = &s->words;
         v.segments          = &s->segments;
+        v.speaker_segments  = &s->speaker_segments;
         v.full_text         = &s->full_text;
         v.detected_language = &s->detected_language;
         v.result_kind       = s->result_kind;
@@ -2872,6 +2946,7 @@ extern "C" transcribe_status transcribe_batch_get_segment(const struct transcrib
     staged.first_token = s.first_token;
     staged.n_tokens    = s.n_tokens;
     staged.text        = s.text.c_str();
+    staged.speaker_id  = s.speaker_id;
     copy_out_prefix(out, &staged, caller_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }
@@ -2935,6 +3010,40 @@ extern "C" transcribe_status transcribe_batch_get_token(const struct transcribe_
     staged.seg_index   = t.seg_index;
     staged.word_index  = t.word_index;
     staged.text        = t.text.c_str();
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
+extern "C" int transcribe_batch_n_speaker_segments(const struct transcribe_session * session, int i) {
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? static_cast<int>(v.speaker_segments->size()) : 0;
+}
+
+extern "C" transcribe_status transcribe_batch_get_speaker_segment(const struct transcribe_session *   session,
+                                                                  int                                 i,
+                                                                  int                                 j,
+                                                                  struct transcribe_speaker_segment * out) {
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_speaker_segment_size); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const uint64_t             caller_size = out->struct_size;
+    transcribe_speaker_segment zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    const BatchResultView v = batch_result_view(session, i);
+    if (!v.valid || j < 0 || static_cast<size_t>(j) >= v.speaker_segments->size()) {
+        return TRANSCRIBE_OK;
+    }
+    const auto &               s = (*v.speaker_segments)[static_cast<size_t>(j)];
+    transcribe_speaker_segment staged{};
+    staged.struct_size = caller_size;
+    staged.t0_ms       = s.t0_ms;
+    staged.t1_ms       = s.t1_ms;
+    staged.speaker_id  = s.speaker_id;
+    staged.p           = s.p;
     copy_out_prefix(out, &staged, caller_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }
