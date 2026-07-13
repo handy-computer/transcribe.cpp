@@ -46,6 +46,11 @@ into shorter pieces.
 | Q5_K_M | [MOSS-Transcribe-Diarize-Q5_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q5_K_M.gguf) | 700 MB  | 1.99% |
 | Q4_K_M | [MOSS-Transcribe-Diarize-Q4_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q4_K_M.gguf) | 617 MB  | 2.59% |
 
+These WER values describe this dataset only, not a general quality ranking. A
+quant that scores slightly better here is not necessarily better in real-world
+use; dataset-specific decoding near-ties can make quantization noise help or
+hurt individual utterances.
+
 WER measured on the full LibriSpeech `test-clean` split (2620 utterances) with
 the Whisper-style English normalizer and jiwer 3.x. MOSS emits the diarized
 format `[start][Sxx]text[end]`; the bracket spans are metadata and are
@@ -56,7 +61,8 @@ the BF16 port lands at 2.08%, within `+0.01pp` of the reference and well inside
 the CI. Q4_K_M's higher 2.59% is not broad degradation but a handful of 4-bit
 tail failures (6 empty outputs, 5 English->Chinese language-drift utterances,
 1 timestamp-token repetition loop); prefer Q5_K_M or higher if those matter.
-See [`reports/wer/moss-transcribe-diarize.librispeech-test-clean.summary.md`](../../reports/wer/moss-transcribe-diarize.librispeech-test-clean.summary.md).
+Dediarization is scoring-only: the runtime continues to return the raw inline
+timestamps and speaker labels.
 
 ## Quick Start
 
@@ -200,7 +206,9 @@ uv run scripts/wer/run.py \
   --model models/MOSS-Transcribe-Diarize/MOSS-Transcribe-Diarize-${PRESET}.gguf \
   --manifest samples/wer/librispeech-test-clean.manifest.jsonl \
   --out reports/wer/MOSS-Transcribe-Diarize-${PRESET}.librispeech-test-clean.jsonl
-uv run scripts/wer/score.py reports/wer/MOSS-Transcribe-Diarize-${PRESET}.librispeech-test-clean.jsonl
+uv run scripts/wer/score.py \
+  reports/wer/MOSS-Transcribe-Diarize-${PRESET}.librispeech-test-clean.jsonl \
+  --dediarize
 ```
 
 ### Score WER against the MOSS author-repo reference
@@ -212,5 +220,7 @@ uv run --project scripts/envs/moss \
     --revision d7231bbae2587a4af278735eb765b318c4f64edd \
     --manifest samples/wer/librispeech-test-clean.manifest.jsonl \
     --out reports/wer/moss-transcribe-diarize-REF.librispeech-test-clean.jsonl
-uv run scripts/wer/score.py reports/wer/moss-transcribe-diarize-REF.librispeech-test-clean.jsonl
+uv run scripts/wer/score.py \
+  reports/wer/moss-transcribe-diarize-REF.librispeech-test-clean.jsonl \
+  --dediarize
 ```

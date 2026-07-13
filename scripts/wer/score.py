@@ -19,6 +19,7 @@ Region suffixes (zh-tw, pt-br, ...) are stripped for routing, so
 
 Usage:
     uv run scripts/wer/score.py reports/wer/<...>.jsonl
+    uv run scripts/wer/score.py reports/wer/<...>.jsonl --dediarize
     uv run scripts/wer/score.py reports/wer/<...>.jsonl --language vi
     uv run scripts/wer/score.py reports/wer/<...>.jsonl --language zh --metric cer
 
@@ -52,24 +53,17 @@ from whisper_normalizer.english import EnglishTextNormalizer
 CER_LANGUAGES = {"zh", "yue", "ja", "ko", "th"}
 
 
-# Bracketed metadata spans: diarization timestamps `[6.98]`, speaker tags
-# `[S01]`, and spoken-noise annotations `[laughter]` / `<unk>`. These are not
-# transcription tokens and must not participate in WER/CER.
+# Optional diarization metadata spans: timestamps `[6.98]`, speaker tags
+# `[S01]`, and annotations such as `[laughter]` / `<unk>`. Whether these count
+# as transcription content is dataset-specific, so removal is opt-in.
 _METADATA_SPAN = re.compile(r"[\[<][^\]>]*[\]>]")
 
 
 def dediarize(text: str | None) -> str:
     """Replace bracketed metadata spans with a space, then collapse runs.
 
-    Diarizing models (e.g. moss) emit `[start][Sxx]text[end]` where the
-    brackets delimit words. The whisper normalizers strip such spans to the
-    *empty* string, which fuses the words on either side ("mouthed[..][S01]
-    malignities" -> "mouthedmalignities") and inflates the error rate. The
-    author-repo reference runner de-diarizes to a space before scoring
-    (scripts/wer/run_reference_moss_author.py); doing the same here for both
-    ref and hyp keeps the C++ port and the framework reference scored
-    identically. Idempotent for bracket-free text (LibriSpeech refs, whisper
-    hyps) and for JSONL that was already de-diarized upstream.
+    Diarizing models such as MOSS emit `[start][Sxx]text[end]`. Replacing the
+    spans with spaces avoids fusing words on either side during normalization.
     """
     return " ".join(_METADATA_SPAN.sub(" ", text or "").split())
 
@@ -142,6 +136,9 @@ def main() -> int:
                    default="auto",
                    help="Error metric. 'auto' picks CER for "
                         "zh/yue/ja/ko/th and WER otherwise (default: auto)")
+    p.add_argument("--dediarize", action="store_true",
+                   help="Remove bracketed timestamps, speaker labels, and "
+                        "annotations before normalization (opt-in)")
     args = p.parse_args()
 
     if not args.report.exists():
@@ -188,11 +185,15 @@ def main() -> int:
         print("error: report is empty", file=sys.stderr)
         return 2
 
-    # Normalize refs and hyps.
-    refs_raw  = [e["ref_text"] for e in entries]
-    hyps_raw  = [e["hyp_text"] for e in entries]
-    refs_norm = [normalizer(dediarize(r)) for r in refs_raw]
-    hyps_norm = [normalizer(dediarize(h)) for h in hyps_raw]
+    # Normalize refs and hyps. Diarization metadata removal is opt-in because
+    # bracketed annotations may be scoring content in other datasets.
+    refs_raw = [e["ref_text"] for e in entries]
+    hyps_raw = [e["hyp_text"] for e in entries]
+    if args.dediarize:
+        refs_raw = [dediarize(r) for r in refs_raw]
+        hyps_raw = [dediarize(h) for h in hyps_raw]
+    refs_norm = [normalizer(r) for r in refs_raw]
+    hyps_norm = [normalizer(h) for h in hyps_raw]
 
     # CER: strip all whitespace from both sides. Whitespace is not a
     # meaningful token for character error rate, and CJK conventions
@@ -268,6 +269,7 @@ def main() -> int:
     score = {
         "metric": metric,
         "language": language,
+        "dediarized": args.dediarize,
         "error_rate": round(global_rate, 6),
         "error_rate_pct": round(global_rate * 100, 2),
         "error_rate_ci_lo": round(ci_lo, 6),

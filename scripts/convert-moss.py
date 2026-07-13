@@ -2,8 +2,8 @@
 """
 convert-moss.py - convert a MOSS-Transcribe-Diarize HuggingFace checkpoint
 to a BF16 reference GGUF that transcribe.cpp's loader can ingest. Block
-quantization (Q8_0, Q5_K_M, ...) is a Stage 5 concern via
-tools/transcribe-quantize.
+quantization (Q8_0, Q5_K_M, ...) is handled separately by
+`tools/transcribe-quantize`.
 
 Source format:
     HuggingFace repo/dir (OpenMOSS-Team/MOSS-Transcribe-Diarize), with:
@@ -133,14 +133,10 @@ from lib.gguf_common import (  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Canonical timestamped+diarize instruction from the OpenMOSS GitHub inference
-# harness (moss_transcribe_diarize/inference_utils.py DEFAULT_PROMPT). The model
-# has no language/task token; this Chinese instruction is used for all audio.
-# Language/prompt override is OUT OF SCOPE for this port, so the prompt wrapper
-# (chat template + this instruction) is fixed and its token ids are baked into
-# the GGUF here. The C++ prompt builder concatenates
-#   prompt_prefix_tokens + audio_span(host int math) + prompt_suffix_tokens
-# and never runs a Chinese BPE / Jinja renderer at inference time.
+# Canonical instruction from the OpenMOSS inference harness. The model has no
+# language/task token, and the runtime supports only this fixed prompt. Prefix
+# and suffix token IDs are baked into the GGUF so inference needs no BPE/Jinja
+# renderer.
 DEFAULT_PROMPT = (
     "请将音频转写为文本，每一段需以起始时间戳和说话人编号"
     "（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，"
@@ -497,8 +493,7 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
 
         writer.add_string("stt.variant", variant)
 
-        # Speaker diarization is a real model capability (emergent [Sxx]
-        # text). Matches intake capabilities.speaker_diarization=true.
+        # Speaker labels are generated inline as [Sxx] text.
         writer.add_bool("stt.capability.speaker_diarization", True)
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----

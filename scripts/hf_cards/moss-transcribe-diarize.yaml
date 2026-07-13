@@ -67,7 +67,11 @@ wer:
     3.x. MOSS emits the diarized format `[start][Sxx]text[end]`; the bracket
     spans are metadata and are de-diarized to a space (for both hypothesis
     and reference) before scoring, matching the author-repo reference runner.
-    The same-manifest MOSS author-repo reference (bf16, greedy) lands at
+    These values describe this dataset only, not a general quality ranking: a
+    quant that scores slightly better here is not necessarily better in
+    real-world use, because dataset-specific decoding near-ties can make
+    quantization noise help or hurt individual utterances. The same-manifest
+    MOSS author-repo reference (bf16, greedy) lands at
     **2.07%** with 95% bootstrap CI [1.82%, 2.40%]. The BF16 port lands at
     2.08% (within +0.01 of the reference, well inside the CI band); the
     lower-bit presets sit between 1.93% and 1.99% (statistical noise) except
@@ -75,7 +79,8 @@ wer:
     (6 empty outputs, 5 English->Chinese language-drift utterances, 1
     timestamp-token repetition loop) rather than broad degradation. Prefer
     Q5_K_M or higher if those tail failures matter. Reproduce with
-    `scripts/wer/run.py` + `scripts/wer/score.py`.
+    `scripts/wer/run.py` + `scripts/wer/score.py --dediarize`; the runtime
+    output itself remains in the raw diarized format.
 
 quants:
   - name: BF16

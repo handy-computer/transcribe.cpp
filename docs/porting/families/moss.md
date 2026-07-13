@@ -1,6 +1,6 @@
 # MOSS-Transcribe-Diarize
 
-Status: research
+Status: supported
 
 ## Identity
 
@@ -36,34 +36,55 @@ timestamps are generated text, not special tokens.
 
 ## Commands
 
-Reference run:
+Reference WER run:
 
 ```bash
-TODO  # porting-2-oracle: transformers + trust_remote_code=True generate() over samples/jfk.wav
+uv run --project scripts/envs/moss \
+  scripts/wer/run_reference_moss_author.py \
+    --model OpenMOSS-Team/MOSS-Transcribe-Diarize \
+    --revision d7231bbae2587a4af278735eb765b318c4f64edd \
+    --manifest samples/wer/librispeech-test-clean.manifest.jsonl \
+    --out reports/wer/moss-transcribe-diarize-REF.librispeech-test-clean.jsonl
+uv run scripts/wer/score.py \
+  reports/wer/moss-transcribe-diarize-REF.librispeech-test-clean.jsonl \
+  --dediarize
 ```
 
 Reference dumps:
 
 ```bash
-TODO  # porting-2-oracle
+uv run --project scripts/envs/moss \
+  scripts/dump_reference_moss_author.py decode \
+    --model OpenMOSS-Team/MOSS-Transcribe-Diarize \
+    --revision d7231bbae2587a4af278735eb765b318c4f64edd \
+    --audio samples/jfk.wav \
+    --out build/validate/moss/moss-transcribe-diarize/jfk/decode/ref
 ```
 
 Conversion:
 
 ```bash
-TODO  # porting-3-convert
+uv run --project scripts/envs/moss \
+  scripts/convert-moss.py OpenMOSS-Team/MOSS-Transcribe-Diarize \
+    --revision d7231bbae2587a4af278735eb765b318c4f64edd
 ```
 
 Validation:
 
 ```bash
-TODO  # porting-4-cpp
+uv run scripts/validate.py all --family moss --variant moss-transcribe-diarize
 ```
 
 Benchmarks:
 
 ```bash
-TODO  # porting-6-bench
+uv run scripts/bench/run.py \
+  --models moss-transcribe-diarize \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name moss-transcribe-diarize-publication
 ```
 
 ## Capability Validation
@@ -86,10 +107,10 @@ TODO  # porting-6-bench
 
 ## Notes
 
-- **Ref-dtype WER (LibriSpeech test-clean, 2620 utts).** C++ BF16 GGUF: batch 1
-  = **2.09%**, batch 8 = **2.09%** (batching WER-neutral, 0.00pp). Oracle
-  reference (our own BF16 run): 2.07%. Delta +0.02pp = 0.01pp over the strict
-  `Oracle + 0.01pp` gate. Cause: 27/2621 utts (1.03%) flip a single word under
+- **Ref-dtype WER (LibriSpeech test-clean, 2620 utts).** C++ BF16 GGUF:
+  **2.08%**. Oracle reference (our own BF16 run): **2.07%**. The +0.01pp
+  difference is at the strict `Oracle + 0.01pp` gate. Cause: 27/2620 utts
+  (1.03%) flip a single word under
   bf16(ref)-vs-f32(cpp) precision (homophones / proper nouns: parquet↔parakeet,
   berksen↔bergson, ...), several arguably more correct in the C++ output. CIs
   overlap ~99% ([1.84,2.41] vs [1.82,2.40]). Root-caused, not assumed: re-running
@@ -116,12 +137,13 @@ TODO  # porting-6-bench
   use case (Chinese/English long-form multi-speaker diarization). All publisher
   benchmarks are Chinese diarization CER/cpCER (AISHELL-4, Alimeeting, Podcast,
   Movies); there is no published English number. Downstream gates use the
-  measured Oracle reference baseline, not a publisher score. The Chinese set
-  needs Chinese audio in `samples/wer/` and cpCER-style scoring infra at Stage 2.
+  measured Oracle reference baseline, not a publisher score. **Not completed in
+  this PR:** the Chinese companion set still needs a pinned corpus/manifest and
+  cpCER-style scoring infrastructure; this remains a post-merge follow-up.
 - WER scoring must de-diarize/de-timestamp hypotheses: strip `[Sxx]` speaker
   tags and `[start]`/`[end]` numeric timestamps from generated text before
-  scoring against LibriSpeech references. This is a Stage 2 (`reference.entrypoint`)
-  concern.
+  scoring against LibriSpeech references. Pass `--dediarize` to
+  `scripts/wer/score.py`; runtime output remains raw.
 - The default instruction prompt is Chinese and is used for English audio too;
   there is no language/task token (`has_language_tokens: false`).
 - Prompt/audio-span construction is non-trivial: the processor interleaves
@@ -131,18 +153,20 @@ TODO  # porting-6-bench
   `enable_time_marker=true`) — the constructor default of 2s is overridden by
   the saved processor config. These are emitted as `stt.moss.*` KV. See
   `known_risks` in the intake.
-- See `reports/porting/moss/moss-transcribe-diarize/intake.json` and
-  `reports/porting/moss/moss-transcribe-diarize/_research_dump.txt` (model card +
-  reference code).
+- See `reports/porting/moss/moss-transcribe-diarize/intake.json`, the pinned
+  [upstream model revision](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/tree/d7231bbae2587a4af278735eb765b318c4f64edd),
+  and the local reference dumper for the source contract.
 
-## Stage 5 — quant matrix (tentative WER; Stage 7 authoritative)
+## Quant matrix
 
 - Full derived matrix produced and CLI-smoked (jfk): F16 (1.83 GB), Q8_0
-  (0.99 GB), Q6_K (0.77 GB), Q5_K_M (0.70 GB), Q4_K_M (0.62 GB). Published to the
-  private repo `handy-computer/moss-transcribe-diarize-gguf`.
-- Tentative WER, LibriSpeech test-clean, batch 1, CUDA/L4 (Modal): BF16 **2.09%**,
-  F16 **2.09%**, Q8_0 **1.94%**, Q6_K **1.97%**, Q5_K_M **2.00%**, Q4_K_M
-  **2.59%** (2.37% excluding one runaway; **2.16%** on Metal). The Q8/Q6/Q5 tiers
+  (0.99 GB), Q6_K (0.77 GB), Q5_K_M (0.70 GB), Q4_K_M (0.62 GB). Artifacts are
+  staged in `handy-computer/moss-transcribe-diarize-gguf`; the repo is planned
+  to become public after this PR merges.
+- WER, LibriSpeech test-clean, batch 1, CUDA/L4 (Modal): BF16 **2.08%**,
+  F16 **2.07%**, Q8_0 **1.93%**, Q6_K **1.96%**, Q5_K_M **1.99%**, Q4_K_M
+  **2.59%** (2.37% excluding one runaway; **2.16%** on Metal). These dataset
+  scores are not a general quality ranking. The Q8/Q6/Q5 tiers
   scoring *below* BF16 is not a quality gain: it is one 31.6s utterance
   (`4507-16021-0026`) where BF16/F16 *and the torch reference itself* take an
   immediate-EOS first-token near-tie and emit empty, while quant rounding noise
@@ -164,10 +188,11 @@ TODO  # porting-6-bench
   single utterance failed, so run.py discarded all 2620 hyps over one truncation.
   Fixed to collect per-utterance errors instead: `OUTPUT_TRUNCATED` is
   result-bearing (the preserved partial hyp is emitted as `text` and scored, still
-  tagged), a new `truncated` count is reported, and batch mode exits non-zero only
-  when *no* usable result was produced at all. Family-agnostic (moss/granite return
-  the truncation code); moss is just the first port whose most-aggressive quant
-  tripped it. Validated on both backends: the sweep now completes at exit 0.
+  tagged), a new `truncated` count is reported, and truncation alone does not make
+  batch mode fail. Hard per-utterance failures still produce a non-zero exit so
+  automation cannot accept a partial sweep. Family-agnostic (moss/granite return
+  the truncation code); MOSS is the first port whose most-aggressive quant tripped
+  it. Validated on both backends: the truncation-only sweep completes at exit 0.
 
 ## Stage 3 conversion — tensor-mapping decisions
 

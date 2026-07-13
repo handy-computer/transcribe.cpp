@@ -38,16 +38,9 @@ namespace transcribe::moss {
 
 extern const Arch arch;
 
-// ---------------------------------------------------------------------------
-// Perf profiling (TRANSCRIBE_PERF_DEBUG). Per-op-type wall-time accounting via
-// the scheduler eval callback. Attaching a callback makes the sched run the
-// graph node-by-node (so it can time each op), which disables CPU op fusion and
-// slightly inflates absolute time — but the RELATIVE per-op breakdown it yields
-// is what we want when hunting for the bottleneck. Zero cost unless the env flag
-// is set (the callback is never attached otherwise). CPU-accurate; on an async
-// GPU backend the "after" callback fires at submit time, so treat GPU per-op
-// numbers as node-dispatch counts, not wall time.
-// ---------------------------------------------------------------------------
+// Per-op profiling under TRANSCRIBE_PERF_DEBUG. The scheduler callback runs
+// CPU graphs node-by-node and perturbs fusion; asynchronous GPU timings measure
+// dispatch rather than completion.
 namespace {
 
 struct OpProf {
@@ -374,10 +367,7 @@ transcribe_status init_context(transcribe_model *                model,
     cc->kv_type   = params->kv_type;
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
-    // Encoder flash matches the whisper family default (identical attention
-    // graph, head_dim 64): drops the materialized [T,T,heads] score matrix.
-    // Measured on the 4750U reference machine: −25% CPU encode, transcript-
-    // neutral on jfk/dots/zh/whole-earth at Q8_0.
+    // The Whisper-compatible flash path avoids materializing attention scores.
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
@@ -436,7 +426,6 @@ transcribe_status encode_one(MossSession *        cc,
                              int64_t &            mel_us,
                              int64_t &            enc_us) {
     const auto & hp      = cm->hparams;
-    const int    n_mels  = hp.enc_num_mel_bins;
     const int    n_chunk = hp.fe_n_samples > 0 ? hp.fe_n_samples : 30 * hp.fe_sample_rate;
     const int    d_model = hp.enc_d_model;
     const int    merge   = hp.audio_merge_size;
@@ -622,15 +611,11 @@ transcribe_status run(transcribe_session *          session,
     transcribe::debug::init();
     const bool dumps_on = transcribe::debug::enabled();
 
-    // Perf profiling: attach the per-op timer to the encode region. The
-    // callback persists across ggml_backend_sched_reset (encode runs several
-    // chunk + adaptor graphs), and is re-pointed at the decode accumulator
-    // below. Only attached under the env flag (perturbs execution, see OpProf).
+    // The callback persists across scheduler resets and is reassigned before decode.
     const bool perf_debug = transcribe::env::flag("TRANSCRIBE_PERF_DEBUG");
     OpProf     enc_prof, dec_prof;
     if (perf_debug) {
-        // The sched is created lazily on the first reset_compute_ctx; force it
-        // now so the encode-region callback has something to attach to.
+        // Create the lazy scheduler before attaching the callback.
         if (const transcribe_status st = ensure_sched(cc, cm); st != TRANSCRIBE_OK) {
             return st;
         }
@@ -957,13 +942,21 @@ transcribe_status run_batch_serial(MossSession *                 cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
+    bool any_truncated = false;
     for (int i = 0; i < n; ++i) {
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
+        cc->clear_result();
+        cc->t_mel_us      = 0;
+        cc->t_encode_us   = 0;
+        cc->t_decode_us   = 0;
+        cc->was_truncated = false;
+
         const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
                                                                                 run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
+        any_truncated              = any_truncated || st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        if (st == TRANSCRIBE_OK || cc->has_result) {
             cc->batch_results.push_back(cc->capture_result(st));
         } else {
             transcribe_session::ResultSet rs;
@@ -971,6 +964,7 @@ transcribe_status run_batch_serial(MossSession *                 cc,
             cc->batch_results.push_back(std::move(rs));
         }
     }
+    cc->was_truncated = any_truncated;
     return TRANSCRIBE_OK;
 }
 
@@ -1016,9 +1010,11 @@ transcribe_status run_batch(transcribe_session *          session,
         if (pcm[b] == nullptr || n_samples[b] <= 0) {
             continue;
         }
-        int te = 0;
-        if (encode_one(cc, cm, pcm[b], n_samples[b], /*dumps=*/false, enc_hosts[b], te, mel_us, enc_us) !=
-            TRANSCRIBE_OK) {
+        int                     te = 0;
+        const transcribe_status enc_st =
+            encode_one(cc, cm, pcm[b], n_samples[b], /*dumps=*/false, enc_hosts[b], te, mel_us, enc_us);
+        if (enc_st != TRANSCRIBE_OK) {
+            fail_status[b] = enc_st;
             continue;
         }
         T_enc[b] = te;

@@ -1004,14 +1004,9 @@ int main(int argc, char ** argv) {
 
         transcribe_session_free(ctx);
         transcribe_model_free(model);
-        // Per-utterance failures are data, not a run failure: they are reported
-        // per line (JSONL error field / stderr) and in the summary above, so a
-        // single degenerate utterance does not void an otherwise-complete batch
-        // (e.g. one quant-induced runaway must not discard a whole WER sweep).
-        // Exit non-zero only when the batch produced no usable result at all —
-        // every utterance hard-failed — which signals a genuinely broken run.
-        const bool produced_result = (n_ok + n_truncated) > 0;
-        return produced_result ? EXIT_SUCCESS : EXIT_FAILURE;
+        // OUTPUT_TRUNCATED is result-bearing and does not fail the batch, but
+        // hard per-utterance failures must remain visible to automation.
+        return n_fail > 0 ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
     // Single-file mode.
