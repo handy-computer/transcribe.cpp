@@ -1,0 +1,105 @@
+# Spec for the HF README of handy-computer/MOSS-Transcribe-Diarize-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: OpenMOSS-Team/MOSS-Transcribe-Diarize
+target_repo: handy-computer/MOSS-Transcribe-Diarize-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moss-transcribe-diarize.md
+
+upstream_commit: d7231bb
+pin_date: 2026-07-12
+
+validation:
+  reference: MOSS author repo (OpenMOSS/MOSS-Transcribe-Diarize)
+  commit: 3f5e15c
+  date: 2026-07-12
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - zh
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - moss
+  - audio-llm
+  - whisper-encoder
+  - qwen3
+  - diarization
+
+summary: |
+  Offline English/Chinese speech-to-text with speaker diarization. A 0.9B
+  audio-LLM: a Whisper-Medium encoder (24 layers, d_model=1024) feeds a
+  4x temporal merge + VQAdaptor bridge into a Qwen3-0.6B decoder (28 layers)
+  via audio-token injection. Takes a 16 kHz mono WAV and emits transcript
+  text in the canonical diarized format `[start][Sxx]text[end]`, where the
+  speaker tags and segment timestamps are generated text, not special
+  tokens. Not a streaming model.
+
+default_quant_index: 2  # Q8_0
+
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: segment  # none | segment | word | token
+
+# Speedup-over-realtime (xRT) per rig/backend, hand-authored from the bench;
+# published raw as rtf_<machine> in the metadata block.
+#
+# PERF PLACEHOLDER — the numbers below are NOT measured. Replace them from the
+# other-machine bench runs (reports/perf/<machine>/*_moss-transcribe-diarize_
+# <backend>.json) BEFORE running scripts/hf_cards/generate.py. Until then the
+# rendered README would carry fake perf, so do not render.
+perf:
+  m4-max:
+    metal: 0
+    cpu: 0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech `test-clean` split (2620 English
+    utterances) with the Whisper-style English text normalizer and jiwer
+    3.x. MOSS emits the diarized format `[start][Sxx]text[end]`; the bracket
+    spans are metadata and are de-diarized to a space (for both hypothesis
+    and reference) before scoring, matching the author-repo reference runner.
+    The same-manifest MOSS author-repo reference (bf16, greedy) lands at
+    **2.07%** with 95% bootstrap CI [1.82%, 2.40%]. The BF16 port lands at
+    2.08% (within +0.01 of the reference, well inside the CI band); the
+    lower-bit presets sit between 1.93% and 1.99% (statistical noise) except
+    Q4_K_M at 2.59%, whose excess is a handful of 4-bit tail failures
+    (6 empty outputs, 5 English->Chinese language-drift utterances, 1
+    timestamp-token repetition loop) rather than broad degradation. Prefer
+    Q5_K_M or higher if those tail failures matter. Reproduce with
+    `scripts/wer/run.py` + `scripts/wer/score.py`.
+
+quants:
+  - name: BF16
+    filename: MOSS-Transcribe-Diarize-BF16.gguf
+    size: 1.83 GB
+    wer: 2.08%
+  - name: F16
+    filename: MOSS-Transcribe-Diarize-F16.gguf
+    size: 1.83 GB
+    wer: 2.07%
+  - name: Q8_0
+    filename: MOSS-Transcribe-Diarize-Q8_0.gguf
+    size: 987 MB
+    wer: 1.93%
+  - name: Q6_K
+    filename: MOSS-Transcribe-Diarize-Q6_K.gguf
+    size: 768 MB
+    wer: 1.96%
+  - name: Q5_K_M
+    filename: MOSS-Transcribe-Diarize-Q5_K_M.gguf
+    size: 700 MB
+    wer: 1.99%
+  - name: Q4_K_M
+    filename: MOSS-Transcribe-Diarize-Q4_K_M.gguf
+    size: 617 MB
+    wer: 2.59%
