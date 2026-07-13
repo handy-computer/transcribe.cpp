@@ -135,6 +135,40 @@ TODO  # porting-6-bench
   `reports/porting/moss/moss-transcribe-diarize/_research_dump.txt` (model card +
   reference code).
 
+## Stage 5 — quant matrix (tentative WER; Stage 7 authoritative)
+
+- Full derived matrix produced and CLI-smoked (jfk): F16 (1.83 GB), Q8_0
+  (0.99 GB), Q6_K (0.77 GB), Q5_K_M (0.70 GB), Q4_K_M (0.62 GB). Published to the
+  private repo `handy-computer/moss-transcribe-diarize-gguf`.
+- Tentative WER, LibriSpeech test-clean, batch 1, CUDA/L4 (Modal): BF16 **2.09%**,
+  F16 **2.09%**, Q8_0 **1.94%**, Q6_K **1.97%**, Q5_K_M **2.00%**, Q4_K_M
+  **2.59%** (2.37% excluding one runaway; **2.16%** on Metal). The Q8/Q6/Q5 tiers
+  scoring *below* BF16 is not a quality gain: it is one 31.6s utterance
+  (`4507-16021-0026`) where BF16/F16 *and the torch reference itself* take an
+  immediate-EOS first-token near-tie and emit empty, while quant rounding noise
+  perturbs that tie and recovers the 65 words. Same bf16-near-tie mechanism as the
+  ref-dtype flips, here dropping/recovering a whole utterance.
+- **Q4_K_M repetition runaway (shipped as-is).** One utterance
+  (`237-134493-0017`, 1/2620 = 0.04%) degenerates into a repetition loop under
+  Q4_K_M **on CUDA only** — it emits a garbled `0:01,` token to the generation cap
+  (decode ~8.6s vs ~1s) and returns `TRANSCRIBE_ERR_OUTPUT_TRUNCATED`. **Metal
+  decodes the same utterance correctly** (0 runaways, 2.16%). This is bounded 4-bit
+  near-tie degeneration on a 0.6B decoder, backend-numerics-sensitive, not a
+  corrupted tensor; the runtime caps it (no hang). Decision: keep Q4_K_M in the
+  matrix — one bounded, backend-specific runaway is not disqualifying and the
+  smallest tier stays available. A repetition/no-repeat decoding guard is a
+  possible future mitigation for the most aggressive quants (separate decoding-
+  policy discussion, out of Stage 5 scope).
+- **Harness fix (`examples/cli/main.cpp`, batch mode).** The Q4_K_M runaway first
+  surfaced as a *sweep abort*: the batch CLI returned `EXIT_FAILURE` whenever any
+  single utterance failed, so run.py discarded all 2620 hyps over one truncation.
+  Fixed to collect per-utterance errors instead: `OUTPUT_TRUNCATED` is
+  result-bearing (the preserved partial hyp is emitted as `text` and scored, still
+  tagged), a new `truncated` count is reported, and batch mode exits non-zero only
+  when *no* usable result was produced at all. Family-agnostic (moss/granite return
+  the truncation code); moss is just the first port whose most-aggressive quant
+  tripped it. Validated on both backends: the sweep now completes at exit 0.
+
 ## Stage 3 conversion — tensor-mapping decisions
 
 - **Encoder names reuse the `whisper` family**, decoder names reuse the
