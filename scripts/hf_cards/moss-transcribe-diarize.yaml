@@ -48,17 +48,13 @@ capabilities:
   lang_detect: false
   timestamps: segment  # none | segment | word | token
 
-# Speedup-over-realtime (xRT) per rig/backend, hand-authored from the bench;
-# published raw as rtf_<machine> in the metadata block.
-#
-# PERF PLACEHOLDER — the numbers below are NOT measured. Replace them from the
-# other-machine bench runs (reports/perf/<machine>/*_moss-transcribe-diarize_
-# <backend>.json) BEFORE running scripts/hf_cards/generate.py. Until then the
-# rendered README would carry fake perf, so do not render.
+# Speedup-over-realtime (xRT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block. Values average the Q8_0 jfk and
+# dots publication cells.
 perf:
   m4-max:
-    metal: 0
-    cpu: 0
+    metal: 28.1
+    cpu: 5.8
 
 wer:
   source: LibriSpeech test-clean

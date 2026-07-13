@@ -84,9 +84,22 @@ CLI flags:
 
 ## Performance
 
-> Bench pending. Perf tables are populated from
-> `reports/perf/<machine>/*_moss-transcribe-diarize_<backend>.json` once the
-> Stage-6 bench runs are synced into this checkout. Reproduce with:
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
+
+### Apple M4 Max
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  | 388 ms (28.3×) | 369 ms (29.8×) |
+| Metal   | dots (35.3s) | 1.27 s (27.8×) | 1.17 s (30.1×) |
+| CPU     | jfk (11.0s)  | 2.06 s (5.3×)  | 2.37 s (4.6×)  |
+| CPU     | dots (35.3s) | 5.71 s (6.2×)  | 5.84 s (6.0×)  |
+
+macOS 26.5.1, transcribe.cpp `e745720`.
+
+Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
