@@ -31,7 +31,12 @@ CI-overlap grounds; see the family WER summary for rationale.
   - **Cache-aware streaming RNN-T (encoder-transducer)**:
     `nemotron-speech-streaming-en-0.6b` (English-only),
     `nemotron-3.5-asr-streaming-0.6b` (multilingual, 40 locales,
-    language one-hot conditioning) — intake only, Stages 2-8 TODO
+    language one-hot conditioning) — intake only, Stages 2-8 TODO,
+    `multitalker-parakeet-streaming-0.6b-v1` (English-only, fine-tuned
+    from `nemotron-speech-streaming-en-0.6b`; ships the
+    `single_speaker_mode` ASR path only — the multitalker /
+    speaker-attribution machinery is out of scope, see Capability
+    Validation rows)
 
 Per-variant intake JSON: `reports/porting/parakeet/<variant>/intake.json`.
 
