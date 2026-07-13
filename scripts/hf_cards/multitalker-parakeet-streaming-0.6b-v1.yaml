@@ -52,9 +52,11 @@ capabilities:
 
 # Speedup-over-realtime (xRT) per rig/backend, from docs/models; published
 # raw as rtf_<machine> in the metadata block. Values average the Q8_0 jfk and
-# dots publication cells. Only the 4750U reference machine has been benched
-# so far (no Apple/Metal run yet).
+# dots publication cells.
 perf:
+  m4-max:
+    metal: 178.3
+    cpu: 34.6
   ryzen-4750u:
     cpu: 13
     vulkan: 25
