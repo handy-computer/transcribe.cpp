@@ -27,10 +27,10 @@ struct ggml_tensor;
 namespace transcribe::moss {
 
 struct EncoderDumps {
-    ggml_tensor * pos_add_out   = nullptr;  // post learned-PE add
-    ggml_tensor * block_0_out   = nullptr;
+    ggml_tensor * pos_add_out    = nullptr;  // post learned-PE add
+    ggml_tensor * block_0_out    = nullptr;
     ggml_tensor * block_last_out = nullptr;
-    ggml_tensor * ln_post_out   = nullptr;  // after final LayerNorm
+    ggml_tensor * ln_post_out    = nullptr;  // after final LayerNorm
 };
 
 struct EncoderBuild {

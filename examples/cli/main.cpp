@@ -803,15 +803,15 @@ int main(int argc, char ** argv) {
                 }
 
                 for (size_t k = 0; k < src_index.size(); ++k) {
-                    const std::string &     wav  = wav_paths[src_index[k]];
-                    const transcribe_status ust  = transcribe_batch_status(ctx, static_cast<int>(k));
+                    const std::string &     wav = wav_paths[src_index[k]];
+                    const transcribe_status ust = transcribe_batch_status(ctx, static_cast<int>(k));
                     // OUTPUT_TRUNCATED is result-bearing: the partial transcript is
                     // preserved and readable via transcribe_batch_full_text (see
                     // transcribe.h). Emit it as the hyp so downstream tooling scores
                     // the partial rather than an empty string; the error field below
                     // still tags it so the truncation stays visible.
-                    const bool  result_present = ust == TRANSCRIBE_OK || ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
-                    const char * text          = "";
+                    const bool   result_present = ust == TRANSCRIBE_OK || ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+                    const char * text           = "";
                     if (result_present) {
                         const char * t = transcribe_batch_full_text(ctx, static_cast<int>(k));
                         if (t && *t) {
@@ -942,9 +942,8 @@ int main(int argc, char ** argv) {
                 // Emit it as the hyp so downstream tooling scores the partial rather
                 // than an empty string; the error field below still tags it so the
                 // truncation stays visible.
-                const bool  result_present =
-                    run_st == TRANSCRIBE_OK || run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
-                const char * text = "";
+                const bool   result_present = run_st == TRANSCRIBE_OK || run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+                const char * text           = "";
                 if (result_present) {
                     const char * t = transcribe_full_text(ctx);
                     if (t && *t) {

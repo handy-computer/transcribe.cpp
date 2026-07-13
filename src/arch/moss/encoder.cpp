@@ -47,12 +47,12 @@ ggml_tensor * add_conv1d_bias(ggml_context * ctx, ggml_tensor * conv_out, ggml_t
 
 // Bidirectional multi-head self-attention. x: [d_model, T] -> [d_model, T].
 // Whisper quirk: q/v/out carry bias, k does not.
-ggml_tensor * mha_encoder(ggml_context * ctx,
-                          ggml_tensor *  x,
+ggml_tensor * mha_encoder(ggml_context *       ctx,
+                          ggml_tensor *        x,
                           const MossEncBlock & b,
-                          int            n_heads,
-                          int            d_model,
-                          bool           use_flash) {
+                          int                  n_heads,
+                          int                  d_model,
+                          bool                 use_flash) {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T        = x->ne[1];
@@ -89,8 +89,12 @@ ggml_tensor * mha_encoder(ggml_context * ctx,
 }
 
 // y = x + MHSA(LN(x)); y = y + FFN(LN(y)).  FFN: fc2(GELU-erf(fc1(x))).
-ggml_tensor * build_block(ggml_context * ctx, ggml_tensor * x, const MossEncBlock & b, int n_heads, int d_model,
-                          bool use_flash) {
+ggml_tensor * build_block(ggml_context *       ctx,
+                          ggml_tensor *        x,
+                          const MossEncBlock & b,
+                          int                  n_heads,
+                          int                  d_model,
+                          bool                 use_flash) {
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_attn_w, b.norm_attn_b);
         y               = mha_encoder(ctx, y, b, n_heads, d_model, use_flash);
@@ -122,8 +126,11 @@ int audio_token_length(int num_samples, const MossHParams & hp) {
     return (num_samples - 1) / stride + 1;
 }
 
-EncoderBuild build_encoder_graph(ggml_context * ctx, const MossWeights & w, const MossHParams & hp, int n_mel_frames,
-                                 bool use_flash) {
+EncoderBuild build_encoder_graph(ggml_context *      ctx,
+                                 const MossWeights & w,
+                                 const MossHParams & hp,
+                                 int                 n_mel_frames,
+                                 bool                use_flash) {
     EncoderBuild eb{};
     if (ctx == nullptr || n_mel_frames <= 0 || n_mel_frames % 2 != 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss encoder: invalid n_mel_frames=%d", n_mel_frames);
@@ -211,7 +218,7 @@ EncoderBuild build_encoder_graph(ggml_context * ctx, const MossWeights & w, cons
 
 AdaptorBuild build_adaptor_graph(ggml_context * ctx, const MossWeights & w, const MossHParams & hp, int T_trim) {
     AdaptorBuild ab{};
-    const int merge = hp.audio_merge_size;
+    const int    merge = hp.audio_merge_size;
     if (ctx == nullptr || T_trim <= 0 || merge <= 0 || T_trim % merge != 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss adaptor: invalid T_trim=%d (merge=%d)", T_trim, merge);
         return ab;
@@ -239,7 +246,7 @@ AdaptorBuild build_adaptor_graph(ggml_context * ctx, const MossWeights & w, cons
     y               = ggml_silu(ctx, y);
     y               = ggml_mul_mat(ctx, w.adaptor.fc2_w, y);
     y               = ggml_add(ctx, y, w.adaptor.fc2_b);
-    y = layer_norm_eps(ctx, y, w.adaptor.norm_out_w, w.adaptor.norm_out_b, hp.dec_rms_norm_eps);
+    y               = layer_norm_eps(ctx, y, w.adaptor.norm_out_w, w.adaptor.norm_out_b, hp.dec_rms_norm_eps);
     named(y, "enc.adaptor.out");
     ab.dumps.adaptor_out = y;
     transcribe::debug::mark_tensor_for_dump(y);

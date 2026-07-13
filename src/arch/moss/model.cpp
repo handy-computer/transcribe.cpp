@@ -91,8 +91,8 @@ void op_prof_report(const char * label, const OpProf & p) {
             break;
         }
         const double pct = total_us > 0 ? (100.0 * p.us[o] / total_us) : 0.0;
-        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "[profile]   %-20s %8.2f ms  %5.1f%%  x%lld", ggml_op_name(static_cast<ggml_op>(o)),
-                p.us[o] / 1000.0, pct, static_cast<long long>(p.cnt[o]));
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "[profile]   %-20s %8.2f ms  %5.1f%%  x%lld",
+                ggml_op_name(static_cast<ggml_op>(o)), p.us[o] / 1000.0, pct, static_cast<long long>(p.cnt[o]));
     }
 }
 
@@ -265,7 +265,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         m->limits.model_max_ctx   = m->hparams.dec_max_position_embeddings;
         m->limits.prompt_overhead =
             static_cast<int>(m->hparams.prompt_prefix_tokens.size() + m->hparams.prompt_suffix_tokens.size());
-        m->limits.gen_reserve = k_max_new;
+        m->limits.gen_reserve        = k_max_new;
         // audio_tokens ~= samples / (hop*2*merge) ; ms = tokens * hop*2*merge*1000/sr
         m->limits.ms_per_audio_token = static_cast<double>(m->hparams.fe_hop_length) * 2.0 *
                                        m->hparams.audio_merge_size * 1000.0 / m->hparams.fe_sample_rate;
@@ -306,8 +306,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     gguf_init_params init_params{};
-    init_params.no_alloc = true;
-    init_params.ctx      = &m->ctx_meta;
+    init_params.no_alloc     = true;
+    init_params.ctx          = &m->ctx_meta;
     gguf_context * gguf_data = gguf_init_from_file(loader.path().c_str(), init_params);
     if (gguf_data == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
@@ -435,11 +435,11 @@ transcribe_status encode_one(MossSession *        cc,
                              int &                out_T_enc,
                              int64_t &            mel_us,
                              int64_t &            enc_us) {
-    const auto & hp        = cm->hparams;
-    const int    n_mels    = hp.enc_num_mel_bins;
-    const int    n_chunk   = hp.fe_n_samples > 0 ? hp.fe_n_samples : 30 * hp.fe_sample_rate;
-    const int    d_model   = hp.enc_d_model;
-    const int    merge     = hp.audio_merge_size;
+    const auto & hp      = cm->hparams;
+    const int    n_mels  = hp.enc_num_mel_bins;
+    const int    n_chunk = hp.fe_n_samples > 0 ? hp.fe_n_samples : 30 * hp.fe_sample_rate;
+    const int    d_model = hp.enc_d_model;
+    const int    merge   = hp.audio_merge_size;
 
     if (const transcribe_status st = ensure_sched(cc, cm); st != TRANSCRIBE_OK) {
         return st;
@@ -449,8 +449,8 @@ transcribe_status encode_one(MossSession *        cc,
     int                T_trim_total = 0;
 
     for (int start = 0; start < n_samples; start += n_chunk) {
-        const int real_len   = std::min(n_chunk, n_samples - start);
-        const int token_len  = audio_token_length(real_len, hp);
+        const int real_len  = std::min(n_chunk, n_samples - start);
+        const int token_len = audio_token_length(real_len, hp);
         if (token_len <= 0) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss encode: degenerate token_len for chunk (real_len=%d)", real_len);
             return TRANSCRIBE_ERR_GGUF;
@@ -462,8 +462,8 @@ transcribe_status encode_one(MossSession *        cc,
 
         int           nm = 0, nf = 0;
         const int64_t t_mel0 = ggml_time_us();
-        if (const transcribe_status mst = cm->mel->compute(chunk.data(), static_cast<size_t>(n_chunk), cc->mel_buf, nm,
-                                                           nf, cc->n_threads);
+        if (const transcribe_status mst =
+                cm->mel->compute(chunk.data(), static_cast<size_t>(n_chunk), cc->mel_buf, nm, nf, cc->n_threads);
             mst != TRANSCRIBE_OK) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss encode: mel compute failed (%s)", transcribe_status_string(mst));
             return mst;
@@ -575,18 +575,18 @@ transcribe_status encode_one(MossSession *        cc,
 
 // Build audio_dense [hidden, T_prompt] + keep_mask [1, T_prompt] host-side by
 // scattering enc_out columns into the audio-pad prompt positions.
-void build_injection(int                        hidden,
-                     int                        T_prompt,
-                     const std::vector<float> & enc_out,
+void build_injection(int                          hidden,
+                     int                          T_prompt,
+                     const std::vector<float> &   enc_out,
                      const std::vector<int32_t> & audio_positions,
-                     std::vector<float> &       audio_dense,
-                     std::vector<float> &       keep_mask) {
+                     std::vector<float> &         audio_dense,
+                     std::vector<float> &         keep_mask) {
     audio_dense.assign(static_cast<size_t>(hidden) * T_prompt, 0.0f);
     keep_mask.assign(static_cast<size_t>(T_prompt), 1.0f);
     for (size_t j = 0; j < audio_positions.size(); ++j) {
         const int pos = audio_positions[j];
-        std::memcpy(audio_dense.data() + static_cast<size_t>(pos) * hidden,
-                    enc_out.data() + j * hidden, static_cast<size_t>(hidden) * sizeof(float));
+        std::memcpy(audio_dense.data() + static_cast<size_t>(pos) * hidden, enc_out.data() + j * hidden,
+                    static_cast<size_t>(hidden) * sizeof(float));
         keep_mask[static_cast<size_t>(pos)] = 0.0f;
     }
 }
@@ -705,8 +705,8 @@ transcribe_status run(transcribe_session *          session,
         return st;
     }
     const bool   slice_last = !dumps_on;
-    PrefillBuild pb = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
-                                          cc->decoder_use_flash, slice_last);
+    PrefillBuild pb         = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
+                                                  cc->decoder_use_flash, slice_last);
     if (pb.graph == nullptr || pb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -747,8 +747,8 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     const int64_t t_prefill_us = perf_debug ? (ggml_time_us() - t_pf0) : 0;
-    cc->kv_cache.n    = T_prompt;
-    cc->kv_cache.head = T_prompt;
+    cc->kv_cache.n             = T_prompt;
+    cc->kv_cache.head          = T_prompt;
 
     if (dumps_on) {
         auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
@@ -777,7 +777,7 @@ transcribe_status run(transcribe_session *          session,
     generated_ids.push_back(next_tok);
 
     // Step loop.
-    const int32_t eos_id  = cm->hparams.eos_token_id;
+    const int32_t eos_id   = cm->hparams.eos_token_id;
     int           cur_past = T_prompt;
     int           max_n_kv = 1024;
     while (max_n_kv < T_prompt + gen_budget) {
@@ -790,8 +790,8 @@ transcribe_status run(transcribe_session *          session,
     if (const transcribe_status st = reset_compute_ctx(cc, 8); st != TRANSCRIBE_OK) {
         return st;
     }
-    StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, max_n_kv,
-                                    cc->decoder_use_flash);
+    StepBuild sb =
+        build_step_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, max_n_kv, cc->decoder_use_flash);
     if (sb.graph == nullptr || sb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -904,12 +904,13 @@ transcribe_status run(transcribe_session *          session,
             };
             log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
                     "[profile] step compute total=%.1f ms  per-step mean=%.3f p50=%.3f p90=%.3f p99=%.3f max=%.3f ms",
-                    t_step_compute_us / 1000.0, (t_step_compute_us / 1000.0) / n_steps, pct(0.50), pct(0.90),
-                    pct(0.99), sorted.back() / 1000.0);
-            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
-                    "[profile] step overhead: input_set total=%.1f ms (%.3f/step)  argmax_get total=%.1f ms (%.3f/step)",
-                    t_step_input_us / 1000.0, (t_step_input_us / 1000.0) / n_steps, t_step_get_us / 1000.0,
-                    (t_step_get_us / 1000.0) / n_steps);
+                    t_step_compute_us / 1000.0, (t_step_compute_us / 1000.0) / n_steps, pct(0.50), pct(0.90), pct(0.99),
+                    sorted.back() / 1000.0);
+            log_msg(
+                TRANSCRIBE_LOG_LEVEL_DEBUG,
+                "[profile] step overhead: input_set total=%.1f ms (%.3f/step)  argmax_get total=%.1f ms (%.3f/step)",
+                t_step_input_us / 1000.0, (t_step_input_us / 1000.0) / n_steps, t_step_get_us / 1000.0,
+                (t_step_get_us / 1000.0) / n_steps);
         }
         op_prof_report("ENCODE", enc_prof);
         op_prof_report("DECODE", dec_prof);
@@ -939,10 +940,10 @@ transcribe_session::ResultSet finalize_utterance(MossModel * cm, std::vector<int
         generated_ids.pop_back();
     }
     std::string raw_text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
-    rs.full_text   = raw_text;
-    rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-    rs.has_result  = true;
-    rs.status      = TRANSCRIBE_OK;
+    rs.full_text         = raw_text;
+    rs.result_kind       = TRANSCRIBE_TIMESTAMPS_NONE;
+    rs.has_result        = true;
+    rs.status            = TRANSCRIBE_OK;
     transcribe_session::SegmentEntry seg{};
     seg.text  = raw_text;
     seg.t0_ms = 0;
@@ -960,8 +961,8 @@ transcribe_status run_batch_serial(MossSession *                 cc,
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG
-                                                                              : run(cc, pcm[i], n_samples[i], params);
+        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
+                                                                                run(cc, pcm[i], n_samples[i], params);
         if (st == TRANSCRIBE_OK) {
             cc->batch_results.push_back(cc->capture_result(st));
         } else {
@@ -1076,8 +1077,8 @@ transcribe_status run_batch(transcribe_session *          session,
         if (const transcribe_status st = reset_compute_ctx(cc, 32); st != TRANSCRIBE_OK) {
             return st;
         }
-        PrefillBuildBatched pb = build_prefill_graph_batched(cc->compute_ctx, cm->weights, cm->hparams,
-                                                             cc->kv_cache_batch, T_prompt_max, n, cc->decoder_use_flash);
+        PrefillBuildBatched pb = build_prefill_graph_batched(
+            cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache_batch, T_prompt_max, n, cc->decoder_use_flash);
         if (pb.graph == nullptr || pb.out == nullptr) {
             return TRANSCRIBE_ERR_GGUF;
         }

@@ -40,7 +40,7 @@ struct PrefillBuild {
     ggml_tensor * mask_in        = nullptr;  // [T_prompt, T_prompt] f16 causal
     ggml_tensor * out            = nullptr;  // [vocab] last-position logits
     DecoderDumps  dumps{};
-    ggml_cgraph * graph = nullptr;
+    ggml_cgraph * graph    = nullptr;
     int           T_prompt = 0;
 };
 
@@ -78,13 +78,13 @@ struct PrefillBuildBatched {
     ggml_tensor * keep_mask_in   = nullptr;  // [1, T_prompt_max*B] f32
     ggml_tensor * positions_in   = nullptr;  // [T_prompt_max] i32
     ggml_tensor * mask_in        = nullptr;  // [T_prompt_max, T_prompt_max] f16
-    ggml_tensor * kv_idx_in       = nullptr;  // [T_prompt_max, B] i64
-    ggml_tensor * last_idx_in     = nullptr;  // [1, B] i32
-    ggml_tensor * logits          = nullptr;  // [vocab, B]
-    ggml_tensor * out             = nullptr;  // [B] i32 argmax
-    ggml_cgraph * graph           = nullptr;
-    int           T_prompt_max    = 0;
-    int           n_batch         = 0;
+    ggml_tensor * kv_idx_in      = nullptr;  // [T_prompt_max, B] i64
+    ggml_tensor * last_idx_in    = nullptr;  // [1, B] i32
+    ggml_tensor * logits         = nullptr;  // [vocab, B]
+    ggml_tensor * out            = nullptr;  // [B] i32 argmax
+    ggml_cgraph * graph          = nullptr;
+    int           T_prompt_max   = 0;
+    int           n_batch        = 0;
 };
 
 PrefillBuildBatched build_prefill_graph_batched(ggml_context *                   ctx,

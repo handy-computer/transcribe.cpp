@@ -42,23 +42,23 @@ struct MossHParams {
     int32_t audio_merge_size  = 0;  // 4
 
     // Qwen3 text LM.
-    int32_t     dec_n_layers               = 0;
-    int32_t     dec_hidden                 = 0;
-    int32_t     dec_intermediate           = 0;
-    int32_t     dec_n_heads                = 0;
-    int32_t     dec_n_kv_heads             = 0;
-    int32_t     dec_head_dim               = 0;
+    int32_t     dec_n_layers     = 0;
+    int32_t     dec_hidden       = 0;
+    int32_t     dec_intermediate = 0;
+    int32_t     dec_n_heads      = 0;
+    int32_t     dec_n_kv_heads   = 0;
+    int32_t     dec_head_dim     = 0;
     std::string dec_hidden_act;  // "silu"
-    float       dec_rms_norm_eps           = 0.0f;
-    float       dec_rope_theta             = 0.0f;
+    float       dec_rms_norm_eps            = 0.0f;
+    float       dec_rope_theta              = 0.0f;
     int32_t     dec_max_position_embeddings = 0;
-    bool        dec_tie_word_embeddings    = true;
-    int32_t     dec_vocab_size             = 0;
+    bool        dec_tie_word_embeddings     = true;
+    int32_t     dec_vocab_size              = 0;
 
     // Audio-token injection + time-marker span construction (processor).
-    int32_t audio_token_id            = 0;   // <|audio_pad|> (151671)
+    int32_t audio_token_id            = 0;     // <|audio_pad|> (151671)
     float   audio_tokens_per_second   = 0.0f;  // 12.5
-    int32_t time_marker_every_seconds = 0;   // 5
+    int32_t time_marker_every_seconds = 0;     // 5
     bool    enable_time_marker        = true;
 
     // Baked fixed prompt (see convert-moss.py::compute_prompt_tokens).

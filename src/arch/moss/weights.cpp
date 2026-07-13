@@ -143,12 +143,13 @@ transcribe_status read_moss_hparams(const gguf_context * gguf, MossHParams & hp)
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_f32_kv(gguf, "stt.moss.audio_tokens_per_second", kFamilyTag, hp.audio_tokens_per_second);
+    if (auto st =
+            read_required_f32_kv(gguf, "stt.moss.audio_tokens_per_second", kFamilyTag, hp.audio_tokens_per_second);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.moss.time_marker_every_seconds", kFamilyTag,
-                                       hp.time_marker_every_seconds);
+    if (auto st =
+            read_required_u32_kv(gguf, "stt.moss.time_marker_every_seconds", kFamilyTag, hp.time_marker_every_seconds);
         st != TRANSCRIBE_OK) {
         return st;
     }
