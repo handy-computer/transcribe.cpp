@@ -103,11 +103,13 @@ Translation (`granite-4.0-1b-speech`, `granite-speech-4.1-2b`):
 Plus only (`granite-speech-4.1-2b-plus`):
 - **Word-level timestamps** via `--timestamps word` — structured per-word
   start/end times, parsed from the model's `[T:N]` centisecond markers.
+- **Speaker attribution** via `--diarize` — structured speaker turns parsed
+  from `[Speaker N]:` markers. This is a separate prompt task and cannot be
+  combined with explicit timestamps.
 
 NAR only (`granite-speech-4.1-2b-nar`):
 - **Single-pass non-autoregressive decode** — fastest of the four.
 
-What's not exposed by the v1 transcribe.cpp runtime: speaker diarization
-(advertised on `-plus`), keyword/hotword biasing (advertised on AR
-variants), real-time streaming, VAD. See the per-variant docs for
-status.
+What's not exposed by the v1 transcribe.cpp runtime: keyword/hotword biasing
+(advertised on AR variants), real-time streaming, VAD. See the per-variant
+docs for status.

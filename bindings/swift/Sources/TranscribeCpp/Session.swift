@@ -200,6 +200,12 @@ public final class Session {
             _ = transcribe_get_token(ptr, Int32(i), &t)
             tokens.append(Token(t))
         }
+        var speakerSegments: [SpeakerSegment] = []
+        for i in 0..<Int(transcribe_n_speaker_segments(ptr)) {
+            var s = transcribe_speaker_segment(); transcribe_speaker_segment_init(&s)
+            _ = transcribe_get_speaker_segment(ptr, Int32(i), &s)
+            speakerSegments.append(SpeakerSegment(s))
+        }
         var timings = transcribe_timings(); transcribe_timings_init(&timings)
         _ = transcribe_get_timings(ptr, &timings)
         let language = String(cString: transcribe_detected_language(ptr))
@@ -207,7 +213,8 @@ public final class Session {
             text: String(cString: transcribe_full_text(ptr)),
             language: language.isEmpty ? nil : language,
             timestampKind: TimestampKind(transcribe_returned_timestamp_kind(ptr)),
-            segments: segments, words: words, tokens: tokens, timings: Timings(timings))
+            segments: segments, speakerSegments: speakerSegments,
+            words: words, tokens: tokens, timings: Timings(timings))
     }
 
     private func batchTranscript(_ i: Int) -> Transcript {
@@ -230,6 +237,12 @@ public final class Session {
             _ = transcribe_batch_get_token(ptr, idx, Int32(j), &t)
             tokens.append(Token(t))
         }
+        var speakerSegments: [SpeakerSegment] = []
+        for j in 0..<Int(transcribe_batch_n_speaker_segments(ptr, idx)) {
+            var s = transcribe_speaker_segment(); transcribe_speaker_segment_init(&s)
+            _ = transcribe_batch_get_speaker_segment(ptr, idx, Int32(j), &s)
+            speakerSegments.append(SpeakerSegment(s))
+        }
         var timings = transcribe_timings(); transcribe_timings_init(&timings)
         _ = transcribe_batch_get_timings(ptr, idx, &timings)
         let language = String(cString: transcribe_batch_detected_language(ptr, idx))
@@ -237,7 +250,8 @@ public final class Session {
             text: String(cString: transcribe_batch_full_text(ptr, idx)),
             language: language.isEmpty ? nil : language,
             timestampKind: TimestampKind(transcribe_batch_returned_timestamp_kind(ptr, idx)),
-            segments: segments, words: words, tokens: tokens, timings: Timings(timings))
+            segments: segments, speakerSegments: speakerSegments,
+            words: words, tokens: tokens, timings: Timings(timings))
     }
 }
 

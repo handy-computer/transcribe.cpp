@@ -125,6 +125,29 @@ pub enum Itn {
     On,
 }
 
+/// Speaker-attribution runtime toggle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Diarize {
+    /// Library default: speaker attribution is disabled for every family.
+    #[default]
+    Default,
+    /// Explicitly disable speaker attribution.
+    Off,
+    /// Enable speaker attribution on supporting models.
+    On,
+}
+
+impl Diarize {
+    pub(crate) fn to_raw(self) -> sys::transcribe_diarize_mode {
+        use sys::transcribe_diarize_mode as D;
+        match self {
+            Diarize::Default => D::TRANSCRIBE_DIARIZE_MODE_DEFAULT,
+            Diarize::Off => D::TRANSCRIBE_DIARIZE_MODE_OFF,
+            Diarize::On => D::TRANSCRIBE_DIARIZE_MODE_ON,
+        }
+    }
+}
+
 impl Itn {
     pub(crate) fn to_raw(self) -> sys::transcribe_itn_mode {
         use sys::transcribe_itn_mode as I;
@@ -183,6 +206,8 @@ pub enum Feature {
     Pnc,
     /// Exposes a runtime ITN toggle.
     Itn,
+    /// Produces structured speaker attribution.
+    Diarization,
 }
 
 impl Feature {
@@ -195,6 +220,7 @@ impl Feature {
             Feature::Cancellation => F::TRANSCRIBE_FEATURE_CANCELLATION,
             Feature::Pnc => F::TRANSCRIBE_FEATURE_PNC,
             Feature::Itn => F::TRANSCRIBE_FEATURE_ITN,
+            Feature::Diarization => F::TRANSCRIBE_FEATURE_DIARIZATION,
         }
     }
 }
@@ -260,6 +286,7 @@ pub enum AbiStruct {
     SessionLimits,
     Ext,
     BackendDevice,
+    SpeakerSegment,
 }
 
 impl AbiStruct {
@@ -280,6 +307,7 @@ impl AbiStruct {
             AbiStruct::SessionLimits => A::TRANSCRIBE_ABI_SESSION_LIMITS,
             AbiStruct::Ext => A::TRANSCRIBE_ABI_EXT,
             AbiStruct::BackendDevice => A::TRANSCRIBE_ABI_BACKEND_DEVICE,
+            AbiStruct::SpeakerSegment => A::TRANSCRIBE_ABI_SPEAKER_SEGMENT,
         }
     }
 }

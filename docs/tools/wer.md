@@ -85,9 +85,9 @@ uv run scripts/wer/run.py \
 ```
 
 Invokes `transcribe-cli --batch` (one model load, N utterances in one
-process). By default it runs `--timestamps none`, matching the library
-and CLI text-first default, and writes the timestamp mode into the
-auto-derived output name:
+process). By default the WER harness explicitly runs `--timestamps none` for
+text-only scoring (the library and CLI defaults are `auto`) and writes the
+timestamp mode into the auto-derived output name:
 
 ```text
 reports/wer/<model-stem>.<dataset>-timestamps_none.jsonl

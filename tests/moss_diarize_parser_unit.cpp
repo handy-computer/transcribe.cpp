@@ -177,6 +177,55 @@ void test_dediarize_equivalence() {
     CHECK(p.full_text == "Welcome home. Thanks!");
 }
 
+void test_run_policy_axes() {
+    const std::string raw = "[0.00][S01]alpha[1.00][1.00][S02]beta[2.00]";
+    CHECK(!transcribe::moss::diarize_resolves_on(nullptr));
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+    CHECK(!transcribe::moss::diarize_resolves_on(&params));
+
+    // Both defaults: clean text, no attribution, richest compatible timing.
+    Parsed p = parse(raw);
+    transcribe::moss::apply_result_policy(&params, p.segments, p.speakers);
+    CHECK(p.full_text == "alpha beta");
+    CHECK(p.speakers.empty());
+    CHECK(p.segments[0].speaker_id == 0);
+    CHECK(p.segments[0].t0_ms == 0 && p.segments[0].t1_ms == 1000);
+    CHECK(transcribe::moss::returned_timestamp_kind(&params) == TRANSCRIBE_TIMESTAMPS_SEGMENT);
+
+    // OFF + SEGMENT: timing is independent of attribution.
+    transcribe_run_params_init(&params);
+    params.diarize    = TRANSCRIBE_DIARIZE_MODE_OFF;
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+    p                 = parse(raw);
+    transcribe::moss::apply_result_policy(&params, p.segments, p.speakers);
+    CHECK(p.speakers.empty());
+    CHECK(p.segments[0].speaker_id == 0);
+    CHECK(p.segments[0].t0_ms == 0 && p.segments[0].t1_ms == 1000);
+    CHECK(transcribe::moss::returned_timestamp_kind(&params) == TRANSCRIBE_TIMESTAMPS_SEGMENT);
+
+    // ON + NONE: attribution remains available even without timing.
+    transcribe_run_params_init(&params);
+    params.diarize    = TRANSCRIBE_DIARIZE_MODE_ON;
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+    p                 = parse(raw);
+    transcribe::moss::apply_result_policy(&params, p.segments, p.speakers);
+    CHECK(transcribe::moss::diarize_resolves_on(&params));
+    CHECK(p.speakers.size() == 2);
+    CHECK(p.segments[0].speaker_id == 1);
+    CHECK(p.speakers[0].t0_ms == 0 && p.speakers[0].t1_ms == 0);
+    CHECK(transcribe::moss::returned_timestamp_kind(&params) == TRANSCRIBE_TIMESTAMPS_NONE);
+
+    // ON + AUTO: retain both attribution and parsed segment timing.
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
+    p                 = parse(raw);
+    transcribe::moss::apply_result_policy(&params, p.segments, p.speakers);
+    CHECK(p.speakers.size() == 2);
+    CHECK(p.speakers[0].t1_ms == 1000);
+    CHECK(transcribe::moss::returned_timestamp_kind(&params) == TRANSCRIBE_TIMESTAMPS_SEGMENT);
+}
+
 }  // namespace
 
 int main() {
@@ -193,5 +242,6 @@ int main() {
     test_cjk_text();
     test_fractional_rounding();
     test_dediarize_equivalence();
+    test_run_policy_axes();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

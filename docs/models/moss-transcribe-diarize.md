@@ -9,11 +9,11 @@ audio-token injection at `<|audio_pad|>` positions.
 
 ## What it's for
 
-Offline English and Chinese speech-to-text with speaker diarization. Takes a
-16 kHz mono WAV and produces transcript text in the canonical diarized format
-`[start][Sxx]text[end]` (e.g. `[0.48][S01]Welcome[1.66]`) via greedy decoding.
-The speaker tags (`[S01]`, `[S02]`, ...) and segment start/end timestamps are
-emergent generated text, not special tokens. Built for long-form,
+Offline English and Chinese speech-to-text with optional speaker attribution.
+The model generates the canonical diarized format `[start][Sxx]text[end]`
+(e.g. `[0.48][S01]Welcome[1.66]`) via greedy decoding. The runtime parses those
+emergent text markers into clean `full_text`, segment rows, and—when
+`diarize=ON`—speaker IDs and speaker-turn rows. Built for long-form,
 multi-speaker audio. No translation; not a streaming model.
 
 See OpenMOSS's [model card](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize)
@@ -61,8 +61,9 @@ the BF16 port lands at 2.08%, within `+0.01pp` of the reference and well inside
 the CI. Q4_K_M's higher 2.59% is not broad degradation but a handful of 4-bit
 tail failures (6 empty outputs, 5 English->Chinese language-drift utterances,
 1 timestamp-token repetition loop); prefer Q5_K_M or higher if those matter.
-Dediarization is scoring-only: the runtime continues to return the raw inline
-timestamps and speaker labels.
+The runtime applies the same marker removal to `full_text`, so WER scoring and
+the public transcript agree. The pre-parsed inline marker string is not exposed
+by the current result API.
 
 ## Quick Start
 
@@ -72,6 +73,7 @@ cmake --build build
 
 build/bin/transcribe-cli \
   -m models/MOSS-Transcribe-Diarize/MOSS-Transcribe-Diarize-Q8_0.gguf \
+  --diarize \
   samples/jfk.wav
 ```
 
@@ -85,8 +87,11 @@ CLI flags:
 
 - `-l en` / `-l zh` (or omit for `auto`): English and Chinese are supported.
 - No `--task` / `--target-language`: the model is ASR-only, no translation.
-- Diarization tags and segment timestamps appear inline in the transcript
-  text; there is no toggle to suppress them.
+- Speaker attribution is off by default. Pass `--diarize` to populate
+  `speaker_id` and speaker-turn rows; `--no-diarize` is the explicit off form.
+- Timestamp selection is independent: `--timestamps segment` or `auto` keeps
+  parsed turn timing; `--timestamps none` returns attribution with zero times.
+- `full_text` is always clean marker-free text after a successful parse.
 
 ## Performance
 

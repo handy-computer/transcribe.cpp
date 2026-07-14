@@ -22,8 +22,11 @@ pub struct Transcript {
     pub language: Option<String>,
     /// The finest timestamp granularity actually populated below.
     pub timestamp_kind: TimestampKind,
-    /// Segment rows (empty unless segment-or-finer timestamps were produced).
+    /// Transcript segments. Speaker-attributed models may return untimed rows
+    /// even when timestamps are disabled.
     pub segments: Vec<Segment>,
+    /// Diarized speaker turns (empty unless diarization was enabled and found).
+    pub speaker_segments: Vec<SpeakerSegment>,
     /// Word rows (empty unless word-or-finer timestamps were produced).
     pub words: Vec<Word>,
     /// Token rows (empty unless token timestamps were produced).
@@ -42,6 +45,18 @@ pub struct Segment {
     pub first_token: i32,
     pub n_tokens: i32,
     pub text: String,
+    /// 1-based speaker id; zero means no attribution.
+    pub speaker_id: i32,
+}
+
+/// One diarized speaker turn. Zero times mean the model attributed text but
+/// did not provide turn timing; `p` is NaN when unavailable.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpeakerSegment {
+    pub t0_ms: i64,
+    pub t1_ms: i64,
+    pub speaker_id: i32,
+    pub p: f32,
 }
 
 /// One word row.
@@ -112,6 +127,18 @@ impl Segment {
             first_token: raw.first_token,
             n_tokens: raw.n_tokens,
             text: owned_str(raw.text),
+            speaker_id: raw.speaker_id,
+        }
+    }
+}
+
+impl SpeakerSegment {
+    pub(crate) fn from_raw(raw: &sys::transcribe_speaker_segment) -> Self {
+        SpeakerSegment {
+            t0_ms: raw.t0_ms,
+            t1_ms: raw.t1_ms,
+            speaker_id: raw.speaker_id,
+            p: raw.p,
         }
     }
 }

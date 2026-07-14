@@ -32,6 +32,7 @@ tags:
   - audio-llm
   - multilingual
   - word-timestamps
+  - diarization
 
 summary: |
   Offline multilingual speech-to-text with word-level timestamps. IBM Granite
@@ -43,7 +44,9 @@ summary: |
   K/V input from 1024 to 2048), and the LM token embeddings are tied with
   the lm_head. Takes a 16 kHz mono WAV and produces a transcript, with
   `--timestamps word` returning structured per-word timestamps (parsed from the
-  model's `[T:N]` centisecond markers). Transcribes English,
+  model's `[T:N]` centisecond markers), or `--diarize` returning structured
+  speaker-attributed turns from its separate SAA prompt. Those two prompt tasks
+  cannot be combined. Transcribes English,
   French, German, Spanish, and Portuguese (no Japanese on this variant).
   This variant is transcription-only: unlike the base granite-speech-4.1-2b,
   it does not perform speech translation.

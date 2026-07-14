@@ -69,8 +69,19 @@ public enum Itn: Sendable {
     }
 }
 
+public enum Diarize: Sendable {
+    case `default`, off, on
+    var cValue: transcribe_diarize_mode {
+        switch self {
+        case .default: return TRANSCRIBE_DIARIZE_MODE_DEFAULT
+        case .off: return TRANSCRIBE_DIARIZE_MODE_OFF
+        case .on: return TRANSCRIBE_DIARIZE_MODE_ON
+        }
+    }
+}
+
 public enum Feature: Sendable {
-    case initialPrompt, temperatureFallback, longForm, cancellation, pnc, itn
+    case initialPrompt, temperatureFallback, longForm, cancellation, pnc, itn, diarization
     var cValue: transcribe_feature {
         switch self {
         case .initialPrompt: return TRANSCRIBE_FEATURE_INITIAL_PROMPT
@@ -79,6 +90,7 @@ public enum Feature: Sendable {
         case .cancellation: return TRANSCRIBE_FEATURE_CANCELLATION
         case .pnc: return TRANSCRIBE_FEATURE_PNC
         case .itn: return TRANSCRIBE_FEATURE_ITN
+        case .diarization: return TRANSCRIBE_FEATURE_DIARIZATION
         }
     }
 }
@@ -113,6 +125,7 @@ public struct RunOptions: Sendable {
     public var timestamps: TimestampKind
     public var pnc: Pnc
     public var itn: Itn
+    public var diarize: Diarize
     /// Source language hint (BCP-47-ish short code); `nil` = autodetect.
     public var language: String?
     /// Target language for translation; `nil` otherwise.
@@ -132,6 +145,7 @@ public struct RunOptions: Sendable {
         timestamps: TimestampKind = .auto,
         pnc: Pnc = .default,
         itn: Itn = .default,
+        diarize: Diarize = .default,
         language: String? = nil,
         targetLanguage: String? = nil,
         keepSpecialTags: Bool = false,
@@ -142,6 +156,7 @@ public struct RunOptions: Sendable {
         self.timestamps = timestamps
         self.pnc = pnc
         self.itn = itn
+        self.diarize = diarize
         self.language = language
         self.targetLanguage = targetLanguage
         self.keepSpecialTags = keepSpecialTags
@@ -159,6 +174,7 @@ public struct RunOptions: Sendable {
         params.timestamps = timestamps.cValue
         params.pnc = pnc.cValue
         params.itn = itn.cValue
+        params.diarize = diarize.cValue
         params.keep_special_tags = keepSpecialTags
         params.spec_k_drafts = specKDrafts
         return try withOptionalCString(language) { lang in

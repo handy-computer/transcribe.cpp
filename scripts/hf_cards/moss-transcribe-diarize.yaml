@@ -34,10 +34,10 @@ summary: |
   Offline English/Chinese speech-to-text with speaker diarization. A 0.9B
   audio-LLM: a Whisper-Medium encoder (24 layers, d_model=1024) feeds a
   4x temporal merge + VQAdaptor bridge into a Qwen3-0.6B decoder (28 layers)
-  via audio-token injection. Takes a 16 kHz mono WAV and emits transcript
-  text in the canonical diarized format `[start][Sxx]text[end]`, where the
-  speaker tags and segment timestamps are generated text, not special
-  tokens. Not a streaming model.
+  via audio-token injection. The model emits `[start][Sxx]text[end]`; the
+  runtime parses those generated markers into clean text and segment rows.
+  Speaker attribution is opt-in (`--diarize`) and returns structured speaker
+  ids/turns. Not a streaming model.
 
 default_quant_index: 2  # Q8_0
 
@@ -79,8 +79,8 @@ wer:
     (6 empty outputs, 5 English->Chinese language-drift utterances, 1
     timestamp-token repetition loop) rather than broad degradation. Prefer
     Q5_K_M or higher if those tail failures matter. Reproduce with
-    `scripts/wer/run.py` + `scripts/wer/score.py --dediarize`; the runtime
-    output itself remains in the raw diarized format.
+    `scripts/wer/run.py` + `scripts/wer/score.py --dediarize`; public
+    `full_text` applies equivalent marker removal.
 
 quants:
   - name: BF16

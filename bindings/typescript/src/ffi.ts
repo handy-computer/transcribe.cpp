@@ -120,9 +120,13 @@ export function bindLibrary(libraryPath: string): Bound {
     nSegments: lib.func("transcribe_n_segments", "int", ["void *"]),
     nWords: lib.func("transcribe_n_words", "int", ["void *"]),
     nTokens: lib.func("transcribe_n_tokens", "int", ["void *"]),
+    nSpeakerSegments: lib.func("transcribe_n_speaker_segments", "int", ["void *"]),
     segmentInit: lib.func("transcribe_segment_init", "void", [outp(T.transcribe_segment)]),
     wordInit: lib.func("transcribe_word_init", "void", [outp(T.transcribe_word)]),
     tokenInit: lib.func("transcribe_token_init", "void", [outp(T.transcribe_token)]),
+    speakerSegmentInit: lib.func("transcribe_speaker_segment_init", "void", [
+      outp(T.transcribe_speaker_segment),
+    ]),
     getSegment: lib.func("transcribe_get_segment", "int", [
       "void *",
       "int",
@@ -130,6 +134,11 @@ export function bindLibrary(libraryPath: string): Bound {
     ]),
     getWord: lib.func("transcribe_get_word", "int", ["void *", "int", iop(T.transcribe_word)]),
     getToken: lib.func("transcribe_get_token", "int", ["void *", "int", iop(T.transcribe_token)]),
+    getSpeakerSegment: lib.func("transcribe_get_speaker_segment", "int", [
+      "void *",
+      "int",
+      iop(T.transcribe_speaker_segment),
+    ]),
     timingsInit: lib.func("transcribe_timings_init", "void", [outp(T.transcribe_timings)]),
     getTimings: lib.func("transcribe_get_timings", "int", ["void *", iop(T.transcribe_timings)]),
 
@@ -182,11 +191,21 @@ export function bindLibrary(libraryPath: string): Bound {
       iop(T.transcribe_word),
     ]),
     batchNTokens: lib.func("transcribe_batch_n_tokens", "int", ["void *", "int"]),
+    batchNSpeakerSegments: lib.func("transcribe_batch_n_speaker_segments", "int", [
+      "void *",
+      "int",
+    ]),
     batchGetToken: lib.func("transcribe_batch_get_token", "int", [
       "void *",
       "int",
       "int",
       iop(T.transcribe_token),
+    ]),
+    batchGetSpeakerSegment: lib.func("transcribe_batch_get_speaker_segment", "int", [
+      "void *",
+      "int",
+      "int",
+      iop(T.transcribe_speaker_segment),
     ]),
     batchFullText: lib.func("transcribe_batch_full_text", "str", ["void *", "int"]),
     batchDetectedLanguage: lib.func("transcribe_batch_detected_language", "str", ["void *", "int"]),

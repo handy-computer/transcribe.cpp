@@ -4,6 +4,8 @@
 // anything outside a recognized "[Speaker N]" marker survives verbatim.
 
 #include "arch/granite/diarize.h"
+#include "transcribe-arch.h"
+#include "transcribe-model.h"
 #include "transcribe-session.h"
 
 #include <cmath>
@@ -11,6 +13,10 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+
+namespace transcribe::granite {
+extern const Arch arch;
+}
 
 namespace {
 
@@ -117,6 +123,42 @@ void test_no_byte_loss_on_malformed() {
     CHECK(p.segments[1].text == "d");
 }
 
+void test_diarize_timestamp_contract() {
+    transcribe_model model;
+    model.arch                    = &transcribe::granite::arch;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_WORD;
+    model.caps.supports_translate = true;
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_DIARIZATION, true);
+
+    transcribe_session session;
+    session.model      = &model;
+    session.full_text  = "previous result";
+    session.has_result = true;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+    params.diarize    = TRANSCRIBE_DIARIZE_MODE_ON;
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+
+    // The mode-specific gate runs before result clearing. Granite's separate
+    // SAA and timestamp prompts cannot silently downgrade this request.
+    float                   pcm = 0.0f;
+    const transcribe_status st  = transcribe_run(&session, &pcm, 1, &params);
+    CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous result");
+
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
+    CHECK(transcribe::granite::arch.run_validate(&session, &params) == TRANSCRIBE_OK);
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+    CHECK(transcribe::granite::arch.run_validate(&session, &params) == TRANSCRIBE_OK);
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
+    CHECK(transcribe::granite::arch.run_validate(&session, &params) == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
+    params.task       = TRANSCRIBE_TASK_TRANSLATE;
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+    CHECK(transcribe::granite::arch.run_validate(&session, &params) == TRANSCRIBE_ERR_INVALID_ARG);
+}
+
 }  // namespace
 
 int main() {
@@ -127,5 +169,6 @@ int main() {
     test_speaker_zero_is_not_a_marker();
     test_multidigit_speaker();
     test_no_byte_loss_on_malformed();
+    test_diarize_timestamp_contract();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

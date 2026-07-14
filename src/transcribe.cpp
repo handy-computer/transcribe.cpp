@@ -580,8 +580,8 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
     std::memset(p, 0, sizeof(*p));
     p->struct_size   = sizeof(*p);
     p->spec_k_drafts = -1;  // family default
-    // Default to AUTO ("richest the model supports", resolved per-family at
-    // run time) rather than the memset NONE.
+    // Default to AUTO (richest output compatible with the model and selected
+    // run tasks, resolved per-family) rather than the memset NONE.
     p->timestamps    = TRANSCRIBE_TIMESTAMPS_AUTO;
 }
 
@@ -1349,9 +1349,16 @@ void warn_unsupported_advisory(const struct transcribe_model * model, const stru
         variant = "(unknown)";
     }
 
+    // Defense in depth: keep raw reads here even though every dispatcher
+    // validates before warning. A future call-site reorder must not turn a
+    // malformed C enum into a typed C++ load.
+    const int pnc_raw     = enum_field_raw(&rp->pnc);
+    const int itn_raw     = enum_field_raw(&rp->itn);
+    const int diarize_raw = enum_field_raw(&rp->diarize);
+
     char buf[512];
-    if (rp->pnc != TRANSCRIBE_PNC_MODE_DEFAULT && !transcribe::has_feature(model, TRANSCRIBE_FEATURE_PNC)) {
-        const char * req = (rp->pnc == TRANSCRIBE_PNC_MODE_ON) ? "ON" : "OFF";
+    if (pnc_raw != TRANSCRIBE_PNC_MODE_DEFAULT && !transcribe::has_feature(model, TRANSCRIBE_FEATURE_PNC)) {
+        const char * req = (pnc_raw == TRANSCRIBE_PNC_MODE_ON) ? "ON" : "OFF";
         std::snprintf(buf, sizeof(buf),
                       "transcribe_run: caller requested pnc=%s but model '%s' "
                       "(variant '%s') does not support pnc control; output will use "
@@ -1361,8 +1368,8 @@ void warn_unsupported_advisory(const struct transcribe_model * model, const stru
                       req, arch_name, variant);
         transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
     }
-    if (rp->itn != TRANSCRIBE_ITN_MODE_DEFAULT && !transcribe::has_feature(model, TRANSCRIBE_FEATURE_ITN)) {
-        const char * req = (rp->itn == TRANSCRIBE_ITN_MODE_ON) ? "ON" : "OFF";
+    if (itn_raw != TRANSCRIBE_ITN_MODE_DEFAULT && !transcribe::has_feature(model, TRANSCRIBE_FEATURE_ITN)) {
+        const char * req = (itn_raw == TRANSCRIBE_ITN_MODE_ON) ? "ON" : "OFF";
         std::snprintf(buf, sizeof(buf),
                       "transcribe_run: caller requested itn=%s but model '%s' "
                       "(variant '%s') does not support itn control; output will use "
@@ -1372,9 +1379,9 @@ void warn_unsupported_advisory(const struct transcribe_model * model, const stru
                       req, arch_name, variant);
         transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
     }
-    if (rp->diarize != TRANSCRIBE_DIARIZE_MODE_DEFAULT &&
+    if (diarize_raw != TRANSCRIBE_DIARIZE_MODE_DEFAULT &&
         !transcribe::has_feature(model, TRANSCRIBE_FEATURE_DIARIZATION)) {
-        const char * req = (rp->diarize == TRANSCRIBE_DIARIZE_MODE_ON) ? "ON" : "OFF";
+        const char * req = (diarize_raw == TRANSCRIBE_DIARIZE_MODE_ON) ? "ON" : "OFF";
         std::snprintf(buf, sizeof(buf),
                       "transcribe_run: caller requested diarize=%s but model '%s' "
                       "(variant '%s') does not support diarization control; output "
@@ -2093,15 +2100,10 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
         }
     }
 
-    // Advisory warn for pnc/itn requests against models that don't
-    // expose the corresponding runtime toggle. Best-effort semantics:
-    // log a WARN and proceed with the model's default behavior. Emitted
-    // before clear_result so a malformed advisory doesn't disturb the
-    // previous snapshot. Skipped when model is null — the post-clear
-    // NOT_IMPLEMENTED path will signal that more directly.
+    // Validate before advisory warning so typed enum reads are proven safe.
+    // A rejection preserves the previous snapshot. Skipped when model is
+    // null — the post-clear NOT_IMPLEMENTED path signals that directly.
     if (session->model != nullptr) {
-        warn_unsupported_advisory(session->model, params);
-
         // Pre-clear run-param validation. A caller-side param bug
         // (out-of-range enum, timestamp granularity finer than the
         // model's max, unsupported language, or TRANSLATE against a
@@ -2115,6 +2117,7 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
         if (const transcribe_status st = validate_run_params_common(session, params); st != TRANSCRIBE_OK) {
             return st;
         }
+        warn_unsupported_advisory(session->model, params);
         if (params->task == TRANSCRIBE_TASK_TRANSLATE && !session->model->caps.supports_translate) {
             return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
         }
@@ -2278,10 +2281,10 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
         }
     }
     if (session->model != nullptr) {
-        warn_unsupported_advisory(session->model, params);
         if (const transcribe_status st = validate_run_params_common(session, params); st != TRANSCRIBE_OK) {
             return st;
         }
+        warn_unsupported_advisory(session->model, params);
         if (params->task == TRANSCRIBE_TASK_TRANSLATE && !session->model->caps.supports_translate) {
             return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
         }

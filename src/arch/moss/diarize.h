@@ -25,11 +25,18 @@ struct transcribe_run_params;
 
 namespace transcribe::moss {
 
-// True when the run params resolve diarization ON for the moss family.
-// DEFAULT resolves ON: the model always emits speaker markers, and the
-// family's WER gates score dediarized text, so structured output is the
-// shipped default. OFF selects the raw passthrough.
+// True only for explicit diarize=ON. DEFAULT/OFF follow the library-wide
+// no-attribution default; MOSS still parses its inline metadata for clean text.
 bool diarize_resolves_on(const transcribe_run_params * params);
+
+// Apply the independent diarization/timestamp run axes to a successfully
+// parsed MOSS result. DEFAULT/OFF erase attribution. timestamps=NONE erases
+// timing but retains the clean per-turn text segmentation.
+void apply_result_policy(const transcribe_run_params *                          params,
+                         std::vector<transcribe_session::SegmentEntry> &        segments,
+                         std::vector<transcribe_session::SpeakerSegmentEntry> & speaker_segments);
+
+transcribe_timestamp_kind returned_timestamp_kind(const transcribe_run_params * params);
 
 // Parse the raw generated transcript into per-turn segments.
 //

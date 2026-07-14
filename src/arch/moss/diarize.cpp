@@ -121,13 +121,36 @@ struct Turn {
 }  // namespace
 
 bool diarize_resolves_on(const transcribe_run_params * params) {
-    // moss family default is ON (the model always emits speaker markers
-    // and the WER gates scored dediarized text). Only an explicit OFF
-    // selects the raw passthrough.
-    if (params == nullptr) {
-        return true;
+    // Library-wide contract: DEFAULT is OFF for every family. MOSS still
+    // parses its unavoidable inline metadata for clean text and timestamps;
+    // this predicate controls whether speaker attribution is retained.
+    return params != nullptr && params->diarize == TRANSCRIBE_DIARIZE_MODE_ON;
+}
+
+void apply_result_policy(const transcribe_run_params *                          params,
+                         std::vector<transcribe_session::SegmentEntry> &        segments,
+                         std::vector<transcribe_session::SpeakerSegmentEntry> & speaker_segments) {
+    if (!diarize_resolves_on(params)) {
+        speaker_segments.clear();
+        for (auto & seg : segments) {
+            seg.speaker_id = 0;
+        }
     }
-    return params->diarize != TRANSCRIBE_DIARIZE_MODE_OFF;
+    if (params == nullptr || params->timestamps == TRANSCRIBE_TIMESTAMPS_NONE) {
+        for (auto & seg : segments) {
+            seg.t0_ms = 0;
+            seg.t1_ms = 0;
+        }
+        for (auto & speaker : speaker_segments) {
+            speaker.t0_ms = 0;
+            speaker.t1_ms = 0;
+        }
+    }
+}
+
+transcribe_timestamp_kind returned_timestamp_kind(const transcribe_run_params * params) {
+    return params != nullptr && params->timestamps != TRANSCRIBE_TIMESTAMPS_NONE ? TRANSCRIBE_TIMESTAMPS_SEGMENT :
+                                                                                   TRANSCRIBE_TIMESTAMPS_NONE;
 }
 
 bool parse_diarized_transcript(const std::string &                                    raw,
@@ -225,7 +248,7 @@ bool parse_diarized_transcript(const std::string &                              
     }
 
     if (turns.empty()) {
-        return false;  // caller keeps the raw passthrough behavior
+        return false;  // caller keeps the plain single-segment fallback
     }
 
     // Patch unknown boundaries. Forward pass: an unknown t0 inherits the

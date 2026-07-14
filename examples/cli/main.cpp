@@ -219,9 +219,8 @@ struct cli_args {
     bool canary_pnc     = true;   // default: punctuation+caps on
     bool canary_pnc_set = false;  // --pnc / --no-pnc set this
 
-    // Speaker diarization toggle (moss / granite-plus). Unset = family
-    // default (moss: parse speaker markers; granite-plus: plain
-    // transcription). --diarize / --no-diarize set this.
+    // Speaker diarization toggle (moss / granite-plus). Unset = library
+    // default (OFF). --diarize / --no-diarize set this.
     bool diarize     = true;
     bool diarize_set = false;
 
@@ -294,7 +293,7 @@ void print_usage(const char * argv0) {
                  "  --no-pnc              (canary) emit lowercase de-punctuated text\n"
                  "  --diarize             (moss/granite-plus) speaker attribution: segments carry\n"
                  "                        speaker ids; granite-plus requests its speaker task\n"
-                 "  --no-diarize          (moss) raw passthrough with inline speaker markers\n"
+                 "  --no-diarize          disable speaker attribution (the library default)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
                  "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
                  "                        N-ms PCM slices; requires model to advertise\n"

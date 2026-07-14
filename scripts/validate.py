@@ -170,10 +170,9 @@ def case_transcript_compare(manifest: dict[str, Any], case) -> str:
 
 def dediarize_text(text: str) -> str:
     """Strip inline [start]/[Sxx]/[end] bracket spans from an emergent-diarization
-    transcript, then normalize. The reference `text` field is already de-diarized,
-    so this is a no-op there; the C++ runtime returns the raw diarized transcript,
-    so bracket spans (whose numeric timestamps carry bf16-vs-f32 digit jitter) are
-    removed before comparison. Mirrors the WER harness de-diarization."""
+    transcript, then normalize. Retained for historical validation artifacts and
+    reference raw-text fields; current C++ `full_text` is already marker-free.
+    Mirrors the WER harness de-diarization."""
     stripped = re.sub(r"\[[^\]]*\]", " ", text)
     return normalize_text_for_compare(stripped)
 

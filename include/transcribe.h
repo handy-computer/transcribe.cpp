@@ -432,9 +432,10 @@ typedef enum {
 } transcribe_task;
 
 /*
- * Timestamp policy: transcribe_run_params_init() requests NONE for
- * text-first transcription. AUTO is an opt-in "richest supported"
- * mode: it is treated as "equal to the model's max_timestamp_kind."
+ * Timestamp policy: transcribe_run_params_init() requests AUTO, the richest
+ * supported output. AUTO requests the richest granularity compatible with the model and
+ * the other selected run tasks (for example, a prompt-selected diarization
+ * task may not compose with the model's separate timestamp task).
  * The dispatcher never rejects AUTO, and the per-family run() handler
  * resolves it to the finest granularity the model can actually
  * produce when it assembles the result. A non-AUTO request is treated
@@ -543,14 +544,12 @@ enum transcribe_itn_mode {
  * when its prompt requests the speaker-attribution task, so there ON
  * changes the instruction the model is given. See each family doc.
  *
- *   DEFAULT (0): family default (the behavior its shipped WER numbers
- *                were measured against). Zero-init gives this value.
- *                moss: ON (its markers are always present and its gates
- *                score dediarized text). granite-plus: OFF (plain
- *                transcription task).
- *   OFF:         no speaker parsing. moss: raw passthrough with markers
- *                verbatim in the text. Families where diarization is a
- *                requested task simply do not request it.
+ *   DEFAULT (0): library default: OFF for every family. Zero-init gives
+ *                this value.
+ *   OFF:         no speaker attribution. Families where diarization is a
+ *                requested task do not request it. Families such as moss
+ *                whose model always emits inline metadata still strip that
+ *                metadata so full_text remains a clean transcript.
  *   ON:          request (if needed) and parse speaker markers into
  *                segment speaker_id + speaker segments.
  */
@@ -1004,9 +1003,9 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *              for translate via its capabilities; otherwise the run
  *              returns TRANSCRIBE_ERR_UNSUPPORTED_TASK.
  *
- * timestamps:  requested granularity. Default params request NONE.
- *              Use AUTO to get the finest granularity the model
- *              supports.
+ * timestamps:  requested granularity. Default params request AUTO,
+ *              which selects the finest granularity compatible with
+ *              the model and other selected run tasks.
  *
  * pnc:         punctuation+capitalization runtime toggle. See
  *              transcribe_pnc_mode. DEFAULT is always safe. Non-DEFAULT

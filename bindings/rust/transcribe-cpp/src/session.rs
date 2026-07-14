@@ -19,9 +19,11 @@ use crate::cancel::{abort_trampoline, CancelToken};
 use crate::error::{check, error_for_status, Error, Result};
 use crate::family::{RunExtRaw, RunExtension};
 use crate::model::{Model, ModelInner, SessionLimits, SessionOptions};
-use crate::result::{owned_opt_str, owned_str, Segment, Timings, Token, Transcript, Word};
+use crate::result::{
+    owned_opt_str, owned_str, Segment, SpeakerSegment, Timings, Token, Transcript, Word,
+};
 use crate::streaming::{build_stream_params, StreamOptions, StreamText, StreamUpdate};
-use crate::types::{Itn, Pnc, StreamState, Task, TimestampKind};
+use crate::types::{Diarize, Itn, Pnc, StreamState, Task, TimestampKind};
 
 /// Per-run parameters.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +32,7 @@ pub struct RunOptions {
     pub timestamps: TimestampKind,
     pub pnc: Pnc,
     pub itn: Itn,
+    pub diarize: Diarize,
     /// Source language hint (ISO code), or `None` to autodetect.
     pub language: Option<String>,
     /// Target language for translation, or `None`.
@@ -49,6 +52,7 @@ impl Default for RunOptions {
             timestamps: TimestampKind::Auto,
             pnc: Pnc::Default,
             itn: Itn::Default,
+            diarize: Diarize::Default,
             language: None,
             target_language: None,
             keep_special_tags: false,
@@ -297,6 +301,7 @@ impl Session {
         let n_seg = unsafe { sys::transcribe_n_segments(self.ptr) };
         let n_word = unsafe { sys::transcribe_n_words(self.ptr) };
         let n_tok = unsafe { sys::transcribe_n_tokens(self.ptr) };
+        let n_speaker = unsafe { sys::transcribe_n_speaker_segments(self.ptr) };
 
         Transcript {
             text: owned_str(unsafe { sys::transcribe_full_text(self.ptr) }),
@@ -305,6 +310,7 @@ impl Session {
                 sys::transcribe_returned_timestamp_kind(self.ptr)
             }),
             segments: (0..n_seg).map(|i| self.segment(i)).collect(),
+            speaker_segments: (0..n_speaker).map(|i| self.speaker_segment(i)).collect(),
             words: (0..n_word).map(|i| self.word(i)).collect(),
             tokens: (0..n_tok).map(|i| self.token(i)).collect(),
             timings: self.timings(),
@@ -316,6 +322,13 @@ impl Session {
         unsafe { sys::transcribe_segment_init(&mut raw) };
         let _ = unsafe { sys::transcribe_get_segment(self.ptr, i, &mut raw) };
         Segment::from_raw(&raw)
+    }
+
+    fn speaker_segment(&self, i: i32) -> SpeakerSegment {
+        let mut raw: sys::transcribe_speaker_segment = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_speaker_segment_init(&mut raw) };
+        let _ = unsafe { sys::transcribe_get_speaker_segment(self.ptr, i, &mut raw) };
+        SpeakerSegment::from_raw(&raw)
     }
 
     fn word(&self, i: i32) -> Word {
@@ -345,6 +358,7 @@ impl Session {
         let n_seg = unsafe { sys::transcribe_batch_n_segments(self.ptr, i) };
         let n_word = unsafe { sys::transcribe_batch_n_words(self.ptr, i) };
         let n_tok = unsafe { sys::transcribe_batch_n_tokens(self.ptr, i) };
+        let n_speaker = unsafe { sys::transcribe_batch_n_speaker_segments(self.ptr, i) };
 
         Transcript {
             text: owned_str(unsafe { sys::transcribe_batch_full_text(self.ptr, i) }),
@@ -355,6 +369,9 @@ impl Session {
                 sys::transcribe_batch_returned_timestamp_kind(self.ptr, i)
             }),
             segments: (0..n_seg).map(|j| self.batch_segment(i, j)).collect(),
+            speaker_segments: (0..n_speaker)
+                .map(|j| self.batch_speaker_segment(i, j))
+                .collect(),
             words: (0..n_word).map(|j| self.batch_word(i, j)).collect(),
             tokens: (0..n_tok).map(|j| self.batch_token(i, j)).collect(),
             timings: self.batch_timings(i),
@@ -366,6 +383,13 @@ impl Session {
         unsafe { sys::transcribe_segment_init(&mut raw) };
         let _ = unsafe { sys::transcribe_batch_get_segment(self.ptr, i, j, &mut raw) };
         Segment::from_raw(&raw)
+    }
+
+    fn batch_speaker_segment(&self, i: i32, j: i32) -> SpeakerSegment {
+        let mut raw: sys::transcribe_speaker_segment = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_speaker_segment_init(&mut raw) };
+        let _ = unsafe { sys::transcribe_batch_get_speaker_segment(self.ptr, i, j, &mut raw) };
+        SpeakerSegment::from_raw(&raw)
     }
 
     fn batch_word(&self, i: i32, j: i32) -> Word {
@@ -410,6 +434,7 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
     params.timestamps = o.timestamps.to_raw();
     params.pnc = o.pnc.to_raw();
     params.itn = o.itn.to_raw();
+    params.diarize = o.diarize.to_raw();
     params.keep_special_tags = o.keep_special_tags;
     params.spec_k_drafts = o.spec_k_drafts;
 

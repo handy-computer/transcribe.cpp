@@ -6,13 +6,15 @@ export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "vulkan" | "metal"
 export type KvType = "auto" | "f32" | "f16";
 export type Task = "transcribe" | "translate";
 export type TimestampKind = "none" | "auto" | "segment" | "word" | "token";
+export type Diarize = "default" | "off" | "on";
 export type Feature =
   | "initial_prompt"
   | "temperature_fallback"
   | "long_form"
   | "cancellation"
   | "pnc"
-  | "itn";
+  | "itn"
+  | "diarization";
 
 /** Mono float32 PCM at the model's native sample rate (16 kHz for v1). */
 export type PcmLike = Float32Array | number[] | ArrayBuffer | Buffer;
@@ -25,6 +27,16 @@ export interface Segment {
   nWords: number;
   firstToken: number;
   nTokens: number;
+  /** 1-based speaker id; 0 means no attribution. */
+  speakerId: number;
+}
+
+export interface SpeakerSegment {
+  t0Ms: number;
+  t1Ms: number;
+  speakerId: number;
+  /** Family-specific confidence, or NaN when unavailable. */
+  p: number;
 }
 
 export interface Word {
@@ -76,6 +88,7 @@ export interface TranscriptionResult {
   language: string;
   timestampKind: TimestampKind;
   segments: Segment[];
+  speakerSegments: SpeakerSegment[];
   words: Word[];
   tokens: Token[];
   timings: Timings;
@@ -135,6 +148,8 @@ export interface TranscribeOptions {
   targetLanguage?: string;
   /** Default "auto" (richest the model supports, per-family). */
   timestamps?: TimestampKind;
+  /** Default "default" (speaker attribution off for every family). */
+  diarize?: Diarize;
   keepSpecialTags?: boolean;
   /** Speculative-decode draft count; -1 = family default. */
   specKDrafts?: number;
@@ -182,6 +197,7 @@ export interface StreamOptions {
   language?: string;
   targetLanguage?: string;
   timestamps?: TimestampKind;
+  diarize?: Diarize;
   keepSpecialTags?: boolean;
   commitPolicy?: CommitPolicy;
   stablePrefixAgreementN?: number;

@@ -595,18 +595,18 @@ int32_t argmax_vec(const std::vector<float> & v) {
 
 // Install the decoded transcript into a result target (the session's
 // scratch slot or a batch ResultSet — both carry identically-named result
-// members). When diarization resolves ON and the emergent
-// [start][Sxx]text[end] markers parse, the result is structured per-turn
-// segments + speaker rows with dediarized full text (kind SEGMENT).
-// Otherwise: today's raw passthrough (one segment, kind NONE).
+// members). MOSS always emits emergent [start][Sxx]text[end] metadata, so
+// parsing is unconditional: full_text is clean and segment timing follows the
+// timestamp request. diarize=ON retains speaker attribution; DEFAULT/OFF
+// discard it. Marker-free/malformed output falls back to one plain segment.
 template <typename Result>
 void install_transcript(Result &                      out,
                         const transcribe_run_params * params,
                         const std::string &           raw_text,
                         int64_t                       audio_ms) {
-    if (diarize_resolves_on(params) &&
-        parse_diarized_transcript(raw_text, audio_ms, out.segments, out.speaker_segments, out.full_text)) {
-        out.result_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+    if (parse_diarized_transcript(raw_text, audio_ms, out.segments, out.speaker_segments, out.full_text)) {
+        apply_result_policy(params, out.segments, out.speaker_segments);
+        out.result_kind = returned_timestamp_kind(params);
         return;
     }
     out.full_text   = raw_text;
@@ -890,8 +890,8 @@ transcribe_status run(transcribe_session *          session,
         generated_ids.pop_back();
     }
 
-    // Raw transcript: [start][Sxx]text[end] emergent text. De-diarization is a
-    // scoring-time concern (WER harness), not the runtime's.
+    // Raw transcript: [start][Sxx]text[end] emergent text. install_transcript
+    // parses the metadata into the clean public result.
     std::string raw_text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
 
     cc->t_decode_us = ggml_time_us() - t_dec_start;

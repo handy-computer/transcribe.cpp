@@ -31,6 +31,7 @@ fn abi_struct_sizes_are_live() {
         AbiStruct::RunParams,
         AbiStruct::Capabilities,
         AbiStruct::Segment,
+        AbiStruct::SpeakerSegment,
         AbiStruct::SessionLimits,
     ] {
         assert!(abi_struct_size(which) > 0, "{which:?} reported size 0");

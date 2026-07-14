@@ -169,13 +169,13 @@ void test_run_validate_success_clears_and_runs() {
 }
 
 // ---------------------------------------------------------------------------
-// diarize enum validation: an out-of-range raw value is rejected with
-// INVALID_ARG before the snapshot is cleared (mirrors the pnc/itn raw-enum
-// gate in validate_run_params_common); a well-formed non-DEFAULT value
-// passes validation and reaches the run hook (unsupported models only WARN).
+// Advisory enum validation: out-of-range raw values are rejected before the
+// warning helper and before snapshot clearing in both single and batch paths.
+// A well-formed non-DEFAULT value reaches the run hook (unsupported models only
+// WARN). UBSan exercises these calls in the sanitized CI lane.
 // ---------------------------------------------------------------------------
 
-void test_diarize_enum_validation() {
+void test_advisory_enum_validation() {
     transcribe_model model;
     model.arch = &run_validate_arch();
 
@@ -184,26 +184,39 @@ void test_diarize_enum_validation() {
     session.full_text  = "previous result";
     session.has_result = true;
 
-    transcribe_run_params params;
-    transcribe_run_params_init(&params);
-    const int bad_raw = 9999;
-    std::memcpy(&params.diarize, &bad_raw, sizeof(bad_raw));
+    const int     bad_raw     = 9999;
+    float         sample      = 0.0f;
+    const float * batch_pcm[] = { &sample };
+    const int     batch_n[]   = { 1 };
 
-    g_run_called          = false;
-    g_run_validate_status = TRANSCRIBE_OK;
+    for (int field = 0; field < 3; ++field) {
+        transcribe_run_params params;
+        transcribe_run_params_init(&params);
+        void * dst = field == 0 ? static_cast<void *>(&params.pnc) :
+                     field == 1 ? static_cast<void *>(&params.itn) :
+                                  static_cast<void *>(&params.diarize);
+        std::memcpy(dst, &bad_raw, sizeof(bad_raw));
 
-    float             pcm = 0.0f;
-    transcribe_status st  = transcribe_run(&session, &pcm, 1, &params);
+        g_run_called          = false;
+        g_run_validate_status = TRANSCRIBE_OK;
+        transcribe_status st  = transcribe_run(&session, &sample, 1, &params);
+        CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(g_run_called == false);
+        CHECK(session.has_result);
+        CHECK(session.full_text == "previous result");
 
-    CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(g_run_called == false);
-    CHECK(session.has_result);
-    CHECK(session.full_text == "previous result");
+        st = transcribe_run_batch(&session, batch_pcm, batch_n, 1, &params);
+        CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(g_run_called == false);
+        CHECK(session.has_result);
+        CHECK(session.full_text == "previous result");
+    }
 
     // Well-formed ON passes the gate (feature-less model WARNs, proceeds).
+    transcribe_run_params params;
     transcribe_run_params_init(&params);
-    params.diarize = TRANSCRIBE_DIARIZE_MODE_ON;
-    st             = transcribe_run(&session, &pcm, 1, &params);
+    params.diarize             = TRANSCRIBE_DIARIZE_MODE_ON;
+    const transcribe_status st = transcribe_run(&session, &sample, 1, &params);
     CHECK(st == TRANSCRIBE_OK);
     CHECK(g_run_called == true);
 }
@@ -340,7 +353,7 @@ int main() {
     test_no_run_hook_clears_and_not_implemented();
     test_run_validate_failure_preserves_snapshot();
     test_run_validate_success_clears_and_runs();
-    test_diarize_enum_validation();
+    test_advisory_enum_validation();
     test_batch_abort_pads_missing_to_n();
     test_batch_fastpath_abort_pads_missing_to_n();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

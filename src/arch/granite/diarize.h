@@ -30,9 +30,8 @@ extern const char k_saa_instruction[];
 
 // True when this run requests the speaker-attribution task: the model
 // advertises TRANSCRIBE_FEATURE_DIARIZATION (the -plus variant's GGUF
-// capability KV) AND the caller passed diarize=ON. DEFAULT resolves OFF
-// for granite: plain transcription is the family default the shipped
-// WER numbers were measured against.
+// capability KV) AND the caller passed diarize=ON. DEFAULT resolves OFF,
+// matching the library-wide default.
 bool diarize_requested(const transcribe_model * model, const transcribe_run_params * params);
 
 // Split a speaker-attributed transcript at "[Speaker N]" markers
