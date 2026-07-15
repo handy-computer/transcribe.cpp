@@ -753,6 +753,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     argmax_collapse_drop_eos(logits_host, static_cast<int>(vocab), n_text, cm->hparams.dec_eos_id, final_ids);
 
     cc->full_text = cm->tok.decode(final_ids.data(), static_cast<int>(final_ids.size()));
+    cc->raw_text  = cc->full_text;  // no post-processing, via transcribe_raw_text
 
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result  = true;

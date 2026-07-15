@@ -754,6 +754,7 @@ void finalize_granite_result(GraniteModel *                cm,
                              const std::string &           raw_text,
                              int64_t                       audio_ms,
                              Result &                      out) {
+    out.raw_text = raw_text;  // pre-parse marker text, via transcribe_raw_text
     if (params != nullptr && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
         out.full_text = parse_granite_word_timestamps(raw_text, audio_ms, out.words, out.segments);
         if (!out.words.empty()) {

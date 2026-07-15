@@ -5,6 +5,10 @@ import CTranscribe
 /// the next run and the session itself.
 public struct Transcript: Sendable, Equatable {
     public let text: String
+    /// The model's decoded output before family post-processing (diarization
+    /// markers, timestamp/special tokens, tag filtering, whitespace trims).
+    /// Equal to `text` modulo whitespace for families that emit clean text.
+    public let rawText: String
     /// Detected language ISO code, or `nil` when the model didn't predict one
     /// (English-only model, a caller-supplied hint, or no LID).
     public let language: String?

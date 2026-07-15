@@ -62,8 +62,8 @@ the CI. Q4_K_M's higher 2.59% is not broad degradation but a handful of 4-bit
 tail failures (6 empty outputs, 5 English->Chinese language-drift utterances,
 1 timestamp-token repetition loop); prefer Q5_K_M or higher if those matter.
 The runtime applies the same marker removal to `full_text`, so WER scoring and
-the public transcript agree. The pre-parsed inline marker string is not exposed
-by the current result API.
+the public transcript agree. The pre-parsed inline marker string remains
+available verbatim via `transcribe_raw_text()`.
 
 ## Quick Start
 

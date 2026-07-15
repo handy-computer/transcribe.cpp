@@ -123,6 +123,19 @@ std::string batch_segments_json(const transcribe_session * ctx, int i) {
     return out;
 }
 
+// ",\"raw_text\":\"...\"" fragment: the model's pre-cleanup decode
+// (transcribe_raw_text). Emitted only when it differs from the clean text,
+// so JSONL stays compact for families with no post-processing.
+std::string raw_text_json(const char * raw, const char * clean) {
+    if (raw == nullptr || raw[0] == '\0' || (clean != nullptr && std::strcmp(raw, clean) == 0)) {
+        return {};
+    }
+    std::string out = ",\"raw_text\":\"";
+    out += json_escape(raw);
+    out += "\"";
+    return out;
+}
+
 // ",\"speakers\":[...]" fragment: the "who spoke when" rows. Emitted only
 // when the run produced speaker segments. p is omitted unless finite
 // (NaN — "model provides no confidence" — is not representable in JSON).
@@ -914,6 +927,7 @@ int main(int argc, char ** argv) {
                         const std::string escaped  = json_escape(text);
                         std::string       segments = batch_segments_json(ctx, static_cast<int>(k));
                         segments += batch_speakers_json(ctx, static_cast<int>(k));
+                        segments += raw_text_json(transcribe_batch_raw_text(ctx, static_cast<int>(k)), text);
                         std::string err_field;
                         if (ust != TRANSCRIBE_OK) {
                             err_field = ",\"error\":\"";
@@ -1058,6 +1072,7 @@ int main(int argc, char ** argv) {
                     const std::string escaped  = json_escape(text);
                     std::string       segments = segments_json(ctx);
                     segments += speakers_json(ctx);
+                    segments += raw_text_json(transcribe_raw_text(ctx), text);
                     std::string err_field;
                     if (run_st != TRANSCRIBE_OK) {
                         err_field = ",\"error\":\"";

@@ -1133,6 +1133,10 @@ transcribe_status forward_buffer(Session *     cc,
     }
     text = text.substr(b, e - b);
 
+    // Unfiltered decode (control markers included, untrimmed) for
+    // transcribe_raw_text. forward_buffer's only caller is the offline run.
+    cc->raw_text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
+
     out_text = std::move(text);
     return TRANSCRIBE_OK;
 }
@@ -2600,6 +2604,7 @@ transcribe_status run_batch(transcribe_session *          session,
         std::string                   text = detok_generated(cm, generated[b]);
         transcribe_session::ResultSet rs;
         rs.full_text   = text;
+        rs.raw_text    = cm->tok.decode(generated[b].data(), static_cast<int>(generated[b].size()));
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result  = true;
         // Valid rows fit the context (over-context rows were rejected up front

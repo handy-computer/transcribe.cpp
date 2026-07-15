@@ -115,6 +115,7 @@ export function bindLibrary(libraryPath: string): Bound {
       inp(T.transcribe_run_params),
     ]),
     fullText: lib.func("transcribe_full_text", "str", ["void *"]),
+    rawText: lib.func("transcribe_raw_text", "str", ["void *"]),
     detectedLanguage: lib.func("transcribe_detected_language", "str", ["void *"]),
     returnedTimestampKind: lib.func("transcribe_returned_timestamp_kind", "int", ["void *"]),
     nSegments: lib.func("transcribe_n_segments", "int", ["void *"]),
@@ -208,6 +209,7 @@ export function bindLibrary(libraryPath: string): Bound {
       iop(T.transcribe_speaker_segment),
     ]),
     batchFullText: lib.func("transcribe_batch_full_text", "str", ["void *", "int"]),
+    batchRawText: lib.func("transcribe_batch_raw_text", "str", ["void *", "int"]),
     batchDetectedLanguage: lib.func("transcribe_batch_detected_language", "str", ["void *", "int"]),
     batchReturnedTimestampKind: lib.func("transcribe_batch_returned_timestamp_kind", "int", [
       "void *",

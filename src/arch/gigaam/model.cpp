@@ -282,6 +282,7 @@ transcribe_status decode_and_populate(GigaamSession * gc,
     gc->t_decode_us = ggml_time_us() - t_dec_start;
 
     std::string text = gm->tok.decode(tokens.data(), static_cast<int>(tokens.size()));
+    gc->raw_text     = text;  // pre-trim decode, via transcribe_raw_text
     // SentencePiece convention: the first token's leading ▁ is stripped on
     // decode. Our shared SP detokenizer maps every ▁ to a space, so trim a
     // single leading space here. Mirrors parakeet's post-decode.

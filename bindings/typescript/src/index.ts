@@ -375,6 +375,7 @@ interface Accessors {
   getSpeakerSegment(j: number, out: any): number;
   getTimings(out: any): number;
   fullText(): string;
+  rawText(): string;
   detectedLanguage(): string;
   returnedTimestampKind(): number;
 }
@@ -392,6 +393,7 @@ function singleAccessors(n: Native, h: any): Accessors {
     getSpeakerSegment: (j, o) => F.getSpeakerSegment(h, j, o),
     getTimings: (o) => F.getTimings(h, o),
     fullText: () => F.fullText(h),
+    rawText: () => F.rawText(h),
     detectedLanguage: () => F.detectedLanguage(h),
     returnedTimestampKind: () => F.returnedTimestampKind(h),
   };
@@ -410,6 +412,7 @@ function batchAccessors(n: Native, h: any, i: number): Accessors {
     getSpeakerSegment: (j, o) => F.batchGetSpeakerSegment(h, i, j, o),
     getTimings: (o) => F.batchGetTimings(h, i, o),
     fullText: () => F.batchFullText(h, i),
+    rawText: () => F.batchRawText(h, i),
     detectedLanguage: () => F.batchDetectedLanguage(h, i),
     returnedTimestampKind: () => F.batchReturnedTimestampKind(h, i),
   };
@@ -494,6 +497,7 @@ function materialize(
 
   return {
     text: acc.fullText() ?? "",
+    rawText: acc.rawText() ?? "",
     language: acc.detectedLanguage() ?? "",
     timestampKind: TIMESTAMP_NAMES[acc.returnedTimestampKind()] ?? "none",
     segments,

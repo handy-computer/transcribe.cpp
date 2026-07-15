@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "1565e5182ce97326"
+PUBLIC_HEADER_HASH = "d67a9bd78b964445"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -259,6 +259,8 @@ def configure(lib):
     lib.transcribe_batch_n_tokens.argtypes = [_c.c_void_p, _c.c_int]
     lib.transcribe_batch_n_words.restype = _c.c_int
     lib.transcribe_batch_n_words.argtypes = [_c.c_void_p, _c.c_int]
+    lib.transcribe_batch_raw_text.restype = _c.c_char_p
+    lib.transcribe_batch_raw_text.argtypes = [_c.c_void_p, _c.c_int]
     lib.transcribe_batch_returned_timestamp_kind.restype = _c.c_int
     lib.transcribe_batch_returned_timestamp_kind.argtypes = [_c.c_void_p, _c.c_int]
     lib.transcribe_batch_status.restype = _c.c_int
@@ -337,6 +339,8 @@ def configure(lib):
     lib.transcribe_parakeet_stream_ext_init.argtypes = [_c.POINTER(transcribe_parakeet_stream_ext)]
     lib.transcribe_print_timings.restype = None
     lib.transcribe_print_timings.argtypes = [_c.c_void_p]
+    lib.transcribe_raw_text.restype = _c.c_char_p
+    lib.transcribe_raw_text.argtypes = [_c.c_void_p]
     lib.transcribe_reset_timings.restype = None
     lib.transcribe_reset_timings.argtypes = [_c.c_void_p]
     lib.transcribe_returned_timestamp_kind.restype = _c.c_int

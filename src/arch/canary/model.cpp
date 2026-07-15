@@ -1170,6 +1170,8 @@ transcribe_status run(transcribe_session *          session,
             seg.text        = full;
 
             cc->segments.push_back(std::move(seg));
+            cc->raw_text =
+                tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));  // unfiltered decode
             cc->full_text   = std::move(full);
             cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
             cc->has_result  = true;
@@ -1780,7 +1782,11 @@ transcribe_status run_batch(transcribe_session *          session,
         seg.t1_ms = 0;
         seg.text  = full;
         rs.segments.push_back(std::move(seg));
-        rs.full_text   = full;
+        rs.full_text = full;
+        {
+            std::vector<int> raw_ids(generated[b].begin(), generated[b].end());
+            rs.raw_text = cm->tok.decode(raw_ids.data(), static_cast<int>(raw_ids.size()));
+        }
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result  = true;
         rs.status      = TRANSCRIBE_OK;

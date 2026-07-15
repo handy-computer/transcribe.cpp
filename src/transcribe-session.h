@@ -133,6 +133,10 @@ struct transcribe_session {
     std::vector<SegmentEntry>        segments;
     std::vector<SpeakerSegmentEntry> speaker_segments;
     std::string                      full_text;
+    // The model's decoded output before family post-processing (marker
+    // parsing, tag filtering, envelope stripping, whitespace trims).
+    // Equals full_text modulo whitespace for families that do none.
+    std::string                      raw_text;
 
     // Offline batch results (transcribe_run_batch). The scratch fields
     // above are the single "current result" slot every run() writes into
@@ -156,6 +160,7 @@ struct transcribe_session {
         std::vector<SegmentEntry>        segments;
         std::vector<SpeakerSegmentEntry> speaker_segments;
         std::string                      full_text;
+        std::string                      raw_text;
         std::string                      detected_language;
         transcribe_timestamp_kind        result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         bool                             has_result  = false;
@@ -184,6 +189,7 @@ struct transcribe_session {
         rs.segments          = segments;
         rs.speaker_segments  = speaker_segments;
         rs.full_text         = full_text;
+        rs.raw_text          = raw_text;
         rs.detected_language = detected_language;
         rs.result_kind       = result_kind;
         rs.has_result        = has_result;

@@ -305,6 +305,7 @@ impl Session {
 
         Transcript {
             text: owned_str(unsafe { sys::transcribe_full_text(self.ptr) }),
+            raw_text: owned_str(unsafe { sys::transcribe_raw_text(self.ptr) }),
             language: owned_opt_str(unsafe { sys::transcribe_detected_language(self.ptr) }),
             timestamp_kind: TimestampKind::from_raw(unsafe {
                 sys::transcribe_returned_timestamp_kind(self.ptr)
@@ -362,6 +363,7 @@ impl Session {
 
         Transcript {
             text: owned_str(unsafe { sys::transcribe_batch_full_text(self.ptr, i) }),
+            raw_text: owned_str(unsafe { sys::transcribe_batch_raw_text(self.ptr, i) }),
             language: owned_opt_str(unsafe {
                 sys::transcribe_batch_detected_language(self.ptr, i)
             }),

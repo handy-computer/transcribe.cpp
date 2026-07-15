@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -347,6 +348,97 @@ void test_batch_fastpath_abort_pads_missing_to_n() {
     CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "") == 0);
 }
 
+// ---------------------------------------------------------------------------
+// raw_text must ride every result path: the single-run scratch slot, the
+// generic serial-fallback batch snapshot (capture_result), and the post-batch
+// utterance-0 mirror back into the scratch slot (restore_scratch_from_result).
+// Regression test for the raw_text-dropped-by-duplicate-snapshot-helpers bug.
+// ---------------------------------------------------------------------------
+
+int g_raw_run_counter = 0;
+
+transcribe_status fake_run_with_raw(transcribe_session *          session,
+                                    const float *                 pcm,
+                                    int                           n_samples,
+                                    const transcribe_run_params * params) {
+    (void) pcm;
+    (void) n_samples;
+    (void) params;
+    ++g_raw_run_counter;
+    session->full_text  = "clean " + std::to_string(g_raw_run_counter);
+    session->raw_text   = "[raw] " + std::to_string(g_raw_run_counter);
+    session->has_result = true;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status fake_run_batch_with_raw(transcribe_session *          session,
+                                          const float * const *         pcm,
+                                          const int *                   n_samples,
+                                          int                           n,
+                                          const transcribe_run_params * params) {
+    (void) pcm;
+    (void) n_samples;
+    (void) n;
+    (void) params;
+    transcribe_session::ResultSet rs;
+    rs.full_text  = "fast clean 0";
+    rs.raw_text   = "[fast raw] 0";
+    rs.has_result = true;
+    rs.status     = TRANSCRIBE_OK;
+    session->batch_results.push_back(std::move(rs));
+    return TRANSCRIBE_OK;
+}
+
+void test_raw_text_single_batch_and_alias() {
+    // Serial-fallback arch: no run_batch hook, so the dispatcher snapshots
+    // the scratch slot per utterance.
+    const transcribe::Arch serial_arch = {
+        "fake-raw-serial", nullptr, nullptr, fake_run_with_raw, nullptr, nullptr,
+        nullptr,           nullptr, nullptr, nullptr,           nullptr, nullptr,
+    };
+
+    transcribe_model model;
+    model.arch = &serial_arch;
+
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+
+    // Single run: raw_text reaches the top-level accessor.
+    g_raw_run_counter = 0;
+    float s0          = 0.0f;
+    CHECK(transcribe_run(&session, &s0, 1, &params) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(transcribe_raw_text(&session), "[raw] 1") == 0);
+    CHECK(std::strcmp(transcribe_batch_raw_text(&session, 0), "[raw] 1") == 0);
+
+    // Serial-fallback batch: each utterance's raw_text lands in its indexed
+    // slot, and the single accessor aliases utterance 0 — NOT the last
+    // utterance left in the scratch slot by the loop.
+    float         s1     = 0.0f;
+    const float * pcm[2] = { &s0, &s1 };
+    const int     ns[2]  = { 1, 1 };
+    CHECK(transcribe_run_batch(&session, pcm, ns, 2, &params) == TRANSCRIBE_OK);
+    CHECK(transcribe_batch_n_results(&session) == 2);
+    CHECK(std::strcmp(transcribe_batch_raw_text(&session, 0), "[raw] 2") == 0);
+    CHECK(std::strcmp(transcribe_batch_raw_text(&session, 1), "[raw] 3") == 0);
+    CHECK(std::strcmp(transcribe_raw_text(&session), "[raw] 2") == 0);
+    CHECK(std::strcmp(transcribe_full_text(&session), "clean 2") == 0);
+
+    // Fast-path arch: the family run_batch hook fills batch_results itself;
+    // the dispatcher's utterance-0 mirror must carry raw_text back into the
+    // scratch slot for the single accessors.
+    const transcribe::Arch fast_arch = {
+        "fake-raw-fast", nullptr, nullptr, fake_run_with_raw, fake_run_batch_with_raw, nullptr, nullptr, nullptr,
+        nullptr,         nullptr, nullptr, nullptr,
+    };
+    model.arch = &fast_arch;
+    CHECK(transcribe_run_batch(&session, pcm, ns, 1, &params) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(transcribe_batch_raw_text(&session, 0), "[fast raw] 0") == 0);
+    CHECK(std::strcmp(transcribe_raw_text(&session), "[fast raw] 0") == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -356,5 +448,6 @@ int main() {
     test_advisory_enum_validation();
     test_batch_abort_pads_missing_to_n();
     test_batch_fastpath_abort_pads_missing_to_n();
+    test_raw_text_single_batch_and_alias();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

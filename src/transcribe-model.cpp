@@ -17,6 +17,7 @@ void transcribe_session::clear_result() {
     segments.clear();
     speaker_segments.clear();
     full_text.clear();
+    raw_text.clear();
     detected_language.clear();
     result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     has_result  = false;

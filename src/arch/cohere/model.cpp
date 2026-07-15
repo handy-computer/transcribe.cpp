@@ -1089,6 +1089,7 @@ transcribe_status run(transcribe_session *          session,
             const transcribe::Tokenizer & tok = cm->tok;
 
             std::string full = tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
+            cc->raw_text     = full;  // pre-trim decode, via transcribe_raw_text
             if (!full.empty() && full.front() == ' ') {
                 full.erase(full.begin());
             }
@@ -1714,6 +1715,7 @@ transcribe_status run_batch(transcribe_session *          session,
             continue;
         }
         std::string full = cm->tok.decode(generated[b].data(), static_cast<int>(generated[b].size()));
+        rs.raw_text      = full;
         if (!full.empty() && full.front() == ' ') {
             full.erase(full.begin());
         }

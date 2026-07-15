@@ -211,6 +211,7 @@ public final class Session {
         let language = String(cString: transcribe_detected_language(ptr))
         return Transcript(
             text: String(cString: transcribe_full_text(ptr)),
+            rawText: String(cString: transcribe_raw_text(ptr)),
             language: language.isEmpty ? nil : language,
             timestampKind: TimestampKind(transcribe_returned_timestamp_kind(ptr)),
             segments: segments, speakerSegments: speakerSegments,
@@ -248,6 +249,7 @@ public final class Session {
         let language = String(cString: transcribe_batch_detected_language(ptr, idx))
         return Transcript(
             text: String(cString: transcribe_batch_full_text(ptr, idx)),
+            rawText: String(cString: transcribe_batch_raw_text(ptr, idx)),
             language: language.isEmpty ? nil : language,
             timestampKind: TimestampKind(transcribe_batch_returned_timestamp_kind(ptr, idx)),
             segments: segments, speakerSegments: speakerSegments,

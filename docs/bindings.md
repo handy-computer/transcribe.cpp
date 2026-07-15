@@ -82,6 +82,18 @@ explicit unsupported combinations return `UNSUPPORTED_TIMESTAMPS`; `AUTO`
 chooses the richest granularity compatible with the selected task. Result
 objects own copies of every row and remain valid after the next run.
 
+## Raw text
+
+Every first-class binding exposes `raw_text` / `rawText` on the materialized
+result alongside the clean `text`: the model's decoded output before family
+post-processing (diarization markers, timestamp/special tokens, tag filtering,
+whitespace trims). It equals the clean text modulo whitespace for families
+that emit clean text natively, and is the recommended replacement for
+`keep_special_tags` when the goal is recovering what the model emitted —
+unlike the flag it works for every family, covers plain-text markers, and does
+not give up the clean transcript. Offline runs (single and batch) only;
+streaming results do not carry it.
+
 When adding a new family extension, update:
 
 - `include/transcribe/<family>.h` with the typed struct, kind constant, and

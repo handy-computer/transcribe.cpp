@@ -17,6 +17,10 @@ use crate::types::TimestampKind;
 pub struct Transcript {
     /// The full transcript text.
     pub text: String,
+    /// The model's decoded output before family post-processing (diarization
+    /// markers, timestamp/special tokens, tag filtering, whitespace trims).
+    /// Equal to `text` modulo whitespace for families that emit clean text.
+    pub raw_text: String,
     /// The model-detected language (ISO code), if it predicted one. `None`
     /// when a language hint was given, the model lacks LID, or none applies.
     pub language: Option<String>,

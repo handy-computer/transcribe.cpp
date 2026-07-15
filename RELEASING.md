@@ -1,7 +1,7 @@
 # Releasing transcribe.cpp
 
 The version is authored once in `include/transcribe.h`
-(`TRANSCRIBE_VERSION_{MAJOR,MINOR,PATCH}`) and duplicated across ~14 files.
+(`TRANSCRIBE_VERSION_{MAJOR,MINOR,PATCH}`) and duplicated across ~15 files.
 `scripts/release/prepare.py` writes all of them and regenerates the FFI;
 `prepare.py --check` verifies the whole tree is consistent. A git tag matching
 `v[0-9]*` is the **only** trigger for the release pipeline (`publish.yml`), and
@@ -12,7 +12,7 @@ has gone green through branch CI on `main`.**
 
 ```bash
 # 1. Branch and write the bump everywhere (header, Cargo/npm/py manifests,
-#    both lockfiles, Swift, and the regenerated FFI) in one command.
+#    all three lockfiles, Swift, and the regenerated FFI) in one command.
 git switch -c release-0.0.x
 uv run --no-project scripts/release/prepare.py 0.0.x
 

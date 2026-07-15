@@ -85,6 +85,10 @@ export interface SessionLimits {
 
 export interface TranscriptionResult {
   text: string;
+  /** The model's decoded output before family post-processing (diarization
+   *  markers, timestamp/special tokens, tag filtering, whitespace trims).
+   *  Equal to `text` modulo whitespace for families that emit clean text. */
+  rawText: string;
   language: string;
   timestampKind: TimestampKind;
   segments: Segment[];

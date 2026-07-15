@@ -926,6 +926,7 @@ transcribe_status run(transcribe_session *          session,
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 
     cc->full_text   = transcript;
+    cc->raw_text    = transcript;  // no post-processing, via transcribe_raw_text
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result  = true;
 
@@ -1355,6 +1356,7 @@ transcribe_status run_batch(transcribe_session *          session,
         std::string                   transcript = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
         transcribe_session::ResultSet rs;
         rs.full_text   = transcript;
+        rs.raw_text    = transcript;
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result  = true;
         rs.status      = TRANSCRIBE_OK;

@@ -916,9 +916,10 @@ transcribe_status run(transcribe_session *          session,
     }
 
     std::string text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
+    cc->raw_text     = text;  // pre-trim decode, via transcribe_raw_text
     // Trim leading/trailing whitespace (the assistant turn often starts
     // with a byte-level space token).
-    size_t      b = 0, e = text.size();
+    size_t b = 0, e = text.size();
     while (b < e && std::isspace(static_cast<unsigned char>(text[b]))) {
         ++b;
     }
@@ -1414,7 +1415,8 @@ transcribe_status run_batch(transcribe_session *          session,
         if (!gen.empty() && gen.back() == eos_id) {
             gen.pop_back();
         }
-        std::string text = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
+        std::string text     = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
+        std::string raw_text = text;
         size_t      s = 0, e = text.size();
         while (s < e && std::isspace(static_cast<unsigned char>(text[s]))) {
             ++s;
@@ -1426,6 +1428,7 @@ transcribe_status run_batch(transcribe_session *          session,
 
         transcribe_session::ResultSet rs;
         rs.full_text   = text;
+        rs.raw_text    = std::move(raw_text);
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result  = true;
         rs.status      = TRANSCRIBE_OK;

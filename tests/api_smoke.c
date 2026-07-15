@@ -637,6 +637,8 @@ static void test_result_accessors_null(void) {
 
     /* Top level. */
     CHECK_STR_EMPTY(transcribe_full_text(ctx));
+    CHECK_STR_EMPTY(transcribe_raw_text(ctx));
+    CHECK_STR_EMPTY(transcribe_batch_raw_text(ctx, 0));
     CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
     CHECK(transcribe_n_segments(ctx) == 0);
     CHECK(transcribe_n_words(ctx) == 0);

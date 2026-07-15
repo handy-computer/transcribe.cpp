@@ -737,7 +737,14 @@ namespace {
 
 constexpr size_t k_min_model_params_size            = TRANSCRIBE_FIELD_END(transcribe_model_load_params, gpu_device);
 constexpr size_t k_min_context_params_size          = TRANSCRIBE_FIELD_END(transcribe_session_params, kv_type);
-constexpr size_t k_min_run_params_size              = TRANSCRIBE_FIELD_END(transcribe_run_params, family);
+// run_params is the one 0.2.0 exception to the append-only rule: `diarize`
+// was inserted mid-struct, shifting every field from `language` on by 8
+// bytes. A 0.1-layout caller's sizeof (64) equals FIELD_END(family) in the
+// NEW layout, so a `family`-prefix minimum would admit stale callers and
+// read their pointers as enums. Require through spec_k_drafts so every
+// pre-0.2 caller that bypasses the SONAME/abihash checks (dlopen by path,
+// stale static link, hand-rolled FFI) gets BAD_STRUCT_SIZE instead.
+constexpr size_t k_min_run_params_size              = TRANSCRIBE_FIELD_END(transcribe_run_params, spec_k_drafts);
 constexpr size_t k_min_stream_params_size           = TRANSCRIBE_FIELD_END(transcribe_stream_params, family);
 constexpr size_t k_stream_params_commit_policy_size = TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_policy);
 constexpr size_t k_stream_params_agreement_n_size =
@@ -2200,21 +2207,6 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *        
 
 namespace {
 
-// Copy the session's scratch result slot into a ResultSet snapshot.
-transcribe_session::ResultSet snapshot_scratch_result(const transcribe_session * s, transcribe_status status) {
-    transcribe_session::ResultSet rs;
-    rs.tokens            = s->tokens;
-    rs.words             = s->words;
-    rs.segments          = s->segments;
-    rs.speaker_segments  = s->speaker_segments;
-    rs.full_text         = s->full_text;
-    rs.detected_language = s->detected_language;
-    rs.result_kind       = s->result_kind;
-    rs.has_result        = s->has_result;
-    rs.status            = status;
-    return rs;
-}
-
 // Pad batch_results out to `n` entries with explicit aborted failures.
 // Called only on an aborted batch: synthesized slots carry
 // TRANSCRIBE_ERR_ABORTED ("did not complete because the batch was aborted"),
@@ -2229,13 +2221,17 @@ void pad_batch_results_aborted(transcribe_session * s, int n) {
 }
 
 // Restore the scratch slot from a ResultSet so the single-result accessors
-// stay coherent after a batch run (they reflect utterance 0).
+// stay coherent after a batch run (they reflect utterance 0). This is the
+// inverse of transcribe_session::capture_result minus the per-run timing
+// accumulators — keep the result fields in sync with that method when adding
+// one (raw_text was once missed here).
 void restore_scratch_from_result(transcribe_session * s, const transcribe_session::ResultSet & rs) {
     s->tokens            = rs.tokens;
     s->words             = rs.words;
     s->segments          = rs.segments;
     s->speaker_segments  = rs.speaker_segments;
     s->full_text         = rs.full_text;
+    s->raw_text          = rs.raw_text;
     s->detected_language = rs.detected_language;
     s->result_kind       = rs.result_kind;
     s->has_result        = rs.has_result;
@@ -2339,7 +2335,10 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
         // validates this utterance's pcm[i] / n_samples[i].
         const transcribe_status st = run_one_inner(session, pcm[i], n_samples[i], params);
         if (st == TRANSCRIBE_OK) {
-            session->batch_results.push_back(snapshot_scratch_result(session, st));
+            // capture_result (not a local field-copy) so every result field —
+            // including per-utterance timings and raw_text — reaches the
+            // batch snapshot without a second list to keep in sync.
+            session->batch_results.push_back(session->capture_result(st));
         } else {
             // Malformed-input early returns preserve the previous scratch
             // slot, so do NOT snapshot it — record an explicit empty
@@ -2627,6 +2626,13 @@ extern "C" const char * transcribe_full_text(const struct transcribe_session * s
     return session->full_text.c_str();
 }
 
+extern "C" const char * transcribe_raw_text(const struct transcribe_session * session) {
+    if (session == nullptr || !session->has_result) {
+        return "";
+    }
+    return session->raw_text.c_str();
+}
+
 extern "C" const char * transcribe_detected_language(const struct transcribe_session * session) {
     if (session == nullptr || !session->has_result) {
         return "";
@@ -2817,6 +2823,7 @@ struct BatchResultView {
     const std::vector<transcribe_session::SegmentEntry> *        segments          = nullptr;
     const std::vector<transcribe_session::SpeakerSegmentEntry> * speaker_segments  = nullptr;
     const std::string *                                          full_text         = nullptr;
+    const std::string *                                          raw_text          = nullptr;
     const std::string *                                          detected_language = nullptr;
     transcribe_timestamp_kind                                    result_kind       = TRANSCRIBE_TIMESTAMPS_NONE;
     bool                                                         valid             = false;
@@ -2850,6 +2857,7 @@ BatchResultView batch_result_view(const transcribe_session * s, int i) {
         v.segments          = &rs.segments;
         v.speaker_segments  = &rs.speaker_segments;
         v.full_text         = &rs.full_text;
+        v.raw_text          = &rs.raw_text;
         v.detected_language = &rs.detected_language;
         v.result_kind       = rs.result_kind;
         v.valid             = true;
@@ -2861,6 +2869,7 @@ BatchResultView batch_result_view(const transcribe_session * s, int i) {
         v.segments          = &s->segments;
         v.speaker_segments  = &s->speaker_segments;
         v.full_text         = &s->full_text;
+        v.raw_text          = &s->raw_text;
         v.detected_language = &s->detected_language;
         v.result_kind       = s->result_kind;
         v.valid             = true;
@@ -2893,6 +2902,11 @@ extern "C" transcribe_status transcribe_batch_status(const struct transcribe_ses
 extern "C" const char * transcribe_batch_full_text(const struct transcribe_session * session, int i) {
     const BatchResultView v = batch_result_view(session, i);
     return v.valid ? v.full_text->c_str() : "";
+}
+
+extern "C" const char * transcribe_batch_raw_text(const struct transcribe_session * session, int i) {
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? v.raw_text->c_str() : "";
 }
 
 extern "C" const char * transcribe_batch_detected_language(const struct transcribe_session * session, int i) {

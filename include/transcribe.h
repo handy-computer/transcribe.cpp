@@ -152,8 +152,8 @@
  * exactly and refuses to load a native provider that does not match.
  */
 #define TRANSCRIBE_VERSION_MAJOR 0
-#define TRANSCRIBE_VERSION_MINOR 1
-#define TRANSCRIBE_VERSION_PATCH 3
+#define TRANSCRIBE_VERSION_MINOR 2
+#define TRANSCRIBE_VERSION_PATCH 0
 
 #define TRANSCRIBE_VERSION_STRINGIZE_(x) #x
 #define TRANSCRIBE_VERSION_STRINGIZE(x)  TRANSCRIBE_VERSION_STRINGIZE_(x)
@@ -1044,9 +1044,14 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *
  * keep_special_tags: keep special vocabulary tags (e.g. <|...|>) in the
  *                     returned text fields. Default (false) strips them
- *                     for clean transcripts; set true to keep the raw
- *                     tags. Token-level accessors always expose the raw
- *                     token text regardless of this flag.
+ *                     for clean transcripts; set true to keep the tags
+ *                     inline. Honored by the families whose models emit
+ *                     such tags (canary, parakeet, sensevoice); parakeet
+ *                     additionally includes/excludes the tag tokens in
+ *                     its public token rows. Most callers should prefer
+ *                     transcribe_raw_text(), which returns the pre-
+ *                     cleanup decode for EVERY family without giving up
+ *                     the clean transcribe_full_text.
  *
  * family:      optional family-specific extension. NULL selects family
  *              defaults. The pointed-to object is caller-owned; the
@@ -2316,7 +2321,21 @@ TRANSCRIBE_API void transcribe_reset_timings(struct transcribe_session * session
 /* Result accessors - top level                                            */
 /* ----------------------------------------------------------------------- */
 
-TRANSCRIBE_API const char *              transcribe_full_text(const struct transcribe_session * session);
+TRANSCRIBE_API const char * transcribe_full_text(const struct transcribe_session * session);
+
+/*
+ * The model's decoded output BEFORE family post-processing — inline
+ * diarization markers (moss `[0.48][S01]`, granite `[Speaker N]:`),
+ * timestamp/special tokens (whisper), language/event/emotion tags
+ * (sensevoice, parakeet, canary), chat-envelope prefixes (qwen3_asr),
+ * and whitespace trims are all still present. transcribe_full_text is
+ * always the clean transcript; this is the escape hatch for callers who
+ * want what the model actually emitted (debugging, custom parsing).
+ * Equal to full_text modulo whitespace for families that emit clean
+ * text natively. Session-owned; same lifetime as transcribe_full_text.
+ * Empty string before any successful run.
+ */
+TRANSCRIBE_API const char *              transcribe_raw_text(const struct transcribe_session * session);
 TRANSCRIBE_API transcribe_timestamp_kind transcribe_returned_timestamp_kind(const struct transcribe_session * session);
 TRANSCRIBE_API int                       transcribe_n_segments(const struct transcribe_session * session);
 TRANSCRIBE_API int                       transcribe_n_words(const struct transcribe_session * session);
@@ -2557,6 +2576,9 @@ TRANSCRIBE_API int transcribe_batch_n_results(const struct transcribe_session * 
 TRANSCRIBE_API transcribe_status transcribe_batch_status(const struct transcribe_session * session, int i);
 
 TRANSCRIBE_API const char * transcribe_batch_full_text(const struct transcribe_session * session, int i);
+
+/* Per-utterance raw text; same contract as transcribe_raw_text. */
+TRANSCRIBE_API const char * transcribe_batch_raw_text(const struct transcribe_session * session, int i);
 
 TRANSCRIBE_API transcribe_timestamp_kind
 transcribe_batch_returned_timestamp_kind(const struct transcribe_session * session, int i);

@@ -46,7 +46,7 @@ from .errors import (
     raise_for_status,
 )
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 # String-enum types, exported so callers (and type checkers) can name them.
 Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda"]
@@ -521,6 +521,10 @@ class Result:
     returned, so it stays valid after later runs."""
 
     text: str
+    #: The model's decoded output before family post-processing (diarization
+    #: markers, timestamp/special tokens, tag filtering, whitespace trims).
+    #: Equal to ``text`` modulo whitespace for families that emit clean text.
+    raw_text: str
     language: str
     timestamp_kind: str
     segments: tuple[Segment, ...]
@@ -1190,6 +1194,7 @@ class Session:
             n_speaker = lambda: _lib.transcribe_n_speaker_segments(h)
             get_speaker = lambda j, out: _lib.transcribe_get_speaker_segment(h, j, out)
             full_text = _lib.transcribe_full_text(h)
+            raw_text = _lib.transcribe_raw_text(h)
             language = _lib.transcribe_detected_language(h)
             kind = _lib.transcribe_returned_timestamp_kind(h)
             get_tim = lambda out: _lib.transcribe_get_timings(h, out)
@@ -1203,6 +1208,7 @@ class Session:
             n_speaker = lambda: _lib.transcribe_batch_n_speaker_segments(h, utt)
             get_speaker = lambda j, out: _lib.transcribe_batch_get_speaker_segment(h, utt, j, out)
             full_text = _lib.transcribe_batch_full_text(h, utt)
+            raw_text = _lib.transcribe_batch_raw_text(h, utt)
             language = _lib.transcribe_batch_detected_language(h, utt)
             kind = _lib.transcribe_batch_returned_timestamp_kind(h, utt)
             get_tim = lambda out: _lib.transcribe_batch_get_timings(h, utt, out)
@@ -1241,6 +1247,7 @@ class Session:
 
         return Result(
             text=_decode(full_text),
+            raw_text=_decode(raw_text),
             language=_decode(language),
             timestamp_kind=_TIMESTAMP_NAMES.get(kind, "unknown"),
             segments=tuple(segments),

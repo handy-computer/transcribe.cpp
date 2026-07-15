@@ -1003,6 +1003,7 @@ transcribe_status run(transcribe_session *          session,
     // Decode generated ids to text (Tokenizer::decode handles the "gpt2"
     // byte-level inversion natively).
     std::string raw_text = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
+    cc->raw_text         = raw_text;  // pre-envelope text, via transcribe_raw_text
 
     // Parse Qwen3-ASR output: auto-detect emits "language X<asr_text>text"
     // (strip prefix); forced emits "text" (we already seeded the prefix). The
@@ -1455,6 +1456,7 @@ transcribe_session::ResultSet finalize_utterance(QwenAsrModel *               cm
     }
 
     rs.full_text   = transcript_text;
+    rs.raw_text    = raw_text;
     rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     rs.has_result  = true;
     rs.status      = TRANSCRIBE_OK;

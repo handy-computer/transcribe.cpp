@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "1565e5182ce97326";
+export const PUBLIC_HEADER_HASH = "d67a9bd78b964445";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -198,6 +198,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_batch_n_speaker_segments': { ret: 'int', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_n_tokens': { ret: 'int', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_n_words': { ret: 'int', args: ['const struct transcribe_session *', 'int'] },
+  'transcribe_batch_raw_text': { ret: 'const char *', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_returned_timestamp_kind': { ret: 'transcribe_timestamp_kind', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_status': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_capabilities_init': { ret: 'void', args: ['struct transcribe_capabilities *'] },
@@ -237,6 +238,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_parakeet_buffered_stream_ext_init': { ret: 'void', args: ['struct transcribe_parakeet_buffered_stream_ext *'] },
   'transcribe_parakeet_stream_ext_init': { ret: 'void', args: ['struct transcribe_parakeet_stream_ext *'] },
   'transcribe_print_timings': { ret: 'void', args: ['const struct transcribe_session *'] },
+  'transcribe_raw_text': { ret: 'const char *', args: ['const struct transcribe_session *'] },
   'transcribe_reset_timings': { ret: 'void', args: ['struct transcribe_session *'] },
   'transcribe_returned_timestamp_kind': { ret: 'transcribe_timestamp_kind', args: ['const struct transcribe_session *'] },
   'transcribe_run': { ret: 'transcribe_status', args: ['struct transcribe_session *', 'const float *', 'int', 'const struct transcribe_run_params *'] },

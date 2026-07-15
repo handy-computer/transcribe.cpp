@@ -595,6 +595,7 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
     gc->t_decode_us = ggml_time_us() - t_dec_start;
 
     std::string text = gm->tok.decode(tokens.data(), static_cast<int>(tokens.size()));
+    gc->raw_text     = text;  // pre-trim decode, via transcribe_raw_text
     if (!text.empty() && text.front() == ' ') {
         text.erase(text.begin());
     }
@@ -686,6 +687,7 @@ transcribe_status decode_one_utterance(MedAsrSession * gc,
     gc->t_decode_us = ggml_time_us() - t_dec_start;
 
     std::string text = gm->tok.decode(tokens.data(), static_cast<int>(tokens.size()));
+    gc->raw_text     = text;  // pre-trim decode, via transcribe_raw_text
     if (!text.empty() && text.front() == ' ') {
         text.erase(text.begin());
     }

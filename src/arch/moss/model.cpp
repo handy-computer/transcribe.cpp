@@ -604,6 +604,7 @@ void install_transcript(Result &                      out,
                         const transcribe_run_params * params,
                         const std::string &           raw_text,
                         int64_t                       audio_ms) {
+    out.raw_text = raw_text;  // pre-parse emergent text, via transcribe_raw_text
     if (parse_diarized_transcript(raw_text, audio_ms, out.segments, out.speaker_segments, out.full_text)) {
         apply_result_policy(params, out.segments, out.speaker_segments);
         out.result_kind = returned_timestamp_kind(params);

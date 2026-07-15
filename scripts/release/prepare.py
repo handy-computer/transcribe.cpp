@@ -3,7 +3,7 @@
 
 The version is authored once in ``include/transcribe.h``
 (``TRANSCRIBE_VERSION_{MAJOR,MINOR,PATCH}``) and physically duplicated across
-~14 files (see ``notes/releasing.md`` §1). This script is the executable form of
+~15 files (see ``notes/releasing.md`` §1). This script is the executable form of
 that bookkeeping and of the pre-tag checklist:
 
     uv run --no-project scripts/release/prepare.py X.Y.Z    # write the bump into
@@ -40,8 +40,9 @@ HEADER = REPO / "include" / "transcribe.h"
 ROOT_CARGO = REPO / "Cargo.toml"
 SAFE_CARGO = REPO / "bindings" / "rust" / "transcribe-cpp" / "Cargo.toml"
 CARGO_LOCK = REPO / "Cargo.lock"
-PYPROJECT = REPO / "bindings" / "python" / "pyproject.toml"
-INIT = REPO / "bindings" / "python" / "src" / "transcribe_cpp" / "__init__.py"
+PY_DIR = REPO / "bindings" / "python"
+PYPROJECT = PY_DIR / "pyproject.toml"
+INIT = PY_DIR / "src" / "transcribe_cpp" / "__init__.py"
 PACKAGE_JSON = REPO / "bindings" / "typescript" / "package.json"
 TS_DIR = REPO / "bindings" / "typescript"
 SWIFT_SOURCE = REPO / "bindings" / "swift" / "Sources" / "TranscribeCpp" / "TranscribeCpp.swift"
@@ -131,6 +132,14 @@ def write_version(version: str) -> int:
 
     print(f"wrote version {version} into every §1b spot")
 
+    # bindings/python/uv.lock: regenerate the local development environment's
+    # project metadata and dependency pins after changing pyproject.toml.
+    print("syncing bindings/python/uv.lock ...")
+    if not _run(["uv", "lock"], cwd=PY_DIR):
+        raise SystemExit(
+            "error: `uv lock` failed — bindings/python/uv.lock was not synced."
+        )
+
     # package-lock.json: regenerate metadata only (no install, no scripts), as
     # notes/releasing.md §3 prescribes. Updates root .version + .packages[""].
     print("syncing bindings/typescript/package-lock.json ...")
@@ -176,6 +185,8 @@ def check() -> int:
          ["cargo", "xtask", "bindgen", "--check"], REPO, False),
         ("swift ABI pin",
          ["uv", "run", "--no-project", str(SWIFT_ABIHASH)], None, False),
+        ("bindings/python/uv.lock freshness (uv lock --check)",
+         ["uv", "lock", "--check"], PY_DIR, False),
         ("Cargo.lock freshness (cargo metadata --locked)",
          ["cargo", "metadata", "--locked", "--format-version", "1"], REPO, True),
         ("package-lock.json freshness (npm ci)",
