@@ -1,7 +1,8 @@
-# WER
+# WER and DER
 
 Word Error Rate is the user-facing acceptance gate. The `scripts/wer/`
-tools turn a reference corpus into transcripts, score them, and compare
+tools turn a reference corpus into transcripts, score text with WER/CER,
+score timed speaker attribution with Diarization Error Rate (DER), and compare
 runs.
 
 ## Pipeline
@@ -12,8 +13,8 @@ runs.
             ▼ scripts/wer/ingest.py        flac → 16-bit PCM wav + manifest.jsonl
             │
             ▼ scripts/wer/run.py           transcribe-cli --batch → hypothesis JSONL
-            │
-            ▼ scripts/wer/score.py         jiwer + bootstrap CI → .score.json
+            ├── scripts/wer/score.py       jiwer + bootstrap CI → .score.json
+            └── scripts/wer/der.py         timed speaker intervals → .der.json
             │
             ▼ scripts/wer/compare.py       delta table across variants
 ```
@@ -99,6 +100,32 @@ with `--out`. Pass `--timestamps segment` or another supported mode
 when you intentionally want timestamped WER; the auto path will use the
 same `-timestamps_<mode>` suffix.
 
+For a diarization run, pass `--diarize`. The input manifest must provide timed
+reference speaker intervals, and `run.py` retains both sides plus the WAV
+duration in the report:
+
+```json
+{"id":"meeting-1","audio":"samples/meeting-1.wav","ref_text":"...",
+ "ref_speaker_segments":[
+   {"t0_ms":0,"t1_ms":920,"speaker_id":"alice"},
+   {"t0_ms":920,"t1_ms":1800,"speaker_id":"bob"}]}
+```
+
+```bash
+uv run scripts/wer/run.py \
+  --model models/MOSS-Transcribe-Diarize/moss-transcribe-diarize-BF16.gguf \
+  --manifest samples/wer/meetings.manifest.jsonl \
+  --diarize
+```
+
+`--diarize` changes the harness timestamp default from `none` to `auto`, since
+DER needs timed speaker rows. An explicit `--timestamps ...` still wins.
+
+The resulting utterance record adds `duration_ms`,
+`ref_speaker_segments`, and `hyp_speaker_segments`. The ordinary LibriSpeech /
+FLEURS ingest adapters do not invent diarization references; use a corpus with
+speaker-time annotations when preparing a DER manifest.
+
 ## `score.py` — compute WER + CI
 
 ```bash
@@ -130,6 +157,47 @@ uv run scripts/wer/score.py reports/wer/<report>.jsonl --dediarize
 
 This is opt-in because bracketed annotations such as `[laughter]` or `<unk>`
 may be meaningful scoring content in other datasets.
+
+## `der.py` — compute DER + CI
+
+```bash
+uv run scripts/wer/der.py reports/wer/<diarized-report>.jsonl
+```
+
+DER is computed from intervals, never by reparsing transcript text. For each
+utterance the scorer optimally matches hypothesis speakers to reference
+speakers, then aggregates missed speaker time, false-alarm speaker time, and
+speaker-confusion time over reference speaker time. Speaker IDs are opaque:
+0-based or 1-based integers and string labels all have identical semantics
+after matching.
+
+The default contract scores overlap and applies no boundary collar. Both are
+explicitly configurable:
+
+```bash
+uv run scripts/wer/der.py reports/wer/<report>.jsonl --collar-ms 250
+uv run scripts/wer/der.py reports/wer/<report>.jsonl --ignore-overlap
+```
+
+`--collar-ms` is the *total* width of a collar centered on every reference
+boundary, pyannote's parameterization: `--collar-ms 250` excludes 125 ms on
+each side. NIST md-eval's `-c` is *per side* — to reproduce a published
+"0.25 s collar" (md-eval `-c 0.25`), pass `--collar-ms 500`.
+The output records the collar and overlap policy alongside corpus DER, a
+deterministic bootstrap confidence interval, component times, per-utterance
+scores, and the selected speaker mapping.
+
+Reference intervals are trusted annotations and validated strictly; a
+malformed reference fails the run. Hypothesis intervals are model output, so
+geometric defects the metric already penalizes are sanitized instead of
+aborting the corpus: rows are clamped to `[0, duration_ms]` and rows that are
+empty after clamping (zero-length or fully out of range) are dropped.
+
+DER fundamentally requires timing. Granite's SAA prompt currently attributes
+text turns but emits no time intervals; an all-`[0, 0]` hypothesis is that
+task's explicit untimed sentinel, and `der.py` rejects it with `DER is
+unavailable` instead of reporting a bogus score. Timed diarization outputs
+such as MOSS can be scored directly.
 
 ## `compare.py` — delta table
 

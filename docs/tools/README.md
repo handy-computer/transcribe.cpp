@@ -54,7 +54,7 @@ This split mirrors `llama.cpp`'s `convert_hf_to_gguf.py` →
 
 - [**benchmarking.md**](benchmarking.md) — `scripts/bench/{run,compare}.py`.
   Perf matrices across (backend, family, quant, sample).
-- [**wer.md**](wer.md) — `scripts/wer/{run,score,compare,ingest}.py`.
+- [**wer.md**](wer.md) — `scripts/wer/{run,score,der,compare,ingest}.py`.
   Hypothesis generation + WER scoring against a reference corpus.
 - [**hf-metadata-schema.md**](hf-metadata-schema.md) — `scripts/hf_cards/generate.py`.
   The `transcribe_cpp` model-card metadata block (per-repo raw WER/RTF plus

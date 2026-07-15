@@ -117,8 +117,8 @@ struct GraniteSession final : public transcribe_session {
     bool decoder_use_flash = true;
 
     // Self-attention KV cache (40 layers, 4 kv heads × 128 head_dim).
-    // Allocated lazily on the first run() call so we can size n_ctx to
-    // the actual prompt+gen budget.
+    // Allocated lazily for the prompt plus minimum output reserve, then grown
+    // in chunks if decoding needs more of the model/session context window.
     transcribe::causal_lm::KvCache kv;
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
