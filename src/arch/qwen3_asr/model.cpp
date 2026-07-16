@@ -364,16 +364,21 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok, ChatTok
 // Build the prompt token sequence + audio-position list, mirroring the
 // Qwen3-ASR chat template at the token level:
 //
-//   <|im_start|>system\n<|im_end|>\n
+//   <|im_start|>system\n{context}<|im_end|>\n
 //   <|im_start|>user\n<|audio_start|><|audio_pad|>*T_enc<|audio_end|><|im_end|>\n
 //   <|im_start|>assistant\n[language {Name}<asr_text>]?
 //
-// System prompt is empty. A non-null `lang_prefix_ids` (resolved via
+// The system slot carries the caller's recognition-biasing context verbatim
+// (the reference builds {"role": "system", "content": context or ""} —
+// qwen_asr/inference/qwen3_asr.py:_build_messages); a null/empty
+// `context_ids` leaves it empty. A non-null `lang_prefix_ids` (resolved via
 // encode_language_prefix) is appended after the trailing newline to force an
-// output language; kept out of here so this stays a pure token-id assembler.
+// output language; both are kept out of here so this stays a pure token-id
+// assembler.
 void build_prompt_tokens(const QwenAsrHParams &       hp,
                          const ChatTokens &           ct,
                          int                          T_enc,
+                         const std::vector<int32_t> * context_ids,
                          const std::vector<int32_t> * lang_prefix_ids,
                          std::vector<int32_t> &       out_ids,
                          std::vector<int64_t> &       out_audio_positions) {
@@ -383,6 +388,9 @@ void build_prompt_tokens(const QwenAsrHParams &       hp,
     out_ids.push_back(ct.im_start);
     out_ids.push_back(ct.role_system);
     out_ids.push_back(ct.newline);
+    if (context_ids != nullptr && !context_ids->empty()) {
+        out_ids.insert(out_ids.end(), context_ids->begin(), context_ids->end());
+    }
     out_ids.push_back(ct.im_end);
     out_ids.push_back(ct.newline);
 
@@ -564,6 +572,19 @@ transcribe_status run(transcribe_session *          session,
         lang_prefix_ptr = &lang_prefix_ids;
     }
 
+    // Recognition-biasing context -> system-message tokens (the reference's
+    // TranscribeArgs context / _build_messages system slot). Plain BPE; the
+    // template's control tokens are pushed by build_prompt_tokens itself.
+    std::vector<int32_t>         context_ids;
+    const std::vector<int32_t> * context_ptr = nullptr;
+    if (const char * ctx_text = transcribe_run_params_context(params); ctx_text != nullptr) {
+        if (const transcribe_status st = cm->tok.encode(ctx_text, context_ids); st != TRANSCRIBE_OK) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: tokenizer.encode failed on context");
+            return st;
+        }
+        context_ptr = &context_ids;
+    }
+
     transcribe::debug::init();
 
     // Mel front-end.
@@ -725,7 +746,7 @@ transcribe_status run(transcribe_session *          session,
     // Prompt construction.
     std::vector<int32_t> prompt_ids;
     std::vector<int64_t> audio_positions;
-    build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc, lang_prefix_ptr, prompt_ids, audio_positions);
+    build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc, context_ptr, lang_prefix_ptr, prompt_ids, audio_positions);
     const int T_prompt   = static_cast<int>(prompt_ids.size());
     const int prefix_len = audio_positions.empty() ? 0 : static_cast<int>(audio_positions.front());
     const int suffix_len = T_prompt - prefix_len - T_enc;
@@ -1528,6 +1549,18 @@ transcribe_status run_batch(transcribe_session *          session,
         lang_prefix_ptr = &lang_prefix_ids;
     }
 
+    // Shared recognition-biasing context (same one-run_params contract);
+    // encoded once, injected into every utterance's system slot.
+    std::vector<int32_t>         context_ids;
+    const std::vector<int32_t> * context_ptr = nullptr;
+    if (const char * ctx_text = transcribe_run_params_context(params); ctx_text != nullptr) {
+        if (cm->tok.encode(ctx_text, context_ids) != TRANSCRIBE_OK) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run_batch: tokenizer.encode failed on context");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        context_ptr = &context_ids;
+    }
+
     // Pass 1: per-utterance encoder + prefill into KV slabs.
     std::vector<std::vector<int32_t>> generated(n);
     std::vector<int>                  T_prompt(n, 0);
@@ -1563,7 +1596,7 @@ transcribe_status run_batch(transcribe_session *          session,
             continue;
         }
         std::vector<int64_t> ap;
-        build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc[b], lang_prefix_ptr, prompt_ids[b], ap);
+        build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc[b], context_ptr, lang_prefix_ptr, prompt_ids[b], ap);
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
         prefix_len  = ap.empty() ? 0 : static_cast<int>(ap.front());
         // Same gate as single-shot run(); the rest of the batch still runs.

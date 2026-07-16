@@ -131,6 +131,10 @@ struct cli_args {
     int                        gpu_device   = 0;  // --device N: 0 = auto, >0 = registry index
     transcribe_timestamp_kind  timestamps   = TRANSCRIBE_TIMESTAMPS_AUTO;
 
+    // Generic recognition-biasing context (transcribe_run_params::context).
+    // Families without the INITIAL_PROMPT feature warn and ignore it.
+    std::string context;  // --context TEXT
+
     // Whisper-family knobs. Ignored for non-Whisper models.
     std::string                              initial_prompt;                    // --initial-prompt TEXT
     bool                                     whisper_set              = false;
@@ -211,7 +215,11 @@ void print_usage(const char * argv0) {
                  "  --batch-jsonl         output one JSON line per file (for batch)\n"
                  "  --batch-size N        group N utterances into one transcribe_run_batch\n"
                  "                        call (offline only; 0/1 = per-file serial loop)\n"
-                 "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
+                 "  --context TEXT        recognition-biasing context (names, jargon,\n"
+                 "                        prior transcript); models without the feature\n"
+                 "                        warn and ignore it\n"
+                 "  --initial-prompt TEXT (whisper) initial prompt text for context biasing;\n"
+                 "                        wins over --context on whisper\n"
                  "  --temperature F       (whisper) tier-0 sampling temperature (default 0 = greedy)\n"
                  "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
                  "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
@@ -439,6 +447,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --batch-size must be >= 0\n");
                 return false;
             }
+        } else if (a == "--context") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.context = v;
         } else if (a == "--initial-prompt") {
             const char * v = take_value(a.c_str());
             if (!v) {
@@ -697,6 +711,9 @@ int main(int argc, char ** argv) {
         }
         if (args.canary_pnc_set) {
             rp.pnc = args.canary_pnc ? TRANSCRIBE_PNC_MODE_ON : TRANSCRIBE_PNC_MODE_OFF;
+        }
+        if (!args.context.empty()) {
+            rp.context = args.context.c_str();
         }
 
         // Whisper run extension. Allocated outside rp's scope so its
@@ -1102,6 +1119,9 @@ int main(int argc, char ** argv) {
         }
         if (args.canary_pnc_set) {
             rp.pnc = args.canary_pnc ? TRANSCRIBE_PNC_MODE_ON : TRANSCRIBE_PNC_MODE_OFF;
+        }
+        if (!args.context.empty()) {
+            rp.context = args.context.c_str();
         }
 
         struct transcribe_whisper_run_ext wx;

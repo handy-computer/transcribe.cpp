@@ -84,6 +84,12 @@ All Fun-ASR-Nano variants support:
   punctuation) via `--itn` on the CLI, or
   `transcribe_funasr_nano_params { use_itn = true }` via the library
   API.
+- **Hotword / context biasing** via `--context` on the CLI or
+  `transcribe_run_params::context` in the API. The text fills the
+  hotword slot of the trained prompt template (upstream
+  `FunASRNano.get_prompt` hotwords path), so comma-separated
+  keyword lists match the trained shape best — e.g.
+  `--context "pull buoy, catch-up freestyle"`.
 
 What's not supported (consistent across the family): translation,
 real-time streaming, long-form chunking, timestamps, VAD, speaker

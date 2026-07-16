@@ -989,14 +989,14 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *
  * target_language: target language for translation tasks, or NULL.
  *
- * String-pointer lifetime (language / target_language): caller-owned, and
- * the library copies what it needs before the API call returns. This holds
- * for transcribe_run / transcribe_run_batch (synchronous) AND for
- * transcribe_stream_begin: the dispatcher copies these strings into
- * session-owned storage at begin, so the caller may free its params —
- * including the strings — the moment begin returns, even though the stream
- * keeps running. Bindings rely on this: ctypes/FFI-managed string buffers
- * die when the begin wrapper returns.
+ * String-pointer lifetime (language / target_language / context):
+ * caller-owned, and the library copies what it needs before the API call
+ * returns. This holds for transcribe_run / transcribe_run_batch
+ * (synchronous) AND for transcribe_stream_begin: the dispatcher copies
+ * these strings into session-owned storage at begin, so the caller may
+ * free its params — including the strings — the moment begin returns,
+ * even though the stream keeps running. Bindings rely on this:
+ * ctypes/FFI-managed string buffers die when the begin wrapper returns.
  *
  * keep_special_tags: keep special vocabulary tags (e.g. <|...|>) in the
  *                     returned text fields. Default (false) strips them
@@ -1049,6 +1049,43 @@ struct transcribe_run_params {
      *   to know whether the field will take effect.
      */
     int32_t spec_k_drafts;
+
+    /*
+     * context: free-text that conditions recognition — names, jargon,
+     *   hotwords, prior-transcript or domain context. NULL (default) or
+     *   empty means no context.
+     *
+     *   Contract: the output remains a faithful transcript of the audio.
+     *   context biases WHAT the model hears (spelling of names, choice
+     *   between homophones), never what it does — it is not an
+     *   instruction channel, and families never route it anywhere that
+     *   would change the task. Each family maps the string to its native
+     *   mechanism:
+     *
+     *     whisper      previous-context prefix after <|startofprev|>
+     *                  (same path as transcribe_whisper_run_ext's
+     *                  initial_prompt; the ext, when present, wins — see
+     *                  include/transcribe/whisper.h for precedence).
+     *     qwen3_asr    system-message context slot (the model's
+     *                  trained biasing channel; accepts keyword lists
+     *                  or free paragraphs).
+     *     funasr_nano  hotword/context slot of the trained prompt
+     *                  template. Keyword-list-style text ("Foo, Bar,
+     *                  Baz") matches the trained shape best.
+     *
+     *   A non-empty context against a model for which
+     *   transcribe_model_supports(model, TRANSCRIBE_FEATURE_INITIAL_PROMPT)
+     *   is false emits a WARN and proceeds without it (same advisory
+     *   semantics as pnc/itn).
+     *
+     *   Field-promotion rule (why this is core and e.g. voxtral's
+     *   instruct mode is not): a knob enters transcribe_run_params when
+     *   two or more families can honor the same caller intent WITHOUT
+     *   changing the output contract. Anything that changes what the
+     *   model does (free-form task instructions, chat) stays on the
+     *   owning family's extension header.
+     */
+    const char * context;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);
@@ -1236,9 +1273,13 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct 
  *
  * Feature meanings:
  *
- *   INITIAL_PROMPT       The model accepts a free-text or token
- *                        prompt to bias decoding. Today: whisper
- *                        only; reached via transcribe_whisper_run_ext.
+ *   INITIAL_PROMPT       The model honors transcribe_run_params::context
+ *                        — free text that biases recognition while the
+ *                        output remains a transcript. Today: whisper,
+ *                        qwen3_asr, funasr_nano. Whisper additionally
+ *                        accepts token-level prompts and decode knobs
+ *                        via transcribe_whisper_run_ext, which takes
+ *                        precedence over the core field.
  *
  *   TEMPERATURE_FALLBACK The model runs a multi-tier temperature loop
  *                        with metric-driven fallback. Today: whisper.

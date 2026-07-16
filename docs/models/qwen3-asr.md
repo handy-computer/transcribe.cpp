@@ -72,6 +72,12 @@ All Qwen3-ASR variants support:
 
 - **Transcription** of 16 kHz mono WAV input.
 - **Auto language detection** across 30 languages.
+- **Context biasing** — Qwen3-ASR's trained "customized recognition"
+  channel. Pass names/jargon/prior context via `--context` (or
+  `transcribe_run_params::context`); the text rides the chat template's
+  system slot, exactly where the upstream reference puts its `context`
+  string. Keyword lists and free paragraphs both work; the output
+  remains a transcript of the audio.
 
 What's not supported (consistent across the family): translation,
 real-time streaming, VAD, speaker diarization, timestamps. See the

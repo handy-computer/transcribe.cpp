@@ -91,6 +91,11 @@ section.
 All Whisper variants support:
 
 - **Transcription** of 16 kHz mono WAV input.
+- **Context biasing** — pass names/jargon/prior-transcript text via
+  `--context` (or `transcribe_run_params::context`); it is injected as
+  Whisper previous-context after `<|startofprev|>`. The whisper run
+  extension's `initial_prompt` / `prompt_tokens` are the power-user
+  form of the same mechanism and win when both are set.
 - **Long-form audio** via 30-second chunked decoding with the
   prev-context window assembly described in the family doc.
 - **Segment timestamps** — the finest granularity the library emits for

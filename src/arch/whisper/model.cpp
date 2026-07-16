@@ -1476,8 +1476,16 @@ transcribe_status whisper_run(transcribe_session *          session,
     if (prev_sot_id < 0) {
         prev_sot_id = cm->tok.find("<|startofprev|>");
     }
-    const bool prompt_requested = (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) ||
-                                  (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0');
+    // Effective initial-prompt string. The whisper run ext wins when it
+    // carries one; otherwise the core run_params::context maps onto the same
+    // previous-context mechanism (transcribe_run_params_context is size-gated
+    // and returns nullptr for absent/empty, so this is non-null iff some
+    // caller supplied non-empty prompt text).
+    const char * initial_prompt_text = (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0') ?
+                                           wp->initial_prompt :
+                                           transcribe_run_params_context(params);
+    const bool   prompt_requested =
+        (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) || initial_prompt_text != nullptr;
     if (prev_sot_id < 0 && (prompt_requested || wp->condition_on_prev_tokens)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "whisper run: model has no <|startofprev|> token; "
@@ -1487,9 +1495,10 @@ transcribe_status whisper_run(transcribe_session *          session,
 
     // Resolve initial prompt -> text-only token ids (library prepends
     // <|startofprev|>). Two paths: prompt_tokens (caller-owned, verbatim,
-    // text-side only); or initial_prompt string, tokenized as HF's
-    // get_prompt_ids form ("<|startofprev|> " + strip) with any special token
-    // (id >= eos_id) in the text rejected (tokenization_whisper.py).
+    // text-side only); or the effective prompt string (ext initial_prompt or
+    // core context), tokenized as HF's get_prompt_ids form
+    // ("<|startofprev|> " + strip) with any special token (id >= eos_id) in
+    // the text rejected (tokenization_whisper.py).
     const int max_prev_cap =
         wp->max_prev_context_tokens > 0 ? wp->max_prev_context_tokens : (cm->hparams.dec_max_target_positions / 2 - 1);
     std::vector<int32_t> prompt_text_ids;
@@ -1505,8 +1514,8 @@ transcribe_status whisper_run(transcribe_session *          session,
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
         prompt_text_ids.assign(wp->prompt_tokens, wp->prompt_tokens + wp->n_prompt_tokens);
-    } else if (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0') {
-        std::string s(wp->initial_prompt);
+    } else if (initial_prompt_text != nullptr) {
+        std::string s(initial_prompt_text);
         auto        issp = [](char c) {
             return c == ' ' || c == '\t' || c == '\n' || c == '\r';
         };
@@ -1540,7 +1549,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                         const int    id    = cm->tok.find(piece);
                         if (id >= eos_id) {
                             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                    "whisper run: initial_prompt contains "
+                                    "whisper run: initial_prompt/context contains "
                                     "disallowed special token \"%s\" (id %d)",
                                     piece.c_str(), id);
                             return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1555,13 +1564,13 @@ transcribe_status whisper_run(transcribe_session *          session,
             if (cm->tok.encode(text, prompt_text_ids) != TRANSCRIBE_OK) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                         "whisper run: tokenizer.encode failed on "
-                        "initial_prompt");
+                        "initial_prompt/context");
                 return TRANSCRIBE_ERR_GGUF;
             }
             for (int32_t id : prompt_text_ids) {
                 if (id >= eos_id) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "whisper run: initial_prompt contains "
+                            "whisper run: initial_prompt/context contains "
                             "disallowed special token id %d",
                             id);
                     return TRANSCRIBE_ERR_INVALID_ARG;
@@ -2576,8 +2585,13 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
     if (prev_sot_id < 0) {
         prev_sot_id = cm->tok.find("<|startofprev|>");
     }
-    const bool           prompt_requested = (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) ||
-                                            (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0');
+    // Effective prompt string mirrors the serial path: ext initial_prompt
+    // wins, core run_params::context is the fallback.
+    const char * initial_prompt_text = (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0') ?
+                                           wp->initial_prompt :
+                                           transcribe_run_params_context(params);
+    const bool   prompt_requested =
+        (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) || initial_prompt_text != nullptr;
     std::vector<int32_t> prev_tokens;
     if (prompt_requested) {
         if (prev_sot_id < 0) {
@@ -2592,7 +2606,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
             }
             ptext.assign(wp->prompt_tokens, wp->prompt_tokens + wp->n_prompt_tokens);
         } else {
-            std::string s(wp->initial_prompt);
+            std::string s(initial_prompt_text);
             auto        issp = [](char c) {
                 return c == ' ' || c == '\t' || c == '\n' || c == '\r';
             };

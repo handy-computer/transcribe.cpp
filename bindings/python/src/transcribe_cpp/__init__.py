@@ -583,7 +583,7 @@ def _stream_update_from(u) -> StreamUpdate:
 
 
 def _build_run_params(task, language, target_language, timestamps,
-                      keep_special_tags, spec_k_drafts):
+                      keep_special_tags, spec_k_drafts, context=None):
     if not isinstance(spec_k_drafts, int) or spec_k_drafts < -1:
         raise InvalidArgument(
             f"spec_k_drafts must be -1 (family default), 0 (disabled), or a "
@@ -597,6 +597,7 @@ def _build_run_params(task, language, target_language, timestamps,
     params.target_language = target_language.encode("utf-8") if target_language else None
     params.keep_special_tags = keep_special_tags
     params.spec_k_drafts = spec_k_drafts
+    params.context = context.encode("utf-8") if context else None
     return params
 
 
@@ -985,6 +986,7 @@ class Session:
             timestamps: Timestamps = "auto",
             keep_special_tags: bool = False,
             spec_k_drafts: int = -1,
+            context: str | None = None,
             family: FamilyExtension | None = None) -> Result:
         """Transcribe 16 kHz mono float32 PCM and return a materialized Result.
 
@@ -993,6 +995,10 @@ class Session:
         ``spec_k_drafts`` tunes speculative decoding on models whose
         capabilities advertise ``supports_spec_decode`` (-1 = family default,
         0 = disabled, >0 = draft length; silently ignored elsewhere).
+        ``context`` is free text (names, jargon, prior transcript) that
+        biases recognition on models advertising the ``initial_prompt``
+        feature (whisper, qwen3_asr, funasr_nano); the output remains a
+        transcript, and unsupported models warn and ignore it.
 
         On ``Aborted`` (via :meth:`cancel`) and ``OutputTruncated`` the
         partial transcript is preserved and attached to the exception as
@@ -1000,7 +1006,7 @@ class Session:
         self._cancel.clear()
         array, n_samples = _pcm_to_carray(pcm)
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts)
+                                   keep_special_tags, spec_k_drafts, context)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1021,6 +1027,7 @@ class Session:
                   timestamps: Timestamps = "auto",
                   keep_special_tags: bool = False,
                   spec_k_drafts: int = -1,
+                  context: str | None = None,
                   family: FamilyExtension | None = None,
                   return_exceptions: bool = False) -> list[Result | TranscribeError]:
         """Transcribe several utterances in one dispatch — one Result each.
@@ -1055,7 +1062,7 @@ class Session:
             counts[k] = n
 
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts)
+                                   keep_special_tags, spec_k_drafts, context)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1108,6 +1115,7 @@ class Session:
                target_language: str | None = None, timestamps: Timestamps = "none",
                keep_special_tags: bool = False, commit_policy: CommitPolicy = "auto",
                stable_prefix_agreement_n: int = 0,
+               context: str | None = None,
                family: FamilyExtension | None = None) -> Stream:
         """Begin streaming on this session and return a Stream to feed audio to.
 
@@ -1120,7 +1128,7 @@ class Session:
         # spec_k_drafts is an offline-decode knob; streaming always uses the
         # family default (-1).
         run_params = _build_run_params(task, language, target_language, timestamps,
-                                       keep_special_tags, -1)
+                                       keep_special_tags, -1, context)
         sp = _StreamParams()
         _lib.transcribe_stream_params_init(_byref(sp))
         sp.commit_policy = _enum(_COMMIT_POLICIES, commit_policy, "commit_policy")
@@ -1349,6 +1357,7 @@ def transcribe(
     timestamps: Timestamps = "auto",
     keep_special_tags: bool = False,
     spec_k_drafts: int = -1,
+    context: str | None = None,
     family: FamilyExtension | None = None,
 ) -> Result:
     """Transcribe *pcm* in one call and return a materialized Result.
@@ -1363,7 +1372,7 @@ def transcribe(
     session_opts = dict(n_threads=n_threads, kv_type=kv_type, n_ctx=n_ctx)
     run_opts = dict(task=task, language=language, target_language=target_language,
                     timestamps=timestamps, keep_special_tags=keep_special_tags,
-                    spec_k_drafts=spec_k_drafts, family=family)
+                    spec_k_drafts=spec_k_drafts, context=context, family=family)
 
     if isinstance(model, Model):
         with model.session(**session_opts) as session:

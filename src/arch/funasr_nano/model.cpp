@@ -147,15 +147,49 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok, ChatTok
 }
 
 // Build the language/itn prompt text that the reference's
-// FunASRNano.get_prompt produces. hotwords-empty path only.
-std::string build_funasr_prompt_text(const char * lang, bool use_itn) {
+// FunASRNano.get_prompt produces. A non-empty `context` renders the
+// reference's hotwords path — the context/hotword preamble with the
+// caller's text in the 热词列表 ("hotword list") slot, exactly where
+// get_prompt puts its ", ".join(hotwords):
+//
+//   请结合上下文信息，更加准确地完成语音转写任务。
+//   如果没有相关信息，我们会留空。\n\n\n**上下文信息：**\n\n\n
+//   热词列表：[{context}]\n
+std::string build_funasr_prompt_text(const char * context, const char * lang, bool use_itn) {
     std::string out;
+    if (context != nullptr && context[0] != '\0') {
+        // 请结合上下文信息，更加准确地完成语音转写任务。
+        // 如果没有相关信息，我们会留空。
+        out =
+            "\xE8\xAF\xB7\xE7\xBB\x93\xE5\x90\x88\xE4\xB8\x8A"
+            "\xE4\xB8\x8B\xE6\x96\x87\xE4\xBF\xA1\xE6\x81\xAF"
+            "\xEF\xBC\x8C\xE6\x9B\xB4\xE5\x8A\xA0\xE5\x87\x86"
+            "\xE7\xA1\xAE\xE5\x9C\xB0\xE5\xAE\x8C\xE6\x88\x90"
+            "\xE8\xAF\xAD\xE9\x9F\xB3\xE8\xBD\xAC\xE5\x86\x99"
+            "\xE4\xBB\xBB\xE5\x8A\xA1\xE3\x80\x82\xE5\xA6\x82"
+            "\xE6\x9E\x9C\xE6\xB2\xA1\xE6\x9C\x89\xE7\x9B\xB8"
+            "\xE5\x85\xB3\xE4\xBF\xA1\xE6\x81\xAF\xEF\xBC\x8C"
+            "\xE6\x88\x91\xE4\xBB\xAC\xE4\xBC\x9A\xE7\x95\x99"
+            "\xE7\xA9\xBA\xE3\x80\x82";
+        out += "\n\n\n";
+        // **上下文信息：**
+        out +=
+            "\x2A\x2A\xE4\xB8\x8A\xE4\xB8\x8B\xE6\x96\x87\xE4\xBF\xA1"
+            "\xE6\x81\xAF\xEF\xBC\x9A\x2A\x2A";
+        out += "\n\n\n";
+        // 热词列表：[
+        out +=
+            "\xE7\x83\xAD\xE8\xAF\x8D\xE5\x88\x97\xE8\xA1\xA8"
+            "\xEF\xBC\x9A\x5B";
+        out += context;
+        out += "]\n";
+    }
     if (lang != nullptr && lang[0] != '\0') {
         // 语音转写成 = "transcribe to" / "transcribe into"
-        out = "\xE8\xAF\xAD\xE9\x9F\xB3\xE8\xBD\xAC\xE5\x86\x99\xE6\x88\x90";
+        out += "\xE8\xAF\xAD\xE9\x9F\xB3\xE8\xBD\xAC\xE5\x86\x99\xE6\x88\x90";
         out += lang;
     } else {
-        out = "\xE8\xAF\xAD\xE9\x9F\xB3\xE8\xBD\xAC\xE5\x86\x99";
+        out += "\xE8\xAF\xAD\xE9\x9F\xB3\xE8\xBD\xAC\xE5\x86\x99";
     }
     if (!use_itn) {
         // ，不进行文本规整 = "; do not apply text normalization"
@@ -227,6 +261,7 @@ transcribe_status encode_with_chat_specials(const transcribe::Tokenizer & tok,
 // <|im_start|>/<|im_end|> within each segment.
 transcribe_status build_funasr_nano_prompt(const transcribe::Tokenizer & tok,
                                            const ChatTokens &            ct,
+                                           const char *                  context,
                                            const char *                  language,
                                            bool                          use_itn,
                                            int                           fake_token_len,
@@ -235,7 +270,19 @@ transcribe_status build_funasr_nano_prompt(const transcribe::Tokenizer & tok,
     out_ids.clear();
     out_fbank_beg = 0;
 
-    const std::string prompt_text = build_funasr_prompt_text(language, use_itn);
+    // Caller context rides inside the user turn that
+    // encode_with_chat_specials scans for <|im_start|>/<|im_end|> markers;
+    // reject those literals in context text so caller data cannot inject
+    // control tokens (mirrors whisper's special-token rejection).
+    if (context != nullptr &&
+        (std::strstr(context, "<|im_start|>") != nullptr || std::strstr(context, "<|im_end|>") != nullptr)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "funasr_nano: context text must not contain chat control "
+                "markers (<|im_start|>/<|im_end|>)");
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const std::string prompt_text = build_funasr_prompt_text(context, language, use_itn);
 
     std::string seg_a =
         "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
@@ -658,7 +705,8 @@ transcribe_status run(transcribe_session *          session,
     std::vector<int32_t> prompt_ids;
     int                  fbank_beg = 0;
     if (const transcribe_status st =
-            build_funasr_nano_prompt(cm->tok, cm->chat_tokens, lang, use_itn, fake_token_len, prompt_ids, fbank_beg);
+            build_funasr_nano_prompt(cm->tok, cm->chat_tokens, transcribe_run_params_context(params), lang, use_itn,
+                                     fake_token_len, prompt_ids, fbank_beg);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -1139,8 +1187,8 @@ transcribe_status run_batch(transcribe_session *          session,
             continue;
         }
         int fbank_beg = 0;
-        if (build_funasr_nano_prompt(cm->tok, cm->chat_tokens, lang, use_itn, T_audio[b], prompt_ids[b], fbank_beg) !=
-            TRANSCRIBE_OK) {
+        if (build_funasr_nano_prompt(cm->tok, cm->chat_tokens, transcribe_run_params_context(params), lang, use_itn,
+                                     T_audio[b], prompt_ids[b], fbank_beg) != TRANSCRIBE_OK) {
             continue;
         }
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());

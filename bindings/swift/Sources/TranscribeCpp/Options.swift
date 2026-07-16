@@ -121,6 +121,11 @@ public struct RunOptions: Sendable {
     public var keepSpecialTags: Bool
     /// Speculative-decode draft length: -1 = family default, 0 = disabled.
     public var specKDrafts: Int32
+    /// Free-text recognition-biasing context (names, jargon, prior
+    /// transcript). Honored by models advertising the initial-prompt
+    /// feature (whisper, qwen3_asr, funasr_nano); the output remains a
+    /// transcript, and unsupported models warn and ignore it.
+    public var context: String?
     /// Family-specific run extension (whisper run options); M3.
     public var family: RunExtension?
 
@@ -136,6 +141,7 @@ public struct RunOptions: Sendable {
         targetLanguage: String? = nil,
         keepSpecialTags: Bool = false,
         specKDrafts: Int32 = -1,
+        context: String? = nil,
         family: RunExtension? = nil
     ) {
         self.task = task
@@ -146,6 +152,7 @@ public struct RunOptions: Sendable {
         self.targetLanguage = targetLanguage
         self.keepSpecialTags = keepSpecialTags
         self.specKDrafts = specKDrafts
+        self.context = context
         self.family = family
     }
 
@@ -165,9 +172,12 @@ public struct RunOptions: Sendable {
             params.language = lang
             return try withOptionalCString(targetLanguage) { tgt in
                 params.target_language = tgt
-                return try withRunExtension(family) { ext in
-                    params.family = ext
-                    return try withUnsafePointer(to: &params) { try body($0) }
+                return try withOptionalCString(context) { ctx in
+                    params.context = ctx
+                    return try withRunExtension(family) { ext in
+                        params.family = ext
+                        return try withUnsafePointer(to: &params) { try body($0) }
+                    }
                 }
             }
         }

@@ -1351,6 +1351,18 @@ void warn_unsupported_advisory(const struct transcribe_model * model, const stru
                       req, arch_name, variant);
         transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
     }
+    // transcribe_run_params_context is size-gated, so a pre-context caller
+    // struct reads as "no context" here rather than as garbage bytes.
+    if (transcribe_run_params_context(rp) != nullptr &&
+        !transcribe::has_feature(model, TRANSCRIBE_FEATURE_INITIAL_PROMPT)) {
+        std::snprintf(buf, sizeof(buf),
+                      "transcribe_run: caller supplied context text but model '%s' "
+                      "(variant '%s') has no recognition-biasing mechanism; the "
+                      "context is ignored. Use transcribe_model_supports(model, "
+                      "TRANSCRIBE_FEATURE_INITIAL_PROMPT) to pre-check.",
+                      arch_name, variant);
+        transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
+    }
 }
 
 }  // namespace
@@ -1771,6 +1783,12 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     // wants a run-slot ext at stream begin must plumb it deliberately.
     session->stream_language_owned        = run_params->language != nullptr ? run_params->language : "";
     session->stream_target_language_owned = run_params->target_language != nullptr ? run_params->target_language : "";
+    // context is size-gated (trailing field): the accessor reads it only
+    // when the caller's struct is new enough to carry it.
+    {
+        const char * ctx_in           = transcribe_run_params_context(run_params);
+        session->stream_context_owned = ctx_in != nullptr ? ctx_in : "";
+    }
     // PREFIX copy, not struct assignment: the size gate above admits any
     // struct_size >= k_min_run_params_size, so a conforming caller's
     // allocation may be SHORTER than sizeof (fields past `family`, e.g.
@@ -1785,7 +1803,8 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     run_params_owned.language = run_params->language != nullptr ? session->stream_language_owned.c_str() : nullptr;
     run_params_owned.target_language =
         run_params->target_language != nullptr ? session->stream_target_language_owned.c_str() : nullptr;
-    run_params_owned.family = nullptr;
+    run_params_owned.context = !session->stream_context_owned.empty() ? session->stream_context_owned.c_str() : nullptr;
+    run_params_owned.family  = nullptr;
 
     const transcribe_status st = session->model->arch->stream_begin(session, &run_params_owned, stream_params);
     if (st != TRANSCRIBE_OK) {
