@@ -1,0 +1,283 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "gigaam",
+  "hf_repo": "ai-sage/GigaAM-Multilingual",
+  "hf_revision": "2f8a57144e6ec3adfd32fe0484d9ea9913305bc8",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Hydra-style config under cfg.model.cfg. Encoder + frontend match the gigaam-v3 base branches (16-layer Conformer, d_model=768, rotary attn, conv1d subsampling). head=CTCHead with feat_in=768, num_classes=71 (70 chars + 1 blank). decoding=CTCGreedyDecoding with INLINE 70-entry multilingual character vocabulary (no tokenizer.model file). model_name=multilingual_ctc; model_class=ctc. NOTE: the `main` branch is identical to the `ctc` branch (both model_name=multilingual_ctc); `large_ctc` is a separate 24-layer/d_model=1024 sibling."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "Frontend declared inside config.json under cfg.model.cfg.preprocessor: _target_=modeling_gigaam.FeatureExtractor, features=64, n_fft=320, hop=160, win=320, center=false. Same FeatureExtractor class and args as the gigaam-v3 branches; mel_scale=htk, mel_norm=null, SpecScaler log scaling come from the FeatureExtractor defaults. Stage 2/3 must confirm modeling_gigaam.py frontend is byte-identical to v3."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "Charwise tokenizer; vocabulary is inline in config.json under cfg.model.cfg.decoding.vocabulary (70 strings). Multilingual: space + apostrophe + Latin a-z (26) + Cyrillic а-я+ё (33) + 9 Turkic/Kazakh letters (і ғ қ ң ү ұ һ ә ө). NO tokenizer.model file (Tokenizer.charwise=True path, same as gigaam-v3-ctc/rnnt)."
+    },
+    "tokenizer_model": {
+      "kind": "hf_file",
+      "path": "tokenizer.model",
+      "status": "missing",
+      "detail": "Branch has NO tokenizer.model file — charwise path. Vocab is the inline 70-entry list."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Not used."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Decoding is CTC greedy; no HF generation_config."
+    },
+    "model_weights": {
+      "kind": "hf_file",
+      "path": "pytorch_model.bin",
+      "status": "found",
+      "detail": "PyTorch pickle, 883,170,115 bytes (~883 MB) on the main/ctc branch. ~220M params at F32, matching the '220M' model-card figure. large_ctc's pytorch_model.bin is 2,341,592,643 bytes (~2.34 GB, ~600M params)."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "Repo ships PyTorch pickle, not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "status": "found",
+      "detail": "Single model card covers all four multilingual branches (ssl, ctc, large_ssl, large_ctc). Reports CV/FLEURS/Internal WER for ru/en/kk/ky/uz. arXiv:2607.10371. Trained HuBERT-style on 2M hours / 70+ languages, fine-tuned for ASR with charwise CTC on 50K hours."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/salute-developers/GigaAM ; HF AutoModel trust_remote_code (modeling_gigaam.py, revision='ctc')",
+      "status": "found",
+      "detail": "Author-first PyTorch implementation. License MIT. Same ConformerEncoder/CTCHead/FeatureExtractor classes as gigaam-v3. README documents the reference path as transformers.AutoModel.from_pretrained('ai-sage/GigaAM-Multilingual', revision='ctc', trust_remote_code=True).transcribe(wav). Stage 2 must confirm whether the gigaam PyPI package also exposes a load_model name for this checkpoint."
+    }
+  },
+  "variants": [
+    {
+      "name": "gigaam-multilingual-ctc",
+      "memory_gb": 0.88,
+      "files": [
+        "config.json",
+        "modeling_gigaam.py",
+        "pytorch_model.bin"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-ctc"
+    ],
+    "key_fields": {
+      "model_type": "gigaam",
+      "model_class": "ctc",
+      "model_name": "multilingual_ctc",
+      "encoder.type": "ConformerEncoder",
+      "encoder.feat_in": 64,
+      "encoder.n_layers": 16,
+      "encoder.d_model": 768,
+      "encoder.n_heads": 16,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.self_attention_model": "rotary",
+      "encoder.pos_emb_max_len": 5000,
+      "encoder.subsampling": "conv1d",
+      "encoder.subs_kernel_size": 5,
+      "encoder.subsampling_factor": 4,
+      "encoder.conv_kernel_size": 5,
+      "encoder.conv_norm_type": "layer_norm",
+      "head.type": "CTCHead",
+      "head.feat_in": 768,
+      "head.num_classes": 71,
+      "decoding": "CTCGreedyDecoding",
+      "tokenizer.kind": "charwise",
+      "tokenizer.vocab_size_plus_blank": 71,
+      "tokenizer.vocab_inline": "70 entries: space + apostrophe + Latin a-z (26) + Cyrillic а-я+ё (33) + 9 Turkic/Kazakh letters (і ғ қ ң ү ұ һ ә ө). Blank id = 70."
+    },
+    "varying_across_variants": [
+      "model_class",
+      "model_name",
+      "encoder.n_layers",
+      "encoder.d_model",
+      "head.feat_in",
+      "head.num_classes",
+      "tokenizer.vocab_inline"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "pytorch_model.bin is 883 MB ≈ 220M params at F32. salute-developers/GigaAM PyTorch checkpoints are stored at F32 (same as the gigaam-v3 family).",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": null,
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "other",
+    "vocab_size": 70,
+    "special_tokens": {
+      "blank": 70
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["ru", "en", "kk", "ky", "uz"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "FLEURS",
+      "language": "ru",
+      "metric": "wer",
+      "score": 4.4,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column. Normalization: lowercasing, punctuation removal, numerals→words; utterances >30s and digit-containing refs excluded; greedy decoding."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "kk",
+      "metric": "wer",
+      "score": 5.2,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "ky",
+      "metric": "wer",
+      "score": 7.0,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "uz",
+      "metric": "wer",
+      "score": 10.0,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "en",
+      "metric": "wer",
+      "score": 12.2,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column. English is explicitly 'moderate quality' per the model card."
+    },
+    {
+      "dataset": "Common Voice",
+      "language": "ru",
+      "metric": "wer",
+      "score": 7.1,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column."
+    },
+    {
+      "dataset": "Common Voice",
+      "language": "kk",
+      "metric": "wer",
+      "score": 17.2,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column."
+    },
+    {
+      "dataset": "Common Voice",
+      "language": "ky",
+      "metric": "wer",
+      "score": 12.5,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column."
+    },
+    {
+      "dataset": "Common Voice",
+      "language": "uz",
+      "metric": "wer",
+      "score": 11.3,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column."
+    },
+    {
+      "dataset": "Common Voice",
+      "language": "en",
+      "metric": "wer",
+      "score": 26.0,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual (220M ctc) column. English is explicitly 'moderate quality' per the model card."
+    }
+  ],
+  "reference_framework": "author_repo_gigaam",
+  "reference_rationale": "Same canonical reference as the rest of the gigaam family: salute-developers/GigaAM (MIT). The multilingual README documents the reference inference path as transformers.AutoModel.from_pretrained('ai-sage/GigaAM-Multilingual', revision='ctc', trust_remote_code=True).transcribe(wav), which runs the same modeling_gigaam.py classes the gigaam-v3 port already validated against. Stage 2 pins the exact loader entrypoint (AutoModel trust_remote_code vs a gigaam.load_model name).",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "Multilingual with NO language conditioning: the model is a single Conformer + CTC head over one shared 70-char vocab. There are no language tokens, no language embeddings, and no language hint input. A --language flag is a no-op for this model — it decodes characters directly. The capability table must not claim an 'explicit language hint' observable the model cannot honor.",
+    "70-entry charwise vocab spans THREE scripts: Latin a-z, Cyrillic (Russian а-я + ё), and 9 Turkic/Kazakh Cyrillic letters (і ғ қ ң ү ұ һ ә ө). Apostrophe (') is in-vocab (Uzbek Latin oʻ/gʻ and English contractions). Unlike gigaam-v3-ctc, ё IS present. NO digits, NO punctuation beyond apostrophe, NO casing — output is lowercased. Converter must emit the exact 70-entry list; C++ loader reuses the charwise path but with a wider vocab.",
+    "Blank id = 70 = num_classes - 1 (num_classes=71). CTCHead is nn.Conv1d(768, 71, kernel_size=1) + log_softmax(-1). Same head shape as gigaam-v3-ctc but wider output.",
+    "Encoder + frontend are EXPECTED identical to the gigaam-v3 base branches (16-layer Conformer, d=768, rotary PE, conv1d subsampling, htk mel, center=false, SpecScaler log). This repo's modeling_gigaam.py is a NEWER regenerated build (2149 lines vs v3's 1426, sha differs) that adds word-timestamp + longform machinery (Word/frames_to_words/LongformTranscriptionResult/masked flash-attn), but the core math classes (FeatureExtractor, SpecScaler, ConformerEncoder, RotaryPositionMultiHeadAttention, apply_rotary_pos_emb, rtt_half, CTCHead, CTCGreedyDecoding) are all present and structurally the same. Stage 2 must dump the frontend/encoder and confirm bit-exactness against the v3 math; do not assume weight reuse (v3 Stage 2 found per-variant encoder-weight divergence).",
+    "Rotary positional embeddings inside Conformer attention — same [cos;sin] stacked-PE / rtt_half element-ordering risk as the gigaam-v3 variants.",
+    "Reference entrypoint is documented as HF AutoModel trust_remote_code (revision='ctc'), NOT a named gigaam.load_model() call in this README. The gigaam PyPI package may not ship a multilingual model name; Stage 2 must confirm the reference loader and whether scripts/envs/gigaam needs a transformers>=5 / torch 2.10 bump (README recommends transformers==5.*, torch==2.10.*).",
+    "Acceptance is FLEURS, gated on ru + kk to start (user-signed 2026-07-18), expanding to ky/uz/en once the C++ port is trusted — not LibriSpeech. Per-language text normalization differs (Kazakh/Kyrgyz/Uzbek Cyrillic orthography, Uzbek apostrophes, English casing/punctuation). The WER scorer must apply the model-card normalization per language: lowercase, strip punctuation, numerals→words, and match the model's lowercased charwise output. Getting normalization wrong will inflate WER differently per language. Kazakh (kk) exercises the 9 Turkic vocab letters that Russian does not, so it is the key early-signal language alongside ru.",
+    "English is 'moderate quality' (CV 26.0%, FLEURS 12.2%) — LibriSpeech test-clean would test the model's weakest capability and is NOT the acceptance dataset for this multilingual model.",
+    "large_ctc is a DIFFERENT architecture (24 layers, d_model=1024, feat_in=1024) sharing the same 70-char vocab and CTC head width — it needs its own intake/oracle/convert run, not a tolerance reuse from the 220M ctc.",
+    "Long-form (>30s) path: same PyAnnote VAD dependency as gigaam-v3 — out of scope for the C++ port at parity. Model-card benchmarks explicitly exclude utterances >30s."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at Stage 2 over the inline 70-entry charwise vocab (candidate value observed at intake: sha256 of newline-joined list = c74f14b62f397a12ab3d1d2db0986ae1ae929f11a65465bd8ea2db06e8022f49). Left null here so Stage 2 canonicalizes with the family's standard method. Expected to MATCH the large_ctc branch vocab (both multilingual CTC share the 70-char list) and to DIFFER from every gigaam-v3 vocab."
+    },
+    {
+      "field": "dtype.expected_f32_tensors",
+      "reason": "Filled at Stage 4 once we observe which norm/bias tensors must stay F32 under quant."
+    },
+    {
+      "field": "reference.entrypoint",
+      "reason": "Stage 2 must pin the exact reference loader (HF AutoModel trust_remote_code revision='ctc' vs a gigaam.load_model name) and confirm the scripts/envs/gigaam env supports the transformers==5 / torch==2.10 versions the multilingual README recommends."
+    },
+    {
+      "field": "upstream_benchmarks.fleurs_measured",
+      "reason": "Model-card FLEURS numbers use upstream's own normalization and >30s/digit exclusions. Stage 7 measures the reference baseline ourselves per language over the ingested FLEURS manifests and gates C++ against that measured baseline, not the published number."
+    }
+  ]
+}

@@ -219,3 +219,75 @@ them from the converter source.
   The intake's hypothesis of shared encoder weights was wrong;
   the converter emits a full GGUF per variant, not a shared encoder
   GGUF with per-variant head shards.
+
+---
+
+# GigaAM Multilingual
+
+Status: **Stage 1 intake done for the 220M `ctc` variant** (2026-07-18);
+Gate A green, capability scope user-signed. Separate HF repo
+`ai-sage/GigaAM-Multilingual` (arXiv:2607.10371). Conformer + charwise CTC,
+same core math as the gigaam-v3 base branches but a 70-char multilingual
+vocab and (for `large_ctc`) a bigger 24-layer/d=1024 encoder.
+
+## Identity
+
+- Hugging Face repo: `ai-sage/GigaAM-Multilingual`
+- License: MIT
+- Languages: ru, en, kk (Kazakh), ky (Kyrgyz), uz (Uzbek). "Best-in-class"
+  on ru/kk/ky/uz; **English is moderate quality** (FLEURS en 12.2%, CV en 26.0%).
+- Reference: same `author_repo_gigaam` code path; README documents
+  `transformers.AutoModel.from_pretrained("ai-sage/GigaAM-Multilingual", revision="ctc", trust_remote_code=True).transcribe(wav)`.
+  Recommended env: `transformers==5.*`, `torch==2.10.*`.
+- Variants (one HF branch each):
+
+  | Variant | HF branch | Params | Encoder | Head | num_classes | Vocab | Status |
+  |---|---|---|---|---|---|---|---|
+  | `gigaam-multilingual-ctc` | `ctc` (== `main`) | 220M | 16-layer, d=768 | CTC | 71 | charwise 70-char multilingual (inline) | **intake (this run)** |
+  | `gigaam-multilingual-large-ctc` | `large_ctc` | 600M | 24-layer, d=1024 | CTC | 71 | same 70-char vocab | **not yet intaken** |
+  | `ssl` / `large_ssl` | `ssl` / `large_ssl` | 220M / 600M | encoder-only HuBERT | — | — | — | **out of scope** (no head/decoding; same rationale as `v3_ssl`) |
+
+  70-char vocab (blank id = 70): space, apostrophe, Latin a-z (26),
+  Cyrillic а-я + ё (33), and 9 Turkic/Kazakh letters (і ғ қ ң ү ұ һ ә ө).
+  Lowercased output, no digits, no punctuation beyond apostrophe, no casing.
+  No language conditioning — a single CTC head over one shared vocab, so
+  a `--language` hint is a no-op.
+
+Canonical bench samples (Stage 2 chooses): a Russian sample plus at least
+one Kazakh/Kyrgyz/Uzbek sample to exercise the Turkic vocab range.
+
+## Capability Validation (Stage 1 draft — `gigaam-multilingual-ctc`)
+
+Stage 1 drafts these rows with `Status: TODO`; Stage 4 fills `Status`.
+`Target` is the Stage-1 scope contract (`MUST PASS` / `OUT OF SCOPE — <reason>`).
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|------------|------|----------------|---------------------|--------|--------|
+| Transcribe (multilingual) | auto / no language hint | `build/bin/transcribe-cli -m models/gigaam-multilingual-ctc/gigaam-multilingual-ctc-F32.gguf <sample>.wav` | non-empty plausible transcript in the sample's language (ru/en/kk/ky/uz) | MUST PASS | TODO |
+| Transcribe (multilingual) | explicit `--language <lang>` | `build/bin/transcribe-cli -m <gguf> --language kk <sample>.wav` | output identical to the auto path (model has no language conditioning; flag is a no-op) | MUST PASS | TODO |
+| Lowercased no-punct output | inherent charwise vocab | same transcribe commands | output is lowercased, no punctuation except apostrophe, no digits | MUST PASS | TODO |
+| Offline batch | batch decode | `scripts/validate.py` / batch harness over N samples | batch output matches per-sample output | MUST PASS | TODO |
+| Translate | only if exposed | `build/bin/transcribe-cli -m <gguf> --translate --target-language en <sample>.wav` | runtime rejects (no translate head upstream) | OUT OF SCOPE — no translate head exists upstream; would need a translation-capable checkpoint | TODO |
+| Language detection | only if exposed | grep CLI output for a "detected language" line | none (no LID head, no language tokens) | OUT OF SCOPE — model has no language-ID head or language tokens; CLI surfaces no detected-language observable | TODO |
+| Word timestamps | only if exposed | inspect `transcribe-cli` for non-zero `words:` count | per-word `t0`/`t1` | OUT OF SCOPE — reference `modeling_gigaam.py` now implements `frames_to_words`, but transcribe.cpp emits per-token (40 ms) timestamps only and does not aggregate to words; would need runtime word-aggregation | TODO |
+| Segment timestamps (>30 s longform) | only if exposed | >30 s sample | per-segment `t0`/`t1` | OUT OF SCOPE — PyAnnote VAD dependency; short-form (≤30 s) only, same as gigaam-v3 | TODO |
+| Streaming | n/a | n/a | n/a | OUT OF SCOPE — not advertised (`streaming: false`) | TODO |
+
+## Notes (Multilingual)
+
+- **Acceptance dataset: FLEURS, starting ru + kk** (user-signed 2026-07-18),
+  not LibriSpeech. Gate on ru + kk first to get a clean signal on the
+  implementation, then expand to ky/uz (and en for context) once we are
+  confident in the C++ port. The model supports English but English is its
+  weakest capability, and the whole value is the ru/kk/ky/uz set.
+  Per-language text normalization (lowercase, strip punctuation,
+  numerals→words, Uzbek apostrophes, ё handling) must match the model's
+  lowercased charwise output. Upstream publishes FLEURS numbers under its
+  own normalization/exclusions; Stage 7 measures the reference baseline
+  ourselves per language and gates C++ against the measured baseline.
+- **`large_ctc` is a distinct architecture** (24-layer, d=1024, feat_in=1024)
+  and needs its own intake/oracle/convert/tolerances run — no reuse of the
+  220M ctc tolerances.
+- **`modeling_gigaam.py` differs from v3** (newer regenerated build, +word
+  timestamps/longform), but the frontend/encoder/CTC math classes are the
+  same. Stage 2 dumps confirm frontend/encoder bit-exactness against v3.
