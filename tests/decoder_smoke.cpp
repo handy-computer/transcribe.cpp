@@ -233,8 +233,10 @@ int main() {
     const int n_tokens = transcribe_n_tokens(ctx);
     CHECK(n_tokens > 0);
 
-    int prev_t0  = -1;
-    int n_with_p = 0;
+    int prev_t0                  = -1;
+    int prev_t1                  = -1;
+    int n_with_p                 = 0;
+    int n_zero_width_punctuation = 0;
     for (int i = 0; i < n_tokens; ++i) {
         transcribe_token tok;
         transcribe_token_init(&tok);
@@ -244,20 +246,31 @@ int main() {
         CHECK(tok.text != nullptr);
         CHECK(tok.t0_ms >= 0);
         CHECK(tok.t1_ms >= tok.t0_ms);
-        CHECK(tok.t0_ms >= prev_t0);  // monotone
+        CHECK(tok.t0_ms >= prev_t0);  // equality is valid at a zero-width punctuation boundary
+        CHECK(tok.t1_ms >= prev_t1);
         CHECK_EQ_INT(tok.seg_index, 0);
         CHECK(tok.word_index >= 0);
         CHECK(tok.p >= 0.0f && tok.p <= 1.0001f && !std::isnan(tok.p));
         if (tok.p > 0.0f) {
             ++n_with_p;
         }
+        const bool is_jfk_punctuation = tok.text != nullptr && tok.text[0] != '\0' && tok.text[1] == '\0' &&
+                                        std::strchr(",.", tok.text[0]) != nullptr;
+        if (is_jfk_punctuation) {
+            CHECK(i > 0);
+            CHECK_EQ_INT(tok.t0_ms, prev_t1);
+            CHECK_EQ_INT(tok.t1_ms, tok.t0_ms);
+            ++n_zero_width_punctuation;
+        }
         prev_t0 = static_cast<int>(tok.t0_ms);
+        prev_t1 = static_cast<int>(tok.t1_ms);
     }
     // At least most tokens should carry a positive confidence (the
     // entropy-based formula gives ~0 for a uniform distribution and
     // ~1 for a confident decode; on jfk.wav nearly every token is
     // emitted with very high confidence).
     CHECK(n_with_p > n_tokens / 2);
+    CHECK(n_zero_width_punctuation > 0);
 
     // ---- Per-word sanity -------------------------------------------
     const int n_words = transcribe_n_words(ctx);
@@ -440,36 +453,39 @@ int main() {
         }
     }
 
-    // ---- Failed transcribe_run clears the prior result -------------
+    // ---- Preflight rejection preserves the prior result ------------
     //
     // Parakeet's max_timestamp_kind is TOKEN, so the dispatcher
     // cannot reject a valid enum request on ceiling grounds. Use an
     // out-of-range enum value cast through int to trip the enum-
-    // range switch at INVALID_ARG. The result-replacement contract
-    // (include/transcribe.h "Results") says a failing transcribe_run
-    // must leave the context in the empty sentinel state, not
-    // silently re-expose the prior successful run's output.
+    // range switch at INVALID_ARG. Dispatcher preflight rejects caller
+    // parameter errors before clear_result(), so the prior successful
+    // result must remain visible.
     {
         // First, seed the context with a real successful run so
-        // there is a previous result to clobber.
+        // there is a previous result to preserve.
         transcribe_run_params rp_ok;
         transcribe_run_params_init(&rp_ok);
         rp_ok.timestamps              = TRANSCRIBE_TIMESTAMPS_TOKEN;
         const transcribe_status st_ok = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
         CHECK(st_ok == TRANSCRIBE_OK);
         CHECK(transcribe_n_tokens(ctx) > 0);
+        const std::string               prior_text       = transcribe_full_text(ctx);
+        const int                       prior_n_segments = transcribe_n_segments(ctx);
+        const int                       prior_n_words    = transcribe_n_words(ctx);
+        const int                       prior_n_tokens   = transcribe_n_tokens(ctx);
+        const transcribe_timestamp_kind prior_kind       = transcribe_returned_timestamp_kind(ctx);
 
         transcribe_run_params rp_bad;
         transcribe_run_params_init(&rp_bad);
         rp_bad.timestamps              = static_cast<transcribe_timestamp_kind>(9999);
         const transcribe_status st_bad = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_bad);
         CHECK(st_bad == TRANSCRIBE_ERR_INVALID_ARG);
-        // All accessors return their safe sentinels.
-        CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
-        CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
-        CHECK_EQ_INT(transcribe_n_words(ctx), 0);
-        CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
-        CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
+        CHECK(prior_text == transcribe_full_text(ctx));
+        CHECK_EQ_INT(transcribe_n_segments(ctx), prior_n_segments);
+        CHECK_EQ_INT(transcribe_n_words(ctx), prior_n_words);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx), prior_n_tokens);
+        CHECK(transcribe_returned_timestamp_kind(ctx) == prior_kind);
     }
 
     // ---- Teardown --------------------------------------------------

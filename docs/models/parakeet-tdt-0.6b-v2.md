@@ -11,6 +11,11 @@ a transcript with optional token-level timestamps. It is not a streaming model,
 does not translate, and v2 has no multilingual capability. For multilingual
 see v3.
 
+Word timings are numerically validated against the NeMo reference within one
+encoder frame (80 ms). Token tables are dumped on both sides for divergence
+localization but are not compared; punctuation-only tokens follow NeMo's
+convention and are zero-length at the previous token's end.
+
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)
 for training data, intended use, and upstream evaluation methodology.
 

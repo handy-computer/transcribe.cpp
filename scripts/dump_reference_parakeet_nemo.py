@@ -108,6 +108,98 @@ def normalize_text(text: str) -> str:
     return " ".join(text.strip().lower().split())
 
 
+def enable_native_timestamps(model, arch: str) -> None:
+    """Enable NeMo's native alignment and timestamp post-processing."""
+    if arch not in {"tdt", "hybrid"} or not hasattr(model.cfg, "decoding"):
+        return
+
+    import copy
+    from omegaconf import OmegaConf, open_dict
+
+    decoding_cfg = copy.deepcopy(model.cfg.decoding)
+    with open_dict(decoding_cfg):
+        decoding_cfg.compute_timestamps = True
+        if "greedy" not in decoding_cfg:
+            decoding_cfg.greedy = OmegaConf.create({})
+        decoding_cfg.greedy.preserve_alignments = True
+        decoding_cfg.tdt_include_token_duration = True
+    model.change_decoding_strategy(decoding_cfg)
+
+
+def nemo_timestamp_rows(hypothesis) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+    """Convert NeMo Hypothesis.timestamp rows to the reference artifact shape."""
+    timestamps = getattr(hypothesis, "timestamp", None)
+    if not isinstance(timestamps, dict):
+        raise RuntimeError(
+            "NeMo returned no Hypothesis.timestamp mapping with timestamps=True"
+        )
+
+    def convert_rows(
+        values,
+        *,
+        level: str,
+        text_keys: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
+        for index, value in enumerate(values or []):
+            if not isinstance(value, dict):
+                raise RuntimeError(
+                    f"NeMo {level} timestamp row {index} is not an object: {value!r}"
+                )
+            text_key = next((key for key in text_keys if key in value), None)
+            if text_key is None or "start" not in value or "end" not in value:
+                raise RuntimeError(
+                    f"NeMo {level} timestamp row {index} lacks text/start/end: {value!r}"
+                )
+            row_text = value[text_key]
+            if isinstance(row_text, (list, tuple)):
+                if len(row_text) != 1:
+                    raise RuntimeError(
+                        f"NeMo {level} timestamp row {index} has "
+                        f"{len(row_text)} text values: {value!r}"
+                    )
+                row_text = row_text[0]
+            if not isinstance(row_text, str):
+                raise RuntimeError(
+                    f"NeMo {level} timestamp row {index} text is not a string: "
+                    f"{value!r}"
+                )
+            converted.append({
+                "start_s": float(value["start"]),
+                "end_s": float(value["end"]),
+                "text": row_text,
+            })
+        return converted
+
+    if "word" not in timestamps:
+        raise RuntimeError("NeMo returned no word timestamp table with timestamps=True")
+    words = convert_rows(
+        timestamps["word"], level="word", text_keys=("word", "text")
+    )
+
+    # NeMo 2.8.0rc0 at 6967f48fda2a exposes the finest decoder-token table only
+    # as `timestamp["char"]`, including for Parakeet's SentencePiece tokens.
+    # AbstractRNNTDecoding.compute_rnnt_timestamps forms a raw TDT token end
+    # from its emission offset plus Hypothesis.token_duration. Its TDT
+    # refinement then makes supported punctuation zero-width at the previous
+    # token's end. Word aggregation inherits that final, possibly clamped end.
+    token_values = timestamps.get("char")
+    tokens = None
+    if token_values is not None:
+        tokens = convert_rows(
+            token_values, level="token", text_keys=("char", "text")
+        )
+    return words, tokens
+
+
+def first_hypothesis(value):
+    while isinstance(value, (list, tuple)):
+        if not value:
+            raise RuntimeError("NeMo returned an empty transcription result")
+        value = value[0]
+    return value
+
+
 # ---------------------------------------------------------------------------
 # NeMo model loading + arch detection
 # ---------------------------------------------------------------------------
@@ -1429,6 +1521,8 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     if not args.skip_transcript:
         print("\n  Running full greedy transcription...")
+        tdt_timestamps = arch in {"tdt", "hybrid"}
+        enable_native_timestamps(model, arch)
         # Some .nemo archives (notably parakeet-unified-en-0.6b) ship without
         # a validation_ds config, which NeMo's transcribe() pipeline tries to
         # read for use_start_end_token. Stub it so transcribe() works.
@@ -1442,28 +1536,49 @@ def cmd_decode(args: argparse.Namespace) -> int:
             # dataset throws on prompt_key='None'. Bypass it: run greedy
             # decoding directly on the prompt-conditioned encoder output we
             # already computed.
+            # rnnt_decoder_predictions_tensor returns frame offsets only;
+            # transcribe() adds seconds during post-processing. A future
+            # prompt-aware TDT/hybrid variant will fail loudly here until this
+            # branch converts those offsets.
             _, encoded_len = run_encoder_forward(model, audio_tensor, length_tensor)
             hyps = model.decoding.rnnt_decoder_predictions_tensor(
                 encoder_output=encoded_for_joint,
                 encoded_lengths=encoded_len,
-                return_hypotheses=False,
+                return_hypotheses=tdt_timestamps,
             )
-            first = hyps[0] if isinstance(hyps, (list, tuple)) and len(hyps) > 0 else hyps
+            first = first_hypothesis(hyps)
             text = first if isinstance(first, str) else getattr(first, "text", str(first))
             print(f"  Transcription: {text}")
-            write_transcript(out_dir, text, source=source)
+            if tdt_timestamps:
+                words, tokens = nemo_timestamp_rows(first)
+                write_transcript(
+                    out_dir, text, source=source, words=words, tokens=tokens
+                )
+            else:
+                write_transcript(out_dir, text, source=source)
             return 0
-        transcriptions = model.transcribe(audio=[str(audio_path)], batch_size=1)
-        if isinstance(transcriptions, (list, tuple)) and len(transcriptions) > 0:
-            first = transcriptions[0]
-            if isinstance(first, (list, tuple)):
-                first = first[0]
-            text = first if isinstance(first, str) else first.text
+        if tdt_timestamps:
+            transcriptions = model.transcribe(
+                audio=[str(audio_path)],
+                batch_size=1,
+                return_hypotheses=True,
+                timestamps=True,
+            )
         else:
-            text = str(transcriptions)
+            transcriptions = model.transcribe(
+                audio=[str(audio_path)], batch_size=1
+            )
+        first = first_hypothesis(transcriptions)
+        text = first if isinstance(first, str) else getattr(first, "text", str(first))
 
         print(f"  Transcription: {text}")
-        write_transcript(out_dir, text, source=source)
+        if tdt_timestamps:
+            words, tokens = nemo_timestamp_rows(first)
+            write_transcript(
+                out_dir, text, source=source, words=words, tokens=tokens
+            )
+        else:
+            write_transcript(out_dir, text, source=source)
 
     return 0
 
