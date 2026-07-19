@@ -1022,6 +1022,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
 
     if (!generated_ids.empty()) {
         std::string full = cm->tok.decode(generated_ids.data(), static_cast<int>(generated_ids.size()));
+        cc->raw_text     = full;  // pre-trim decode, via transcribe_raw_text
         if (!full.empty() && full.front() == ' ') {
             full.erase(full.begin());
         }
@@ -1246,6 +1247,7 @@ void reset_result_text_only(MoonshineStreamingSession * cc) {
     cc->words.clear();
     cc->segments.clear();
     cc->full_text.clear();
+    cc->raw_text.clear();
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result  = false;
 }
@@ -2153,6 +2155,7 @@ transcribe_status run_batch(transcribe_session *          session,
             continue;
         }
         std::string full = cm->tok.decode(generated[b].data(), static_cast<int>(generated[b].size()));
+        rs.raw_text      = full;
         if (!full.empty() && full.front() == ' ') {
             full.erase(full.begin());
         }

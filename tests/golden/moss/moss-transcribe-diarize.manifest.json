@@ -49,7 +49,7 @@
     "speaker_diarization": true
   },
   "tolerance_file": "tests/tolerances/moss.json",
-  "transcript_compare": "dediarized",
+  "transcript_compare": "exact",
   "cases": [
     {
       "audio": "jfk",

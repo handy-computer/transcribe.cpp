@@ -55,6 +55,7 @@ add_library(transcribe
     arch/qwen3_asr/decoder.cpp
     arch/moss/model.cpp
     arch/moss/capabilities.cpp
+    arch/moss/diarize.cpp
     arch/moss/weights.cpp
     arch/moss/encoder.cpp
     arch/moss/decoder.cpp
@@ -107,6 +108,7 @@ add_library(transcribe
     arch/gigaam/decoder.cpp
     arch/gigaam/mel.cpp
     arch/granite/model.cpp
+    arch/granite/diarize.cpp
     arch/granite/capabilities.cpp
     arch/granite/weights.cpp
     arch/granite/encoder.cpp
@@ -220,15 +222,24 @@ else()
     message(STATUS "transcribe: TRANSCRIBE_USE_SYSTEM_BLAS=OFF — decoder uses scalar fallback (official-wheel posture; no system BLAS vendored)")
 endif()
 
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+    # Pre-1.0 policy permits ABI changes only on minor releases. Encode that
+    # boundary in the shared-library identity so an old raw-C binary fails to
+    # load a new incompatible minor instead of silently binding to it.
+    set(TRANSCRIBE_SOVERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
+else()
+    set(TRANSCRIBE_SOVERSION "${PROJECT_VERSION_MAJOR}")
+endif()
+
 set_target_properties(transcribe PROPERTIES
     OUTPUT_NAME transcribe
     POSITION_INDEPENDENT_CODE ON
-    # Versions the shared lib (libtranscribe.0.1.0.dylib + libtranscribe.0.dylib
-    # symlink). Ignored for the static archive. SOVERSION is the major only;
-    # pre-1.0 the real compatibility backstop is the binding's exact
-    # version/header-hash check, not the SONAME.
+    # Versions the shared lib (for 0.2.0: libtranscribe.0.2.0.dylib plus the
+    # libtranscribe.0.2.dylib compatibility link). Ignored for the static archive. Before 1.0 SOVERSION tracks
+    # major.minor because the public ABI policy allows breaks on minor bumps;
+    # from 1.0 onward it tracks the major conventionally.
     VERSION   ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
+    SOVERSION ${TRANSCRIBE_SOVERSION}
 )
 
 # miniz (vendored, src/third_party/miniz) provides the deflate compressor for

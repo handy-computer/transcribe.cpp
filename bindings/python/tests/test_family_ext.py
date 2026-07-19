@@ -130,7 +130,7 @@ def test_run_batch_accepts_family(model_path, audio_pcm):
 def test_supports_probe_all_features(model_path):
     with t.Model(model_path) as model:
         for feature in ("initial_prompt", "temperature_fallback", "long_form",
-                        "cancellation", "pnc", "itn"):
+                        "cancellation", "pnc", "itn", "diarization"):
             assert model.supports(feature) in (True, False)
         with pytest.raises(t.InvalidArgument, match="unknown feature"):
             model.supports("levitation")

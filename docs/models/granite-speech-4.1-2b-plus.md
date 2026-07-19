@@ -154,7 +154,14 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 | Transcribe (fr/de/es/pt)    | Yes    |
 | Translate                   | No (ASR-only variant; use the base [granite-speech-4.1-2b](granite-speech-4.1-2b.md) for translation) |
 | Word-level timestamps       | Yes (`--timestamps word`, structured per-word t0/t1 parsed from the model's `[T:N]` markers) |
-| Speaker diarization         | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
+| Speaker diarization         | Yes (`--diarize`; structured per-turn `speaker_id`, no timing) |
+
+Speaker attribution is off by default. `--diarize` selects Granite's distinct
+speaker-attribution prompt and parses `[Speaker N]:` markers into segment and
+speaker-turn rows. This task carries no timestamps: `--timestamps none` and
+`auto` are accepted, while explicit `segment`, `word`, or `token` requests are
+rejected instead of silently downgraded. The speaker-attribution and word-
+timestamp prompts cannot be combined.
 
 ## Numerical Validation
 

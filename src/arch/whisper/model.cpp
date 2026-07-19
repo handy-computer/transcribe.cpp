@@ -1187,6 +1187,37 @@ WhisperSegmentResult whisper_retrieve_segment(const std::vector<int32_t> &  gene
     return out;
 }
 
+// Render an accepted raw token stream for transcribe_raw_text. Timestamp
+// tokens are model-emitted but absent from the GGUF tokens array (see the
+// tokenizer-load note), so Tokenizer::decode silently drops them; synthesize
+// the canonical "<|t|>" form instead (20 ms per timestamp position), matching
+// HF's decode_with_timestamps rendering. Timestamps are chunk-relative, as
+// emitted.
+std::string whisper_decode_raw(const transcribe::Tokenizer & tok,
+                               const std::vector<int32_t> &  ids,
+                               int                           timestamp_begin) {
+    std::string      out;
+    std::vector<int> run;
+    auto             flush = [&]() {
+        if (!run.empty()) {
+            out += tok.decode(run.data(), static_cast<int>(run.size()));
+            run.clear();
+        }
+    };
+    for (const int32_t id : ids) {
+        if (id >= timestamp_begin) {
+            flush();
+            char buf[24];
+            std::snprintf(buf, sizeof(buf), "<|%.2f|>", static_cast<double>(id - timestamp_begin) * 0.02);
+            out += buf;
+        } else {
+            run.push_back(id);
+        }
+    }
+    flush();
+    return out;
+}
+
 }  // namespace
 
 transcribe_status whisper_run(transcribe_session *          session,
@@ -1388,6 +1419,10 @@ transcribe_status whisper_run(transcribe_session *          session,
     cc->chunk_traces.clear();
     std::vector<int32_t> all_text_ids;
     all_text_ids.reserve(256);
+    // Unfiltered twin of all_text_ids: accepted ids INCLUDING timestamp and
+    // special tokens, decoded into transcribe_raw_text.
+    std::vector<int32_t> all_raw_ids;
+    all_raw_ids.reserve(256);
 
     std::vector<float> last_logits(static_cast<size_t>(vocab_size));
     int64_t            t_decode_start   = 0;
@@ -1423,6 +1458,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             seg.text = text;
             cc->segments.push_back(std::move(seg));
         }
+        cc->raw_text    = whisper_decode_raw(cm->tok, all_raw_ids, timestamp_begin);
         cc->full_text   = std::move(text);
         cc->result_kind = want_segment_timestamps ? TRANSCRIBE_TIMESTAMPS_SEGMENT : TRANSCRIBE_TIMESTAMPS_NONE;
         cc->has_result  = true;
@@ -2410,6 +2446,7 @@ transcribe_status whisper_run(transcribe_session *          session,
         }
 
         all_text_ids.insert(all_text_ids.end(), generated_text_ids.begin(), generated_text_ids.end());
+        all_raw_ids.insert(all_raw_ids.end(), generated_ids.begin(), generated_ids.end());
 
         // Seek advance.
         //   Short-form: full-chunk advance. PCM is padded to exactly
@@ -3209,6 +3246,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
             rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         }
         rs.full_text         = text;
+        rs.raw_text          = whisper_decode_raw(cm->tok, g, timestamp_begin);
         rs.detected_language = det_lang[b];
         rs.has_result        = true;
         rs.status            = TRANSCRIBE_OK;

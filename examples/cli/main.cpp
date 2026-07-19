@@ -12,6 +12,7 @@
 #include "wav.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -50,12 +51,33 @@ std::string json_escape(const char * s) {
     return out;
 }
 
+// Shared row formatter for segments_json / batch_segments_json below.
+std::string segment_row_json(const struct transcribe_segment & seg) {
+    std::string out;
+    char        head[128];
+    if (seg.speaker_id > 0) {
+        std::snprintf(head, sizeof(head), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"speaker_id\":%d,\"text\":\"",
+                      static_cast<long long>(seg.t0_ms), static_cast<long long>(seg.t1_ms),
+                      static_cast<int>(seg.speaker_id));
+    } else {
+        std::snprintf(head, sizeof(head), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"",
+                      static_cast<long long>(seg.t0_ms), static_cast<long long>(seg.t1_ms));
+    }
+    out += head;
+    out += json_escape(seg.text != nullptr ? seg.text : "");
+    out += "\"}";
+    return out;
+}
+
 // Build the ",\"segments\":[...]" fragment when the context has real
-// segment timestamps. Returns an empty string when the result kind is
-// NONE (the library still populates a single dummy entry in that case,
-// but with zero timing — don't pollute the JSON with it).
+// segment rows: segment timestamps, or speaker-attributed turns (which
+// may carry no timing — granite's speaker-attribution task). Returns an
+// empty string otherwise (the library still populates a single dummy
+// entry when the kind is NONE, but with zero timing — don't pollute the
+// JSON with it).
 std::string segments_json(const transcribe_session * ctx) {
-    if (transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE) {
+    if (transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE &&
+        transcribe_n_speaker_segments(ctx) <= 0) {
         return {};
     }
     const int n_seg = transcribe_n_segments(ctx);
@@ -70,12 +92,7 @@ std::string segments_json(const transcribe_session * ctx) {
         struct transcribe_segment seg;
         transcribe_segment_init(&seg);
         (void) transcribe_get_segment(ctx, s, &seg);
-        char head[96];
-        std::snprintf(head, sizeof(head), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"",
-                      static_cast<long long>(seg.t0_ms), static_cast<long long>(seg.t1_ms));
-        out += head;
-        out += json_escape(seg.text != nullptr ? seg.text : "");
-        out += "\"}";
+        out += segment_row_json(seg);
     }
     out += "]";
     return out;
@@ -84,7 +101,8 @@ std::string segments_json(const transcribe_session * ctx) {
 // Batch variant: segments JSON for utterance `i` of a transcribe_run_batch
 // result, using the indexed transcribe_batch_* accessors.
 std::string batch_segments_json(const transcribe_session * ctx, int i) {
-    if (transcribe_batch_returned_timestamp_kind(ctx, i) == TRANSCRIBE_TIMESTAMPS_NONE) {
+    if (transcribe_batch_returned_timestamp_kind(ctx, i) == TRANSCRIBE_TIMESTAMPS_NONE &&
+        transcribe_batch_n_speaker_segments(ctx, i) <= 0) {
         return {};
     }
     const int n_seg = transcribe_batch_n_segments(ctx, i);
@@ -99,12 +117,75 @@ std::string batch_segments_json(const transcribe_session * ctx, int i) {
         struct transcribe_segment seg;
         transcribe_segment_init(&seg);
         (void) transcribe_batch_get_segment(ctx, i, s, &seg);
-        char head[96];
-        std::snprintf(head, sizeof(head), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"",
-                      static_cast<long long>(seg.t0_ms), static_cast<long long>(seg.t1_ms));
-        out += head;
-        out += json_escape(seg.text != nullptr ? seg.text : "");
-        out += "\"}";
+        out += segment_row_json(seg);
+    }
+    out += "]";
+    return out;
+}
+
+// ",\"raw_text\":\"...\"" fragment: the model's pre-cleanup decode
+// (transcribe_raw_text). Emitted only when it differs from the clean text,
+// so JSONL stays compact for families with no post-processing.
+std::string raw_text_json(const char * raw, const char * clean) {
+    if (raw == nullptr || raw[0] == '\0' || (clean != nullptr && std::strcmp(raw, clean) == 0)) {
+        return {};
+    }
+    std::string out = ",\"raw_text\":\"";
+    out += json_escape(raw);
+    out += "\"";
+    return out;
+}
+
+// ",\"speakers\":[...]" fragment: the "who spoke when" rows. Emitted only
+// when the run produced speaker segments. p is omitted unless finite
+// (NaN — "model provides no confidence" — is not representable in JSON).
+std::string speaker_row_json(const struct transcribe_speaker_segment & row) {
+    char buf[160];
+    if (std::isfinite(row.p)) {
+        std::snprintf(buf, sizeof(buf), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"speaker_id\":%d,\"p\":%.4f}",
+                      static_cast<long long>(row.t0_ms), static_cast<long long>(row.t1_ms),
+                      static_cast<int>(row.speaker_id), static_cast<double>(row.p));
+    } else {
+        std::snprintf(buf, sizeof(buf), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"speaker_id\":%d}",
+                      static_cast<long long>(row.t0_ms), static_cast<long long>(row.t1_ms),
+                      static_cast<int>(row.speaker_id));
+    }
+    return buf;
+}
+
+std::string speakers_json(const transcribe_session * ctx) {
+    const int n = transcribe_n_speaker_segments(ctx);
+    if (n <= 0) {
+        return {};
+    }
+    std::string out = ",\"speakers\":[";
+    for (int s = 0; s < n; ++s) {
+        if (s > 0) {
+            out += ",";
+        }
+        struct transcribe_speaker_segment row;
+        transcribe_speaker_segment_init(&row);
+        (void) transcribe_get_speaker_segment(ctx, s, &row);
+        out += speaker_row_json(row);
+    }
+    out += "]";
+    return out;
+}
+
+std::string batch_speakers_json(const transcribe_session * ctx, int i) {
+    const int n = transcribe_batch_n_speaker_segments(ctx, i);
+    if (n <= 0) {
+        return {};
+    }
+    std::string out = ",\"speakers\":[";
+    for (int s = 0; s < n; ++s) {
+        if (s > 0) {
+            out += ",";
+        }
+        struct transcribe_speaker_segment row;
+        transcribe_speaker_segment_init(&row);
+        (void) transcribe_batch_get_speaker_segment(ctx, i, s, &row);
+        out += speaker_row_json(row);
     }
     out += "]";
     return out;
@@ -150,6 +231,11 @@ struct cli_args {
     // Canary family knobs. Ignored by non-Canary families.
     bool canary_pnc     = true;   // default: punctuation+caps on
     bool canary_pnc_set = false;  // --pnc / --no-pnc set this
+
+    // Speaker diarization toggle (moss / granite-plus). Unset = library
+    // default (OFF). --diarize / --no-diarize set this.
+    bool diarize     = true;
+    bool diarize_set = false;
 
     // Streaming demo: when > 0, the single-file path feeds the WAV
     // through transcribe_stream_begin/feed/finalize in fixed-size
@@ -218,6 +304,9 @@ void print_usage(const char * argv0) {
                  "  --itn                 (sensevoice/funasr-nano) enable inverse text normalization\n"
                  "  --pnc                 (canary) emit punctuation and capitalization (default)\n"
                  "  --no-pnc              (canary) emit lowercase de-punctuated text\n"
+                 "  --diarize             (moss/granite-plus) speaker attribution: segments carry\n"
+                 "                        speaker ids; granite-plus requests its speaker task\n"
+                 "  --no-diarize          disable speaker attribution (the library default)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
                  "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
                  "                        N-ms PCM slices; requires model to advertise\n"
@@ -481,6 +570,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
         } else if (a == "--no-pnc") {
             out.canary_pnc     = false;
             out.canary_pnc_set = true;
+        } else if (a == "--diarize") {
+            out.diarize     = true;
+            out.diarize_set = true;
+        } else if (a == "--no-diarize") {
+            out.diarize     = false;
+            out.diarize_set = true;
         } else if (a == "--raw-tokens") {
             out.keep_special_tags = true;
         } else if (a == "--stream-chunk-ms") {
@@ -698,6 +793,9 @@ int main(int argc, char ** argv) {
         if (args.canary_pnc_set) {
             rp.pnc = args.canary_pnc ? TRANSCRIBE_PNC_MODE_ON : TRANSCRIBE_PNC_MODE_OFF;
         }
+        if (args.diarize_set) {
+            rp.diarize = args.diarize ? TRANSCRIBE_DIARIZE_MODE_ON : TRANSCRIBE_DIARIZE_MODE_OFF;
+        }
 
         // Whisper run extension. Allocated outside rp's scope so its
         // bytes outlive the per-file loop below; the library copies
@@ -827,8 +925,10 @@ int main(int argc, char ** argv) {
                     }
                     if (args.batch_jsonl) {
                         const std::string escaped  = json_escape(text);
-                        const std::string segments = batch_segments_json(ctx, static_cast<int>(k));
-                        std::string       err_field;
+                        std::string       segments = batch_segments_json(ctx, static_cast<int>(k));
+                        segments += batch_speakers_json(ctx, static_cast<int>(k));
+                        segments += raw_text_json(transcribe_batch_raw_text(ctx, static_cast<int>(k)), text);
+                        std::string err_field;
                         if (ust != TRANSCRIBE_OK) {
                             err_field = ",\"error\":\"";
                             err_field += json_escape(transcribe_status_string(ust));
@@ -970,8 +1070,10 @@ int main(int argc, char ** argv) {
                     transcribe_timings_init(&tm);
                     (void) transcribe_get_timings(ctx, &tm);
                     const std::string escaped  = json_escape(text);
-                    const std::string segments = segments_json(ctx);
-                    std::string       err_field;
+                    std::string       segments = segments_json(ctx);
+                    segments += speakers_json(ctx);
+                    segments += raw_text_json(transcribe_raw_text(ctx), text);
+                    std::string err_field;
                     if (run_st != TRANSCRIBE_OK) {
                         err_field = ",\"error\":\"";
                         err_field += json_escape(transcribe_status_string(run_st));
@@ -1102,6 +1204,9 @@ int main(int argc, char ** argv) {
         }
         if (args.canary_pnc_set) {
             rp.pnc = args.canary_pnc ? TRANSCRIBE_PNC_MODE_ON : TRANSCRIBE_PNC_MODE_OFF;
+        }
+        if (args.diarize_set) {
+            rp.diarize = args.diarize ? TRANSCRIBE_DIARIZE_MODE_ON : TRANSCRIBE_DIARIZE_MODE_OFF;
         }
 
         struct transcribe_whisper_run_ext wx;
@@ -1253,14 +1358,24 @@ int main(int argc, char ** argv) {
 
             const transcribe_timestamp_kind ret_kind = transcribe_returned_timestamp_kind(ctx);
             const int                       n_seg    = transcribe_n_segments(ctx);
-            if (n_seg > 0 && ret_kind != TRANSCRIBE_TIMESTAMPS_NONE) {
+            const bool                      has_spk  = transcribe_n_speaker_segments(ctx) > 0;
+            if (n_seg > 0 && (ret_kind != TRANSCRIBE_TIMESTAMPS_NONE || has_spk)) {
                 std::printf("segments: %d\n", n_seg);
                 for (int i = 0; i < n_seg; ++i) {
                     struct transcribe_segment seg;
                     transcribe_segment_init(&seg);
                     (void) transcribe_get_segment(ctx, i, &seg);
-                    std::printf("  [%7.2f -> %7.2f] %s\n", seg.t0_ms / 1000.0, seg.t1_ms / 1000.0,
-                                (seg.text != nullptr) ? seg.text : "");
+                    char spk[16] = "";
+                    if (seg.speaker_id > 0) {
+                        std::snprintf(spk, sizeof(spk), "S%d: ", static_cast<int>(seg.speaker_id));
+                    }
+                    if (ret_kind != TRANSCRIBE_TIMESTAMPS_NONE) {
+                        std::printf("  [%7.2f -> %7.2f] %s%s\n", seg.t0_ms / 1000.0, seg.t1_ms / 1000.0, spk,
+                                    (seg.text != nullptr) ? seg.text : "");
+                    } else {
+                        // Speaker-attributed turns without timing (granite SAA).
+                        std::printf("  %s%s\n", spk, (seg.text != nullptr) ? seg.text : "");
+                    }
                 }
             }
             if (ret_kind == TRANSCRIBE_TIMESTAMPS_WORD || ret_kind == TRANSCRIBE_TIMESTAMPS_TOKEN) {

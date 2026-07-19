@@ -364,6 +364,8 @@ static transcribe_status decode_and_populate(SenseVoiceSession *           cc,
         seg.n_words     = 0;
         seg.text        = full;
 
+        cc->raw_text = cc->token_ids.empty() ? std::string() :
+                                               tok.decode(cc->token_ids.data(), static_cast<int>(cc->token_ids.size()));
         cc->full_text = std::move(full);
         cc->segments.push_back(std::move(seg));
 

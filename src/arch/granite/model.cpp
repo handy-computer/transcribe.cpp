@@ -1,6 +1,7 @@
 // arch/granite/model.cpp - Granite Speech family handler.
 
 #include "decoder.h"
+#include "diarize.h"
 #include "encoder.h"
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -244,8 +245,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    // Only -plus exposes word timestamps; lower the WORD family default to NONE
-    // when the GGUF does not advertise stt.capability.word_timestamps.
+    // Only -plus exposes word timestamps; lower the advertised maximum from
+    // WORD to NONE when the GGUF lacks stt.capability.word_timestamps.
     {
         bool word_ts = false;
         if (const transcribe_status st =
@@ -256,6 +257,19 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         if (!word_ts) {
             m->caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         }
+    }
+
+    // Speaker attribution is variant-scoped the same way: the converter
+    // writes stt.capability.speaker_diarization only for -plus, so the
+    // feature bit is set from the KV rather than as a family invariant.
+    {
+        bool diar = false;
+        if (const transcribe_status st =
+                read_optional_bool_kv(loader.gguf(), "stt.capability.speaker_diarization", "granite", false, diar);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_DIARIZATION, diar);
     }
 
     if (const transcribe_status st = read_languages_kv(loader.gguf(), *m); st != TRANSCRIBE_OK) {
@@ -531,9 +545,22 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
             // -plus only (1b/2b advertise NONE, gated out upstream). AUTO does
             // NOT request timestamps. IBM's verbatim prompt; the model emits
             // per-word "[T:N]" centisecond markers (parsed in run()).
+            if (diarize_requested(cm, params)) {
+                // Upstream defines timestamps and speaker attribution as
+                // separate tasks (one instruction each); they do not compose.
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "granite: diarize=ON and timestamps=word are mutually exclusive tasks; request one or the "
+                        "other");
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
             instruction =
                 " Timestamps: Transcribe the speech. After each word, add a timestamp tag "
                 "showing the end time in centiseconds, e.g. hello [T:45] world [T:82]";
+        } else if (diarize_requested(cm, params)) {
+            // -plus only (the DIARIZATION feature bit gates this). IBM's
+            // verbatim speaker-attribution instruction; the model emits
+            // "[Speaker N]:" tags before turns (split after decode).
+            instruction = k_saa_instruction;
         }
     }
 
@@ -711,6 +738,42 @@ static std::string parse_granite_word_timestamps(const std::string &            
     }
 
     return clean;
+}
+
+// Install the decoded transcript into a result target (the session's
+// scratch slot or a batch ResultSet — identical member names). Single
+// source of truth for run() and the run_batch capture loop:
+//   - timestamps=WORD: parse "[T:N]" markers into words (kind WORD).
+//   - diarize=ON (SAA task requested at prompt build): split at
+//     "[Speaker N]:" markers into per-turn segments + speaker rows
+//     (kind NONE — the SAA task carries no timing).
+//   - otherwise / no markers recognized: plain single segment.
+template <typename Result>
+void finalize_granite_result(GraniteModel *                cm,
+                             const transcribe_run_params * params,
+                             const std::string &           raw_text,
+                             int64_t                       audio_ms,
+                             Result &                      out) {
+    out.raw_text = raw_text;  // pre-parse marker text, via transcribe_raw_text
+    if (params != nullptr && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
+        out.full_text = parse_granite_word_timestamps(raw_text, audio_ms, out.words, out.segments);
+        if (!out.words.empty()) {
+            out.result_kind = TRANSCRIBE_TIMESTAMPS_WORD;
+            return;
+        }
+    }
+    if (diarize_requested(cm, params) &&
+        split_speaker_turns(raw_text, out.segments, out.speaker_segments, out.full_text)) {
+        out.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        return;
+    }
+    out.full_text   = raw_text;
+    out.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    transcribe_session::SegmentEntry seg{};
+    seg.text  = raw_text;
+    seg.t0_ms = 0;
+    seg.t1_ms = audio_ms;
+    out.segments.push_back(std::move(seg));
 }
 
 transcribe_status run(transcribe_session *          ctx_base,
@@ -1231,22 +1294,9 @@ transcribe_status run(transcribe_session *          ctx_base,
     const int64_t audio_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
 
     cc->has_result = true;
-    // -plus word timestamps: parse "[T:N]" markers into words, else plain text.
-    if (params != nullptr && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
-        cc->full_text = parse_granite_word_timestamps(raw_text, audio_ms, cc->words, cc->segments);
-        if (!cc->words.empty()) {
-            cc->result_kind = TRANSCRIBE_TIMESTAMPS_WORD;
-        }
-    }
-    if (cc->words.empty()) {
-        cc->full_text   = raw_text;
-        cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-        transcribe_session::SegmentEntry seg{};
-        seg.text  = cc->full_text;
-        seg.t0_ms = 0;
-        seg.t1_ms = audio_ms;
-        cc->segments.push_back(std::move(seg));
-    }
+    // -plus word timestamps / speaker attribution / plain text; shared with
+    // the run_batch capture loop via finalize_granite_result.
+    finalize_granite_result(cm, params, raw_text, audio_ms, *cc);
 
     // Output truncation (decode hit the generation budget / context ceiling
     // before EOS) is a hard status, not a silent success: surface it so the
@@ -1423,6 +1473,22 @@ transcribe_status run_batch_serial(GraniteSession *              cc,
 }
 
 }  // namespace
+
+// Granite's word-timestamp and speaker-attribution prompts are distinct tasks
+// and cannot be composed. Validate the mode-dependent timestamp contract before
+// the dispatcher clears the previous result snapshot.
+transcribe_status run_validate(const transcribe_session * ctx, const transcribe_run_params * params) {
+    if (ctx == nullptr || ctx->model == nullptr || params == nullptr || !diarize_requested(ctx->model, params)) {
+        return TRANSCRIBE_OK;
+    }
+    if (params->task != TRANSCRIBE_TASK_TRANSCRIBE) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (params->timestamps != TRANSCRIBE_TIMESTAMPS_NONE && params->timestamps != TRANSCRIBE_TIMESTAMPS_AUTO) {
+        return TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS;
+    }
+    return TRANSCRIBE_OK;
+}
 
 transcribe_status run_batch(transcribe_session *          session,
                             const float * const *         pcm,
@@ -1742,22 +1808,8 @@ transcribe_status run_batch(transcribe_session *          session,
         transcribe_session::ResultSet rs;
         rs.has_result = true;
         rs.status     = TRANSCRIBE_OK;
-        // Same as run(): parse -plus "[T:N]" word markers, else plain-text segment.
-        if (params != nullptr && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
-            rs.full_text = parse_granite_word_timestamps(transcript, audio_ms, rs.words, rs.segments);
-            if (!rs.words.empty()) {
-                rs.result_kind = TRANSCRIBE_TIMESTAMPS_WORD;
-            }
-        }
-        if (rs.words.empty()) {
-            rs.full_text   = transcript;
-            rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-            transcribe_session::SegmentEntry seg{};
-            seg.text  = transcript;
-            seg.t0_ms = 0;
-            seg.t1_ms = audio_ms;
-            rs.segments.push_back(std::move(seg));
-        }
+        // Same as run(): word markers / speaker attribution / plain text.
+        finalize_granite_result(cm, params, transcript, audio_ms, rs);
         // Per-utterance truncation parity with single-shot run(): a row cut at
         // the generation budget / KV window before eos reports
         // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
@@ -1786,6 +1838,7 @@ extern const Arch arch = {
     /* .stream_finalize  = */ nullptr,
     /* .stream_reset     = */ nullptr,
     /* .accepts_ext_kind = */ nullptr,
+    /* .run_validate     = */ run_validate,
 };
 
 }  // namespace transcribe::granite

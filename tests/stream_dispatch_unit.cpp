@@ -1475,12 +1475,17 @@ void test_begin_copies_param_strings_out() {
 }
 
 void test_begin_accepts_min_prefix_run_params() {
-    // The size gate admits struct_size >= the prefix ending at `family` —
-    // a caller compiled against a pre-spec_k_drafts header allocates
-    // EXACTLY that many bytes. The dispatcher must never read past the
-    // caller's declared prefix when it builds its owned copy (a full
-    // struct assignment is a heap-buffer-overflow here; ASan catches it),
-    // and the absent tail field must come out as its documented default.
+    // The size gate admits struct_size >= the prefix ending at
+    // `spec_k_drafts` (the 0.2.0 minimum: the diarize mid-struct insert
+    // made every pre-0.2 layout invalid, so the gate must reject the old
+    // 64-byte sizeof outright). A minimal caller allocates EXACTLY the
+    // prefix — sizeof includes tail padding beyond it. The dispatcher
+    // must never read past the caller's declared prefix when it builds
+    // its owned copy (a full struct assignment is a heap-buffer-overflow
+    // here; ASan catches it), and caller-set values throughout the
+    // prefix must survive the copy. Fields appended after spec_k_drafts
+    // in some future release will get the init-default fill this copy
+    // already implements.
     const transcribe::Arch arch = {
         "fake-retaining-stream-minprefix",
         nullptr,
@@ -1504,15 +1509,16 @@ void test_begin_accepts_min_prefix_run_params() {
     session.model = &model;
 
     const size_t min_size =
-        offsetof(transcribe_run_params, family) + sizeof(((transcribe_run_params *) nullptr)->family);
+        offsetof(transcribe_run_params, spec_k_drafts) + sizeof(((transcribe_run_params *) nullptr)->spec_k_drafts);
 
     // Stage full defaults on the stack, then heap-allocate ONLY the
     // prefix and declare exactly that many bytes via struct_size.
     transcribe_run_params staged;
     transcribe_run_params_init(&staged);
-    staged.struct_size = min_size;
-    staged.language    = "en";  // exercise the string copy alongside
-    auto * rp          = static_cast<transcribe_run_params *>(std::malloc(min_size));
+    staged.struct_size   = min_size;
+    staged.language      = "en";  // exercise the string copy alongside
+    staged.spec_k_drafts = 3;     // last in-prefix field: must survive the copy
+    auto * rp            = static_cast<transcribe_run_params *>(std::malloc(min_size));
     std::memcpy(rp, &staged, min_size);
 
     transcribe_stream_params sp;
@@ -1524,9 +1530,10 @@ void test_begin_accepts_min_prefix_run_params() {
 
     // The library-owned view the family retained must carry the caller's
     // true struct_size (so downstream has_field gating stays honest) and
-    // the init default for the field the caller's struct did not have.
+    // the caller's value for the last in-prefix field, proving the copy
+    // spans the whole admitted prefix without over-reading past it.
     CHECK(g_retained_rp.struct_size == min_size);
-    CHECK(g_retained_rp.spec_k_drafts == -1);
+    CHECK(g_retained_rp.spec_k_drafts == 3);
 
     transcribe_stream_update up;
     transcribe_stream_update_init(&up);

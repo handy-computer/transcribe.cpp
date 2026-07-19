@@ -832,7 +832,17 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
         }
         std::string full = tok.decode(all_ids.data(), static_cast<int>(all_ids.size()));
         normalize_transcript_whitespace(full);
-        seg.text      = full;
+        seg.text = full;
+        {
+            // Unfiltered decode of every emitted token (tags included,
+            // whitespace unnormalized) for transcribe_raw_text.
+            std::vector<int> raw_ids;
+            raw_ids.reserve(pc->raw_tokens.size());
+            for (const auto & rt : pc->raw_tokens) {
+                raw_ids.push_back(rt.id);
+            }
+            pc->raw_text = tok.decode(raw_ids.data(), static_cast<int>(raw_ids.size()));
+        }
         pc->full_text = std::move(full);
         pc->segments.push_back(std::move(seg));
 
@@ -2067,6 +2077,14 @@ void rebuild_streaming_result_text(ParakeetSession * pc, const ParakeetModel * p
     }
     pc->full_text = tok.decode(all_ids.data(), static_cast<int>(all_ids.size()));
     normalize_transcript_whitespace(pc->full_text);
+    {
+        std::vector<int32_t> raw_ids;
+        raw_ids.reserve(pc->raw_tokens.size());
+        for (const auto & tk : pc->raw_tokens) {
+            raw_ids.push_back(tk.id);
+        }
+        pc->raw_text = tok.decode(raw_ids.data(), static_cast<int>(raw_ids.size()));
+    }
     pc->has_result  = true;
     pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 }

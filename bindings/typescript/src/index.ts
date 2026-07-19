@@ -32,6 +32,7 @@ import type {
   Capabilities,
   CommitPolicy,
   DeviceType,
+  Diarize,
   ExtSlot,
   FamilyExtension,
   Feature,
@@ -39,6 +40,7 @@ import type {
   ModelOptions,
   PcmLike,
   Segment,
+  SpeakerSegment,
   SessionLimits,
   SessionOptions,
   StreamOptions,
@@ -86,6 +88,11 @@ const TIMESTAMPS: Record<TimestampKind, number> = {
 const TIMESTAMP_NAMES: Record<number, TimestampKind> = Object.fromEntries(
   Object.entries(TIMESTAMPS).map(([k, v]) => [v, k as TimestampKind]),
 );
+const DIARIZE: Record<Diarize, number> = {
+  default: g.TRANSCRIBE_DIARIZE_MODE_DEFAULT,
+  off: g.TRANSCRIBE_DIARIZE_MODE_OFF,
+  on: g.TRANSCRIBE_DIARIZE_MODE_ON,
+};
 const FEATURES: Record<Feature, number> = {
   initial_prompt: g.TRANSCRIBE_FEATURE_INITIAL_PROMPT,
   temperature_fallback: g.TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK,
@@ -93,6 +100,7 @@ const FEATURES: Record<Feature, number> = {
   cancellation: g.TRANSCRIBE_FEATURE_CANCELLATION,
   pnc: g.TRANSCRIBE_FEATURE_PNC,
   itn: g.TRANSCRIBE_FEATURE_ITN,
+  diarization: g.TRANSCRIBE_FEATURE_DIARIZATION,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -363,8 +371,11 @@ interface Accessors {
   getWord(j: number, out: any): number;
   nTokens(): number;
   getToken(j: number, out: any): number;
+  nSpeakerSegments(): number;
+  getSpeakerSegment(j: number, out: any): number;
   getTimings(out: any): number;
   fullText(): string;
+  rawText(): string;
   detectedLanguage(): string;
   returnedTimestampKind(): number;
 }
@@ -378,8 +389,11 @@ function singleAccessors(n: Native, h: any): Accessors {
     getWord: (j, o) => F.getWord(h, j, o),
     nTokens: () => F.nTokens(h),
     getToken: (j, o) => F.getToken(h, j, o),
+    nSpeakerSegments: () => F.nSpeakerSegments(h),
+    getSpeakerSegment: (j, o) => F.getSpeakerSegment(h, j, o),
     getTimings: (o) => F.getTimings(h, o),
     fullText: () => F.fullText(h),
+    rawText: () => F.rawText(h),
     detectedLanguage: () => F.detectedLanguage(h),
     returnedTimestampKind: () => F.returnedTimestampKind(h),
   };
@@ -394,8 +408,11 @@ function batchAccessors(n: Native, h: any, i: number): Accessors {
     getWord: (j, o) => F.batchGetWord(h, i, j, o),
     nTokens: () => F.batchNTokens(h, i),
     getToken: (j, o) => F.batchGetToken(h, i, j, o),
+    nSpeakerSegments: () => F.batchNSpeakerSegments(h, i),
+    getSpeakerSegment: (j, o) => F.batchGetSpeakerSegment(h, i, j, o),
     getTimings: (o) => F.batchGetTimings(h, i, o),
     fullText: () => F.batchFullText(h, i),
+    rawText: () => F.batchRawText(h, i),
     detectedLanguage: () => F.batchDetectedLanguage(h, i),
     returnedTimestampKind: () => F.batchReturnedTimestampKind(h, i),
   };
@@ -420,6 +437,7 @@ function materialize(
       nWords: s.n_words,
       firstToken: s.first_token,
       nTokens: s.n_tokens,
+      speakerId: s.speaker_id,
     });
   }
 
@@ -454,6 +472,19 @@ function materialize(
     });
   }
 
+  const speakerSegments: SpeakerSegment[] = [];
+  for (let i = 0, c = acc.nSpeakerSegments(); i < c; i++) {
+    const s: any = {};
+    F.speakerSegmentInit(s);
+    check(n, acc.getSpeakerSegment(i, s), `reading speaker segment ${i}`);
+    speakerSegments.push({
+      t0Ms: num(s.t0_ms),
+      t1Ms: num(s.t1_ms),
+      speakerId: s.speaker_id,
+      p: s.p,
+    });
+  }
+
   const tm: any = {};
   F.timingsInit(tm);
   check(n, acc.getTimings(tm), "reading timings");
@@ -466,9 +497,11 @@ function materialize(
 
   return {
     text: acc.fullText() ?? "",
+    rawText: acc.rawText() ?? "",
     language: acc.detectedLanguage() ?? "",
     timestampKind: TIMESTAMP_NAMES[acc.returnedTimestampKind()] ?? "none",
     segments,
+    speakerSegments,
     words,
     tokens,
     timings,
@@ -770,6 +803,7 @@ export class Session {
     // whisper resolves it to "segment" (its robust path), no-timestamp
     // families resolve to "none".
     p.timestamps = lookup(TIMESTAMPS, opts.timestamps ?? "auto", "timestamps");
+    p.diarize = lookup(DIARIZE, opts.diarize ?? "default", "diarize");
     if (opts.language !== undefined) p.language = opts.language;
     if (opts.targetLanguage !== undefined)
       p.target_language = opts.targetLanguage;
@@ -870,6 +904,7 @@ export class Session {
       language: opts.language,
       targetLanguage: opts.targetLanguage,
       timestamps: opts.timestamps,
+      diarize: opts.diarize,
       keepSpecialTags: opts.keepSpecialTags,
       specKDrafts: -1,
     });

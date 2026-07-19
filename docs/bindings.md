@@ -65,6 +65,35 @@ automatic: Python `ctypes.c_char_p` / `.decode()`, Go `C.GoString`, Rust
 hands out a zero-copy view must scope it to the current callback/update turn
 and document that it dies at the next stream mutation.
 
+## Diarization result contract
+
+First-class bindings expose the generic diarization surface rather than only
+the generated FFI:
+
+- a run option with `default` / `off` / `on` values (`default` is globally
+  off),
+- the `diarization` feature probe,
+- `speaker_id` / `speakerId` on every segment (1-based, 0 = unattributed), and
+- speaker-turn rows with start/end milliseconds, speaker id, and confidence.
+
+Speaker-turn times may both be zero when a model attributes text but does not
+produce timing (Granite SAA). Timestamp selection is an independent axis:
+explicit unsupported combinations return `UNSUPPORTED_TIMESTAMPS`; `AUTO`
+chooses the richest granularity compatible with the selected task. Result
+objects own copies of every row and remain valid after the next run.
+
+## Raw text
+
+Every first-class binding exposes `raw_text` / `rawText` on the materialized
+result alongside the clean `text`: the model's decoded output before family
+post-processing (diarization markers, timestamp/special tokens, tag filtering,
+whitespace trims). It equals the clean text modulo whitespace for families
+that emit clean text natively, and is the recommended replacement for
+`keep_special_tags` when the goal is recovering what the model emitted —
+unlike the flag it works for every family, covers plain-text markers, and does
+not give up the clean transcript. Offline runs (single and batch) only;
+streaming results do not carry it.
+
 When adding a new family extension, update:
 
 - `include/transcribe/<family>.h` with the typed struct, kind constant, and

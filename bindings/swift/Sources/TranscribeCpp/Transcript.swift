@@ -5,12 +5,17 @@ import CTranscribe
 /// the next run and the session itself.
 public struct Transcript: Sendable, Equatable {
     public let text: String
+    /// The model's decoded output before family post-processing (diarization
+    /// markers, timestamp/special tokens, tag filtering, whitespace trims).
+    /// Equal to `text` modulo whitespace for families that emit clean text.
+    public let rawText: String
     /// Detected language ISO code, or `nil` when the model didn't predict one
     /// (English-only model, a caller-supplied hint, or no LID).
     public let language: String?
     /// The granularity actually returned (may be coarser than requested).
     public let timestampKind: TimestampKind
     public let segments: [Segment]
+    public let speakerSegments: [SpeakerSegment]
     public let words: [Word]
     public let tokens: [Token]
     public let timings: Timings
@@ -25,12 +30,29 @@ public struct Segment: Sendable, Equatable {
     public let firstToken: Int32
     public let nTokens: Int32
     public let text: String
+    /// 1-based speaker id; zero means no attribution.
+    public let speakerId: Int32
 
     init(_ c: transcribe_segment) {
         t0Ms = c.t0_ms; t1Ms = c.t1_ms
         firstWord = c.first_word; nWords = c.n_words
         firstToken = c.first_token; nTokens = c.n_tokens
         text = c.text.map { String(cString: $0) } ?? ""
+        speakerId = c.speaker_id
+    }
+}
+
+/// One diarized speaker turn. Zero times mean attribution without timing;
+/// `p` is NaN when the model does not expose confidence.
+public struct SpeakerSegment: Sendable, Equatable {
+    public let t0Ms: Int64
+    public let t1Ms: Int64
+    public let speakerId: Int32
+    public let p: Float
+
+    init(_ c: transcribe_speaker_segment) {
+        t0Ms = c.t0_ms; t1Ms = c.t1_ms
+        speakerId = c.speaker_id; p = c.p
     }
 }
 

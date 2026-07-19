@@ -54,6 +54,9 @@ Output JSONL:
     - Remaining lines (one per utterance):
         {"id": "...", "ref_text": "...", "hyp_text": "...", "mel_ms": ...,
          "encode_ms": ..., "decode_ms": ...}
+      With --diarize, timed DER inputs are also retained:
+        {"duration_ms": ..., "ref_speaker_segments": [...],
+         "hyp_speaker_segments": [...]}
 """
 
 from __future__ import annotations
@@ -65,6 +68,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import wave
 from pathlib import Path
 
 REMOTE_HELPERS = Path(__file__).resolve().parent / "remote"
@@ -108,12 +112,23 @@ def find_repo_root(start: Path) -> Path:
 
 
 def derive_out_path(
-    repo: Path, model: Path, manifest: Path, timestamps: str
+    repo: Path, model: Path, manifest: Path, timestamps: str, diarize: bool
 ) -> Path:
     model_stem = model.stem
     dataset = manifest.stem.replace(".manifest", "")
     dataset = f"{dataset}-timestamps_{timestamps}"
+    if diarize:
+        dataset += "-diarize"
     return repo / "reports" / "wer" / f"{model_stem}.{dataset}.jsonl"
+
+
+def audio_duration_ms(path: str) -> int:
+    """Read PCM WAV duration for the DER evaluation region."""
+    try:
+        with wave.open(path, "rb") as wav:
+            return round(wav.getnframes() * 1000 / wav.getframerate())
+    except (OSError, EOFError, wave.Error, ZeroDivisionError):
+        return 0
 
 
 def resolve_dataset(repo: Path, spec: str) -> tuple[Path, str | None]:
@@ -196,8 +211,12 @@ def main() -> int:
                    help="Flash-attn KV cache type passthrough")
     p.add_argument("--timestamps",
                    choices=("auto", "none", "segment", "word", "token"),
-                   default="none",
-                   help="Timestamp granularity passthrough (default: none)")
+                   default=None,
+                   help="Timestamp granularity passthrough (default: none "
+                        "for WER, auto with --diarize)")
+    p.add_argument("--diarize", action="store_true",
+                   help="Request diarization and retain timed speaker "
+                        "intervals for scripts/wer/der.py")
     p.add_argument("--stream-chunk-ms", type=int, default=0,
                    help="When > 0, drive each utterance through the "
                         "streaming API in N-ms chunks. Requires a model "
@@ -220,6 +239,8 @@ def main() -> int:
                         "the right-context (lookahead) size in ms. "
                         "Ignored unless --stream-chunk-ms > 0.")
     args = p.parse_args()
+    if args.timestamps is None:
+        args.timestamps = "auto" if args.diarize else "none"
 
     # Resolve --dataset first (may run ingest.py). --dataset takes
     # precedence over --manifest; if neither is set fall back to the
@@ -239,7 +260,7 @@ def main() -> int:
             return 2
 
     out_path = args.out or derive_out_path(
-        repo, args.model, args.manifest, args.timestamps
+        repo, args.model, args.manifest, args.timestamps, args.diarize
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -295,8 +316,6 @@ def main() -> int:
     # path (audio_to_entry), so reordering the batch list is safe.
     batch_order = manifest
     if args.sort_by_length and args.batch_size and args.batch_size > 1:
-        import wave
-
         def _dur(e: dict) -> float:
             try:
                 with wave.open(e["audio"]) as w:
@@ -339,6 +358,8 @@ def main() -> int:
     if args.language:
         cmd += ["--language", args.language]
     cmd += ["--timestamps", args.timestamps]
+    if args.diarize:
+        cmd += ["--diarize"]
     if args.stream_chunk_ms > 0:
         cmd += ["--stream-chunk-ms", str(args.stream_chunk_ms)]
         if args.stream_att_right is not None:
@@ -406,6 +427,7 @@ def main() -> int:
                     result["language"] = args.language
                 result["recipe"] = {
                     "timestamps": args.timestamps,
+                    "diarize": args.diarize,
                     "language": args.language or "auto-detect",
                     "batch_size": bs,
                     "backend": args.backend or "default",
@@ -428,6 +450,14 @@ def main() -> int:
                 "decode_ms": result.get("decode_ms", 0),
                 "error": result.get("error", ""),
             }
+            if args.diarize:
+                out_entry["duration_ms"] = (
+                    entry.get("duration_ms") or audio_duration_ms(audio_path)
+                )
+                out_entry["ref_speaker_segments"] = entry.get(
+                    "ref_speaker_segments", []
+                )
+                out_entry["hyp_speaker_segments"] = result.get("speakers", [])
             # Compute total latency for backwards compat with score.py.
             out_entry["latency_ms"] = round(
                 out_entry["mel_ms"] + out_entry["encode_ms"] +

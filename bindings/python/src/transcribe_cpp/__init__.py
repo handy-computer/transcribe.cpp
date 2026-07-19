@@ -46,17 +46,18 @@ from .errors import (
     raise_for_status,
 )
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 # String-enum types, exported so callers (and type checkers) can name them.
 Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda"]
 KVType = Literal["auto", "f32", "f16"]
 Task = Literal["transcribe", "translate"]
 Timestamps = Literal["none", "auto", "segment", "word", "token"]
+Diarize = Literal["default", "off", "on"]
 CommitPolicy = Literal["auto", "on_finalize", "stable_prefix"]
 Feature = Literal[
     "initial_prompt", "temperature_fallback", "long_form",
-    "cancellation", "pnc", "itn",
+    "cancellation", "pnc", "itn", "diarization",
 ]
 
 __all__ = [
@@ -66,6 +67,7 @@ __all__ = [
     "Session",
     "Result",
     "Segment",
+    "SpeakerSegment",
     "Word",
     "Token",
     "Capabilities",
@@ -84,6 +86,7 @@ __all__ = [
     "KVType",
     "Task",
     "Timestamps",
+    "Diarize",
     "CommitPolicy",
     "Feature",
     "TranscribeError",
@@ -165,6 +168,7 @@ _RunParams = _generated.transcribe_run_params
 _Capabilities = _generated.transcribe_capabilities
 _Timings = _generated.transcribe_timings
 _Segment = _generated.transcribe_segment
+_SpeakerSegment = _generated.transcribe_speaker_segment
 _Word = _generated.transcribe_word
 _Token = _generated.transcribe_token
 _StreamParams = _generated.transcribe_stream_params
@@ -198,6 +202,11 @@ _TIMESTAMPS = {
     "token": _generated.TRANSCRIBE_TIMESTAMPS_TOKEN,
 }
 _TIMESTAMP_NAMES = {v: k for k, v in _TIMESTAMPS.items()}
+_DIARIZE = {
+    "default": _generated.TRANSCRIBE_DIARIZE_MODE_DEFAULT,
+    "off": _generated.TRANSCRIBE_DIARIZE_MODE_OFF,
+    "on": _generated.TRANSCRIBE_DIARIZE_MODE_ON,
+}
 _COMMIT_POLICIES = {
     "auto": _generated.TRANSCRIBE_STREAM_COMMIT_AUTO,
     "on_finalize": _generated.TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE,
@@ -220,6 +229,7 @@ _FEATURES = {
     "cancellation": _generated.TRANSCRIBE_FEATURE_CANCELLATION,
     "pnc": _generated.TRANSCRIBE_FEATURE_PNC,
     "itn": _generated.TRANSCRIBE_FEATURE_ITN,
+    "diarization": _generated.TRANSCRIBE_FEATURE_DIARIZATION,
 }
 
 
@@ -434,6 +444,18 @@ class Segment:
     n_words: int
     first_token: int
     n_tokens: int
+    speaker_id: int
+
+
+@dataclass(frozen=True)
+class SpeakerSegment:
+    """One diarized turn. Times are zero when the model attributes text but
+    does not provide speaker timing; ``p`` is NaN when unavailable."""
+
+    t0_ms: int
+    t1_ms: int
+    speaker_id: int
+    p: float
 
 
 @dataclass(frozen=True)
@@ -499,9 +521,14 @@ class Result:
     returned, so it stays valid after later runs."""
 
     text: str
+    #: The model's decoded output before family post-processing (diarization
+    #: markers, timestamp/special tokens, tag filtering, whitespace trims).
+    #: Equal to ``text`` modulo whitespace for families that emit clean text.
+    raw_text: str
     language: str
     timestamp_kind: str
     segments: tuple[Segment, ...]
+    speaker_segments: tuple[SpeakerSegment, ...]
     words: tuple[Word, ...]
     tokens: tuple[Token, ...]
     timings: Timings
@@ -548,6 +575,14 @@ def _segment_from(s) -> Segment:
         text=_decode(s.text), t0_ms=s.t0_ms, t1_ms=s.t1_ms,
         first_word=s.first_word, n_words=s.n_words,
         first_token=s.first_token, n_tokens=s.n_tokens,
+        speaker_id=s.speaker_id,
+    )
+
+
+def _speaker_segment_from(s) -> SpeakerSegment:
+    return SpeakerSegment(
+        t0_ms=s.t0_ms, t1_ms=s.t1_ms,
+        speaker_id=s.speaker_id, p=s.p,
     )
 
 
@@ -583,7 +618,7 @@ def _stream_update_from(u) -> StreamUpdate:
 
 
 def _build_run_params(task, language, target_language, timestamps,
-                      keep_special_tags, spec_k_drafts):
+                      keep_special_tags, spec_k_drafts, diarize="default"):
     if not isinstance(spec_k_drafts, int) or spec_k_drafts < -1:
         raise InvalidArgument(
             f"spec_k_drafts must be -1 (family default), 0 (disabled), or a "
@@ -593,6 +628,7 @@ def _build_run_params(task, language, target_language, timestamps,
     _lib.transcribe_run_params_init(_byref(params))
     params.task = _enum(_TASKS, task, "task")
     params.timestamps = _enum(_TIMESTAMPS, timestamps, "timestamps")
+    params.diarize = _enum(_DIARIZE, diarize, "diarize")
     params.language = language.encode("utf-8") if language else None
     params.target_language = target_language.encode("utf-8") if target_language else None
     params.keep_special_tags = keep_special_tags
@@ -983,6 +1019,7 @@ class Session:
             language: str | None = None,
             target_language: str | None = None,
             timestamps: Timestamps = "auto",
+            diarize: Diarize = "default",
             keep_special_tags: bool = False,
             spec_k_drafts: int = -1,
             family: FamilyExtension | None = None) -> Result:
@@ -1000,7 +1037,7 @@ class Session:
         self._cancel.clear()
         array, n_samples = _pcm_to_carray(pcm)
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts)
+                                   keep_special_tags, spec_k_drafts, diarize)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1019,6 +1056,7 @@ class Session:
                   language: str | None = None,
                   target_language: str | None = None,
                   timestamps: Timestamps = "auto",
+                  diarize: Diarize = "default",
                   keep_special_tags: bool = False,
                   spec_k_drafts: int = -1,
                   family: FamilyExtension | None = None,
@@ -1055,7 +1093,7 @@ class Session:
             counts[k] = n
 
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts)
+                                   keep_special_tags, spec_k_drafts, diarize)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1106,6 +1144,7 @@ class Session:
 
     def stream(self, *, task: Task = "transcribe", language: str | None = None,
                target_language: str | None = None, timestamps: Timestamps = "none",
+               diarize: Diarize = "default",
                keep_special_tags: bool = False, commit_policy: CommitPolicy = "auto",
                stable_prefix_agreement_n: int = 0,
                family: FamilyExtension | None = None) -> Stream:
@@ -1120,7 +1159,7 @@ class Session:
         # spec_k_drafts is an offline-decode knob; streaming always uses the
         # family default (-1).
         run_params = _build_run_params(task, language, target_language, timestamps,
-                                       keep_special_tags, -1)
+                                       keep_special_tags, -1, diarize)
         sp = _StreamParams()
         _lib.transcribe_stream_params_init(_byref(sp))
         sp.commit_policy = _enum(_COMMIT_POLICIES, commit_policy, "commit_policy")
@@ -1152,7 +1191,10 @@ class Session:
             get_word = lambda j, out: _lib.transcribe_get_word(h, j, out)
             n_tok = lambda: _lib.transcribe_n_tokens(h)
             get_tok = lambda j, out: _lib.transcribe_get_token(h, j, out)
+            n_speaker = lambda: _lib.transcribe_n_speaker_segments(h)
+            get_speaker = lambda j, out: _lib.transcribe_get_speaker_segment(h, j, out)
             full_text = _lib.transcribe_full_text(h)
+            raw_text = _lib.transcribe_raw_text(h)
             language = _lib.transcribe_detected_language(h)
             kind = _lib.transcribe_returned_timestamp_kind(h)
             get_tim = lambda out: _lib.transcribe_get_timings(h, out)
@@ -1163,7 +1205,10 @@ class Session:
             get_word = lambda j, out: _lib.transcribe_batch_get_word(h, utt, j, out)
             n_tok = lambda: _lib.transcribe_batch_n_tokens(h, utt)
             get_tok = lambda j, out: _lib.transcribe_batch_get_token(h, utt, j, out)
+            n_speaker = lambda: _lib.transcribe_batch_n_speaker_segments(h, utt)
+            get_speaker = lambda j, out: _lib.transcribe_batch_get_speaker_segment(h, utt, j, out)
             full_text = _lib.transcribe_batch_full_text(h, utt)
+            raw_text = _lib.transcribe_batch_raw_text(h, utt)
             language = _lib.transcribe_batch_detected_language(h, utt)
             kind = _lib.transcribe_batch_returned_timestamp_kind(h, utt)
             get_tim = lambda out: _lib.transcribe_batch_get_timings(h, utt, out)
@@ -1189,15 +1234,24 @@ class Session:
             get_tok(j, _byref(tok))
             tokens.append(_token_from(tok))
 
+        speaker_segments = []
+        for j in range(n_speaker()):
+            speaker = _SpeakerSegment()
+            _lib.transcribe_speaker_segment_init(_byref(speaker))
+            get_speaker(j, _byref(speaker))
+            speaker_segments.append(_speaker_segment_from(speaker))
+
         tm = _Timings()
         _lib.transcribe_timings_init(_byref(tm))
         get_tim(_byref(tm))
 
         return Result(
             text=_decode(full_text),
+            raw_text=_decode(raw_text),
             language=_decode(language),
             timestamp_kind=_TIMESTAMP_NAMES.get(kind, "unknown"),
             segments=tuple(segments),
+            speaker_segments=tuple(speaker_segments),
             words=tuple(words),
             tokens=tuple(tokens),
             timings=_timings_from(tm),
@@ -1347,6 +1401,7 @@ def transcribe(
     language: str | None = None,
     target_language: str | None = None,
     timestamps: Timestamps = "auto",
+    diarize: Diarize = "default",
     keep_special_tags: bool = False,
     spec_k_drafts: int = -1,
     family: FamilyExtension | None = None,
@@ -1362,7 +1417,8 @@ def transcribe(
     """
     session_opts = dict(n_threads=n_threads, kv_type=kv_type, n_ctx=n_ctx)
     run_opts = dict(task=task, language=language, target_language=target_language,
-                    timestamps=timestamps, keep_special_tags=keep_special_tags,
+                    timestamps=timestamps, diarize=diarize,
+                    keep_special_tags=keep_special_tags,
                     spec_k_drafts=spec_k_drafts, family=family)
 
     if isinstance(model, Model):
