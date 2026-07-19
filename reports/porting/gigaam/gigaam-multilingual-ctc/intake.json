@@ -145,7 +145,7 @@
       "blank": 70
     },
     "has_language_tokens": false,
-    "vocab_sha256": null
+    "vocab_sha256": "c74f14b62f397a12ab3d1d2db0986ae1ae929f11a65465bd8ea2db06e8022f49"
   },
   "capabilities": {
     "languages": ["ru", "en", "kk", "ky", "uz"],
@@ -265,7 +265,7 @@
   "intake_gaps": [
     {
       "field": "tokenizer.vocab_sha256",
-      "reason": "Computed at Stage 2 over the inline 70-entry charwise vocab (candidate value observed at intake: sha256 of newline-joined list = c74f14b62f397a12ab3d1d2db0986ae1ae929f11a65465bd8ea2db06e8022f49). Left null here so Stage 2 canonicalizes with the family's standard method. Expected to MATCH the large_ctc branch vocab (both multilingual CTC share the 70-char list) and to DIFFER from every gigaam-v3 vocab."
+      "reason": "RESOLVED at Stage 2: sha256 over the newline-joined inline 70-entry charwise vocab = c74f14b62f397a12ab3d1d2db0986ae1ae929f11a65465bd8ea2db06e8022f49. Recorded in tokenizer.vocab_sha256 and the golden manifest tokenizer_summary._vocab_sha256. Expected to MATCH the large_ctc branch vocab and DIFFER from every gigaam-v3 vocab; large_ctc intake will confirm the match."
     },
     {
       "field": "dtype.expected_f32_tensors",
@@ -273,7 +273,7 @@
     },
     {
       "field": "reference.entrypoint",
-      "reason": "Stage 2 must pin the exact reference loader (HF AutoModel trust_remote_code revision='ctc' vs a gigaam.load_model name) and confirm the scripts/envs/gigaam env supports the transformers==5 / torch==2.10 versions the multilingual README recommends."
+      "reason": "RESOLVED at Stage 2: reference loads via gigaam.load_model('multilingual_ctc', fp16_encoder=False, device='cpu') from the author package (the gigaam PyPI HEAD registers the multilingual checkpoints; the README's AutoModel trust_remote_code path was avoided because its modeling_gigaam.py check_imports demands pyannote for out-of-scope longform). Runs under a DEDICATED env scripts/envs/gigaam-multilingual (gigaam @559d88d, torch/torchaudio 2.11 pinned) so the shipped v3 env stays at 6e4b027. Dumper: scripts/dump_reference_gigaam_author.py --variant multilingual_ctc. Verified transcript on samples/ru.wav: 'важно различать глаголы и дополнения'."
     },
     {
       "field": "upstream_benchmarks.fleurs_measured",

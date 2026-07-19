@@ -54,14 +54,21 @@ sys.path.insert(0, str(_THIS_DIR))
 from lib.ref_dump import write_tensor, write_transcript  # noqa: E402
 
 
-# Branch SHA pin per variant — locked at Stage 1 intake.
-_VARIANT_REVISIONS = {
-    "v3_e2e_rnnt": "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",  # main
-    "v3_e2e_ctc":  "cec030b4c4f35d928e4a9044a3bdb29ebd499fac",
-    "v3_rnnt":     "c7f128b8accdd9624df905e5c2d7b7a48c27c0d8",
-    "v3_ctc":      "15ef3b5a88da78f93134b3cb7f015c70aefa8946",
+# Per-variant registry: variant_key -> (hf_repo, hf_revision). The HF
+# revision is informational in the dumped source metadata; the actual
+# weights load via gigaam.load_model(variant_key) from the author package.
+# GigaAM-v3 variants run under scripts/envs/gigaam (gigaam pinned 6e4b027);
+# GigaAM-Multilingual variants run under scripts/envs/gigaam-multilingual
+# (gigaam pinned 559d88d, the first commit registering the multilingual
+# checkpoints in _MODEL_HASHES).
+_VARIANT_INFO = {
+    "v3_e2e_rnnt":      ("ai-sage/GigaAM-v3",           "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e"),  # main
+    "v3_e2e_ctc":       ("ai-sage/GigaAM-v3",           "cec030b4c4f35d928e4a9044a3bdb29ebd499fac"),
+    "v3_rnnt":          ("ai-sage/GigaAM-v3",           "c7f128b8accdd9624df905e5c2d7b7a48c27c0d8"),
+    "v3_ctc":           ("ai-sage/GigaAM-v3",           "15ef3b5a88da78f93134b3cb7f015c70aefa8946"),
+    "multilingual_ctc": ("ai-sage/GigaAM-Multilingual", "2f8a57144e6ec3adfd32fe0484d9ea9913305bc8"),
 }
-_HF_REPO = "ai-sage/GigaAM-v3"
+_DEFAULT_HF_REPO = "ai-sage/GigaAM-v3"
 
 
 def configure_torch(args: argparse.Namespace) -> None:
@@ -129,10 +136,10 @@ def load_reference(args: argparse.Namespace):
     """
     import gigaam
 
-    if args.variant not in _VARIANT_REVISIONS:
+    if args.variant not in _VARIANT_INFO:
         raise SystemExit(
             f"unknown variant {args.variant!r}; expected one of "
-            f"{sorted(_VARIANT_REVISIONS)}"
+            f"{sorted(_VARIANT_INFO)}"
         )
     print(
         f"Loading gigaam.load_model({args.variant!r}, fp16_encoder=False, "
@@ -177,11 +184,12 @@ def cmd_decode(args: argparse.Namespace) -> int:
     wav = pcm.to(device).unsqueeze(0)  # [1, N]
     length = torch.full([1], wav.shape[-1], dtype=torch.long, device=device)
 
+    hf_repo, hf_revision = _VARIANT_INFO[args.variant]
     source: dict[str, Any] = {
         "kind": "gigaam-author",
         "framework": "author_repo_gigaam",
-        "hf_repo": _HF_REPO,
-        "hf_revision": _VARIANT_REVISIONS[args.variant],
+        "hf_repo": hf_repo,
+        "hf_revision": hf_revision,
         "variant": args.variant,
         "device": args.device,
         "torch_threads": args.torch_threads,
@@ -319,9 +327,9 @@ def cmd_decode(args: argparse.Namespace) -> int:
 def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--variant", required=True,
-        choices=sorted(_VARIANT_REVISIONS),
-        help="GigaAM-v3 variant key (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, "
-             "v3_ctc)",
+        choices=sorted(_VARIANT_INFO),
+        help="GigaAM variant key (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, "
+             "v3_ctc, multilingual_ctc)",
     )
     p.add_argument("--audio", required=True, help="16 kHz mono WAV path")
     p.add_argument("--out", required=True, help="Output directory for dumps")
@@ -332,11 +340,13 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     # --model and optionally --language). GigaAM loads via
     # gigaam.load_model(variant_key), so --model is accepted but the
     # value is informational only. --language is a no-op (monolingual ru).
-    p.add_argument("--model", default=_HF_REPO,
+    p.add_argument("--model", default=_DEFAULT_HF_REPO,
                    help="HF repo id (informational; load path is "
                         "gigaam.load_model(variant_key))")
     p.add_argument("--language", default=None,
-                   help="Language hint (no-op; GigaAM is monolingual ru)")
+                   help="Language hint (no-op; GigaAM heads have no language "
+                        "conditioning — v3 is monolingual ru, multilingual "
+                        "decodes a shared charwise vocab)")
 
 
 def main(argv: list[str] | None = None) -> int:

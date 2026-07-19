@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "GigaAM Multilingual per-tensor tolerances for compare_tensors.py.",
+    "",
+    "SEPARATE FILE from tests/tolerances/gigaam.json (the finalized",
+    "GigaAM-v3 tolerances). The multilingual CTC variant shares tensor",
+    "NAMES with v3 but has a different 71-class head and different",
+    "encoder weights, so its drift budget is tracked independently to",
+    "avoid clobbering v3's signed-off values. The variant manifest",
+    "points tolerance_file here.",
+    "",
+    "PROVISIONAL \u2014 magnitude-aware Stage 2 budgets, NOT finalized:",
+    "  max_abs  = max(1e-4 * p99_abs, 1e-6)   # 0.01% of typical large value",
+    "  mean_abs = max(1e-5 * rms,     1e-6)   # 0.001% of RMS energy",
+    "Derived from the samples/ru.wav reference dump under",
+    "scripts/envs/gigaam-multilingual (gigaam @ 559d88d, torch 2.11).",
+    "",
+    "Every entry carries _provisional: true. Stage 4 (porting-4-cpp)",
+    "finalizes these against observed C++-vs-reference drift and removes",
+    "the flags. DO NOT SHIP while _provisional entries remain.",
+    "Tensors well above these budgets in Stage 4 are signals to",
+    "investigate, not to widen blindly."
+  ],
+  "ctc.log_probs": {
+    "max_abs": 0.0027652889442443844,
+    "mean_abs": 0.00019447160950336977,
+    "_provisional": true
+  },
+  "ctc.logits.raw": {
+    "max_abs": 0.0016557475433349599,
+    "mean_abs": 4.580322422570778e-05,
+    "_provisional": true
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.0006623139367103568,
+    "mean_abs": 1.752115223849738e-05,
+    "_provisional": true
+  },
+  "enc.block.15.out": {
+    "max_abs": 0.00022703931188583365,
+    "mean_abs": 9.049803771336133e-06,
+    "_provisional": true
+  },
+  "enc.block.7.out": {
+    "max_abs": 0.0005415536913871762,
+    "mean_abs": 1.669295542708862e-05,
+    "_provisional": true
+  },
+  "enc.out": {
+    "max_abs": 0.00022703931188583365,
+    "mean_abs": 9.049803771336133e-06,
+    "_provisional": true
+  },
+  "enc.pos_emb": {
+    "max_abs": 9.998701250553132e-05,
+    "mean_abs": 7.071067820259556e-06,
+    "_provisional": true
+  },
+  "enc.subsample.out": {
+    "max_abs": 0.00504480619049072,
+    "mean_abs": 0.0001646037554388743,
+    "_provisional": true
+  },
+  "frontend.mel.out": {
+    "max_abs": 0.0013590802001953127,
+    "mean_abs": 9.797699377702641e-05,
+    "_provisional": true
+  }
+}

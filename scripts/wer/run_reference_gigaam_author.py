@@ -27,12 +27,16 @@ import sys
 import time
 from pathlib import Path
 
-# Same per-variant revision pins as the dumper.
+# Same per-variant revision pins as the dumper. GigaAM-v3 keys run under
+# scripts/envs/gigaam; multilingual_* keys run under
+# scripts/envs/gigaam-multilingual (gigaam @559d88d registers them). The
+# multilingual revision is the HF mirror pin, matching the golden manifest.
 _VARIANT_REVISIONS = {
     "v3_e2e_rnnt": "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
     "v3_e2e_ctc":  "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
     "v3_rnnt":     "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
     "v3_ctc":      "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
+    "multilingual_ctc": "2f8a57144e6ec3adfd32fe0484d9ea9913305bc8",
 }
 
 

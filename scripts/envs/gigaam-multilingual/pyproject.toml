@@ -1,0 +1,34 @@
+[project]
+name = "transcribe-gigaam-multilingual-env"
+version = "0.1.0"
+description = "Python env for GigaAM Multilingual reference dumps and conversion (author repo)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # Separate pin from scripts/envs/gigaam (which stays at 6e4b027 for the
+    # already-shipped GigaAM-v3 port). The v3 pin predates the multilingual
+    # checkpoints: `_MODEL_HASHES` on 6e4b027 registers only v1/v2/v3, not
+    # `multilingual_ctc` / `multilingual_ssl` / `multilingual_large_ctc` /
+    # `multilingual_large_ssl`. Bumping the shared env would make the v3
+    # manifests' pinned `reference.revision` stale, so the multilingual
+    # variants get their own env pinned to the commit that ships them.
+    #
+    # Commit chosen: 559d88d6b72541412743929f633a6ae7c9950b85 (main, 2026-07-14)
+    # — "GigaAM Multilingual: models, SSL fine-tuning #81". First commit on
+    # main that registers the four multilingual variants in `_MODEL_HASHES`.
+    # Verified: gigaam.load_model('multilingual_ctc') transcribes samples/ru.wav
+    # to "важно различать глаголы и дополнения" (matches the v3 non-e2e output).
+    "gigaam[torch] @ git+https://github.com/salute-developers/GigaAM@559d88d6b72541412743929f633a6ae7c9950b85",
+    # Pin torch/torchaudio to a matched pair for a reproducible oracle env.
+    # gigaam's `requires` only declares torch>=2.6, so an unpinned sync
+    # floats torch (observed: 2.13.0 with torchaudio 2.11.0, a mismatched
+    # pair). The multilingual README recommends torch==2.10.*; 2.11 is the
+    # matched pair that resolves with a py3.12/macOS-arm wheel and was
+    # verified to transcribe samples/ru.wav correctly.
+    "torch==2.11.*",
+    "torchaudio==2.11.*",
+    "soundfile>=0.12",
+    "numpy>=1.26,<3",
+    "huggingface-hub>=0.30",
+    # Conversion-side helpers (Stage 3 reuses this env).
+    "gguf>=0.10",
+]

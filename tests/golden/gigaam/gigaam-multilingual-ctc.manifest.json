@@ -6,7 +6,60 @@
     "hf_repo": "ai-sage/GigaAM-Multilingual",
     "hf_revision": "2f8a57144e6ec3adfd32fe0484d9ea9913305bc8"
   },
+  "reference": {
+    "kind": "author_repo_gigaam",
+    "source": "https://github.com/salute-developers/GigaAM",
+    "revision": "559d88d6b72541412743929f633a6ae7c9950b85",
+    "entrypoint": "scripts/dump_reference_gigaam_author.py",
+    "env": "scripts/envs/gigaam-multilingual",
+    "variant_key": "multilingual_ctc",
+    "dump_args": ["--variant", "multilingual_ctc"],
+    "notes": "Loaded via gigaam.load_model('multilingual_ctc', fp16_encoder=False, device='cpu'). Weights come from the gigaam author package CDN (md5-verified); the HF revision above is the mirror Stage 3 converts from. Stage 4 tensor compare confirms the two weight sources agree."
+  },
   "expected_dtype": "float32",
   "dtype_source": "manual",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "win_length": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "center": false,
+    "mel_filterbank_norm": "htk",
+    "log_scale": "log(clamp(x, 1e-9, 1e9))"
+  },
+  "tokenizer_summary": {
+    "type": "other",
+    "vocab_size": 70,
+    "special_tokens": {
+      "blank": 70
+    },
+    "_charwise_vocab_size": 70,
+    "_vocab_sha256": "c74f14b62f397a12ab3d1d2db0986ae1ae929f11a65465bd8ea2db06e8022f49",
+    "_vocab_note": "70-char multilingual charwise vocab (space, apostrophe, Latin a-z, Cyrillic а-я+ё, 9 Turkic letters і ғ қ ң ү ұ һ ә ө). sha256 over the newline-joined inline list. Shared with the large_ctc branch; differs from every gigaam-v3 vocab."
+  },
+  "capabilities": {
+    "languages": [
+      "ru",
+      "en",
+      "kk",
+      "ky",
+      "uz"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "head_type": "ctc",
+  "tolerance_file": "tests/tolerances/gigaam-multilingual.json",
+  "cases": [
+    {
+      "audio": "ru",
+      "language": "ru"
+    }
+  ]
 }
