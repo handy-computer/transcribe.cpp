@@ -12,6 +12,7 @@
 #include "wav.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -105,6 +106,113 @@ std::string batch_segments_json(const transcribe_session * ctx, int i) {
         out += head;
         out += json_escape(seg.text != nullptr ? seg.text : "");
         out += "\"}";
+    }
+    out += "]";
+    return out;
+}
+
+void append_word_json(std::string & out, const struct transcribe_word & wrd) {
+    char head[96];
+    std::snprintf(head, sizeof(head), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"", static_cast<long long>(wrd.t0_ms),
+                  static_cast<long long>(wrd.t1_ms));
+    out += head;
+    out += json_escape(wrd.text != nullptr ? wrd.text : "");
+    out += "\"}";
+}
+
+void append_token_json(std::string & out, const struct transcribe_token & tok) {
+    char head[96];
+    std::snprintf(head, sizeof(head), "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"", static_cast<long long>(tok.t0_ms),
+                  static_cast<long long>(tok.t1_ms));
+    out += head;
+    out += json_escape(tok.text != nullptr ? tok.text : "");
+    char tail[96];
+    if (std::isfinite(tok.p)) {
+        std::snprintf(tail, sizeof(tail), "\",\"id\":%d,\"p\":%.9g}", tok.id, static_cast<double>(tok.p));
+    } else {
+        std::snprintf(tail, sizeof(tail), "\",\"id\":%d,\"p\":null}", tok.id);
+    }
+    out += tail;
+}
+
+std::string words_json(const transcribe_session * ctx) {
+    const transcribe_timestamp_kind kind = transcribe_returned_timestamp_kind(ctx);
+    if (kind != TRANSCRIBE_TIMESTAMPS_WORD && kind != TRANSCRIBE_TIMESTAMPS_TOKEN) {
+        return {};
+    }
+    const int n_words = transcribe_n_words(ctx);
+    if (n_words <= 0) {
+        return {};
+    }
+    std::string out = ",\"words\":[";
+    for (int w = 0; w < n_words; ++w) {
+        if (w > 0) {
+            out += ",";
+        }
+        struct transcribe_word wrd;
+        transcribe_word_init(&wrd);
+        (void) transcribe_get_word(ctx, w, &wrd);
+        append_word_json(out, wrd);
+    }
+    out += "]";
+    return out;
+}
+
+std::string tokens_json(const transcribe_session * ctx) {
+    if (transcribe_returned_timestamp_kind(ctx) != TRANSCRIBE_TIMESTAMPS_TOKEN) {
+        return {};
+    }
+    const int n_tokens = transcribe_n_tokens(ctx);
+    if (n_tokens <= 0) {
+        return {};
+    }
+    std::string out = ",\"tokens\":[";
+    for (int t = 0; t < n_tokens; ++t) {
+        if (t > 0) {
+            out += ",";
+        }
+        struct transcribe_token tok;
+        transcribe_token_init(&tok);
+        (void) transcribe_get_token(ctx, t, &tok);
+        append_token_json(out, tok);
+    }
+    out += "]";
+    return out;
+}
+
+std::string batch_words_json(const transcribe_session * ctx, int i) {
+    if (transcribe_batch_returned_timestamp_kind(ctx, i) < TRANSCRIBE_TIMESTAMPS_WORD) {
+        return {};
+    }
+    const int   n_words = transcribe_batch_n_words(ctx, i);
+    std::string out     = ",\"words\":[";
+    for (int w = 0; w < n_words; ++w) {
+        if (w > 0) {
+            out += ",";
+        }
+        struct transcribe_word wrd;
+        transcribe_word_init(&wrd);
+        (void) transcribe_batch_get_word(ctx, i, w, &wrd);
+        append_word_json(out, wrd);
+    }
+    out += "]";
+    return out;
+}
+
+std::string batch_tokens_json(const transcribe_session * ctx, int i) {
+    if (transcribe_batch_returned_timestamp_kind(ctx, i) != TRANSCRIBE_TIMESTAMPS_TOKEN) {
+        return {};
+    }
+    const int   n_tokens = transcribe_batch_n_tokens(ctx, i);
+    std::string out      = ",\"tokens\":[";
+    for (int t = 0; t < n_tokens; ++t) {
+        if (t > 0) {
+            out += ",";
+        }
+        struct transcribe_token tok;
+        transcribe_token_init(&tok);
+        (void) transcribe_batch_get_token(ctx, i, t, &tok);
+        append_token_json(out, tok);
     }
     out += "]";
     return out;
@@ -828,6 +936,8 @@ int main(int argc, char ** argv) {
                     if (args.batch_jsonl) {
                         const std::string escaped  = json_escape(text);
                         const std::string segments = batch_segments_json(ctx, static_cast<int>(k));
+                        const std::string words    = batch_words_json(ctx, static_cast<int>(k));
+                        const std::string tokens   = batch_tokens_json(ctx, static_cast<int>(k));
                         std::string       err_field;
                         if (ust != TRANSCRIBE_OK) {
                             err_field = ",\"error\":\"";
@@ -842,11 +952,11 @@ int main(int argc, char ** argv) {
                         transcribe_timings_init(&tm);
                         (void) transcribe_batch_get_timings(ctx, static_cast<int>(k), &tm);
                         std::printf(
-                            "{\"file\":\"%s\",\"text\":\"%s\"%s,"
+                            "{\"file\":\"%s\",\"text\":\"%s\"%s%s%s,"
                             "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
                             "\"decode_ms\":%.1f%s}\n",
-                            wav.c_str(), escaped.c_str(), segments.c_str(), (double) tm.mel_ms, (double) tm.encode_ms,
-                            (double) tm.decode_ms, err_field.c_str());
+                            wav.c_str(), escaped.c_str(), segments.c_str(), words.c_str(), tokens.c_str(),
+                            (double) tm.mel_ms, (double) tm.encode_ms, (double) tm.decode_ms, err_field.c_str());
                     } else {
                         std::printf("[%zu/%zu] %s", src_index[k] + 1, total, wav.c_str());
                         if (ust == TRANSCRIBE_OK) {
@@ -971,6 +1081,8 @@ int main(int argc, char ** argv) {
                     (void) transcribe_get_timings(ctx, &tm);
                     const std::string escaped  = json_escape(text);
                     const std::string segments = segments_json(ctx);
+                    const std::string words    = words_json(ctx);
+                    const std::string tokens   = tokens_json(ctx);
                     std::string       err_field;
                     if (run_st != TRANSCRIBE_OK) {
                         err_field = ",\"error\":\"";
@@ -978,11 +1090,11 @@ int main(int argc, char ** argv) {
                         err_field += "\"";
                     }
                     std::printf(
-                        "{\"file\":\"%s\",\"text\":\"%s\"%s,"
+                        "{\"file\":\"%s\",\"text\":\"%s\"%s%s%s,"
                         "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
                         "\"decode_ms\":%.1f%s}\n",
-                        wav.c_str(), escaped.c_str(), segments.c_str(), (double) tm.mel_ms, (double) tm.encode_ms,
-                        (double) tm.decode_ms, err_field.c_str());
+                        wav.c_str(), escaped.c_str(), segments.c_str(), words.c_str(), tokens.c_str(),
+                        (double) tm.mel_ms, (double) tm.encode_ms, (double) tm.decode_ms, err_field.c_str());
                 } else {
                     std::printf("[%zu/%zu] %s", i + 1, wav_paths.size(), wav.c_str());
                     if (run_st == TRANSCRIBE_OK) {

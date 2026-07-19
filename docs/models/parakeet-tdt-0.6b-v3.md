@@ -14,6 +14,12 @@ Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian,
 Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, Slovenian,
 Spanish, Swedish, Ukrainian.
 
+Word timings are numerically validated against the NeMo reference within one
+encoder frame (80 ms); on the validation clip v3 matches the reference
+exactly. Token tables are dumped on both sides for divergence localization
+but are not compared; punctuation-only tokens follow NeMo's convention and
+are zero-length at the previous token's end.
+
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 for training data, intended use, and upstream evaluation methodology.
 

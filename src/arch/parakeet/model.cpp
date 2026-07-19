@@ -24,6 +24,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-unicode.h"
 #include "transcribe/parakeet.h"
 #include "weights.h"
 
@@ -382,6 +383,8 @@ void reset_streaming_decoder_state(ParakeetSession * pc, const ParakeetModel * p
     pc->stream_dec_state.initialized   = true;
 }
 
+static std::vector<uint32_t> nemo_supported_punctuation(const transcribe::Tokenizer & tok);
+
 // Forward declarations for the Arch trait below.
 extern transcribe_status load(Loader &, const transcribe_model_load_params *, transcribe_model **);
 extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *, transcribe_session **);
@@ -443,6 +446,9 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     // we validate against are consistent.
     if (const transcribe_status st = read_parakeet_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK) {
         return st;
+    }
+    if (m->hparams.head_kind == HeadKind::TDT) {
+        m->nemo_supported_punctuation = nemo_supported_punctuation(m->tok);
     }
 
     // Derive supports_streaming from hparams:
@@ -633,6 +639,135 @@ static bool is_strippable_special(const transcribe::Tokenizer & tok, int id) {
     return tok.is_control(id) || is_lang_tag_piece(tok.token(id));
 }
 
+constexpr const char k_sentencepiece_marker[]   = "\xE2\x96\x81";
+constexpr int        k_sentencepiece_marker_len = 3;
+
+static bool starts_with_sentencepiece_marker(const std::string & piece) {
+    return piece.size() >= static_cast<size_t>(k_sentencepiece_marker_len) &&
+           std::memcmp(piece.data(), k_sentencepiece_marker, k_sentencepiece_marker_len) == 0;
+}
+
+static bool is_valid_utf8(const std::string & text) {
+    size_t offset = 0;
+    while (offset < text.size()) {
+        const uint8_t lead = static_cast<uint8_t>(text[offset]);
+        if (lead <= 0x7Fu) {
+            ++offset;
+            continue;
+        }
+
+        size_t   width = 0;
+        uint32_t cpt   = 0;
+        uint32_t min   = 0;
+        if ((lead & 0xE0u) == 0xC0u) {
+            width = 2;
+            cpt   = lead & 0x1Fu;
+            min   = 0x80u;
+        } else if ((lead & 0xF0u) == 0xE0u) {
+            width = 3;
+            cpt   = lead & 0x0Fu;
+            min   = 0x800u;
+        } else if ((lead & 0xF8u) == 0xF0u) {
+            width = 4;
+            cpt   = lead & 0x07u;
+            min   = 0x10000u;
+        } else {
+            return false;
+        }
+        if (width > text.size() - offset) {
+            return false;
+        }
+        for (size_t i = 1; i < width; ++i) {
+            const uint8_t next = static_cast<uint8_t>(text[offset + i]);
+            if ((next & 0xC0u) != 0x80u) {
+                return false;
+            }
+            cpt = (cpt << 6) | (next & 0x3Fu);
+        }
+        if (cpt < min || cpt > 0x10FFFFu || (cpt >= 0xD800u && cpt <= 0xDFFFu)) {
+            return false;
+        }
+        offset += width;
+    }
+    return true;
+}
+
+static bool is_nemo_punctuation_special_piece(const std::string & piece) {
+    const size_t n = piece.size();
+    if ((n >= 2 && piece.front() == '[' && piece.back() == ']') ||
+        (n >= 2 && piece.front() == '<' && piece.back() == '>') || (n >= 2 && piece[0] == '#' && piece[1] == '#') ||
+        starts_with_sentencepiece_marker(piece)) {
+        return true;
+    }
+
+    size_t offset = 0;
+    while (offset < n) {
+        const uint32_t cpt = unicode::cpt_from_utf8(piece, offset);
+        if (!unicode::flags_from_cpt(cpt).is_whitespace()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static std::vector<uint32_t> nemo_supported_punctuation(const transcribe::Tokenizer & tok) {
+    std::vector<uint32_t> punctuation;
+    for (int id = 0; id < tok.n_tokens(); ++id) {
+        const std::string & piece = tok.token(id);
+        if (!is_valid_utf8(piece) || is_nemo_punctuation_special_piece(piece)) {
+            continue;
+        }
+
+        size_t offset = 0;
+        while (offset < piece.size()) {
+            const uint32_t cpt = unicode::cpt_from_utf8(piece, offset);
+            if ((unicode::flags_from_cpt(cpt).bits & unicode::CptFlags::PUNCTUATION) == 0) {
+                continue;
+            }
+            bool seen = false;
+            for (uint32_t existing : punctuation) {
+                if (existing == cpt) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                punctuation.push_back(cpt);
+            }
+        }
+    }
+    return punctuation;
+}
+
+static bool is_nemo_supported_punctuation_token(const std::string &           piece,
+                                                const std::string &           text,
+                                                const std::vector<uint32_t> & supported_punctuation) {
+    if (!is_valid_utf8(piece) || !is_valid_utf8(text)) {
+        return false;
+    }
+
+    size_t offset = 0;
+    // SentencePiece removes a leading word-boundary marker when NeMo
+    // decodes one token in isolation; our decoder exposes it as a space.
+    if (starts_with_sentencepiece_marker(piece) && !text.empty() && text.front() == ' ') {
+        offset = 1;
+    }
+    if (offset >= text.size()) {
+        return false;
+    }
+
+    const uint32_t cpt = unicode::cpt_from_utf8(text, offset);
+    if (offset != text.size()) {
+        return false;
+    }
+    for (uint32_t supported : supported_punctuation) {
+        if (supported == cpt) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Collapse runs of ASCII spaces to one and trim both ends — cleans up the
 // double/edge spaces a stripped tag leaves behind. Shared by both builders.
 static void normalize_transcript_whitespace(std::string & s) {
@@ -725,14 +860,12 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
     // v2/v3). Shared with the streaming builder.
     const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
 
-    // SentencePiece word-boundary marker U+2581 ("▁", UTF-8 E2 96 81): a
-    // raw piece starting with it opens a new word. We use the raw NeMo
-    // piece (its leading 3 bytes are unambiguous), not the post-decode
-    // "▁ → space" form.
-    constexpr const char k_sp_marker[]   = "\xE2\x96\x81";
-    constexpr int        k_sp_marker_len = 3;
-
     const transcribe::Tokenizer & tok = pm->tok;
+
+    // NeMo 2.8.0rc0 (6967f48fda2a) parts/utils/tokenizer_utils.py builds
+    // this set from Unicode P* code points. parts/submodules/rnnt_decoding.py
+    // makes a supported punctuation token zero-width at the previous end.
+    const std::vector<uint32_t> & supported_punctuation = pm->nemo_supported_punctuation;
 
     pc->tokens.reserve(pc->raw_tokens.size());
     // Strip multilingual <ll-RR> language tags by default (gated on
@@ -740,6 +873,10 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
     // Tokenizer::is_control (CONTROL token_type); is_lang_tag_piece is a
     // transitional fallback for GGUFs predating that converter change.
     const bool strip_tags = (params == nullptr) ? true : !params->keep_special_tags;
+    // NeMo indexes the full non-blank sequence; this loop indexes tokens kept
+    // after control/language-tag stripping. They match for v2 (which has no
+    // strippable tokens) and validation's --raw-tokens path, but a future
+    // tag-emitting TDT model would diverge.
     for (const TdtToken & rt : pc->raw_tokens) {
         if (strip_tags && is_strippable_special(tok, rt.id)) {
             continue;
@@ -752,6 +889,11 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
         const double end_frame = static_cast<double>(rt.step_at_emit) + static_cast<double>(rt.duration_frames);
         te.t1_ms               = static_cast<int64_t>(std::llround(frame_to_ms * end_frame));
         te.text                = tok.decode(&rt.id, 1);
+        if (pm->host_decoder.head_kind == HostHeadKind::TDT && !pc->tokens.empty() &&
+            is_nemo_supported_punctuation_token(tok.token(rt.id), te.text, supported_punctuation)) {
+            te.t0_ms = pc->tokens.back().t1_ms;
+            te.t1_ms = te.t0_ms;
+        }
         pc->tokens.push_back(std::move(te));
     }
 
@@ -787,8 +929,7 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
         for (size_t i = 0; i < pc->tokens.size(); ++i) {
             const auto & tk          = pc->tokens[i];
             const auto & raw_piece   = tok.token(tk.id);  // empty if id OOR
-            const bool   starts_word = (i == 0) || (raw_piece.size() >= static_cast<size_t>(k_sp_marker_len) &&
-                                                    std::memcmp(raw_piece.data(), k_sp_marker, k_sp_marker_len) == 0);
+            const bool   starts_word = (i == 0) || starts_with_sentencepiece_marker(raw_piece);
             if (starts_word) {
                 open_new_word(static_cast<int>(i), tk);
             }
@@ -2039,6 +2180,10 @@ void rebuild_streaming_result_text(ParakeetSession * pc, const ParakeetModel * p
     }
 
     const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
+
+    // The punctuation clamp intentionally stays in the offline decode path.
+    // Buffered-streaming timings keep raw TDT durations because NeMo's
+    // buffered-streaming path does not run TDT timestamp refinement either.
 
     // Strip CONTROL / <ll-RR> tag pieces from the public result, mirroring
     // decode_and_populate (gated on keep_special_tags). Only the public

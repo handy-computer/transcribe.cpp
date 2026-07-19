@@ -101,18 +101,21 @@ def write_transcript(
     text: str,
     *,
     source: dict[str, Any],
-    tokens: list[int] | None = None,
+    tokens: list[int] | list[dict[str, Any]] | None = None,
+    words: list[dict[str, Any]] | None = None,
 ) -> None:
     """Write transcript.json alongside a decode dump.
 
     transcript.json is the behavioral artifact: the text the reference
-    framework produced for this audio, plus optional token IDs. Used by
-    validate.py to compare against the C++ transcript at the public
-    boundary (not just per-tensor).
+    framework produced for this audio, plus optional token IDs or timestamp
+    rows. Used by validate.py to compare against the C++ transcript at the
+    public boundary (not just per-tensor).
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {"text": text, "source": source}
+    if words is not None:
+        payload["words"] = list(words)
     if tokens is not None:
         payload["tokens"] = list(tokens)
     (out_dir / "transcript.json").write_text(json.dumps(payload, indent=2) + "\n")
