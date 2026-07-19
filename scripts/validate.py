@@ -40,6 +40,7 @@ import argparse
 import datetime as dt
 import glob
 import json
+import math
 import os
 import re
 import shutil
@@ -178,6 +179,14 @@ def dediarize_text(text: str) -> str:
     return normalize_text_for_compare(stripped)
 
 
+def text_for_compare(text: str, mode: str) -> str:
+    if mode == "exact":
+        return text
+    if mode == "dediarized":
+        return dediarize_text(text)
+    return normalize_text_for_compare(text)
+
+
 def find_gguf(repo: Path, family: str, slug: str | None = None,
               variant: str | None = None) -> Path:
     """Find a GGUF under models/.
@@ -303,11 +312,28 @@ def run_cmd(cmd: list[str], repo: Path, label: str) -> None:
         )
 
 
-def parse_cli_transcript(output: str) -> str | None:
+def parse_cli_result(output: str) -> dict[str, Any] | None:
+    for line in reversed(output.splitlines()):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(payload, dict)
+            and payload.get("type") != "batch_header"
+            and isinstance(payload.get("text"), str)
+        ):
+            return payload
+
     for line in reversed(output.splitlines()):
         if line.startswith("text: "):
-            return line[len("text: "):]
+            return {"text": line[len("text: "):], "words": []}
     return None
+
+
+def parse_cli_transcript(output: str) -> str | None:
+    payload = parse_cli_result(output)
+    return str(payload["text"]) if payload is not None else None
 
 
 def write_cpp_transcript(
@@ -319,23 +345,167 @@ def write_cpp_transcript(
     gguf: Path,
     backend: str,
     text: str,
+    words: list[dict[str, Any]],
+    tokens: list[dict[str, Any]] | None,
 ) -> None:
     path = out_dir / "transcript.json"
     payload = {
-        "schema": "transcribe-cpp-transcript-v1",
+        "schema": "transcribe-cpp-transcript-v2",
         "family": family,
         "variant": variant,
         "case": case,
         "text": text,
         "normalized_text": normalize_text(text),
+        "words": words,
         "source": {
             "kind": "transcribe.cpp",
             "gguf": str(gguf),
             "backend": backend,
         },
     }
+    if tokens is not None:
+        payload["tokens"] = tokens
     path.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"  wrote {path}", file=sys.stderr)
+
+
+def timestamp_tolerance_ms(path: Path | None) -> float | None:
+    if path is None:
+        return None
+    payload = json.loads(path.read_text())
+    entry = payload.get("timestamps")
+    if entry is None:
+        return None
+    if not isinstance(entry, dict) or "max_abs_ms" not in entry:
+        raise SystemExit(
+            f"error: {path}: timestamps must contain max_abs_ms"
+        )
+    value = float(entry["max_abs_ms"])
+    if not math.isfinite(value) or value < 0.0:
+        raise SystemExit(
+            f"error: {path}: timestamps.max_abs_ms must be finite and non-negative"
+        )
+    return value
+
+
+def case_timestamp_compare(
+    reference: dict[str, Any],
+    cpp: dict[str, Any],
+    *,
+    text_mode: str,
+    tolerance_ms: float | None,
+) -> dict[str, Any]:
+    ref_words = reference.get("words")
+    cpp_words = cpp.get("words")
+    if not isinstance(ref_words, list):
+        return {"match": False, "reason": "reference words field is not a list"}
+    if not isinstance(cpp_words, list):
+        return {"match": False, "reason": "C++ words field is not a list"}
+    if tolerance_ms is None:
+        return {
+            "match": False,
+            "reason": "timestamp tolerance is missing from the tolerance file",
+        }
+
+    def word_texts(rows: list[Any], side: str) -> tuple[list[str] | None, str | None]:
+        texts: list[str] = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict) or "text" not in row:
+                return None, f"{side} word {index} lacks a text field"
+            texts.append(str(row["text"]))
+        return texts, None
+
+    ref_texts, error = word_texts(ref_words, "reference")
+    if error is not None:
+        return {"match": False, "reason": error}
+    cpp_texts, error = word_texts(cpp_words, "C++")
+    if error is not None:
+        return {"match": False, "reason": error}
+    assert ref_texts is not None and cpp_texts is not None
+
+    ref_aligned = [text_for_compare(text, text_mode) for text in ref_texts]
+    cpp_aligned = [text_for_compare(text, text_mode) for text in cpp_texts]
+    if len(ref_words) != len(cpp_words):
+        divergent_index = next(
+            (
+                index
+                for index, (ref_text, cpp_text) in enumerate(
+                    zip(ref_aligned, cpp_aligned)
+                )
+                if ref_text != cpp_text
+            ),
+            min(len(ref_aligned), len(cpp_aligned)),
+        )
+        window_start = max(0, divergent_index - 2)
+        window_end = divergent_index + 3
+        return {
+            "match": False,
+            "reason": (
+                f"word count mismatch: reference={len(ref_words)}, "
+                f"C++={len(cpp_words)}; first divergent index={divergent_index}; "
+                f"reference[{window_start}:{min(window_end, len(ref_aligned))}]="
+                f"{ref_aligned[window_start:window_end]!r}; "
+                f"C++[{window_start}:{min(window_end, len(cpp_aligned))}]="
+                f"{cpp_aligned[window_start:window_end]!r}"
+            ),
+        }
+
+    for index, (ref_text, cpp_text) in enumerate(zip(ref_aligned, cpp_aligned)):
+        if ref_text != cpp_text:
+            return {
+                "match": False,
+                "reason": (
+                    f"word text mismatch at index {index}: "
+                    f"reference={ref_texts[index]!r} ({ref_text!r}), "
+                    f"C++={cpp_texts[index]!r} ({cpp_text!r})"
+                ),
+            }
+
+    starts: list[float] = []
+    ends: list[float] = []
+    for index, (ref_word, cpp_word) in enumerate(zip(ref_words, cpp_words)):
+        try:
+            ref_t0_ms = float(ref_word["start_s"]) * 1000.0
+            ref_t1_ms = float(ref_word["end_s"]) * 1000.0
+            cpp_t0_ms = float(cpp_word["t0_ms"])
+            cpp_t1_ms = float(cpp_word["t1_ms"])
+        except (KeyError, TypeError, ValueError) as exc:
+            return {
+                "match": False,
+                "reason": f"invalid timestamp fields at word {index}: {exc}",
+            }
+        values = (ref_t0_ms, ref_t1_ms, cpp_t0_ms, cpp_t1_ms)
+        if not all(math.isfinite(value) for value in values):
+            return {
+                "match": False,
+                "reason": f"non-finite timestamp at word {index}: {values!r}",
+            }
+        starts.append(abs(cpp_t0_ms - ref_t0_ms))
+        ends.append(abs(cpp_t1_ms - ref_t1_ms))
+
+    deviations = starts + ends
+    max_deviation_ms = max(deviations, default=0.0)
+    mean_deviation_ms = (
+        sum(deviations) / len(deviations) if deviations else 0.0
+    )
+    within_tolerance = max_deviation_ms <= tolerance_ms
+    result = {
+        "match": within_tolerance,
+        "n_words": len(ref_words),
+        "tolerance_ms": tolerance_ms,
+        "max_deviation_ms": max_deviation_ms,
+        "mean_deviation_ms": mean_deviation_ms,
+        "max_start_deviation_ms": max(starts, default=0.0),
+        "mean_start_deviation_ms": sum(starts) / len(starts) if starts else 0.0,
+        "max_end_deviation_ms": max(ends, default=0.0),
+        "mean_end_deviation_ms": sum(ends) / len(ends) if ends else 0.0,
+    }
+    if not result["match"]:
+        result["reason"] = (
+            f"max endpoint deviation {max_deviation_ms:.3f} ms exceeds "
+            f"{tolerance_ms:.3f} ms"
+        )
+    return result
 
 
 def cmd_ref(args: argparse.Namespace) -> int:
@@ -440,6 +610,35 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
 
+        ref_transcript = (
+            repo / "build" / "validate" / args.family / variant
+            / case_name / "ref" / "transcript.json"
+        )
+        reference_data: dict[str, Any] = {}
+        if ref_transcript.exists():
+            reference_data = json.loads(ref_transcript.read_text())
+        else:
+            print(
+                "  note: reference transcript artifact is absent; the CLI dump "
+                "is running without reference-informed timestamp mode, and the "
+                "later compare will report a word-count mismatch.",
+                file=sys.stderr,
+            )
+        reference_words = reference_data.get("words")
+        reference_tokens = reference_data.get("tokens")
+        has_reference_words = isinstance(reference_words, list)
+        has_reference_tokens = (
+            isinstance(reference_tokens, list)
+            and all(
+                isinstance(row, dict)
+                and {"start_s", "end_s", "text"}.issubset(row)
+                for row in reference_tokens
+            )
+        )
+        timestamp_request = None
+        if has_reference_words:
+            timestamp_request = "token" if has_reference_tokens else "word"
+
         # Whisper: by default, exercise the production C++ MelFrontend so
         # the per-tensor compare covers the full mel→encoder→decoder
         # pipeline. The env-var ref-mel injection is preserved as an
@@ -474,6 +673,9 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             cmd += ["--language", language]
         if args.family == "whisper":
             cmd += ["--timestamps", "none"]
+            timestamp_request = None
+        elif timestamp_request is not None:
+            cmd += ["--timestamps", timestamp_request]
         if args.family in ("sensevoice", "parakeet"):
             # The reference dumper emits the raw token stream including
             # control / language tags (sensevoice: language / event /
@@ -482,7 +684,15 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             # strips these by default, so the validate dump must pass
             # --raw-tokens to keep them and match the reference exactly.
             cmd += ["--raw-tokens"]
-        cmd.append(str(audio))
+
+        batch_tmp = None
+        if timestamp_request is not None:
+            batch_tmp = tempfile.TemporaryDirectory(prefix="transcribe-validate-")
+            batch_list = Path(batch_tmp.name) / "audio.txt"
+            batch_list.write_text(f"{audio}\n")
+            cmd += ["--batch", str(batch_list), "--batch-jsonl"]
+        else:
+            cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)
         print(f"  cpp dump [{args.family}/{case_name}]", file=sys.stderr)
@@ -490,15 +700,19 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         print(f"  {' '.join(cmd)}", file=sys.stderr)
         print(f"{'=' * 60}", file=sys.stderr)
 
-        result = subprocess.run(
-            cmd,
-            cwd=repo,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=repo,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+            )
+        finally:
+            if batch_tmp is not None:
+                batch_tmp.cleanup()
         if result.stdout:
             print(result.stdout, end="")
         if result.returncode != 0:
@@ -506,10 +720,20 @@ def cmd_cpp(args: argparse.Namespace) -> int:
                 f"error: cpp dump [{args.family}/{case_name}] failed "
                 f"with exit code {result.returncode}"
             )
-        transcript = parse_cli_transcript(result.stdout or "")
-        if transcript is None:
+        cli_result = parse_cli_result(result.stdout or "")
+        if cli_result is None:
             raise SystemExit(
                 f"error: cpp dump [{args.family}/{case_name}] did not emit a transcript line"
+            )
+        words = cli_result.get("words", [])
+        tokens = cli_result.get("tokens")
+        if not isinstance(words, list):
+            raise SystemExit(
+                f"error: cpp dump [{args.family}/{case_name}] emitted a non-list words field"
+            )
+        if tokens is not None and not isinstance(tokens, list):
+            raise SystemExit(
+                f"error: cpp dump [{args.family}/{case_name}] emitted a non-list tokens field"
             )
         write_cpp_transcript(
             out_dir,
@@ -518,7 +742,9 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             case=case_name,
             gguf=gguf,
             backend=args.backend,
-            text=transcript,
+            text=str(cli_result["text"]),
+            words=words,
+            tokens=tokens,
         )
 
     return 0
@@ -547,11 +773,13 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
     compare_script = repo / "scripts" / "compare_tensors.py"
     report_mode = getattr(args, "report", False)
+    timestamp_tolerance = timestamp_tolerance_ms(tolerances)
 
     cases = manifest.get("cases", ["jfk"])
     all_passed = True
     compare_outputs: list[dict[str, Any]] = []
     transcript_results: list[dict[str, Any]] = []
+    timestamp_results: list[dict[str, Any]] = []
     cmd_log: list[dict[str, Any]] = []
 
     for case in cases:
@@ -616,19 +844,18 @@ def cmd_compare(args: argparse.Namespace) -> int:
                     "case": case_name, "match": False,
                     "reason": "missing C++ transcript artifact",
                 })
+                if "words" in ref_data:
+                    timestamp_results.append({
+                        "case": case_name,
+                        "match": False,
+                        "reason": "missing C++ transcript artifact",
+                    })
                 continue
 
             cpp_data = json.loads(cpp_transcript.read_text())
             cpp_text = str(cpp_data.get("text", ""))
-            if transcript_compare == "exact":
-                ref_compare = ref_text
-                cpp_compare = cpp_text
-            elif transcript_compare == "dediarized":
-                ref_compare = dediarize_text(ref_text)
-                cpp_compare = dediarize_text(cpp_text)
-            else:
-                ref_compare = normalize_text_for_compare(ref_text)
-                cpp_compare = normalize_text_for_compare(cpp_text)
+            ref_compare = text_for_compare(ref_text, transcript_compare)
+            cpp_compare = text_for_compare(cpp_text, transcript_compare)
             match = cpp_compare == ref_compare
             transcript_results.append({
                 "case": case_name, "match": match,
@@ -646,6 +873,37 @@ def cmd_compare(args: argparse.Namespace) -> int:
             else:
                 print(f"\n  Transcript: ok ({transcript_compare}) {cpp_text!r}")
 
+            if "words" in ref_data:
+                timestamp_result = case_timestamp_compare(
+                    ref_data,
+                    cpp_data,
+                    text_mode=transcript_compare,
+                    tolerance_ms=timestamp_tolerance,
+                )
+                timestamp_result = {
+                    "case": case_name,
+                    "mode": transcript_compare,
+                    **timestamp_result,
+                }
+                timestamp_results.append(timestamp_result)
+                if timestamp_result["match"]:
+                    print(
+                        "  Word timestamps: ok "
+                        f"({timestamp_result['n_words']} words, "
+                        f"max={timestamp_result['max_deviation_ms']:.3f} ms, "
+                        f"mean={timestamp_result['mean_deviation_ms']:.3f} ms, "
+                        f"tolerance={timestamp_result['tolerance_ms']:.3f} ms)"
+                    )
+                else:
+                    print("\nFAIL word timestamp mismatch")
+                    print(f"  {timestamp_result['reason']}")
+                    if "max_deviation_ms" in timestamp_result:
+                        print(
+                            f"  max={timestamp_result['max_deviation_ms']:.3f} ms, "
+                            f"mean={timestamp_result['mean_deviation_ms']:.3f} ms"
+                        )
+                    all_passed = False
+
     if report_mode:
         write_report_bundle(
             repo=repo,
@@ -653,6 +911,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             variant=variant,
             compare_outputs=compare_outputs,
             transcript_results=transcript_results,
+            timestamp_results=timestamp_results,
             cmd_log=cmd_log,
             overall_passed=all_passed,
         )
@@ -765,16 +1024,17 @@ def write_report_bundle(
     variant: str,
     compare_outputs: list[dict[str, Any]],
     transcript_results: list[dict[str, Any]],
+    timestamp_results: list[dict[str, Any]],
     cmd_log: list[dict[str, Any]],
     overall_passed: bool,
 ) -> Path:
     """Write an ephemeral validation report bundle.
 
     The bundle captures what's not reproducible from git alone: the compare
-    stdout, exact command invocations, and transcript comparison at this
-    moment. The manifest, tolerance file, and compare_tensors.py live in the
-    repo — pin them via `validated_at_sha` (the git HEAD at bundle time)
-    rather than duplicating them here.
+    stdout, exact command invocations, transcript comparison, and timestamp
+    comparison at this moment. The manifest, tolerance file, and
+    compare_tensors.py live in the repo — pin them via `validated_at_sha` (the
+    git HEAD at bundle time) rather than duplicating them here.
     """
     now = dt.datetime.now(dt.UTC)
     ts = now.strftime("%Y%m%dT%H%M%SZ")
@@ -824,6 +1084,28 @@ def write_report_bundle(
                 else:
                     summary.append(f"- reference: `{tr.get('reference', '')!r}`")
                     summary.append(f"- c++:       `{tr.get('cpp', '')!r}`")
+            summary.append("")
+    if timestamp_results:
+        summary += ["## Word timestamp comparison", ""]
+        for result in timestamp_results:
+            summary.append(f"### {result['case']}")
+            summary.append("")
+            summary.append(
+                f"- Match: **{'yes' if result['match'] else 'no'}**"
+            )
+            if result["match"]:
+                summary.append(f"- Words: `{result['n_words']}`")
+                summary.append(
+                    f"- Max endpoint deviation: `{result['max_deviation_ms']:.3f} ms`"
+                )
+                summary.append(
+                    f"- Mean endpoint deviation: `{result['mean_deviation_ms']:.3f} ms`"
+                )
+                summary.append(
+                    f"- Tolerance: `{result['tolerance_ms']:.3f} ms`"
+                )
+            else:
+                summary.append(f"- Reason: {result['reason']}")
             summary.append("")
     (bundle_dir / "summary.md").write_text("\n".join(summary))
 

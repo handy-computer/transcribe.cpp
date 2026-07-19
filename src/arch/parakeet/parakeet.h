@@ -73,10 +73,12 @@ void apply_family_invariants(transcribe_model & model);
 // data buffer; the destructor frees it, invalidating every borrowed
 // ggml_tensor* in `weights`.
 struct ParakeetModel final : public transcribe_model {
-    Tokenizer       tok;
-    ParakeetHParams hparams;
-    ParakeetWeights weights;
-    ggml_context *  ctx_meta = nullptr;
+    Tokenizer             tok;
+    // Derived once from the tokenizer vocabulary during load.
+    std::vector<uint32_t> nemo_supported_punctuation;
+    ParakeetHParams       hparams;
+    ParakeetWeights       weights;
+    ggml_context *        ctx_meta = nullptr;
 
     // Runtime backend plan, resolved at load() via
     // load_common::init_backends (see transcribe-backend.h). plan's
