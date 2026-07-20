@@ -1,0 +1,235 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "sortformer",
+  "hf_repo": "nvidia/diar_streaming_sortformer_4spk-v2.1",
+  "hf_revision": "fafaab5faa1617a0ca52d38dd3dc4bd636800d3d",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only; no HF config.json. Architecture from model_config.yaml inside diar_streaming_sortformer_4spk-v2.1.nemo (nemo_version 2.6.0rc0)."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "missing",
+      "detail": "Inside .nemo model_config.yaml: AudioToMelSpectrogramPreprocessor, 16kHz, features=128, n_fft=512, window_size=0.025, window_stride=0.01, window=hann, normalize=NA, dither=1e-5."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "No tokenizer. This is a diarizer: output is a T x 4 speaker-activity probability matrix, not text. No vocabulary of any kind."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "N/A for a diarizer."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "N/A; no autoregressive decoding."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "PyTorch state_dict (model_weights.ckpt) inside the .nemo tar; not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1",
+      "status": "found",
+      "detail": "Streaming Sortformer 4-spk v2.1, 117M params, DER published per dataset at 1.04s and 30.4s input-buffer latency."
+    },
+    "nemo_model_config": {
+      "kind": "reference_code",
+      "path": "diar_streaming_sortformer_4spk-v2.1.nemo::model_config.yaml",
+      "status": "found",
+      "detail": "target: nemo.collections.asr.models.sortformer_diar_models.SortformerEncLabelModel. Extracted via HTTP range read of the tar head (config is the first member)."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "nemo.collections.asr.models.SortformerEncLabelModel + nemo.collections.asr.modules.sortformer_modules.SortformerModules",
+      "status": "found",
+      "detail": "Same NeMo toolkit already pinned for parakeet/canary. diarize() and the streaming speaker-cache (AOSC/FIFO) logic live in sortformer_modules."
+    }
+  },
+  "variants": [
+    {
+      "name": "streaming-4spk-v2.1",
+      "memory_gb": 2,
+      "files": ["diar_streaming_sortformer_4spk-v2.1.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-diarizer"],
+    "key_fields": {
+      "target": "nemo.collections.asr.models.sortformer_diar_models.SortformerEncLabelModel",
+      "model_type": "sortformer_enc_label",
+      "max_num_of_spks": 4,
+      "streaming_mode": true,
+      "frame_period_seconds": 0.08,
+      "output_shape": "T x 4 sigmoid speaker-activity probabilities (arrival-order columns)",
+      "encoder.type": "ConformerEncoder (NEST / FastConformer-Large)",
+      "encoder.n_layers": 17,
+      "encoder.d_model": 512,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.conv_norm_type": "batch_norm",
+      "encoder.self_attention_model": "rel_pos",
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.xscaling": true,
+      "transformer_encoder.num_layers": 18,
+      "transformer_encoder.hidden_size": 192,
+      "transformer_encoder.inner_size": 768,
+      "transformer_encoder.num_attention_heads": 8,
+      "transformer_encoder.hidden_act": "relu",
+      "transformer_encoder.pre_ln": false,
+      "head": "2 feedforward layers -> 4 sigmoid outputs per frame",
+      "loss": "BCELoss (train-time; sort-based PIL/ATS objective, pil_weight=0.5 ats_weight=0.5)",
+      "sortformer_modules.spkcache_len": 188,
+      "sortformer_modules.fifo_len": 0,
+      "sortformer_modules.chunk_len": 188,
+      "sortformer_modules.spkcache_update_period": 188
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo PyTorch state_dict; NeMo diarization models run and store at float32. No config torch_dtype and no safetensors header. Confirm the state_dict dtype at Stage 3 convert.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "other",
+    "vocab_size": 0,
+    "special_tokens": {},
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": true,
+    "speaker_diarization": true
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "AMI Test IHM (forced-alignment RTTM)",
+      "language": "en",
+      "metric": "other",
+      "score": 16.67,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "Metric is DER (lower is better), collar 0.0s with overlap, 1.04s input-buffer latency. FREELY DOWNLOADABLE. CONFIRMED acceptance set at intake sign-off (parity + DER + JER vs the NeMo reference). 30.4s-latency DER is 15.90."
+    },
+    {
+      "dataset": "AMI Test SDM (forced-alignment RTTM)",
+      "language": "en",
+      "metric": "other",
+      "score": 20.57,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0s, 1.04s latency. Freely downloadable single-distant-mic condition. 30.4s-latency DER is 17.80."
+    },
+    {
+      "dataset": "DIHARD III Eval full (1-9 spk)",
+      "language": "en",
+      "metric": "other",
+      "score": 20.21,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0s, 1.04s latency. Context only: DIHARD III is LDC-gated, not freely reproducible here. Uses dataset-tuned post-processing."
+    },
+    {
+      "dataset": "CALLHOME-part2 full (2-6 spk)",
+      "language": "en",
+      "metric": "other",
+      "score": 11.19,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.25s, 1.04s latency. Context only: NIST-SRE-2000 Disc8 is LDC-gated."
+    },
+    {
+      "dataset": "CH109 (CALLHOME American English, 2 spk)",
+      "language": "en",
+      "metric": "other",
+      "score": 5.09,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.25s, 1.04s latency. Context only: LDC-gated."
+    },
+    {
+      "dataset": "AliMeeting Test near (forced-alignment RTTM)",
+      "language": "zh",
+      "metric": "other",
+      "score": 12.6,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0s, 1.04s latency. Mandarin meeting corpus; context only (model is English-primary)."
+    },
+    {
+      "dataset": "NOTSOFAR1 Eval SC full (3-7 spk)",
+      "language": "en",
+      "metric": "other",
+      "score": 28.75,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0s, 1.04s latency. Meeting corpus; v2.1 improved markedly over v2 here (34.52 -> 28.75)."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "The model ships only as a NeMo .nemo checkpoint and loads exclusively via nemo.collections.asr.models.SortformerEncLabelModel (from_pretrained / restore_from). There is no HF transformers modeling class, no config.json, no trust_remote_code path. The forward pass, the AudioToMelSpectrogramPreprocessor frontend, and the streaming speaker-cache logic (AOSC/FIFO, arrival-order permutation) all live in NeMo (sortformer_diar_models.py + sortformer_modules.py). NeMo is therefore the sole source of truth, and it is the same toolkit already pinned for the parakeet and canary ports (scripts/envs/parakeet, scripts/envs/canary).",
+  "architecture_pattern": "encoder-diarizer",
+  "known_risks": [
+    "NEW ARCHITECTURE FAMILY for the runtime. Sortformer is a frame-level end-to-end neural diarizer: NEST/FastConformer encoder -> 18-layer Transformer encoder -> 2 feedforward layers -> 4 sigmoid outputs per 80ms frame. Output is a T x 4 speaker-activity probability matrix, NOT text. transcribe.cpp has no such forward path today: the existing diarization support (moss, granite) is host-side text parsing of an audio-LLM's emergent [Sxx] speaker tags, a completely different mechanism. This port needs a genuinely new arch scaffold (encoder-diarizer): encoder + per-frame multi-label classification head, no decoder, no tokenizer, no generation loop.",
+    "STREAMING-ONLY STATEFUL INFERENCE is the core novelty and the largest lift. The model runs online with an Arrival-Order Speaker Cache (AOSC) plus a FIFO queue plus a speaker cache, all measured in 80ms frames and driven by chunk_len / chunk_right_context / fifo_len / spkcache_update_period / spkcache_len (sortformer_modules.SortformerModules). Offline is just streaming with one large chunk. Porting requires reproducing the speaker-cache update/eviction and arrival-order permutation exactly; these carry state across chunks and are where numerical parity is hardest.",
+    "MULTITALKER INTEROP is an explicit integration goal (not standalone-only). The parakeet multitalker port (reports/porting/parakeet/multitalker-parakeet-streaming-0.6b-v1) names nvidia/diar_streaming_sortformer_4spk-v2.1 as its HARD external dependency: multitalker's layer-0 speaker kernel consumes per-frame per-speaker speech-activity supervision (spk_supervision='diar'), which is exactly Sortformer's T x 4 output. Both sides run the same frame grid (10ms hop x8 subsampling = 80ms) and the same normalize=NA frontend. The diarization output/interface must be designed to feed the multitalker speaker-kernel (arrival-order speaker indices, 80ms cadence, streaming state alignment), not just to emit standalone RTTM.",
+    "MIXED-NORM TWO-ENCODER STACK. NEST/FastConformer encoder (ConformerEncoder, 17 layers, d=512, 8 heads, rel_pos with untied biases, xscaling, dw_striding x8, subsampling_conv_channels=256, conv kernel 9, conv_norm_type=batch_norm) feeds an 18-layer Transformer encoder (d=192, inner=768, 8 heads, ReLU, pre_ln=false i.e. post-LN, pre_ln_final_layer_norm=true). Conformer batch-norm convs vs Transformer LayerNorm, and the post-LN Transformer, must each be wired correctly; the d=512 -> d=192 handoff between the two stacks is a specific integration point.",
+    "FRONTEND normalize=NA (no per-feature normalization), unlike non-streaming parakeet (per_feature). 128 mels, n_fft=512, win_length=400 (25ms), hop=160 (10ms), hann, dither=1e-5. preemphasis is NOT set in model_config.yaml so the NeMo default (0.97) is assumed here, but the sibling streaming-parakeet models disable preemphasis; the true value MUST be confirmed against the Stage 2 Oracle dump. A silent frontend mismatch degrades DER without any shape error.",
+    "OUTPUT IS PROBABILITIES, NOT SEGMENTS. DER/JER require post-processing (thresholding plus optional onset/offset + median filtering) to turn the T x 4 probs into RTTM speaker segments. NVIDIA's published DER uses per-dataset tuned post-processing YAMLs. The porting parity gate must therefore be raw prob-tensor parity vs the NeMo reference (arrival-order columns are directly comparable, no Hungarian needed); DER and JER are computed with a fixed/documented post-processing and compared to the reference model on the SAME audio+manifest, not to the published numbers.",
+    "ACCEPTANCE DATA. LibriSpeech test-clean is single-speaker and degenerate for diarization, so it is NOT a valid acceptance set here. Most published eval corpora (CALLHOME, DIHARD III, CH109, NIST-SRE) are LDC-gated and not freely reproducible. AMI and VoxConverse are freely downloadable; AMI (NVIDIA publishes DER on it) is the proposed reproducible acceptance set. Confirm final acceptance set at sign-off.",
+    "OPERATING-POINT KNOBS. Hard cap of 4 speakers (>4 degrades sharply). The streaming knobs (chunk_len, chunk_right_context, fifo_len, spkcache_update_period, spkcache_len) trade latency for accuracy; the published numbers correspond to specific presets (e.g. 1.04s vs 30.4s input-buffer latency). These must be exposed/settable in the runtime to reproduce a published operating point and to match whichever preset the multitalker path expects."
+  ],
+  "intake_gaps": [
+    {
+      "field": "frontend.preemphasis",
+      "reason": "Not present in model_config.yaml; recorded as the NeMo default 0.97 but the sibling streaming-parakeet models disable preemphasis. Confirm the actual value against the Stage 2 Oracle dump before convert (info-only for Gate A, but load-bearing for DER)."
+    },
+    {
+      "field": "upstream_benchmarks.acceptance_dataset",
+      "reason": "RESOLVED at sign-off: acceptance set is AMI (freely downloadable, published DER), verified as prob-tensor parity + DER + JER vs the NeMo reference on the same manifest. Not LibriSpeech (single-speaker => degenerate for diarization)."
+    },
+    {
+      "field": "capabilities.timestamps",
+      "reason": "Left empty: diarization output is intrinsically timed speaker segments, but the transcription-timestamp capability (none/segment/word/token) does not apply to a model that emits no transcript."
+    }
+  ]
+}
