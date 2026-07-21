@@ -1,7 +1,7 @@
 {
   "schema": "transcribe-golden-manifest-v1",
   "family": "sortformer",
-  "variant": "streaming-4spk-v2.1",
+  "variant": "diar_streaming_sortformer_4spk-v2.1",
   "source_model": {
     "hf_repo": "nvidia/diar_streaming_sortformer_4spk-v2.1",
     "hf_revision": "fafaab5faa1617a0ca52d38dd3dc4bd636800d3d"

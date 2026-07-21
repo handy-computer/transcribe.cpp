@@ -20,8 +20,8 @@ Run through the Sortformer reference env:
     --manifest samples/diar/ami-ihm-test.manifest.jsonl \
     --model nvidia/diar_streaming_sortformer_4spk-v2.1 \
     --preset very_high_latency \
-    --pred-dir reports/diar/pred/streaming-4spk-v2.1-ami-ihm-test \
-    --out reports/diar/streaming-4spk-v2.1-REF.ami-ihm-test.jsonl
+    --pred-dir reports/diar/pred/diar_streaming_sortformer_4spk-v2.1-ami-ihm-test \
+    --out reports/diar/diar_streaming_sortformer_4spk-v2.1-REF.ami-ihm-test.jsonl
 """
 
 from __future__ import annotations

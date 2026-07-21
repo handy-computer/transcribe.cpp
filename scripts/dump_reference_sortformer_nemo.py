@@ -34,13 +34,13 @@ Tensor output uses the shared contract via scripts.lib.ref_dump
       scripts/dump_reference_sortformer_nemo.py encoder \
       --model nvidia/diar_streaming_sortformer_4spk-v2.1 \
       --audio samples/sortformer-2spk-mix.wav \
-      --out build/validate/sortformer/streaming-4spk-v2.1/sortformer-2spk-mix/encoder/ref
+      --out build/validate/sortformer/diar_streaming_sortformer_4spk-v2.1/sortformer-2spk-mix/encoder/ref
 
     uv run --project scripts/envs/sortformer \
       scripts/dump_reference_sortformer_nemo.py diarize \
       --model nvidia/diar_streaming_sortformer_4spk-v2.1 \
       --audio samples/sortformer-2spk-mix.wav \
-      --out build/validate/sortformer/streaming-4spk-v2.1/sortformer-2spk-mix/diarize/ref
+      --out build/validate/sortformer/diar_streaming_sortformer_4spk-v2.1/sortformer-2spk-mix/diarize/ref
 """
 
 from __future__ import annotations

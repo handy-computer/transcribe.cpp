@@ -133,6 +133,6 @@ accumulation, no structural divergence) and end-to-end via AMI DER
 
 ## Variant Notes
 
-- `streaming-4spk-v2.1`: family baseline (this port).
+- `diar_streaming_sortformer_4spk-v2.1`: family baseline (this port).
 - `streaming-4spk-v2`: architecturally identical, CC-BY-4.0; add weights once
   v2.1 validated (sibling-variant shortcut, Step 1).

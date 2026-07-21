@@ -16,16 +16,16 @@ Score with scripts/diar/score_der.py against the forced-alignment RTTMs, e.g.:
   uv run --project scripts/envs/sortformer \
     scripts/diar/run_cpp_sortformer.py \
     --manifest samples/diar/ami-ihm-test-fa.manifest.jsonl \
-    --gguf models/streaming-4spk-v2.1/streaming-4spk-v2.1-F32.gguf \
+    --gguf models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf \
     --preset very_high_latency \
     --postprocessing-yaml scripts/diar/postprocessing/diar_streaming_sortformer_4spk-v2_dihard3-dev.yaml \
-    --pred-dir reports/diar/pred/streaming-4spk-v2.1-cpp-ami-ihm-test \
-    --out reports/diar/streaming-4spk-v2.1-CPP.ami-ihm-test.jsonl
+    --pred-dir reports/diar/pred/diar_streaming_sortformer_4spk-v2.1-cpp-ami-ihm-test \
+    --out reports/diar/diar_streaming_sortformer_4spk-v2.1-CPP.ami-ihm-test.jsonl
 
   uv run scripts/diar/score_der.py \
     --manifest samples/diar/ami-ihm-test-fa.manifest.jsonl \
-    --pred-dir reports/diar/pred/streaming-4spk-v2.1-cpp-ami-ihm-test \
-    --out reports/diar/streaming-4spk-v2.1-CPP.ami-ihm-test.score.json
+    --pred-dir reports/diar/pred/diar_streaming_sortformer_4spk-v2.1-cpp-ami-ihm-test \
+    --out reports/diar/diar_streaming_sortformer_4spk-v2.1-CPP.ami-ihm-test.score.json
 """
 
 from __future__ import annotations

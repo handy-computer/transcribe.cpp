@@ -5,7 +5,7 @@
  * streaming-operating-point run extension, its kind constant, and its
  * init function.
  *
- * Sortformer (streaming-4spk-v2.1) is a diarization-only model: a run
+ * Sortformer (diar_streaming_sortformer_4spk-v2.1) is a diarization-only model: a run
  * produces no text; the product is the who-spoke-when rows read back via
  * transcribe_n_speaker_segments / transcribe_get_speaker_segment
  * (TRANSCRIBE_FEATURE_DIARIZATION). The compute core is streaming

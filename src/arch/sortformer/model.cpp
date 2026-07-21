@@ -42,7 +42,7 @@ namespace pk   = transcribe::parakeet;
 namespace conf = transcribe::conformer;
 
 static constexpr float kBnEps = 1e-5f;
-static constexpr char  k_default_variant[] = "streaming-4spk-v2.1";
+static constexpr char  k_default_variant[] = "diar_streaming_sortformer_4spk-v2.1";
 
 SortformerModel::~SortformerModel() {
     if (bn_fused_ctx != nullptr) {

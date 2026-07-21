@@ -61,7 +61,7 @@
   },
   "variants": [
     {
-      "name": "streaming-4spk-v2.1",
+      "name": "diar_streaming_sortformer_4spk-v2.1",
       "memory_gb": 2,
       "files": ["diar_streaming_sortformer_4spk-v2.1.nemo"]
     }

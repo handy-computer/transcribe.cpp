@@ -25,8 +25,8 @@ Writes <input-stem>.score.json:
 Usage:
   uv run scripts/diar/score_der.py \
     --manifest samples/diar/ami-ihm-test.manifest.jsonl \
-    --pred-dir reports/diar/pred/streaming-4spk-v2.1-ami-ihm-test \
-    --out reports/diar/streaming-4spk-v2.1-REF.ami-ihm-test.score.json
+    --pred-dir reports/diar/pred/diar_streaming_sortformer_4spk-v2.1-ami-ihm-test \
+    --out reports/diar/diar_streaming_sortformer_4spk-v2.1-REF.ami-ihm-test.score.json
 """
 
 from __future__ import annotations

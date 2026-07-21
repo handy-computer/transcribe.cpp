@@ -80,8 +80,8 @@ int main() {
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
                      "sortformer_stream_ext_unit: TRANSCRIBE_SORTFORMER_GGUF not set; skipping.\n"
-                     "Re-run with TRANSCRIBE_SORTFORMER_GGUF=models/streaming-4spk-v2.1/"
-                     "streaming-4spk-v2.1-F32.gguf\n");
+                     "Re-run with TRANSCRIBE_SORTFORMER_GGUF=models/diar_streaming_sortformer_4spk-v2.1/"
+                     "diar_streaming_sortformer_4spk-v2.1-F32.gguf\n");
         return 77;
     }
     const std::string gguf = env;

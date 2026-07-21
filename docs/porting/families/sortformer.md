@@ -32,7 +32,7 @@ dependency of the Parakeet multitalker speaker-attributed ASR path
 - Hugging Face revision: `fafaab5faa1617a0ca52d38dd3dc4bd636800d3d`
 - License: NVIDIA Open Model License (v2.1). Sibling `diar_streaming_sortformer_4spk-v2` is CC-BY-4.0.
 - Variants:
-  - `streaming-4spk-v2.1` — this port (best meeting DER; multitalker's named dependency).
+  - `diar_streaming_sortformer_4spk-v2.1` — this port (best meeting DER; multitalker's named dependency).
   - `streaming-4spk-v2` — architecturally identical, CC-BY-4.0. Deferred; add by dropping in weights once v2.1 is validated.
 
 ### Diarization scope policy
@@ -112,7 +112,7 @@ uv run scripts/gen_sortformer_oracle_audio.py
 Reference dumps (NeMo, via scripts/envs/sortformer):
 
 ```bash
-BASE=build/validate/sortformer/streaming-4spk-v2.1/sortformer-2spk-mix
+BASE=build/validate/sortformer/diar_streaming_sortformer_4spk-v2.1/sortformer-2spk-mix
 uv run --project scripts/envs/sortformer scripts/dump_reference_sortformer_nemo.py encoder \
   --model nvidia/diar_streaming_sortformer_4spk-v2.1 --audio samples/sortformer-2spk-mix.wav --out $BASE/encoder/ref
 uv run --project scripts/envs/sortformer scripts/dump_reference_sortformer_nemo.py diarize \
@@ -122,7 +122,7 @@ uv run --project scripts/envs/sortformer scripts/dump_reference_sortformer_nemo.
 Conversion:
 
 ```bash
-scripts/convert-sortformer.py -> models/streaming-4spk-v2.1/streaming-4spk-v2.1-F32.gguf (arch `sortformer`).
+scripts/convert-sortformer.py -> models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf (arch `sortformer`).
 ```
 
 Validation:
@@ -140,19 +140,19 @@ uv run --project scripts/envs/sortformer scripts/diar/run_reference_sortformer_n
   --manifest samples/diar/ami-ihm-test.manifest.jsonl \
   --model nvidia/diar_streaming_sortformer_4spk-v2.1 --preset very_high_latency \
   --postprocessing-yaml scripts/diar/postprocessing/diar_streaming_sortformer_4spk-v2_dihard3-dev.yaml \
-  --pred-dir reports/diar/pred/streaming-4spk-v2.1-ami-ihm-test-PPdihard \
-  --out reports/diar/streaming-4spk-v2.1-REF.ami-ihm-test.PPdihard.jsonl
+  --pred-dir reports/diar/pred/diar_streaming_sortformer_4spk-v2.1-ami-ihm-test-PPdihard \
+  --out reports/diar/diar_streaming_sortformer_4spk-v2.1-REF.ami-ihm-test.PPdihard.jsonl
 # C++ port (dumps diar.probs per meeting, applies the SAME dihard3 PP):
 uv run --project scripts/envs/sortformer scripts/diar/run_cpp_sortformer.py \
   --manifest samples/diar/ami-ihm-test-fa.manifest.jsonl \
-  --gguf models/streaming-4spk-v2.1/streaming-4spk-v2.1-F32.gguf --preset very_high_latency \
+  --gguf models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf --preset very_high_latency \
   --postprocessing-yaml scripts/diar/postprocessing/diar_streaming_sortformer_4spk-v2_dihard3-dev.yaml \
-  --pred-dir reports/diar/pred/streaming-4spk-v2.1-cpp-ami-ihm-test \
-  --out reports/diar/streaming-4spk-v2.1-CPP.ami-ihm-test.jsonl --backend cpu
+  --pred-dir reports/diar/pred/diar_streaming_sortformer_4spk-v2.1-cpp-ami-ihm-test \
+  --out reports/diar/diar_streaming_sortformer_4spk-v2.1-CPP.ami-ihm-test.jsonl --backend cpu
 uv run scripts/diar/score_der.py \
   --manifest samples/diar/ami-ihm-test-fa.manifest.jsonl \
-  --pred-dir reports/diar/pred/streaming-4spk-v2.1-cpp-ami-ihm-test \
-  --out reports/diar/streaming-4spk-v2.1-CPP.ami-ihm-test-fa.PPdihard.score.json
+  --pred-dir reports/diar/pred/diar_streaming_sortformer_4spk-v2.1-cpp-ami-ihm-test \
+  --out reports/diar/diar_streaming_sortformer_4spk-v2.1-CPP.ami-ihm-test-fa.PPdihard.score.json
 # -> REF DER 14.83% / JER 19.89% ; C++ DER 14.59% / JER 19.51% (within 0.24 pt).
 ```
 
@@ -186,7 +186,7 @@ TODO
 
 ## Reference baselines (Stage 2 Oracle)
 
-- **Tensor parity oracle** (`build/validate/sortformer/streaming-4spk-v2.1/sortformer-2spk-mix/`): mel + fastconformer + encoder_proj + transformer + offline preds + streaming `diar.probs` [150×4]. Offline preds == streaming probs on this short clip (single chunk). Tolerances in `tests/tolerances/sortformer.json` (provisional).
+- **Tensor parity oracle** (`build/validate/sortformer/diar_streaming_sortformer_4spk-v2.1/sortformer-2spk-mix/`): mel + fastconformer + encoder_proj + transformer + offline preds + streaming `diar.probs` [150×4]. Offline preds == streaming probs on this short clip (single chunk). Tolerances in `tests/tolerances/sortformer.json` (provisional).
 - **Measured reference DER/JER** on AMI ihm test (16 meetings, 9.06 h), preset `very_high_latency`, collar 0.0s / overlap included (NVIDIA AMI protocol). The reference pipeline REPRODUCES the published number (15.90 @ very_high_latency AMI-IHM). Full 2x2 decomposition of the two protocol levers:
 
   | predictions | vs manual RTTMs (diarizers-community/ami) | vs forced-alignment RTTMs (nttcslab-sp) |
@@ -194,14 +194,14 @@ TODO
   | no post-processing | 29.44% | 15.96% |
   | + dihard3 post-processing | 27.95% | **14.83%** |
 
-  - **Official gate = forced-alignment RTTMs + dihard3 PP: DER 14.83%, JER 19.89%** (missed 5.89%, FA 5.60%, confusion 3.34%). File: `reports/diar/streaming-4spk-v2.1-REF.ami-ihm-test-fa.PPdihard.score.json`. Stage 4 / Stage 7 apply the SAME PP to the C++ probs and score vs the SAME forced-alignment RTTMs, gated against this number.
+  - **Official gate = forced-alignment RTTMs + dihard3 PP: DER 14.83%, JER 19.89%** (missed 5.89%, FA 5.60%, confusion 3.34%). File: `reports/diar/diar_streaming_sortformer_4spk-v2.1-REF.ami-ihm-test-fa.PPdihard.score.json`. Stage 4 / Stage 7 apply the SAME PP to the C++ probs and score vs the SAME forced-alignment RTTMs, gated against this number.
   - The RTTM source is ~13 pts of the published-vs-manual gap; post-processing another ~1 pt. Confusion stays ~3% throughout, so the diarization core is correct; the manual-RTTM inflation was recall against dense annotations (within-utterance pauses), exactly as NVIDIA's forced-alignment `only_words` labels avoid.
   - Ground truth: nttcslab-sp/diar-forced-alignment (ASRU 2025, card ref [7]), `only_words`, full-corpus-ASR partition — the labels NVIDIA used. PP: NeMo v2 `dihard3-dev` config (no AMI-specific or v2.1 PP is published; dihard3 is the meeting-domain proxy).
   - Diagnostic/context files also kept: `...ami-ihm-test.score.json` (no-PP/manual 29.44%), `...ami-ihm-test-fa.noPP.score.json` (no-PP/FA 15.96%).
 
 ## Conversion (Stage 3)
 
-`scripts/convert-sortformer.py` -> `models/streaming-4spk-v2.1/streaming-4spk-v2.1-F32.gguf` (F32, 471 MB, arch string `sortformer`). 971 tensors emitted; 19 skipped (2 `preprocessor.*` recomputed in the C++ frontend, 17 BN `num_batches_tracked` counters). Gate B all-PASS. The GGUF tensor-name contract Stage 4's `src/arch/sortformer/weights.cpp` must implement:
+`scripts/convert-sortformer.py` -> `models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf` (F32, 471 MB, arch string `sortformer`). 971 tensors emitted; 19 skipped (2 `preprocessor.*` recomputed in the C++ frontend, 17 BN `num_batches_tracked` counters). Gate B all-PASS. The GGUF tensor-name contract Stage 4's `src/arch/sortformer/weights.cpp` must implement:
 
 - `enc.pre_encode.*` — dw_striding subsample (same as Parakeet).
 - `enc.blocks.{0..16}.*` — 17 Conformer/NEST blocks; identical suffix map to Parakeet's `ENCODER_BLOCK_TABLE` (macaron FF1/FF2, rel-pos self-attn with `pos_bias_u/v`, conv module with `conv.bn.{weight,bias,running_mean,running_var}`). `use_bias=true` (linear biases present); `conv_norm_type=batch_norm`.
@@ -209,7 +209,7 @@ TODO
 - `tf.blocks.{0..17}.*` — 18 post-LN Transformer blocks: `norm_1` -> attn(`attn.{q,k,v,out}`) -> `norm_2` -> FFN(`ff.{in,out}`), ReLU, `pre_ln=false`.
 - `diar.fc1.*`, `diar.spk_head.*` (4x384 -> 4 sigmoid), `diar.single_spk_head.*` (4x192).
 
-Tensor-name mapping decisions: Conformer names mirror `convert-parakeet.py` verbatim (shared NeMo ConformerEncoder). Transformer norms named `norm_1`/`norm_2` and BN kept as `.bn.` so `reference_dtype_for`/`policy.cpp` route them to F32; representatives registered in `scripts/lib/test_quant_policy_sync.py`. GGUF slug is the variant (`streaming-4spk-v2.1`), not the longer repo slug.
+Tensor-name mapping decisions: Conformer names mirror `convert-parakeet.py` verbatim (shared NeMo ConformerEncoder). Transformer norms named `norm_1`/`norm_2` and BN kept as `.bn.` so `reference_dtype_for`/`policy.cpp` route them to F32; representatives registered in `scripts/lib/test_quant_policy_sync.py`. GGUF slug is the variant (`diar_streaming_sortformer_4spk-v2.1`), not the longer repo slug.
 
 ## Notes
 
