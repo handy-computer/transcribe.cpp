@@ -135,7 +135,18 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
         list(APPEND _frameworks Accelerate)
     endif()
     if("vulkan" IN_LIST _kinds)
-        list(APPEND _system_libs vulkan)
+        # The Vulkan import library's basename is platform-specific: Windows'
+        # LunarG SDK ships `vulkan-1.lib` (the import lib for the
+        # driver-installed vulkan-1.dll loader); every other platform links
+        # `libvulkan`. Emit the right name per-OS so a non-CMake consumer
+        # reconstructing the link line from this manifest resolves it — a bare
+        # `vulkan` becomes `vulkan.lib` on MSVC, which the SDK does not provide,
+        # so the link dies with LNK1181.
+        if(WIN32)
+            list(APPEND _system_libs vulkan-1)
+        else()
+            list(APPEND _system_libs vulkan)
+        endif()
     endif()
     if(_frameworks)
         list(REMOVE_DUPLICATES _frameworks)
