@@ -1258,9 +1258,10 @@ transcribe_status whisper_run(transcribe_session *          session,
     const int  n_mels                 = cm->hparams.enc_num_mel_bins;
     const int  n_mel_frames_per_chunk = cm->hparams.fe_nb_max_frames > 0 ? cm->hparams.fe_nb_max_frames : 3000;
     const int  n_samples_per_chunk    = cm->hparams.fe_n_samples > 0 ? cm->hparams.fe_n_samples : 480000;
-    // Short-form = fits a single 30s window; bypasses the dynamic-stride
-    // machinery. HF's generate() takes a different code path for is_shortform,
-    // so this is a numeric + behavioral parity gate (not just an optimization).
+    // Short-form = fits a single 30s window. Controls PCM padding only (HF's
+    // processor pads short-form PCM to 30s before the mel, long-form does
+    // not); the seek loop below is unified across both forms, matching HF's
+    // generate(), which since 5.x runs one seek loop for every input length.
     const bool is_short_form          = (n_samples <= n_samples_per_chunk);
 
     const int64_t t_mel_start      = ggml_time_us();
@@ -2448,17 +2449,19 @@ transcribe_status whisper_run(transcribe_session *          session,
         all_text_ids.insert(all_text_ids.end(), generated_text_ids.begin(), generated_text_ids.end());
         all_raw_ids.insert(all_raw_ids.end(), generated_ids.begin(), generated_ids.end());
 
-        // Seek advance.
-        //   Short-form: full-chunk advance. PCM is padded to exactly
-        //     n_samples_per_chunk, so the silent tail would hallucinate
-        //     "you you you" if re-entered; single-pass it (matches HF's
-        //     separate is_shortform path).
-        //   Long-form: dynamic advance via segment_offset_frames (last closed
-        //     timestamp pair), guarded against 0-advance infinite loops.
+        // Seek advance. HF (generation_whisper.py, 5.6.1) runs ONE seek loop
+        // for every input length — there is no separate short-form decode
+        // path, and max_frames for a padded short-form window is the full
+        // 3000 frames. Short-form therefore uses the same dynamic advance as
+        // long-form: a decode ending in a lone close-timestamp or with no
+        // timestamp pairs (always the case under <|notimestamps|>) advances
+        // the full window, so well-behaved short-form stays single-pass. Only
+        // a consecutive-timestamp ending (<|t|><|t|>: the model closed a
+        // segment early and the timestamp rules forced a reopen — issue #89)
+        // re-enters the loop at t and decodes the speech after a premature
+        // EOS. Guarded against 0-advance infinite loops.
         //   No-speech fired: declared empty, skip the whole window.
-        if (is_short_form) {
-            seek += seek_num_frames;
-        } else if (no_speech_fired_this_chunk) {
+        if (no_speech_fired_this_chunk) {
             seek += seek_num_frames;
         } else {
             if (segment_offset_frames <= 0) {
@@ -2479,11 +2482,13 @@ transcribe_status whisper_run(transcribe_session *          session,
 // autoregressive DECODE is batched across B utterances in lockstep. The batched
 // fast path covers only the common, parity-exact case and peels everything else
 // to the serial whisper_run():
-//   batched: short-form (<= 30s) at tier 0 (T=0 greedy), TIMESTAMPS_NONE, no
-//            initial_prompt.
-//   serial : long-form, segment-timestamps, T > 0, prompt/prompt_tokens,
-//            invalid inputs, and any utterance whose tier-0 output fails the
-//            fallback thresholds (so the temperature ladder runs exactly).
+//   batched: short-form (<= 30s) single-window decodes (segment timestamps,
+//            the temperature ladder, and initial_prompt run in-batch).
+//   serial : long-form, invalid inputs, device/topology constraints (see the
+//            global gates below), and any utterance whose accepted decode
+//            ends in a consecutive-timestamp pair — the serial seek loop
+//            re-enters at that timestamp (continuation), which the
+//            single-window batched graph cannot do.
 //
 // A clip that passes tier 0 (the common case) is bit-for-bit the serial tier-0
 // result, so batch_parity holds; anything that would diverge runs serially.
@@ -3229,14 +3234,25 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
         return s.substr(a, b - a);
     };
     auto finalize = [&](int b, const std::vector<int32_t> & g, const std::vector<int32_t> & gt) {
+        // Continuation peel: a decode that ends in a consecutive-timestamp
+        // pair re-enters the serial seek loop at that timestamp (HF's unified
+        // seek loop; the short-form advance matches long-form). The
+        // single-window batched graph cannot continue, so peel the utterance
+        // to the serial fallback below for the exact multi-window result.
+        // retrieve_segment's offset logic is mode-agnostic (HF runs it for
+        // return_timestamps=False too), so check both timestamp modes.
+        WhisperSegmentResult sr = whisper_retrieve_segment(g, cm->tok, /*time_offset_ms=*/0, seek_num_frames, want_ts,
+                                                           timestamp_begin, vocab_size);
+        if (sr.segment_offset_frames > 0 && sr.segment_offset_frames < seek_num_frames) {
+            needs_serial[b]  = 1;
+            accepted_done[b] = 1;
+            return;
+        }
         transcribe_session::ResultSet rs;
         std::vector<int>              tids(gt.begin(), gt.end());
         std::string                   text =
             tids.empty() ? std::string() : trim_ws(cm->tok.decode(tids.data(), static_cast<int>(tids.size())));
         if (want_ts) {
-            WhisperSegmentResult sr =
-                whisper_retrieve_segment(g, cm->tok, /*time_offset_ms=*/0, seek_num_frames,
-                                         /*want_segment_timestamps=*/true, timestamp_begin, vocab_size);
             rs.segments    = std::move(sr.segments);
             rs.result_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         } else {
