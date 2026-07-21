@@ -470,6 +470,21 @@ VARIANT_DISPLAY_NAMES: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Translation-capable variants
+# ---------------------------------------------------------------------------
+# Multilingual checkpoints normally support speech translation, and every
+# multilingual vocab carries <|translate|>. large-v3-turbo is the exception:
+# OpenAI fine-tuned it "for two more epochs over the same amount of
+# multilingual transcription data used for training large-v3, i.e. excluding
+# translation data, on which we don't expect turbo to perform well"
+# (https://github.com/openai/whisper/discussions/2363). Handed <|translate|>
+# it typically emits the source language verbatim instead of English, so the
+# GGUF advertises translate=False and the dispatcher rejects the task rather
+# than silently returning a non-translation.
+NO_TRANSLATE_VARIANTS: frozenset[str] = frozenset({"whisper-large-v3-turbo"})
+
+
+# ---------------------------------------------------------------------------
 # Main converter
 # ---------------------------------------------------------------------------
 
@@ -559,12 +574,15 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         # Multilingual checkpoints support auto language detection and
         # speech translation via the <|translate|> task token. The .en
         # checkpoints (English-only) drop both: their vocab has no
-        # language tokens and no <|translate|> task token.
+        # language tokens and no <|translate|> task token. Translation is
+        # additionally withheld from the NO_TRANSLATE_VARIANTS checkpoints,
+        # which carry the token but were never trained for the task.
         is_multilingual = len(hp["languages"]) > 1
+        can_translate   = is_multilingual and variant not in NO_TRANSLATE_VARIANTS
         writer.add_bool("stt.capability.lang_detect", is_multilingual)
-        writer.add_bool("stt.capability.translate",   is_multilingual)
+        writer.add_bool("stt.capability.translate",   can_translate)
         writer.add_bool("stt.capability.timestamps",  True)
-        if is_multilingual:
+        if can_translate:
             writer.add_array("stt.translation.target_languages", ["en"])
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----

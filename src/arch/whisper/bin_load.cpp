@@ -287,8 +287,16 @@ void fill_whisper_hparams(const transcribe::bin_loader::WhisperBinModel & bm, Wh
     hp.fe_n_samples     = 480000;
     hp.fe_nb_max_frames = 3000;
 
+    // large-v3-turbo is the one multilingual checkpoint that carries
+    // <|translate|> but was never trained for translation (OpenAI fine-tuned
+    // it on transcription data only — openai/whisper discussion #2363), so it
+    // returns the source language instead of English. .bin files carry no
+    // variant string; turbo is the only whisper release pairing the 1280-wide
+    // large encoder with a 4-layer decoder (full large has 32).
+    const bool is_turbo = bm.hp.n_text_state == 1280 && bm.hp.n_text_layer == 4;
+
     hp.cap_lang_detect = bm.is_multilingual;
-    hp.cap_translate   = bm.is_multilingual;
+    hp.cap_translate   = bm.is_multilingual && !is_turbo;
     hp.cap_timestamps  = true;
 }
 

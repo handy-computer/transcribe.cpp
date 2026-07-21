@@ -195,6 +195,19 @@ See `reports/porting/whisper/whisper-tiny/intake.json::known_risks`. Highlights:
   WhisperFeatureExtractor recomputes them at load time. The converter
   reproduces this via `transformers.audio_utils.mel_filter_bank` and
   bakes the result into the GGUF as `frontend.mel_filterbank`.
+- **`whisper-large-v3-turbo` translation.** Turbo's vocab carries
+  `<|translate|>` (id 50359) and its `generation_config.json` lists the
+  task, but OpenAI fine-tuned it "over the same amount of multilingual
+  transcription data used for training `large-v3`, i.e. excluding
+  translation data"
+  ([openai/whisper#2363](https://github.com/openai/whisper/discussions/2363));
+  handed the task token it emits the source language rather than English.
+  The converter's `NO_TRANSLATE_VARIANTS` set writes
+  `stt.capability.translate=False` (and omits
+  `stt.translation.target_languages`) for this variant only —
+  `stt.whisper.translate_token_id` is still written, since it is a fact
+  about the vocab. The `.bin` loader reaches the same conclusion from
+  shape alone (`n_text_state==1280 && n_text_layer==4`).
 - **`whisper-large-v3-turbo` decoder depth.** Turbo is the v3 encoder
   paired with a 4-layer decoder (vs. 32 for full v3). The loader reads
   decoder layer count dynamically from `stt.whisper.decoder.n_layers`,

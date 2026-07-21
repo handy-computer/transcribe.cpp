@@ -126,14 +126,14 @@ tags:
   - openai
 
 summary: |
-  OpenAI Whisper large-v3-turbo — converted to GGUF for transcribe.cpp. Multilingual transcription, language detection, and speech translation (audio in any supported language → English text). v3 family adds Cantonese (yue) and uses a 128-bin mel input. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
+  OpenAI Whisper large-v3-turbo — converted to GGUF for transcribe.cpp. Multilingual transcription and language detection across 100 languages. Transcription only: unlike the rest of the multilingual family, turbo was fine-tuned on transcription data with translation excluded, so `task="translate"` is not supported (use `whisper-large-v3` for speech translation). v3 family adds Cantonese (yue) and uses a 128-bin mel input. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
 
 default_quant_index: 1
 
 # Capability flags for the transcribe_cpp metadata block.
 capabilities:
   streaming: false
-  translate: true
+  translate: false  # turbo was fine-tuned with translation data excluded
   lang_detect: true
   timestamps: segment  # none | segment | word | token
 
@@ -150,26 +150,26 @@ perf:
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 2.10%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 2.10%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single CUDA (L4) run against these exact GGUFs; run-to-run and backend variation on this corpus is ~0.1pp, mostly driven by short-clip hallucination outcomes on the noise floor.
 
 quants:
   - name: F16
     filename: whisper-large-v3-turbo-F16.gguf
     size: 1.51 GB
-    wer: 2.01%
+    wer: 2.00%
   - name: Q8_0
     filename: whisper-large-v3-turbo-Q8_0.gguf
     size: 845 MB
-    wer: 2.01%
+    wer: 2.00%
   - name: Q6_K
     filename: whisper-large-v3-turbo-Q6_K.gguf
     size: 660 MB
-    wer: 2.01%
+    wer: 1.96%
   - name: Q5_K_M
     filename: whisper-large-v3-turbo-Q5_K_M.gguf
     size: 591 MB
-    wer: 2.03%
+    wer: 2.00%
   - name: Q4_K_M
     filename: whisper-large-v3-turbo-Q4_K_M.gguf
     size: 511 MB
-    wer: 2.04%
+    wer: 2.00%

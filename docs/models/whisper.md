@@ -23,12 +23,17 @@ see the family doc at
   multilingual checkpoints (no `.en`). They cover 99 languages
   (100 in the v3 family, which adds Cantonese), do automatic language
   identification, and can produce English translations of non-English
-  audio when invoked with `task=translate`.
+  audio when invoked with `task=translate` — except `large-v3-turbo`,
+  which is transcription-only (see below).
 - **Throughput vs accuracy.** WER drops as you go up the size ladder, but
   decode latency scales with parameter count. `tiny` and `base` run in
   near-realtime on CPU; `large` typically wants Metal or a recent CUDA
   GPU. `large-v3-turbo` is large-v3 quality with a much smaller decoder —
-  the best accuracy/speed tradeoff for most multilingual workloads.
+  the best accuracy/speed tradeoff for most multilingual workloads, but
+  it is transcription-only: OpenAI fine-tuned it with translation data
+  excluded ([openai/whisper#2363](https://github.com/openai/whisper/discussions/2363)),
+  so `stt.capability.translate=false` and `--translate` is rejected. Use
+  `large-v3` when you need speech translation.
 - **v3 family quirks.** `large-v3` and `large-v3-turbo` use a 128-bin mel
   input (the rest use 80) and add a Cantonese (`yue`) language token. The
   reference dtype shipped is F16, not F32 — they were released in F16
@@ -55,7 +60,7 @@ numbers compare to OpenAI's self-reported figures. Numbers come from single Meta
 | `whisper-large`          | 99 + auto-detect    | 1.55 GB | 2.74% | [whisper-large.md](whisper-large.md) |
 | `whisper-large-v2`       | 99 + auto-detect    | 1.55 GB | 2.65% | [whisper-large-v2.md](whisper-large-v2.md) |
 | `whisper-large-v3`       | 100 + auto-detect   | 1.55 GB | 1.82% | [whisper-large-v3.md](whisper-large-v3.md) |
-| `whisper-large-v3-turbo` | 100 + auto-detect   |  845 MB | 2.01% | [whisper-large-v3-turbo.md](whisper-large-v3-turbo.md) |
+| `whisper-large-v3-turbo` | 100 + auto-detect   |  845 MB | 2.00% | [whisper-large-v3-turbo.md](whisper-large-v3-turbo.md) |
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
@@ -97,7 +102,7 @@ All Whisper variants support:
   Whisper (`max_timestamp_kind = segment`). Word-level timestamps are not
   currently exposed.
 - **Translation** (any supported language → English) on multilingual
-  checkpoints — `.en` variants are transcribe-only.
+  checkpoints — `.en` variants and `large-v3-turbo` are transcribe-only.
 
 What's not supported (consistent across the family): real-time
 streaming (whisper is not streaming-first; chunked 30-second windows

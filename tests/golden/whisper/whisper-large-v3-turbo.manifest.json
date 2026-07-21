@@ -143,8 +143,7 @@
       "yue"
     ],
     "language_detection": true,
-    "translation": true,
-    "translation_target_languages": ["en"],
+    "translation": false,
     "timestamps": [
       "segment",
       "word"

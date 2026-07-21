@@ -200,7 +200,7 @@
       "yue"
     ],
     "language_detection": true,
-    "translation": true,
+    "translation": false,
     "timestamps": [
       "segment",
       "word"
