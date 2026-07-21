@@ -1085,6 +1085,26 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_qwen3_asr_e2e_smoke)
     set_tests_properties(transcribe_qwen3_asr_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Sortformer streaming operating-point run ext (SFST, RUN slot).
+    # Kind/slot probe, init stamping, pre-clear rejection with snapshot
+    # preservation, and ext-vs-env preset parity on the committed 2-spk
+    # oracle mix. Gated by TRANSCRIBE_SORTFORMER_GGUF (RC 77 skip).
+    add_executable(transcribe_sortformer_stream_ext_unit
+        sortformer_stream_ext_unit.cpp)
+
+    target_link_libraries(transcribe_sortformer_stream_ext_unit
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_sortformer_stream_ext_unit PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_sortformer_stream_ext_unit)
+
+    add_test(NAME transcribe_sortformer_stream_ext_unit
+        COMMAND transcribe_sortformer_stream_ext_unit)
+    set_tests_properties(transcribe_sortformer_stream_ext_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------

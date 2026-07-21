@@ -98,6 +98,14 @@ struct MelConfig {
     // Optional checkpoint-provided window [win_length]. When non-empty,
     // used instead of computing a periodic Hann window.
     std::vector<float> window;
+
+    // NeMo seq-len semantics for the centered (reflect/constant) paths.
+    // Newer NeMo AudioToMelSpectrogramPreprocessor computes the feature
+    // length as ceil(n_samples / hop) rather than floor(n_samples / hop) + 1.
+    // The two agree except when n_samples is an exact multiple of hop, where
+    // ceil drops the extra trailing center frame. Sortformer's preprocessor
+    // uses the ceil form; leave false for the legacy +1 families.
+    bool nemo_seq_len_ceil = false;
 };
 
 // Pure C++ log-mel extractor. Construct once, call compute() any

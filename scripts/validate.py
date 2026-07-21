@@ -403,8 +403,24 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # decoder intermediates across subcommands (parakeet). Running
         # both is safe — if a tensor is dumped by both, the decode
         # pass overwrites the encoder pass (same values).
-        for stage in ["encoder", "decode"]:
-            cmd = base_args + [stage] + common_args
+        #
+        # Sortformer is an encoder-diarizer: the offline forward (encoder
+        # subcommand) emits the offline gate tensors; the streaming `diarize`
+        # subcommand emits diar.probs (AOSC/FIFO path). VALIDATE_SORTFORMER_PRESET
+        # selects a matching streaming operating point on both the reference
+        # (--preset) and the C++ side (TRANSCRIBE_SORTFORMER_STREAM_PRESET in
+        # cmd_cpp); unset -> the checkpoint-shipped cfg (single chunk on the
+        # short oracle, i.e. diar.probs == diar.preds_offline).
+        if args.family == "sortformer":
+            stages = ["encoder", "diarize"]
+        else:
+            stages = ["encoder", "decode"]
+        sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
+        for stage in stages:
+            stage_args = list(common_args)
+            if args.family == "sortformer" and stage == "diarize" and sf_preset:
+                stage_args += ["--preset", sf_preset]
+            cmd = base_args + [stage] + stage_args
             run_cmd(
                 cmd,
                 repo,
@@ -438,6 +454,18 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+
+        # Sortformer: keep the C++ streaming operating point in lockstep with
+        # the reference `diarize --preset` (see cmd_ref) so the diar.probs
+        # tensors are comparable. Also enable the offline full-context forward
+        # so the enc.* / diar.preds_offline parity tensors are dumped (it is
+        # gated off by default because it is O(T^2) over the whole clip and
+        # would OOM on long DER audio).
+        if args.family == "sortformer":
+            env["TRANSCRIBE_SORTFORMER_OFFLINE_DUMP"] = "1"
+            sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
+            if sf_preset:
+                env["TRANSCRIBE_SORTFORMER_STREAM_PRESET"] = sf_preset
 
         # Whisper: by default, exercise the production C++ MelFrontend so
         # the per-tensor compare covers the full mel→encoder→decoder
@@ -599,8 +627,13 @@ def cmd_compare(args: argparse.Namespace) -> int:
         # Transcript comparison: if the reference produced a transcript.json,
         # verify the C++ transcript. Manifests can opt into normalized compare
         # for models whose generation differs only in punctuation/casing.
+        #
+        # Sortformer is a diarizer: it has no text transcript (the C++ CLI
+        # emits speaker segments, not `text`). Its behavioral artifact is the
+        # diar.probs tensor, gated above; the `diarize` stage's segment lines
+        # are informational only, so skip the text-transcript comparison.
         ref_transcript = ref_dir / "transcript.json"
-        if ref_transcript.exists():
+        if ref_transcript.exists() and args.family != "sortformer":
             transcript_compare = case_transcript_compare(manifest, case)
             ref_data = json.loads(ref_transcript.read_text())
             ref_text = str(ref_data.get("text", ""))

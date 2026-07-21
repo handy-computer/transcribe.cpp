@@ -329,6 +329,13 @@ int MelFrontend::n_frames_for(size_t n_samples) const {
                                 static_cast<size_t>(cfg_.hop_length)) +
                1;
     }
+    // Newer NeMo (e.g. Sortformer) computes ceil(n / hop); the legacy
+    // families use floor(n / hop) + 1. They differ only when n is an exact
+    // multiple of hop, where ceil drops the trailing center frame.
+    if (cfg_.nemo_seq_len_ceil) {
+        return static_cast<int>((n_samples + static_cast<size_t>(cfg_.hop_length) - 1) /
+                                static_cast<size_t>(cfg_.hop_length));
+    }
     // Matches NeMo features_lens = (waveforms_lens / hop_length) + 1.
     // The +1 accounts for the centered first frame.
     return static_cast<int>(n_samples / static_cast<size_t>(cfg_.hop_length)) + 1;
@@ -351,11 +358,7 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     const int  pad    = n_fft / 2;
     const bool no_pad = (cfg_.pad_mode == "none");
 
-    const int n_frames =
-        no_pad ? (static_cast<int>(n_samples) < win ?
-                      0 :
-                      static_cast<int>((n_samples - static_cast<size_t>(win)) / static_cast<size_t>(hop)) + 1) :
-                 static_cast<int>(n_samples / static_cast<size_t>(hop)) + 1;
+    const int n_frames = n_frames_for(n_samples);
 
     // Per-feature normalize divides by (n_frames - 1) and the
     // reflect pad needs at least pad+1 input samples to reflect

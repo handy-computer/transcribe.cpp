@@ -16,6 +16,7 @@
 #include "transcribe.h"
 #include "transcribe/moonshine_streaming.h"
 #include "transcribe/parakeet.h"
+#include "transcribe/sortformer.h"
 #include "transcribe/voxtral_realtime.h"
 #include "transcribe/whisper.h"
 

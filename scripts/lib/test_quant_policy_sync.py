@@ -75,6 +75,9 @@ NORM = [
     "enc.layers.0.ln_pre.weight",           # qwen3 encoder ln_pre
     "enc.blocks.0.self_attn.pos_bias_u",    # conformer rel-pos bias u
     "enc.blocks.0.self_attn.pos_bias_v",    # conformer rel-pos bias v
+    "tf.blocks.0.norm_1.weight",            # sortformer transformer post-LN (norm_ prefix)
+    "tf.blocks.0.attn.q.bias",              # sortformer transformer attn bias (.bias)
+    "diar.spk_head.bias",                   # sortformer diarization head bias (.bias)
     "dec.pos_enc",                          # cohere sinusoidal pos table
     "enc.pos_emb.weight",                   # whisper encoder pos_emb
     "dec.pos_emb.weight",                   # whisper decoder pos_emb
@@ -100,6 +103,10 @@ LINEAR = [
     "enc.blocks.3.attn.linear_out.weight",  # attention output projection
     "dec.embed.token.weight",               # cohere tied embedding (Embed)
     "dec.token_embd.weight",                # llama-style embedding (Embed)
+    "tf.blocks.0.attn.q.weight",            # sortformer transformer attn projection
+    "tf.blocks.0.ff.in.weight",             # sortformer transformer FFN matrix
+    "diar.encoder_proj.weight",             # sortformer 512->192 projection
+    "diar.spk_head.weight",                 # sortformer diarization head (4 sigmoid outputs)
 ]
 
 # KNOWN DRIFT — policy.cpp::classify_tensor places these in the Norm (F32) or

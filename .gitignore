@@ -59,6 +59,10 @@ __pycache__/
 
 # WER evaluation data + generated working reports.
 /samples/wer/
+# Diarization eval corpora (AMI audio + fetched RTTMs); regenerable via
+# scripts/diar/ingest_ami.py + fetch_ami_forced_alignment.py. The committed
+# oracle case lives at samples/sortformer-2spk-mix.wav (outside samples/diar/).
+/samples/diar/
 /reports/*
 
 # Reviewable porting evidence (intake, porting log) is intentionally committed.

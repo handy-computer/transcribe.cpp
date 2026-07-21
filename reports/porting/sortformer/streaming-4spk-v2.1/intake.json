@@ -148,7 +148,7 @@
       "score": 16.67,
       "score_unit": "percent DER",
       "source": "model card",
-      "notes": "Metric is DER (lower is better), collar 0.0s with overlap, 1.04s input-buffer latency. FREELY DOWNLOADABLE. CONFIRMED acceptance set at intake sign-off (parity + DER + JER vs the NeMo reference). 30.4s-latency DER is 15.90."
+      "notes": "Metric is DER (lower is better), collar 0.0s with overlap. FREELY DOWNLOADABLE. CONFIRMED acceptance set. 30.4s-latency (very_high_latency) published DER is 15.90. Stage 2 REPRODUCED this: our measured NeMo reference on AMI ihm test = 15.96% (no PP) / 14.83% (dihard3 PP), both vs forced-alignment RTTMs (nttcslab-sp), preset very_high_latency. Scoring vs the denser diarizers-community manual RTTMs instead gives 29.44% (recall-inflated). Official gate = FA RTTMs + dihard3 PP = 14.83%."
     },
     {
       "dataset": "AMI Test SDM (forced-alignment RTTM)",
@@ -221,7 +221,7 @@
   "intake_gaps": [
     {
       "field": "frontend.preemphasis",
-      "reason": "Not present in model_config.yaml; recorded as the NeMo default 0.97 but the sibling streaming-parakeet models disable preemphasis. Confirm the actual value against the Stage 2 Oracle dump before convert (info-only for Gate A, but load-bearing for DER)."
+      "reason": "RESOLVED at Stage 2 Oracle: the loaded AudioToMelSpectrogramPreprocessor reports preemph=0.97 and normalize='NA' (none). The 0.97 default is applied, not disabled. Frontend is locked."
     },
     {
       "field": "upstream_benchmarks.acceptance_dataset",
