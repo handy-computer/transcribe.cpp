@@ -63,6 +63,7 @@ ParakeetSession::~ParakeetSession() {
         sched = nullptr;
     }
     if (compute_ctx != nullptr) {
+        stream_graph.reset();
         ggml_free(compute_ctx);
         compute_ctx = nullptr;
     }
@@ -928,6 +929,7 @@ static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     // ----- Reset per-call compute state -----
     // Free the previous run's compute_ctx; encoder_out is invalidated.
     if (pc->compute_ctx != nullptr) {
+        pc->stream_graph.reset();
         ggml_free(pc->compute_ctx);
         pc->compute_ctx = nullptr;
     }
@@ -1027,12 +1029,16 @@ static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         const int d_model = pm->hparams.enc_d_model;
         const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
 
-        // Position of "relative offset 0" in the buffer: (pos_len-1)/2 for
-        // full / chunked_limited; W_left for Regular local attention.
+        // Position of relative offset 0 in the buffer: (pos_len-1)/2 for
+        // full/dense ChunkedLimited; W_left for Regular local attention;
+        // key_window-1 for the rectangular windowed ChunkedLimited graph.
         const bool is_chunked = (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
         const bool is_local_pe =
             (!is_chunked) && (pm->hparams.enc_att_context_left >= 0 && pm->hparams.enc_att_context_right >= 0);
-        const int zero_index = is_local_pe ? pm->hparams.enc_att_context_left : (pos_len - 1) / 2;
+        const bool is_windowed_chunked = is_chunked && eb.chunked_mask_in != nullptr && eb.chunked_mask_in->ne[3] > 1;
+        const int  zero_index          = is_windowed_chunked ? static_cast<int>(eb.chunked_mask_in->ne[0]) - 1 :
+                                         is_local_pe         ? pm->hparams.enc_att_context_left :
+                                                               (pos_len - 1) / 2;
 
         pc->pos_buf.assign(static_cast<size_t>(pos_len) * d_model, 0.0f);
 
@@ -1063,22 +1069,28 @@ static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     // -INF outside. NeMo: chunk_size = att_context_right + 1,
     // left_chunks = att_context_left / chunk_size.
     if (eb.chunked_mask_in != nullptr) {
-        const int T_enc       = static_cast<int>(eb.chunked_mask_in->ne[0]);
         const int chunk_size  = pm->hparams.enc_att_context_right + 1;
         const int left_chunks = (chunk_size > 0) ? (pm->hparams.enc_att_context_left / chunk_size) : 0;
 
-        std::vector<float> mask_buf(static_cast<size_t>(T_enc) * static_cast<size_t>(T_enc));
-        // ggml ne = [T_k, T_q, 1, 1], row-major in the host buffer is
-        // contiguous along T_k (ne[0]). Indexing: mask[q, k] lives at
-        // offset (q * T_enc + k).
-        for (int q = 0; q < T_enc; ++q) {
-            const int q_chunk     = (chunk_size > 0) ? (q / chunk_size) : 0;
-            const int k_min_chunk = (q_chunk - left_chunks > 0) ? (q_chunk - left_chunks) : 0;
-            const int k_min       = k_min_chunk * chunk_size;
-            const int k_max       = (q_chunk + 1) * chunk_size;  // exclusive
-            float *   row         = mask_buf.data() + static_cast<size_t>(q) * T_enc;
-            for (int k = 0; k < T_enc; ++k) {
-                row[k] = (k >= k_min && k < k_max) ? 0.0f : -std::numeric_limits<float>::infinity();
+        const int          T_enc    = static_cast<int>(eb.out->ne[1]);
+        const int          T_k      = static_cast<int>(eb.chunked_mask_in->ne[0]);
+        const int          T_q      = static_cast<int>(eb.chunked_mask_in->ne[1]);
+        const int          N        = static_cast<int>(eb.chunked_mask_in->ne[3]);
+        const bool         windowed = N > 1;
+        std::vector<float> mask_buf(static_cast<size_t>(T_k) * T_q * N, -std::numeric_limits<float>::infinity());
+        if (windowed) {
+            compute_chunked_limited_window_mask(mask_buf.data(), T_enc, chunk_size, left_chunks);
+        } else {
+            // Dense reference layout [T_k,T_q,1,1].
+            for (int q = 0; q < T_enc; ++q) {
+                const int q_chunk     = (chunk_size > 0) ? (q / chunk_size) : 0;
+                const int k_min_chunk = (q_chunk - left_chunks > 0) ? (q_chunk - left_chunks) : 0;
+                const int k_min       = k_min_chunk * chunk_size;
+                const int k_max       = (q_chunk + 1) * chunk_size;  // exclusive
+                float *   row         = mask_buf.data() + static_cast<size_t>(q) * T_enc;
+                for (int k = 0; k < T_enc; ++k) {
+                    row[k] = (k >= k_min && k < k_max) ? 0.0f : -std::numeric_limits<float>::infinity();
+                }
             }
         }
 
@@ -1242,6 +1254,7 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
     transcribe::pack_pad_channel_major(pc->mel_buf, mels, nf, n_mels, T_max);
 
     if (pc->compute_ctx != nullptr) {
+        pc->stream_graph.reset();
         ggml_free(pc->compute_ctx);
         pc->compute_ctx = nullptr;
     }
@@ -1647,6 +1660,11 @@ transcribe_status ensure_pos_proj_cache(ParakeetSession * pc, ParakeetModel * pm
         return TRANSCRIBE_ERR_BACKEND;
     }
 
+    // The steady-state encoder graph borrows the projection tensors below,
+    // and this one-off graph resets the scheduler allocation. It cannot be
+    // replayed after either operation.
+    pc->stream_graph.reset();
+
     auto & sc = pc->stream_caches;
     if (sc.pos_proj_buf != nullptr) {
         safe_buffer_free(sc.pos_proj_buf);
@@ -1763,6 +1781,38 @@ void compute_chunked_limited_with_rc_mask(float * out_buf,
     }
 }
 
+void compute_chunked_limited_window_mask(float * out_buf, int T, int chunk_size, int left_chunks) {
+    assert(out_buf != nullptr);
+    assert(T >= 1);
+    assert(chunk_size >= 1);
+    assert(left_chunks >= 0);
+
+    const int C = chunk_size;
+    const int W = (left_chunks + 1) * C;
+    const int N = (T + C - 1) / C;
+
+    std::fill(out_buf, out_buf + static_cast<size_t>(W) * C * N, -std::numeric_limits<float>::infinity());
+    for (int n = 0; n < N; ++n) {
+        const int key_start = (n - left_chunks) * C;
+        for (int q = 0; q < C; ++q) {
+            const int q_abs = n * C + q;
+            float *   row   = out_buf + (static_cast<size_t>(n) * C + q) * W;
+            if (q_abs >= T) {
+                // Kept finite only so softmax does not receive an all-masked
+                // row. The graph drops these padded query outputs.
+                row[0] = 0.0f;
+                continue;
+            }
+            for (int k = 0; k < W; ++k) {
+                const int k_abs = key_start + k;
+                if (k_abs >= 0 && k_abs < T) {
+                    row[k] = 0.0f;
+                }
+            }
+        }
+    }
+}
+
 namespace {
 
 // Build, run, and post-process a single streaming encoder chunk.
@@ -1791,21 +1841,6 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     }
     if (pc->kv_type == TRANSCRIBE_KV_TYPE_F16) {
         resolved_kv = GGML_TYPE_F16;
-    }
-
-    // One compute_ctx per chunk (matches the offline run() lifecycle).
-    if (pc->compute_ctx != nullptr) {
-        ggml_free(pc->compute_ctx);
-        pc->compute_ctx = nullptr;
-    }
-    ggml_init_params ip{};
-    ip.mem_size     = 16 * 1024 * 1024;
-    ip.mem_buffer   = nullptr;
-    ip.no_alloc     = true;
-    pc->compute_ctx = ggml_init(ip);
-    if (pc->compute_ctx == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: ggml_init compute_ctx failed");
-        return TRANSCRIBE_ERR_OOM;
     }
 
     const int  step_num = pc->stream_caches.chunk_step;
@@ -1853,25 +1888,82 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     cache_io.pos_proj     = pc->stream_caches.pos_proj;
     cache_io.pos_proj_len = pc->stream_caches.pos_proj_len;
 
-    EncoderBuild eb = build_encoder_graph_streaming(pc->compute_ctx, pm->weights, hp, n_mel_chunk_frames,
-                                                    drop_extra_pre_encoded, cache_io, resolved_kv, pm->backend.c_str());
-    if (eb.out == nullptr || eb.graph == nullptr) {
-        return TRANSCRIBE_ERR_GGUF;
-    }
+    auto &     graph_cache = pc->stream_graph;
+    const bool reuse_graph = !dump_on && graph_cache.ready && pc->compute_ctx != nullptr && pc->sched != nullptr &&
+                             graph_cache.n_mel_chunk_frames == n_mel_chunk_frames &&
+                             graph_cache.drop_extra_pre_encoded == drop_extra_pre_encoded &&
+                             graph_cache.pos_proj_len == cache_io.pos_proj_len &&
+                             graph_cache.kv_type == static_cast<int>(resolved_kv);
 
-    if (pc->sched == nullptr) {
-        pc->sched = ggml_backend_sched_new(pm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(pm->plan.scheduler_list.size()),
-                                           /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+    EncoderBuild eb;
+    if (reuse_graph) {
+        eb.graph             = graph_cache.graph;
+        eb.mel_in            = graph_cache.mel_in;
+        eb.pos_emb_in        = graph_cache.pos_emb_in;
+        eb.chunked_mask_in   = graph_cache.chunked_mask_in;
+        eb.prompt_one_hot_in = graph_cache.prompt_one_hot_in;
+        eb.out               = graph_cache.out;
+        cache_io.channel_out = graph_cache.channel_out;
+        cache_io.time_out    = graph_cache.time_out;
+        cache_io.k_out       = graph_cache.k_out;
+        cache_io.v_out       = graph_cache.v_out;
+    } else {
+        graph_cache.reset();
+        if (pc->compute_ctx != nullptr) {
+            ggml_free(pc->compute_ctx);
+            pc->compute_ctx = nullptr;
+        }
+        ggml_init_params ip{};
+        ip.mem_size     = 16 * 1024 * 1024;
+        ip.mem_buffer   = nullptr;
+        ip.no_alloc     = true;
+        pc->compute_ctx = ggml_init(ip);
+        if (pc->compute_ctx == nullptr) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: ggml_init compute_ctx failed");
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        eb = build_encoder_graph_streaming(pc->compute_ctx, pm->weights, hp, n_mel_chunk_frames, drop_extra_pre_encoded,
+                                           cache_io, resolved_kv, pm->backend.c_str());
+        if (eb.out == nullptr || eb.graph == nullptr) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
         if (pc->sched == nullptr) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: sched_new failed");
+            pc->sched = ggml_backend_sched_new(pm->plan.scheduler_list.data(), nullptr,
+                                               static_cast<int>(pm->plan.scheduler_list.size()),
+                                               /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+            if (pc->sched == nullptr) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: sched_new failed");
+                return TRANSCRIBE_ERR_BACKEND;
+            }
+        }
+        ggml_backend_sched_reset(pc->sched);
+        if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: alloc_graph failed");
             return TRANSCRIBE_ERR_BACKEND;
         }
-    }
-    ggml_backend_sched_reset(pc->sched);
-    if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: alloc_graph failed");
-        return TRANSCRIBE_ERR_BACKEND;
+
+        // A geometry whose rel-pos projections are already memoized is
+        // stable across chunks. Keep its allocated graph and replay it on
+        // the next chunk after refreshing the mutable inputs and caches.
+        if (!dump_on && eb.pos_emb_in == nullptr) {
+            graph_cache.graph                  = eb.graph;
+            graph_cache.mel_in                 = eb.mel_in;
+            graph_cache.pos_emb_in             = eb.pos_emb_in;
+            graph_cache.chunked_mask_in        = eb.chunked_mask_in;
+            graph_cache.prompt_one_hot_in      = eb.prompt_one_hot_in;
+            graph_cache.out                    = eb.out;
+            graph_cache.channel_out            = cache_io.channel_out;
+            graph_cache.time_out               = cache_io.time_out;
+            graph_cache.k_out                  = cache_io.k_out;
+            graph_cache.v_out                  = cache_io.v_out;
+            graph_cache.n_mel_chunk_frames     = n_mel_chunk_frames;
+            graph_cache.drop_extra_pre_encoded = drop_extra_pre_encoded;
+            graph_cache.pos_proj_len           = cache_io.pos_proj_len;
+            graph_cache.kv_type                = static_cast<int>(resolved_kv);
+            graph_cache.ready                  = true;
+        }
     }
 
     // Upload mel chunk. Row-major [n_mels, n_mel_chunk_frames] is
@@ -1927,6 +2019,7 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
 
     if (const ggml_status gs = ggml_backend_sched_graph_compute(pc->sched, eb.graph); gs != GGML_STATUS_SUCCESS) {
+        graph_cache.reset();
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: graph_compute failed (%d)", static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -2186,6 +2279,7 @@ transcribe_status emit_buffered_chunk(ParakeetSession * pc,
 
     // ----- Reset per-chunk compute state -----
     if (pc->compute_ctx != nullptr) {
+        pc->stream_graph.reset();
         ggml_free(pc->compute_ctx);
         pc->compute_ctx = nullptr;
     }

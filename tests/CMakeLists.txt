@@ -170,6 +170,24 @@ transcribe_apply_warnings(transcribe_parakeet_chunked_limited_with_rc_mask_unit)
 add_test(NAME transcribe_parakeet_chunked_limited_with_rc_mask_unit
     COMMAND transcribe_parakeet_chunked_limited_with_rc_mask_unit)
 
+# Compact offline ChunkedLimited attention mask. Proves that the bounded
+# [window,chunk,n_chunks] representation reconstructs the original dense
+# [T,T] chunk topology and relative-position offsets for ragged geometries.
+
+add_executable(transcribe_parakeet_chunked_limited_window_mask_unit
+    parakeet_chunked_limited_window_mask_unit.cpp)
+
+target_link_libraries(transcribe_parakeet_chunked_limited_window_mask_unit
+    PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_parakeet_chunked_limited_window_mask_unit
+    PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_parakeet_chunked_limited_window_mask_unit)
+
+add_test(NAME transcribe_parakeet_chunked_limited_window_mask_unit
+    COMMAND transcribe_parakeet_chunked_limited_window_mask_unit)
+
 # -----------------------------------------------------------------------------
 # Variable-length batch mask and causal subsampling unit test
 # -----------------------------------------------------------------------------
