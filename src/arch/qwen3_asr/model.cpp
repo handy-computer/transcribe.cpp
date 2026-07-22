@@ -109,15 +109,11 @@ int qwen3_context_ceiling(int32_t n_ctx_knob, const QwenAsrHParams & hp) {
         ceiling = n_ctx_knob;
     }
     if (ceiling & (ceiling - 1)) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr: ceiling %d not a power of 2.",
-                            ceiling);
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: ceiling %d not a power of 2.", ceiling);
         return 0;
     }
     if (ceiling < k_min_n_ctx) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr: ceiling %d < minimum %d.",
-                            ceiling, k_min_n_ctx);
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: ceiling %d < minimum %d.", ceiling, k_min_n_ctx);
         return 0;
     }
     return ceiling;
@@ -166,11 +162,12 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     // Basis for transcribe_session_get_limits: the same constants
     // qwen3_max_audio_ms uses, so the limit recomputes at a lowered n_ctx.
-    if (m->hparams.dec_max_position_embeddings > k_max_prompt_overhead && m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
+    if (m->hparams.dec_max_position_embeddings > k_max_prompt_overhead && m->hparams.fe_hop_length > 0 &&
+        m->hparams.fe_sample_rate > 0) {
         m->limits.has_context_cap    = true;
         m->limits.model_max_ctx      = m->hparams.dec_max_position_embeddings;
         m->limits.prompt_overhead    = k_max_prompt_overhead;
-        int32_t without_overhead = m->limits.model_max_ctx - m->limits.prompt_overhead;
+        int32_t without_overhead     = m->limits.model_max_ctx - m->limits.prompt_overhead;
         m->limits.gen_reserve        = static_cast<int32_t>(without_overhead * k_output_ratio_default);
         // audio_tokens ≈ mel_frames / 8 ; mel_frames = ms*sr/(hop*1000)
         m->limits.ms_per_audio_token = 8.0 * m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
@@ -629,7 +626,7 @@ transcribe_status run(transcribe_session *          session,
     // ggml context metadata arena for encoder + prefill graphs,
     // followed by the smaller step graph.
     constexpr size_t ggml_prefill_mem_bytes = 16 * 1024 * 1024;
-    constexpr size_t ggml_step_mem_bytes = 8 * 1024 * 1024;
+    constexpr size_t ggml_step_mem_bytes    = 8 * 1024 * 1024;
 
     {
         ggml_init_params ip{};
@@ -737,9 +734,9 @@ transcribe_status run(transcribe_session *          session,
     std::vector<int32_t> prompt_ids;
     std::vector<int64_t> audio_positions;
     build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc, lang_prefix_ptr, prompt_ids, audio_positions);
-    const int T_prompt   = static_cast<int>(prompt_ids.size());
-    const int prefix_len = audio_positions.empty() ? 0 : static_cast<int>(audio_positions.front());
-    const int suffix_len = T_prompt - prefix_len - T_enc;
+    const int T_prompt        = static_cast<int>(prompt_ids.size());
+    const int prefix_len      = audio_positions.empty() ? 0 : static_cast<int>(audio_positions.front());
+    const int suffix_len      = T_prompt - prefix_len - T_enc;
     const int prompt_overhead = prefix_len + suffix_len;
 
     if (prompt_overhead > k_max_prompt_overhead) {
@@ -756,8 +753,7 @@ transcribe_status run(transcribe_session *          session,
     // context window. Reject an over-length clip here, before prefill/decode.
     const int ceiling = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
     if (ceiling <= 0) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr run: context ceiling invalid.");
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: context ceiling invalid.");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -769,8 +765,7 @@ transcribe_status run(transcribe_session *          session,
                             "Shorten the audio (see transcribe_capabilities.max_audio_ms), "
                             "split it into segments, or raise the context limit (up to "
                             "model limit %d).",
-                            T_enc, prompt_overhead, ceiling, T_prompt + gen_reserve,
-                            cm->limits.model_max_ctx);
+                            T_enc, prompt_overhead, ceiling, T_prompt + gen_reserve, cm->limits.model_max_ctx);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
@@ -784,9 +779,8 @@ transcribe_status run(transcribe_session *          session,
     }
     if (max_n_kv > ceiling) {
         // Getting here means there is a logic error in our invariant checks above.
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr run: max_n_kv %d exceeded ceiling %d.",
-                            max_n_kv, ceiling);
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: max_n_kv %d exceeded ceiling %d.", max_n_kv,
+                            ceiling);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (cc->kv_cache.ctx != nullptr && cc->kv_cache.n_ctx < max_n_kv) {
@@ -925,9 +919,8 @@ transcribe_status run(transcribe_session *          session,
     if (max_n_kv > cc->kv_cache.n_ctx) {
         // This should never happen, because we resized the cache previously
         // to max_n_kv already.
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr run: max_n_kv %d exceeded kv_cache.n_ctx %d.",
-                            max_n_kv, cc->kv_cache.n_ctx);        
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: max_n_kv %d exceeded kv_cache.n_ctx %d.",
+                            max_n_kv, cc->kv_cache.n_ctx);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     const int64_t t_step_build_start = ggml_time_us();
@@ -1587,17 +1580,16 @@ transcribe_status run_batch(transcribe_session *          session,
 
     // Prompt length bound → max_n_kv and batched-cache n_ctx. Build and keep
     // each utterance's prompt token ids for the batched prefill.
-    int                               max_T_prompt = 0;
-    int                               prefix_len   = 0;
+    int       max_T_prompt = 0;
+    int       prefix_len   = 0;
     // Per-utterance terminal status for rejected rows. Defaults to INVALID_ARG;
     // over-length rows below are upgraded to INPUT_TOO_LONG.
-    const int                         ceiling      = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
+    const int ceiling      = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
     if (ceiling <= 0) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr run_batch: context ceiling invalid.");
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run_batch: context ceiling invalid.");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    const int gen_reserve = expected_gen_reserve(ceiling);
+    const int                         gen_reserve = expected_gen_reserve(ceiling);
     std::vector<transcribe_status>    fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<int32_t>> prompt_ids(n);
     for (int b = 0; b < n; ++b) {
@@ -1636,9 +1628,8 @@ transcribe_status run_batch(transcribe_session *          session,
     }
     if (max_n_kv > ceiling) {
         // Getting here means there is a logic error in our invariant checks above.
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr run: max_n_kv %d exceeded ceiling %d.",
-                            max_n_kv, ceiling);
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr run: max_n_kv %d exceeded ceiling %d.", max_n_kv,
+                            ceiling);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
