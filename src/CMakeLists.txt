@@ -200,8 +200,9 @@ if(APPLE)
 elseif(TRANSCRIBE_USE_SYSTEM_BLAS)
     # BLA_VENDOR can be set by the user to prefer a specific BLAS
     # (e.g. -DBLA_VENDOR=OpenBLAS). find_package probes the system.
+    find_package(CBLAS QUIET)
     find_package(BLAS QUIET)
-    if(BLAS_FOUND)
+    if(CBLAS_FOUND OR BLAS_FOUND)
         # find_package(BLAS) may find a Fortran-only BLAS (e.g. libblas3
         # on Debian/Ubuntu) that lacks the cblas C wrappers. Verify that
         # cblas.h exists before enabling; otherwise the build compiles
@@ -209,7 +210,12 @@ elseif(TRANSCRIBE_USE_SYSTEM_BLAS)
         include(CheckIncludeFile)
         check_include_file(cblas.h HAVE_CBLAS_H)
         if(HAVE_CBLAS_H)
-            target_link_libraries(transcribe PRIVATE ${BLAS_LIBRARIES})
+            if(CBLAS_FOUND)
+                target_link_libraries(transcribe PRIVATE ${CBLAS_LIBRARIES})
+            elseif(BLAS_FOUND)
+                target_link_libraries(transcribe PRIVATE ${BLAS_LIBRARIES})
+            endif()
+
             target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_BLAS=1)
             message(STATUS "transcribe: BLAS found — decoder will use cblas_sgemv")
         else()
