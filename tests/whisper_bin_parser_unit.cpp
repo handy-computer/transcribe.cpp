@@ -36,13 +36,17 @@
 #include "transcribe-bin-loader.h"
 
 #include <sys/stat.h>
-#include <unistd.h>
+#ifndef _WIN32
+#    include <unistd.h>
+#endif
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -186,29 +190,45 @@ bool write_synthetic_bin(const std::string & path,
     return static_cast<bool>(f);
 }
 
+// Portable stand-in for mkstemps(): create a unique empty file named
+// transcribe_bin_test_<rand>.bin in the system temp dir. Returns the
+// path, or an empty string on failure. Collision-then-overwrite is
+// acceptable for these synthetic-fixture tests.
+std::string make_temp_bin_path() {
+    std::error_code             ec;
+    const std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+    if (ec) {
+        return {};
+    }
+    std::random_device          rd;
+    const std::filesystem::path p = dir / ("transcribe_bin_test_" + std::to_string(rd()) + ".bin");
+    std::ofstream               f(p, std::ios::binary);
+    if (!f) {
+        return {};
+    }
+    return p.string();
+}
+
 void test_bad_n_fft() {
-    char      tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
-    const int fd     = ::mkstemps(tmpl, 4);
-    if (fd < 0) {
+    const std::string path = make_temp_bin_path();
+    if (path.empty()) {
         std::fprintf(stderr, "SKIP: could not create tempfile for synthetic bin\n");
         ++g_skipped;
         return;
     }
-    ::close(fd);
-    const std::string path = tmpl;
 
     // Whisper-shaped hparams but non-canonical n_fft (200 instead of
     // 201). Parser must reject before we even get to the vocab phase.
     if (!write_synthetic_bin(path, 51865, 4, 4, 80, 80, 200)) {
         std::fprintf(stderr, "SKIP: failed to write synthetic .bin\n");
         ++g_skipped;
-        ::unlink(path.c_str());
+        std::remove(path.c_str());
         return;
     }
     transcribe::bin_loader::WhisperBinModel m;
     const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path.c_str(), m);
     CHECK(rc == TRANSCRIBE_ERR_GGUF);
-    ::unlink(path.c_str());
+    std::remove(path.c_str());
 }
 
 void test_distil_layer_count_accepted() {
@@ -216,18 +236,15 @@ void test_distil_layer_count_accepted() {
     // whisper-shaped hparams should pass the hparams gate. We don't
     // care that the parser later fails at "no tensors" — the hparams
     // check should not be the gating step.
-    char      tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
-    const int fd     = ::mkstemps(tmpl, 4);
-    if (fd < 0) {
+    const std::string path = make_temp_bin_path();
+    if (path.empty()) {
         ++g_skipped;
         return;
     }
-    ::close(fd);
-    const std::string path = tmpl;
 
     if (!write_synthetic_bin(path, 51865, 24, 2, 80, 80, 201)) {
         ++g_skipped;
-        ::unlink(path.c_str());
+        std::remove(path.c_str());
         return;
     }
     transcribe::bin_loader::WhisperBinModel m;
@@ -237,7 +254,7 @@ void test_distil_layer_count_accepted() {
     // "no tensors" / truncated diagnostic), NOT UNSUPPORTED_ARCH —
     // that's the proof that the geometry gate accepts distil layers.
     CHECK(rc == TRANSCRIBE_ERR_GGUF);
-    ::unlink(path.c_str());
+    std::remove(path.c_str());
 }
 
 }  // namespace

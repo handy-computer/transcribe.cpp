@@ -30,7 +30,11 @@
 #include "ggml.h"
 #include "transcribe-debug.h"
 
-#include <unistd.h>  // ::getpid()
+#ifdef _WIN32
+#    include <process.h>  // ::_getpid()
+#else
+#    include <unistd.h>   // ::getpid()
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -70,7 +74,11 @@ int g_failures = 0;
 // scoped to this test process. Caller deletes it on success.
 fs::path make_unique_dump_dir() {
     fs::path base = fs::temp_directory_path() / "transcribe-debug-dump-test";
+#ifdef _WIN32
+    base /= std::to_string(::_getpid());
+#else
     base /= std::to_string(::getpid());
+#endif
     fs::remove_all(base);  // ensure clean state in case of leftover
     fs::create_directories(base);
     return base;
@@ -106,6 +114,16 @@ bool contains(const std::string & haystack, const std::string & needle) {
     return haystack.find(needle) != std::string::npos;
 }
 
+// Portable setenv(name, value, 1). fs::path::c_str() is wchar_t* on
+// Windows, so callers pass a narrow std::string instead.
+bool set_env(const char * name, const std::string & value) {
+#ifdef _WIN32
+    return ::_putenv_s(name, value.c_str()) == 0;
+#else
+    return ::setenv(name, value.c_str(), 1) == 0;
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -114,8 +132,9 @@ int main() {
     // Create a unique dump dir, point TRANSCRIBE_DUMP_DIR at it, and
     // initialize the dumper. setenv before init is the contract:
     // init() reads the env var once and caches it.
-    const fs::path dump_dir = make_unique_dump_dir();
-    if (::setenv("TRANSCRIBE_DUMP_DIR", dump_dir.c_str(), 1) != 0) {
+    const fs::path    dump_dir     = make_unique_dump_dir();
+    const std::string dump_dir_str = dump_dir.string();
+    if (!set_env("TRANSCRIBE_DUMP_DIR", dump_dir_str)) {
         std::fprintf(stderr, "FAIL: setenv failed\n");
         return EXIT_FAILURE;
     }
@@ -127,9 +146,10 @@ int main() {
         return EXIT_FAILURE;
     }
     CHECK(transcribe::debug::enabled());
-    if (transcribe::debug::dump_dir() == nullptr || std::strcmp(transcribe::debug::dump_dir(), dump_dir.c_str()) != 0) {
+    if (transcribe::debug::dump_dir() == nullptr ||
+        std::strcmp(transcribe::debug::dump_dir(), dump_dir_str.c_str()) != 0) {
         std::fprintf(stderr, "FAIL: dump_dir() = \"%s\", expected \"%s\"\n",
-                     transcribe::debug::dump_dir() ? transcribe::debug::dump_dir() : "(null)", dump_dir.c_str());
+                     transcribe::debug::dump_dir() ? transcribe::debug::dump_dir() : "(null)", dump_dir_str.c_str());
         ++g_failures;
     }
 
