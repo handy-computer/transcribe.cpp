@@ -1550,7 +1550,7 @@ transcribe_status run_batch(transcribe_session *          session,
 
     // Prompt length bound → max_n_kv and batched-cache n_ctx. Build and keep
     // each utterance's prompt token ids for the batched prefill.
-    const int                         max_new      = 256;
+    const int                         max_new      = k_max_new;
     int                               max_T_prompt = 0;
     int                               prefix_len   = 0;
     // Per-utterance terminal status for rejected rows. Defaults to INVALID_ARG;
