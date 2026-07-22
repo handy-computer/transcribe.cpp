@@ -247,6 +247,30 @@ VARIANT_PROFILES: dict[str, dict] = {
         "license_name": "Creative Commons Attribution 4.0",
         "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
+    # 115M Persian (Farsi) hybrid RNNT+CTC FastConformer, from NVIDIA's
+    # nvidia/stt_fa_fastconformer_hybrid_large (Common Voice fa 15.0
+    # fine-tune of the English FastConformer encoder). Not an official
+    # transcribe.cpp-tracked Parakeet release; added locally to convert
+    # this checkpoint. We walk the CTC path (head_kind="ctc") rather
+    # than the RNNT decoder/joint, matching the simpler, well-tested
+    # parakeet-ctc-* code path and avoiding the autoregressive
+    # predictor/joint resolution for a model this codebase doesn't
+    # otherwise know about.
+    "stt-fa-fastconformer-hybrid-large": {
+        "variant": "fa-fastconformer-hybrid-large",
+        "display_name": "FastConformer Hybrid Large (Persian)",
+        "version": "v1",
+        "size_label": "115M",
+        "basename": "parakeet-ctc",
+        "head_kind": "ctc",
+        "ctc_from_aux": True,
+        "expected_vocab_size": 1024,
+        "languages": ["fa"],
+        "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
+    },
     # 110M English hybrid TDT+CTC. Shipped as TDT-only at runtime
     # per the family-level Open-decisions #1 ("the pure ctc-* variants
     # cover the CTC path; drop the hybrid's auxiliary CTC head"). The
@@ -1222,13 +1246,25 @@ EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED = ("ctc_decoder.",)
 
 
 def is_expected_unused(key: str, head_kind: str, drop_aux_ctc: bool,
-                       has_prompt: bool) -> bool:
+                       has_prompt: bool, ctc_from_aux: bool = False) -> bool:
     if key.startswith(EXPECTED_UNUSED_PREFIXES_BASE):
         return True
     if key.endswith(EXPECTED_UNUSED_SUFFIXES):
         return True
     if drop_aux_ctc and key.startswith(EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED):
         return True
+    # Reverse case of the above: a hybrid checkpoint where we walk the
+    # CTC path (head_kind="ctc") and the *primary* decoder.{prediction,
+    # joint} tensors are the RNNT head we're deliberately not using.
+    # `ctc_decoder.*` itself is also expected-unused here: convert()
+    # aliased it onto `decoder.*` earlier (see the ctc_from_aux block
+    # above `sd_keys = set(sd.keys())`), so the original prefixed keys
+    # are consumed-by-copy rather than consumed-by-name.
+    if ctc_from_aux and head_kind == "ctc":
+        if key.startswith("decoder.prediction.") or key.startswith("joint."):
+            return True
+        if key.startswith("ctc_decoder."):
+            return True
     # prompt_kernel.* belongs to the multilingual prompt MLP. Variants
     # with has_prompt=True consume these via PROMPT_MLP_TABLE; variants
     # without the prompt path (English-only checkpoints) won't carry
@@ -1389,6 +1425,32 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
         )
 
     sd = model.state_dict()
+
+    # Hybrid checkpoints where we're walking the CTC path but the
+    # checkpoint's *primary* decoder is RNNT: the real CTC head lives
+    # under the auxiliary `ctc_decoder.` prefix (NeMo's
+    # EncDecHybridRNNTCTCModel convention), not under top-level
+    # `decoder.` (which here is the RNNT prediction network we are
+    # deliberately not using). Alias `ctc_decoder.*` -> `decoder.*` so
+    # CTC_HEAD_TABLE's fixed `decoder.decoder_layers.0.*` lookups
+    # resolve to the right tensors. Opt-in via the profile so this
+    # never silently touches the tdt_ctc-* variants (which drop
+    # ctc_decoder.* the other way around, see drop_aux_ctc above).
+    if profile.get("ctc_from_aux") and head_kind == "ctc":
+        aux_prefix = "ctc_decoder."
+        aliased = 0
+        for k in list(sd.keys()):
+            if k.startswith(aux_prefix):
+                sd["decoder." + k[len(aux_prefix):]] = sd[k]
+                aliased += 1
+        if aliased == 0:
+            raise KeyError(
+                f"ctc_from_aux=True but no {aux_prefix!r}-prefixed tensors "
+                f"found in state_dict"
+            )
+        print(f"Aliased {aliased} tensors from {aux_prefix!r} -> 'decoder.' "
+              f"for the CTC head")
+
     sd_keys = set(sd.keys())
 
     # Resolve enc_use_bias from the state_dict. The presence of
@@ -1798,7 +1860,8 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
 
     unused = sorted(
         k for k in (sd_keys - consumed)
-        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt)
+        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt,
+                                  bool(profile.get("ctc_from_aux", False)))
     )
     if unused:
         print(
