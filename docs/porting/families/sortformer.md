@@ -1,15 +1,25 @@
 # Sortformer
 
-Status: Stage 4 complete (offline + streaming)
+Status: port complete (Stages 1-8; ship gate passed 2026-07-22)
 
 Intake signed off 2026-07-19: capability scope approved as drafted;
 acceptance set = AMI (DER + JER vs NeMo reference, plus prob-tensor parity).
-Stages 1-4 done. Stage 4 offline checkpoint (tensor parity, 5/5) and streaming
-checkpoint (AOSC/FIFO + `_compress_spkcache`, `diar.probs` parity, AMI DER)
-both green. **C++ AMI DER 14.59% / JER 19.51%** (16 mtgs, very_high_latency,
-forced-alignment RTTMs + dihard3 PP) reproduces the measured reference
-14.83% / 19.89% within 0.24 pt (per-meeting median |Δ| ~0.02 pt). Next: Stage 5
-quants.
+Stage 4 tensor parity 6/6; compression internals verified bit-exact vs a
+neutral arbiter (residual #1). Stage 7 ref-dtype gate PASS: **C++ AMI DER
+14.59% / JER 19.51%** (16 mtgs, very_high_latency, forced-alignment RTTMs +
+dihard3 PP) vs measured reference 14.83% / 19.89% (gate: reference + 0.01).
+Shipped matrix: **F32 + F16 + Q8_0** (k tiers withdrawn; see "Quant policy
+(Stage 7)"). Private HF repo:
+`handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf`.
+
+Batch posture: **ACCEPTED GAP — no `run_batch()`** (user-approved Stage 4
+deferral; single-session `transcribe_run` is the shipped path; revisit with
+multitalker interop). Streaming posture: **natively streaming — PASS**; the
+chunk/lookahead contract is the preset menu in "Public API (run extension)"
+(default = GGUF-shipped checkpoint cfg; very_high_latency ~30.4 s lookahead
+... low_latency ~1.04 s), exposed via `transcribe_sortformer_stream_ext`.
+Push-audio `transcribe_stream_*` entry point is future work (STREAM-slot
+kind reserved by design).
 
 Streaming Sortformer is a **frame-level end-to-end neural speaker diarizer**
 (architecture pattern `encoder-diarizer`, new to this repo). It is NOT a
@@ -84,6 +94,21 @@ rejected pre-clear (`run_validate`), preserving the previous result.
 Unit test: `tests/sortformer_stream_ext_unit.cpp`
 (`TRANSCRIBE_SORTFORMER_GGUF`-gated).
 
+## Quant policy (Stage 7)
+
+Shipped matrix: **F32 (reference) + F16 + Q8_0** only
+(`FAMILY_PRESETS["sortformer"]` in `scripts/lib/quant_policy.py`). The
+k-quant tiers are withdrawn: this family's output depends on discrete
+AOSC speaker-cache compression decisions, and k-tier weight error can
+deterministically flip a near-tie pick and permute speaker labels
+mid-stream. Observed at Q5_K_M on AMI TS3003b under the default CPU
+operating point (9.47% -> 32.13% DER; deterministic across thread
+counts, escaped by Metal float order and by high_latency). The flip is
+chaotic in quant error (coarser Q4_K_M passed the same sample), so a
+clean 16-meeting result cannot certify a k tier; the tiers also save
+little disk (139 -> 92 MB) and are slower than Q8_0 on CPU. Full
+evidence: `reports/diar/diar_streaming_sortformer_4spk-v2.1.ami-ihm-test-fa.summary.md`.
+
 A future push-audio entry point (`transcribe_stream_begin/feed`, live
 diarization) registers a separate STREAM-slot kind taking the same preset
 enum; the multitalker interop path (raw T x 4 supervision into parakeet's
@@ -156,10 +181,21 @@ uv run scripts/diar/score_der.py \
 # -> REF DER 14.83% / JER 19.89% ; C++ DER 14.59% / JER 19.51% (within 0.24 pt).
 ```
 
-Benchmarks:
+Benchmarks (publication scope; on-doc artifacts
+`reports/perf/apple-m4/diar-streaming-sortformer-4spk-v2-1-publication_*.json`):
 
 ```bash
-TODO
+uv run scripts/bench/run.py \
+  --models diar_streaming_sortformer_4spk-v2.1 \
+  --quants f16,q8_0 \
+  --samples jfk,dots \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name diar_streaming_sortformer_4spk-v2.1-publication
+# apple-m4: Metal ~170x (jfk) / ~110x (dots) rtf; CPU Q8_0 100x/51x, F16 80x/44x.
+# Note: low_latency preset runs ~1.2x realtime on CPU (per-chunk graph
+# rebuild dominates at 0.5 s chunks); the shipped default and
+# very_high_latency are unaffected.
 ```
 
 ## Capability Validation
@@ -178,15 +214,16 @@ TODO
 | Streaming diarization (<=4 spk) | online, AOSC/FIFO cache | port streaming diarize vs NeMo reference at a fixed preset (e.g. 1.04s latency) | prob-tensor parity vs reference; DER + JER within tolerance on AMI | MUST PASS | PASS — `diar.probs` parity (single-chunk 2.96e-4; multi-chunk `small` preset ~3.9e-4 uniform); AMI DER 14.59% / JER 19.51% vs ref 14.83% / 19.89% |
 | Offline diarization | single large chunk | port diarize vs NeMo reference | prob-tensor parity vs reference | MUST PASS | PASS — `diar.preds_offline` 2.96e-4 (validate.py all 6/6) |
 | Speaker-activity tensor | `include_tensor_outputs` | T x 4 sigmoid probs, port vs reference on the same audio | max-abs-diff within tolerance, columns arrival-order aligned | MUST PASS | PASS — `diar.probs` [150x4] within tolerance |
-| Multitalker interop | feed diar supervision | Sortformer T x 4 drives parakeet multitalker layer-0 speaker kernel | multitalker emits speaker-attributed transcript | OUT OF SCOPE — owned by the multitalker port; unblocked once both land | TODO |
-| Transcription (text) | n/a | n/a | model produces no text output | OUT OF SCOPE — not a transcription model | TODO |
-| Translation | n/a | n/a | n/a | OUT OF SCOPE — not a transcription model | TODO |
-| Timestamps (transcription) | n/a | n/a | diarization segment times are intrinsic, not a transcript-timestamp capability | OUT OF SCOPE — not a transcription model | TODO |
-| >4 speakers | n/a | n/a | hard cap at 4 speakers | OUT OF SCOPE — architectural 4-speaker cap | TODO |
+| Multitalker interop | feed diar supervision | Sortformer T x 4 drives parakeet multitalker layer-0 speaker kernel | multitalker emits speaker-attributed transcript | OUT OF SCOPE — owned by the multitalker port; unblocked once both land | N/A (deferred to multitalker port) |
+| Transcription (text) | n/a | n/a | model produces no text output | OUT OF SCOPE — not a transcription model | N/A |
+| Translation | n/a | n/a | n/a | OUT OF SCOPE — not a transcription model | N/A |
+| Timestamps (transcription) | n/a | n/a | diarization segment times are intrinsic, not a transcript-timestamp capability | OUT OF SCOPE — not a transcription model | N/A |
+| >4 speakers | n/a | n/a | hard cap at 4 speakers | OUT OF SCOPE — architectural 4-speaker cap | N/A |
+| Batch (`run_batch`) | n/a | n/a | parallel multi-file fast path | ACCEPTED GAP — user-approved Stage 4 deferral; single-session runs only | N/A (deferred) |
 
 ## Reference baselines (Stage 2 Oracle)
 
-- **Tensor parity oracle** (`build/validate/sortformer/diar_streaming_sortformer_4spk-v2.1/sortformer-2spk-mix/`): mel + fastconformer + encoder_proj + transformer + offline preds + streaming `diar.probs` [150×4]. Offline preds == streaming probs on this short clip (single chunk). Tolerances in `tests/tolerances/sortformer.json` (provisional).
+- **Tensor parity oracle** (`build/validate/sortformer/diar_streaming_sortformer_4spk-v2.1/sortformer-2spk-mix/`): mel + fastconformer + encoder_proj + transformer + offline preds + streaming `diar.probs` [150×4]. Offline preds == streaming probs on this short clip (single chunk). Tolerances in `tests/tolerances/sortformer.json` (finalized Stage 4; no `_provisional` flags).
 - **Measured reference DER/JER** on AMI ihm test (16 meetings, 9.06 h), preset `very_high_latency`, collar 0.0s / overlap included (NVIDIA AMI protocol). The reference pipeline REPRODUCES the published number (15.90 @ very_high_latency AMI-IHM). Full 2x2 decomposition of the two protocol levers:
 
   | predictions | vs manual RTTMs (diarizers-community/ami) | vs forced-alignment RTTMs (nttcslab-sp) |

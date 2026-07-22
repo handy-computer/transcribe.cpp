@@ -1,0 +1,86 @@
+# Spec for the HF README of handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+#
+# Diarizer family: metric is DER (not WER); pipeline_tag follows the
+# upstream NVIDIA card's diarization tagging rather than ASR.
+
+hf_repo: nvidia/diar_streaming_sortformer_4spk-v2.1
+target_repo: handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/diar_streaming_sortformer_4spk-v2.1.md
+
+upstream_commit: fafaab5
+pin_date: 2026-07-19
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: NeMo
+  commit: d42c3bb
+  date: 2026-07-22
+
+license: other
+license_display: NVIDIA Open Model License
+pipeline_tag: voice-activity-detection
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - speaker-diarization
+  - diarization
+  - streaming
+  - sortformer
+  - fastconformer
+
+metric: DER
+
+summary: |
+  Streaming speaker diarization: who spoke when, for up to 4 speakers.
+  A FastConformer encoder with an 18-layer Transformer head emitting
+  per-frame speaker-activity probabilities, running online with an
+  Arrival-Order Speaker Cache (AOSC) + FIFO. NOT a transcription model:
+  a run produces speaker segments (start, end, speaker id in arrival
+  order), no text. Takes 16 kHz mono WAV.
+
+default_quant_index: 2  # Q8_0
+
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: true
+  translate: false
+  lang_detect: false
+  timestamps: none  # segment times are diarization output, not transcript timestamps
+
+# Speedup-over-realtime (×RT) per rig/backend, hand-authored from the bench;
+# published raw as rtf_<machine> in the metadata block.
+perf:
+  m4:
+    cpu: 51
+    metal: 110
+
+wer:
+  source: AMI IHM test
+  metadata_key: ami_ihm_test
+  notes: |
+    DER measured on the full AMI IHM test set (16 meetings, ~9 h) against
+    forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
+    overlap scored, at the very_high_latency operating point. Measured NeMo
+    reference under the identical protocol: 14.83% DER / 19.89% JER; the
+    C++ F32 port scores 14.59% / 19.51%. Published DER numbers vary with
+    RTTM source and post-processing; compare like with like. Only
+    near-reference tiers ship for this family (k-quant tiers withdrawn;
+    see the transcribe.cpp family doc, "Quant policy (Stage 7)").
+
+quants:
+  - name: F32
+    filename: diar_streaming_sortformer_4spk-v2.1-F32.gguf
+    size: 471 MB
+    wer: 14.59%
+  - name: F16
+    filename: diar_streaming_sortformer_4spk-v2.1-F16.gguf
+    size: 237 MB
+    wer: 14.23%
+  - name: Q8_0
+    filename: diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf
+    size: 139 MB
+    wer: 14.73%
