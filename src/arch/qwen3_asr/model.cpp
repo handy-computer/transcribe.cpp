@@ -778,18 +778,18 @@ transcribe_status run(transcribe_session *          session,
     // hold prompt + generation budget, rounded up to a power of two (the step
     // graph's flash-attn path wants pow2 attention width). A pre-allocated
     // smaller cache is freed and re-allocated.
-    int want_n_ctx = k_min_n_ctx;
-    while (want_n_ctx < T_prompt + gen_reserve) {
-        want_n_ctx *= 2;
+    int max_n_kv = k_min_n_ctx;
+    while (max_n_kv < T_prompt + gen_reserve) {
+        max_n_kv *= 2;
     }
-    if (want_n_ctx > ceiling) {
+    if (max_n_kv > ceiling) {
         // Getting here means there is a logic error in our invariant checks above.
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "qwen3_asr run: want_n_ctx %d exceeded ceiling %d.",
-                            want_n_ctx, ceiling);
+                            "qwen3_asr run: max_n_kv %d exceeded ceiling %d.",
+                            max_n_kv, ceiling);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    if (cc->kv_cache.ctx != nullptr && cc->kv_cache.n_ctx < want_n_ctx) {
+    if (cc->kv_cache.ctx != nullptr && cc->kv_cache.n_ctx < max_n_kv) {
         cc->kv_cache.free();
     }
     if (cc->kv_cache.ctx == nullptr) {
@@ -797,13 +797,13 @@ transcribe_status run(transcribe_session *          session,
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
             kv_type = GGML_TYPE_F32;
         }
-        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, want_n_ctx, cm->hparams.dec_n_kv_heads,
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, max_n_kv, cm->hparams.dec_n_kv_heads,
                                             cm->hparams.dec_head_dim, cm->hparams.dec_n_layers, kv_type)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "qwen3_asr run: KV cache allocation failed (n_ctx=%d, "
                                 "%d kv-heads x %d head-dim x %d layers) — out of memory. "
                                 "Lower transcribe_session_params.n_ctx or shorten the audio.",
-                                want_n_ctx, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
+                                max_n_kv, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                                 cm->hparams.dec_n_layers);
             return TRANSCRIBE_ERR_OOM;
         }
@@ -922,10 +922,9 @@ transcribe_status run(transcribe_session *          session,
     // workload (T_prompt written + up to gen_reserve generated). Metal's flash-attn
     // kernels dispatch ~30% faster (M4 Max) when K/V ne[1] is a power of 2, so
     // round up; floor of 1024 (smaller just hits the slow-misaligned branch).
-    int max_n_kv = want_n_ctx;
     if (max_n_kv > cc->kv_cache.n_ctx) {
         // This should never happen, because we resized the cache previously
-        // to want_n_ctx already.
+        // to max_n_kv already.
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "qwen3_asr run: max_n_kv %d exceeded kv_cache.n_ctx %d.",
                             max_n_kv, cc->kv_cache.n_ctx);        
