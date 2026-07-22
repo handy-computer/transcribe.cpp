@@ -84,6 +84,7 @@ constexpr const char k_default_variant[] = "qwen3-asr";
 
 // Per-run generation budget (matches the reference dumper default).
 constexpr int k_max_new = 256;
+constexpr int k_prompt_overhead = 48;  // chat-affixes
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
 // optionally lowered — never raised — by the caller's session n_ctx knob.
@@ -106,7 +107,6 @@ int64_t qwen3_max_audio_ms(const QwenAsrHParams & hp) {
     if (hp.dec_max_position_embeddings <= 0 || hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0) {
         return 0;
     }
-    constexpr int k_prompt_overhead = 48;  // chat affixes; advisory
     const int     max_audio_tokens  = hp.dec_max_position_embeddings - k_prompt_overhead - k_max_new;
     if (max_audio_tokens <= 0) {
         return 0;
@@ -167,7 +167,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (m->hparams.dec_max_position_embeddings > 0 && m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
         m->limits.has_context_cap    = true;
         m->limits.model_max_ctx      = m->hparams.dec_max_position_embeddings;
-        m->limits.prompt_overhead    = 48;
+        m->limits.prompt_overhead    = k_prompt_overhead;
         m->limits.gen_reserve        = k_max_new;
         // audio_tokens ≈ mel_frames / 8 ; mel_frames = ms*sr/(hop*1000)
         m->limits.ms_per_audio_token = 8.0 * m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
