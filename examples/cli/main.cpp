@@ -1297,6 +1297,10 @@ int main(int argc, char ** argv) {
         {
             struct transcribe_session_limits lim;
             transcribe_session_limits_init(&lim);
+            struct transcribe_capabilities caps;
+            transcribe_capabilities_init(&caps);
+            const bool unbounded_audio =
+                transcribe_model_get_capabilities(model, &caps) == TRANSCRIBE_OK && caps.max_audio_ms == 0;
             if (transcribe_session_get_limits(ctx, &lim) == TRANSCRIBE_OK) {
                 if (lim.effective_max_audio_ms > 0) {
                     std::printf("  max audio:  %.1f s", (double) lim.effective_max_audio_ms / 1000.0);
@@ -1305,6 +1309,8 @@ int main(int argc, char ** argv) {
                                     (long long) (lim.max_kv_bytes >> 20));
                     }
                     std::printf("\n");
+                } else if (unbounded_audio) {
+                    std::printf("  max audio:  unbounded (long audio chunked internally)\n");
                 } else if (lim.effective_n_ctx > 0) {
                     // Capped family whose context is too small to fit any audio
                     // plus a prompt (e.g. an aggressively low --n-ctx).
@@ -1312,8 +1318,6 @@ int main(int argc, char ** argv) {
                         "  max audio:  ~0 s (context %d tok too small for "
                         "audio + prompt)\n",
                         lim.effective_n_ctx);
-                } else {
-                    std::printf("  max audio:  unbounded (long audio chunked internally)\n");
                 }
             }
         }

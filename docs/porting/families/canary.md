@@ -140,7 +140,7 @@ uv run scripts/bench/run.py \
   - canary-1b-v2 / 1b-flash / 180m-flash: `[<source_lang>, <target_lang>, <task>, <pnc>, <toggle_timestamps>]` (5 slots, `task='asr'|'ast'`).
 - Output head: LM head over the concatenated SP vocabulary. Decoding is beam search by default for the original canary-1b (beam=5, length_penalty=1.0) and greedy by default for the flash variants (beam=1).
 - Tokenizer: concatenated SentencePiece — one SP model per language concatenated into a single vocabulary. canary-1b-v2 is 16,384 pieces; flash/180m-flash/1b vocab sizes are not stated on model cards (Stage 2 fills from .nemo).
-- Audio length contract: native ≤40 s direct inference. <1 s is symmetrically zero-padded to 1 s. >40 s is handled by an external chunked inference script with 1 s overlap (canary-1b-v2 chunk len defaults to 40 s; canary-1b-flash 10 s; canary-180m-flash 10 s). **Long-form / streaming is out of scope for the v1 port.**
+- Audio length contract: native ≤40 s direct inference. <1 s is symmetrically zero-padded to 1 s. Upstream handles >40 s with overlapping chunks. transcribe.cpp implements that path for canary-1b-v2 with low-energy boundaries inside a 30-40 s window, 1 s overlap, and subword-LCS stitching; streaming remains unsupported. The other variants retain the encoder positional-table input cap.
 
 ## Capabilities (from intake)
 
@@ -177,7 +177,7 @@ See per-variant `reports/porting/canary/<variant>/intake.json::known_risks`. Fam
 4. **NeMo FilterbankFeatures applies preemph=0.97 BEFORE windowing/STFT.** Standard NeMo ASR frontend trap. Per-feature normalization (per mel band, across time) — not per-utterance global stats.
 5. **Cross-attention from transformer decoder to encoder output.** Padding mask on the cross-attention keys must propagate from encoder input lengths after the factor-8 subsampling.
 6. **Decoding default differs by variant.** canary-1b: beam=5, length_penalty=1.0. flash variants: beam=1 greedy. Mismatch with upstream's measured-config beam will move WER.
-7. **Audio length contract.** Native ≤40 s; <1 s is zero-padded to 1 s; long-form needs an external chunker. Streaming is not native — out of scope for v1.
+7. **Audio length contract.** Native ≤40 s; <1 s is zero-padded to 1 s. canary-1b-v2 long-form uses internal 30-40 s overlapping windows; the other variants still expose the encoder positional-table cap. Streaming is not native.
 8. **Timestamps are not native to the v2 AED.** canary-1b-v2 aligns the AED transcript with a side CTC Conformer stored in the `.nemo`. The aligner tokenizer IDs must remain identical to the AED tokenizer IDs. Flash timestamp-token decoding remains out of scope.
 9. **License divergence.** canary-1b is CC-BY-NC-4.0; the rest are CC-BY-4.0. Converter must surface license correctly in `general.license` so non-commercial restrictions on canary-1b ride along with the GGUF.
 10. **.nemo archive distribution.** No HF `config.json` / `tokenizer_config.json` / `generation_config.json` (except canary-1b-flash's encoder-only HF Transformers shim). Converter must mirror the parakeet pattern of unpacking the .nemo before extraction.

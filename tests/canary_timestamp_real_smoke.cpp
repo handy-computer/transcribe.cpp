@@ -176,7 +176,7 @@ void check_batch_truncation_reset(transcribe_model * model, const std::vector<fl
     }
 
     const std::vector<float> silence(16000, 0.0f);
-    const float *            rows[]   = { pcm.data(), silence.data() };
+    const float *            rows[]    = { pcm.data(), silence.data() };
     const int                lengths[] = { static_cast<int>(pcm.size()), static_cast<int>(silence.size()) };
 
     transcribe_run_params params;
@@ -208,12 +208,18 @@ void check_timestamp_model(const std::string & path, const std::vector<float> & 
     CHECK_EQ_INT(transcribe_model_get_capabilities(model, &caps), TRANSCRIBE_OK);
     CHECK_EQ_INT(caps.native_sample_rate, 16000);
     CHECK_EQ_INT(caps.max_timestamp_kind, TRANSCRIBE_TIMESTAMPS_WORD);
+    CHECK_EQ_INT(caps.max_audio_ms, 0);
 
     transcribe_session * session = init_session(model);
     if (session == nullptr) {
         transcribe_model_free(model);
         return;
     }
+
+    transcribe_session_limits limits;
+    transcribe_session_limits_init(&limits);
+    CHECK_EQ_INT(transcribe_session_get_limits(session, &limits), TRANSCRIBE_OK);
+    CHECK_EQ_INT(limits.effective_max_audio_ms, 0);
 
     transcribe_run_params params;
     transcribe_run_params_init(&params);
@@ -225,6 +231,7 @@ void check_timestamp_model(const std::string & path, const std::vector<float> & 
     params.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
     CHECK_EQ_INT(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &params), TRANSCRIBE_OK);
     check_word_result(session);
+    const int short_word_count = transcribe_n_words(session);
 
     params.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
     CHECK_EQ_INT(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &params), TRANSCRIBE_OK);
@@ -244,6 +251,34 @@ void check_timestamp_model(const std::string & path, const std::vector<float> & 
                  TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
     check_none_result(session);
 
+    std::vector<float> long_pcm;
+    long_pcm.reserve(pcm.size() * 5);
+    for (int i = 0; i < 5; ++i) {
+        long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
+    }
+    params.task            = TRANSCRIBE_TASK_TRANSCRIBE;
+    params.target_language = nullptr;
+    params.timestamps      = TRANSCRIBE_TIMESTAMPS_WORD;
+    CHECK_EQ_INT(transcribe_run(session, long_pcm.data(), static_cast<int>(long_pcm.size()), &params), TRANSCRIBE_OK);
+    check_word_result(session);
+    CHECK_EQ_INT(transcribe_n_words(session), short_word_count * 5);
+    std::string joined_words;
+    for (int i = 0; i < transcribe_n_words(session); ++i) {
+        transcribe_word word;
+        transcribe_word_init(&word);
+        CHECK_EQ_INT(transcribe_get_word(session, i, &word), TRANSCRIBE_OK);
+        if (!joined_words.empty()) {
+            joined_words.push_back(' ');
+        }
+        joined_words += word.text;
+    }
+    CHECK(joined_words == transcribe_full_text(session));
+    transcribe_word last_word;
+    transcribe_word_init(&last_word);
+    CHECK_EQ_INT(transcribe_get_word(session, transcribe_n_words(session) - 1, &last_word), TRANSCRIBE_OK);
+    CHECK(last_word.t1_ms > 40000);
+    CHECK(last_word.t1_ms <= static_cast<int64_t>(long_pcm.size()) * 1000 / 16000);
+
     transcribe_session_free(session);
     check_batch_truncation_reset(model, pcm);
     transcribe_model_free(model);
@@ -262,6 +297,7 @@ void check_legacy_model(const std::string & path, const std::vector<float> & pcm
     transcribe_capabilities_init(&caps);
     CHECK_EQ_INT(transcribe_model_get_capabilities(model, &caps), TRANSCRIBE_OK);
     CHECK_EQ_INT(caps.max_timestamp_kind, TRANSCRIBE_TIMESTAMPS_NONE);
+    CHECK_EQ_INT(caps.max_audio_ms, 0);
 
     transcribe_session * session = init_session(model);
     if (session == nullptr) {
@@ -281,6 +317,15 @@ void check_legacy_model(const std::string & path, const std::vector<float> & pcm
     CHECK_EQ_INT(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &params),
                  TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
     check_empty_result(session);
+
+    std::vector<float> long_pcm;
+    long_pcm.reserve(pcm.size() * 5);
+    for (int i = 0; i < 5; ++i) {
+        long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
+    }
+    params.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+    CHECK_EQ_INT(transcribe_run(session, long_pcm.data(), static_cast<int>(long_pcm.size()), &params), TRANSCRIBE_OK);
+    check_none_result(session);
 
     transcribe_session_free(session);
     transcribe_model_free(model);

@@ -93,6 +93,11 @@ If your audio is not already 16 kHz mono WAV, convert it first:
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
 
+There is no practical per-call audio limit. Inputs over 40 seconds are
+processed in 30-40 second windows selected at low-energy acoustic boundaries,
+with 1 second overlap, and stitched into one transcript; word and segment
+timestamps remain on the original audio timeline.
+
 CLI flags specific to canary:
 
 - `--pnc` / `--no-pnc` — punctuation & capitalization. Note: canary-1b-v2

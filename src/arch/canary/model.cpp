@@ -282,10 +282,15 @@ namespace {
 
 constexpr float kBnEps = 1e-5f;
 
+constexpr int kCanaryLongFormMinSeconds = 30;
+constexpr int kCanaryLongFormMaxSeconds = 40;
+constexpr int kCanaryLongFormOverlapMs  = 1000;
+
 // Input-length contract (see docs/input-limits.md). Two limits:
 //   (a) INPUT — the encoder rel-pos table (enc_pos_emb_max_len, ~400 s).
 //       T_enc must stay within it or the runtime table aliases past the
-//       trained range; gated up front. Drives max_audio_ms.
+//       trained range. Canary v2 stays well below it via 30-40 s long-form
+//       windows; variants without that coordinator remain gated up front.
 //   (b) DECODER self-KV (dec_max_position) + 512 max-new cap bound the
 //       OUTPUT length; an overrun is kept as a partial and flagged via
 //       transcribe_was_truncated(), not rejected.
@@ -318,7 +323,7 @@ int canary_predict_t_enc(int mel_n_frames, int subsampling_factor) {
     return t;
 }
 
-// Advisory max_audio_ms: longest audio whose T_enc still fits
+// Advisory max_audio_ms for variants without long-form chunking: longest audio whose T_enc still fits
 // enc_pos_emb_max_len, inverting the rate
 //   ms = T_enc * subsampling_factor * hop_length * 1000 / sr
 // at T_enc == enc_pos_emb_max_len. Returns 0 (unknown) if any rate hparam
@@ -330,6 +335,15 @@ int64_t canary_max_audio_ms(const CanaryHParams & hp) {
     }
     const int64_t mel_frames = static_cast<int64_t>(hp.enc_pos_emb_max_len) * hp.enc_subsampling_factor;
     return mel_frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
+}
+
+bool canary_supports_long_form(const CanaryModel & model) {
+    return model.variant == "canary-1b-v2";
+}
+
+bool canary_needs_long_form(const CanaryModel & model, int n_samples) {
+    return canary_supports_long_form(model) && model.hparams.fe_sample_rate > 0 &&
+           n_samples > static_cast<int64_t>(kCanaryLongFormMaxSeconds) * model.hparams.fe_sample_rate;
 }
 
 // Effective decoder self-KV ceiling, in tokens: dec_max_position, optionally
@@ -473,10 +487,9 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
     m->caps.max_timestamp_kind = m->hparams.aligner_present ? TRANSCRIBE_TIMESTAMPS_WORD : TRANSCRIBE_TIMESTAMPS_NONE;
 
-    // Publish the input-length ceiling now that the encoder positional span
-    // and frontend rate are known (apply_family_invariants ran before the
-    // hparams were read). The encoder is the binding INPUT limit for canary.
-    m->caps.max_audio_ms = canary_max_audio_ms(m->hparams);
+    // V2 windows long audio internally; older variants still expose the
+    // encoder positional span as their binding per-call input limit.
+    m->caps.max_audio_ms = canary_supports_long_form(*m) ? 0 : canary_max_audio_ms(m->hparams);
 
     // Basis for transcribe_session_get_limits. audio_from_caps = true pins
     // effective_max_audio_ms to the encoder bound regardless of n_ctx; the
@@ -777,6 +790,13 @@ struct CanaryTimedWord {
     int         n_tokens    = 0;
 };
 
+struct CanaryChunkResult {
+    std::vector<int>             generated_ids;
+    std::vector<int>             canonical_ids;
+    std::vector<CanaryTimedWord> timed_words;
+    std::vector<std::string>     display_words;
+};
+
 struct CanaryWordRef {
     std::string text;
     int         first_token = 0;
@@ -1014,7 +1034,8 @@ transcribe_status apply_canary_timestamps(CanarySession &               cc,
                                           CanaryModel &                 cm,
                                           const std::vector<int> &      generated_ids,
                                           const transcribe_run_params * params,
-                                          transcribe_timestamp_kind     requested) {
+                                          transcribe_timestamp_kind     requested,
+                                          CanaryChunkResult *           chunk_result) {
     if (requested == TRANSCRIBE_TIMESTAMPS_NONE || cm.caps.max_timestamp_kind == TRANSCRIBE_TIMESTAMPS_NONE) {
         return TRANSCRIBE_OK;
     }
@@ -1043,14 +1064,20 @@ transcribe_status apply_canary_timestamps(CanarySession &               cc,
     if (params != nullptr && params->keep_special_tags) {
         display_words = canary_preserve_special_tags(cm.tok, generated_ids, display_words);
     }
+    if (chunk_result != nullptr) {
+        chunk_result->canonical_ids = canonical_ids;
+        chunk_result->timed_words   = timed_words;
+        chunk_result->display_words = display_words;
+    }
     assemble_timed_result(cc, timed_words, display_words, requested);
     return TRANSCRIBE_OK;
 }
 
-transcribe_status run(transcribe_session *          session,
-                      const float *                 pcm,
-                      int                           n_samples,
-                      const transcribe_run_params * params) {
+transcribe_status run_chunk(transcribe_session *          session,
+                            const float *                 pcm,
+                            int                           n_samples,
+                            const transcribe_run_params * params,
+                            CanaryChunkResult *           chunk_result) {
     if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1059,6 +1086,10 @@ transcribe_status run(transcribe_session *          session,
     auto * cm = static_cast<CanaryModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    if (chunk_result != nullptr) {
+        *chunk_result = {};
     }
 
     if (cc->poll_abort()) {
@@ -1508,6 +1539,10 @@ transcribe_status run(transcribe_session *          session,
         auto commit_result = [&]() {
             cc->t_decode_us = ggml_time_us() - t_dec_start;
 
+            if (chunk_result != nullptr) {
+                chunk_result->generated_ids = generated_ids;
+            }
+
             if (generated_ids.empty()) {
                 return;
             }
@@ -1731,7 +1766,8 @@ transcribe_status run(transcribe_session *          session,
     }
 
     if (cc->has_result) {
-        if (const transcribe_status st = apply_canary_timestamps(*cc, *cm, generated_ids, params, requested_kind);
+        if (const transcribe_status st =
+                apply_canary_timestamps(*cc, *cm, generated_ids, params, requested_kind, chunk_result);
             st != TRANSCRIBE_OK) {
             return st;
         }
@@ -1740,6 +1776,206 @@ transcribe_status run(transcribe_session *          session,
     // Partial transcript committed above; a truncated decode returns the hard
     // OUTPUT_TRUNCATED status (the result stays readable, like an aborted run).
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+}
+
+void merge_token_ids(std::vector<int> &       merged,
+                     const std::vector<int> & current,
+                     int                      previous_search,
+                     int                      current_search) {
+    if (current.empty()) {
+        return;
+    }
+    const CanaryTokenSeam seam = canary_token_seam(merged, current, previous_search, current_search);
+    merged.resize(static_cast<size_t>(seam.previous_keep));
+    merged.insert(merged.end(), current.begin() + seam.current_skip, current.end());
+}
+
+void merge_timed_chunk(std::vector<int> &             merged_ids,
+                       std::vector<CanaryTimedWord> & merged_words,
+                       std::vector<std::string> &     merged_display,
+                       const CanaryChunkResult &      chunk,
+                       int64_t                        chunk_offset_ms) {
+    if (chunk.canonical_ids.empty() || chunk.timed_words.empty()) {
+        return;
+    }
+
+    CanaryTokenSeam seam{ static_cast<int>(merged_ids.size()), 0, false };
+    if (!merged_words.empty()) {
+        const int64_t ownership_boundary = chunk_offset_ms + kCanaryLongFormOverlapMs / 2;
+        for (const CanaryTimedWord & word : merged_words) {
+            if ((word.t0_ms + word.t1_ms) / 2 >= ownership_boundary) {
+                seam.previous_keep = word.first_token;
+                break;
+            }
+        }
+        seam.current_skip = static_cast<int>(chunk.canonical_ids.size());
+        for (const CanaryTimedWord & word : chunk.timed_words) {
+            if ((word.t0_ms + word.t1_ms) / 2 >= kCanaryLongFormOverlapMs / 2) {
+                seam.current_skip = word.first_token;
+                break;
+            }
+        }
+    }
+
+    while (!merged_words.empty() && merged_words.back().first_token >= seam.previous_keep) {
+        merged_words.pop_back();
+        merged_display.pop_back();
+    }
+    merged_ids.resize(static_cast<size_t>(seam.previous_keep));
+
+    const int merged_base = seam.previous_keep;
+    merged_ids.insert(merged_ids.end(), chunk.canonical_ids.begin() + seam.current_skip, chunk.canonical_ids.end());
+    for (size_t i = 0; i < chunk.timed_words.size(); ++i) {
+        CanaryTimedWord word = chunk.timed_words[i];
+        if (word.first_token < seam.current_skip) {
+            continue;
+        }
+        word.first_token = merged_base + word.first_token - seam.current_skip;
+        word.t0_ms += chunk_offset_ms;
+        word.t1_ms += chunk_offset_ms;
+        if (!merged_words.empty()) {
+            if (word.t1_ms <= merged_words.back().t1_ms) {
+                continue;
+            }
+            word.t0_ms = std::max(word.t0_ms, merged_words.back().t1_ms);
+        }
+        if (word.t1_ms <= word.t0_ms) {
+            continue;
+        }
+        merged_words.push_back(std::move(word));
+        merged_display.push_back(i < chunk.display_words.size() ? chunk.display_words[i] : chunk.timed_words[i].text);
+    }
+}
+
+transcribe_status run(transcribe_session *          session,
+                      const float *                 pcm,
+                      int                           n_samples,
+                      const transcribe_run_params * params) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    auto * cc = static_cast<CanarySession *>(session);
+    auto * cm = static_cast<CanaryModel *>(cc->model);
+    if (cm == nullptr || !canary_needs_long_form(*cm, n_samples)) {
+        return run_chunk(session, pcm, n_samples, params, nullptr);
+    }
+
+    const std::vector<CanaryChunkSpan> chunks = canary_long_form_chunks(pcm, n_samples, cm->hparams.fe_sample_rate);
+    if (chunks.size() <= 1) {
+        return run_chunk(session, pcm, n_samples, params, nullptr);
+    }
+
+    transcribe_run_params chunk_params;
+    transcribe_run_params_init(&chunk_params);
+    if (params != nullptr) {
+        chunk_params = *params;
+    }
+    const transcribe_timestamp_kind requested_kind = canary_timestamp_kind_for_run(params);
+    if (requested_kind == TRANSCRIBE_TIMESTAMPS_SEGMENT) {
+        chunk_params.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
+    }
+
+    const int frame_ms =
+        cm->hparams.fe_sample_rate > 0 ?
+            cm->hparams.fe_hop_length * cm->hparams.enc_subsampling_factor * 1000 / cm->hparams.fe_sample_rate :
+            0;
+    const int delay_frames    = std::max(1, frame_ms > 0 ? kCanaryLongFormOverlapMs / frame_ms : 12);
+    const int previous_search = delay_frames * 2;
+    const int current_search  = std::max(1, delay_frames * 3 / 5);
+
+    std::vector<int>             merged_generated;
+    std::vector<int>             merged_text;
+    std::vector<int>             merged_aligned;
+    std::vector<CanaryTimedWord> merged_words;
+    std::vector<std::string>     merged_display;
+    int64_t                      total_mel_us        = 0;
+    int64_t                      total_encode_us     = 0;
+    int64_t                      total_decode_us     = 0;
+    bool                         any_result          = false;
+    bool                         any_truncated       = false;
+    bool                         timestamps_complete = true;
+    transcribe_status            final_status        = TRANSCRIBE_OK;
+    const bool                   wants_timestamps =
+        requested_kind != TRANSCRIBE_TIMESTAMPS_NONE && cm->caps.max_timestamp_kind != TRANSCRIBE_TIMESTAMPS_NONE;
+
+    for (const CanaryChunkSpan & span : chunks) {
+        if (cc->poll_abort()) {
+            final_status = TRANSCRIBE_ERR_ABORTED;
+            break;
+        }
+
+        cc->was_truncated = false;
+        cc->t_mel_us      = 0;
+        cc->t_encode_us   = 0;
+        cc->t_decode_us   = 0;
+        CanaryChunkResult       chunk_result;
+        const transcribe_status st =
+            run_chunk(cc, pcm + span.start_sample, span.n_samples, &chunk_params, &chunk_result);
+        total_mel_us += cc->t_mel_us;
+        total_encode_us += cc->t_encode_us;
+        total_decode_us += cc->t_decode_us;
+        any_truncated |= cc->was_truncated;
+
+        const bool chunk_has_timestamps = !chunk_result.canonical_ids.empty() && !chunk_result.timed_words.empty();
+        const bool keep_unaligned_chunk = !wants_timestamps || st != TRANSCRIBE_ERR_ABORTED || merged_words.empty();
+        if (!chunk_result.generated_ids.empty() && (chunk_has_timestamps || keep_unaligned_chunk)) {
+            any_result = true;
+            merge_token_ids(merged_generated, chunk_result.generated_ids, previous_search, current_search);
+            const std::vector<int> clean_ids = params != nullptr && params->keep_special_tags ?
+                                                   chunk_result.generated_ids :
+                                                   canary_text_ids(*cm, chunk_result.generated_ids);
+            merge_token_ids(merged_text, clean_ids, previous_search, current_search);
+            if (chunk_has_timestamps) {
+                const int64_t chunk_offset_ms =
+                    static_cast<int64_t>(span.start_sample) * 1000 / cm->hparams.fe_sample_rate;
+                merge_timed_chunk(merged_aligned, merged_words, merged_display, chunk_result, chunk_offset_ms);
+            } else if (wants_timestamps) {
+                timestamps_complete = false;
+            }
+        }
+
+        if (st != TRANSCRIBE_OK) {
+            final_status = st;
+            break;
+        }
+    }
+
+    cc->clear_result();
+    cc->t_mel_us      = total_mel_us;
+    cc->t_encode_us   = total_encode_us;
+    cc->t_decode_us   = total_decode_us;
+    cc->was_truncated = any_truncated;
+    if (final_status != TRANSCRIBE_OK && final_status != TRANSCRIBE_ERR_ABORTED &&
+        final_status != TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+        return final_status;
+    }
+    if (any_result) {
+        cc->raw_text = cm->tok.decode(merged_generated.data(), static_cast<int>(merged_generated.size()));
+        if (wants_timestamps && timestamps_complete && !merged_words.empty()) {
+            for (const std::string & word : merged_display) {
+                if (!cc->full_text.empty()) {
+                    cc->full_text.push_back(' ');
+                }
+                cc->full_text += word;
+            }
+            assemble_timed_result(*cc, merged_words, merged_display, requested_kind);
+        } else {
+            cc->full_text = cm->tok.decode(merged_text.data(), static_cast<int>(merged_text.size()));
+            if (!cc->full_text.empty() && cc->full_text.front() == ' ') {
+                cc->full_text.erase(cc->full_text.begin());
+            }
+            transcribe_session::SegmentEntry segment{};
+            segment.text = cc->full_text;
+            cc->segments.push_back(std::move(segment));
+            cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        }
+        cc->has_result = true;
+    }
+
+    if (final_status == TRANSCRIBE_OK && any_truncated) {
+        return TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+    }
+    return final_status;
 }
 
 // ===========================================================================
@@ -1888,6 +2124,12 @@ transcribe_status run_batch(transcribe_session *          session,
     auto * cm = static_cast<CanaryModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    for (int i = 0; i < n; ++i) {
+        if (n_samples[i] > 0 && canary_needs_long_form(*cm, n_samples[i])) {
+            return run_batch_serial(cc, pcm, n_samples, n, params);
+        }
     }
 
     const bool primary_is_gpu = cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
@@ -2208,6 +2450,141 @@ transcribe_status run_batch(transcribe_session *          session,
 }
 
 }  // namespace
+
+std::vector<CanaryChunkSpan> canary_long_form_chunks(int n_samples, int sample_rate) {
+    return canary_long_form_chunks(nullptr, n_samples, sample_rate);
+}
+
+std::vector<CanaryChunkSpan> canary_long_form_chunks(const float * pcm, int n_samples, int sample_rate) {
+    if (n_samples <= 0 || sample_rate <= 0) {
+        return {};
+    }
+    if (n_samples <= static_cast<int64_t>(kCanaryLongFormMaxSeconds) * sample_rate) {
+        return {
+            { 0, n_samples }
+        };
+    }
+
+    const int64_t overlap = static_cast<int64_t>(kCanaryLongFormOverlapMs) * sample_rate / 1000;
+    if (pcm != nullptr) {
+        const int64_t min_chunk = static_cast<int64_t>(kCanaryLongFormMinSeconds) * sample_rate;
+        const int64_t max_chunk = static_cast<int64_t>(kCanaryLongFormMaxSeconds) * sample_rate;
+        const int64_t window    = std::max<int64_t>(1, sample_rate / 5);
+        const int64_t half      = window / 2;
+        const int64_t right     = window - half;
+        const int64_t stride    = std::max<int64_t>(1, sample_rate / 50);
+
+        std::vector<CanaryChunkSpan> chunks;
+        int64_t                      start = 0;
+        while (static_cast<int64_t>(n_samples) - start > max_chunk) {
+            const int64_t first_center = start + min_chunk;
+            const int64_t last_center  = std::min(start + max_chunk, static_cast<int64_t>(n_samples) - right);
+            int64_t       best_center  = first_center;
+            double        best_energy  = std::numeric_limits<double>::infinity();
+
+            int64_t window_begin = first_center - half;
+            int64_t window_end   = window_begin + window;
+            double  energy       = 0.0;
+            for (int64_t i = window_begin; i < window_end; ++i) {
+                energy += static_cast<double>(pcm[i]) * pcm[i];
+            }
+            for (int64_t center = first_center; center <= last_center; center += stride) {
+                if (center > first_center) {
+                    const int64_t next_begin = center - half;
+                    const int64_t next_end   = next_begin + window;
+                    for (int64_t i = window_begin; i < next_begin; ++i) {
+                        energy -= static_cast<double>(pcm[i]) * pcm[i];
+                    }
+                    for (int64_t i = window_end; i < next_end; ++i) {
+                        energy += static_cast<double>(pcm[i]) * pcm[i];
+                    }
+                    window_begin = next_begin;
+                    window_end   = next_end;
+                }
+                if (energy <= best_energy) {
+                    best_energy = energy;
+                    best_center = center;
+                }
+            }
+
+            chunks.push_back({ static_cast<int>(start), static_cast<int>(best_center - start) });
+            start = best_center - overlap;
+        }
+        chunks.push_back({ static_cast<int>(start), n_samples - static_cast<int>(start) });
+        return chunks;
+    }
+
+    int64_t chunk_size = static_cast<int64_t>(kCanaryLongFormMinSeconds) * sample_rate;
+    int64_t best_tail  = 0;
+    for (int seconds = kCanaryLongFormMinSeconds; seconds <= kCanaryLongFormMaxSeconds; ++seconds) {
+        const int64_t candidate = static_cast<int64_t>(seconds) * sample_rate;
+        const int64_t step      = candidate - overlap;
+        if (step <= 0 || candidate > n_samples) {
+            continue;
+        }
+        const int64_t n_chunks = (static_cast<int64_t>(n_samples) + step - 1) / step;
+        const int64_t tail     = n_samples - (n_chunks - 1) * step;
+        if (tail > best_tail) {
+            best_tail  = tail;
+            chunk_size = candidate;
+        }
+    }
+
+    const int64_t                step = chunk_size - overlap;
+    std::vector<CanaryChunkSpan> chunks;
+    for (int64_t start = 0; start + overlap < n_samples; start += step) {
+        chunks.push_back({ static_cast<int>(start),
+                           static_cast<int>(std::min(chunk_size, static_cast<int64_t>(n_samples) - start)) });
+    }
+    return chunks;
+}
+
+CanaryTokenSeam canary_token_seam(const std::vector<int> & previous,
+                                  const std::vector<int> & current,
+                                  int                      previous_search,
+                                  int                      current_search) {
+    CanaryTokenSeam seam{ static_cast<int>(previous.size()), 0, false };
+    if (previous.empty() || current.empty() || previous_search <= 0 || current_search <= 0) {
+        return seam;
+    }
+
+    const int previous_begin = std::max(0, static_cast<int>(previous.size()) - previous_search);
+    const int current_end    = std::min(static_cast<int>(current.size()), current_search);
+    int       best_length    = 0;
+    int       best_prev_end  = static_cast<int>(previous.size());
+    int       best_curr_end  = 0;
+    for (int i = previous_begin; i < static_cast<int>(previous.size()); ++i) {
+        for (int j = 0; j < current_end; ++j) {
+            int length = 0;
+            while (i + length < static_cast<int>(previous.size()) && j + length < current_end &&
+                   previous[i + length] == current[j + length]) {
+                ++length;
+            }
+            const int  prev_end        = i + length;
+            const int  curr_end        = j + length;
+            // Preserve the previous hypothesis. Only trim current tokens that
+            // agree with its true suffix; repeated interior text is ambiguous.
+            const bool at_previous_end = prev_end == static_cast<int>(previous.size());
+            const bool accepted        = at_previous_end && (length >= 2 || (length == 1 && j == 0));
+            if (!accepted) {
+                continue;
+            }
+            if (length > best_length ||
+                (length == best_length && length > 0 &&
+                 (prev_end > best_prev_end || (prev_end == best_prev_end && curr_end < best_curr_end)))) {
+                best_length   = length;
+                best_prev_end = prev_end;
+                best_curr_end = curr_end;
+            }
+        }
+    }
+    if (best_length > 0) {
+        seam.previous_keep = static_cast<int>(previous.size());
+        seam.current_skip  = best_curr_end;
+        seam.matched       = true;
+    }
+    return seam;
+}
 
 bool canary_aligner_input_too_long(int                       mel_n_frames,
                                    const CanaryHParams &     hp,
