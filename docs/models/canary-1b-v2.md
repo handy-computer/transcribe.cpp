@@ -23,8 +23,9 @@ The model takes a 16 kHz mono WAV and produces a transcript. Supports:
 This is the broadest-coverage canary variant. The other multilingual
 variants (180m-flash, 1b-flash) cover only English/German/Spanish/French.
 
-Not a streaming model. Word and segment timestamps from the upstream
-model are not exposed in the v1 port.
+Not a streaming model. Word and segment timestamps are available when the
+GGUF includes the upstream auxiliary CTC aligner. Older GGUFs without the
+aligner remain text-only and reject explicit timestamp requests.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-v2)
 for training data, intended use, and upstream evaluation methodology.
@@ -44,6 +45,9 @@ pinned 2026-05-08.
 | Q5_K_M | [canary-1b-v2-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q5_K_M.gguf) | 798 MB | 1.93% |
 | Q4_K_M | [canary-1b-v2-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q4_K_M.gguf) | 701 MB | 1.91% |
 
+These published artifacts predate embedded-aligner support and remain text-only.
+Use the [conversion recipe](#convert) below to create a timestamp-enabled GGUF.
+
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.92%.
 NVIDIA's self-reported number on the upstream model card is 2.18%; our
@@ -58,7 +62,7 @@ cmake --build build
 
 # ASR (any supported language)
 build/bin/transcribe-cli \
-  -m models/canary-1b-v2/canary-1b-v2-Q8_0.gguf \
+  -m models/canary-1b-v2/canary-1b-v2-timestamps-Q8_0.gguf \
   -l en \
   samples/jfk.wav
 
@@ -74,6 +78,13 @@ build/bin/transcribe-cli \
   --task translate \
   -l en --target-language de \
   samples/jfk.wav
+
+# Word timestamps (requires a GGUF converted with the auxiliary aligner)
+build/bin/transcribe-cli \
+  -m models/canary-1b-v2/canary-1b-v2-Q8_0.gguf \
+  -l en --timestamps word \
+  --output-json transcript.json \
+  samples/jfk.wav
 ```
 
 If your audio is not already 16 kHz mono WAV, convert it first:
@@ -81,6 +92,11 @@ If your audio is not already 16 kHz mono WAV, convert it first:
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
+
+There is no practical per-call audio limit. Inputs over 40 seconds are
+processed in 30-40 second windows selected at low-energy acoustic boundaries,
+with 1 second overlap, and stitched into one transcript; word and segment
+timestamps remain on the original audio timeline.
 
 CLI flags specific to canary:
 
@@ -90,7 +106,13 @@ CLI flags specific to canary:
 - `-l <code>` — source language code (one of the 25 supported BCP-47
   codes).
 - `--task translate` + `--target-language <code>` — switch to translation
-  mode.
+  mode. Translation returns text only; explicit timestamp requests are rejected
+  because the auxiliary CTC model aligns source-language speech.
+- `--timestamps word|segment` — run the embedded CTC aligner. Timestamp-enabled
+  v2 conversions advertise word support; GGUFs converted from stripped sources
+  without `timestamps_asr_model` advertise none.
+- `--output-json <path>` — write structured segment and nested word timings in
+  integer milliseconds for subtitle integrations.
 
 ## Performance
 
@@ -158,13 +180,15 @@ For the full porting writeup, see
 
 ```bash
 uv run --project scripts/envs/canary \
-  scripts/convert-canary.py nvidia/canary-1b-v2 --repo-id nvidia/canary-1b-v2
+  scripts/convert-canary.py nvidia/canary-1b-v2 \
+  models/canary-1b-v2/canary-1b-v2-timestamps-F32.gguf
 ```
 
 ### Quantize
 
 ```bash
-uv run scripts/quantize-all.py models/canary-1b-v2/canary-1b-v2-F32.gguf
+uv run scripts/quantize-all.py \
+  models/canary-1b-v2/canary-1b-v2-timestamps-F32.gguf
 ```
 
 ### Validate

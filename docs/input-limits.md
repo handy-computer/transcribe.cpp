@@ -56,9 +56,11 @@ value at the default context; for the effective limit under a lowered
 
 | Families | Limit | Behavior |
 | --- | --- | --- |
-| whisper, parakeet (all variants), voxtral_realtime | none (`max_audio_ms = 0`) | Long audio is windowed internally and stitched (whisper), processed by an unbounded/streaming encoder (parakeet, voxtral_realtime), or padded if short. No practical limit; all three **ignore `n_ctx`** (it cannot lower a limit they don't have). whisper and parakeet never error on length. voxtral_realtime has one exception — its absolute `dec_max_position` cap (~2.9 h, see below): a clip past it returns `INPUT_TOO_LONG` (one-shot/batch), and a stream that reaches it flags `was_truncated`. |
+| whisper, canary-1b-v2, parakeet (all variants), voxtral_realtime | none (`max_audio_ms = 0`) | Long audio is windowed internally and stitched (whisper, canary-1b-v2), processed by an unbounded/streaming encoder (parakeet, voxtral_realtime), or padded if short. No practical input limit. whisper, canary-1b-v2, and parakeet never error on input length. voxtral_realtime has one exception — its absolute `dec_max_position` cap (~2.9 h, see below): a clip past it returns `INPUT_TOO_LONG` (one-shot/batch), and a stream that reaches it flags `was_truncated`. |
 
-Whisper slices audio into 30 s windows with prev-context stitching; parakeet's
+Whisper slices audio into 30 s windows with prev-context stitching;
+canary-1b-v2 uses 30-40 s windows, selects low-energy acoustic boundaries,
+and stitches a 1 s overlap; parakeet's
 conformer is effectively unbounded (the encoder positional table is recomputed
 per run, not a fixed wall). This holds for every parakeet variant, including the
 cache-aware streaming RNN-T member (`nemotron-3.5-asr-streaming-0.6b`): the
@@ -71,7 +73,7 @@ need and do not have a length gate.
 
 | Families | Limit source | Behavior |
 | --- | --- | --- |
-| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or the encoder positional table (`enc_pos_emb_max_len`, for cohere/canary) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
+| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary except canary-1b-v2 | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or the encoder positional table (`enc_pos_emb_max_len`, for cohere/canary) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
 
 These families wrap an LLM-style decoder whose context window
 (`audio_tokens + prompt + generation`) is the binding constraint. The number of
@@ -144,10 +146,12 @@ self-KV / output budget. In those families `transcribe_session_get_limits()`
 reports a smaller `effective_n_ctx` and `max_kv_bytes` when `n_ctx` is lowered,
 but `effective_max_audio_ms` stays pinned to the encoder input bound.
 
-**Chunked / unbounded families (bucket 1) ignore `n_ctx` entirely.** whisper,
-parakeet, and voxtral_realtime have no lowerable context ceiling, so a non-zero
-`n_ctx` is a documented no-op and `transcribe_session_get_limits()` keeps
-reporting them unbounded. voxtral_realtime is the subtle case: it *does* have an
+Most chunked / unbounded families ignore `n_ctx` entirely. whisper, parakeet,
+and voxtral_realtime have no lowerable context ceiling, so a non-zero `n_ctx`
+is a documented no-op. canary-1b-v2 is the exception: its input remains
+unbounded because each window gets a fresh decoder context, while `n_ctx` can
+still lower that per-window output-token budget and cause `OUTPUT_TRUNCATED`.
+voxtral_realtime is the other subtle case: it *does* have an
 absolute decoder position cap (`dec_max_position`, ~2.9 h of audio), but that is
 the model's true RoPE wall — not a memory ceiling a caller can lower — so
 `n_ctx` does not narrow it (its decoder KV is a constant-memory sliding ring;

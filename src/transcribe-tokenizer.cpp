@@ -18,8 +18,10 @@
 #include "transcribe-unicode.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <queue>
 #include <string>
 #include <vector>
@@ -309,6 +311,180 @@ struct BigramGreater {
         return a.left > b.left;
     }
 };
+
+struct SentencePieceBigram {
+    int    left  = -1;
+    int    right = -1;
+    float  score = 0.0f;
+    size_t size  = 0;
+};
+
+struct SentencePieceBigramLess {
+    bool operator()(const SentencePieceBigram & a, const SentencePieceBigram & b) const {
+        if (a.score != b.score) {
+            return a.score < b.score;
+        }
+        return a.left > b.left;
+    }
+};
+
+std::string normalize_decoded_sentencepiece(const std::string & text) {
+    std::string normalized;
+    normalized.reserve(text.size() + k_sp_space_len);
+
+    bool at_word_start = true;
+    for (size_t offset = 0; offset < text.size();) {
+        const unsigned char byte = static_cast<unsigned char>(text[offset]);
+        if (byte < 0x80 && std::isspace(byte)) {
+            at_word_start = true;
+            ++offset;
+            continue;
+        }
+        if (at_word_start) {
+            normalized.append(k_sp_space, k_sp_space_len);
+            at_word_start = false;
+        }
+        const size_t len = std::min(text.size() - offset, unicode::len_utf8(text[offset]));
+        normalized.append(text, offset, len);
+        offset += len;
+    }
+    return normalized;
+}
+
+transcribe_status encode_sentencepiece_bpe(const std::string &                              normalized,
+                                           const std::vector<std::string> &                 tokens,
+                                           const std::vector<float> &                       scores,
+                                           const std::vector<int32_t> &                     token_types,
+                                           const std::unordered_map<std::string, int32_t> & piece_to_id,
+                                           int                                              unk_id,
+                                           std::vector<int32_t> &                           out_ids) {
+    constexpr int32_t k_token_type_normal = 1;
+    constexpr int32_t k_token_type_unused = 5;
+
+    out_ids.clear();
+    if (normalized.empty()) {
+        return TRANSCRIBE_OK;
+    }
+    if (scores.size() != tokens.size()) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    auto token_type = [&](int id) -> int32_t {
+        if (token_types.empty()) {
+            return k_token_type_normal;
+        }
+        return token_types[static_cast<size_t>(id)];
+    };
+    auto mergeable = [&](int id) {
+        if (id < 0 || static_cast<size_t>(id) >= tokens.size() || id == unk_id) {
+            return false;
+        }
+        const int32_t type = token_type(id);
+        return type == k_token_type_normal || type == k_token_type_unused;
+    };
+
+    std::vector<Symbol> symbols;
+    symbols.reserve(normalized.size());
+    int    index  = 0;
+    size_t offset = 0;
+    while (offset < normalized.size()) {
+        const size_t len = std::min(normalized.size() - offset, unicode::len_utf8(normalized[offset]));
+        Symbol       symbol;
+        symbol.text = normalized.data() + offset;
+        symbol.n    = len;
+        symbol.prev = index - 1;
+        symbol.next = offset + len == normalized.size() ? -1 : index + 1;
+        symbols.push_back(symbol);
+        offset += len;
+        ++index;
+    }
+
+    std::priority_queue<SentencePieceBigram, std::vector<SentencePieceBigram>, SentencePieceBigramLess> queue;
+    std::unordered_map<std::string, std::pair<std::string, std::string>> reverse_unused_merge;
+    auto                                                                 push_bigram = [&](int left, int right) {
+        if (left < 0 || right < 0) {
+            return;
+        }
+        const std::string left_text(symbols[left].text, symbols[left].n);
+        const std::string right_text(symbols[right].text, symbols[right].n);
+        const std::string piece = left_text + right_text;
+        const auto        it    = piece_to_id.find(piece);
+        if (it == piece_to_id.end() || !mergeable(it->second)) {
+            return;
+        }
+        queue.push({ left, right, scores[static_cast<size_t>(it->second)], piece.size() });
+        if (token_type(it->second) == k_token_type_unused) {
+            reverse_unused_merge[piece] = std::make_pair(left_text, right_text);
+        }
+    };
+
+    for (int i = 1; i < static_cast<int>(symbols.size()); ++i) {
+        push_bigram(i - 1, i);
+    }
+    while (!queue.empty()) {
+        const SentencePieceBigram bigram = queue.top();
+        queue.pop();
+        Symbol & left  = symbols[bigram.left];
+        Symbol & right = symbols[bigram.right];
+        if (left.n == 0 || right.n == 0 || left.n + right.n != bigram.size) {
+            continue;
+        }
+        left.n += right.n;
+        right.n   = 0;
+        left.next = right.next;
+        if (right.next >= 0) {
+            symbols[right.next].prev = bigram.left;
+        }
+        push_bigram(left.prev, bigram.left);
+        push_bigram(bigram.left, left.next);
+    }
+
+    const char *                                  hex         = "0123456789ABCDEF";
+    bool                                          emit_failed = false;
+    std::function<void(const std::string &, int)> emit_piece;
+    emit_piece = [&](const std::string & piece, int depth) {
+        const auto it = piece_to_id.find(piece);
+        if (it != piece_to_id.end()) {
+            const int id = it->second;
+            if (token_type(id) == k_token_type_unused && depth < 100) {
+                const auto reverse = reverse_unused_merge.find(piece);
+                if (reverse != reverse_unused_merge.end()) {
+                    emit_piece(reverse->second.first, depth + 1);
+                    emit_piece(reverse->second.second, depth + 1);
+                    return;
+                }
+            }
+            if (mergeable(id)) {
+                out_ids.push_back(id);
+                return;
+            }
+        }
+
+        std::vector<int32_t> byte_ids;
+        byte_ids.reserve(piece.size());
+        for (unsigned char byte : piece) {
+            const char byte_piece[] = { '<', '0', 'x', hex[byte >> 4], hex[byte & 15], '>', '\0' };
+            const auto byte_it      = piece_to_id.find(byte_piece);
+            if (byte_it == piece_to_id.end()) {
+                byte_ids.clear();
+                break;
+            }
+            byte_ids.push_back(byte_it->second);
+        }
+        if (!byte_ids.empty()) {
+            out_ids.insert(out_ids.end(), byte_ids.begin(), byte_ids.end());
+        } else if (unk_id >= 0 && static_cast<size_t>(unk_id) < tokens.size()) {
+            out_ids.push_back(unk_id);
+        } else {
+            emit_failed = true;
+        }
+    };
+
+    for (int i = 0; i != -1; i = symbols[i].next) {
+        emit_piece(std::string(symbols[i].text, symbols[i].n), 0);
+    }
+    return emit_failed ? TRANSCRIBE_ERR_GGUF : TRANSCRIBE_OK;
+}
 
 }  // namespace
 
@@ -649,6 +825,18 @@ transcribe_status Tokenizer::encode(const std::string & text, std::vector<int32_
         }
     }
     return TRANSCRIBE_OK;
+}
+
+transcribe_status Tokenizer::canonicalize_bpe(const int * ids, int n, std::vector<int32_t> & out_ids) const {
+    out_ids.clear();
+    if (model_ != "bpe") {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    if (ids == nullptr || n <= 0) {
+        return TRANSCRIBE_OK;
+    }
+    const std::string normalized = normalize_decoded_sentencepiece(decode(ids, n));
+    return encode_sentencepiece_bpe(normalized, tokens_, scores_, token_type_, piece_to_id_, unk_id_, out_ids);
 }
 
 // ---------------------------------------------------------------------------
