@@ -146,12 +146,19 @@
     "target_lang": "en",
     "task": "asr",
     "pnc": "yes",
-    "toggle_timestamps": "no",
+    "toggle_timestamps": "yes",
     "beam": 1
   },
   "tolerance_file": "tests/tolerances/canary.json",
   "cases": [
     "jfk"
   ],
-  "transcript_compare": "normalized"
+  "transcript_compare": "normalized",
+  "timestamp_validation": {
+    "levels": [
+      "word",
+      "segment"
+    ],
+    "tolerance_ms": 80
+  }
 }

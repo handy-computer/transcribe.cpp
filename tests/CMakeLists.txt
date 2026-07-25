@@ -671,6 +671,26 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         SKIP_RETURN_CODE 77)
 endif()
 
+# Canary 1B v2 timestamp result contracts. The timestamp-enabled GGUF is
+# required; an optional legacy GGUF also exercises unsupported requests.
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_canary_timestamp_real_smoke
+        canary_timestamp_real_smoke.cpp)
+
+    target_link_libraries(transcribe_canary_timestamp_real_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_canary_timestamp_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_canary_timestamp_real_smoke)
+
+    add_test(NAME transcribe_canary_timestamp_real_smoke
+        COMMAND transcribe_canary_timestamp_real_smoke)
+    set_tests_properties(transcribe_canary_timestamp_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
 # -----------------------------------------------------------------------------
 # Decoder + result accessor accuracy test (real-model gated)
 # -----------------------------------------------------------------------------
@@ -1152,7 +1172,7 @@ add_test(NAME transcribe_mel_unit COMMAND transcribe_mel_unit)
 add_executable(transcribe_tokenizer_decode_only_unit
     tokenizer_decode_only_unit.cpp)
 
-target_link_libraries(transcribe_tokenizer_decode_only_unit PRIVATE transcribe)
+target_link_libraries(transcribe_tokenizer_decode_only_unit PRIVATE transcribe ggml)
 
 target_include_directories(transcribe_tokenizer_decode_only_unit PRIVATE
     ${CMAKE_SOURCE_DIR}/src)
@@ -1161,6 +1181,23 @@ transcribe_apply_warnings(transcribe_tokenizer_decode_only_unit)
 
 add_test(NAME transcribe_tokenizer_decode_only_unit
     COMMAND transcribe_tokenizer_decode_only_unit)
+
+# -----------------------------------------------------------------------------
+# Canary timestamp alignment unit test
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_canary_timestamp_unit
+    canary_timestamp_unit.cpp)
+
+target_link_libraries(transcribe_canary_timestamp_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_canary_timestamp_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_canary_timestamp_unit)
+
+add_test(NAME transcribe_canary_timestamp_unit
+    COMMAND transcribe_canary_timestamp_unit)
 
 # -----------------------------------------------------------------------------
 # Whisper .bin parser unit test

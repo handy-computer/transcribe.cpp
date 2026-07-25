@@ -492,6 +492,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     text: str = ""
     tokens: list[int] | None = None
+    timestamps: dict[str, Any] | None = None
 
     def dump(name: str, t, stage: str) -> None:
         a = to_np(t)
@@ -552,9 +553,14 @@ def cmd_decode(args: argparse.Namespace) -> int:
                     print(f"  warning: could not set beam_size={args.beam}: {exc}")
 
             print("\n  Running canonical transcribe() ...")
+            timestamps_arg = None
+            if args.toggle_timestamps in ("yes", "no"):
+                timestamps_arg = args.toggle_timestamps == "yes"
             output = model.transcribe(
                 str(manifest_path),
                 batch_size=1,
+                return_hypotheses=True,
+                timestamps=timestamps_arg,
             )
             if isinstance(output, (list, tuple)) and output:
                 first = output[0]
@@ -562,6 +568,9 @@ def cmd_decode(args: argparse.Namespace) -> int:
                     first = first[0]
                 if hasattr(first, "text"):
                     text = first.text
+                    raw_timestamps = getattr(first, "timestamp", None)
+                    if isinstance(raw_timestamps, dict):
+                        timestamps = raw_timestamps
                     raw_tokens = getattr(first, "y_sequence", None)
                     if raw_tokens is not None:
                         try:
@@ -579,6 +588,15 @@ def cmd_decode(args: argparse.Namespace) -> int:
             if manifest_path is not None and manifest_path.exists():
                 manifest_path.unlink()
 
+    if not args.skip_transcript and args.toggle_timestamps == "yes":
+        if not isinstance(timestamps, dict) or any(
+            not isinstance(timestamps.get(level), list) or not timestamps[level]
+            for level in ("word", "segment")
+        ):
+            raise RuntimeError(
+                "Canary timestamp decoding returned no non-empty word and segment lists"
+            )
+
     # ----- Decoder intermediates (captured from the transcribe() pass) ---
     for i in dec_blocks:
         for sub in ("self_attn", "cross_attn", "ffn"):
@@ -588,7 +606,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     # ----- Transcript artifact ------------------------------------------
     if text:
-        write_transcript(out_dir, text, source=source, tokens=tokens)
+        write_transcript(out_dir, text, source=source, tokens=tokens, timestamps=timestamps)
         print(f"  wrote {out_dir / 'transcript.json'}")
 
     for h in enc_hooks + dec_hooks:

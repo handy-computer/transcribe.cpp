@@ -40,6 +40,7 @@ import argparse
 import datetime as dt
 import glob
 import json
+import math
 import os
 import re
 import shutil
@@ -309,6 +310,175 @@ def parse_cli_transcript(output: str) -> str | None:
     return None
 
 
+def parse_cli_timestamps(output: str) -> dict[str, list[dict[str, Any]]] | None:
+    header_pattern = re.compile(r"^(segments|words|tokens):\s*(\d+)\s*$")
+    row_pattern = re.compile(r"^\s*\[\s*(\S+)\s*->\s*(\S+)\s*\]\s*(.*)$")
+    sections = {"segments": "segment", "words": "word", "tokens": "token"}
+    timestamps: dict[str, list[dict[str, Any]]] = {}
+    declared_counts: dict[str, int] = {}
+    section: str | None = None
+
+    def finish_section() -> None:
+        nonlocal section
+        if section is not None and len(timestamps[section]) != declared_counts[section]:
+            raise ValueError(
+                f"CLI declared {declared_counts[section]} {section} timestamp rows, "
+                f"parsed {len(timestamps[section])}"
+            )
+        section = None
+
+    for line in output.splitlines():
+        header = header_pattern.match(line)
+        if header is not None:
+            finish_section()
+            section = sections[header.group(1)]
+            if section in declared_counts:
+                raise ValueError(f"CLI emitted duplicate {section} timestamp section")
+            declared_counts[section] = int(header.group(2))
+            timestamps[section] = []
+            continue
+        if section is None:
+            continue
+        match = row_pattern.match(line)
+        if match is None:
+            finish_section()
+            continue
+        label = match.group(3)
+        if section == "token":
+            token_match = re.match(r"^p=\S+\s+(.*)$", label)
+            if token_match is None:
+                raise ValueError("malformed CLI token timestamp row")
+            label = token_match.group(1)
+        try:
+            start = float(match.group(1))
+            end = float(match.group(2))
+        except ValueError as exc:
+            raise ValueError(f"malformed CLI {section} timestamp edge") from exc
+        timestamps[section].append({
+            section: label,
+            "start": start,
+            "end": end,
+        })
+    finish_section()
+    return timestamps or None
+
+
+def manifest_timestamp_config(manifest: dict[str, Any]) -> tuple[list[str], int]:
+    config = manifest.get("timestamp_validation")
+    if config is None:
+        return [], 80
+    if not isinstance(config, dict):
+        raise SystemExit("error: manifest timestamp_validation must be an object")
+
+    raw_levels = config.get("levels", [])
+    if not isinstance(raw_levels, list):
+        raise SystemExit("error: manifest timestamp_validation.levels must be a list")
+
+    levels: list[str] = []
+    for raw_level in raw_levels:
+        level = str(raw_level)
+        if level == "none":
+            continue
+        if level not in {"segment", "word", "token"}:
+            raise SystemExit(
+                f"error: unsupported manifest timestamp level {raw_level!r}"
+            )
+        if level not in levels:
+            levels.append(level)
+
+    tolerance_raw = config.get("tolerance_ms", 80)
+    if (
+        isinstance(tolerance_raw, bool)
+        or not isinstance(tolerance_raw, (int, float))
+        or not math.isfinite(float(tolerance_raw))
+        or float(tolerance_raw) < 0.0
+        or not float(tolerance_raw).is_integer()
+    ):
+        raise SystemExit("error: manifest timestamp_validation.tolerance_ms must be a nonnegative integer")
+    return levels, int(tolerance_raw)
+
+
+def timestamp_artifact_error(
+    source: str,
+    timestamps: Any,
+    required_levels: list[str],
+) -> str | None:
+    if not isinstance(timestamps, dict):
+        return f"{source} timestamps are absent or malformed"
+
+    for level in required_levels:
+        rows = timestamps.get(level)
+        if not isinstance(rows, list) or not rows:
+            return f"{source} {level} timestamps are absent or empty"
+        previous_start = -1.0
+        previous_end = -1.0
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                return f"{source} {level} timestamp row {index} is malformed"
+            label = row.get(level)
+            if not isinstance(label, str) or not label.strip():
+                return f"{source} {level} timestamp row {index} has no label"
+            edges: list[float] = []
+            for edge in ("start", "end"):
+                value = row.get(edge)
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    return f"{source} {level} timestamp row {index} has malformed {edge}"
+                value = float(value)
+                if not math.isfinite(value) or value < 0.0:
+                    return f"{source} {level} timestamp row {index} has invalid {edge}"
+                edges.append(value)
+            start, end = edges
+            if start >= end:
+                return f"{source} {level} timestamp row {index} has start >= end"
+            if start < previous_start or end < previous_end:
+                return f"{source} {level} timestamp row {index} has non-monotonic edges"
+            previous_start = start
+            previous_end = end
+    return None
+
+
+def compare_timestamps(
+    reference: Any,
+    cpp: Any,
+    required_levels: list[str],
+    tolerance_ms: int,
+    transcript_compare: str,
+) -> tuple[bool, str | None]:
+    for source, timestamps in (("reference", reference), ("C++", cpp)):
+        error = timestamp_artifact_error(source, timestamps, required_levels)
+        if error is not None:
+            return False, error
+
+    for level in required_levels:
+        ref_rows = reference[level]
+        cpp_rows = cpp[level]
+        if len(ref_rows) != len(cpp_rows):
+            return False, (
+                f"{level} timestamp row count differs: "
+                f"reference={len(ref_rows)}, C++={len(cpp_rows)}"
+            )
+        for index, (ref_row, cpp_row) in enumerate(zip(ref_rows, cpp_rows)):
+            ref_label = str(ref_row[level])
+            cpp_label = str(cpp_row[level])
+            if transcript_compare == "normalized":
+                ref_label = normalize_text_for_compare(ref_label)
+                cpp_label = normalize_text_for_compare(cpp_label)
+            elif transcript_compare == "dediarized":
+                ref_label = dediarize_text(ref_label)
+                cpp_label = dediarize_text(cpp_label)
+            if ref_label != cpp_label:
+                return False, f"{level} timestamp row {index} label differs"
+            for edge in ("start", "end"):
+                ref_ms = int(round(float(ref_row[edge]) * 1000.0))
+                cpp_ms = int(round(float(cpp_row[edge]) * 1000.0))
+                if abs(ref_ms - cpp_ms) > tolerance_ms:
+                    return False, (
+                        f"{level} timestamp row {index} {edge} differs by "
+                        f"{abs(ref_ms - cpp_ms)} ms"
+                    )
+    return True, None
+
+
 def write_cpp_transcript(
     out_dir: Path,
     *,
@@ -318,6 +488,7 @@ def write_cpp_transcript(
     gguf: Path,
     backend: str,
     text: str,
+    timestamps: dict[str, list[dict[str, Any]]] | None = None,
 ) -> None:
     path = out_dir / "transcript.json"
     payload = {
@@ -333,6 +504,8 @@ def write_cpp_transcript(
             "backend": backend,
         },
     }
+    if timestamps is not None:
+        payload["timestamps"] = timestamps
     path.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"  wrote {path}", file=sys.stderr)
 
@@ -405,6 +578,15 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # pass overwrites the encoder pass (same values).
         for stage in ["encoder", "decode"]:
             cmd = base_args + [stage] + common_args
+            if args.family == "canary" and stage == "decode":
+                multitask = manifest.get("multitask_default") or {}
+                cmd += [
+                    "--source-lang", str(multitask.get("source_lang", "en")),
+                    "--target-lang", str(multitask.get("target_lang", "en")),
+                    "--task", str(multitask.get("task", "asr")),
+                    "--pnc", str(multitask.get("pnc", "yes")),
+                    "--toggle-timestamps", str(multitask.get("toggle_timestamps", "no")),
+                ]
             run_cmd(
                 cmd,
                 repo,
@@ -473,6 +655,10 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             cmd += ["--language", language]
         if args.family == "whisper":
             cmd += ["--timestamps", "none"]
+        if args.family == "canary":
+            multitask = manifest.get("multitask_default") or {}
+            timestamp_toggle = str(multitask.get("toggle_timestamps", "no"))
+            cmd += ["--timestamps", "word" if timestamp_toggle == "yes" else "none"]
         if args.family in ("sensevoice", "parakeet"):
             # The reference dumper emits the raw token stream including
             # control / language tags (sensevoice: language / event /
@@ -510,6 +696,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             raise SystemExit(
                 f"error: cpp dump [{args.family}/{case_name}] did not emit a transcript line"
             )
+        try:
+            timestamps = parse_cli_timestamps(result.stdout or "")
+        except ValueError as exc:
+            raise SystemExit(
+                f"error: cpp dump [{args.family}/{case_name}] emitted malformed "
+                f"timestamps: {exc}"
+            ) from exc
         write_cpp_transcript(
             out_dir,
             family=args.family,
@@ -518,6 +711,7 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             gguf=gguf,
             backend=args.backend,
             text=transcript,
+            timestamps=timestamps,
         )
 
     return 0
@@ -527,6 +721,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     repo = find_repo_root(Path(__file__).parent)
     manifest = load_manifest(repo, args.family, getattr(args, "variant", None))
     variant = manifest["variant"]
+    required_timestamp_levels, timestamp_tolerance_ms = manifest_timestamp_config(manifest)
 
     # Prefer per-variant tolerances declared in the manifest; fall
     # back to the family default. This lets larger variants (e.g.
@@ -561,10 +756,26 @@ def cmd_compare(args: argparse.Namespace) -> int:
         if not cpp_dir.exists():
             print(f"SKIP {case_name}: no C++ dumps at {cpp_dir}", file=sys.stderr)
             all_passed = False
+            if required_timestamp_levels:
+                transcript_results.append({
+                    "case": case_name,
+                    "match": False,
+                    "reason": "missing C++ dump directory",
+                    "timestamps_match": False,
+                    "timestamps_reason": "missing C++ dump directory",
+                })
             continue
         if not ref_dir.exists():
             print(f"SKIP {case_name}: no reference dumps at {ref_dir}", file=sys.stderr)
             all_passed = False
+            if required_timestamp_levels:
+                transcript_results.append({
+                    "case": case_name,
+                    "match": False,
+                    "reason": "missing reference dump directory",
+                    "timestamps_match": False,
+                    "timestamps_reason": "missing reference dump directory",
+                })
             continue
 
         cmd = [
@@ -614,6 +825,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 transcript_results.append({
                     "case": case_name, "match": False,
                     "reason": "missing C++ transcript artifact",
+                    "timestamps_match": False if required_timestamp_levels else None,
+                    "timestamps_reason": (
+                        "missing C++ transcript artifact"
+                        if required_timestamp_levels else None
+                    ),
                 })
                 continue
 
@@ -644,6 +860,36 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 all_passed = False
             else:
                 print(f"\n  Transcript: ok ({transcript_compare}) {cpp_text!r}")
+
+            if required_timestamp_levels:
+                timestamp_match, timestamp_reason = compare_timestamps(
+                    ref_data.get("timestamps"),
+                    cpp_data.get("timestamps"),
+                    required_timestamp_levels,
+                    timestamp_tolerance_ms,
+                    transcript_compare,
+                )
+                transcript_results[-1]["timestamps_match"] = timestamp_match
+                if not timestamp_match:
+                    transcript_results[-1]["timestamps_reason"] = timestamp_reason
+                    print(
+                        f"FAIL timestamps mismatch (tolerance {timestamp_tolerance_ms} ms): "
+                        f"{timestamp_reason}"
+                    )
+                    all_passed = False
+                else:
+                    print(f"  Timestamps: ok (tolerance {timestamp_tolerance_ms} ms)")
+        elif required_timestamp_levels:
+            reason = "missing reference transcript artifact"
+            print(f"FAIL timestamps: {reason}: {ref_transcript}", file=sys.stderr)
+            all_passed = False
+            transcript_results.append({
+                "case": case_name,
+                "match": False,
+                "reason": reason,
+                "timestamps_match": False,
+                "timestamps_reason": reason,
+            })
 
     if report_mode:
         write_report_bundle(
@@ -823,6 +1069,12 @@ def write_report_bundle(
                 else:
                     summary.append(f"- reference: `{tr.get('reference', '')!r}`")
                     summary.append(f"- c++:       `{tr.get('cpp', '')!r}`")
+            if tr.get("timestamps_match") is not None:
+                summary.append(
+                    f"- Timestamps match: **{'yes' if tr['timestamps_match'] else 'no'}**"
+                )
+                if tr.get("timestamps_reason"):
+                    summary.append(f"- Timestamp reason: {tr['timestamps_reason']}")
             summary.append("")
     (bundle_dir / "summary.md").write_text("\n".join(summary))
 

@@ -15,8 +15,8 @@ void apply_family_invariants(transcribe_model & model) {
     // directions are an optional GGUF contract in stt.translation.pairs.
     caps.supports_translate = true;
 
-    // Timestamps out of scope. Advertise NONE; the GGUF KV
-    // stt.capability.timestamps overrides this once the path is wired up.
+    // The loader raises this to WORD after it has distinguished Flash's AED
+    // timestamp-token path from v2's optional auxiliary CTC aligner.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
     // Feature bits: cancellation is wired at the run level. Canary

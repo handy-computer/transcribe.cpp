@@ -17,35 +17,72 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
 
-// Minimal JSON string escape: covers the characters MUST be escaped by
-// the JSON spec (quote, backslash, control chars). Transcribed text is
-// short UTF-8 in practice; we don't need unicode escaping.
+// JSON string escape with UTF-8 validation. A truncated decoder can stop in
+// the middle of a byte sequence; replace malformed bytes instead of emitting
+// syntactically invalid JSON.
 std::string json_escape(const char * s) {
     std::string out;
-    for (const char * p = s ? s : ""; *p; ++p) {
+    for (const char * p = s ? s : ""; *p;) {
         const unsigned char c = static_cast<unsigned char>(*p);
         if (c == '"') {
             out += "\\\"";
+            ++p;
         } else if (c == '\\') {
             out += "\\\\";
+            ++p;
         } else if (c == '\n') {
             out += "\\n";
+            ++p;
         } else if (c == '\r') {
             out += "\\r";
+            ++p;
         } else if (c == '\t') {
             out += "\\t";
+            ++p;
         } else if (c < 0x20) {
             char buf[8];
             std::snprintf(buf, sizeof(buf), "\\u%04x", c);
             out += buf;
-        } else {
+            ++p;
+        } else if (c < 0x80) {
             out += static_cast<char>(c);
+            ++p;
+        } else {
+            int n = 0;
+            if (c >= 0xC2 && c <= 0xDF) {
+                n = 2;
+            } else if (c >= 0xE0 && c <= 0xEF) {
+                n = 3;
+            } else if (c >= 0xF0 && c <= 0xF4) {
+                n = 4;
+            }
+            bool valid = n > 0;
+            for (int i = 1; valid && i < n; ++i) {
+                const unsigned char continuation = static_cast<unsigned char>(p[i]);
+                valid                            = continuation >= 0x80 && continuation <= 0xBF;
+            }
+            if (valid && n == 3) {
+                const unsigned char second = static_cast<unsigned char>(p[1]);
+                valid                      = (c != 0xE0 || second >= 0xA0) && (c != 0xED || second <= 0x9F);
+            } else if (valid && n == 4) {
+                const unsigned char second = static_cast<unsigned char>(p[1]);
+                valid                      = (c != 0xF0 || second >= 0x90) && (c != 0xF4 || second <= 0x8F);
+            }
+            if (valid) {
+                out.append(p, static_cast<size_t>(n));
+                p += n;
+            } else {
+                out += "\xEF\xBF\xBD";
+                ++p;
+            }
         }
     }
     return out;
@@ -123,6 +160,85 @@ std::string batch_segments_json(const transcribe_session * ctx, int i) {
     return out;
 }
 
+const char * timestamp_kind_json_name(transcribe_timestamp_kind kind) {
+    switch (kind) {
+        case TRANSCRIBE_TIMESTAMPS_NONE:
+            return "none";
+        case TRANSCRIBE_TIMESTAMPS_SEGMENT:
+            return "segment";
+        case TRANSCRIBE_TIMESTAMPS_WORD:
+            return "word";
+        case TRANSCRIBE_TIMESTAMPS_TOKEN:
+            return "token";
+        case TRANSCRIBE_TIMESTAMPS_AUTO:
+            return "auto";
+    }
+    return "unknown";
+}
+
+bool write_result_json(const std::string &        path,
+                       const transcribe_session * ctx,
+                       const std::string &        language,
+                       transcribe_status          status) {
+    const char *       detected  = transcribe_detected_language(ctx);
+    const char *       lang      = (detected != nullptr && detected[0] != '\0') ? detected : language.c_str();
+    const auto         kind      = transcribe_returned_timestamp_kind(ctx);
+    const bool         truncated = transcribe_was_truncated(ctx);
+    std::ostringstream json;
+    json << "{\"status\":\"" << json_escape(transcribe_status_string(status))
+         << "\",\"truncated\":" << (truncated ? "true" : "false")
+         << ",\"aborted\":" << (status == TRANSCRIBE_ERR_ABORTED ? "true" : "false") << ",\"text\":\""
+         << json_escape(transcribe_full_text(ctx)) << "\",\"language\":\"" << json_escape(lang)
+         << "\",\"timestamp_kind\":\"" << timestamp_kind_json_name(kind) << "\",\"segments\":[";
+
+    const bool emit_segments = kind != TRANSCRIBE_TIMESTAMPS_NONE || transcribe_n_speaker_segments(ctx) > 0;
+    const int  n_segments    = emit_segments ? transcribe_n_segments(ctx) : 0;
+    for (int i = 0; i < n_segments; ++i) {
+        if (i > 0) {
+            json << ',';
+        }
+        transcribe_segment segment;
+        transcribe_segment_init(&segment);
+        if (transcribe_get_segment(ctx, i, &segment) != TRANSCRIBE_OK) {
+            std::fprintf(stderr, "error: cannot read segment %d for JSON output\n", i);
+            return false;
+        }
+        json << "{\"t0_ms\":" << segment.t0_ms << ",\"t1_ms\":" << segment.t1_ms;
+        if (segment.speaker_id > 0) {
+            json << ",\"speaker_id\":" << segment.speaker_id;
+        }
+        json << ",\"text\":\"" << json_escape(segment.text) << "\",\"words\":[";
+        for (int j = 0; j < segment.n_words; ++j) {
+            if (j > 0) {
+                json << ',';
+            }
+            transcribe_word word;
+            transcribe_word_init(&word);
+            if (transcribe_get_word(ctx, segment.first_word + j, &word) != TRANSCRIBE_OK) {
+                std::fprintf(stderr, "error: cannot read word %d for JSON output\n", segment.first_word + j);
+                return false;
+            }
+            json << "{\"t0_ms\":" << word.t0_ms << ",\"t1_ms\":" << word.t1_ms << ",\"text\":\""
+                 << json_escape(word.text) << "\"}";
+        }
+        json << "]}";
+    }
+    json << "]}\n";
+
+    std::ofstream out(std::filesystem::u8path(path), std::ios::binary | std::ios::trunc);
+    if (!out) {
+        std::fprintf(stderr, "error: cannot open JSON output %s\n", path.c_str());
+        return false;
+    }
+    out << json.str();
+    out.close();
+    if (out.fail()) {
+        std::fprintf(stderr, "error: failed writing JSON output %s\n", path.c_str());
+        return false;
+    }
+    return true;
+}
+
 // ",\"raw_text\":\"...\"" fragment: the model's pre-cleanup decode
 // (transcribe_raw_text). Emitted only when it differs from the clean text,
 // so JSONL stays compact for families with no post-processing.
@@ -197,6 +313,7 @@ struct cli_args {
     std::string                language;
     std::string                target_language;   // --target-language: target lang for translation
     std::string                batch_file;        // --batch: one wav path per line
+    std::string                output_json_path;  // --output-json: structured single-file result
     int                        batch_size   = 0;  // --batch-size: >1 groups utterances into
                                                   // transcribe_run_batch calls (offline only).
                                                   // 0/1 keeps the per-file serial loop.
@@ -295,6 +412,8 @@ void print_usage(const char * argv0) {
                  "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
                  "  --batch FILE          batch mode: FILE has one wav path per line\n"
                  "  --batch-jsonl         output one JSON line per file (for batch)\n"
+                 "  --output-json PATH    write a structured single-file result with nested\n"
+                 "                        segment and word timings in milliseconds\n"
                  "  --batch-size N        group N utterances into one transcribe_run_batch\n"
                  "                        call (offline only; 0/1 = per-file serial loop)\n"
                  "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
@@ -518,6 +637,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             out.batch_file = v;
         } else if (a == "--batch-jsonl") {
             out.batch_jsonl = true;
+        } else if (a == "--output-json") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.output_json_path = v;
         } else if (a == "--batch-size") {
             const char * v = take_value(a.c_str());
             if (!v) {
@@ -654,6 +779,14 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
     }
     if (!out.wav_path.empty() && !out.batch_file.empty()) {
         std::fprintf(stderr, "error: cannot combine positional audio.wav with --batch\n");
+        return false;
+    }
+    if (!out.output_json_path.empty() && !out.batch_file.empty()) {
+        std::fprintf(stderr, "error: --output-json is only available for single-file runs\n");
+        return false;
+    }
+    if (!out.output_json_path.empty() && out.model_path.empty()) {
+        std::fprintf(stderr, "error: --output-json requires --model\n");
         return false;
     }
     if (out.stream_chunk_ms > 0 && out.repeat > 1) {
@@ -1236,7 +1369,8 @@ int main(int argc, char ** argv) {
         // CLI prints the live tentative text on each such feed.
         // Families that only commit at finalize keep result_changed
         // false until the finalize call.
-        transcribe_status run_st = TRANSCRIBE_OK;
+        transcribe_status run_st        = TRANSCRIBE_OK;
+        bool              json_write_ok = true;
         if (args.stream_chunk_ms > 0) {
             struct transcribe_capabilities caps;
             transcribe_capabilities_init(&caps);
@@ -1400,6 +1534,10 @@ int main(int argc, char ** argv) {
                                 (tok.text != nullptr) ? tok.text : "");
                 }
             }
+            if (!args.output_json_path.empty() &&
+                !write_result_json(args.output_json_path, ctx, args.language, run_st)) {
+                json_write_ok = false;
+            }
         }
 
         transcribe_print_timings(ctx);
@@ -1418,7 +1556,7 @@ int main(int argc, char ** argv) {
         transcribe_session_free(ctx);
         transcribe_model_free(model);
 
-        if (run_st != TRANSCRIBE_OK) {
+        if (run_st != TRANSCRIBE_OK || !json_write_ok) {
             return EXIT_FAILURE;
         }
     } else {

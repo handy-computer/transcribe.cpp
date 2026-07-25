@@ -25,6 +25,7 @@
 //     tiktoken-style piece_to_id_ ranks.
 //   - DecodeOnlySpecials values are carried into bos/eos/unk/blank ids.
 
+#include "gguf.h"
 #include "transcribe-tokenizer.h"
 
 #include <cstdio>
@@ -191,12 +192,86 @@ void test_empty_vocab_rejected() {
     CHECK(tok.load_decode_only_raw_bytes(empty) == TRANSCRIBE_ERR_INVALID_ARG);
 }
 
+void test_sentencepiece_bpe_canonicalization() {
+    const char * tokens[] = {
+        "<unk>",
+        "\xE2\x96\x81",
+        "h",
+        "e",
+        "l",
+        "o",
+        "\xE2\x96\x81h",
+        "\xE2\x96\x81he",
+        "ll",
+        "llo",
+        "\xE2\x96\x81hello",
+        "w",
+        "r",
+        "d",
+        "\xE2\x96\x81w",
+        "\xE2\x96\x81wo",
+        "\xE2\x96\x81wor",
+        "\xE2\x96\x81worl",
+        "\xE2\x96\x81world",
+    };
+    const float scores[] = {
+        0.0f,  -20.0f, -20.0f, -20.0f, -20.0f, -20.0f, -9.0f, -8.0f, -7.0f, -6.0f,
+        -5.0f, -20.0f, -20.0f, -20.0f, -9.0f,  -8.0f,  -7.0f, -6.0f, -5.0f,
+    };
+    int32_t types[sizeof(tokens) / sizeof(tokens[0])] = {};
+    types[0]                                          = 2;
+    for (size_t i = 1; i < sizeof(types) / sizeof(types[0]); ++i) {
+        types[i] = 1;
+    }
+
+    gguf_context * gguf = gguf_init_empty();
+    CHECK(gguf != nullptr);
+    if (gguf == nullptr) {
+        return;
+    }
+    gguf_set_val_str(gguf, "tokenizer.ggml.model", "bpe");
+    gguf_set_arr_str(gguf, "tokenizer.ggml.tokens", tokens, sizeof(tokens) / sizeof(tokens[0]));
+    gguf_set_arr_data(gguf, "tokenizer.ggml.scores", GGUF_TYPE_FLOAT32, scores, sizeof(scores) / sizeof(scores[0]));
+    gguf_set_arr_data(gguf, "tokenizer.ggml.token_type", GGUF_TYPE_INT32, types, sizeof(types) / sizeof(types[0]));
+    gguf_set_val_u32(gguf, "tokenizer.ggml.unknown_token_id", 0);
+
+    transcribe::Tokenizer tok;
+    CHECK(tok.load(gguf) == TRANSCRIBE_OK);
+    gguf_free(gguf);
+    CHECK(tok.has_bpe_canonicalizer());
+
+    // This valid decoded sequence is deliberately not the canonical BPE
+    // segmentation and contains duplicate decoded whitespace.
+    const int            noncanonical[] = { 1, 1, 2, 3, 4, 4, 5, 1, 11, 5, 12, 4, 13, 1 };
+    std::vector<int32_t> canonical;
+    CHECK(tok.canonicalize_bpe(noncanonical, static_cast<int>(sizeof(noncanonical) / sizeof(noncanonical[0])),
+                               canonical) == TRANSCRIBE_OK);
+    CHECK(canonical == std::vector<int32_t>({ 10, 18 }));
+
+    // The general plain-text encoder remains unavailable for SentencePiece;
+    // canonicalization does not claim unigram or arbitrary normalizer support.
+    std::vector<int32_t> encoded;
+    CHECK(tok.encode("hello world", encoded) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
+
+    gguf = gguf_init_empty();
+    CHECK(gguf != nullptr);
+    if (gguf != nullptr) {
+        gguf_set_val_str(gguf, "tokenizer.ggml.model", "bpe");
+        gguf_set_arr_str(gguf, "tokenizer.ggml.tokens", tokens, sizeof(tokens) / sizeof(tokens[0]));
+        transcribe::Tokenizer decode_only;
+        CHECK(decode_only.load(gguf) == TRANSCRIBE_OK);
+        CHECK(!decode_only.has_bpe_canonicalizer());
+        gguf_free(gguf);
+    }
+}
+
 }  // namespace
 
 int main() {
     test_gpt2_decode_only();
     test_raw_bytes_decode_only();
     test_empty_vocab_rejected();
+    test_sentencepiece_bpe_canonicalization();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "FAILED: %d check(s)\n", g_failures);
