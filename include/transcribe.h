@@ -1306,7 +1306,7 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct 
  *   LONG_FORM            The model exposes a long-form chunker that
  *                        handles audio longer than its native window
  *                        in a single transcribe_run call. Today:
- *                        whisper.
+ *                        whisper, and canary-1b-v2.
  *
  *   CANCELLATION         transcribe_set_abort_callback fires between
  *                        chunks / decode steps and the family hook

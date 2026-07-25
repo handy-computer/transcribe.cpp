@@ -44,11 +44,13 @@ each per-variant doc has direct download links.
 
 ## Input limits
 
-Every variant accepts up to about **6.7 minutes (400 s)** of 16 kHz mono audio
-per call — the encoder's positional table is the binding limit, shared across
-the family. Longer audio is rejected up front with
-`TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than silently truncated; split it into
-shorter segments. See the [input-length contract](../input-limits.md).
+`canary-1b-v2` has no practical per-call limit. Audio over 40 seconds is split
+into 30-40 second windows at low-energy acoustic boundaries with 1 second
+overlap, then stitched by subword-token agreement; word timestamps are rebased
+onto the original timeline. The other variants retain their encoder positional-table
+limit of about **6.7 minutes (400 s)** and reject longer audio up front with
+`TRANSCRIBE_ERR_INPUT_TOO_LONG`. See the
+[input-length contract](../input-limits.md).
 
 ## Quick start
 

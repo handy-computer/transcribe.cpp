@@ -50,6 +50,25 @@ std::vector<std::string> canary_preserve_special_tags(const Tokenizer &         
                                                       const std::vector<int> &         generated_ids,
                                                       const std::vector<std::string> & aligned_words);
 
+struct CanaryChunkSpan {
+    int start_sample = 0;
+    int n_samples    = 0;
+};
+
+struct CanaryTokenSeam {
+    int  previous_keep = 0;
+    int  current_skip  = 0;
+    bool matched       = false;
+};
+
+std::vector<CanaryChunkSpan> canary_long_form_chunks(int n_samples, int sample_rate);
+std::vector<CanaryChunkSpan> canary_long_form_chunks(const float * pcm, int n_samples, int sample_rate);
+
+CanaryTokenSeam canary_token_seam(const std::vector<int> & previous,
+                                  const std::vector<int> & current,
+                                  int                      previous_search,
+                                  int                      current_search);
+
 // ---------------------------------------------------------------------------
 // KV cache for the autoregressive decoder. Same shape as cohere.
 // ---------------------------------------------------------------------------
