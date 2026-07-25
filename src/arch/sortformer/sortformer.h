@@ -13,11 +13,11 @@
 
 #include "../parakeet/encoder.h"  // build_encoder_graph
 #include "../parakeet/weights.h"  // ParakeetHParams / ParakeetWeights (conformer)
-#include "transcribe/sortformer.h"  // public preset enum + run ext
 #include "transcribe-backend.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
+#include "transcribe/sortformer.h"  // public preset enum + run ext
 #include "weights.h"
 
 #include <cstdint>
@@ -76,38 +76,38 @@ struct SortformerModel final : public transcribe_model {
 // change will expose the presets via a stream extension). All lengths are
 // in 80 ms diar frames.
 struct SortformerStreamParams {
-    int chunk_len              = 188;
-    int chunk_left_context     = 1;
-    int chunk_right_context    = 1;
-    int fifo_len               = 0;
-    int spkcache_len           = 188;
-    int spkcache_update_period = 188;
-    int spkcache_sil_frames_per_spk = 3;
-    float sil_threshold        = 0.2f;
-    float pred_score_threshold = 0.25f;
-    float scores_boost_latest  = 0.05f;
-    float strong_boost_rate    = 0.75f;
-    float weak_boost_rate      = 1.5f;
-    float min_pos_scores_rate  = 0.5f;
-    int   max_index            = 99999;
+    int   chunk_len                   = 188;
+    int   chunk_left_context          = 1;
+    int   chunk_right_context         = 1;
+    int   fifo_len                    = 0;
+    int   spkcache_len                = 188;
+    int   spkcache_update_period      = 188;
+    int   spkcache_sil_frames_per_spk = 3;
+    float sil_threshold               = 0.2f;
+    float pred_score_threshold        = 0.25f;
+    float scores_boost_latest         = 0.05f;
+    float strong_boost_rate           = 0.75f;
+    float weak_boost_rate             = 1.5f;
+    float min_pos_scores_rate         = 0.5f;
+    int   max_index                   = 99999;
 };
 
 // Host-side streaming state (AOSC speaker cache + FIFO), mirroring NeMo's
 // StreamingSortformerState. Embeddings are 512-dim pre_encode outputs stored
 // row-major [n_frames, enc_d_model]; preds are [n_frames, n_spk].
 struct SortformerStreamState {
-    std::vector<float> spkcache;        // [spkcache_n * D]
-    std::vector<float> spkcache_preds;  // [spkcache_n * S]
-    int                spkcache_n = 0;
+    std::vector<float> spkcache;                     // [spkcache_n * D]
+    std::vector<float> spkcache_preds;               // [spkcache_n * S]
+    int                spkcache_n          = 0;
     bool               spkcache_preds_init = false;  // NeMo: spkcache_preds is None until first compress
-    std::vector<float> fifo;            // [fifo_n * D]
-    std::vector<float> fifo_preds;      // [fifo_n * S]
+    std::vector<float> fifo;                         // [fifo_n * D]
+    std::vector<float> fifo_preds;                   // [fifo_n * S]
     int                fifo_n = 0;
-    std::vector<float> mean_sil_emb;    // [D]
+    std::vector<float> mean_sil_emb;                 // [D]
     int64_t            n_sil_frames = 0;
-    std::vector<float> total_preds;     // [T_total * S], accumulated chunk preds
-    int                total_n = 0;
-    int                compress_count = 0;  // # _compress_spkcache calls (parity-dump index)
+    std::vector<float> total_preds;                  // [T_total * S], accumulated chunk preds
+    int                total_n        = 0;
+    int                compress_count = 0;           // # _compress_spkcache calls (parity-dump index)
 
     void reset(int emb_dim) {
         spkcache.clear();
@@ -120,7 +120,7 @@ struct SortformerStreamState {
         mean_sil_emb.assign(static_cast<size_t>(emb_dim), 0.0f);
         n_sil_frames = 0;
         total_preds.clear();
-        total_n = 0;
+        total_n        = 0;
         compress_count = 0;
     }
 };
@@ -135,9 +135,16 @@ SortformerStreamParams resolve_stream_params(const SortformerHParams & hp, trans
 // Exact host ports of the NeMo sync-streaming primitives (batch=1). All
 // embeddings row-major [n_frames, emb_dim]; preds row-major [n_frames, n_spk].
 // Defined in stream.cpp.
-void streaming_update_sync(SortformerStreamState & st, const SortformerStreamParams & p, int n_spk, int emb_dim,
-                           const std::vector<float> & chunk_embs, int T_diar,
-                           const std::vector<float> & preds, int T_concat, int lc, int rc);
+void streaming_update_sync(SortformerStreamState &        st,
+                           const SortformerStreamParams & p,
+                           int                            n_spk,
+                           int                            emb_dim,
+                           const std::vector<float> &     chunk_embs,
+                           int                            T_diar,
+                           const std::vector<float> &     preds,
+                           int                            T_concat,
+                           int                            lc,
+                           int                            rc);
 
 // Compress st.spkcache (spkcache_n > spkcache_len frames) in place down to
 // spkcache_len frames, matching sortformer_modules._compress_spkcache.
@@ -157,9 +164,9 @@ struct SortformerSession final : public transcribe_session {
 
     // Streaming scratch (AOSC/FIFO path).
     SortformerStreamState stream;
-    std::vector<float>    chunk_mel_buf;    // [n_mels * M] mel window for Graph A
-    std::vector<float>    chunk_embs_host;  // [T_diar * enc_d_model] pre_encode readback
-    std::vector<float>    concat_host;      // [T_concat * enc_d_model] Graph B input
+    std::vector<float>    chunk_mel_buf;      // [n_mels * M] mel window for Graph A
+    std::vector<float>    chunk_embs_host;    // [T_diar * enc_d_model] pre_encode readback
+    std::vector<float>    concat_host;        // [T_concat * enc_d_model] Graph B input
     std::vector<float>    stream_preds_host;  // [T_concat * n_spk] Graph B readback
 
     SortformerSession() = default;

@@ -43,7 +43,7 @@ bool env_int(const char * name, int & out) {
     if (v == nullptr) {
         return false;
     }
-    char *    end = nullptr;
+    char *     end    = nullptr;
     const long parsed = std::strtol(v, &end, 10);
     if (end == v) {
         return false;
@@ -66,10 +66,10 @@ struct Preset {
 };
 
 const Preset k_presets[] = {
-    { "very_high_latency", 340, 40, 40, 300, 188 },
-    { "high_latency",      124, 1, 124, 124, 188 },
-    { "low_latency",       6, 7, 188, 144, 188 },
-    { "small",             20, 1, 10, 20, 24 },
+    { "very_high_latency", 340, 40, 40,  300, 188 },
+    { "high_latency",      124, 1,  124, 124, 188 },
+    { "low_latency",       6,   7,  188, 144, 188 },
+    { "small",             20,  1,  10,  20,  24  },
 };
 
 }  // namespace
@@ -77,11 +77,11 @@ const Preset k_presets[] = {
 SortformerStreamParams resolve_stream_params(const SortformerHParams & hp, transcribe_sortformer_preset preset) {
     SortformerStreamParams p;  // score / boost params keep their (verified) defaults
     // GGUF-shipped streaming cfg is the baseline.
-    p.chunk_len              = hp.stream_chunk_len > 0 ? hp.stream_chunk_len : p.chunk_len;
-    p.spkcache_len           = hp.stream_spkcache_len > 0 ? hp.stream_spkcache_len : p.spkcache_len;
-    p.fifo_len               = hp.stream_fifo_len;  // 0 is a valid shipped value
-    p.spkcache_update_period = hp.stream_spkcache_update_period > 0 ? hp.stream_spkcache_update_period
-                                                                    : p.spkcache_update_period;
+    p.chunk_len    = hp.stream_chunk_len > 0 ? hp.stream_chunk_len : p.chunk_len;
+    p.spkcache_len = hp.stream_spkcache_len > 0 ? hp.stream_spkcache_len : p.spkcache_len;
+    p.fifo_len     = hp.stream_fifo_len;  // 0 is a valid shipped value
+    p.spkcache_update_period =
+        hp.stream_spkcache_update_period > 0 ? hp.stream_spkcache_update_period : p.spkcache_update_period;
 
     // Public run-ext preset (DEFAULT keeps the GGUF cfg). Range-checked by
     // run_validate before the dispatcher clears the previous result.
@@ -139,8 +139,13 @@ SortformerStreamParams resolve_stream_params(const SortformerHParams & hp, trans
 // ---- _get_silence_profile (sortformer_modules.py:636-667) ----
 
 // File-local (only streaming_update_sync calls it).
-static void get_silence_profile(SortformerStreamState & st, float sil_threshold, const float * pop_embs,
-                                const float * pop_preds, int n, int n_spk, int emb_dim) {
+static void get_silence_profile(SortformerStreamState & st,
+                                float                   sil_threshold,
+                                const float *           pop_embs,
+                                const float *           pop_preds,
+                                int                     n,
+                                int                     n_spk,
+                                int                     emb_dim) {
     if (n <= 0) {
         return;
     }
@@ -168,7 +173,7 @@ static void get_silence_profile(SortformerStreamState & st, float sil_threshold,
                 sil_sum += pop_embs[static_cast<size_t>(i) * emb_dim + d];
             }
         }
-        const float old_sum = st.mean_sil_emb[static_cast<size_t>(d)] * static_cast<float>(old_n);
+        const float old_sum                     = st.mean_sil_emb[static_cast<size_t>(d)] * static_cast<float>(old_n);
         st.mean_sil_emb[static_cast<size_t>(d)] = (old_sum + sil_sum) / denom;
     }
     st.n_sil_frames = new_n;
@@ -188,9 +193,9 @@ std::vector<float> get_log_pred_scores(const float * preds, int n, int n_spk, fl
             l1sum += std::log(std::max(1.0f - p, thr));
         }
         for (int s = 0; s < n_spk; ++s) {
-            const float p  = preds[static_cast<size_t>(i) * n_spk + s];
-            const float lp = std::log(std::max(p, thr));
-            const float l1 = std::log(std::max(1.0f - p, thr));
+            const float p                              = preds[static_cast<size_t>(i) * n_spk + s];
+            const float lp                             = std::log(std::max(p, thr));
+            const float l1                             = std::log(std::max(1.0f - p, thr));
             scores[static_cast<size_t>(i) * n_spk + s] = lp - l1 + l1sum - log_half;
         }
     }
@@ -219,7 +224,7 @@ void disable_low_scores(const float * preds, std::vector<float> & scores, int n,
         }
         if (pos_count >= min_pos) {
             for (int i = 0; i < n; ++i) {
-                const size_t idx      = static_cast<size_t>(i) * n_spk + s;
+                const size_t idx       = static_cast<size_t>(i) * n_spk + s;
                 const bool   is_speech = preds[idx] > 0.5f;
                 const bool   is_pos    = scores[idx] > 0.0f;
                 if (is_speech && !is_pos) {
@@ -239,20 +244,19 @@ void boost_topk_scores(std::vector<float> & scores, int n, int n_spk, int k, flo
     }
     // Reference: scores[topk] -= scale * log(0.5). log(0.5) < 0, so the top-k
     // scores are increased (boosted).
-    const float delta = scale * std::log(0.5f);  // negative
+    const float      delta = scale * std::log(0.5f);  // negative
     std::vector<int> order(static_cast<size_t>(n));
     for (int s = 0; s < n_spk; ++s) {
         std::iota(order.begin(), order.end(), 0);
         const int kk = std::min(k, n);
-        std::partial_sort(order.begin(), order.begin() + kk, order.end(),
-                          [&](int a, int b) {
-                              const float va = scores[static_cast<size_t>(a) * n_spk + s];
-                              const float vb = scores[static_cast<size_t>(b) * n_spk + s];
-                              if (va != vb) {
-                                  return va > vb;  // descending value
-                              }
-                              return a < b;  // tie -> lower index first
-                          });
+        std::partial_sort(order.begin(), order.begin() + kk, order.end(), [&](int a, int b) {
+            const float va = scores[static_cast<size_t>(a) * n_spk + s];
+            const float vb = scores[static_cast<size_t>(b) * n_spk + s];
+            if (va != vb) {
+                return va > vb;  // descending value
+            }
+            return a < b;        // tie -> lower index first
+        });
         for (int j = 0; j < kk; ++j) {
             scores[static_cast<size_t>(order[static_cast<size_t>(j)]) * n_spk + s] -= delta;
         }
@@ -264,8 +268,8 @@ void boost_topk_scores(std::vector<float> & scores, int n, int n_spk, int k, flo
 // ---- _compress_spkcache (sortformer_modules.py:838-896) ----
 
 void compress_spkcache(SortformerStreamState & st, const SortformerStreamParams & p, int n_spk, int emb_dim) {
-    const int N   = st.spkcache_n;          // n_frames (> spkcache_len)
-    const int L   = p.spkcache_len;         // target frames
+    const int N   = st.spkcache_n;   // n_frames (> spkcache_len)
+    const int L   = p.spkcache_len;  // target frames
     const int sil = p.spkcache_sil_frames_per_spk;
 
     const int per_spk = L / n_spk - sil;
@@ -293,8 +297,8 @@ void compress_spkcache(SortformerStreamState & st, const SortformerStreamParams 
     boost_topk_scores(scores, N, n_spk, weak, /*scale=*/1.0f);
 
     // 4. append `sil` rows of +inf per speaker; n_frames = N + sil.
-    const int n_frames        = N + sil;
-    const int n_frames_no_sil = N;
+    const int          n_frames        = N + sil;
+    const int          n_frames_no_sil = N;
     std::vector<float> scores_ext(static_cast<size_t>(n_frames) * n_spk);
     std::copy(scores.begin(), scores.end(), scores_ext.begin());
     for (int i = N; i < n_frames; ++i) {
@@ -306,7 +310,7 @@ void compress_spkcache(SortformerStreamState & st, const SortformerStreamParams 
     // 5. _get_topk_indices: flatten permute(0,2,1) -> flat[s*n_frames + i];
     // top-L largest (value desc, flat-idx asc), -inf picks -> max_index, sort
     // ascending, derive frame idx + is_disabled.
-    const int64_t M = static_cast<int64_t>(n_spk) * n_frames;
+    const int64_t        M = static_cast<int64_t>(n_spk) * n_frames;
     std::vector<int64_t> flat(static_cast<size_t>(M));
     std::iota(flat.begin(), flat.end(), int64_t{ 0 });
     auto flat_val = [&](int64_t f) -> float {
@@ -315,19 +319,18 @@ void compress_spkcache(SortformerStreamState & st, const SortformerStreamParams 
         return scores_ext[static_cast<size_t>(i) * n_spk + s];
     };
     const int kk = static_cast<int>(std::min<int64_t>(L, M));
-    std::partial_sort(flat.begin(), flat.begin() + kk, flat.end(),
-                      [&](int64_t a, int64_t b) {
-                          const float va = flat_val(a);
-                          const float vb = flat_val(b);
-                          if (va != vb) {
-                              return va > vb;
-                          }
-                          return a < b;
-                      });
+    std::partial_sort(flat.begin(), flat.begin() + kk, flat.end(), [&](int64_t a, int64_t b) {
+        const float va = flat_val(a);
+        const float vb = flat_val(b);
+        if (va != vb) {
+            return va > vb;
+        }
+        return a < b;
+    });
     std::vector<int64_t> picks(static_cast<size_t>(L));
     for (int j = 0; j < L; ++j) {
         if (j < kk) {
-            const int64_t f = flat[static_cast<size_t>(j)];
+            const int64_t f               = flat[static_cast<size_t>(j)];
             picks[static_cast<size_t>(j)] = (flat_val(f) == kNegInf) ? p.max_index : f;
         } else {
             picks[static_cast<size_t>(j)] = p.max_index;  // fewer than L finite picks
@@ -375,26 +378,25 @@ void compress_spkcache(SortformerStreamState & st, const SortformerStreamParams 
     // can be compared index-for-index. Gated behind an explicit env on top of
     // the normal dump-enabled flag so DER/validate runs are unaffected.
     if (transcribe::debug::enabled() && env_get("TRANSCRIBE_SORTFORMER_COMPRESS_DUMP") != nullptr) {
-        const int k = st.compress_count;
-        char name[64];
+        const int          k = st.compress_count;
+        char               name[64];
         std::vector<float> fidx(static_cast<size_t>(L)), fdis(static_cast<size_t>(L));
         for (int j = 0; j < L; ++j) {
             fidx[static_cast<size_t>(j)] = static_cast<float>(frame_idx[static_cast<size_t>(j)]);
             fdis[static_cast<size_t>(j)] = is_disabled[static_cast<size_t>(j)] ? 1.0f : 0.0f;
         }
-        const long long li = L;
+        const long long li        = L;
         const long long shp_in[2] = { N, n_spk };
         std::snprintf(name, sizeof(name), "compress.%03d.input_preds", k);
-        transcribe::debug::dump_host_f32(name, st.spkcache_preds.data(), static_cast<long long>(N) * n_spk,
-                                         shp_in, 2, "compress");
+        transcribe::debug::dump_host_f32(name, st.spkcache_preds.data(), static_cast<long long>(N) * n_spk, shp_in, 2,
+                                         "compress");
         std::snprintf(name, sizeof(name), "compress.%03d.frame_idx", k);
         transcribe::debug::dump_host_f32(name, fidx.data(), li, &li, 1, "compress");
         std::snprintf(name, sizeof(name), "compress.%03d.is_disabled", k);
         transcribe::debug::dump_host_f32(name, fdis.data(), li, &li, 1, "compress");
         const long long shp[2] = { L, n_spk };
         std::snprintf(name, sizeof(name), "compress.%03d.spkcache_preds", k);
-        transcribe::debug::dump_host_f32(name, new_preds.data(), static_cast<long long>(L) * n_spk, shp, 2,
-                                         "compress");
+        transcribe::debug::dump_host_f32(name, new_preds.data(), static_cast<long long>(L) * n_spk, shp, 2, "compress");
     }
     ++st.compress_count;
 
@@ -405,12 +407,19 @@ void compress_spkcache(SortformerStreamState & st, const SortformerStreamParams 
 
 // ---- streaming_update (sync branch, sortformer_modules.py:526-609) ----
 
-void streaming_update_sync(SortformerStreamState & st, const SortformerStreamParams & p, int n_spk, int emb_dim,
-                           const std::vector<float> & chunk_embs, int T_diar,
-                           const std::vector<float> & preds, int /*T_concat*/, int lc, int rc) {
-    const int S = st.spkcache_n;         // spkcache_len (local, pre-update)
-    const int F = st.fifo_n;             // fifo_len (local, pre-update)
-    const int C = T_diar - lc - rc;      // chunk_len (middle frames)
+void streaming_update_sync(SortformerStreamState &        st,
+                           const SortformerStreamParams & p,
+                           int                            n_spk,
+                           int                            emb_dim,
+                           const std::vector<float> &     chunk_embs,
+                           int                            T_diar,
+                           const std::vector<float> &     preds,
+                           int /*T_concat*/,
+                           int lc,
+                           int rc) {
+    const int S = st.spkcache_n;     // spkcache_len (local, pre-update)
+    const int F = st.fifo_n;         // fifo_len (local, pre-update)
+    const int C = T_diar - lc - rc;  // chunk_len (middle frames)
 
     // fifo_preds = preds[S : S+F]  (rebuilt from the concat preds each call).
     st.fifo_preds.assign(preds.begin() + static_cast<size_t>(S) * n_spk,
@@ -431,8 +440,7 @@ void streaming_update_sync(SortformerStreamState & st, const SortformerStreamPar
         pop     = std::min(pop, F + C);
 
         std::vector<float> pop_embs(st.fifo.begin(), st.fifo.begin() + static_cast<size_t>(pop) * emb_dim);
-        std::vector<float> pop_preds(st.fifo_preds.begin(),
-                                     st.fifo_preds.begin() + static_cast<size_t>(pop) * n_spk);
+        std::vector<float> pop_preds(st.fifo_preds.begin(), st.fifo_preds.begin() + static_cast<size_t>(pop) * n_spk);
 
         get_silence_profile(st, p.sil_threshold, pop_embs.data(), pop_preds.data(), pop, n_spk, emb_dim);
 

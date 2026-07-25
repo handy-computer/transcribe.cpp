@@ -25,8 +25,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -41,7 +41,7 @@ extern const Arch arch;
 namespace pk   = transcribe::parakeet;
 namespace conf = transcribe::conformer;
 
-static constexpr float kBnEps = 1e-5f;
+static constexpr float kBnEps              = 1e-5f;
 static constexpr char  k_default_variant[] = "diar_streaming_sortformer_4spk-v2.1";
 
 SortformerModel::~SortformerModel() {
@@ -98,13 +98,13 @@ void fill_conformer_hp(const SortformerHParams & s, pk::ParakeetHParams & p) {
     p.enc_conv_norm_type       = pk::ParakeetHParams::ConvNormType::BatchNorm;
 
     // Frontend fields build_encoder_graph's pre_encode geometry reads.
-    p.fe_num_mels    = s.fe_num_mels;
-    p.fe_sample_rate = s.fe_sample_rate;
-    p.fe_n_fft       = s.fe_n_fft;
-    p.fe_win_length  = s.fe_win_length;
-    p.fe_hop_length  = s.fe_hop_length;
-    p.fe_normalize   = s.fe_normalize;
-    p.fe_dither      = s.fe_dither;
+    p.fe_num_mels     = s.fe_num_mels;
+    p.fe_sample_rate  = s.fe_sample_rate;
+    p.fe_n_fft        = s.fe_n_fft;
+    p.fe_win_length   = s.fe_win_length;
+    p.fe_hop_length   = s.fe_hop_length;
+    p.fe_normalize    = s.fe_normalize;
+    p.fe_dither       = s.fe_dither;
     p.fe_pre_emphasis = s.fe_pre_emphasis;
 }
 
@@ -120,15 +120,16 @@ transcribe_status load_conformer_weights(ggml_context * ctx, const pk::ParakeetH
         }
         return t;
     };
-#define G(dst, nm)                              \
-    do {                                        \
-        (dst) = get(nm);                        \
-        if ((dst) == nullptr) return TRANSCRIBE_ERR_GGUF; \
+#define G(dst, nm)                      \
+    do {                                \
+        (dst) = get(nm);                \
+        if ((dst) == nullptr)           \
+            return TRANSCRIBE_ERR_GGUF; \
     } while (0)
-#define GL(dst, fmt, i)                         \
-    do {                                        \
+#define GL(dst, fmt, i)                            \
+    do {                                           \
         std::snprintf(name, sizeof(name), fmt, i); \
-        G(dst, name);                           \
+        G(dst, name);                              \
     } while (0)
 
     auto & pe = w.pre_encode;
@@ -257,7 +258,7 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * W, ggml_tensor * x, ggml_
 // One post-LN Transformer encoder block (no positional encoding, full
 // attention). x ne = [d, T].
 ggml_tensor * tf_block(ggml_context * ctx, const SortformerTfBlock & b, ggml_tensor * x, int d, int n_head, int T) {
-    const int   head_dim  = d / n_head;
+    const int   head_dim   = d / n_head;
     const float attn_scale = std::sqrt(std::sqrt(static_cast<float>(head_dim)));
     const float inv_scale  = 1.0f / attn_scale;
 
@@ -275,13 +276,13 @@ ggml_tensor * tf_block(ggml_context * ctx, const SortformerTfBlock & b, ggml_ten
     q = ggml_scale(ctx, q, inv_scale);
     k = ggml_scale(ctx, k, inv_scale);
 
-    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);   // [T_k, T_q, H]
-    kq               = ggml_soft_max(ctx, kq);    // softmax over keys (ne0)
+    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);                                      // [T_k, T_q, H]
+    kq               = ggml_soft_max(ctx, kq);                                       // softmax over keys (ne0)
 
-    ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));  // [T, hd, H]
-    ggml_tensor * ctx_out = ggml_mul_mat(ctx, v_t, kq);                    // [hd, T_q, H]
-    ctx_out = ggml_cont(ctx, ggml_permute(ctx, ctx_out, 0, 2, 1, 3));      // [hd, H, T]
-    ctx_out = ggml_reshape_2d(ctx, ctx_out, d, T);                         // [d, T]
+    ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));        // [T, hd, H]
+    ggml_tensor * ctx_out = ggml_mul_mat(ctx, v_t, kq);                              // [hd, T_q, H]
+    ctx_out               = ggml_cont(ctx, ggml_permute(ctx, ctx_out, 0, 2, 1, 3));  // [hd, H, T]
+    ctx_out               = ggml_reshape_2d(ctx, ctx_out, d, T);                     // [d, T]
 
     ggml_tensor * attn_out = linear(ctx, b.attn_o_w, ctx_out, b.attn_o_b);
 
@@ -309,12 +310,12 @@ ggml_tensor * tf_block(ggml_context * ctx, const SortformerTfBlock & b, ggml_ten
 
 conf::ConvPolicy sf_conv_policy(const char * backend) {
     conf::ConvPolicy policy{};
-    policy.direct_pw = conf::detect_direct_pw(backend);
+    policy.direct_pw          = conf::detect_direct_pw(backend);
     // Parakeet block/pre_encode depthwise defaults (encoder.cpp:50-66).
     policy.direct_dw_in_block = conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW",
                                                           /*backend_default=*/true);
-    const bool is_metal = backend != nullptr &&
-                          (std::strstr(backend, "Metal") != nullptr || std::strstr(backend, "metal") != nullptr);
+    const bool is_metal =
+        backend != nullptr && (std::strstr(backend, "Metal") != nullptr || std::strstr(backend, "metal") != nullptr);
     policy.direct_dw_in_pre_encode = conf::resolve_conv_direct(
         "TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW", /*backend_default=*/!is_metal);
     policy.causal_pre_encode = false;  // NEST offline subsample (Regular att)
@@ -323,36 +324,62 @@ conf::ConvPolicy sf_conv_policy(const char * backend) {
 
 conf::PreEncodeView sf_pre_view(const pk::ParakeetPreEncode & pe) {
     conf::PreEncodeView v;
-    v.conv0_w = pe.conv0_w;  v.conv0_b = pe.conv0_b;
-    v.conv2_w = pe.conv2_w;  v.conv2_b = pe.conv2_b;
-    v.conv3_w = pe.conv3_w;  v.conv3_b = pe.conv3_b;
-    v.conv5_w = pe.conv5_w;  v.conv5_b = pe.conv5_b;
-    v.conv6_w = pe.conv6_w;  v.conv6_b = pe.conv6_b;
-    v.out_w   = pe.out_w;    v.out_b   = pe.out_b;
+    v.conv0_w = pe.conv0_w;
+    v.conv0_b = pe.conv0_b;
+    v.conv2_w = pe.conv2_w;
+    v.conv2_b = pe.conv2_b;
+    v.conv3_w = pe.conv3_w;
+    v.conv3_b = pe.conv3_b;
+    v.conv5_w = pe.conv5_w;
+    v.conv5_b = pe.conv5_b;
+    v.conv6_w = pe.conv6_w;
+    v.conv6_b = pe.conv6_b;
+    v.out_w   = pe.out_w;
+    v.out_b   = pe.out_b;
     return v;
 }
 
 conf::BlockView sf_block_view(const pk::ParakeetBlock & b) {
     conf::BlockView v;
-    v.norm_ff1_w = b.norm_ff1_w;  v.norm_ff1_b = b.norm_ff1_b;
-    v.ff1_lin1_w = b.ff1_lin1_w;  v.ff1_lin1_b = b.ff1_lin1_b;
-    v.ff1_lin2_w = b.ff1_lin2_w;  v.ff1_lin2_b = b.ff1_lin2_b;
-    v.norm_attn_w = b.norm_attn_w;  v.norm_attn_b = b.norm_attn_b;
-    v.attn_q_w = b.attn_q_w;  v.attn_q_b = b.attn_q_b;
-    v.attn_k_w = b.attn_k_w;  v.attn_k_b = b.attn_k_b;
-    v.attn_v_w = b.attn_v_w;  v.attn_v_b = b.attn_v_b;
-    v.attn_out_w = b.attn_out_w;  v.attn_out_b = b.attn_out_b;
-    v.attn_pos_w = b.attn_pos_w;  v.attn_pos_u = b.attn_pos_u;  v.attn_pos_v = b.attn_pos_v;
-    v.norm_conv_w = b.norm_conv_w;  v.norm_conv_b = b.norm_conv_b;
-    v.conv_pw1_w = b.conv_pw1_w;  v.conv_pw1_b = b.conv_pw1_b;
-    v.conv_dw_w = b.conv_dw_w;  v.conv_dw_b = b.conv_dw_b;
-    v.conv_pw2_w = b.conv_pw2_w;  v.conv_pw2_b = b.conv_pw2_b;
-    v.conv_bn_fused_scale = b.conv_bn_fused_scale;  v.conv_bn_fused_bias = b.conv_bn_fused_bias;
-    v.conv_ln_w = b.conv_bn_w;  v.conv_ln_b = b.conv_bn_b;
-    v.norm_ff2_w = b.norm_ff2_w;  v.norm_ff2_b = b.norm_ff2_b;
-    v.ff2_lin1_w = b.ff2_lin1_w;  v.ff2_lin1_b = b.ff2_lin1_b;
-    v.ff2_lin2_w = b.ff2_lin2_w;  v.ff2_lin2_b = b.ff2_lin2_b;
-    v.norm_out_w = b.norm_out_w;  v.norm_out_b = b.norm_out_b;
+    v.norm_ff1_w          = b.norm_ff1_w;
+    v.norm_ff1_b          = b.norm_ff1_b;
+    v.ff1_lin1_w          = b.ff1_lin1_w;
+    v.ff1_lin1_b          = b.ff1_lin1_b;
+    v.ff1_lin2_w          = b.ff1_lin2_w;
+    v.ff1_lin2_b          = b.ff1_lin2_b;
+    v.norm_attn_w         = b.norm_attn_w;
+    v.norm_attn_b         = b.norm_attn_b;
+    v.attn_q_w            = b.attn_q_w;
+    v.attn_q_b            = b.attn_q_b;
+    v.attn_k_w            = b.attn_k_w;
+    v.attn_k_b            = b.attn_k_b;
+    v.attn_v_w            = b.attn_v_w;
+    v.attn_v_b            = b.attn_v_b;
+    v.attn_out_w          = b.attn_out_w;
+    v.attn_out_b          = b.attn_out_b;
+    v.attn_pos_w          = b.attn_pos_w;
+    v.attn_pos_u          = b.attn_pos_u;
+    v.attn_pos_v          = b.attn_pos_v;
+    v.norm_conv_w         = b.norm_conv_w;
+    v.norm_conv_b         = b.norm_conv_b;
+    v.conv_pw1_w          = b.conv_pw1_w;
+    v.conv_pw1_b          = b.conv_pw1_b;
+    v.conv_dw_w           = b.conv_dw_w;
+    v.conv_dw_b           = b.conv_dw_b;
+    v.conv_pw2_w          = b.conv_pw2_w;
+    v.conv_pw2_b          = b.conv_pw2_b;
+    v.conv_bn_fused_scale = b.conv_bn_fused_scale;
+    v.conv_bn_fused_bias  = b.conv_bn_fused_bias;
+    v.conv_ln_w           = b.conv_bn_w;
+    v.conv_ln_b           = b.conv_bn_b;
+    v.norm_ff2_w          = b.norm_ff2_w;
+    v.norm_ff2_b          = b.norm_ff2_b;
+    v.ff2_lin1_w          = b.ff2_lin1_w;
+    v.ff2_lin1_b          = b.ff2_lin1_b;
+    v.ff2_lin2_w          = b.ff2_lin2_w;
+    v.ff2_lin2_b          = b.ff2_lin2_b;
+    v.norm_out_w          = b.norm_out_w;
+    v.norm_out_b          = b.norm_out_b;
     return v;
 }
 
@@ -387,8 +414,8 @@ struct PreEncodeBuild {
 
 PreEncodeBuild build_pre_encode_graph(ggml_context * ctx, SortformerModel & m, int M) {
     PreEncodeBuild b{};
-    const int     n_mels = m.conformer_hp.fe_num_mels;
-    ggml_tensor * mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, M, n_mels, 1, 1);
+    const int      n_mels = m.conformer_hp.fe_num_mels;
+    ggml_tensor *  mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, M, n_mels, 1, 1);
     ggml_set_name(mel_in, "chunk.mel.in");
     ggml_set_input(mel_in);
     const conf::ConvPolicy policy = sf_conv_policy(m.backend.c_str());
@@ -416,8 +443,8 @@ struct StreamInferBuild {
 
 StreamInferBuild build_stream_infer_graph(ggml_context * ctx, SortformerModel & m, int T_concat) {
     StreamInferBuild b{};
-    const int     ed        = m.conformer_hp.enc_d_model;
-    ggml_tensor * concat_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ed, T_concat);
+    const int        ed        = m.conformer_hp.enc_d_model;
+    ggml_tensor *    concat_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ed, T_concat);
     ggml_set_name(concat_in, "stream.concat.in");
     ggml_set_input(concat_in);
 
@@ -430,10 +457,10 @@ StreamInferBuild build_stream_infer_graph(ggml_context * ctx, SortformerModel & 
     ggml_set_input(pos_emb_in);
 
     conf::BlockParams bp{};
-    bp.d_model     = ed;
-    bp.n_head      = m.conformer_hp.enc_n_heads;
-    bp.conv_kernel = m.conformer_hp.enc_conv_kernel;
-    bp.kv_type     = GGML_TYPE_F32;
+    bp.d_model         = ed;
+    bp.n_head          = m.conformer_hp.enc_n_heads;
+    bp.conv_kernel     = m.conformer_hp.enc_conv_kernel;
+    bp.kv_type         = GGML_TYPE_F32;
     bool enc_use_flash = true, dec_use_flash = false;
     transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
     bp.use_flash          = enc_use_flash;
@@ -459,9 +486,9 @@ StreamInferBuild build_stream_infer_graph(ggml_context * ctx, SortformerModel & 
 
     // Diar head (forward_speaker_sigmoids). All frames valid in sync mode, so
     // the encoder_mask multiply is a no-op.
-    ggml_tensor * h = ggml_relu(ctx, t);
-    h               = linear(ctx, m.weights.fc1_w, h, m.weights.fc1_b);
-    h               = ggml_relu(ctx, h);
+    ggml_tensor * h     = ggml_relu(ctx, t);
+    h                   = linear(ctx, m.weights.fc1_w, h, m.weights.fc1_b);
+    h                   = ggml_relu(ctx, h);
     ggml_tensor * s     = linear(ctx, m.weights.single_spk_head_w, h, m.weights.single_spk_head_b);
     ggml_tensor * preds = ggml_sigmoid(ctx, s);  // [n_spk, T_concat]
 
@@ -504,14 +531,14 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     // Mel front-end (NeMo AudioToMelSpectrogramPreprocessor; normalize=none).
     {
         transcribe::MelConfig cfg{};
-        cfg.sample_rate  = m->hparams.fe_sample_rate;
-        cfg.num_mels     = m->hparams.fe_num_mels;
-        cfg.n_fft        = m->hparams.fe_n_fft;
-        cfg.win_length   = m->hparams.fe_win_length;
-        cfg.hop_length   = m->hparams.fe_hop_length;
-        cfg.pre_emphasis = m->hparams.fe_pre_emphasis;
-        cfg.normalize    = m->hparams.fe_normalize;
-        cfg.pad_mode     = "constant";
+        cfg.sample_rate       = m->hparams.fe_sample_rate;
+        cfg.num_mels          = m->hparams.fe_num_mels;
+        cfg.n_fft             = m->hparams.fe_n_fft;
+        cfg.win_length        = m->hparams.fe_win_length;
+        cfg.hop_length        = m->hparams.fe_hop_length;
+        cfg.pre_emphasis      = m->hparams.fe_pre_emphasis;
+        cfg.normalize         = m->hparams.fe_normalize;
+        cfg.pad_mode          = "constant";
         // NeMo AudioToMelSpectrogramPreprocessor uses ceil(n/hop) framing;
         // the mel tensor is pad_to=16 padded but forward() trims it back to
         // the real length before the encoder, so feeding the ceil length is
@@ -521,8 +548,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     gguf_init_params init_params{};
-    init_params.no_alloc = true;
-    init_params.ctx      = &m->ctx_meta;
+    init_params.no_alloc     = true;
+    init_params.ctx          = &m->ctx_meta;
     gguf_context * gguf_data = gguf_init_from_file(loader.path().c_str(), init_params);
     if (gguf_data == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
@@ -571,12 +598,13 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     m->t_load_us = ggml_time_us() - t_load_start;
-    *out_model = m.release();
+    *out_model   = m.release();
     return TRANSCRIBE_OK;
 }
 
-transcribe_status init_context(transcribe_model * model, const transcribe_session_params * params,
-                               transcribe_session ** out_ctx) {
+transcribe_status init_context(transcribe_model *                model,
+                               const transcribe_session_params * params,
+                               transcribe_session **             out_ctx) {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -584,7 +612,7 @@ transcribe_status init_context(transcribe_model * model, const transcribe_sessio
     pc->model     = model;
     pc->n_threads = params->n_threads;
     pc->kv_type   = params->kv_type;
-    *out_ctx = pc.release();
+    *out_ctx      = pc.release();
     return TRANSCRIBE_OK;
 }
 
@@ -592,7 +620,7 @@ transcribe_status init_context(transcribe_model * model, const transcribe_sessio
 // the DER-grade dihard3 post-processing is a later, streaming-checkpoint
 // concern). probs is row-major [T, n_spk]. Emits one contiguous run per
 // speaker as a speaker_segment row.
-static void probs_to_speaker_segments(transcribe_session *   pc,
+static void probs_to_speaker_segments(transcribe_session *       pc,
                                       const std::vector<float> & probs,
                                       int                        T,
                                       int                        n_spk,
@@ -667,9 +695,9 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
     }
     ggml_tensor * tf_out = x;
 
-    ggml_tensor * h = ggml_relu(ctx, tf_out);
-    h               = linear(ctx, pm->weights.fc1_w, h, pm->weights.fc1_b);
-    h               = ggml_relu(ctx, h);
+    ggml_tensor * h     = ggml_relu(ctx, tf_out);
+    h                   = linear(ctx, pm->weights.fc1_w, h, pm->weights.fc1_b);
+    h                   = ggml_relu(ctx, h);
     ggml_tensor * s     = linear(ctx, pm->weights.single_spk_head_w, h, pm->weights.single_spk_head_b);
     ggml_tensor * preds = ggml_sigmoid(ctx, s);
 
@@ -714,12 +742,16 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
 // proj + transformer + head) over the [spkcache|fifo|chunk] concat, and drives
 // the host streaming_update_sync / _compress_spkcache state machine. Emits the
 // accumulated T x n_spk probs as diar.probs and the speaker segments.
-static transcribe_status run_streaming(SortformerSession * pc, SortformerModel * pm, int mel_n_mels, int mel_n_frames,
-                                       double ms_per_frame, transcribe_sortformer_preset preset) {
-    const SortformerStreamParams P     = resolve_stream_params(pm->hparams, preset);
-    const int                    ed    = pm->conformer_hp.enc_d_model;
-    const int                    n_spk = pm->hparams.max_speakers;
-    const int                    sub   = pm->hparams.enc_subsampling_factor;
+static transcribe_status run_streaming(SortformerSession *          pc,
+                                       SortformerModel *            pm,
+                                       int                          mel_n_mels,
+                                       int                          mel_n_frames,
+                                       double                       ms_per_frame,
+                                       transcribe_sortformer_preset preset) {
+    const SortformerStreamParams P        = resolve_stream_params(pm->hparams, preset);
+    const int                    ed       = pm->conformer_hp.enc_d_model;
+    const int                    n_spk    = pm->hparams.max_speakers;
+    const int                    sub      = pm->hparams.enc_subsampling_factor;
     const int                    feat_len = mel_n_frames;
 
     if (sub <= 0 || P.chunk_len <= 0) {
@@ -744,8 +776,8 @@ static transcribe_status run_streaming(SortformerSession * pc, SortformerModel *
         const int M            = win_hi - win_lo;
         // Diar-frame context: left_offset is a multiple of sub -> round is
         // exact; right_offset may be short on the final chunk -> ceil.
-        const int lc = (left_offset + sub / 2) / sub;
-        const int rc = (right_offset + sub - 1) / sub;
+        const int lc           = (left_offset + sub / 2) / sub;
+        const int rc           = (right_offset + sub - 1) / sub;
 
         if (pc->compute_ctx != nullptr) {
             ggml_free(pc->compute_ctx);
@@ -829,8 +861,7 @@ static transcribe_status run_streaming(SortformerSession * pc, SortformerModel *
             return TRANSCRIBE_ERR_GGUF;
         }
         pc->stream_preds_host.resize(static_cast<size_t>(T_concat) * n_spk);
-        ggml_backend_tensor_get(B.preds, pc->stream_preds_host.data(), 0,
-                                pc->stream_preds_host.size() * sizeof(float));
+        ggml_backend_tensor_get(B.preds, pc->stream_preds_host.data(), 0, pc->stream_preds_host.size() * sizeof(float));
 
         transcribe::debug::pop_name_prefix();
 
@@ -858,7 +889,9 @@ static transcribe_status run_streaming(SortformerSession * pc, SortformerModel *
     return TRANSCRIBE_OK;
 }
 
-transcribe_status run(transcribe_session * session, const float * pcm, int n_samples,
+transcribe_status run(transcribe_session *          session,
+                      const float *                 pcm,
+                      int                           n_samples,
                       const transcribe_run_params * params) {
     auto * pc = static_cast<SortformerSession *>(session);
     auto * pm = static_cast<SortformerModel *>(session->model);
@@ -891,8 +924,8 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
         return mst;
     }
 
-    const double ms_per_frame = 1000.0 * static_cast<double>(pm->hparams.frame_hop) /
-                                static_cast<double>(pm->hparams.fe_sample_rate);
+    const double ms_per_frame =
+        1000.0 * static_cast<double>(pm->hparams.frame_hop) / static_cast<double>(pm->hparams.fe_sample_rate);
 
     // Offline forward: parity dumps only. Gated behind an explicit env
     // (set by validate.py cmd_cpp) because it runs full-context O(T^2)

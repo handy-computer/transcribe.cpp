@@ -89,7 +89,7 @@ int main() {
         std::fprintf(stderr, "sortformer_stream_ext_unit: file not found: %s\n", gguf.c_str());
         return 77;
     }
-    const std::string wav_path = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/sortformer-2spk-mix.wav";
+    const std::string  wav_path = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/sortformer-2spk-mix.wav";
     std::vector<float> pcm;
     std::string        wav_err;
     if (!transcribe_cli::load_wav_mono_16k(wav_path, pcm, wav_err)) {
@@ -103,7 +103,7 @@ int main() {
 
     transcribe_model_load_params mp;
     transcribe_model_load_params_init(&mp);
-    mp.backend = TRANSCRIBE_BACKEND_CPU;  // deterministic float order for the parity leg
+    mp.backend                      = TRANSCRIBE_BACKEND_CPU;  // deterministic float order for the parity leg
     struct transcribe_model * model = nullptr;
     if (transcribe_model_load_file(gguf.c_str(), &mp, &model) != TRANSCRIBE_OK || model == nullptr) {
         std::fprintf(stderr, "FAIL: model load\n");
@@ -112,8 +112,7 @@ int main() {
 
     // 1. Kind+slot probe.
     CHECK(transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM));
-    CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
-                                             TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM));
+    CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM, TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM));
     CHECK(!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, 0x4E524857u /* WHRN */));
 
     // 2. Init function stamps the header + default.
@@ -146,16 +145,14 @@ int main() {
         transcribe_sortformer_stream_ext_init(&bad);
         bad.ext.kind = 0x4E524857u;  // WHRN: wrong family kind
         rp.family    = &bad.ext;
-        CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) ==
-              TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_ERR_INVALID_ARG);
         CHECK(same_segments(read_segments(session), env_rows));  // snapshot intact
 
         transcribe_sortformer_stream_ext oor;
         transcribe_sortformer_stream_ext_init(&oor);
         oor.preset = static_cast<transcribe_sortformer_preset>(99);
         rp.family  = &oor.ext;
-        CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) ==
-              TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(transcribe_run(session, pcm.data(), static_cast<int>(pcm.size()), &rp) == TRANSCRIBE_ERR_INVALID_ARG);
         CHECK(same_segments(read_segments(session), env_rows));
     }
 

@@ -53,12 +53,15 @@ transcribe_status read_sortformer_hparams(const gguf_context * g, SortformerHPar
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-#define RD_U32(key, field)                                              \
-    if (const transcribe_status st = kv_u32(g, key, hp.field); st != TRANSCRIBE_OK) return st
-#define RD_F32(key, field)                                              \
-    if (const transcribe_status st = kv_f32(g, key, hp.field); st != TRANSCRIBE_OK) return st
-#define RD_STR(key, field)                                              \
-    if (const transcribe_status st = kv_str(g, key, hp.field); st != TRANSCRIBE_OK) return st
+#define RD_U32(key, field)                                                          \
+    if (const transcribe_status st = kv_u32(g, key, hp.field); st != TRANSCRIBE_OK) \
+    return st
+#define RD_F32(key, field)                                                          \
+    if (const transcribe_status st = kv_f32(g, key, hp.field); st != TRANSCRIBE_OK) \
+    return st
+#define RD_STR(key, field)                                                          \
+    if (const transcribe_status st = kv_str(g, key, hp.field); st != TRANSCRIBE_OK) \
+    return st
 
     RD_U32("stt.sortformer.max_speakers", max_speakers);
     RD_U32("stt.sortformer.frame_hop", frame_hop);
@@ -104,8 +107,8 @@ transcribe_status read_sortformer_hparams(const gguf_context * g, SortformerHPar
 #undef RD_STR
 
     if (hp.tf_n_heads == 0 || hp.tf_d_model % hp.tf_n_heads != 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer: tf_d_model %d not divisible by tf_n_heads %d",
-                hp.tf_d_model, hp.tf_n_heads);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer: tf_d_model %d not divisible by tf_n_heads %d", hp.tf_d_model,
+                hp.tf_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.tf_pre_ln) {
@@ -126,9 +129,8 @@ ggml_tensor * get_checked(ggml_context * ctx, const char * name, int64_t ne0, in
         return nullptr;
     }
     if ((ne0 >= 0 && t->ne[0] != ne0) || (ne1 >= 0 && t->ne[1] != ne1)) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "sortformer: tensor %s shape mismatch: have [%lld,%lld] want [%lld,%lld]", name,
-                (long long) t->ne[0], (long long) t->ne[1], (long long) ne0, (long long) ne1);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer: tensor %s shape mismatch: have [%lld,%lld] want [%lld,%lld]",
+                name, (long long) t->ne[0], (long long) t->ne[1], (long long) ne0, (long long) ne1);
         return nullptr;
     }
     return t;
@@ -137,16 +139,17 @@ ggml_tensor * get_checked(ggml_context * ctx, const char * name, int64_t ne0, in
 }  // namespace
 
 transcribe_status build_sortformer_weights(ggml_context * ctx, const SortformerHParams & hp, SortformerWeights & w) {
-    const int64_t d    = hp.tf_d_model;
-    const int64_t dff  = hp.tf_d_ff;
-    const int64_t ed   = hp.enc_d_model;
-    const int64_t spk  = hp.max_speakers;
+    const int64_t d   = hp.tf_d_model;
+    const int64_t dff = hp.tf_d_ff;
+    const int64_t ed  = hp.enc_d_model;
+    const int64_t spk = hp.max_speakers;
     char          name[128];
 
-#define GET(dst, nm, e0, e1)                                     \
-    do {                                                         \
-        (dst) = get_checked(ctx, (nm), (e0), (e1));              \
-        if ((dst) == nullptr) return TRANSCRIBE_ERR_GGUF;        \
+#define GET(dst, nm, e0, e1)                        \
+    do {                                            \
+        (dst) = get_checked(ctx, (nm), (e0), (e1)); \
+        if ((dst) == nullptr)                       \
+            return TRANSCRIBE_ERR_GGUF;             \
     } while (0)
 
     GET(w.enc_proj_w, "diar.encoder_proj.weight", ed, d);
@@ -155,11 +158,11 @@ transcribe_status build_sortformer_weights(ggml_context * ctx, const SortformerH
     w.tf_blocks.resize(static_cast<size_t>(hp.tf_n_layers));
     for (int i = 0; i < hp.tf_n_layers; ++i) {
         SortformerTfBlock & b = w.tf_blocks[static_cast<size_t>(i)];
-#define GETB(dst, suffix, e0, e1)                                \
-        do {                                                     \
-            std::snprintf(name, sizeof(name), "tf.blocks.%d.%s", i, suffix);   \
-            GET(dst, name, e0, e1);                              \
-        } while (0)
+#define GETB(dst, suffix, e0, e1)                                        \
+    do {                                                                 \
+        std::snprintf(name, sizeof(name), "tf.blocks.%d.%s", i, suffix); \
+        GET(dst, name, e0, e1);                                          \
+    } while (0)
         GETB(b.norm1_w, "norm_1.weight", d, -1);
         GETB(b.norm1_b, "norm_1.bias", d, -1);
         GETB(b.attn_q_w, "attn.q.weight", d, d);
