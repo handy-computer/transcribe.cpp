@@ -141,8 +141,7 @@ impl RunExtRaw {
                 (&**ext) as *const sys::transcribe_whisper_run_ext as *const sys::transcribe_ext
             }
             RunExtRaw::Sortformer(e) => {
-                (&**e) as *const sys::transcribe_sortformer_stream_ext
-                    as *const sys::transcribe_ext
+                (&**e) as *const sys::transcribe_sortformer_stream_ext as *const sys::transcribe_ext
             }
         }
     }
