@@ -104,9 +104,27 @@ struct CanaryHParams {
     float       fe_f_max        = 0.0f;
     std::string fe_pad_mode;
 
+    // Canary-1B-v2 carries an auxiliary CTC Conformer used only for forced
+    // alignment. Flash variants leave this absent and emit timestamp tokens
+    // from the AED decoder instead.
+    bool        aligner_present              = false;
+    int32_t     aligner_n_layers             = 0;
+    int32_t     aligner_d_model              = 0;
+    int32_t     aligner_n_heads              = 0;
+    int32_t     aligner_d_ff                 = 0;
+    int32_t     aligner_conv_kernel          = 0;
+    int32_t     aligner_subsampling_factor   = 0;
+    int32_t     aligner_subsampling_channels = 0;
+    int32_t     aligner_pos_emb_max_len      = 0;
+    int32_t     aligner_vocab_size           = 0;
+    int32_t     aligner_blank_id             = -1;
+    std::string aligner_conv_norm_type;
+
     int32_t enc_head_dim() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
 
     int32_t dec_head_dim() const { return dec_n_heads > 0 ? dec_d_model / dec_n_heads : 0; }
+
+    int32_t aligner_head_dim() const { return aligner_n_heads > 0 ? aligner_d_model / aligner_n_heads : 0; }
 };
 
 transcribe_status read_canary_hparams(const gguf_context * gguf, CanaryHParams & hp);
@@ -241,6 +259,17 @@ struct CanaryHead {
     ggml_tensor * bias   = nullptr;  // [vocab_size]
 };
 
+struct CanaryAlignerHead {
+    ggml_tensor * weight = nullptr;  // [d_model, vocab_size]
+    ggml_tensor * bias   = nullptr;  // [vocab_size]
+};
+
+struct CanaryAlignerWeights {
+    CanaryPreEncode          pre_encode;
+    std::vector<CanaryBlock> blocks;
+    CanaryAlignerHead        head;
+};
+
 struct CanaryWeights {
     CanaryPreEncode             pre_encode;
     std::vector<CanaryBlock>    blocks;
@@ -249,6 +278,7 @@ struct CanaryWeights {
     std::vector<CanaryDecBlock> dec_blocks;
     CanaryDecFinal              dec_final;
     CanaryHead                  head;
+    CanaryAlignerWeights        aligner;
 };
 
 transcribe_status build_canary_weights(ggml_context * ctx_meta, const CanaryHParams & hp, CanaryWeights & weights);

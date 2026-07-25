@@ -309,6 +309,63 @@ transcribe_status read_canary_hparams(const gguf_context * gguf, CanaryHParams &
         return st;
     }
 
+    if (auto st = read_optional_bool_kv(gguf, "stt.canary.aligner.present", kFamilyTag, false, hp.aligner_present);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (hp.aligner_present) {
+        if (auto st =
+                read_required_u32_kv(gguf, "stt.canary.aligner.encoder.n_layers", kFamilyTag, hp.aligner_n_layers);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.encoder.d_model", kFamilyTag, hp.aligner_d_model);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.encoder.n_heads", kFamilyTag, hp.aligner_n_heads);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.encoder.d_ff", kFamilyTag, hp.aligner_d_ff);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.encoder.conv_kernel", kFamilyTag,
+                                           hp.aligner_conv_kernel);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.encoder.subsampling_factor", kFamilyTag,
+                                           hp.aligner_subsampling_factor);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.encoder.subsampling_channels", kFamilyTag,
+                                           hp.aligner_subsampling_channels);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.encoder.pos_emb_max_len", kFamilyTag,
+                                           hp.aligner_pos_emb_max_len);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_string_kv(gguf, "stt.canary.aligner.encoder.conv_norm_type", kFamilyTag,
+                                              hp.aligner_conv_norm_type);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.vocab_size", kFamilyTag, hp.aligner_vocab_size);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.canary.aligner.blank_id", kFamilyTag, hp.aligner_blank_id);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
+
     // Cross-field invariants.
     if (hp.enc_n_layers <= 0 || hp.enc_d_model <= 0 || hp.enc_n_heads <= 0 || hp.enc_d_ff <= 0 ||
         hp.enc_conv_kernel <= 0 || hp.enc_subsampling_factor <= 0 || hp.enc_subsampling_channels <= 0) {
@@ -365,6 +422,31 @@ transcribe_status read_canary_hparams(const gguf_context * gguf, CanaryHParams &
                 "(only \"canary\" and \"canary2\")",
                 hp.prompt_format.c_str());
         return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.aligner_present) {
+        if (hp.aligner_n_layers <= 0 || hp.aligner_d_model <= 0 || hp.aligner_n_heads <= 0 || hp.aligner_d_ff <= 0 ||
+            hp.aligner_conv_kernel <= 0 || hp.aligner_subsampling_factor <= 0 || hp.aligner_subsampling_channels <= 0 ||
+            hp.aligner_pos_emb_max_len <= 0 || hp.aligner_vocab_size <= 0 || hp.aligner_blank_id < 0 ||
+            hp.aligner_blank_id >= hp.aligner_vocab_size) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary: invalid auxiliary aligner hparams");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (hp.aligner_d_model % hp.aligner_n_heads != 0) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary: aligner d_model (%d) not divisible by n_heads (%d)",
+                    hp.aligner_d_model, hp.aligner_n_heads);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (hp.aligner_subsampling_factor != 8 || hp.aligner_conv_norm_type != "batch_norm") {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary: unsupported aligner geometry (subsampling=%d conv_norm=%s)",
+                    hp.aligner_subsampling_factor, hp.aligner_conv_norm_type.c_str());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (hp.aligner_vocab_size != hp.dec_vocab_size + 1 || hp.aligner_blank_id != hp.dec_vocab_size) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "canary: aligner vocab/blank (%d/%d) must match AED vocab+blank (%d/%d)", hp.aligner_vocab_size,
+                    hp.aligner_blank_id, hp.dec_vocab_size + 1, hp.dec_vocab_size);
+            return TRANSCRIBE_ERR_GGUF;
+        }
     }
 
     return TRANSCRIBE_OK;
@@ -559,6 +641,72 @@ transcribe_status build_canary_weights(ggml_context * ctx_meta, const CanaryHPar
     // LM head (untied).
     GET_LIN(weights.head.weight, "dec.head.weight", d_dec, vocab);
     GET_F32(weights.head.bias, "dec.head.bias", vocab);
+
+    if (hp.aligner_present) {
+        const int64_t ad      = hp.aligner_d_model;
+        const int64_t aff     = hp.aligner_d_ff;
+        const int64_t aheads  = hp.aligner_n_heads;
+        const int64_t ahead   = hp.aligner_head_dim();
+        const int64_t ak      = hp.aligner_conv_kernel;
+        const int64_t ach     = hp.aligner_subsampling_channels;
+        const int64_t apre_in = ach * (hp.fe_num_mels / hp.aligner_subsampling_factor);
+        const int64_t avocab  = hp.aligner_vocab_size;
+        auto &        aligner = weights.aligner;
+
+        GET_CONV(aligner.pre_encode.conv0_w, "aligner.enc.pre_encode.conv.0.weight", 3, 3, 1, ach);
+        GET_F32(aligner.pre_encode.conv0_b, "aligner.enc.pre_encode.conv.0.bias", ach);
+        GET_CONV(aligner.pre_encode.conv2_w, "aligner.enc.pre_encode.conv.2.weight", 3, 3, 1, ach);
+        GET_F32(aligner.pre_encode.conv2_b, "aligner.enc.pre_encode.conv.2.bias", ach);
+        GET_CONV(aligner.pre_encode.conv3_w, "aligner.enc.pre_encode.conv.3.weight", 1, 1, ach, ach);
+        GET_F32(aligner.pre_encode.conv3_b, "aligner.enc.pre_encode.conv.3.bias", ach);
+        GET_CONV(aligner.pre_encode.conv5_w, "aligner.enc.pre_encode.conv.5.weight", 3, 3, 1, ach);
+        GET_F32(aligner.pre_encode.conv5_b, "aligner.enc.pre_encode.conv.5.bias", ach);
+        GET_CONV(aligner.pre_encode.conv6_w, "aligner.enc.pre_encode.conv.6.weight", 1, 1, ach, ach);
+        GET_F32(aligner.pre_encode.conv6_b, "aligner.enc.pre_encode.conv.6.bias", ach);
+        GET_LIN(aligner.pre_encode.out_w, "aligner.enc.pre_encode.out.weight", apre_in, ad);
+        GET_F32(aligner.pre_encode.out_b, "aligner.enc.pre_encode.out.bias", ad);
+
+        aligner.blocks.assign(hp.aligner_n_layers, CanaryBlock{});
+        for (int i = 0; i < hp.aligner_n_layers; ++i) {
+            auto & b = aligner.blocks[i];
+
+            GET_F32(b.norm_ff1_w, lname("aligner.enc.blocks.%d.norm_ff1.weight", i), ad);
+            GET_F32(b.norm_ff1_b, lname("aligner.enc.blocks.%d.norm_ff1.bias", i), ad);
+            GET_LIN(b.ff1_lin1_w, lname("aligner.enc.blocks.%d.ff1.linear1.weight", i), ad, aff);
+            GET_LIN(b.ff1_lin2_w, lname("aligner.enc.blocks.%d.ff1.linear2.weight", i), aff, ad);
+
+            GET_F32(b.norm_attn_w, lname("aligner.enc.blocks.%d.norm_attn.weight", i), ad);
+            GET_F32(b.norm_attn_b, lname("aligner.enc.blocks.%d.norm_attn.bias", i), ad);
+            GET_LIN(b.attn_q_w, lname("aligner.enc.blocks.%d.attn.linear_q.weight", i), ad, ad);
+            GET_LIN(b.attn_k_w, lname("aligner.enc.blocks.%d.attn.linear_k.weight", i), ad, ad);
+            GET_LIN(b.attn_v_w, lname("aligner.enc.blocks.%d.attn.linear_v.weight", i), ad, ad);
+            GET_LIN(b.attn_out_w, lname("aligner.enc.blocks.%d.attn.linear_out.weight", i), ad, ad);
+            GET_LIN(b.attn_pos_w, lname("aligner.enc.blocks.%d.attn.linear_pos.weight", i), ad, ad);
+            GET_F32(b.attn_pos_u, lname("aligner.enc.blocks.%d.attn.pos_bias_u", i), ahead, aheads);
+            GET_F32(b.attn_pos_v, lname("aligner.enc.blocks.%d.attn.pos_bias_v", i), ahead, aheads);
+
+            GET_F32(b.norm_conv_w, lname("aligner.enc.blocks.%d.norm_conv.weight", i), ad);
+            GET_F32(b.norm_conv_b, lname("aligner.enc.blocks.%d.norm_conv.bias", i), ad);
+            GET_CONV(b.conv_pw1_w, lname("aligner.enc.blocks.%d.conv.pointwise1.weight", i), 1, ad, 2 * ad);
+            GET_CONV(b.conv_dw_w, lname("aligner.enc.blocks.%d.conv.depthwise.weight", i), ak, 1, ad);
+            GET_CONV(b.conv_pw2_w, lname("aligner.enc.blocks.%d.conv.pointwise2.weight", i), 1, ad, ad);
+            GET_F32(b.conv_bn_w, lname("aligner.enc.blocks.%d.conv.bn.weight", i), ad);
+            GET_F32(b.conv_bn_b, lname("aligner.enc.blocks.%d.conv.bn.bias", i), ad);
+            GET_F32(b.conv_bn_rm, lname("aligner.enc.blocks.%d.conv.bn.running_mean", i), ad);
+            GET_F32(b.conv_bn_rv, lname("aligner.enc.blocks.%d.conv.bn.running_var", i), ad);
+
+            GET_F32(b.norm_ff2_w, lname("aligner.enc.blocks.%d.norm_ff2.weight", i), ad);
+            GET_F32(b.norm_ff2_b, lname("aligner.enc.blocks.%d.norm_ff2.bias", i), ad);
+            GET_LIN(b.ff2_lin1_w, lname("aligner.enc.blocks.%d.ff2.linear1.weight", i), ad, aff);
+            GET_LIN(b.ff2_lin2_w, lname("aligner.enc.blocks.%d.ff2.linear2.weight", i), aff, ad);
+
+            GET_F32(b.norm_out_w, lname("aligner.enc.blocks.%d.norm_out.weight", i), ad);
+            GET_F32(b.norm_out_b, lname("aligner.enc.blocks.%d.norm_out.bias", i), ad);
+        }
+
+        GET_LIN(aligner.head.weight, "aligner.head.weight", ad, avocab);
+        GET_F32(aligner.head.bias, "aligner.head.bias", avocab);
+    }
 
     return TRANSCRIBE_OK;
 }
