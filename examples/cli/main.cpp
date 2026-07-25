@@ -204,6 +204,7 @@ struct cli_args {
     bool                       quiet        = false;
     bool                       list_devices = false;  // --list-devices: print devices and exit
     bool                       batch_jsonl  = false;  // --batch-jsonl: output JSONL
+    std::string                output_path;            // -o: write raw text here
     int                        repeat       = 1;
     int                        n_threads    = 0;      // 0 = library default (all cores)
     int                        n_ctx        = 0;      // 0 = model's true max; >0 lowers the cap
@@ -282,6 +283,7 @@ void print_usage(const char * argv0) {
                  "  --target-language ISO target language for translation (e.g. de, es, fr)\n"
                  "  -q, --quiet           suppress library log output\n"
                  "  -r, --repeat N        run N times per file (benchmark)\n"
+                 "  -o, --output PATH     write transcribed text to PATH (stdout unchanged)\n"
                  "  --threads N           CPU threads (default: all cores)\n"
                  "  --n-ctx N             session context/KV cap in tokens (bounds decoder\n"
                  "                        KV memory; cannot extend the model): 0 = model\n"
@@ -528,6 +530,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --batch-size must be >= 0\n");
                 return false;
             }
+        } else if (a == "-o" || a == "--output") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.output_path = v;
         } else if (a == "--initial-prompt") {
             const char * v = take_value(a.c_str());
             if (!v) {
@@ -686,6 +694,20 @@ void log_cb(transcribe_log_level level, const char * msg, void * userdata) {
             break;
     }
     std::fprintf(stderr, "%s %s%s", prefix, msg, (msg && *msg && msg[std::strlen(msg) - 1] == '\n') ? "" : "\n");
+}
+
+// Write transcription text to the output file if -o was given.
+// Appends so it works for both single-file and batch mode.
+static void write_output_file(const std::string & path, const char * text) {
+    if (path.empty() || text == nullptr || text[0] == '\0') {
+        return;
+    }
+    std::ofstream fout(path, std::ios::binary | std::ios::app);
+    if (!fout) {
+        std::fprintf(stderr, "error: cannot open %s for writing\n", path.c_str());
+    } else {
+        fout << text << '\n';
+    }
 }
 
 }  // namespace
@@ -957,6 +979,7 @@ int main(int argc, char ** argv) {
                             std::printf("  ERROR: %s\n", transcribe_status_string(ust));
                         }
                     }
+                    write_output_file(args.output_path, text);
                     std::fflush(stdout);
                 }
             }
@@ -1095,6 +1118,7 @@ int main(int argc, char ** argv) {
                         std::printf("  ERROR: %s\n", transcribe_status_string(run_st));
                     }
                 }
+                write_output_file(args.output_path, text);
                 std::fflush(stdout);
             }
         }
@@ -1341,6 +1365,7 @@ int main(int argc, char ** argv) {
         if (result_present) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
+            write_output_file(args.output_path, text);
 
             // A truncated decode hit the model's context/output budget before
             // end-of-stream; the text above is incomplete.
