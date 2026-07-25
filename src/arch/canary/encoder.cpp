@@ -224,4 +224,73 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     return eb;
 }
 
+AlignerBuild build_aligner_graph(ggml_context *        ctx,
+                                 const CanaryWeights & w,
+                                 const CanaryHParams & hp,
+                                 int                   n_mel_frames,
+                                 ggml_type             kv_type,
+                                 bool                  use_flash,
+                                 const char *          backend_name) {
+    AlignerBuild ab{};
+    if (ctx == nullptr || !hp.aligner_present || n_mel_frames <= 0) {
+        return ab;
+    }
+    if (hp.aligner_subsampling_factor != 8 || hp.fe_num_mels != 128 || w.aligner.blocks.empty()) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary aligner: unsupported geometry (subsampling=%d num_mels=%d blocks=%zu)",
+                hp.aligner_subsampling_factor, hp.fe_num_mels, w.aligner.blocks.size());
+        return ab;
+    }
+
+    conf::ConvPolicy policy{};
+    policy.direct_pw               = conf::detect_direct_pw(backend_name);
+    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode = false;
+
+    ab.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_mel_frames, hp.fe_num_mels);
+    ggml_set_name(ab.mel_in, "aligner.mel.in");
+    ggml_set_input(ab.mel_in);
+
+    ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.aligner.pre_encode), ab.mel_in, policy,
+                                             /*name_prefix=*/"aligner.enc.pre_encode",
+                                             /*error_tag=*/"canary aligner");
+    if (x == nullptr) {
+        return ab;
+    }
+
+    const int64_t T_enc   = x->ne[1];
+    const int64_t pos_len = 2 * T_enc - 1;
+    ab.pos_emb_in         = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.aligner_d_model, pos_len);
+    ggml_set_name(ab.pos_emb_in, "aligner.pos_emb.in");
+    ggml_set_input(ab.pos_emb_in);
+
+    conf::BlockParams bparams{};
+    bparams.d_model        = hp.aligner_d_model;
+    bparams.n_head         = hp.aligner_n_heads;
+    bparams.conv_kernel    = hp.aligner_conv_kernel;
+    bparams.kv_type        = kv_type;
+    bparams.use_flash      = use_flash;
+    bparams.policy         = policy;
+    bparams.conv_norm_type = conf::BlockParams::ConvNormType::BatchNorm;
+
+    for (const CanaryBlock & block : w.aligner.blocks) {
+        x = conf::build_conformer_block(ctx, x, ab.pos_emb_in, to_view(block), bparams);
+        if (x == nullptr) {
+            return ab;
+        }
+    }
+
+    ab.logits = ggml_mul_mat(ctx, w.aligner.head.weight, x);
+    ab.logits = ggml_add(ctx, ab.logits, w.aligner.head.bias);
+    ggml_set_name(ab.logits, "aligner.ctc.logits");
+    ggml_set_output(ab.logits);
+
+    ab.graph = ggml_new_graph_custom(ctx, 16384, false);
+    if (ab.graph == nullptr) {
+        return ab;
+    }
+    ggml_build_forward_expand(ab.graph, ab.logits);
+    return ab;
+}
+
 }  // namespace transcribe::canary

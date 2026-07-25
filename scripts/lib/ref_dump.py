@@ -102,6 +102,7 @@ def write_transcript(
     *,
     source: dict[str, Any],
     tokens: list[int] | None = None,
+    timestamps: dict[str, Any] | None = None,
 ) -> None:
     """Write transcript.json alongside a decode dump.
 
@@ -115,4 +116,6 @@ def write_transcript(
     payload: dict[str, Any] = {"text": text, "source": source}
     if tokens is not None:
         payload["tokens"] = list(tokens)
+    if timestamps is not None:
+        payload["timestamps"] = timestamps
     (out_dir / "transcript.json").write_text(json.dumps(payload, indent=2) + "\n")

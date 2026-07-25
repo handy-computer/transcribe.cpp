@@ -209,6 +209,7 @@ def _extract_aggregate(tk) -> dict:
     return {
         "tokens": tokens, "scores": scores, "types": types,
         "offsets": offsets, "codes": codes, "sizes": sizes,
+        "model": "unigram",
         "specials": dict(tk.special_tokens),
         "unk_id": 0,
         "bos_id": int(tk.bos_id) if tk.bos_id is not None else None,
@@ -257,6 +258,7 @@ def _extract_bpe(tk) -> dict:
     return {
         "tokens": tokens, "scores": scores, "types": types,
         "offsets": [0], "codes": ["all"], "sizes": [vocab_size],
+        "model": "bpe",
         "specials": specials,
         "unk_id": int(tk.unk_id) if getattr(tk, "unk_id", None) is not None else None,
         "bos_id": int(tk.bos_id) if tk.bos_id is not None else None,
@@ -300,11 +302,10 @@ def read_hparams(config: dict) -> dict:
             f"converter only handles AudioToMelSpectrogramPreprocessor"
         )
 
-    sample_rate   = int(pre["sample_rate"])
-    window_size   = float(pre["window_size"])
-    window_stride = float(pre["window_stride"])
-    win_length    = int(round(window_size  * sample_rate))
-    hop_length    = int(round(window_stride * sample_rate))
+    frontend    = read_mel_hparams(pre)
+    sample_rate = frontend["sample_rate"]
+    win_length  = frontend["win_length"]
+    hop_length  = frontend["hop_length"]
 
     # transf_encoder is configured but disabled across all four shipping
     # canary variants. If a future variant turns it on we need new
@@ -357,9 +358,10 @@ def read_hparams(config: dict) -> dict:
         "fe_normalize":    str(pre["normalize"]),
         "fe_dither":       float(pre["dither"]),
         "fe_log":          bool(pre.get("log", True)),
-        "fe_pre_emphasis": 0.97,  # NeMo FilterbankFeatures default
-        "fe_f_min":        0.0,
-        "fe_f_max":        float(sample_rate) / 2.0,
+        "fe_pre_emphasis": frontend["preemphasis"],
+        "fe_f_min":        frontend["f_min"],
+        "fe_f_max":        frontend["f_max"],
+        "frontend":        frontend,
     }
 
 
@@ -473,6 +475,38 @@ DECODER_BLOCK_TABLE: list[tuple[str, str]] = [
     ("third_sub_layer.dense_out.bias",       "ffn.down.bias"),
 ]
 
+# Bias-free Conformer used by canary-1b-v2's auxiliary CTC aligner.
+ALIGNER_BLOCK_TABLE: list[tuple[str, str]] = [
+    ("norm_feed_forward1.weight",       "norm_ff1.weight"),
+    ("norm_feed_forward1.bias",         "norm_ff1.bias"),
+    ("feed_forward1.linear1.weight",    "ff1.linear1.weight"),
+    ("feed_forward1.linear2.weight",    "ff1.linear2.weight"),
+    ("norm_self_att.weight",            "norm_attn.weight"),
+    ("norm_self_att.bias",              "norm_attn.bias"),
+    ("self_attn.linear_q.weight",       "attn.linear_q.weight"),
+    ("self_attn.linear_k.weight",       "attn.linear_k.weight"),
+    ("self_attn.linear_v.weight",       "attn.linear_v.weight"),
+    ("self_attn.linear_out.weight",     "attn.linear_out.weight"),
+    ("self_attn.linear_pos.weight",     "attn.linear_pos.weight"),
+    ("self_attn.pos_bias_u",            "attn.pos_bias_u"),
+    ("self_attn.pos_bias_v",            "attn.pos_bias_v"),
+    ("norm_conv.weight",                "norm_conv.weight"),
+    ("norm_conv.bias",                  "norm_conv.bias"),
+    ("conv.pointwise_conv1.weight",     "conv.pointwise1.weight"),
+    ("conv.depthwise_conv.weight",      "conv.depthwise.weight"),
+    ("conv.pointwise_conv2.weight",     "conv.pointwise2.weight"),
+    ("conv.batch_norm.weight",          "conv.bn.weight"),
+    ("conv.batch_norm.bias",            "conv.bn.bias"),
+    ("conv.batch_norm.running_mean",    "conv.bn.running_mean"),
+    ("conv.batch_norm.running_var",     "conv.bn.running_var"),
+    ("norm_feed_forward2.weight",       "norm_ff2.weight"),
+    ("norm_feed_forward2.bias",         "norm_ff2.bias"),
+    ("feed_forward2.linear1.weight",    "ff2.linear1.weight"),
+    ("feed_forward2.linear2.weight",    "ff2.linear2.weight"),
+    ("norm_out.weight",                 "norm_out.weight"),
+    ("norm_out.bias",                   "norm_out.bias"),
+]
+
 
 EXPECTED_UNUSED_PREFIXES = (
     "preprocessor.",            # mel filterbank + window — C++ recomputes
@@ -505,6 +539,72 @@ def tensor_to_fp32_numpy(t) -> np.ndarray:
         raise ValueError(f"expected fp32 tensor, got {t.dtype}")
     arr = t.detach().cpu().numpy()
     return np.ascontiguousarray(arr)
+
+
+def read_mel_hparams(pre: dict) -> dict:
+    sample_rate = int(pre["sample_rate"])
+    highfreq    = pre.get("highfreq")
+    frontend = {
+        "num_mels":     int(pre["features"]),
+        "sample_rate":  sample_rate,
+        "n_fft":        int(pre["n_fft"]),
+        "win_length":   int(round(float(pre["window_size"]) * sample_rate)),
+        "hop_length":   int(round(float(pre["window_stride"]) * sample_rate)),
+        "window":       str(pre["window"]),
+        "normalize":    str(pre["normalize"]),
+        "dither":       float(pre["dither"]),
+        "log":          bool(pre.get("log", True)),
+        "preemphasis":  float(pre.get("preemph", pre.get("pre_emphasis", 0.97))),
+        "f_min":        float(pre.get("lowfreq") or 0.0),
+        "f_max":        float(highfreq) if highfreq is not None else sample_rate / 2.0,
+    }
+    for key in (
+        "exact_pad",
+        "frame_splicing",
+        "log_zero_guard_type",
+        "log_zero_guard_value",
+        "mag_power",
+        "mel_norm",
+        "mel_scale",
+        "pad_to",
+        "pad_value",
+    ):
+        if key in pre:
+            frontend[key] = pre[key]
+    return frontend
+
+
+def read_aligner_hparams(config: dict, state_dict: dict) -> dict:
+    enc = config["encoder"]
+    pre = config["preprocessor"]
+    head_w = state_dict["decoder.decoder_layers.0.weight"]
+    if head_w.ndim != 3 or int(head_w.shape[2]) != 1:
+        raise ValueError(f"unexpected aligner CTC head shape: {tuple(head_w.shape)}")
+
+    conv_norm_type = str(enc.get("conv_norm_type", "batch_norm"))
+    return {
+        "n_layers":             int(enc["n_layers"]),
+        "d_model":              int(enc["d_model"]),
+        "n_heads":              int(enc["n_heads"]),
+        "d_ff":                 int(enc["d_model"]) * int(enc["ff_expansion_factor"]),
+        "conv_kernel":          int(enc["conv_kernel_size"]),
+        "subsampling_factor":   int(enc["subsampling_factor"]),
+        "subsampling_channels": int(enc["subsampling_conv_channels"]),
+        "pos_emb_max_len":      int(enc["pos_emb_max_len"]),
+        "conv_norm_type":       conv_norm_type,
+        "vocab_size":           int(head_w.shape[0]),
+        "blank_id":             int(head_w.shape[0]) - 1,
+        "frontend":             read_mel_hparams(pre),
+    }
+
+
+def tokenizer_piece_list(tokenizer, vocab_size: int) -> list[str]:
+    if hasattr(tokenizer, "ids_to_tokens"):
+        return [str(tokenizer.ids_to_tokens([i])[0]) for i in range(vocab_size)]
+    sp = getattr(tokenizer, "tokenizer", None)
+    if sp is not None and hasattr(sp, "IdToPiece"):
+        return [str(sp.IdToPiece(i)) for i in range(vocab_size)]
+    raise TypeError(f"cannot enumerate aligner tokenizer {type(tokenizer).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +669,39 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
     sd = model.state_dict()
     sd_keys = set(sd.keys())
 
+    aligner = getattr(model, "timestamps_asr_model", None)
+    aligner_sd = None
+    aligner_sd_keys: set[str] = set()
+    aligner_hp = None
+    if aligner is not None:
+        aligner_sd = aligner.state_dict()
+        aligner_sd_keys = set(aligner_sd.keys())
+        aligner_cfg = OmegaConf.to_container(aligner.cfg, resolve=True)
+        aligner_hp = read_aligner_hparams(aligner_cfg, aligner_sd)
+        if variant != "canary-1b-v2":
+            raise ValueError(f"unexpected auxiliary timestamps model on {variant}")
+        if aligner_hp["conv_norm_type"] != "batch_norm":
+            raise ValueError(
+                f"unsupported aligner conv_norm_type={aligner_hp['conv_norm_type']!r}"
+            )
+        shared_frontend_fields = sorted(
+            set(aligner_hp["frontend"]) & set(hp["frontend"])
+        )
+        frontend_mismatches = [
+            key
+            for key in shared_frontend_fields
+            if aligner_hp["frontend"][key] != hp["frontend"][key]
+        ]
+        if frontend_mismatches:
+            details = ", ".join(
+                f"{key}: aligner={aligner_hp['frontend'][key]!r}, "
+                f"AED={hp['frontend'][key]!r}"
+                for key in frontend_mismatches
+            )
+            raise ValueError(f"aligner and AED mel frontends differ ({details})")
+        aligner_pieces = tokenizer_piece_list(aligner.tokenizer, aligner_hp["vocab_size"] - 1)
+        if aligner_pieces != tok["tokens"]:
+            raise ValueError("aligner tokenizer IDs differ from the AED tokenizer")
     has_proj = "encoder_decoder_proj.weight" in sd_keys
     if has_proj:
         proj_w = sd["encoder_decoder_proj.weight"]
@@ -588,6 +721,7 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
           f"max_pos={hp['dec_max_position']}")
     print(f"Vocab: {hp['head_num_classes']} ({len(tok['codes'])} sub-tokenizers)")
     print(f"encoder_decoder_proj: {'present' if has_proj else 'absent (dims match)'}")
+    print(f"timestamp aligner: {'present' if aligner_hp is not None else 'absent (text-only GGUF)'}")
 
     print(f"Writing GGUF to {out_path}")
     writer = gguf_writer(str(out_path), "canary")
@@ -620,17 +754,29 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
     xlat_langs = [lang for lang in languages if lang not in xlat_exclude]
     writer.add_array ("stt.translation.target_languages", xlat_langs)
     writer.add_array ("stt.translation.pairs", english_pivot_pairs(xlat_langs))
-    # All shipping variants except canary-1b expose timestamp tokens.
-    has_timestamps = "<|timestamp|>" in tok["specials"]
-    writer.add_bool  ("stt.capability.timestamps",  has_timestamps)
+    writer.add_bool  ("stt.capability.timestamps",  aligner_hp is not None)
+
+    writer.add_bool("stt.canary.aligner.present", aligner_hp is not None)
+    if aligner_hp is not None:
+        writer.add_uint32("stt.canary.aligner.encoder.n_layers", aligner_hp["n_layers"])
+        writer.add_uint32("stt.canary.aligner.encoder.d_model", aligner_hp["d_model"])
+        writer.add_uint32("stt.canary.aligner.encoder.n_heads", aligner_hp["n_heads"])
+        writer.add_uint32("stt.canary.aligner.encoder.d_ff", aligner_hp["d_ff"])
+        writer.add_uint32("stt.canary.aligner.encoder.conv_kernel", aligner_hp["conv_kernel"])
+        writer.add_uint32("stt.canary.aligner.encoder.subsampling_factor", aligner_hp["subsampling_factor"])
+        writer.add_uint32("stt.canary.aligner.encoder.subsampling_channels", aligner_hp["subsampling_channels"])
+        writer.add_uint32("stt.canary.aligner.encoder.pos_emb_max_len", aligner_hp["pos_emb_max_len"])
+        writer.add_string("stt.canary.aligner.encoder.conv_norm_type", aligner_hp["conv_norm_type"])
+        writer.add_uint32("stt.canary.aligner.vocab_size", aligner_hp["vocab_size"])
+        writer.add_uint32("stt.canary.aligner.blank_id", aligner_hp["blank_id"])
 
     # ----- tokenizer.ggml.* -----
-    # Use "unigram" so the C++ tokenizer's SentencePiece decode path
-    # picks up the pieces directly. The aggregate-over-multi-SP nature
+    # Both SentencePiece model tags share the same C++ decode path. The
+    # aggregate-over-multi-SP nature
     # of canary's tokenizer is preserved separately under
     # stt.canary.tokenizer.{lang_codes,lang_offsets,lang_sizes} for any
     # future encode() implementation to consume.
-    writer.add_string("tokenizer.ggml.model",     "unigram")
+    writer.add_string("tokenizer.ggml.model",     tok["model"])
     writer.add_array ("tokenizer.ggml.tokens",     tok["tokens"])
     writer.add_array ("tokenizer.ggml.scores",     tok["scores"])
     writer.add_array ("tokenizer.ggml.token_type", tok["types"])
@@ -800,6 +946,41 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
         raise RuntimeError(
             f"tensor count mismatch: added {n_added}, expected {expected}"
         )
+
+    aligner_consumed: set[str] = set()
+    if aligner_hp is not None and aligner_sd is not None:
+        aligner_added = 0
+
+        def add_aligner(nemo_name: str, gguf_name: str, squeeze_head: bool = False) -> None:
+            nonlocal n_added, bytes_out, aligner_added
+            if nemo_name not in aligner_sd_keys:
+                raise KeyError(f"aligner state_dict missing tensor: {nemo_name!r}")
+            arr = tensor_to_fp32_numpy(aligner_sd[nemo_name])
+            if squeeze_head:
+                arr = np.ascontiguousarray(arr[:, :, 0])
+            writer.add_tensor(gguf_name, arr)
+            aligner_consumed.add(nemo_name)
+            bytes_out += int(arr.nbytes)
+            n_added += 1
+            aligner_added += 1
+
+        for nemo_name, gguf_name in PRE_ENCODE_TABLE:
+            add_aligner(nemo_name, gguf_name.replace("enc.", "aligner.enc.", 1))
+        for i in range(aligner_hp["n_layers"]):
+            for suffix_nemo, suffix_gguf in ALIGNER_BLOCK_TABLE:
+                add_aligner(
+                    f"encoder.layers.{i}.{suffix_nemo}",
+                    f"aligner.enc.blocks.{i}.{suffix_gguf}",
+                )
+        add_aligner("decoder.decoder_layers.0.weight", "aligner.head.weight", squeeze_head=True)
+        add_aligner("decoder.decoder_layers.0.bias", "aligner.head.bias")
+
+        aligner_expected = len(PRE_ENCODE_TABLE) + aligner_hp["n_layers"] * len(ALIGNER_BLOCK_TABLE) + 2
+        if aligner_added != aligner_expected:
+            raise RuntimeError(
+                f"aligner tensor count mismatch: added {aligner_added}, expected {aligner_expected}"
+            )
+
     print(f"Added {n_added} tensors ({bytes_out / (1024 * 1024):.1f} MB)")
 
     unused = sorted(
@@ -814,6 +995,15 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
             print(f"  {k}", file=sys.stderr)
         if len(unused) > 10:
             print(f"  ... and {len(unused) - 10} more", file=sys.stderr)
+
+    if aligner_sd is not None:
+        aligner_unused = sorted(
+            k for k in (aligner_sd_keys - aligner_consumed) if not is_expected_unused(k)
+        )
+        if aligner_unused:
+            raise RuntimeError(
+                "auxiliary aligner tensors were not consumed: " + ", ".join(aligner_unused[:10])
+            )
 
     print("Writing header + KV + tensor info...")
     writer.write_header_to_file()
