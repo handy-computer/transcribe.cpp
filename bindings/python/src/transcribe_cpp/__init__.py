@@ -54,6 +54,7 @@ KVType = Literal["auto", "f32", "f16"]
 Task = Literal["transcribe", "translate"]
 Timestamps = Literal["none", "auto", "segment", "word", "token"]
 Diarize = Literal["default", "off", "on"]
+SortformerPreset = Literal["default", "very_high_latency", "high_latency", "low_latency"]
 CommitPolicy = Literal["auto", "on_finalize", "stable_prefix"]
 Feature = Literal[
     "initial_prompt", "temperature_fallback", "long_form",
@@ -81,8 +82,10 @@ __all__ = [
     "MoonshineStreamingOptions",
     "ParakeetStreamOptions",
     "ParakeetBufferedStreamOptions",
+    "SortformerStreamOptions",
     "VoxtralRealtimeStreamOptions",
     "Backend",
+    "SortformerPreset",
     "KVType",
     "Task",
     "Timestamps",
@@ -797,6 +800,40 @@ class VoxtralRealtimeStreamOptions(FamilyExtension):
             ext.num_delay_tokens = self.num_delay_tokens
         if self.min_decode_interval_ms is not None:
             ext.min_decode_interval_ms = self.min_decode_interval_ms
+
+
+class SortformerStreamOptions(FamilyExtension):
+    """Sortformer streaming operating-point options (run slot).
+
+    Sortformer is a diarizer: a run produces speaker segments, no text.
+    ``preset`` selects the latency / accuracy trade-off from the model's
+    published menu; ``"default"`` keeps the GGUF-shipped checkpoint
+    configuration. ``"very_high_latency"`` (~30 s lookahead) is the
+    offline-file operating point; ``"low_latency"`` (~1 s) is the
+    real-time point and costs substantially more compute per audio
+    second."""
+
+    _slot = "run"
+    _kind = _generated.TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM
+    _struct = _generated.transcribe_sortformer_stream_ext
+    _init = "transcribe_sortformer_stream_ext_init"
+
+    _presets = {
+        "default": _generated.TRANSCRIBE_SORTFORMER_PRESET_DEFAULT,
+        "very_high_latency": _generated.TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY,
+        "high_latency": _generated.TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY,
+        "low_latency": _generated.TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY,
+    }
+
+    def __init__(self, *, preset: SortformerPreset | None = None):
+        if preset is not None and preset not in self._presets:
+            raise ValueError(f"unknown sortformer preset {preset!r}; "
+                             f"expected one of {sorted(self._presets)}")
+        self.preset = preset
+
+    def _apply(self, ext) -> None:
+        if self.preset is not None:
+            ext.preset = self._presets[self.preset]
 
 
 # --- high-level handles ---------------------------------------------------

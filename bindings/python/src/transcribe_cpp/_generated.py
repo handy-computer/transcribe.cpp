@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "d67a9bd78b964445"
+PUBLIC_HEADER_HASH = "fb2e64791dcbb70a"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -101,6 +101,10 @@ TRANSCRIBE_STREAM_FAILED = 3
 TRANSCRIBE_STREAM_COMMIT_AUTO = 0
 TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE = 1
 TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX = 2
+TRANSCRIBE_SORTFORMER_PRESET_DEFAULT = 0
+TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY = 1
+TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY = 2
+TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY = 3
 TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT = 0
 TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS = 1
 
@@ -108,6 +112,7 @@ TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS = 1
 TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM = 1414746957
 TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM = 1396853584
 TRANSCRIBE_EXT_KIND_PARAKEET_STREAM = 1414744912
+TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM = 1414743635
 TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM = 1414746710
 TRANSCRIBE_EXT_KIND_WHISPER_RUN = 1314015319
 
@@ -148,6 +153,8 @@ class transcribe_parakeet_stream_ext(_c.Structure):
     pass
 class transcribe_parakeet_buffered_stream_ext(_c.Structure):
     pass
+class transcribe_sortformer_stream_ext(_c.Structure):
+    pass
 class transcribe_voxtral_realtime_stream_ext(_c.Structure):
     pass
 class transcribe_whisper_run_ext(_c.Structure):
@@ -173,6 +180,7 @@ transcribe_speaker_segment._fields_ = [("struct_size", _c.c_uint64), ("t0_ms", _
 transcribe_moonshine_streaming_stream_ext._fields_ = [("ext", transcribe_ext), ("min_decode_interval_ms", _c.c_int32)]
 transcribe_parakeet_stream_ext._fields_ = [("ext", transcribe_ext), ("att_context_right", _c.c_int32)]
 transcribe_parakeet_buffered_stream_ext._fields_ = [("ext", transcribe_ext), ("left_ms", _c.c_int32), ("chunk_ms", _c.c_int32), ("right_ms", _c.c_int32)]
+transcribe_sortformer_stream_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
 transcribe_voxtral_realtime_stream_ext._fields_ = [("ext", transcribe_ext), ("num_delay_tokens", _c.c_int32), ("min_decode_interval_ms", _c.c_int32)]
 transcribe_whisper_run_ext._fields_ = [("ext", transcribe_ext), ("initial_prompt", _c.c_char_p), ("prompt_tokens", _c.POINTER(_c.c_int32)), ("n_prompt_tokens", _c.c_size_t), ("prompt_condition", _c.c_int), ("condition_on_prev_tokens", _c.c_bool), ("max_prev_context_tokens", _c.c_int32), ("temperature", _c.c_float), ("temperature_inc", _c.c_float), ("compression_ratio_thold", _c.c_float), ("logprob_thold", _c.c_float), ("no_speech_thold", _c.c_float), ("seed", _c.c_uint32), ("max_initial_timestamp", _c.c_float)]
 transcribe_whisper_chunk_trace._fields_ = [("struct_size", _c.c_uint64), ("t0_ms", _c.c_int64), ("t1_ms", _c.c_int64), ("temperature_used", _c.c_float), ("compression_ratio", _c.c_float), ("avg_logprob", _c.c_float), ("no_speech_prob", _c.c_float), ("no_speech_triggered", _c.c_bool), ("n_fallbacks", _c.c_int32)]
@@ -217,6 +225,7 @@ STRUCT_LAYOUT = {
     'transcribe_moonshine_streaming_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'min_decode_interval_ms': 16}},
     'transcribe_parakeet_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'att_context_right': 16}},
     'transcribe_parakeet_buffered_stream_ext': {'size': 32, 'align': 8, 'offsets': {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24}},
+    'transcribe_sortformer_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
     'transcribe_voxtral_realtime_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'num_delay_tokens': 16, 'min_decode_interval_ms': 20}},
     'transcribe_whisper_run_ext': {'size': 80, 'align': 8, 'offsets': {'ext': 0, 'initial_prompt': 16, 'prompt_tokens': 24, 'n_prompt_tokens': 32, 'prompt_condition': 40, 'condition_on_prev_tokens': 44, 'max_prev_context_tokens': 48, 'temperature': 52, 'temperature_inc': 56, 'compression_ratio_thold': 60, 'logprob_thold': 64, 'no_speech_thold': 68, 'seed': 72, 'max_initial_timestamp': 76}},
     'transcribe_whisper_chunk_trace': {'size': 48, 'align': 8, 'offsets': {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'temperature_used': 24, 'compression_ratio': 28, 'avg_logprob': 32, 'no_speech_prob': 36, 'no_speech_triggered': 40, 'n_fallbacks': 44}},
@@ -365,6 +374,8 @@ def configure(lib):
     lib.transcribe_session_params_init.argtypes = [_c.POINTER(transcribe_session_params)]
     lib.transcribe_set_abort_callback.restype = None
     lib.transcribe_set_abort_callback.argtypes = [_c.c_void_p, _c.CFUNCTYPE(_c.c_bool, _c.c_void_p), _c.c_void_p]
+    lib.transcribe_sortformer_stream_ext_init.restype = None
+    lib.transcribe_sortformer_stream_ext_init.argtypes = [_c.POINTER(transcribe_sortformer_stream_ext)]
     lib.transcribe_speaker_segment_init.restype = None
     lib.transcribe_speaker_segment_init.argtypes = [_c.POINTER(transcribe_speaker_segment)]
     lib.transcribe_status_string.restype = _c.c_char_p

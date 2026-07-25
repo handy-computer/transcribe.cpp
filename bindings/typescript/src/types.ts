@@ -238,10 +238,25 @@ export interface VoxtralRealtimeStreamOptions {
   numDelayTokens?: number;
   minDecodeIntervalMs?: number;
 }
+/** Sortformer streaming operating point (latency / accuracy trade-off).
+ *  "default" keeps the GGUF-shipped checkpoint configuration;
+ *  "very_high_latency" (~30 s lookahead) is the offline-file operating
+ *  point; "low_latency" (~1 s) is the real-time point. */
+export type SortformerPreset =
+  | "default"
+  | "very_high_latency"
+  | "high_latency"
+  | "low_latency";
+/** Sortformer diarizer options (run slot). A run produces speaker
+ *  segments, no text. */
+export interface SortformerStreamOptions {
+  preset?: SortformerPreset;
+}
 
 export type FamilyExtension =
   | ({ kind: "whisper" } & WhisperRunOptions)
   | ({ kind: "moonshine" } & MoonshineStreamingOptions)
   | ({ kind: "parakeet" } & ParakeetStreamOptions)
   | ({ kind: "parakeet_buffered" } & ParakeetBufferedStreamOptions)
-  | ({ kind: "voxtral" } & VoxtralRealtimeStreamOptions);
+  | ({ kind: "voxtral" } & VoxtralRealtimeStreamOptions)
+  | ({ kind: "sortformer" } & SortformerStreamOptions);

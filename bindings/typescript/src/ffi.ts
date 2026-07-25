@@ -166,6 +166,9 @@ export function bindLibrary(libraryPath: string): Bound {
     voxtralRealtimeStreamExtInit: lib.func("transcribe_voxtral_realtime_stream_ext_init", "void", [
       outp(T.transcribe_voxtral_realtime_stream_ext),
     ]),
+    sortformerStreamExtInit: lib.func("transcribe_sortformer_stream_ext_init", "void", [
+      outp(T.transcribe_sortformer_stream_ext),
+    ]),
 
     // batch (offline)
     runBatch: lib.func("transcribe_run_batch", "int", [

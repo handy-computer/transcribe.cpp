@@ -588,6 +588,20 @@ const FAMILY: Record<string, FamilyReg> = {
       min_decode_interval_ms: o.minDecodeIntervalMs,
     }),
   },
+  sortformer: {
+    slot: "run",
+    kind: g.TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM,
+    type: "transcribe_sortformer_stream_ext",
+    init: "sortformerStreamExtInit",
+    map: (o) => ({ preset: SORTFORMER_PRESET[o.preset as string] }),
+  },
+};
+
+const SORTFORMER_PRESET: Record<string, number> = {
+  default: g.TRANSCRIBE_SORTFORMER_PRESET_DEFAULT,
+  very_high_latency: g.TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY,
+  high_latency: g.TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY,
+  low_latency: g.TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY,
 };
 
 /**

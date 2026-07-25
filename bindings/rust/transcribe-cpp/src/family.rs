@@ -60,11 +60,55 @@ pub struct VoxtralRealtimeStreamOptions {
     pub min_decode_interval_ms: Option<i32>,
 }
 
+/// Sortformer streaming operating point (latency / accuracy trade-off).
+/// The menu is discrete (jointly-tuned bundles), not a latency dial;
+/// `Default` keeps the GGUF-shipped checkpoint configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SortformerPreset {
+    #[default]
+    Default,
+    /// ~30.4 s algorithmic lookahead; the offline-file operating point.
+    VeryHighLatency,
+    /// ~10.0 s lookahead.
+    HighLatency,
+    /// ~1.04 s lookahead; the real-time point (compute-heavy per audio
+    /// second — many small windows).
+    LowLatency,
+}
+
+impl SortformerPreset {
+    fn to_sys(self) -> sys::transcribe_sortformer_preset {
+        match self {
+            SortformerPreset::Default => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_DEFAULT
+            }
+            SortformerPreset::VeryHighLatency => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY
+            }
+            SortformerPreset::HighLatency => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY
+            }
+            SortformerPreset::LowLatency => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY
+            }
+        }
+    }
+}
+
+/// Sortformer diarizer run-extension knobs (run slot). Sortformer produces
+/// speaker segments, no text; read results via the speaker-segment
+/// accessors. `None` keeps the family default (the GGUF-shipped cfg).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SortformerStreamOptions {
+    pub preset: Option<SortformerPreset>,
+}
+
 /// A family extension for the run slot (offline `run`/`run_batch`).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RunExtension {
     Whisper(WhisperRunOptions),
+    Sortformer(SortformerStreamOptions),
 }
 
 /// A family extension for the stream slot.
@@ -86,6 +130,7 @@ pub(crate) enum RunExtRaw {
         ext: Box<sys::transcribe_whisper_run_ext>,
         _prompt: Option<CString>,
     },
+    Sortformer(Box<sys::transcribe_sortformer_stream_ext>),
 }
 
 impl RunExtRaw {
@@ -94,6 +139,10 @@ impl RunExtRaw {
             // `ext` is field 0, so &ext == &the family struct.
             RunExtRaw::Whisper { ext, .. } => {
                 (&**ext) as *const sys::transcribe_whisper_run_ext as *const sys::transcribe_ext
+            }
+            RunExtRaw::Sortformer(e) => {
+                (&**e) as *const sys::transcribe_sortformer_stream_ext
+                    as *const sys::transcribe_ext
             }
         }
     }
@@ -127,6 +176,12 @@ impl RunExtension {
                     ext: Box::new(ext),
                     _prompt: prompt,
                 })
+            }
+            RunExtension::Sortformer(o) => {
+                let mut ext: sys::transcribe_sortformer_stream_ext = unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_sortformer_stream_ext_init(&mut ext) };
+                set(&mut ext.preset, o.preset.map(SortformerPreset::to_sys));
+                Ok(RunExtRaw::Sortformer(Box::new(ext)))
             }
         }
     }
