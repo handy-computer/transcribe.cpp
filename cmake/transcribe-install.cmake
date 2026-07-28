@@ -11,6 +11,7 @@
 #   lib/       libtranscribe (static or shared per TRANSCRIBE_BUILD_SHARED)
 #              + ggml/ggml-base/backend libs (ggml's own install rules)
 #              + transcribe-link.json (the link manifest, see below)
+#              + pkgconfig/transcribe.pc (pkg-config metadata, see below)
 #
 # transcribe-link.json is the machine-readable link interface for non-CMake
 # consumers: which archives to link in which order, plus the system
@@ -208,6 +209,59 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/transcribe-link.json"
 ")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/transcribe-link.json"
     DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+# --- pkg-config metadata (transcribe.pc) -------------------------------------
+# For consumers that speak pkg-config rather than CMake: meson, autotools,
+# distro -devel packages. The manifest is also reachable from here, for
+# consumers that want the full link interface:
+#
+#     pkg-config --variable=linkmanifest transcribe
+#
+# Libs vs Libs.private: Libs is what a consumer of the SHARED library needs
+# (libtranscribe.so already carries DT_NEEDED on the ggml libraries, so
+# -ltranscribe is enough); Libs.private is what a static link additionally
+# drags in, and pkg-config emits it only under --static. Both are built from
+# the same lists that feed the manifest above, so the two cannot drift: in a
+# static build _libraries is the whole archive set (kept in Libs, in
+# single-pass-ld order, so a plain --libs is not a broken link line) and the
+# system libraries/frameworks/flags land in Libs.private. In a shared build
+# those lists are empty and Libs.private is empty with them — the install
+# ships no archives, so there is nothing extra to link.
+#
+# GNUInstallDirs permits an absolute CMAKE_INSTALL_<dir>, which must not be
+# re-rooted at ${prefix}; keep the ${prefix}-relative form (what makes
+# `pkg-config --define-prefix` work) only when the directory is relative.
+set(TRANSCRIBE_PC_LIBDIR "\${prefix}/${CMAKE_INSTALL_LIBDIR}")
+if(IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+    set(TRANSCRIBE_PC_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+endif()
+set(TRANSCRIBE_PC_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+if(IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+    set(TRANSCRIBE_PC_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+endif()
+set(TRANSCRIBE_PC_LIBS "-L\${libdir}")
+foreach(_lib IN LISTS _libraries)
+    string(APPEND TRANSCRIBE_PC_LIBS " -l${_lib}")
+endforeach()
+set(TRANSCRIBE_PC_LIBS_PRIVATE "")
+foreach(_flag IN LISTS _link_flags)
+    string(APPEND TRANSCRIBE_PC_LIBS_PRIVATE " ${_flag}")
+endforeach()
+foreach(_path IN LISTS _library_paths)
+    string(APPEND TRANSCRIBE_PC_LIBS_PRIVATE " ${_path}")
+endforeach()
+foreach(_framework IN LISTS _frameworks)
+    string(APPEND TRANSCRIBE_PC_LIBS_PRIVATE " -framework ${_framework}")
+endforeach()
+foreach(_lib IN LISTS _system_libs)
+    string(APPEND TRANSCRIBE_PC_LIBS_PRIVATE " -l${_lib}")
+endforeach()
+string(STRIP "${TRANSCRIBE_PC_LIBS_PRIVATE}" TRANSCRIBE_PC_LIBS_PRIVATE)
+configure_file("${CMAKE_CURRENT_LIST_DIR}/transcribe.pc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/transcribe.pc"
+    @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/transcribe.pc"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
 message(STATUS
     "transcribe install: ${PROJECT_VERSION} shared=${TRANSCRIBE_BUILD_SHARED} "
