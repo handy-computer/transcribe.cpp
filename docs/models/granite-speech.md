@@ -92,6 +92,26 @@ All variants:
 - **Transcription** of 16 kHz mono WAV input across the variant's
   supported languages.
 
+Keyword biasing / hotwords (AR variants — `granite-4.0-1b-speech`,
+`granite-speech-4.1-2b`, `granite-speech-4.1-2b-plus`):
+- **Hotword hints** via `--hotwords "kw1, kw2"` (library:
+  `transcribe_run_params::hotwords`) bias decoding toward domain terms. Keyword
+  biasing is a **distinct trained prompt whose exact form varies by variant**,
+  not one clause bolted onto every task — an off-distribution prompt is silently
+  ignored (the model falls back to plain transcription), so the runtime selects
+  the trained stem per variant and passes the caller's `, `-joined list through
+  verbatim:
+  - `granite-speech-4.1-2b`: `transcribe the speech to text. Keywords: <list>`
+    for ASR and `translate the speech to <lang>. Keywords: <list>` for
+    translation (per the model card's preferred-prompt table).
+  - `granite-speech-4.1-2b-plus`: appends ` Keywords: <list>` to its plain-ASR
+    prompt (`can you transcribe the speech into a written format?`), as the card
+    documents; `-plus` is ASR-only, so there is no translation form.
+  - `granite-4.0-1b-speech`: no keyword-biasing prompt is published, so the
+    runtime uses the same plain-ASR-append form as best effort.
+  IBM documents keyword biasing for ASR (and, on the 2b card, AST); combining it
+  with speaker attribution or word timestamps is unverified upstream and warns.
+
 Translation (`granite-4.0-1b-speech`, `granite-speech-4.1-2b`):
 - **Translation** between English and each ASR language in either direction
   (en ↔ fr, en ↔ de, en ↔ es, en ↔ pt, en ↔ ja), plus English-to-Italian
@@ -110,6 +130,5 @@ Plus only (`granite-speech-4.1-2b-plus`):
 NAR only (`granite-speech-4.1-2b-nar`):
 - **Single-pass non-autoregressive decode** — fastest of the four.
 
-What's not exposed by the v1 transcribe.cpp runtime: keyword/hotword biasing
-(advertised on AR variants), real-time streaming, VAD. See the per-variant
-docs for status.
+What's not exposed by the v1 transcribe.cpp runtime: real-time streaming, VAD.
+See the per-variant docs for status.

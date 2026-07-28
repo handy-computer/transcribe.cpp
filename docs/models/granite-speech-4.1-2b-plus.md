@@ -155,6 +155,7 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 | Translate                   | No (ASR-only variant; use the base [granite-speech-4.1-2b](granite-speech-4.1-2b.md) for translation) |
 | Word-level timestamps       | Yes (`--timestamps word`, structured per-word t0/t1 parsed from the model's `[T:N]` markers) |
 | Speaker diarization         | Yes (`--diarize`; structured per-turn `speaker_id`, no timing) |
+| Keyword biasing (hotwords)  | Yes (`--hotwords "kw1, kw2"`) |
 
 Speaker attribution is off by default. `--diarize` selects Granite's distinct
 speaker-attribution prompt and parses `[Speaker N]:` markers into segment and
@@ -162,6 +163,29 @@ speaker-turn rows. This task carries no timestamps: `--timestamps none` and
 `auto` are accepted, while explicit `segment`, `word`, or `token` requests are
 rejected instead of silently downgraded. The speaker-attribution and word-
 timestamp prompts cannot be combined.
+
+### Hotword hints (keyword biasing)
+
+Pass `--hotwords "kubernetes, gRPC, OTEL"` to bias transcription toward domain
+terms. The runtime appends IBM's trained ` Keywords: <list>` clause to the task
+instruction, matching the model card's keyword-biasing surface form. On the
+plus checkpoint IBM reports keyword F1 gains (e.g. 68.8 -> 81.5 on Earnings22),
+with the noisiest, most jargon-heavy audio benefiting most. Notes:
+
+- The surface form is load-bearing: the model **silently** ignores a malformed
+  or paraphrased prompt and falls back to plain transcription, so the library
+  appends the exact trained ` Keywords:` clause and passes your list through
+  verbatim. Provide it already joined with `, `.
+- The list may include terms that never appear in a given clip, so a single
+  standing glossary can be reused across recordings. Cap at a few dozen terms
+  and measure.
+- **-plus emits no punctuation/capitalization**, so keywords come back
+  lowercased and unpunctuated.
+- Keyword biasing is documented by IBM **only for ASR mode**. Combining it with
+  `--diarize` or `--timestamps word` is unverified upstream; the library still
+  applies it but emits a one-time warning, because an off-distribution prompt
+  may weaken `[Speaker N]:`/timestamp emission. Verify tag survival on your own
+  audio before relying on the combination.
 
 ## Numerical Validation
 
