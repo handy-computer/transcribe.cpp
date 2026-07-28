@@ -1070,6 +1070,22 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *              ext` as field 0. Use transcribe_model_accepts_ext_kind
  *              to probe whether the loaded model accepts a given kind
  *              before pointing `family` at it.
+ *
+ * hotwords:    optional keyword/hotword biasing hint, or NULL. A
+ *              NUL-terminated UTF-8 string of caller-joined terms (e.g.
+ *              "kubernetes, gRPC, OTEL"); the library appends it to the
+ *              model's prompt so decoding is biased toward those terms.
+ *              NULL or "" means no hint (behavior is byte-identical to
+ *              omitting the field). Honored only by families whose model
+ *              declares transcribe_model_supports(model,
+ *              TRANSCRIBE_FEATURE_HOTWORDS) == true (currently moss and
+ *              the granite AR variants — granite-4.0-1b-speech,
+ *              granite-speech-4.1-2b, and -2b-plus); other families ignore
+ *              it. Caller-owned with the same lifetime as language/
+ *              target_language: copied before the call returns. The caller
+ *              controls the exact list surface (separators, order, casing);
+ *              the library only wraps it in each family's trained biasing
+ *              clause.
  */
 struct transcribe_run_params {
     uint64_t struct_size;
@@ -1106,6 +1122,15 @@ struct transcribe_run_params {
      *   to know whether the field will take effect.
      */
     int32_t spec_k_drafts;
+
+    /*
+     * hotwords: optional keyword-biasing hint (NUL-terminated UTF-8), or
+     *   NULL for none. See the field docs above transcribe_run_params.
+     *   Appended (only when non-empty) after spec_k_drafts as a tail field:
+     *   old callers whose struct_size predates it are unaffected, and
+     *   families guard the read behind struct_size.
+     */
+    const char * hotwords;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);
@@ -1334,6 +1359,14 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct 
  *                        against a model where this returns false emits
  *                        a WARN and proceeds.
  *
+ *   HOTWORDS             The model honors transcribe_run_params::hotwords:
+ *                        the runtime appends the caller's keyword list to
+ *                        the model's trained biasing clause so decoding is
+ *                        biased toward those terms. False means the field
+ *                        is ignored by that family (no error). A non-NULL
+ *                        hotwords string against a model where this returns
+ *                        false is silently ignored.
+ *
  * Returns false on NULL model or unknown feature enum.
  */
 typedef enum {
@@ -1344,6 +1377,7 @@ typedef enum {
     TRANSCRIBE_FEATURE_PNC                  = 4,
     TRANSCRIBE_FEATURE_ITN                  = 5,
     TRANSCRIBE_FEATURE_DIARIZATION          = 6,
+    TRANSCRIBE_FEATURE_HOTWORDS             = 7,
 } transcribe_feature;
 
 TRANSCRIBE_API bool transcribe_model_supports(const struct transcribe_model * model, transcribe_feature feature);

@@ -102,6 +102,7 @@ const FEATURES: Record<Feature, number> = {
   pnc: g.TRANSCRIBE_FEATURE_PNC,
   itn: g.TRANSCRIBE_FEATURE_ITN,
   diarization: g.TRANSCRIBE_FEATURE_DIARIZATION,
+  hotwords: g.TRANSCRIBE_FEATURE_HOTWORDS,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -825,6 +826,7 @@ export class Session {
     if (opts.keepSpecialTags !== undefined)
       p.keep_special_tags = opts.keepSpecialTags;
     if (opts.specKDrafts !== undefined) p.spec_k_drafts = opts.specKDrafts;
+    if (opts.hotwords !== undefined) p.hotwords = opts.hotwords;
     if (opts.family)
       p.family = buildFamily(n, this.#model.handle, opts.family, "run");
     return p;

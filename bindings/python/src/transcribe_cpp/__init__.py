@@ -58,7 +58,7 @@ SortformerPreset = Literal["default", "very_high_latency", "high_latency", "low_
 CommitPolicy = Literal["auto", "on_finalize", "stable_prefix"]
 Feature = Literal[
     "initial_prompt", "temperature_fallback", "long_form",
-    "cancellation", "pnc", "itn", "diarization",
+    "cancellation", "pnc", "itn", "diarization", "hotwords",
 ]
 
 __all__ = [
@@ -234,6 +234,7 @@ _FEATURES = {
     "pnc": _generated.TRANSCRIBE_FEATURE_PNC,
     "itn": _generated.TRANSCRIBE_FEATURE_ITN,
     "diarization": _generated.TRANSCRIBE_FEATURE_DIARIZATION,
+    "hotwords": _generated.TRANSCRIBE_FEATURE_HOTWORDS,
 }
 
 
@@ -622,7 +623,8 @@ def _stream_update_from(u) -> StreamUpdate:
 
 
 def _build_run_params(task, language, target_language, timestamps,
-                      keep_special_tags, spec_k_drafts, diarize="default"):
+                      keep_special_tags, spec_k_drafts, diarize="default",
+                      hotwords=None):
     if not isinstance(spec_k_drafts, int) or spec_k_drafts < -1:
         raise InvalidArgument(
             f"spec_k_drafts must be -1 (family default), 0 (disabled), or a "
@@ -637,6 +639,7 @@ def _build_run_params(task, language, target_language, timestamps,
     params.target_language = target_language.encode("utf-8") if target_language else None
     params.keep_special_tags = keep_special_tags
     params.spec_k_drafts = spec_k_drafts
+    params.hotwords = hotwords.encode("utf-8") if hotwords else None
     return params
 
 
@@ -1060,6 +1063,7 @@ class Session:
             diarize: Diarize = "default",
             keep_special_tags: bool = False,
             spec_k_drafts: int = -1,
+            hotwords: str | None = None,
             family: FamilyExtension | None = None) -> Result:
         """Transcribe 16 kHz mono float32 PCM and return a materialized Result.
 
@@ -1068,6 +1072,9 @@ class Session:
         ``spec_k_drafts`` tunes speculative decoding on models whose
         capabilities advertise ``supports_spec_decode`` (-1 = family default,
         0 = disabled, >0 = draft length; silently ignored elsewhere).
+        ``hotwords`` is an optional comma-joined keyword-biasing hint honored
+        by models whose ``supports("hotwords")`` is true (e.g. moss, granite
+        AR); silently ignored elsewhere. None/empty means no hint.
 
         On ``Aborted`` (via :meth:`cancel`) and ``OutputTruncated`` the
         partial transcript is preserved and attached to the exception as
@@ -1075,7 +1082,8 @@ class Session:
         self._cancel.clear()
         array, n_samples = _pcm_to_carray(pcm)
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts, diarize)
+                                   keep_special_tags, spec_k_drafts, diarize,
+                                   hotwords)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1097,6 +1105,7 @@ class Session:
                   diarize: Diarize = "default",
                   keep_special_tags: bool = False,
                   spec_k_drafts: int = -1,
+                  hotwords: str | None = None,
                   family: FamilyExtension | None = None,
                   return_exceptions: bool = False) -> list[Result | TranscribeError]:
         """Transcribe several utterances in one dispatch — one Result each.
@@ -1131,7 +1140,8 @@ class Session:
             counts[k] = n
 
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts, diarize)
+                                   keep_special_tags, spec_k_drafts, diarize,
+                                   hotwords)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1194,8 +1204,8 @@ class Session:
         session is single-threaded and runs at most one stream at a time. Use
         the Stream as a context manager so it is reset when you are done."""
         self._cancel.clear()
-        # spec_k_drafts is an offline-decode knob; streaming always uses the
-        # family default (-1).
+        # spec_k_drafts and hotwords are offline-decode knobs; streaming always
+        # uses the family defaults (-1 / no hint).
         run_params = _build_run_params(task, language, target_language, timestamps,
                                        keep_special_tags, -1, diarize)
         sp = _StreamParams()
@@ -1442,6 +1452,7 @@ def transcribe(
     diarize: Diarize = "default",
     keep_special_tags: bool = False,
     spec_k_drafts: int = -1,
+    hotwords: str | None = None,
     family: FamilyExtension | None = None,
 ) -> Result:
     """Transcribe *pcm* in one call and return a materialized Result.
@@ -1451,13 +1462,14 @@ def transcribe(
     many clips keep a Model and call ``model.session().run(...)`` yourself; this
     helper is for the one-shot case. ``backend`` / ``gpu_device`` apply only when
     *model* is a path — they are ignored when an already-loaded Model is passed.
-    ``family`` / ``spec_k_drafts`` pass through to :meth:`Session.run`.
+    ``family`` / ``spec_k_drafts`` / ``hotwords`` pass through to
+    :meth:`Session.run`.
     """
     session_opts = dict(n_threads=n_threads, kv_type=kv_type, n_ctx=n_ctx)
     run_opts = dict(task=task, language=language, target_language=target_language,
                     timestamps=timestamps, diarize=diarize,
                     keep_special_tags=keep_special_tags,
-                    spec_k_drafts=spec_k_drafts, family=family)
+                    spec_k_drafts=spec_k_drafts, hotwords=hotwords, family=family)
 
     if isinstance(model, Model):
         with model.session(**session_opts) as session:
