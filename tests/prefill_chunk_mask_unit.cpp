@@ -114,7 +114,7 @@ int main() {
     // triangle a single-shot prefill would have built — no gaps, no overlap,
     // no leaked future. Reassemble it and compare against the reference.
     {
-        const int T = 37, chunk = 8;
+        const int                T = 37, chunk = 8;
         // Reference: full [T, T] causal mask.
         std::vector<ggml_fp16_t> full(static_cast<size_t>(T) * T);
         fill_prefill_chunk_mask(full.data(), T, T, 0);
@@ -128,8 +128,8 @@ int main() {
                 const int row = n_past + q;
                 for (int k = 0; k < T; ++k) {
                     // Beyond this chunk's window the key is simply not read.
-                    const ggml_fp16_t got  = (k < max_n_kv) ? scratch[static_cast<size_t>(q) * max_n_kv + k]
-                                                            : ggml_fp32_to_fp16(-INFINITY);
+                    const ggml_fp16_t got =
+                        (k < max_n_kv) ? scratch[static_cast<size_t>(q) * max_n_kv + k] : ggml_fp32_to_fp16(-INFINITY);
                     const ggml_fp16_t want = full[static_cast<size_t>(row) * T + k];
                     CHECK(is_keep(got) == is_keep(want));
                 }
