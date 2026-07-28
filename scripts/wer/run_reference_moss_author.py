@@ -40,6 +40,10 @@ DEFAULT_PROMPT = (
     "并在段末标注结束时间戳，以清晰标明该段语音范围。"
 )
 
+# Hotword-biasing label appended directly after DEFAULT_PROMPT (fullwidth colon,
+# no trailing space) then the caller-joined list — mirrors the C++ moss runtime.
+MOSS_HOTWORD_LABEL = "热词提示："
+
 
 def dediarize(raw: str) -> str:
     return " ".join(re.sub(r"\[[^\]]*\]", " ", raw).split())
@@ -64,6 +68,9 @@ def main() -> int:
     p.add_argument("--torch-threads", type=int, default=0,
                    help="torch.set_num_threads (0 = unchanged).")
     p.add_argument("--max-new-tokens", type=int, default=1024)
+    p.add_argument("--hotwords", default=None,
+                   help="Optional caller-joined hotword list (e.g. \"热词1, 热词2\"); "
+                        "appended as a 热词提示：<list> clause to match the C++ path.")
     p.add_argument("--limit", type=int, default=0,
                    help="Process only the first N utterances (0 = all).")
     args = p.parse_args()
@@ -100,12 +107,13 @@ def main() -> int:
 
     # Build the prompt text once (audio value is irrelevant to template render;
     # the pcm is passed per-utterance to processor(audio=...)).
+    prompt = DEFAULT_PROMPT + (MOSS_HOTWORD_LABEL + args.hotwords if args.hotwords else "")
     messages = [
         {
             "role": "user",
             "content": [
                 {"type": "audio", "audio": ""},
-                {"type": "text", "text": DEFAULT_PROMPT},
+                {"type": "text", "text": prompt},
             ],
         }
     ]
@@ -130,7 +138,9 @@ def main() -> int:
             "load_ms": round(load_ms, 1),
             "framework": "moss_author",
             "model": args.model,
-            "prompt": "DEFAULT_PROMPT (timestamp+diarize, zh)",
+            "prompt": "DEFAULT_PROMPT (timestamp+diarize, zh)"
+            + ("+hotwords" if args.hotwords else ""),
+            "hotwords": args.hotwords,
             "dediarized": True,
         }) + "\n")
         fout.flush()

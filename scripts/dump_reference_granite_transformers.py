@@ -53,6 +53,31 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.ref_dump import write_tensor, write_transcript
 
+# Per-variant base ASR instruction, matching the C++ granite path
+# (build_granite_affixes in src/arch/granite/model.cpp) and the WER runner
+# (scripts/wer/run_reference_granite_transformers.py). base-2b is trained on the
+# punctuated prompt; -plus keeps a leading space (BPE tokenizes " can" vs "can"
+# differently); 1b and any other variant use the plain-ASR prompt.
+PLAIN_ASR_INSTRUCTION = "can you transcribe the speech into a written format?"
+PLUS_ASR_INSTRUCTION = " can you transcribe the speech into a written format?"
+BASE_2B_ASR_INSTRUCTION = "transcribe the speech with proper punctuation and capitalization."
+BASE_2B_VARIANT = "granite-speech-4.1-2b"
+PLUS_VARIANT = "granite-speech-4.1-2b-plus"
+# Keyword biasing on base-2b uses a DISTINCT trained stem ("transcribe the speech
+# to text.") that does NOT reuse the punctuated ASR prompt above.
+BASE_2B_ASR_KWB_STEM = "transcribe the speech to text."
+
+
+def default_instruction_for_variant(variant: str) -> str:
+    """Auto-selected base instruction when --instruction is omitted, mirroring
+    the WER runner and the C++ granite path so a bare parity dump already matches
+    without the operator having to know each variant's trained prompt."""
+    if variant == BASE_2B_VARIANT:
+        return BASE_2B_ASR_INSTRUCTION
+    if variant == PLUS_VARIANT:
+        return PLUS_ASR_INSTRUCTION
+    return PLAIN_ASR_INSTRUCTION
+
 
 def configure_torch(args: argparse.Namespace) -> None:
     import torch
@@ -333,8 +358,28 @@ def cmd_decode(args: argparse.Namespace) -> int:
             f"Granite Speech expects 16kHz audio; got {sr} Hz in {audio_path}"
         )
 
-    # Build the chat-templated prompt with an audio placeholder.
-    user_message = f"<|audio|>{args.instruction}"
+    # Build the chat-templated prompt with an audio placeholder. The base
+    # instruction is auto-selected per variant when --instruction is omitted,
+    # mirroring the WER runner and the C++ granite path (build_granite_affixes in
+    # src/arch/granite/model.cpp), so a bare parity dump matches without the
+    # operator having to know each variant's trained prompt. Keyword biasing
+    # (KWB) uses a DISTINCT trained stem that varies by variant: base-2b swaps to
+    # "transcribe the speech to text." (ASR) or "translate the speech to <lang>."
+    # (AST), whereas -plus/1b append " Keywords: <list>" to their plain-ASR
+    # prompt. The surface form is load-bearing (a paraphrase silently disables
+    # biasing), so only base-2b's auto-selected stem is swapped here. An explicit
+    # --instruction is honored verbatim (pass the trained AST-KWB stem there for
+    # translate parity).
+    variant = args.model.rstrip("/").rsplit("/", 1)[-1]
+    if args.instruction is not None:
+        instruction = args.instruction
+    else:
+        instruction = default_instruction_for_variant(variant)
+    if getattr(args, "hotwords", None):
+        if args.instruction is None and variant == BASE_2B_VARIANT:
+            instruction = BASE_2B_ASR_KWB_STEM
+        instruction = f"{instruction} Keywords: {args.hotwords}"
+    user_message = f"<|audio|>{instruction}"
     chat: list[dict] = []
     if args.system:
         chat.append({"role": "system", "content": args.system})
@@ -505,8 +550,24 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--out", required=True, help="output directory for dumps")
     p.add_argument(
         "--instruction",
-        default="can you transcribe the speech into a written format?",
-        help="user instruction following the <|audio|> placeholder",
+        default=None,
+        help="User instruction after the <|audio|> placeholder. When omitted, "
+             "auto-selected per-variant from --model to match the model card and "
+             "the C++ granite path: base-2b -> 'transcribe the speech with proper "
+             "punctuation and capitalization.'; -plus -> ' can you transcribe the "
+             "speech into a written format?' (leading space); 1b -> 'can you "
+             "transcribe the speech into a written format?'. Override only if you "
+             "know what you are doing.",
+    )
+    p.add_argument(
+        "--hotwords",
+        default=None,
+        help=("Optional caller-joined keyword list (e.g. \"kubernetes, gRPC\"); "
+              "appends IBM's trained \" Keywords: <list>\" clause. Keyword biasing "
+              "on granite-speech-4.1-2b uses a distinct trained stem "
+              "(\"transcribe the speech to text.\"), so when --instruction is "
+              "omitted this swaps the auto-selected base-2b stem to match the C++ "
+              "granite path."),
     )
     p.add_argument(
         "--system",

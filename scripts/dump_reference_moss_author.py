@@ -62,6 +62,21 @@ DEFAULT_PROMPT = (
 )
 
 
+# Hotword-biasing label appended directly after DEFAULT_PROMPT's closing "。"
+# (fullwidth colon, no trailing space), followed by the caller-joined list —
+# mirrors the C++ moss runtime assembly (k_moss_hotword_label) and OpenMOSS
+# examples/prompts.md so parity dumps tokenize identically.
+MOSS_HOTWORD_LABEL = "热词提示："
+
+
+def build_prompt(hotwords: str | None) -> str:
+    """DEFAULT_PROMPT, optionally with a `热词提示：<list>` hotword clause."""
+    prompt = DEFAULT_PROMPT
+    if hotwords:
+        prompt += MOSS_HOTWORD_LABEL + hotwords
+    return prompt
+
+
 # ---------------------------------------------------------------------------
 # Shared reference-dump helpers
 # ---------------------------------------------------------------------------
@@ -230,7 +245,9 @@ def make_source(
         "audio": audio_path.name,
         "n_samples": int(n_samples),
         "sample_rate": int(sample_rate),
-        "prompt": "DEFAULT_PROMPT (timestamp+diarize, zh)",
+        "prompt": "DEFAULT_PROMPT (timestamp+diarize, zh)"
+        + ("+hotwords" if getattr(args, "hotwords", None) else ""),
+        "hotwords": getattr(args, "hotwords", None),
     }
 
 
@@ -373,7 +390,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
             "role": "user",
             "content": [
                 {"type": "audio", "audio": str(args.audio)},
-                {"type": "text", "text": DEFAULT_PROMPT},
+                {"type": "text", "text": build_prompt(args.hotwords)},
             ],
         }
     ]
@@ -483,6 +500,9 @@ def _add_common(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--revision", default=None,
                     help="HF revision to pin (ignored for local paths).")
     sp.add_argument("--audio", required=True, help="16 kHz mono WAV path")
+    sp.add_argument("--hotwords", default=None,
+                    help="Optional caller-joined hotword list (e.g. \"热词1, 热词2\"); "
+                         "appended as a 热词提示：<list> clause to match the C++ path.")
     sp.add_argument("--out", required=True, help="Output directory for dumps")
     sp.add_argument("--device", default="cpu", help="torch device (default: cpu)")
     sp.add_argument("--dtype", default="bf16", choices=["bf16", "f16", "f32"],
