@@ -250,6 +250,22 @@ transcribe_apply_warnings(transcribe_granite_diarize_parser_unit)
 add_test(NAME transcribe_granite_diarize_parser_unit COMMAND transcribe_granite_diarize_parser_unit)
 
 # -----------------------------------------------------------------------------
+# Granite instruction-selector unit test (pure host, no model)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_granite_prompt_builder_unit
+    granite_prompt_builder_unit.cpp)
+
+target_link_libraries(transcribe_granite_prompt_builder_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_granite_prompt_builder_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_granite_prompt_builder_unit)
+
+add_test(NAME transcribe_granite_prompt_builder_unit COMMAND transcribe_granite_prompt_builder_unit)
+
+# -----------------------------------------------------------------------------
 # F16 → F32 conv pointwise promotion unit test
 # -----------------------------------------------------------------------------
 #
