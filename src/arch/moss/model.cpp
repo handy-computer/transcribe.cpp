@@ -177,10 +177,11 @@ void build_audio_span(const MossHParams &    hp,
     }
 }
 
-void build_prompt_tokens(const MossHParams &    hp,
-                         int                    audio_seq_len,
-                         std::vector<int32_t> & out_ids,
-                         std::vector<int32_t> & out_audio_positions) {
+void build_prompt_tokens(const MossHParams &          hp,
+                         int                          audio_seq_len,
+                         const std::vector<int32_t> & hotword_ids,
+                         std::vector<int32_t> &       out_ids,
+                         std::vector<int32_t> &       out_audio_positions) {
     out_ids.clear();
     out_audio_positions.clear();
 
@@ -195,13 +196,55 @@ void build_prompt_tokens(const MossHParams &    hp,
         out_audio_positions.push_back(prefix_len + off);
     }
 
-    out_ids.insert(out_ids.end(), hp.prompt_suffix_tokens.begin(), hp.prompt_suffix_tokens.end());
+    // Suffix, split at the baked prompt body->close boundary so optional
+    // hotword ids land inside the prompt (after "…语音范围。", before the
+    // <|im_end|> that closes the turn). Empty hotword_ids => byte-identical to
+    // the original single-array insert. When no eos was found at load time the
+    // split equals the suffix size (no body->close boundary); in that case
+    // hotwords are disabled rather than appended after the turn-closing tokens,
+    // honoring the load-time contract and never corrupting the baked prompt.
+    const auto & suffix = hp.prompt_suffix_tokens;
+    const size_t split  = std::min(hp.prompt_suffix_split, suffix.size());
+    out_ids.insert(out_ids.end(), suffix.begin(), suffix.begin() + static_cast<std::ptrdiff_t>(split));
+    if (split < suffix.size()) {
+        out_ids.insert(out_ids.end(), hotword_ids.begin(), hotword_ids.end());
+    }
+    out_ids.insert(out_ids.end(), suffix.begin() + static_cast<std::ptrdiff_t>(split), suffix.end());
 }
 
 namespace {
 
 constexpr const char k_default_variant[] = "moss-transcribe-diarize";
 constexpr int        k_max_new           = 256;
+
+// Hotword biasing clause label. Appended directly after the baked prompt's
+// closing "。" (no separating space), then the caller's comma-joined list —
+// matching OpenMOSS examples/prompts.md ("…语音范围。热词提示：热词1, 热词2").
+// Chinese label because the baked default prompt is Chinese.
+constexpr const char k_moss_hotword_label[] = "热词提示：";
+
+// Encode the "热词提示：<list>" clause for insertion at the prompt body->close
+// boundary. Returns empty (unbiased prompt) when no hotwords are supplied, the
+// GGUF tokenizer lacks a runtime encoder (merges absent), or encoding fails.
+std::vector<int32_t> build_moss_hotword_ids(const MossModel * cm, const transcribe_run_params * params) {
+    std::vector<int32_t> ids;
+    const char *         hw = transcribe::run_params_hotwords(params);
+    if (hw == nullptr) {
+        return ids;
+    }
+    if (!cm->tok.has_encoder()) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "moss: hotwords ignored — GGUF tokenizer has no runtime encoder (merges absent)");
+        return ids;
+    }
+    const std::string text = std::string(k_moss_hotword_label) + hw;
+    if (const transcribe_status st = cm->tok.encode(text, ids); st != TRANSCRIBE_OK) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "moss: hotwords ignored — tokenizer encode failed (%d)",
+                static_cast<int>(st));
+        ids.clear();
+    }
+    return ids;
+}
 
 int moss_context_ceiling(int32_t n_ctx_knob, const MossHParams & hp) {
     int ceiling = hp.dec_max_position_embeddings;
@@ -251,6 +294,24 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (m->hparams.eos_token_id < 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss: GGUF tokenizer has no eos_token_id");
         return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // Split the baked suffix at the first eos id (the <|im_end|> closing the
+    // prompt body). DEFAULT_PROMPT is plain text with no control tokens, so the
+    // first eos in the suffix is exactly the body->close boundary. Hotwords, if
+    // supplied, are inserted here at run time (build_prompt_tokens). If no eos
+    // is present, split = size (no boundary), so hotwords are disabled — never
+    // appended after the turn-closing tokens and never corrupts the baked prompt.
+    {
+        const auto & suffix = m->hparams.prompt_suffix_tokens;
+        size_t       split  = suffix.size();
+        for (size_t i = 0; i < suffix.size(); ++i) {
+            if (suffix[i] == m->hparams.eos_token_id) {
+                split = i;
+                break;
+            }
+        }
+        m->hparams.prompt_suffix_split = split;
     }
 
     // Publish an advisory input bound (decoder context / audio-token rate).
@@ -749,9 +810,10 @@ transcribe_status run(transcribe_session *          session,
     }
 
     // Prompt.
-    std::vector<int32_t> prompt_ids;
-    std::vector<int32_t> audio_positions;
-    build_prompt_tokens(cm->hparams, T_enc, prompt_ids, audio_positions);
+    std::vector<int32_t>       prompt_ids;
+    std::vector<int32_t>       audio_positions;
+    const std::vector<int32_t> hotword_ids = build_moss_hotword_ids(cm, params);
+    build_prompt_tokens(cm->hparams, T_enc, hotword_ids, prompt_ids, audio_positions);
     const int T_prompt = static_cast<int>(prompt_ids.size());
     if (static_cast<int>(audio_positions.size()) != T_enc) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss run: audio_positions(%zu) != T_enc(%d)", audio_positions.size(),
@@ -1109,7 +1171,10 @@ transcribe_status run_batch(transcribe_session *          session,
     // the same 65535-query-row limit chunked prefill exists to avoid. Prompt
     // length is a pure function of the sample count, so predict it here — no
     // encoder pass needed — and hand the whole batch to the serial path,
-    // which goes through run() and therefore chunks.
+    // which goes through run() and therefore chunks. The hotword clause is
+    // constant across the batch (params->hotwords is shared), so fold it into
+    // the length prediction too — it is part of every utterance's prompt.
+    const std::vector<int32_t> hotword_ids = build_moss_hotword_ids(cm, params);
     {
         const int chunk_size = causal_lm::prefill_chunk_size();
         for (int b = 0; b < n; ++b) {
@@ -1117,7 +1182,8 @@ transcribe_status run_batch(transcribe_session *          session,
                 continue;
             }
             std::vector<int32_t> ids, positions;
-            build_prompt_tokens(cm->hparams, audio_token_length(n_samples[b], cm->hparams), ids, positions);
+            build_prompt_tokens(cm->hparams, audio_token_length(n_samples[b], cm->hparams), hotword_ids, ids,
+                                positions);
             if (static_cast<int>(ids.size()) > chunk_size) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
                         "moss run_batch: utterance %d needs %zu prompt tokens (> %d) — running the batch serially so "
@@ -1141,9 +1207,9 @@ transcribe_status run_batch(transcribe_session *          session,
     std::vector<transcribe_status>    fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     int64_t                           mel_us = 0, enc_us = 0;
 
-    const int ceiling      = moss_context_ceiling(cc->n_ctx, cm->hparams);
-    int       max_T_prompt = 0;
-    int       max_T_enc    = 0;
+    const int                  ceiling      = moss_context_ceiling(cc->n_ctx, cm->hparams);
+    int                        max_T_prompt = 0;
+    int                        max_T_enc    = 0;
     for (int b = 0; b < n; ++b) {
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
@@ -1159,7 +1225,7 @@ transcribe_status run_batch(transcribe_session *          session,
             continue;
         }
         T_enc[b] = te;
-        build_prompt_tokens(cm->hparams, te, prompt_ids[b], audio_positions[b]);
+        build_prompt_tokens(cm->hparams, te, hotword_ids, prompt_ids[b], audio_positions[b]);
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
         if (T_prompt[b] + k_max_new > ceiling) {
             fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;

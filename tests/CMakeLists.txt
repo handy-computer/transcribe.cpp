@@ -218,6 +218,22 @@ transcribe_apply_warnings(transcribe_moss_diarize_parser_unit)
 add_test(NAME transcribe_moss_diarize_parser_unit COMMAND transcribe_moss_diarize_parser_unit)
 
 # -----------------------------------------------------------------------------
+# MOSS hotword prompt-builder unit test (pure host, no model)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_moss_prompt_builder_unit
+    moss_prompt_builder_unit.cpp)
+
+target_link_libraries(transcribe_moss_prompt_builder_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_moss_prompt_builder_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_moss_prompt_builder_unit)
+
+add_test(NAME transcribe_moss_prompt_builder_unit COMMAND transcribe_moss_prompt_builder_unit)
+
+# -----------------------------------------------------------------------------
 # Granite speaker-attribution splitter unit test (pure host, no model)
 # -----------------------------------------------------------------------------
 
