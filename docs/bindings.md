@@ -39,7 +39,10 @@ binding's generated files:
   `GGML_BACKEND_DL` installs — `module_dir`, the directory to hand to
   `transcribe_init_backends()`. Proven per push by the link-smoke CI lane,
   which compiles a toy C consumer from nothing but this manifest in both
-  static and shared postures.
+  static and shared postures. The Rust `-sys` crate consumes it from two
+  sources: its own vendored source build (the default), or — with the
+  `TRANSCRIBE_DIR` env var pointing at an installed prefix — a prebuilt
+  tree, skipping the source build entirely.
 
 ## Result text pointers: copy at the FFI boundary
 
