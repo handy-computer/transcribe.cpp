@@ -42,6 +42,8 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
+constexpr int kWindowedChunkMinWindowCount = 12;
+
 // ----- Per-family depthwise dispatch policy -----
 //
 // In-block depthwise conv uses the direct conv_2d_dw path on every
@@ -404,26 +406,45 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         // pos_emb input, ne = [d_model, pos_len, 1, 1] (numpy
         // (pos_len, d_model)), filled by the driver. Local attention
         // (Regular, both contexts >= 0) shortens pos_len to (left+right+1)
-        // (NeMo LocalAttRelPositionalEncoding); ChunkedLimited keeps the
-        // full 2T-1 and uses a separate mask. ChunkedLimitedWithRc engages
-        // the mask only when buf_mask is non-null (offline runs full attn).
+        // (NeMo LocalAttRelPositionalEncoding). Long single-utterance
+        // ChunkedLimited runs use the exact bounded query/key geometry;
+        // shorter, batched, and debug runs retain the dense reference graph.
+        // ChunkedLimitedWithRc engages its dense mask only when buf_mask is
+        // non-null (offline runs full attention).
         const bool is_chunked =
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited) ||
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc && buf_mask != nullptr);
+        const int     chunk_size       = hp.enc_att_context_right + 1;
+        const int     left_chunks      = chunk_size > 0 ? hp.enc_att_context_left / chunk_size : 0;
+        const int     chunk_window     = (left_chunks + 1) * chunk_size;
+        // Window materialization has a fixed reshape/im2col cost. Keep the
+        // dense graph below the measured crossover so short requests do not
+        // regress; long requests replace quadratic attention with O(T*W).
+        const bool    windowed_chunked = hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited &&
+                                         n_batch == 1 && !var_len_masks && !transcribe::debug::enabled() &&
+                                         chunk_size > 0 && hp.enc_att_context_left >= 0 &&
+                                         T_enc > kWindowedChunkMinWindowCount * chunk_window;
         const bool    is_local_pe = (!is_chunked) && (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
-        const int64_t pos_len     = is_local_pe ?
-                                        static_cast<int64_t>(hp.enc_att_context_left + hp.enc_att_context_right + 1) :
-                                        (2 * T_enc - 1);
-        eb.pos_emb_in             = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.enc_d_model, pos_len);
+        const int64_t pos_len =
+            windowed_chunked ? static_cast<int64_t>(chunk_window + chunk_size - 1) :
+            is_local_pe      ? static_cast<int64_t>(hp.enc_att_context_left + hp.enc_att_context_right + 1) :
+                               (2 * T_enc - 1);
+        eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.enc_d_model, pos_len);
         ggml_set_name(eb.pos_emb_in, "pos_emb.in");
         ggml_set_input(eb.pos_emb_in);
 
-        // ChunkedLimited mask. [T_enc, T_enc, 1, 1] F32; the driver
-        // fills it host-side after the compute buffer is allocated.
-        // Broadcasts across heads inside rel_pos_mhsa.
+        // ChunkedLimited mask. The dense reference graph uses
+        // [T_enc,T_enc,1,1]. The bounded graph uses
+        // [chunk_window,chunk_size,1,n_chunks], including only prefix/tail
+        // padding masks; its chunk topology supplies the interior band.
         ggml_tensor * chunked_mask_in = nullptr;
         if (is_chunked) {
-            chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, T_enc, 1, 1);
+            if (windowed_chunked) {
+                const int64_t n_chunks = (T_enc + chunk_size - 1) / chunk_size;
+                chunked_mask_in        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, chunk_window, chunk_size, 1, n_chunks);
+            } else {
+                chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, T_enc, 1, 1);
+            }
             ggml_set_name(chunked_mask_in, "attn.chunked_mask.in");
             ggml_set_input(chunked_mask_in);
             eb.chunked_mask_in = chunked_mask_in;
@@ -476,6 +497,7 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         bparams.att_context_right  = hp.enc_att_context_right;
         bparams.att_context_style  = is_chunked ? conf::BlockParams::AttContextStyle::ChunkedLimited :
                                                   conf::BlockParams::AttContextStyle::Regular;
+        bparams.chunked_windowed   = windowed_chunked;
         bparams.attn_chunked_mask  = chunked_mask_in;
         bparams.attn_pad_mask      = attn_pad_mask_in;
         bparams.conv_context_left  = hp.enc_conv_context_left;

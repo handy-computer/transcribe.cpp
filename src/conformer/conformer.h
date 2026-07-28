@@ -163,8 +163,8 @@ struct BlockParams {
     //     T <= 2W+1 and remains correct (band-restricted) when T
     //     exceeds the window. Default for every offline variant.
     //
-    //   ChunkedLimited  — pos_emb stays at the full 2T-1 length and
-    //     the caller supplies a precomputed F16 mask of shape
+    //   ChunkedLimited  — pos_emb normally stays at the full 2T-1 length
+    //     and the caller supplies a precomputed F32 mask of shape
     //     [T_k, T_q, 1, 1] in `attn_chunked_mask` that
     //     rel_pos_mhsa adds onto matrix_bd before flash_attn. Chunk
     //     size = right+1, left_chunks = left/chunk_size; the mask is
@@ -173,8 +173,15 @@ struct BlockParams {
     enum class AttContextStyle { Regular, ChunkedLimited };
     AttContextStyle att_context_style = AttContextStyle::Regular;
 
+    // Offline ChunkedLimited optimization. When true, attention reshapes
+    // one utterance into a batch of fixed-size query chunks and overlapping
+    // bounded K/V windows. This is mathematically the same mask as the dense
+    // [T,T] path, but its work and temporary storage are linear in T.
+    // attn_chunked_mask is [window, chunk, 1, n_chunks] in this mode.
+    bool chunked_windowed = false;
+
     // Optional precomputed mask for ChunkedLimited. The caller builds
-    // this as a graph input shape [T_k, T_q, 1, 1] F16 (broadcasts
+    // this as a graph input shape [T_k, T_q, 1, 1] F32 (broadcasts
     // across heads) and uploads the host-computed pattern after the
     // compute buffer is allocated. Ignored for AttContextStyle::Regular.
     ggml_tensor * attn_chunked_mask = nullptr;

@@ -21,6 +21,7 @@
 #include <vector>
 
 struct ggml_context;
+struct ggml_cgraph;
 struct ggml_tensor;
 struct ggml_backend;
 struct ggml_backend_buffer;
@@ -36,7 +37,7 @@ inline int pre_encode_time_out(int input_frames, bool causal) {
     return causal ? (input_frames / 2 + 1) : ((input_frames - 1) / 2 + 1);
 }
 
-// Host-side attention-mask helpers for the streaming paths. Declared
+// Host-side attention-mask helpers for the chunked-attention paths. Declared
 // here so the per-mask unit tests can call them without a ggml backend
 // or a GGUF on disk.
 //
@@ -61,6 +62,16 @@ void compute_chunked_limited_with_rc_mask(float * out_buf,
                                           int     chunk_size_frames,
                                           int     right_context_frames,
                                           int     pad_length);
+
+// Bounded offline ChunkedLimited mask. The dense mask has T*T cells, but
+// every query chunk only attends to `left_chunks` complete chunks on its
+// left plus itself. This helper emits the equivalent compact layout used by
+// rel_pos_mhsa: [window, chunk_size, 1, n_chunks], contiguous in `window`,
+// where window = (left_chunks + 1)*chunk_size and
+// n_chunks = ceil(T/chunk_size). Prefix/tail K padding is -INF. Padded query
+// rows retain one finite cell to avoid an all-masked softmax; those rows are
+// removed from the graph output before the residual path.
+void compute_chunked_limited_window_mask(float * out_buf, int T, int chunk_size, int left_chunks);
 
 // Family defaults — applied before transcribe::read_capability_kv runs
 // (KV present overrides, KV absent leaves the default). Defined in
@@ -216,6 +227,50 @@ struct ParakeetStreamingDecoderState {
     bool initialized = false;
 };
 
+// Scheduler-allocated steady-state streaming graph. ggml graphs are
+// multi-use for computation once allocated; retaining the fixed-geometry
+// graph avoids rebuilding and re-allocating the same encoder topology for
+// every chunk. All tensor handles are borrowed from compute_ctx and become
+// invalid together when reset() is called before that context is freed.
+struct ParakeetStreamingGraph {
+    ggml_cgraph * graph = nullptr;
+
+    ggml_tensor * mel_in            = nullptr;
+    ggml_tensor * pos_emb_in        = nullptr;
+    ggml_tensor * chunked_mask_in   = nullptr;
+    ggml_tensor * prompt_one_hot_in = nullptr;
+    ggml_tensor * out               = nullptr;
+
+    std::vector<ggml_tensor *> channel_out;
+    std::vector<ggml_tensor *> time_out;
+    std::vector<ggml_tensor *> k_out;
+    std::vector<ggml_tensor *> v_out;
+
+    int  n_mel_chunk_frames     = -1;
+    int  drop_extra_pre_encoded = -1;
+    int  pos_proj_len           = -1;
+    int  kv_type                = -1;
+    bool ready                  = false;
+
+    void reset() {
+        graph                  = nullptr;
+        mel_in                 = nullptr;
+        pos_emb_in             = nullptr;
+        chunked_mask_in        = nullptr;
+        prompt_one_hot_in      = nullptr;
+        out                    = nullptr;
+        n_mel_chunk_frames     = -1;
+        drop_extra_pre_encoded = -1;
+        pos_proj_len           = -1;
+        kv_type                = -1;
+        ready                  = false;
+        channel_out.clear();
+        time_out.clear();
+        k_out.clear();
+        v_out.clear();
+    }
+};
+
 // Concrete context. Owns a per-call compute context and a persistent
 // multi-backend scheduler that dispatches encoder graph ops to the best
 // available backend.
@@ -259,6 +314,7 @@ struct ParakeetSession final : public transcribe_session {
     // an utterance, freed in the dtor.
     ParakeetStreamingCaches       stream_caches;
     ParakeetStreamingDecoderState stream_dec_state;
+    ParakeetStreamingGraph        stream_graph;
 
     // ---- Buffered streaming state (parakeet-unified-en-0.6b) ----
     //
