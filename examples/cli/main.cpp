@@ -238,6 +238,11 @@ struct cli_args {
     bool diarize     = true;
     bool diarize_set = false;
 
+    // Hotword/keyword biasing hint (moss / granite AR variants). Empty = none.
+    // --hotwords "w1, w2, w3" sets rp.hotwords; ignored by families that
+    // do not advertise TRANSCRIBE_FEATURE_HOTWORDS.
+    std::string hotwords;  // --hotwords "w1, w2, w3"
+
     // Streaming demo: when > 0, the single-file path feeds the WAV
     // through transcribe_stream_begin/feed/finalize in fixed-size
     // ms-aligned chunks instead of one transcribe_run call. Requires
@@ -309,6 +314,8 @@ void print_usage(const char * argv0) {
                  "  --diarize             (moss/granite-plus) speaker attribution: segments carry\n"
                  "                        speaker ids; granite-plus requests its speaker task\n"
                  "  --no-diarize          disable speaker attribution (the library default)\n"
+                 "  --hotwords LIST       (moss/granite) bias decoding toward comma-separated\n"
+                 "                        keywords, e.g. --hotwords \"kubernetes, gRPC, Mori\"\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
                  "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
                  "                        N-ms PCM slices; requires model to advertise\n"
@@ -586,6 +593,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
         } else if (a == "--no-diarize") {
             out.diarize     = false;
             out.diarize_set = true;
+        } else if (a == "--hotwords") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.hotwords = v;
         } else if (a == "--raw-tokens") {
             out.keep_special_tags = true;
         } else if (a == "--stream-chunk-ms") {
@@ -834,6 +847,9 @@ int main(int argc, char ** argv) {
         }
         if (args.diarize_set) {
             rp.diarize = args.diarize ? TRANSCRIBE_DIARIZE_MODE_ON : TRANSCRIBE_DIARIZE_MODE_OFF;
+        }
+        if (!args.hotwords.empty()) {
+            rp.hotwords = args.hotwords.c_str();
         }
 
         // Whisper run extension. Allocated outside rp's scope so its
@@ -1253,6 +1269,9 @@ int main(int argc, char ** argv) {
         }
         if (args.diarize_set) {
             rp.diarize = args.diarize ? TRANSCRIBE_DIARIZE_MODE_ON : TRANSCRIBE_DIARIZE_MODE_OFF;
+        }
+        if (!args.hotwords.empty()) {
+            rp.hotwords = args.hotwords.c_str();
         }
 
         struct transcribe_whisper_run_ext wx;
