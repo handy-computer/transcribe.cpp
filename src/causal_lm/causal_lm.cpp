@@ -6,6 +6,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe-backend.h"
+#include "transcribe-env.h"
 #include "transcribe-log.h"
 #include "transcribe-session.h"
 
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace transcribe::causal_lm {
@@ -159,6 +161,56 @@ bool kv_init_batched(KvCache &      cache,
     cache.head    = 0;
     cache.n_batch = n_batch;
     return true;
+}
+
+int pick_kv_cache_context(int needed, int model_max) {
+    if (model_max <= 0) {
+        return 0;
+    }
+
+    constexpr int k_min_context = 1024;
+    constexpr int k_large_step  = 4096;
+
+    int64_t want = k_min_context;
+    if (needed > k_large_step) {
+        want = (static_cast<int64_t>(needed) + k_large_step - 1) / k_large_step * k_large_step;
+    } else {
+        while (want < needed) {
+            want *= 2;
+        }
+    }
+    return static_cast<int>(std::min<int64_t>(want, model_max));
+}
+
+void fill_prefill_chunk_mask(ggml_fp16_t * dst, int max_n_kv, int T_chunk, int n_past) {
+    if (dst == nullptr || max_n_kv <= 0 || T_chunk <= 0 || n_past < 0 || n_past + T_chunk > max_n_kv) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "causal_lm prefill mask: bad geometry (max_n_kv=%d T_chunk=%d n_past=%d)",
+                max_n_kv, T_chunk, n_past);
+        return;
+    }
+    const ggml_fp16_t keep = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t drop = ggml_fp32_to_fp16(-INFINITY);
+    for (int q = 0; q < T_chunk; ++q) {
+        ggml_fp16_t * row  = dst + static_cast<size_t>(q) * max_n_kv;
+        // Absolute position of this query; it sees KV rows [0, last].
+        const int     last = n_past + q;
+        std::fill(row, row + last + 1, keep);
+        std::fill(row + last + 1, row + max_n_kv, drop);
+    }
+}
+
+int prefill_chunk_size() {
+    int chunk = k_prefill_chunk_default;
+    if (const char * s = transcribe::env::str("TRANSCRIBE_PREFILL_CHUNK")) {
+        const long v = std::strtol(s, nullptr, 10);
+        if (v > 0 && v <= k_prefill_chunk_max) {
+            chunk = static_cast<int>(v);
+        } else {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "TRANSCRIBE_PREFILL_CHUNK=%s out of range (1..%d) — using %d", s,
+                    k_prefill_chunk_max, chunk);
+        }
+    }
+    return chunk;
 }
 
 // Block forward — prefill.

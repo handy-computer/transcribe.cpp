@@ -54,6 +54,46 @@ struct PrefillBuild {
     int suffix_len = 0;
 };
 
+// ---------- Chunked prefill ----------
+//
+// One chunk of a long prompt, run against the KV earlier chunks wrote. Used
+// instead of build_prefill_graph when T_prompt exceeds
+// causal_lm::prefill_chunk_size(); shorter prompts keep the single-shot graph
+// the golden dumps were recorded against.
+//
+// Voxtral's decoder context is 131072 tokens but the Metal flash-attention
+// kernel asserts ne01 < 65536 query rows, so a single-shot prefill aborts the
+// process somewhere past ~87 min of audio; the dense [T, T] mask is the other
+// half of the problem. See src/arch/moss/decoder.h — same defect, same fix.
+//
+// A chunk is a contiguous slice of [prefix | audio | suffix], so it holds at
+// most one run of each, in that order: `pre_n` token-embedding rows, then
+// `aud_n` encoder rows, then `suf_n` token-embedding rows, summing to T_chunk.
+struct PrefillChunkBuild {
+    ggml_tensor * input_ids_in = nullptr;  // [T_chunk] i32
+    ggml_tensor * enc_out_in   = nullptr;  // [dec_hidden, aud_n] f32 (null when aud_n == 0)
+    ggml_tensor * positions_in = nullptr;  // [T_chunk] i32
+    ggml_tensor * kv_idx_in    = nullptr;  // [T_chunk] i64
+    ggml_tensor * mask_in      = nullptr;  // [max_n_kv, T_chunk] f16
+    ggml_tensor * out          = nullptr;  // [vocab] last-position logits (final chunk only)
+    ggml_cgraph * graph        = nullptr;
+
+    int T_chunk  = 0;
+    int max_n_kv = 0;
+};
+
+PrefillChunkBuild build_prefill_chunk_graph(ggml_context *                   ctx,
+                                            const VoxtralWeights &           weights,
+                                            const VoxtralHParams &           hp,
+                                            transcribe::causal_lm::KvCache & kv_cache,
+                                            int                              T_chunk,
+                                            int                              max_n_kv,
+                                            int                              pre_n,
+                                            int                              aud_n,
+                                            int                              suf_n,
+                                            bool                             use_flash,
+                                            bool                             want_logits);
+
 // Prefill graph: token-embed the prompt, splice proj.out over the audio
 // placeholder run, run the LM blocks (writing KV [0,T_prompt)), final
 // RMSNorm + UNTIED head, output last-position logits.

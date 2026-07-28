@@ -101,19 +101,106 @@ int pick_decode_budget(int n_audio, int t_prompt, int model_max) {
     return budget;
 }
 
-// Pick a KV-cache context length that fits `needed` (prompt + decode budget).
-// Rounds up to a power of two (so the step graph's `max_n_kv`, computed the same
-// way, never exceeds the allocation) and clamps to the trained
-// max_position_embeddings — the real ceiling, since RoPE is only valid there.
-int pick_kv_ctx(int needed, int model_max) {
-    int want = 1024;
-    while (want < needed) {
-        want *= 2;
+// Chunked prefill — see decoder.h. Walks the prompt in blocks against the
+// growing KV cache and returns the final position's logits. The prompt is
+// laid out [prefix | audio | suffix], so each chunk holds at most one run of
+// each and the audio rows it needs are a contiguous slice of enc_host.
+transcribe_status prefill_chunked(VoxtralSession *             cc,
+                                  VoxtralModel *               cm,
+                                  const std::vector<int32_t> & prompt_ids,
+                                  int                          prefix_len,
+                                  int                          T_enc,
+                                  int                          chunk_size,
+                                  std::vector<float> &         out_logits) {
+    const int T_prompt = static_cast<int>(prompt_ids.size());
+    const int hidden   = cm->hparams.dec_hidden;
+    const int n_chunks = (T_prompt + chunk_size - 1) / chunk_size;
+    const int aud_lo   = prefix_len;          // first audio position
+    const int aud_hi   = prefix_len + T_enc;  // one past the last
+
+    std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * std::min(chunk_size, T_prompt));
+    std::vector<int32_t>     positions(chunk_size);
+    std::vector<int64_t>     kv_idx(chunk_size);
+
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "voxtral prefill: %d tokens in %d chunks of %d", T_prompt, n_chunks,
+            chunk_size);
+
+    for (int c = 0; c < n_chunks; ++c) {
+        const int  a        = c * chunk_size;
+        const int  T_chunk  = std::min(chunk_size, T_prompt - a);
+        const int  b        = a + T_chunk;
+        const int  max_n_kv = b;
+        const bool last     = (c == n_chunks - 1);
+
+        // Overlap of [a, b) with each of the three runs.
+        const int pre_n = std::max(0, std::min(b, aud_lo) - a);
+        const int aud_n = std::max(0, std::min(b, aud_hi) - std::max(a, aud_lo));
+        const int suf_n = T_chunk - pre_n - aud_n;
+
+        if (cc->compute_ctx != nullptr) {
+            ggml_free(cc->compute_ctx);
+            cc->compute_ctx = nullptr;
+        }
+        ggml_init_params ip{};
+        ip.mem_size     = 64 * 1024 * 1024;
+        ip.no_alloc     = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral prefill: ggml_init failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        PrefillChunkBuild pb =
+            build_prefill_chunk_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_chunk, max_n_kv, pre_n,
+                                      aud_n, suf_n, cc->decoder_use_flash, last);
+        if (pb.graph == nullptr || (last && pb.out == nullptr)) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral prefill: chunk %d/%d graph alloc failed — out of memory.",
+                    c + 1, n_chunks);
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        if (pb.input_ids_in != nullptr) {  // null when the chunk is pure audio
+            ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data() + a, 0,
+                                    static_cast<size_t>(T_chunk) * sizeof(int32_t));
+        }
+        if (aud_n > 0) {
+            const size_t row0 = static_cast<size_t>(std::max(a, aud_lo) - aud_lo);
+            ggml_backend_tensor_set(pb.enc_out_in, cc->enc_host.data() + row0 * hidden, 0,
+                                    static_cast<size_t>(aud_n) * hidden * sizeof(float));
+        }
+
+        for (int i = 0; i < T_chunk; ++i) {
+            positions[i] = a + i;
+            kv_idx[i]    = a + i;
+        }
+        ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, static_cast<size_t>(T_chunk) * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.kv_idx_in, kv_idx.data(), 0, static_cast<size_t>(T_chunk) * sizeof(int64_t));
+
+        causal_lm::fill_prefill_chunk_mask(mask.data(), max_n_kv, T_chunk, /*n_past=*/a);
+        ggml_backend_tensor_set(pb.mask_in, mask.data(), 0,
+                                static_cast<size_t>(max_n_kv) * T_chunk * sizeof(ggml_fp16_t));
+
+        if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral prefill: chunk %d/%d compute failed (%d)", c + 1, n_chunks,
+                    static_cast<int>(gs));
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        cc->kv_cache.n    = max_n_kv;
+        cc->kv_cache.head = max_n_kv;
+
+        if (last) {
+            if (transcribe::debug::enabled()) {
+                transcribe::debug::dump_tensor("dec.logits_raw", pb.out, "dec.logits_raw");
+            }
+            ggml_backend_tensor_get(pb.out, out_logits.data(), 0, out_logits.size() * sizeof(float));
+        }
     }
-    if (want > model_max) {
-        want = model_max;
-    }
-    return want;
+    return TRANSCRIBE_OK;
 }
 
 // Input-length contract (see docs/input-limits.md). Hard-context-cap family:
@@ -696,7 +783,7 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
     const int max_new  = pick_decode_budget(n_audio_total, T_prompt, model_max);
-    const int want_ctx = pick_kv_ctx(T_prompt + max_new, model_max);
+    const int want_ctx = causal_lm::pick_kv_cache_context(T_prompt + max_new, model_max);
     if (cc->kv_cache.n_ctx < want_ctx) {
         const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
         cc->kv_cache.free();
@@ -736,76 +823,91 @@ transcribe_status run(transcribe_session *          session,
             return TRANSCRIBE_ERR_OOM;
         }
     }
-    PrefillBuild pb = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
-                                          n_audio_total, prefix_len, suffix_len, cc->decoder_use_flash, slice_last);
-    if (pb.graph == nullptr || pb.out == nullptr) {
-        return TRANSCRIBE_ERR_GGUF;
-    }
-
-    ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "voxtral run: prefill graph allocation failed — out of memory. "
-                            "Lower transcribe_session_params.n_ctx or shorten the audio.");
-        return TRANSCRIBE_ERR_OOM;
-    }
-
-    ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(), 0, prompt_ids.size() * sizeof(int32_t));
-    ggml_backend_tensor_set(pb.enc_out_in, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
-    {
-        std::vector<int32_t> positions(T_prompt);
-        for (int i = 0; i < T_prompt; ++i) {
-            positions[i] = i;
-        }
-        ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, positions.size() * sizeof(int32_t));
-    }
-    {
-        const ggml_fp16_t        mz = ggml_fp32_to_fp16(0.0f);
-        const ggml_fp16_t        mn = ggml_fp32_to_fp16(-INFINITY);
-        std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * T_prompt, mn);
-        for (int r = 0; r < T_prompt; ++r) {
-            for (int col = 0; col <= r; ++col) {
-                mask[static_cast<size_t>(r) * T_prompt + col] = mz;
-            }
-        }
-        ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
-    }
-    set_sched_threads(cc->sched, cc->n_threads);
-
-    if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: prefill compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    cc->kv_cache.n    = T_prompt;
-    cc->kv_cache.head = T_prompt;
-
-    if (dumps_on) {
-        auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
-            if (t != nullptr) {
-                transcribe::debug::dump_tensor(name, t, stage);
-            }
-        };
-        try_dump("dec.token_emb", pb.dumps.token_emb, "dec.token_emb");
-        try_dump("dec.audio_injected", pb.dumps.audio_injected, "dec.audio_injected");
-        try_dump("dec.block.0.out", pb.dumps.block_0_out, "dec.block.0");
-        {
-            char nm[64];
-            std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers / 2);
-            try_dump(nm, pb.dumps.block_mid_out, "dec.block.mid");
-        }
-        {
-            char nm[64];
-            std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers - 1);
-            try_dump(nm, pb.dumps.block_last_out, "dec.block.last");
-        }
-        try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
-        try_dump("dec.logits_raw", pb.dumps.logits_raw, "dec.logits_raw");
-    }
-
-    // ----- First token (argmax of prefill logits) -----
-    const int          vocab = cm->hparams.dec_vocab_size;
+    const int          vocab      = cm->hparams.dec_vocab_size;
+    const int          chunk_size = causal_lm::prefill_chunk_size();
     std::vector<float> logits(vocab);
-    ggml_backend_tensor_get(pb.out, logits.data(), 0, logits.size() * sizeof(float));
+
+    if (T_prompt > chunk_size) {
+        // Long prompt: chunk it. A single flash-attention call is capped at
+        // 65535 query rows on Metal, and the [T, T] mask is O(T^2) on both
+        // host and device — see decoder.h.
+        if (dumps_on) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                                "voxtral run: T_prompt=%d exceeds the %d-token prefill chunk — only "
+                                "dec.logits_raw is dumped (per-chunk hidden states have no single-shot "
+                                "counterpart)",
+                                T_prompt, chunk_size);
+        }
+        set_sched_threads(cc->sched, cc->n_threads);
+        if (const transcribe_status st =
+                prefill_chunked(cc, cm, prompt_ids, prefix_len, n_audio_total, chunk_size, logits);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+    } else {
+        PrefillBuild pb = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
+                                              n_audio_total, prefix_len, suffix_len, cc->decoder_use_flash, slice_last);
+        if (pb.graph == nullptr || pb.out == nullptr) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                "voxtral run: prefill graph allocation failed — out of memory. "
+                                "Lower transcribe_session_params.n_ctx or shorten the audio.");
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(), 0, prompt_ids.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.enc_out_in, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
+        {
+            std::vector<int32_t> positions(T_prompt);
+            for (int i = 0; i < T_prompt; ++i) {
+                positions[i] = i;
+            }
+            ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, positions.size() * sizeof(int32_t));
+        }
+        {
+            std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * T_prompt);
+            causal_lm::fill_prefill_chunk_mask(mask.data(), T_prompt, T_prompt, /*n_past=*/0);
+            ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
+        }
+        set_sched_threads(cc->sched, cc->n_threads);
+
+        if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: prefill compute failed (%d)", static_cast<int>(gs));
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        cc->kv_cache.n    = T_prompt;
+        cc->kv_cache.head = T_prompt;
+
+        if (dumps_on) {
+            auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
+                if (t != nullptr) {
+                    transcribe::debug::dump_tensor(name, t, stage);
+                }
+            };
+            try_dump("dec.token_emb", pb.dumps.token_emb, "dec.token_emb");
+            try_dump("dec.audio_injected", pb.dumps.audio_injected, "dec.audio_injected");
+            try_dump("dec.block.0.out", pb.dumps.block_0_out, "dec.block.0");
+            {
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers / 2);
+                try_dump(nm, pb.dumps.block_mid_out, "dec.block.mid");
+            }
+            {
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers - 1);
+                try_dump(nm, pb.dumps.block_last_out, "dec.block.last");
+            }
+            try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
+            try_dump("dec.logits_raw", pb.dumps.logits_raw, "dec.logits_raw");
+        }
+
+        // ----- First token (argmax of prefill logits) -----
+        ggml_backend_tensor_get(pb.out, logits.data(), 0, logits.size() * sizeof(float));
+    }
     auto argmax = [&](const std::vector<float> & v) -> int32_t {
         int32_t best   = 0;
         float   best_v = v[0];
@@ -995,6 +1097,34 @@ transcribe_status run_batch(transcribe_session *          session,
 
     transcribe::debug::init();
     const auto & hp = cm->hparams;
+
+    // The batched prefill is still single-shot ([T_max, T_max] mask, all query
+    // rows in one flash-attention call), so a long utterance would trip the
+    // same 65535-query-row limit chunked prefill exists to avoid. Audio-token
+    // count is a pure function of the sample count, so screen for it here and
+    // send the batch down the serial path, which goes through run() and
+    // therefore chunks.
+    {
+        const int chunk_size = causal_lm::prefill_chunk_size();
+        int       spc        = hp.fe_n_samples;
+        if (spc <= 0) {
+            spc = (hp.fe_chunk_length > 0 ? hp.fe_chunk_length : 30) * hp.fe_sample_rate;
+        }
+        const int per_chunk = hp.audio_tokens_per_chunk();
+        for (int b = 0; b < n; ++b) {
+            if (pcm[b] == nullptr || n_samples[b] <= 0 || spc <= 0 || per_chunk <= 0) {
+                continue;
+            }
+            const int64_t audio_tok = static_cast<int64_t>((n_samples[b] + spc - 1) / spc) * per_chunk;
+            if (audio_tok > chunk_size) {  // conservative: prompt >= audio tokens
+                log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                        "voxtral run_batch: utterance %d needs >= %lld prompt tokens (> %d) — running the batch "
+                        "serially so prefill can chunk",
+                        b, static_cast<long long>(audio_tok), chunk_size);
+                return run_batch_serial(cc, pcm, n_samples, n, params);
+            }
+        }
+    }
 
     // ----- Prompt mode (uniform across the batch) -----
     const bool  translate = (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE);

@@ -565,6 +565,93 @@ transcribe_status encode_one(MossSession *        cc,
 
 // Build audio_dense [hidden, T_prompt] + keep_mask [1, T_prompt] host-side by
 // scattering enc_out columns into the audio-pad prompt positions.
+// Chunked prefill: push the prompt through the decoder in blocks against the
+// growing KV cache, and return the final position's logits.
+//
+// A single-shot prefill runs every prompt token as one flash-attention call
+// (Metal asserts ne01 < 65536, so ~82 min of audio aborts the process) with a
+// dense [T_prompt, T_prompt] f16 mask (17 GB at 2 h, twice over counting the
+// host copy). Chunking bounds the query rows to `chunk_size` and the mask to
+// [n_past + T_chunk, T_chunk]. Prompts that fit in one chunk never come here
+// — see run() — so the numerics recorded by the golden dumps are untouched.
+transcribe_status prefill_chunked(MossSession *                cc,
+                                  MossModel *                  cm,
+                                  const std::vector<int32_t> & prompt_ids,
+                                  const std::vector<float> &   audio_dense,
+                                  const std::vector<float> &   keep_mask,
+                                  int                          chunk_size,
+                                  std::vector<float> &         out_logits) {
+    const int T_prompt = static_cast<int>(prompt_ids.size());
+    const int hidden   = cm->hparams.dec_hidden;
+    const int n_chunks = (T_prompt + chunk_size - 1) / chunk_size;
+
+    // Sized for the widest chunk we will build (the last chunk sees the whole
+    // KV window), then refilled in place — one allocation, not one per chunk.
+    std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * std::min(chunk_size, T_prompt));
+    std::vector<int32_t>     positions(chunk_size);
+    std::vector<int64_t>     kv_idx(chunk_size);
+
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "moss prefill: %d tokens in %d chunks of %d", T_prompt, n_chunks, chunk_size);
+
+    for (int c = 0; c < n_chunks; ++c) {
+        const int  n_past   = c * chunk_size;
+        const int  T_chunk  = std::min(chunk_size, T_prompt - n_past);
+        const int  max_n_kv = n_past + T_chunk;
+        const bool last     = (c == n_chunks - 1);
+
+        if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        PrefillChunkBuild pb = build_prefill_chunk_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
+                                                         T_chunk, max_n_kv, cc->decoder_use_flash, last);
+        if (pb.graph == nullptr || (last && pb.out == nullptr)) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss prefill: chunk %d/%d graph alloc failed", c + 1, n_chunks);
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data() + n_past, 0,
+                                static_cast<size_t>(T_chunk) * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.audio_dense_in, audio_dense.data() + static_cast<size_t>(n_past) * hidden, 0,
+                                static_cast<size_t>(T_chunk) * hidden * sizeof(float));
+        ggml_backend_tensor_set(pb.keep_mask_in, keep_mask.data() + n_past, 0,
+                                static_cast<size_t>(T_chunk) * sizeof(float));
+
+        for (int i = 0; i < T_chunk; ++i) {
+            positions[i] = n_past + i;
+            kv_idx[i]    = n_past + i;
+        }
+        ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, static_cast<size_t>(T_chunk) * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.kv_idx_in, kv_idx.data(), 0, static_cast<size_t>(T_chunk) * sizeof(int64_t));
+
+        causal_lm::fill_prefill_chunk_mask(mask.data(), max_n_kv, T_chunk, n_past);
+        ggml_backend_tensor_set(pb.mask_in, mask.data(), 0,
+                                static_cast<size_t>(max_n_kv) * T_chunk * sizeof(ggml_fp16_t));
+
+        if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss prefill: chunk %d/%d compute failed", c + 1, n_chunks);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        cc->kv_cache.n    = max_n_kv;
+        cc->kv_cache.head = max_n_kv;
+
+        if (last) {
+            if (transcribe::debug::enabled()) {
+                // The one dump point chunked prefill can honour: same tensor,
+                // same shape, same meaning as the single-shot path, which is
+                // what the chunked-vs-single parity check compares.
+                transcribe::debug::dump_tensor("dec.logits_raw", pb.out, "dec.logits_raw");
+            }
+            ggml_backend_tensor_get(pb.out, out_logits.data(), 0, out_logits.size() * sizeof(float));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
 void build_injection(int                          hidden,
                      int                          T_prompt,
                      const std::vector<float> &   enc_out,
@@ -685,14 +772,11 @@ transcribe_status run(transcribe_session *          session,
     // for long-form far exceeds the k_max_new floor. Clamp to the context.
     const int gen_budget = std::min(ceiling - T_prompt, std::max(k_max_new, 2 * T_enc + 128));
 
-    // KV cache (grow-to-fit, pow2, clamped to ceiling).
-    int want_n_ctx = 1024;
-    while (want_n_ctx < T_prompt + gen_budget) {
-        want_n_ctx *= 2;
-    }
-    if (want_n_ctx > ceiling) {
-        want_n_ctx = ceiling;
-    }
+    // KV cache (grow-to-fit, clamped to ceiling). Short inputs retain the old
+    // 1K/2K/4K buckets; longer ones grow in 4K steps so crossing 32K does not
+    // jump straight to the full 131072-token, ~14 GiB worst case. Still
+    // grow-only, so repeat runs on one session reuse the largest allocation.
+    const int want_n_ctx = causal_lm::pick_kv_cache_context(T_prompt + gen_budget, ceiling);
     if (cc->kv_cache.ctx != nullptr && cc->kv_cache.n_ctx < want_n_ctx) {
         cc->kv_cache.free();
     }
@@ -711,77 +795,93 @@ transcribe_status run(transcribe_session *          session,
         cc->kv_cache.head = 0;
     }
 
-    // Prefill.
-    if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK) {
-        return st;
-    }
-    const bool   slice_last = !dumps_on;
-    PrefillBuild pb         = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
-                                                  cc->decoder_use_flash, slice_last);
-    if (pb.graph == nullptr || pb.out == nullptr) {
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        return TRANSCRIBE_ERR_OOM;
-    }
+    // Prefill. Prompts that fit in one chunk keep the original single-shot
+    // graph verbatim — that is the graph every golden dump and tolerance was
+    // recorded against. Longer prompts go chunk-by-chunk, which is the only
+    // way they run at all: a single flash-attention call is capped at 65535
+    // query rows on Metal (~82 min of audio), and the dense [T, T] mask is
+    // O(T^2) on both the host and the device.
+    const int          vocab      = cm->hparams.dec_vocab_size;
+    const int          chunk_size = causal_lm::prefill_chunk_size();
+    std::vector<float> logits(vocab);
+    std::vector<float> audio_dense, keep_mask;
+    build_injection(cm->hparams.dec_hidden, T_prompt, cc->enc_host, audio_positions, audio_dense, keep_mask);
 
-    ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(), 0, prompt_ids.size() * sizeof(int32_t));
-    {
-        std::vector<float> audio_dense, keep_mask;
-        build_injection(cm->hparams.dec_hidden, T_prompt, cc->enc_host, audio_positions, audio_dense, keep_mask);
+    int64_t t_prefill_us = 0;
+    if (T_prompt > chunk_size) {
+        if (dumps_on) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                    "moss run: T_prompt=%d exceeds the %d-token prefill chunk — only dec.logits_raw is dumped "
+                    "(per-chunk hidden states have no single-shot counterpart)",
+                    T_prompt, chunk_size);
+        }
+        const int64_t t_pf0 = perf_debug ? ggml_time_us() : 0;
+        if (const transcribe_status st =
+                prefill_chunked(cc, cm, prompt_ids, audio_dense, keep_mask, chunk_size, logits);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        t_prefill_us = perf_debug ? (ggml_time_us() - t_pf0) : 0;
+    } else {
+        if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        const bool   slice_last = !dumps_on;
+        PrefillBuild pb         = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
+                                                      cc->decoder_use_flash, slice_last);
+        if (pb.graph == nullptr || pb.out == nullptr) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(), 0, prompt_ids.size() * sizeof(int32_t));
         ggml_backend_tensor_set(pb.audio_dense_in, audio_dense.data(), 0, audio_dense.size() * sizeof(float));
         ggml_backend_tensor_set(pb.keep_mask_in, keep_mask.data(), 0, keep_mask.size() * sizeof(float));
-    }
-    {
-        std::vector<int32_t> positions(T_prompt);
-        for (int i = 0; i < T_prompt; ++i) {
-            positions[i] = i;
-        }
-        ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, positions.size() * sizeof(int32_t));
-    }
-    {
-        const ggml_fp16_t        mz = ggml_fp32_to_fp16(0.0f);
-        const ggml_fp16_t        mn = ggml_fp32_to_fp16(-INFINITY);
-        std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * T_prompt, mn);
-        for (int r = 0; r < T_prompt; ++r) {
-            for (int c = 0; c <= r; ++c) {
-                mask[static_cast<size_t>(r) * T_prompt + c] = mz;
-            }
-        }
-        ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
-    }
-
-    const int64_t t_pf0 = perf_debug ? ggml_time_us() : 0;
-    if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss run: prefill compute failed");
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    const int64_t t_prefill_us = perf_debug ? (ggml_time_us() - t_pf0) : 0;
-    cc->kv_cache.n             = T_prompt;
-    cc->kv_cache.head          = T_prompt;
-
-    if (dumps_on) {
-        auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
-            if (t != nullptr) {
-                transcribe::debug::dump_tensor(name, t, stage);
-            }
-        };
-        try_dump("dec.token_emb", pb.dumps.token_emb, "dec.token_emb");
-        try_dump("dec.audio_injected", pb.dumps.audio_injected, "dec.audio_injected");
-        try_dump("dec.block.0.out", pb.dumps.block_0_out, "dec.block.0");
         {
-            char nm[64];
-            std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers - 1);
-            try_dump(nm, pb.dumps.block_last_out, "dec.block.last");
+            std::vector<int32_t> positions(T_prompt);
+            for (int i = 0; i < T_prompt; ++i) {
+                positions[i] = i;
+            }
+            ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, positions.size() * sizeof(int32_t));
         }
-        try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
-        try_dump("dec.logits_raw", pb.dumps.logits_raw, "dec.logits_raw");
-    }
+        {
+            std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * T_prompt);
+            causal_lm::fill_prefill_chunk_mask(mask.data(), T_prompt, T_prompt, /*n_past=*/0);
+            ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
+        }
 
-    const int          vocab = cm->hparams.dec_vocab_size;
-    std::vector<float> logits(vocab);
-    ggml_backend_tensor_get(pb.out, logits.data(), 0, logits.size() * sizeof(float));
+        const int64_t t_pf0 = perf_debug ? ggml_time_us() : 0;
+        if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss run: prefill compute failed");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        t_prefill_us      = perf_debug ? (ggml_time_us() - t_pf0) : 0;
+        cc->kv_cache.n    = T_prompt;
+        cc->kv_cache.head = T_prompt;
+
+        if (dumps_on) {
+            auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
+                if (t != nullptr) {
+                    transcribe::debug::dump_tensor(name, t, stage);
+                }
+            };
+            try_dump("dec.token_emb", pb.dumps.token_emb, "dec.token_emb");
+            try_dump("dec.audio_injected", pb.dumps.audio_injected, "dec.audio_injected");
+            try_dump("dec.block.0.out", pb.dumps.block_0_out, "dec.block.0");
+            {
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers - 1);
+                try_dump(nm, pb.dumps.block_last_out, "dec.block.last");
+            }
+            try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
+            try_dump("dec.logits_raw", pb.dumps.logits_raw, "dec.logits_raw");
+        }
+
+        ggml_backend_tensor_get(pb.out, logits.data(), 0, logits.size() * sizeof(float));
+    }
 
     std::vector<int32_t> generated_ids;
     int32_t              next_tok = argmax_vec(logits);
@@ -1003,6 +1103,29 @@ transcribe_status run_batch(transcribe_session *          session,
     // Batched decode requires the flash step path and dump-free operation.
     if (!cc->decoder_use_flash || transcribe::debug::enabled() || n == 1) {
         return run_batch_serial(cc, pcm, n_samples, n, params);
+    }
+    // The batched prefill is still single-shot ([T_max, T_max] mask, every
+    // query row in one flash-attention call), so a long utterance would trip
+    // the same 65535-query-row limit chunked prefill exists to avoid. Prompt
+    // length is a pure function of the sample count, so predict it here — no
+    // encoder pass needed — and hand the whole batch to the serial path,
+    // which goes through run() and therefore chunks.
+    {
+        const int chunk_size = causal_lm::prefill_chunk_size();
+        for (int b = 0; b < n; ++b) {
+            if (pcm[b] == nullptr || n_samples[b] <= 0) {
+                continue;
+            }
+            std::vector<int32_t> ids, positions;
+            build_prompt_tokens(cm->hparams, audio_token_length(n_samples[b], cm->hparams), ids, positions);
+            if (static_cast<int>(ids.size()) > chunk_size) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                        "moss run_batch: utterance %d needs %zu prompt tokens (> %d) — running the batch serially so "
+                        "prefill can chunk",
+                        b, ids.size(), chunk_size);
+                return run_batch_serial(cc, pcm, n_samples, n, params);
+            }
+        }
     }
     transcribe::debug::init();
 
