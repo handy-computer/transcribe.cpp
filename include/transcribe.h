@@ -818,8 +818,8 @@ typedef enum {
  *
  * kind is the library's vendor classification, one of: "cpu", "accel" (a
  * host-memory accelerator such as BLAS/AMX), "metal", "vulkan", "cuda",
- * "sycl", "gpu" (an unrecognized GPU), or "unknown". device_type is the
- * orthogonal CPU/GPU/IGPU/ACCEL axis.
+ * "rocm", "sycl", "gpu" (an unrecognized GPU), or "unknown". device_type is
+ * the orthogonal CPU/GPU/IGPU/ACCEL axis.
  *
  * device_id is a stable hardware identifier when the backend reports one
  * (for PCI devices the lower-case bus id "domain:bus:device.function", e.g.
