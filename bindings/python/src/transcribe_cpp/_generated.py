@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "fb2e64791dcbb70a"
+PUBLIC_HEADER_HASH = "7896d8d4c2a46147"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -83,6 +83,7 @@ TRANSCRIBE_BACKEND_METAL = 2
 TRANSCRIBE_BACKEND_VULKAN = 3
 TRANSCRIBE_BACKEND_CPU_ACCEL = 4
 TRANSCRIBE_BACKEND_CUDA = 5
+TRANSCRIBE_BACKEND_ROCM = 6
 TRANSCRIBE_DEVICE_TYPE_CPU = 0
 TRANSCRIBE_DEVICE_TYPE_GPU = 1
 TRANSCRIBE_DEVICE_TYPE_IGPU = 2

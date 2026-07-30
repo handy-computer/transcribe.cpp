@@ -25,16 +25,28 @@ vcpkg setup is required on any platform. The static link is the default; the
 
 ## Features
 
-- `metal` (default on Apple), `vulkan`, `cuda`, `openmp` — each forwards to the
-  matching `TRANSCRIBE_*` CMake option.
+- `metal` (default on Apple), `vulkan`, `cuda`, `rocm`, `openmp` — each forwards
+  to the matching `TRANSCRIBE_*` CMake option (`rocm` enables `TRANSCRIBE_HIP`).
 - `shared` — link a shared `libtranscribe` (`.so`/`.dylib`/`.dll`) loaded at
   runtime instead of statically baking it in. The default is a self-contained
   static link.
 - `dynamic-backends` — additionally ship each compute backend (the per-ISA CPU
-  tiers, Vulkan, CUDA, …) as a loadable module next to the library, selected at
+  tiers, Vulkan, CUDA, ROCm, …) as a loadable module next to the library, selected at
   runtime by `transcribe_init_backends_default()` when the modules sit next to
   `libtranscribe`, or `transcribe_init_backends(dir)` for a custom provider
   directory. Implies `shared`.
+
+## ROCm builds
+
+Install ROCm 6.1 or newer, then enable the first-class `rocm` feature:
+
+```sh
+cargo build --no-default-features --features rocm
+```
+
+The build detects the attached AMD GPU. To target a specific architecture, pass
+it through CMake, for example
+`TRANSCRIBE_CMAKE_ARGS="-DAMDGPU_TARGETS=gfx1201"`.
 
 ## Windows Vulkan builds
 

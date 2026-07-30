@@ -1054,6 +1054,9 @@ static bool transcribe_backend_available_impl(int raw) {
         case TRANSCRIBE_BACKEND_CUDA:
             want = transcribe::BackendKind::Cuda;
             break;
+        case TRANSCRIBE_BACKEND_ROCM:
+            want = transcribe::BackendKind::Rocm;
+            break;
         default:
             return false;
     }
@@ -1447,6 +1450,7 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
         case TRANSCRIBE_BACKEND_VULKAN:
         case TRANSCRIBE_BACKEND_CPU_ACCEL:
         case TRANSCRIBE_BACKEND_CUDA:
+        case TRANSCRIBE_BACKEND_ROCM:
             break;
         default:
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: invalid backend request %d",

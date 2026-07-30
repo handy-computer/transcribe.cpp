@@ -6,7 +6,7 @@
 //   - Strict CPU: primary_kind == Cpu, scheduler_list.size() == 1,
 //     and the sole scheduler handle classifies as Cpu via
 //     ggml_backend_get_device() + classify_device().
-//   - Explicit Metal/Vulkan: asserts based on what init_backends()
+//   - Explicit vendor GPU requests: assert based on what init_backends()
 //     actually returns, not on registry probes — a device can be
 //     registered but fail initialization.
 //   - AUTO: always succeeds; asserts based on the returned primary_kind.
@@ -176,7 +176,24 @@ int main() {
     }
 
     // ---------------------------------------------------------------
-    // 5. AUTO — always succeeds (falls back to CPU at minimum)
+    // 5. Explicit ROCm — same pattern as other GPU backends
+    // ---------------------------------------------------------------
+    {
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_ROCM, 0, "test-rocm", plan);
+
+        if (st == TRANSCRIBE_OK) {
+            CHECK_EQ(plan.primary_kind, BackendKind::Rocm);
+            CHECK(plan.primary != nullptr);
+            CHECK(plan.scheduler_list.size() >= 2);
+            free_plan(plan);
+        } else {
+            CHECK_EQ(st, TRANSCRIBE_ERR_BACKEND);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 6. AUTO — always succeeds (falls back to CPU at minimum)
     // ---------------------------------------------------------------
     //
     // AUTO probes GPU/IGPU devices and falls back to CPU if none
@@ -203,7 +220,7 @@ int main() {
     }
 
     // ---------------------------------------------------------------
-    // 6. Invalid enum — returns TRANSCRIBE_ERR_INVALID_ARG
+    // 7. Invalid enum — returns TRANSCRIBE_ERR_INVALID_ARG
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;
@@ -212,7 +229,7 @@ int main() {
     }
 
     // ---------------------------------------------------------------
-    // 7. Explicit gpu_device validation
+    // 8. Explicit gpu_device validation
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;

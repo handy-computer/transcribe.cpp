@@ -69,7 +69,8 @@ cmake --build build
 
 Replace `gfx1201` with your GPU architecture — `rocminfo | grep gfx` prints it.
 Pass a semicolon-separated list for several architectures. ROCm devices report
-as the `rocm` backend kind and are picked up by the default `auto` backend.
+as the `rocm` backend kind, are picked up by the default `auto` backend, and can
+be required explicitly with `--backend rocm`.
 
 `libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 

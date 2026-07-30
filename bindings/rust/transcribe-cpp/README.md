@@ -48,7 +48,7 @@ is the safe wrapper.
 ## Backends
 
 Backends are selected with cargo features forwarded to `transcribe-cpp-sys`:
-`metal` (default on Apple), `vulkan`, `cuda`, and `openmp`.
+`metal` (default on Apple), `vulkan`, `cuda`, `rocm`, and `openmp`.
 
 On Windows, `vulkan` requires the Vulkan SDK. Deep Cargo output paths are
 shortened automatically during the native build; see the

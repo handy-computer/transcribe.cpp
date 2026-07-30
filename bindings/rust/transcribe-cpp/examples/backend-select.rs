@@ -26,16 +26,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {} [{}] — {}", d.name, d.kind, d.description);
     }
     println!("\nbackend availability:");
-    for b in [Backend::Cpu, Backend::Metal, Backend::Vulkan, Backend::Cuda] {
+    for b in [
+        Backend::Cpu,
+        Backend::Metal,
+        Backend::Vulkan,
+        Backend::Cuda,
+        Backend::Rocm,
+    ] {
         println!("  {b:?} = {}", backend_available(b));
     }
 
     // The first optional backend this build does NOT have — used below to show
     // a request that cannot be satisfied. (CPU is always present, so it is not
     // a candidate.)
-    let unavailable = [Backend::Cuda, Backend::Vulkan, Backend::Metal]
-        .into_iter()
-        .find(|&b| !backend_available(b));
+    let unavailable = [
+        Backend::Cuda,
+        Backend::Rocm,
+        Backend::Vulkan,
+        Backend::Metal,
+    ]
+    .into_iter()
+    .find(|&b| !backend_available(b));
 
     let mut args = std::env::args().skip(1);
     let Some(model_path) = common::model_path(args.next().as_deref()) else {

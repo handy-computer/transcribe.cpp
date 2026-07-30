@@ -288,7 +288,7 @@ void print_usage(const char * argv0) {
                  "                        max, >max is clamped down. Lowers the effective\n"
                  "                        max audio.\n"
                  "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
-                 "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan, cuda\n"
+                 "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan, cuda, rocm\n"
                  "                        (default: auto)\n"
                  "  --device N            GPU device index from --list-devices: 0 = auto\n"
                  "                        (first of kind), >0 selects that registry index\n"
@@ -476,8 +476,10 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 out.backend = TRANSCRIBE_BACKEND_VULKAN;
             } else if (vs == "cuda") {
                 out.backend = TRANSCRIBE_BACKEND_CUDA;
+            } else if (vs == "rocm") {
+                out.backend = TRANSCRIBE_BACKEND_ROCM;
             } else {
-                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, vulkan, or cuda\n");
+                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, vulkan, cuda, or rocm\n");
                 return false;
             }
         } else if (a == "--device") {

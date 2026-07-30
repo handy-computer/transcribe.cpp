@@ -21,7 +21,7 @@ def test_at_least_one_device_registered():
     for dev in devices:
         assert dev.name
         assert dev.kind in {
-            "cpu", "accel", "metal", "vulkan", "cuda", "sycl", "gpu", "unknown"
+            "cpu", "accel", "metal", "vulkan", "cuda", "rocm", "sycl", "gpu", "unknown"
         }
 
 
@@ -66,8 +66,8 @@ def test_available_kinds_match_device_list():
     # answer. (cpu_accel is satisfied by a CPU device per the C contract.)
     kinds = {d.kind for d in t.backends()}
     for request, device_kind in (("metal", "metal"), ("vulkan", "vulkan"),
-                                 ("cuda", "cuda"), ("cpu", "cpu"),
-                                 ("cpu_accel", "cpu")):
+                                 ("cuda", "cuda"), ("rocm", "rocm"),
+                                 ("cpu", "cpu"), ("cpu_accel", "cpu")):
         assert t.backend_available(request) == (device_kind in kinds), request
 
 

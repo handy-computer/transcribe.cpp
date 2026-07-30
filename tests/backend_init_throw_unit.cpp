@@ -109,6 +109,7 @@ void test_specific_gpu_request_fails_cleanly_when_every_device_throws() {
         TRANSCRIBE_BACKEND_METAL,
         TRANSCRIBE_BACKEND_VULKAN,
         TRANSCRIBE_BACKEND_CUDA,
+        TRANSCRIBE_BACKEND_ROCM,
     };
     for (const auto kind : kinds) {
         transcribe::BackendPlan plan;

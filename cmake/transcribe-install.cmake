@@ -165,14 +165,31 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
         endforeach()
 
         # Some HIP packages add compiler-rt builtins directly to hip::host's
-        # interface. Preserve any such absolute artifacts as well; the
-        # amdhip64 target itself is already represented above.
-        get_target_property(_hip_host_links hip::host INTERFACE_LINK_LIBRARIES)
-        foreach(_hip_host_link IN LISTS _hip_host_links)
-            if(IS_ABSOLUTE "${_hip_host_link}" AND EXISTS "${_hip_host_link}")
-                list(APPEND _library_paths "${_hip_host_link}")
+        # interface. hip::host is created in ggml-hip's directory and imported
+        # targets are directory-scoped, so it normally is not visible here.
+        # Query it when a package promotes it to global; otherwise reproduce
+        # hip-config.cmake's compiler query using CMake's HIP compiler.
+        if(TARGET hip::host)
+            get_target_property(_hip_host_links hip::host INTERFACE_LINK_LIBRARIES)
+            foreach(_hip_host_link IN LISTS _hip_host_links)
+                if(IS_ABSOLUTE "${_hip_host_link}" AND EXISTS "${_hip_host_link}")
+                    list(APPEND _library_paths "${_hip_host_link}")
+                endif()
+            endforeach()
+        elseif(CMAKE_HIP_COMPILER)
+            execute_process(
+                COMMAND "${CMAKE_HIP_COMPILER}"
+                    -print-libgcc-file-name --rtlib=compiler-rt
+                OUTPUT_VARIABLE _hip_compiler_rt
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+                RESULT_VARIABLE _hip_compiler_rt_result)
+            if(_hip_compiler_rt_result EQUAL 0
+                    AND IS_ABSOLUTE "${_hip_compiler_rt}"
+                    AND EXISTS "${_hip_compiler_rt}")
+                list(APPEND _library_paths "${_hip_compiler_rt}")
             endif()
-        endforeach()
+        endif()
         list(REMOVE_DUPLICATES _library_paths)
     endif()
     if(_frameworks)

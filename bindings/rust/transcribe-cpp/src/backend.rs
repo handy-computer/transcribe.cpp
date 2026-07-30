@@ -59,7 +59,7 @@ pub struct Device {
     /// Human-readable description, e.g. "Apple M4 Max".
     pub description: String,
     /// Classified vendor kind: "cpu", "accel", "metal", "vulkan", "cuda",
-    /// "sycl", "gpu", or "unknown".
+    /// "rocm", "sycl", "gpu", or "unknown".
     pub kind: String,
     /// The CPU/GPU/IGPU/ACCEL axis, orthogonal to [`Device::kind`].
     pub device_type: DeviceType,

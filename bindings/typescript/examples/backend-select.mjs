@@ -13,7 +13,7 @@ for (const d of getAvailableBackends()) {
   console.log(`  ${d.kind.padEnd(7)} ${d.name} — ${d.description}`);
 }
 console.log("\nbackend availability:");
-for (const b of ["cpu", "metal", "vulkan", "cuda"]) {
+for (const b of ["cpu", "metal", "vulkan", "cuda", "rocm"]) {
   console.log(`  ${b.padEnd(7)} ${backendAvailable(b)}`);
 }
 
@@ -21,7 +21,13 @@ const path = model("TRANSCRIBE_SMOKE_MODEL");
 if (!path) skip("\nno model — device discovery only (set TRANSCRIBE_SMOKE_MODEL to load)");
 
 // Prefer an accelerator, fall back to CPU on a clean failure.
-const preferred = backendAvailable("metal") ? "metal" : backendAvailable("cuda") ? "cuda" : "cpu";
+const preferred = backendAvailable("metal")
+  ? "metal"
+  : backendAvailable("cuda")
+    ? "cuda"
+    : backendAvailable("rocm")
+      ? "rocm"
+      : "cpu";
 console.log(`\nrequesting backend: ${preferred}`);
 let m;
 try {

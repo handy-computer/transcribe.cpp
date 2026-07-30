@@ -8,7 +8,7 @@ for device in Transcribe.devices() {
 }
 
 print("\nbackend availability:")
-for backend in [Backend.cpu, .metal, .vulkan, .cuda] {
+for backend in [Backend.cpu, .metal, .vulkan, .cuda, .rocm] {
     print("  \(backend): \(Transcribe.backendAvailable(backend))")
 }
 

@@ -49,7 +49,7 @@ from .errors import (
 __version__ = "0.2.0"
 
 # String-enum types, exported so callers (and type checkers) can name them.
-Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda"]
+Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda", "rocm"]
 KVType = Literal["auto", "f32", "f16"]
 Task = Literal["transcribe", "translate"]
 Timestamps = Literal["none", "auto", "segment", "word", "token"]
@@ -187,6 +187,7 @@ _BACKENDS = {
     "vulkan": _generated.TRANSCRIBE_BACKEND_VULKAN,
     "cpu_accel": _generated.TRANSCRIBE_BACKEND_CPU_ACCEL,
     "cuda": _generated.TRANSCRIBE_BACKEND_CUDA,
+    "rocm": _generated.TRANSCRIBE_BACKEND_ROCM,
 }
 _KV_TYPES = {
     "auto": _generated.TRANSCRIBE_KV_TYPE_AUTO,
@@ -271,7 +272,7 @@ class BackendDevice:
 
     name: str
     description: str
-    kind: str  # "cpu" | "accel" | "metal" | "vulkan" | "cuda" | "sycl" | "gpu" | "unknown"
+    kind: str  # "cpu" | "accel" | "metal" | "vulkan" | "cuda" | "rocm" | "sycl" | "gpu" | "unknown"
     # Vendor-agnostic class: "cpu" | "gpu" | "igpu" | "accel", or "unknown" for a
     # value reported by a runtime newer than this binding (tell such devices
     # apart by device_id / name, not by this axis).

@@ -128,7 +128,7 @@ add_test(NAME transcribe_backend_probe_order_unit
 #
 # Covers the runtime backend-selection matrix: strict CPU invariants,
 # conditional explicit-backend error paths, AUTO fallback, and invalid
-# enum rejection. Hardware-dependent cases (Metal/Vulkan present or
+# enum rejection. Hardware-dependent cases (vendor GPU present or
 # absent) are probed at runtime inside the test binary — the test
 # always runs but exercises different branches depending on what the
 # build configured and what hardware is available.

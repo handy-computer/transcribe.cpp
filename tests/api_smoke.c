@@ -176,6 +176,7 @@ static void test_backend_devices(void) {
 
         CHECK(transcribe_backend_available(TRANSCRIBE_BACKEND_AUTO));
         CHECK(transcribe_backend_available(TRANSCRIBE_BACKEND_CPU));
+        (void) transcribe_backend_available(TRANSCRIBE_BACKEND_ROCM);
     }
 
     /* Out-of-range probes answer cleanly: error status or false, never UB. */

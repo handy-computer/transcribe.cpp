@@ -59,7 +59,7 @@ bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev)
 //                device at that global ggml registry index (the same index
 //                space transcribe_get_backend_device() enumerates) as the
 //                primary, validated against `requested`: the device must be
-//                a GPU/IGPU, and for a specific METAL/VULKAN/CUDA request it
+//                a GPU/IGPU, and for a specific METAL/VULKAN/CUDA/ROCM request it
 //                must be that vendor. gpu_device is not valid for a
 //                CPU / CPU_ACCEL request (there is no GPU to pick) nor
 //                negative; both return TRANSCRIBE_ERR_INVALID_ARG.
@@ -77,7 +77,7 @@ bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev)
 //                          vendor doesn't match a specific GPU request, or
 //                          is non-zero for a CPU request.
 //   TRANSCRIBE_ERR_BACKEND if the caller asked for a specific
-//                          backend (METAL / VULKAN) that could not
+//                          backend (METAL / VULKAN / CUDA / ROCM) that could not
 //                          be initialized, or if the CPU backend
 //                          itself fails to initialize (there is no
 //                          fallback past CPU).

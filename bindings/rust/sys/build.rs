@@ -14,6 +14,7 @@
 //!   `metal`            -> TRANSCRIBE_METAL=ON   (Apple targets only; no-op elsewhere)
 //!   `vulkan`           -> TRANSCRIBE_VULKAN=ON
 //!   `cuda`             -> TRANSCRIBE_CUDA=ON
+//!   `rocm`             -> TRANSCRIBE_HIP=ON
 //!   `openmp`           -> TRANSCRIBE_USE_OPENMP=ON
 //! Official-artifact hygiene flags (OpenMP/BLAS off) are deliberately NOT
 //! forced here: a source build is the consumer's build (same philosophy as
@@ -159,6 +160,9 @@ fn main() {
     }
     if feature("CUDA") {
         cfg.define("TRANSCRIBE_CUDA", "ON");
+    }
+    if feature("ROCM") {
+        cfg.define("TRANSCRIBE_HIP", "ON");
     }
     // Keep OpenMP OFF unless explicitly opted in. TRANSCRIBE_USE_OPENMP already
     // defaults OFF in CMake (the native ggml threadpool is the default path); we

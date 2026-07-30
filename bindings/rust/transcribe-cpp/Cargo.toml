@@ -26,6 +26,7 @@ default = ["metal"]
 metal = ["transcribe-cpp-sys/metal"]
 vulkan = ["transcribe-cpp-sys/vulkan"]
 cuda = ["transcribe-cpp-sys/cuda"]
+rocm = ["transcribe-cpp-sys/rocm"]
 openmp = ["transcribe-cpp-sys/openmp"]
 # `shared` links a shared libtranscribe; `dynamic-backends` additionally ships
 # each compute backend as a runtime-loaded module (and implies `shared`, both

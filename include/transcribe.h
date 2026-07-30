@@ -675,7 +675,7 @@ TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(const struct transcribe_mo
  *         that successfully initializes, probing every discrete GPU
  *         before any integrated GPU; within a tier, devices are tried
  *         in ggml's device registry order — which is build-time
- *         prioritized (Metal on Apple, Vulkan / CUDA / SYCL on
+ *         prioritized (Metal on Apple, Vulkan / CUDA / ROCm / SYCL on
  *         Linux, …). An integrated GPU is selected only when no
  *         discrete GPU initializes. Host-memory accelerators (BLAS,
  *         AMX, …) are additionally layered onto the scheduler when
@@ -708,6 +708,12 @@ TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(const struct transcribe_mo
  *         if Vulkan is not available in this build. Host-memory
  *         accelerators are still layered on when present.
  *
+ * CUDA    Require the NVIDIA CUDA backend. Returns TRANSCRIBE_ERR_BACKEND
+ *         if CUDA is not available in this build.
+ *
+ * ROCM    Require the AMD ROCm backend. Returns TRANSCRIBE_ERR_BACKEND
+ *         if ROCm is not available in this build.
+ *
  * Callers that need to know which backend they actually landed on
  * can query transcribe_model_backend() after load.
  */
@@ -718,6 +724,7 @@ typedef enum {
     TRANSCRIBE_BACKEND_VULKAN    = 3,
     TRANSCRIBE_BACKEND_CPU_ACCEL = 4,
     TRANSCRIBE_BACKEND_CUDA      = 5,
+    TRANSCRIBE_BACKEND_ROCM      = 6,
 } transcribe_backend_request;
 
 /* ----------------------------------------------------------------------- */
@@ -797,7 +804,7 @@ TRANSCRIBE_API int transcribe_backend_device_count(void);
 /*
  * Device type: ggml's vendor-agnostic classification of a device,
  * orthogonal to `kind` below (which carries the vendor: metal/vulkan/cuda/
- * ...). Backends report this classification themselves, so treat it as a
+ * rocm/...). Backends report this classification themselves, so treat it as a
  * runtime hint about CPU/GPU/IGPU/ACCEL placement rather than a portable
  * hardware-memory taxonomy. The numeric values mirror ggml's device-type
  * enum.
@@ -861,8 +868,8 @@ TRANSCRIBE_API transcribe_status transcribe_get_backend_device(int index, struct
 /*
  * Whether a backend request can be satisfied by some registered device:
  * AUTO whenever any device exists; CPU and CPU_ACCEL when a CPU device
- * exists; METAL / VULKAN / CUDA when a device of that kind exists. Unknown
- * or invalid request values answer false (never an error). This is the
+ * exists; METAL / VULKAN / CUDA / ROCM when a device of that kind exists.
+ * Unknown or invalid request values answer false (never an error). This is the
  * probe a binding uses to turn `backend="vulkan"` on a machine without
  * Vulkan into a clear exception instead of a failed model load.
  */
@@ -915,7 +922,7 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_device(const struct transc
  *
  * gpu_device: Multi-GPU selector. 0 (the default) means "auto / the first
  *             device of the chosen kind": AUTO picks the first GPU that
- *             initializes, and explicit METAL/VULKAN/CUDA requests pick the
+ *             initializes, and explicit METAL/VULKAN/CUDA/ROCM requests pick the
  *             first matching device — in both cases probing every discrete
  *             GPU before any integrated GPU, in ggml's registry order
  *             within each tier.
@@ -925,7 +932,7 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_device(const struct transc
  *             enumerates, so enumerate first to choose one. The selected
  *             device becomes the model's primary backend, validated against
  *             `backend`: it must be a GPU/IGPU, and for an explicit
- *             METAL/VULKAN/CUDA request it must be that vendor. The index is
+ *             METAL/VULKAN/CUDA/ROCM request it must be that vendor. The index is
  *             order-dependent — ggml's registry order can shift across driver
  *             updates or hosts, so treat it as a runtime selection, not a
  *             stable identifier; correlate via the enumerated device's name /
@@ -1353,7 +1360,7 @@ TRANSCRIBE_API bool transcribe_model_supports(const struct transcribe_model * mo
  *     and the architecture handler had no default to substitute.
  *
  *   transcribe_model_backend(): the runtime backend currently bound
- *     to this model, e.g. "cpu", "metal", "vulkan", "cuda". This is
+ *     to this model, e.g. "cpu", "metal", "vulkan", "cuda", "ROCm". This is
  *     the mechanism for detecting CPU fallback when GPU was requested.
  *
  *     Returns an empty string when no runtime backend is currently

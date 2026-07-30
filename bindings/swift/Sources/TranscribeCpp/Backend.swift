@@ -1,7 +1,7 @@
 import CTranscribe
 
 /// A backend request. `auto` always succeeds (CPU is the final fallback);
-/// `metal`/`vulkan`/`cuda` require that backend to be present in the build.
+/// Explicit GPU choices require that backend to be present in the build.
 public enum Backend: Sendable, Equatable {
     case auto
     case cpu
@@ -9,6 +9,7 @@ public enum Backend: Sendable, Equatable {
     case metal
     case vulkan
     case cuda
+    case rocm
 
     var cValue: transcribe_backend_request {
         switch self {
@@ -18,6 +19,7 @@ public enum Backend: Sendable, Equatable {
         case .metal: return TRANSCRIBE_BACKEND_METAL
         case .vulkan: return TRANSCRIBE_BACKEND_VULKAN
         case .cuda: return TRANSCRIBE_BACKEND_CUDA
+        case .rocm: return TRANSCRIBE_BACKEND_ROCM
         }
     }
 }
@@ -54,7 +56,7 @@ public struct Device: Sendable, Equatable {
     public let name: String
     /// Human-readable description, e.g. "Apple M4 Max".
     public let description: String
-    /// Classified vendor kind string, e.g. "cpu", "metal", "vulkan", "cuda".
+    /// Classified vendor kind string, e.g. "cpu", "metal", "vulkan", "cuda", "rocm".
     public let kind: String
     /// The CPU/GPU/IGPU/ACCEL axis, orthogonal to `kind`.
     public let deviceType: DeviceType

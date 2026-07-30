@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "fb2e64791dcbb70a";
+export const PUBLIC_HEADER_HASH = "7896d8d4c2a46147";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -81,6 +81,7 @@ export const TRANSCRIBE_BACKEND_METAL = 2;
 export const TRANSCRIBE_BACKEND_VULKAN = 3;
 export const TRANSCRIBE_BACKEND_CPU_ACCEL = 4;
 export const TRANSCRIBE_BACKEND_CUDA = 5;
+export const TRANSCRIBE_BACKEND_ROCM = 6;
 export const TRANSCRIBE_DEVICE_TYPE_CPU = 0;
 export const TRANSCRIBE_DEVICE_TYPE_GPU = 1;
 export const TRANSCRIBE_DEVICE_TYPE_IGPU = 2;

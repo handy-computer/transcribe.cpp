@@ -81,6 +81,7 @@ test("each backend device has a well-formed, index-aligned shape", () => {
 test("backendAvailable is a clean boolean probe", () => {
   assert.equal(backendAvailable("cpu"), true);
   assert.equal(typeof backendAvailable("cuda"), "boolean");
+  assert.equal(typeof backendAvailable("rocm"), "boolean");
 });
 
 test("invalid backend string is rejected, not silently coerced", () => {

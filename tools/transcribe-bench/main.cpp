@@ -52,7 +52,7 @@ void print_usage(const char * argv0) {
                  "  --quiet            suppress progress lines on stderr\n"
                  "  --threads N        CPU threads (default 0 = library default)\n"
                  "  --backend KIND     request a specific backend:\n"
-                 "                       auto|cpu|cpu_accel|metal|vulkan|cuda (default auto)\n"
+                 "                       auto|cpu|cpu_accel|metal|vulkan|cuda|rocm (default auto)\n"
                  "                     cpu is strict CPU (no GPU, no BLAS/AMX).\n"
                  "                     cpu_accel is CPU + host-memory accelerators\n"
                  "                       (BLAS/AMX) when the build includes them.\n"
@@ -95,9 +95,13 @@ bool parse_backend_kind(const char * s, transcribe_backend_request & out) {
         out = TRANSCRIBE_BACKEND_CUDA;
         return true;
     }
+    if (std::strcmp(s, "rocm") == 0) {
+        out = TRANSCRIBE_BACKEND_ROCM;
+        return true;
+    }
     std::fprintf(stderr,
                  "error: --backend value '%s' not recognized "
-                 "(expected one of: auto, cpu, cpu_accel, metal, vulkan, cuda)\n",
+                 "(expected one of: auto, cpu, cpu_accel, metal, vulkan, cuda, rocm)\n",
                  s);
     return false;
 }

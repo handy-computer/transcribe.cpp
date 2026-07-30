@@ -2,7 +2,7 @@
 
 import type { TranscribeError } from "./errors.js";
 
-export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "vulkan" | "metal";
+export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "rocm" | "vulkan" | "metal";
 export type KvType = "auto" | "f32" | "f16";
 export type Task = "transcribe" | "translate";
 export type TimestampKind = "none" | "auto" | "segment" | "word" | "token";

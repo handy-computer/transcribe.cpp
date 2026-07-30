@@ -68,6 +68,7 @@ const BACKENDS: Record<Backend, number> = {
   vulkan: g.TRANSCRIBE_BACKEND_VULKAN,
   cpu_accel: g.TRANSCRIBE_BACKEND_CPU_ACCEL,
   cuda: g.TRANSCRIBE_BACKEND_CUDA,
+  rocm: g.TRANSCRIBE_BACKEND_ROCM,
 };
 const KV_TYPES: Record<KvType, number> = {
   auto: g.TRANSCRIBE_KV_TYPE_AUTO,

@@ -102,9 +102,9 @@ the model lease). Disposal is idempotent and order-independent.
 import { getAvailableBackends, backendAvailable } from "transcribe-cpp";
 
 getAvailableBackends(); // [{ kind: "metal", name: "MTL0", description: "…" }, …]
-backendAvailable("cuda"); // boolean — never throws
+backendAvailable("rocm"); // boolean — never throws
 
-const model = await TranscribeModel.load("model.gguf", { backend: "metal" });
+const model = await TranscribeModel.load("model.gguf", { backend: "rocm" });
 ```
 
 `backend` defaults to `"auto"` (best accelerator, else CPU). A missing Vulkan

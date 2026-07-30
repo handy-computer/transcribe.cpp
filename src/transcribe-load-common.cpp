@@ -187,6 +187,7 @@ bool valid_backend_request(int raw) {
         case TRANSCRIBE_BACKEND_VULKAN:
         case TRANSCRIBE_BACKEND_CPU_ACCEL:
         case TRANSCRIBE_BACKEND_CUDA:
+        case TRANSCRIBE_BACKEND_ROCM:
             return true;
     }
     return false;
@@ -229,6 +230,9 @@ transcribe_status init_backends_explicit_index(transcribe_backend_request reques
             break;
         case TRANSCRIBE_BACKEND_CUDA:
             wanted = BackendKind::Cuda;
+            break;
+        case TRANSCRIBE_BACKEND_ROCM:
+            wanted = BackendKind::Rocm;
             break;
         case TRANSCRIBE_BACKEND_AUTO:
             break;
@@ -349,6 +353,7 @@ transcribe_status init_backends(transcribe_backend_request requested,
         case TRANSCRIBE_BACKEND_METAL:
         case TRANSCRIBE_BACKEND_VULKAN:
         case TRANSCRIBE_BACKEND_CUDA:
+        case TRANSCRIBE_BACKEND_ROCM:
             {
                 // Specific GPU backend request: must find a matching device
                 // or fail. ACCEL is still layered on because it's host-memory
@@ -363,6 +368,9 @@ transcribe_status init_backends(transcribe_backend_request requested,
                         break;
                     case TRANSCRIBE_BACKEND_CUDA:
                         wanted = BackendKind::Cuda;
+                        break;
+                    case TRANSCRIBE_BACKEND_ROCM:
+                        wanted = BackendKind::Rocm;
                         break;
                     default:
                         break;
