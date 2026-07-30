@@ -1054,17 +1054,16 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         resolved_kv = GGML_TYPE_F16;
     }
 
-    const bool   spk_supervision = (mt != nullptr && mt->use_kernel);
+    const bool           spk_supervision = (mt != nullptr && mt->use_kernel);
     // Kernel-mode chunk gating: sanitize the orchestrator's keep list
     // against the actual pre_encode output length (the orchestrator
     // builds its chunk grid from the diar frame count, which can trail
     // the encoder length by a frame at the clip tail).
     std::vector<int32_t> mt_keep;
     if (spk_supervision && !mt->keep_enc_frames.empty()) {
-        const bool causal =
-            (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
-        const int T_pred = pre_encode_time_out(
-            pre_encode_time_out(pre_encode_time_out(mel_n_frames, causal), causal), causal);
+        const bool causal = (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+        const int  T_pred =
+            pre_encode_time_out(pre_encode_time_out(pre_encode_time_out(mel_n_frames, causal), causal), causal);
         mt_keep.reserve(mt->keep_enc_frames.size());
         for (const int32_t i : mt->keep_enc_frames) {
             if (i >= 0 && i < T_pred) {
@@ -1072,7 +1071,7 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
             }
         }
     }
-    const int mt_keep_frames = static_cast<int>(mt_keep.size());
+    const int    mt_keep_frames = static_cast<int>(mt_keep.size());
     EncoderBuild eb = build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames, resolved_kv,
                                           pm->backend.c_str(), /*buf_mask=*/nullptr, /*n_batch=*/1,
                                           /*batch_var_len=*/false, spk_supervision, mt_keep_frames);
@@ -1114,9 +1113,9 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     if (eb.spk_mask_in != nullptr && mt != nullptr) {
         // Ungated encoder length (pre-gather); the injection masks are
         // sized to the gathered length when chunk gating is active.
-        const int T_full = static_cast<int>(eb.dumps.pre_encode_out->ne[1]);
-        const int T_inj  = static_cast<int>(eb.spk_mask_in->ne[1]);
-        auto align_full  = [&](const std::vector<float> & src, float default_value) {
+        const int T_full     = static_cast<int>(eb.dumps.pre_encode_out->ne[1]);
+        const int T_inj      = static_cast<int>(eb.spk_mask_in->ne[1]);
+        auto      align_full = [&](const std::vector<float> & src, float default_value) {
             std::vector<float> buf(static_cast<size_t>(T_full), default_value);
             const int          n = static_cast<int>(src.size());
             if (n >= T_full) {
@@ -1144,8 +1143,7 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         fill_mask(eb.spk_mask_in, mt->spk, 1.0f);
         fill_mask(eb.bg_mask_in, mt->bg, 0.0f);
         if (eb.mt_keep_in != nullptr) {
-            ggml_backend_tensor_set(eb.mt_keep_in, mt_keep.data(), 0,
-                                    mt_keep.size() * sizeof(int32_t));
+            ggml_backend_tensor_set(eb.mt_keep_in, mt_keep.data(), 0, mt_keep.size() * sizeof(int32_t));
         }
     }
 

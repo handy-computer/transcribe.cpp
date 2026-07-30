@@ -447,8 +447,8 @@ PreEncodeBuild build_pre_encode_graph(ggml_context *                ctx,
     ggml_set_name(mel_in, "chunk.mel.in");
     ggml_set_input(mel_in);
     const conf::ConvPolicy policy = sf_conv_policy(backend);
-    ggml_tensor *          out    = conf::build_pre_encode(ctx, sf_pre_view(pe), mel_in, policy,
-                                                           /*name_prefix=*/"chunk.pre_encode", /*error_tag=*/"sortformer", nullptr);
+    ggml_tensor * out = conf::build_pre_encode(ctx, sf_pre_view(pe), mel_in, policy,
+                                               /*name_prefix=*/"chunk.pre_encode", /*error_tag=*/"sortformer", nullptr);
     if (out == nullptr) {
         return b;
     }
@@ -983,21 +983,20 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
 // Family wrapper: resolve the operating point, run the core, trim, dump,
 // and emit speaker segments on the session.
 static transcribe_status run_streaming(SortformerSession *          pc,
-                                SortformerModel *            pm,
-                                int                          mel_n_mels,
-                                int                          mel_n_frames,
-                                double                       ms_per_frame,
-                                transcribe_sortformer_preset preset) {
+                                       SortformerModel *            pm,
+                                       int                          mel_n_mels,
+                                       int                          mel_n_frames,
+                                       double                       ms_per_frame,
+                                       transcribe_sortformer_preset preset) {
     const SortformerStreamParams P = resolve_stream_params(pm->hparams, preset);
     if (const transcribe_status st = ensure_sched(pc, pm); st != TRANSCRIBE_OK) {
         return st;
     }
 
     const int64_t           t_stream_start = ggml_time_us();
-    const transcribe_status st =
-        run_diar_streaming_core(pc->scratch, pm->hparams, pm->conformer_hp, pm->conformer, pm->weights,
-                                pm->backend.c_str(), pc->sched, pc->n_threads, P, pc->mel_buf.data(), mel_n_mels,
-                                mel_n_frames, pc);
+    const transcribe_status st = run_diar_streaming_core(pc->scratch, pm->hparams, pm->conformer_hp, pm->conformer,
+                                                         pm->weights, pm->backend.c_str(), pc->sched, pc->n_threads, P,
+                                                         pc->mel_buf.data(), mel_n_mels, mel_n_frames, pc);
     if (st != TRANSCRIBE_OK) {
         return st;
     }

@@ -149,12 +149,12 @@ transcribe_status build_sortformer_weights(ggml_context *            ctx,
     const char *  pfx = (tensor_prefix != nullptr) ? tensor_prefix : "";
     char          name[160];
 
-#define GET(dst, nm, e0, e1)                                     \
-    do {                                                         \
-        std::snprintf(name, sizeof(name), "%s%s", pfx, (nm));    \
-        (dst) = get_checked(ctx, name, (e0), (e1));              \
-        if ((dst) == nullptr)                                    \
-            return TRANSCRIBE_ERR_GGUF;                          \
+#define GET(dst, nm, e0, e1)                                  \
+    do {                                                      \
+        std::snprintf(name, sizeof(name), "%s%s", pfx, (nm)); \
+        (dst) = get_checked(ctx, name, (e0), (e1));           \
+        if ((dst) == nullptr)                                 \
+            return TRANSCRIBE_ERR_GGUF;                       \
     } while (0)
 
     GET(w.enc_proj_w, "diar.encoder_proj.weight", ed, d);
@@ -164,10 +164,10 @@ transcribe_status build_sortformer_weights(ggml_context *            ctx,
     for (int i = 0; i < hp.tf_n_layers; ++i) {
         SortformerTfBlock & b = w.tf_blocks[static_cast<size_t>(i)];
         char                blk[96];
-#define GETB(dst, suffix, e0, e1)                                       \
-    do {                                                                \
+#define GETB(dst, suffix, e0, e1)                                      \
+    do {                                                               \
         std::snprintf(blk, sizeof(blk), "tf.blocks.%d.%s", i, suffix); \
-        GET(dst, blk, e0, e1);                                          \
+        GET(dst, blk, e0, e1);                                         \
     } while (0)
         GETB(b.norm1_w, "norm_1.weight", d, -1);
         GETB(b.norm1_b, "norm_1.bias", d, -1);

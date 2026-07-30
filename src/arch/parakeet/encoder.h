@@ -205,16 +205,16 @@ EncoderBuild build_encoder_graph(ggml_context *                     compute_ctx,
                                  const ParakeetWeights &            weights,
                                  const ParakeetHParams &            hp,
                                  int                                n_mel_frames,
-                                 ggml_type                          kv_type       = GGML_TYPE_COUNT,
-                                 const char *                       backend_name  = "",
-                                 const BufferedStreamMaskOverride * buf_mask      = nullptr,
-                                 int                                n_batch       = 1,
+                                 ggml_type                          kv_type         = GGML_TYPE_COUNT,
+                                 const char *                       backend_name    = "",
+                                 const BufferedStreamMaskOverride * buf_mask        = nullptr,
+                                 int                                n_batch         = 1,
                                  // When true and n_batch > 1, allocate the
                                  // variable-length batch masks (attn_pad_mask_in
                                  // + conv_pad_mask_in sized for the batch) and
                                  // wire them into every conformer block. The
                                  // driver fills them from per-utterance lengths.
-                                 bool                               batch_var_len = false,
+                                 bool                               batch_var_len   = false,
                                  // Multitalker bundle (n_batch == 1 only): expose
                                  // per-frame speaker/background supervision masks
                                  // as graph inputs (EncoderBuild::spk_mask_in /
@@ -296,8 +296,8 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            compute_ctx
                                            int                       n_mel_chunk_frames,
                                            int                       drop_extra_pre_encoded,
                                            StreamingEncoderCacheIO & cache_io,
-                                           ggml_type                 kv_type      = GGML_TYPE_COUNT,
-                                           const char *              backend_name = "",
+                                           ggml_type                 kv_type         = GGML_TYPE_COUNT,
+                                           const char *              backend_name    = "",
                                            // Multitalker streaming pass: expose the
                                            // per-chunk speaker/background supervision
                                            // masks (ne=[1, T_q_new]) as graph inputs

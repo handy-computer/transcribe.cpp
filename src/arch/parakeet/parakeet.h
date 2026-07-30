@@ -120,8 +120,8 @@ struct ParakeetModel final : public transcribe_model {
     // bundle's tensor prefix); the diarizer conformer's fused-BN params
     // live in their own ctx + buffer, freed in the dtor.
     std::unique_ptr<transcribe::sortformer::SortformerEmbedded> diar;
-    ggml_context *        diar_bn_ctx    = nullptr;
-    ggml_backend_buffer_t diar_bn_buffer = nullptr;
+    ggml_context *                                              diar_bn_ctx    = nullptr;
+    ggml_backend_buffer_t                                       diar_bn_buffer = nullptr;
 
     // Diarizer mel front-end. Same acoustic settings as the ASR frontend
     // (the compose step enforces agreement) but with the sortformer port's
@@ -331,11 +331,11 @@ struct ParakeetSession final : public transcribe_session {
 //     union of other actives) drive the layer-0 speaker-kernel injection
 //     as graph inputs (set_speaker_targets path).
 struct MultitalkerPass {
-    bool               use_kernel = false;
-    float              threshold  = 0.5f;
-    float              mask_value = -16.6355f;
-    std::vector<float> spk;  // [T_diar] target-speaker activity
-    std::vector<float> bg;   // [T_diar] binarized union of other actives
+    bool                 use_kernel = false;
+    float                threshold  = 0.5f;
+    float                mask_value = -16.6355f;
+    std::vector<float>   spk;  // [T_diar] target-speaker activity
+    std::vector<float>   bg;   // [T_diar] binarized union of other actives
     // Kernel-mode chunk gating (reference cache_gating): encoder-frame
     // indices of this speaker's ACTIVE 14-frame chunks, in order. The
     // conformer + decoder see only these frames (gathered after the

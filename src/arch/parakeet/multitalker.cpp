@@ -102,12 +102,12 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
     }
     mel_us += ggml_time_us() - t_mel_start;
 
-    const int chunk_enc = hp.enc_att_context_right + 1;                                        // 14
-    const int sub       = hp.enc_subsampling_factor;                                           // 8
+    const int chunk_enc = hp.enc_att_context_right + 1;                                          // 14
+    const int sub       = hp.enc_subsampling_factor;                                             // 8
     const int mel_first = hp.enc_stream_sampling_frames_first + sub * hp.enc_att_context_right;  // 105
-    const int mel_chunk = chunk_enc * sub;                                                     // 112
-    const int mel_cache = hp.enc_stream_pre_encode_cache_size;                                 // 9
-    const int drop_sub  = hp.enc_stream_drop_extra_pre_encoded;                                // 2
+    const int mel_chunk = chunk_enc * sub;                                                       // 112
+    const int mel_cache = hp.enc_stream_pre_encode_cache_size;                                   // 9
+    const int drop_sub  = hp.enc_stream_drop_extra_pre_encoded;                                  // 2
 
     // Reference cache_gating: speaker s is active in chunk k iff the max
     // of its accumulated preds over the last 2 chunks (incl. current)
@@ -132,6 +132,7 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
         std::vector<float>            bg;
         bool                          started = false;
     };
+
     std::vector<Inst> inst(active.size());
 
     auto swap_in = [&](Inst & I) {
@@ -240,14 +241,14 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
             }
 
             // Kernel mode: per-chunk supervision over the NEW enc frames.
-            const int t_enc0   = k * chunk_enc;
-            const int mask_len = std::max(0, std::min(chunk_enc, T_diar - t_enc0));
-            const float * spk_ptr = nullptr;
-            const float * bg_ptr  = nullptr;
+            const int          t_enc0   = k * chunk_enc;
+            const int          mask_len = std::max(0, std::min(chunk_enc, T_diar - t_enc0));
+            const float *      spk_ptr  = nullptr;
+            const float *      bg_ptr   = nullptr;
             std::vector<float> bg_compat;
             if (use_kernel && mask_len > 0) {
-                spk_ptr = I.spk.data() + t_enc0;
-                bg_ptr  = I.bg.data() + t_enc0;
+                spk_ptr                         = I.spk.data() + t_enc0;
+                bg_ptr                          = I.bg.data() + t_enc0;
                 // TRANSCRIBE_MULTITALKER_REF_BG_COMPAT=1 reproduces the
                 // reference harness's background-slot indexing bug
                 // (multispk_transcribe_utils.get_active_speakers_info
@@ -257,8 +258,7 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
                 // the reference's own bg_targets dumps. Parity tooling
                 // only — the default is the intended union of the other
                 // ACTIVE slots.
-                static const bool ref_bg_compat =
-                    (std::getenv("TRANSCRIBE_MULTITALKER_REF_BG_COMPAT") != nullptr);
+                static const bool ref_bg_compat = (std::getenv("TRANSCRIBE_MULTITALKER_REF_BG_COMPAT") != nullptr);
                 if (ref_bg_compat) {
                     std::vector<int> act_k;
                     for (const int o : active) {
@@ -294,9 +294,8 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
             }
             if (st == TRANSCRIBE_OK) {
                 const int64_t off_before = pc->stream_dec_state.frame_offset;
-                st = emit_streaming_chunk(pc, pm, chunk_buf.data(), n_feed,
-                                          (k == 0) ? 0 : drop_sub, advance,
-                                          spk_ptr, bg_ptr, use_kernel ? mask_len : 0);
+                st = emit_streaming_chunk(pc, pm, chunk_buf.data(), n_feed, (k == 0) ? 0 : drop_sub, advance, spk_ptr,
+                                          bg_ptr, use_kernel ? mask_len : 0);
                 if (st == TRANSCRIBE_OK) {
                     const int n_new = static_cast<int>(pc->stream_dec_state.frame_offset - off_before);
                     for (int f = 0; f < n_new; ++f) {
@@ -321,13 +320,13 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
         Inst & I = inst[i];
         if (st == TRANSCRIBE_OK && !I.raw.empty()) {
             for (auto & rt : I.raw) {
-                const size_t f = std::min(static_cast<size_t>(std::max(rt.step_at_emit, 0)), I.fed.size() - 1);
+                const size_t f  = std::min(static_cast<size_t>(std::max(rt.step_at_emit, 0)), I.fed.size() - 1);
                 rt.step_at_emit = I.fed[f];
             }
             transcribe_run_params sp = *params;
             sp.timestamps            = TRANSCRIBE_TIMESTAMPS_AUTO;
             pc->clear_result();
-            pc->raw_tokens = std::move(I.raw);
+            pc->raw_tokens              = std::move(I.raw);
             const transcribe_status bst = build_result_from_raw_tokens(pc, pm, &sp);
             if (bst != TRANSCRIBE_OK) {
                 st = bst;
@@ -403,27 +402,26 @@ transcribe_status run_multitalker(ParakeetSession *             pc,
     // ASR streaming buffer's chunks (chunk_size_first = sampling_frames +
     // sub * R mel frames first, then pre_encode_cache-frame overlapped
     // windows with drop_extra_pre_encoded outputs discarded).
-    P.feat_first_chunk = pm->hparams.enc_stream_sampling_frames_first +
-                         pm->hparams.enc_subsampling_factor * pm->hparams.enc_att_context_right;
-    P.feat_cache      = pm->hparams.enc_stream_pre_encode_cache_size;
-    P.drop_pre_encode = pm->hparams.enc_stream_drop_extra_pre_encoded;
+    P.feat_first_chunk           = pm->hparams.enc_stream_sampling_frames_first +
+                                   pm->hparams.enc_subsampling_factor * pm->hparams.enc_att_context_right;
+    P.feat_cache                 = pm->hparams.enc_stream_pre_encode_cache_size;
+    P.drop_pre_encode            = pm->hparams.enc_stream_drop_extra_pre_encoded;
 
     const int64_t t_diar_start = ggml_time_us();
     transcribe::debug::push_name_prefix("mt.diar");
-    const transcribe_status dst =
-        sf::run_diar_streaming_core(pc->diar_scratch, diar.hp, diar.conformer_hp, diar.conformer, diar.weights,
-                                    pm->backend.c_str(), pc->sched, pc->n_threads, P, diar_mel.data(), dm_mels,
-                                    dm_frames, pc);
+    const transcribe_status dst = sf::run_diar_streaming_core(
+        pc->diar_scratch, diar.hp, diar.conformer_hp, diar.conformer, diar.weights, pm->backend.c_str(), pc->sched,
+        pc->n_threads, P, diar_mel.data(), dm_mels, dm_frames, pc);
     transcribe::debug::pop_name_prefix();
     if (dst != TRANSCRIBE_OK) {
         return dst;
     }
     const int64_t t_diar_us = ggml_time_us() - t_diar_start;
 
-    const int sub    = diar.hp.enc_subsampling_factor > 0 ? diar.hp.enc_subsampling_factor : 8;
-    const int n_spk  = diar.hp.max_speakers;
-    const int T_diar = std::min(pc->diar_scratch.stream.total_n, (dm_frames + sub - 1) / sub);
-    const std::vector<float> & probs = pc->diar_scratch.stream.total_preds;  // row-major [total_n, n_spk]
+    const int                  sub    = diar.hp.enc_subsampling_factor > 0 ? diar.hp.enc_subsampling_factor : 8;
+    const int                  n_spk  = diar.hp.max_speakers;
+    const int                  T_diar = std::min(pc->diar_scratch.stream.total_n, (dm_frames + sub - 1) / sub);
+    const std::vector<float> & probs  = pc->diar_scratch.stream.total_preds;  // row-major [total_n, n_spk]
 
     if (transcribe::debug::enabled()) {
         const long long shape[2] = { T_diar, n_spk };
@@ -474,114 +472,115 @@ transcribe_status run_multitalker(ParakeetSession *             pc,
             st != TRANSCRIBE_OK) {
             return st;
         }
-    } else
-    for (const int s : active) {
-        MultitalkerPass pass;
-        pass.use_kernel = use_kernel;
-        pass.spk.resize(static_cast<size_t>(T_diar));
-        pass.bg.assign(static_cast<size_t>(T_diar), 0.0f);
-        for (int t = 0; t < T_diar; ++t) {
-            pass.spk[static_cast<size_t>(t)] = probs[static_cast<size_t>(t) * n_spk + s];
-        }
-        for (const int o : active) {
-            if (o == s) {
-                continue;
-            }
+    } else {
+        for (const int s : active) {
+            MultitalkerPass pass;
+            pass.use_kernel = use_kernel;
+            pass.spk.resize(static_cast<size_t>(T_diar));
+            pass.bg.assign(static_cast<size_t>(T_diar), 0.0f);
             for (int t = 0; t < T_diar; ++t) {
-                if (probs[static_cast<size_t>(t) * n_spk + o] > 0.5f) {
-                    pass.bg[static_cast<size_t>(t)] = 1.0f;
-                }
+                pass.spk[static_cast<size_t>(t)] = probs[static_cast<size_t>(t) * n_spk + s];
             }
-        }
-
-        // Kernel-mode chunk gating (reference cache_gating=true,
-        // cache_gating_buffer_size=2): a speaker's conformer/decoder only
-        // ever sees chunks where _find_active_speakers selected it — max
-        // of the accumulated preds over the last 2 chunks (incl. current)
-        // > 0.5. Without this, a mostly-inactive speaker's pass
-        // transcribes everyone else's speech (the trained kernels only
-        // ever saw gated chunks). Masked mode hard-silences non-target
-        // features instead, so it stays ungated here.
-        if (use_kernel) {
-            const int chunk    = P.chunk_len;  // 14 = nframes_per_chunk
-            const int n_chunks = (T_diar + chunk - 1) / chunk;
-            // +1 covers the encoder length trailing the diar frame count
-            // at the tail; run_one_shot_inner clamps to the true length.
-            pass.keep_enc_frames.reserve(static_cast<size_t>(T_diar) + 1);
-            for (int k = 0; k < n_chunks; ++k) {
-                const int end   = std::min((k + 1) * chunk, T_diar);
-                const int begin = std::max(0, (k - 1) * chunk);  // 2-chunk window
-                float     mx    = 0.0f;
-                for (int t = begin; t < end; ++t) {
-                    mx = std::max(mx, probs[static_cast<size_t>(t) * n_spk + s]);
+            for (const int o : active) {
+                if (o == s) {
+                    continue;
                 }
-                if (mx > 0.5f) {
-                    const int enc_end = (k == n_chunks - 1) ? end + 1 : end;
-                    for (int t = k * chunk; t < enc_end; ++t) {
-                        pass.keep_enc_frames.push_back(t);
+                for (int t = 0; t < T_diar; ++t) {
+                    if (probs[static_cast<size_t>(t) * n_spk + o] > 0.5f) {
+                        pass.bg[static_cast<size_t>(t)] = 1.0f;
                     }
                 }
             }
-            if (pass.keep_enc_frames.empty()) {
-                continue;  // globally active but never chunk-selected
+
+            // Kernel-mode chunk gating (reference cache_gating=true,
+            // cache_gating_buffer_size=2): a speaker's conformer/decoder only
+            // ever sees chunks where _find_active_speakers selected it — max
+            // of the accumulated preds over the last 2 chunks (incl. current)
+            // > 0.5. Without this, a mostly-inactive speaker's pass
+            // transcribes everyone else's speech (the trained kernels only
+            // ever saw gated chunks). Masked mode hard-silences non-target
+            // features instead, so it stays ungated here.
+            if (use_kernel) {
+                const int chunk    = P.chunk_len;  // 14 = nframes_per_chunk
+                const int n_chunks = (T_diar + chunk - 1) / chunk;
+                // +1 covers the encoder length trailing the diar frame count
+                // at the tail; run_one_shot_inner clamps to the true length.
+                pass.keep_enc_frames.reserve(static_cast<size_t>(T_diar) + 1);
+                for (int k = 0; k < n_chunks; ++k) {
+                    const int end   = std::min((k + 1) * chunk, T_diar);
+                    const int begin = std::max(0, (k - 1) * chunk);  // 2-chunk window
+                    float     mx    = 0.0f;
+                    for (int t = begin; t < end; ++t) {
+                        mx = std::max(mx, probs[static_cast<size_t>(t) * n_spk + s]);
+                    }
+                    if (mx > 0.5f) {
+                        const int enc_end = (k == n_chunks - 1) ? end + 1 : end;
+                        for (int t = k * chunk; t < enc_end; ++t) {
+                            pass.keep_enc_frames.push_back(t);
+                        }
+                    }
+                }
+                if (pass.keep_enc_frames.empty()) {
+                    continue;  // globally active but never chunk-selected
+                }
             }
+
+            // Decode at full timestamp resolution; the merged result is elided
+            // to the caller's request at the end.
+            transcribe_run_params sp = *params;
+            sp.timestamps            = TRANSCRIBE_TIMESTAMPS_AUTO;
+
+            pc->clear_result();
+            char prefix[32];
+            std::snprintf(prefix, sizeof(prefix), "mt.spk%d", s);
+            transcribe::debug::push_name_prefix(prefix);
+            const transcribe_status st = run_one_shot_inner(pc, pm, pcm, n_samples, &sp, &pass);
+            transcribe::debug::pop_name_prefix();
+            if (st != TRANSCRIBE_OK) {
+                return st;
+            }
+            mel_us += pc->t_mel_us;
+            enc_us += pc->t_encode_us;
+            dec_us += pc->t_decode_us;
+
+            SpeakerDecode r;
+            r.speaker   = s;
+            r.tokens    = std::move(pc->tokens);
+            r.words     = std::move(pc->words);
+            r.segments  = std::move(pc->segments);
+            r.full_text = std::move(pc->full_text);
+            r.raw_text  = std::move(pc->raw_text);
+
+            // Gated pass timestamps are in the gathered timeline; map each
+            // frame back through the keep list to absolute clip time.
+            if (!pass.keep_enc_frames.empty()) {
+                const auto & keep     = pass.keep_enc_frames;
+                const double f_ms     = diar_ms_per_frame;  // 80 ms encoder cadence
+                auto         remap_t0 = [&](int64_t t_ms) {
+                    size_t f = static_cast<size_t>(std::max<int64_t>(0, t_ms) / static_cast<int64_t>(f_ms));
+                    f        = std::min(f, keep.size() - 1);
+                    return static_cast<int64_t>(keep[f]) * static_cast<int64_t>(f_ms);
+                };
+                auto remap_t1 = [&](int64_t t_ms) {
+                    size_t f = static_cast<size_t>(std::max<int64_t>(0, t_ms - 1) / static_cast<int64_t>(f_ms));
+                    f        = std::min(f, keep.size() - 1);
+                    return static_cast<int64_t>(keep[f] + 1) * static_cast<int64_t>(f_ms);
+                };
+                for (auto & tk : r.tokens) {
+                    tk.t0_ms = remap_t0(tk.t0_ms);
+                    tk.t1_ms = remap_t1(tk.t1_ms);
+                }
+                for (auto & wd : r.words) {
+                    wd.t0_ms = remap_t0(wd.t0_ms);
+                    wd.t1_ms = remap_t1(wd.t1_ms);
+                }
+                for (auto & sg : r.segments) {
+                    sg.t0_ms = remap_t0(sg.t0_ms);
+                    sg.t1_ms = remap_t1(sg.t1_ms);
+                }
+            }
+            per_spk.push_back(std::move(r));
         }
-
-        // Decode at full timestamp resolution; the merged result is elided
-        // to the caller's request at the end.
-        transcribe_run_params sp = *params;
-        sp.timestamps            = TRANSCRIBE_TIMESTAMPS_AUTO;
-
-        pc->clear_result();
-        char prefix[32];
-        std::snprintf(prefix, sizeof(prefix), "mt.spk%d", s);
-        transcribe::debug::push_name_prefix(prefix);
-        const transcribe_status st = run_one_shot_inner(pc, pm, pcm, n_samples, &sp, &pass);
-        transcribe::debug::pop_name_prefix();
-        if (st != TRANSCRIBE_OK) {
-            return st;
-        }
-        mel_us += pc->t_mel_us;
-        enc_us += pc->t_encode_us;
-        dec_us += pc->t_decode_us;
-
-        SpeakerDecode r;
-        r.speaker   = s;
-        r.tokens    = std::move(pc->tokens);
-        r.words     = std::move(pc->words);
-        r.segments  = std::move(pc->segments);
-        r.full_text = std::move(pc->full_text);
-        r.raw_text  = std::move(pc->raw_text);
-
-        // Gated pass timestamps are in the gathered timeline; map each
-        // frame back through the keep list to absolute clip time.
-        if (!pass.keep_enc_frames.empty()) {
-            const auto & keep  = pass.keep_enc_frames;
-            const double f_ms  = diar_ms_per_frame;  // 80 ms encoder cadence
-            auto remap_t0 = [&](int64_t t_ms) {
-                size_t f = static_cast<size_t>(std::max<int64_t>(0, t_ms) / static_cast<int64_t>(f_ms));
-                f        = std::min(f, keep.size() - 1);
-                return static_cast<int64_t>(keep[f]) * static_cast<int64_t>(f_ms);
-            };
-            auto remap_t1 = [&](int64_t t_ms) {
-                size_t f = static_cast<size_t>(std::max<int64_t>(0, t_ms - 1) / static_cast<int64_t>(f_ms));
-                f        = std::min(f, keep.size() - 1);
-                return static_cast<int64_t>(keep[f] + 1) * static_cast<int64_t>(f_ms);
-            };
-            for (auto & tk : r.tokens) {
-                tk.t0_ms = remap_t0(tk.t0_ms);
-                tk.t1_ms = remap_t1(tk.t1_ms);
-            }
-            for (auto & wd : r.words) {
-                wd.t0_ms = remap_t0(wd.t0_ms);
-                wd.t1_ms = remap_t1(wd.t1_ms);
-            }
-            for (auto & sg : r.segments) {
-                sg.t0_ms = remap_t0(sg.t0_ms);
-                sg.t1_ms = remap_t1(sg.t1_ms);
-            }
-        }
-        per_spk.push_back(std::move(r));
     }
 
     // ---- 4. Merge into one speaker-tagged result ----
@@ -598,11 +597,10 @@ transcribe_status run_multitalker(ParakeetSession *             pc,
             order.push_back({ &r, static_cast<int>(i) });
         }
     }
-    std::stable_sort(order.begin(), order.end(),
-                     [](const SegRef & a, const SegRef & b) {
-                         return a.r->segments[static_cast<size_t>(a.seg_idx)].t0_ms <
-                                b.r->segments[static_cast<size_t>(b.seg_idx)].t0_ms;
-                     });
+    std::stable_sort(order.begin(), order.end(), [](const SegRef & a, const SegRef & b) {
+        return a.r->segments[static_cast<size_t>(a.seg_idx)].t0_ms <
+               b.r->segments[static_cast<size_t>(b.seg_idx)].t0_ms;
+    });
 
     std::string merged_text;
     std::string merged_raw;

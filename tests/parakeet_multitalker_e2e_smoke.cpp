@@ -117,6 +117,7 @@ int main() {
             return EXIT_FAILURE;
         }
     }
+
     check(transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION),
           "bundle reports TRANSCRIBE_FEATURE_DIARIZATION");
 
