@@ -88,6 +88,7 @@ endif()
 set(_libraries transcribe)
 set(_library_paths "")
 set(_system_libs "")
+set(_search_dirs "")
 set(_frameworks "")
 set(_link_flags "")
 
@@ -137,6 +138,25 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
     if("vulkan" IN_LIST _kinds)
         list(APPEND _system_libs vulkan)
     endif()
+    if("cuda" IN_LIST _kinds)
+        # The ggml-cuda archive references the CUDA runtime and cuBLAS and —
+        # unless VMM was disabled at configure time — the CUDA driver API
+        # (mirrors ggml/src/ggml-cuda/CMakeLists.txt). Record the toolkit's
+        # library directory too: it is rarely on the default linker path, so
+        # names alone leave every non-CMake consumer guessing an install
+        # root. The stubs directory satisfies `-lcuda` on machines that
+        # build without a display driver; at runtime the real libcuda
+        # resolves through the loader as usual.
+        find_package(CUDAToolkit REQUIRED)
+        list(APPEND _system_libs cudart cublas)
+        if(NOT GGML_CUDA_NO_VMM)
+            list(APPEND _system_libs cuda)
+        endif()
+        list(APPEND _search_dirs "${CUDAToolkit_LIBRARY_DIR}")
+        if(EXISTS "${CUDAToolkit_LIBRARY_DIR}/stubs")
+            list(APPEND _search_dirs "${CUDAToolkit_LIBRARY_DIR}/stubs")
+        endif()
+    endif()
     if(_frameworks)
         list(REMOVE_DUPLICATES _frameworks)
     endif()
@@ -184,6 +204,7 @@ endfunction()
 _transcribe_json_strings(_kinds_json ${_kinds})
 _transcribe_json_strings(_libraries_json ${_libraries})
 _transcribe_json_strings(_library_paths_json ${_library_paths})
+_transcribe_json_strings(_search_dirs_json ${_search_dirs})
 _transcribe_json_strings(_system_libs_json ${_system_libs})
 _transcribe_json_strings(_frameworks_json ${_frameworks})
 _transcribe_json_strings(_link_flags_json ${_link_flags})
@@ -201,6 +222,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/transcribe-link.json"
   \"lib_dir\": \"${CMAKE_INSTALL_LIBDIR}\",
   \"libraries\": [${_libraries_json}],
   \"library_paths\": [${_library_paths_json}],
+  \"search_dirs\": [${_search_dirs_json}],
   \"system_libs\": [${_system_libs_json}],
   \"frameworks\": [${_frameworks_json}],
   \"link_flags\": [${_link_flags_json}]

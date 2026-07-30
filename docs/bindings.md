@@ -35,11 +35,14 @@ binding's generated files:
 - **`lib/transcribe-link.json`** — installed by `cmake --install` (the
   `TRANSCRIBE_INSTALL` rules): the machine-readable link interface for
   non-CMake consumers building from source (the Rust `-sys` crate's
-  `build.rs`). Archive order, system libs, frameworks, flags, and — for
-  `GGML_BACKEND_DL` installs — `module_dir`, the directory to hand to
-  `transcribe_init_backends()`. Proven per push by the link-smoke CI lane,
-  which compiles a toy C consumer from nothing but this manifest in both
-  static and shared postures.
+  `build.rs`). Archive order, system libs, `search_dirs` (extra linker
+  search directories recorded at configure time — e.g. the CUDA toolkit's
+  library dir and its driver-stub subdirectory, which back the `cudart` /
+  `cublas` / `cuda` entries CUDA builds add to `system_libs`), frameworks,
+  flags, and — for `GGML_BACKEND_DL` installs — `module_dir`, the
+  directory to hand to `transcribe_init_backends()`. Proven per push by
+  the link-smoke CI lane, which compiles a toy C consumer from nothing but
+  this manifest in both static and shared postures.
 
 ## Result text pointers: copy at the FFI boundary
 

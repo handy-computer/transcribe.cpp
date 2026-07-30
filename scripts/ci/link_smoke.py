@@ -49,6 +49,9 @@ def main() -> int:
     cmd = [args.cc, str(SOURCE), f"-I{include_dir}", "-o", str(out)]
     cmd += manifest["link_flags"]
     cmd += [f"-L{lib_dir}"]
+    # Configure-time search dirs (e.g. the CUDA toolkit's library dir);
+    # absent in pre-0.1.4 manifests.
+    cmd += [f"-L{path}" for path in manifest.get("search_dirs", [])]
 
     libs = [f"-l{name}" for name in manifest["libraries"]]
     if manifest["libraries"][1:] and platform.system() == "Linux":

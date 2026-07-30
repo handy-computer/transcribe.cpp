@@ -365,6 +365,12 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
     let lib_dir = prefix.join(json["lib_dir"].as_str().unwrap_or("lib"));
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
 
+    // Extra linker search directories recorded at configure time (e.g. the
+    // CUDA toolkit's library dir, which is rarely on the default path).
+    for dir in strs("search_dirs") {
+        println!("cargo:rustc-link-search=native={dir}");
+    }
+
     // Archives (static) or the single shared lib. The manifest order is
     // single-pass-GNU-ld safe (each archive's undefined refs resolve in a
     // later one: transcribe -> ggml -> backends -> ggml-base).
