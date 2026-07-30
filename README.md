@@ -60,6 +60,17 @@ cmake -B build -DTRANSCRIBE_CUDA=ON
 cmake --build build
 ```
 
+For HIP/ROCm (Linux + AMD GPU), which needs ROCm 6.1 or newer:
+
+```bash
+cmake -B build -DTRANSCRIBE_HIP=ON -DAMDGPU_TARGETS=gfx1201
+cmake --build build
+```
+
+Replace `gfx1201` with your GPU architecture — `rocminfo | grep gfx` prints it.
+Pass a semicolon-separated list for several architectures. ROCm devices report
+as the `rocm` backend kind and are picked up by the default `auto` backend.
+
 `libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 
 tinyBLAS (Justine Tunney's `llamafile_sgemm` kernels) is on by default.

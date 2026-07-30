@@ -24,6 +24,8 @@ const char * kind_name(BackendKind kind) {
             return "vulkan";
         case BackendKind::Cuda:
             return "cuda";
+        case BackendKind::Rocm:
+            return "rocm";
         case BackendKind::Sycl:
             return "sycl";
         case BackendKind::Accel:
@@ -38,7 +40,7 @@ const char * kind_name(BackendKind kind) {
 
 // Return true if `reg_name` (the ggml backend registry name) starts
 // with the given prefix. ggml's registry names look like "MTL",
-// "Vulkan", "CUDA", "SYCL", "BLAS", "CPU", etc. Prefix matching is
+// "Vulkan", "CUDA", "ROCm", "SYCL", "BLAS", "CPU", etc. Prefix matching is
 // intentional: registry names can get version suffixes or device
 // index suffixes in some ggml builds.
 static bool reg_name_is(const char * reg_name, const char * prefix) {
@@ -65,6 +67,8 @@ BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type, const cha
         return BackendKind::Vulkan;
     } else if (reg_name_is(reg_name, "CUDA")) {
         return BackendKind::Cuda;
+    } else if (reg_name_is(reg_name, "ROCm")) {
+        return BackendKind::Rocm;
     } else if (reg_name_is(reg_name, "SYCL")) {
         return BackendKind::Sycl;
     }

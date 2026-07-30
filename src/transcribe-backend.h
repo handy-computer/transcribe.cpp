@@ -34,6 +34,7 @@ enum class BackendKind {
     Metal,     // Apple Metal
     Vulkan,    // Vulkan compute
     Cuda,      // NVIDIA CUDA
+    Rocm,      // AMD ROCm
     Sycl,      // Intel oneAPI / SYCL
     Accel,     // BLAS / AMX / other host-memory accelerator
     OtherGpu,  // GPU/IGPU device we don't have a special case for
@@ -48,8 +49,8 @@ BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type, const cha
 
 // Classify a backend device into a BackendKind. Uses
 // ggml_backend_dev_type for the GPU/IGPU/ACCEL/CPU dimension and the
-// reg name ("MTL", "Vulkan", "CUDA", "SYCL", ...) to resolve the
-// vendor. Never returns Unknown for a valid device pointer.
+// reg name ("MTL", "Vulkan", "CUDA", "ROCm", "SYCL", ...) to resolve
+// the vendor. Never returns Unknown for a valid device pointer.
 BackendKind classify_device(ggml_backend_dev_t dev);
 
 // Probe order for GPU device selection. `dev_types` holds the ggml
