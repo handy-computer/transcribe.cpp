@@ -578,8 +578,9 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
         return;
     }
     std::memset(p, 0, sizeof(*p));
-    p->struct_size   = sizeof(*p);
-    p->spec_k_drafts = -1;  // family default
+    p->struct_size    = sizeof(*p);
+    p->spec_k_drafts  = -1;  // family default
+    p->max_new_tokens = -1;  // family default
     // Default to AUTO (richest output compatible with the model and selected
     // run tasks, resolved per-family) rather than the memset NONE.
     p->timestamps    = TRANSCRIBE_TIMESTAMPS_AUTO;
