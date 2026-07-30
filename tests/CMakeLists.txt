@@ -1234,4 +1234,11 @@ if(TRANSCRIBE_BUILD_EXAMPLES)
             ${CMAKE_SOURCE_DIR}/samples/jfk.wav)
     set_tests_properties(transcribe_cli_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION "duration:")
+
+    add_test(NAME transcribe_cli_output_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI=$<TARGET_FILE:transcribe-cli>
+            -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-output-smoke
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_output_smoke.cmake)
 endif()
