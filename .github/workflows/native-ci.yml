@@ -135,6 +135,69 @@ jobs:
       - name: ccache stats
         run: ccache -s | head -8
 
+  cpp-tests-windows:
+    # The ONLY lane that compiles tests/ on Windows. Before it existed nothing
+    # did: cpp-tests above runs Linux + macOS-arm64, and every Windows lane in
+    # the repo (cuda-windows, python-wheels) builds through SKBUILD, which
+    # forces TRANSCRIBE_BUILD_TESTS=OFF. So the Windows-portability shims in
+    # tests/ (_getpid, _putenv_s, std::filesystem temp files in place of
+    # mkstemps) were unguarded and could rot silently between releases.
+    #
+    # Two postures, because they exercise DIFFERENT toolchains:
+    #   windows-x64   -> the default MSVC toolset (cl.exe)
+    #   windows-arm64 -> ClangCL, NOT MSVC. ggml's CPU backend hard-fails on
+    #                    ARM under MSVC ("MSVC is not supported for ARM, use
+    #                    clang", ggml/src/ggml-cpu/CMakeLists.txt), so the
+    #                    ARM64 posture is only buildable with clang-cl. The
+    #                    windows-11-arm image ships the VC.Llvm.Clang +
+    #                    VC.Llvm.ClangToolset components that needs.
+    #
+    # GGML_NATIVE=OFF on ARM64 only: ggml's native-ARM probe shells out with
+    # INPUT_FILE "/dev/null" (not a path on Windows) and detects
+    # dotprod/i8mm/SVE/SME via check_cxx_source_runs. Off pins a deterministic
+    # armv8-a baseline instead of depending on the runner SKU. x64 keeps the
+    # dev posture (NATIVE on) to match cpp-tests.
+    #
+    # Scope is configure + build + ctest. The install/link-smoke step from
+    # cpp-tests is deliberately absent: scripts/ci/link_smoke.py drives a POSIX
+    # cc driver (-I/-l/-L/-Wl,-rpath/-framework), none of which cl.exe or
+    # clang-cl's CL-compatible driver accept. Porting it is separate work.
+    #
+    # transcribe_loader_smoke does not register here (no uv on PATH). uv is
+    # only Tier 2 on Windows ARM64 and its `python install` still resolves an
+    # x86_64 CPython there, so it is left out rather than made conditional.
+    #
+    # NOTE: runs-on windows-11-arm is free for PUBLIC repos only — the label
+    # fails to resolve on a private repo. Revisit if this repo ever goes private.
+    name: cpp-tests (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            runner: windows-latest
+            arch: x64
+            extra: ""
+          - label: windows-arm64
+            runner: windows-11-arm
+            arch: ARM64
+            extra: "-T ClangCL -DGGML_NATIVE=OFF"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+      # The Visual Studio generator is used rather than Ninja on purpose: it
+      # locates the toolchain itself, so no vcvars/dev-shell action is needed.
+      - name: Configure (static white-box build)
+        run: cmake -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch }} ${{ matrix.extra }}
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test (full white-box suite)
+        run: ctest --test-dir build -C Release --output-on-failure
+
   cpp-tests-sanitized:
     # ASan+UBSan over the white-box suite. This is the lane that certifies
     # the C lifetime/ABI contracts the FFI bindings rely on — including the
