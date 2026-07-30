@@ -350,6 +350,27 @@ fn find_manifest(prefix: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Convert a conventional absolute Unix library filename into the Cargo native
+/// library kind/name pair. `rustc-link-lib` propagates through dependent Rust
+/// crates; a raw `rustc-link-arg=/path/to/lib` does not.
+fn cargo_library_name(path: &Path) -> Option<(&'static str, String)> {
+    let file = path.file_name()?.to_str()?;
+    let file = file.strip_prefix("lib")?;
+
+    if let Some(name) = file.strip_suffix(".dll.a") {
+        return Some(("dylib", name.to_owned()));
+    }
+    if let Some(name) = file.strip_suffix(".a") {
+        return Some(("static", name.to_owned()));
+    }
+    for suffix in [".so", ".dylib", ".tbd"] {
+        if let Some(name) = file.strip_suffix(suffix) {
+            return Some(("dylib", name.to_owned()));
+        }
+    }
+    None
+}
+
 fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
     let text = std::fs::read_to_string(manifest_path).expect("read transcribe-link.json");
     let json: serde_json::Value = serde_json::from_str(&text).expect("parse transcribe-link.json");
@@ -377,9 +398,21 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
         println!("cargo:rustc-link-lib={kind}={name}");
     }
 
-    // Absolute library paths (e.g. a find_package(BLAS) result): link the file.
+    // Absolute library paths (e.g. ROCm SDK libraries, compiler-rt, or a
+    // find_package(BLAS) result). Express conventional library files as
+    // search-dir + rustc-link-lib rather than a raw rustc-link-arg: native
+    // library directives propagate from this -sys crate to final downstream
+    // binaries, while link arguments only affect this crate's own artifacts.
+    // Keep the exact-path fallback for an unusual linker input that cannot be
+    // represented as a conventional native library.
     for path in strs("library_paths") {
-        println!("cargo:rustc-link-arg={path}");
+        let path = Path::new(&path);
+        if let (Some(parent), Some((kind, name))) = (path.parent(), cargo_library_name(path)) {
+            println!("cargo:rustc-link-search=native={}", parent.display());
+            println!("cargo:rustc-link-lib={kind}={name}");
+        } else {
+            println!("cargo:rustc-link-arg={}", path.display());
+        }
     }
     // System libraries the C++/backend archives drag in.
     for name in strs("system_libs") {
