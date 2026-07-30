@@ -34,7 +34,6 @@
 // construction.
 
 #include "../sortformer/sortformer.h"
-#include "ggml-backend.h"
 #include "ggml.h"
 #include "parakeet.h"
 #include "transcribe-debug.h"
@@ -142,7 +141,7 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
     };
     auto free_inst = [&](Inst & I) {
         if (I.caches.buffer != nullptr) {
-            ggml_backend_buffer_free(I.caches.buffer);
+            transcribe::safe_buffer_free(I.caches.buffer);
             I.caches.buffer = nullptr;
         }
         if (I.caches.ctx != nullptr) {
@@ -150,7 +149,7 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
             I.caches.ctx = nullptr;
         }
         if (I.caches.pos_proj_buf != nullptr) {
-            ggml_backend_buffer_free(I.caches.pos_proj_buf);
+            transcribe::safe_buffer_free(I.caches.pos_proj_buf);
             I.caches.pos_proj_buf = nullptr;
         }
         if (I.caches.pos_proj_ctx != nullptr) {
