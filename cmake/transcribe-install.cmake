@@ -137,6 +137,44 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
     if("vulkan" IN_LIST _kinds)
         list(APPEND _system_libs vulkan)
     endif()
+    if("rocm" IN_LIST _kinds)
+        # ggml-hip is an archive in this posture, but its HIP/rocBLAS/hipBLAS
+        # dependencies are shared ROCm SDK libraries. CMake propagates those
+        # imported targets while linking in-tree executables; an installed
+        # non-CMake consumer has only this manifest, so record absolute paths
+        # rather than assuming /opt/rocm/lib is in its linker search path.
+        if(DEFINED ENV{ROCM_PATH} AND EXISTS "$ENV{ROCM_PATH}")
+            set(_rocm_root "$ENV{ROCM_PATH}")
+        elseif(EXISTS "/opt/rocm")
+            set(_rocm_root "/opt/rocm")
+        else()
+            set(_rocm_root "/usr")
+        endif()
+        foreach(_rocm_lib IN ITEMS amdhip64 rocblas hipblas)
+            unset(_transcribe_rocm_library CACHE)
+            unset(_transcribe_rocm_library)
+            find_library(_transcribe_rocm_library
+                NAMES ${_rocm_lib}
+                HINTS "${_rocm_root}/lib" "${_rocm_root}/lib64")
+            if(NOT _transcribe_rocm_library)
+                message(FATAL_ERROR
+                    "transcribe install: could not resolve ROCm library "
+                    "${_rocm_lib} for the static link manifest")
+            endif()
+            list(APPEND _library_paths "${_transcribe_rocm_library}")
+        endforeach()
+
+        # Some HIP packages add compiler-rt builtins directly to hip::host's
+        # interface. Preserve any such absolute artifacts as well; the
+        # amdhip64 target itself is already represented above.
+        get_target_property(_hip_host_links hip::host INTERFACE_LINK_LIBRARIES)
+        foreach(_hip_host_link IN LISTS _hip_host_links)
+            if(IS_ABSOLUTE "${_hip_host_link}" AND EXISTS "${_hip_host_link}")
+                list(APPEND _library_paths "${_hip_host_link}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _library_paths)
+    endif()
     if(_frameworks)
         list(REMOVE_DUPLICATES _frameworks)
     endif()

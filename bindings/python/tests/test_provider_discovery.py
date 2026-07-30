@@ -84,6 +84,7 @@ def test_matches_request(request_str, expected):
 
 def test_rank_orders_accelerated_above_cpu():
     assert make("m", ["metal", "cpu"]).rank == 3
+    assert make("r", ["rocm", "cpu"]).rank == 3
     assert make("v", ["vulkan"]).rank == 2
     assert make("c", ["cpu"]).rank == 1
     assert make("u", ["wat"]).rank == 0
