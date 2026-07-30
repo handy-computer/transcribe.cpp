@@ -118,6 +118,15 @@ ParakeetModel::~ParakeetModel() {
         safe_buffer_free(conv_pw_f32_buffer);
         conv_pw_f32_buffer = nullptr;
     }
+    // Embedded-diarizer fused BN (multitalker bundle only).
+    if (diar_bn_ctx != nullptr) {
+        ggml_free(diar_bn_ctx);
+        diar_bn_ctx = nullptr;
+    }
+    if (diar_bn_buffer != nullptr) {
+        safe_buffer_free(diar_bn_buffer);
+        diar_bn_buffer = nullptr;
+    }
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
@@ -276,6 +285,8 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(ParakeetModel & m) {
 // Default variant string when the GGUF did not carry stt.variant.
 constexpr const char k_default_variant[] = "tdt-0.6b-v2";
 
+}  // namespace
+
 // Allocate the streaming encoder caches (cache_last_channel,
 // cache_last_time), lazily on the first stream_begin for ChunkedLimited
 // variants. Layout matches NeMo's get_initial_cache_state (see
@@ -381,6 +392,8 @@ void reset_streaming_decoder_state(ParakeetSession * pc, const ParakeetModel * p
     pc->stream_dec_state.frame_offset  = 0;
     pc->stream_dec_state.initialized   = true;
 }
+
+namespace {
 
 // Forward declarations for the Arch trait below.
 extern transcribe_status load(Loader &, const transcribe_model_load_params *, transcribe_model **);
@@ -542,6 +555,27 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
+    // Multitalker bundle: claim the embedded Sortformer diarizer. The
+    // bundle GGUF (scripts/compose-multitalker-bundle.py) carries the
+    // diarizer's tensors under a name prefix next to the ASR's own, plus
+    // the stt.sortformer.* hparams. Weight resolution needs gguf_data (KVs)
+    // + ctx_meta (tensors), so it runs before gguf_free; the BN fusion
+    // below needs uploaded tensor DATA, so it runs after this point too.
+    {
+        const int64_t k_embedded = gguf_find_key(gguf_data, "stt.parakeet.diarizer.embedded");
+        if (k_embedded >= 0 && gguf_get_val_bool(gguf_data, k_embedded)) {
+            const int64_t k_prefix = gguf_find_key(gguf_data, "stt.parakeet.diarizer.tensor_prefix");
+            const char *  prefix   = (k_prefix >= 0) ? gguf_get_val_str(gguf_data, k_prefix) : "sortformer.";
+            m->diar                = std::make_unique<transcribe::sortformer::SortformerEmbedded>();
+            if (const transcribe_status st =
+                    transcribe::sortformer::init_embedded_diarizer(gguf_data, m->ctx_meta, prefix, *m->diar);
+                st != TRANSCRIBE_OK) {
+                gguf_free(gguf_data);
+                return st;
+            }
+        }
+    }
+
     gguf_free(gguf_data);
 
     // Fuse BatchNorm into scale + bias (replaces 4 elementwise ops per
@@ -563,6 +597,31 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     // backend → host copy; the decoder runs on host, see decoder.h).
     if (const transcribe_status st = build_host_decoder_weights(*m, m->host_decoder); st != TRANSCRIBE_OK) {
         return st;
+    }
+
+    // Multitalker bundle post-load: fuse the diarizer conformer's BN (needs
+    // uploaded data), build its ceil-framed mel frontend, and publish the
+    // DIARIZATION capability — for a bundle it is a property of the file.
+    if (m->diar != nullptr) {
+        if (const transcribe_status st = transcribe::sortformer::fuse_embedded_diar_bn(
+                *m->diar, m->plan.scheduler_list.back(), &m->diar_bn_ctx, &m->diar_bn_buffer);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        {
+            transcribe::MelConfig cfg{};
+            cfg.sample_rate       = m->diar->hp.fe_sample_rate;
+            cfg.num_mels          = m->diar->hp.fe_num_mels;
+            cfg.n_fft             = m->diar->hp.fe_n_fft;
+            cfg.win_length        = m->diar->hp.fe_win_length;
+            cfg.hop_length        = m->diar->hp.fe_hop_length;
+            cfg.pre_emphasis      = m->diar->hp.fe_pre_emphasis;
+            cfg.normalize         = m->diar->hp.fe_normalize;
+            cfg.pad_mode          = "constant";
+            cfg.nemo_seq_len_ceil = true;  // sortformer port framing
+            m->diar_mel.emplace(cfg);
+        }
+        transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_DIARIZATION, true);
     }
 
     m->t_load_us = ggml_time_us() - t_load_start;
@@ -717,9 +776,19 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
         }
     }
     pc->t_decode_us = ggml_time_us() - t_dec_start;
+    return build_result_from_raw_tokens(pc, pm, params);
+}
 
-    // ----- Build the public result hierarchy -----
-    //
+}  // namespace
+
+// ----- Build the public result hierarchy from pc->raw_tokens -----
+//
+// External linkage: the multitalker streaming pass accumulates raw
+// tokens per speaker (with absolute-frame step_at_emit) and reuses this
+// to materialize tokens/words/segments/text.
+transcribe_status build_result_from_raw_tokens(ParakeetSession *             pc,
+                                               ParakeetModel *               pm,
+                                               const transcribe_run_params * params) {
     // step_at_emit is an encoder frame index; one frame is
     // subsampling_factor * hop_length / sample_rate seconds (80 ms on
     // v2/v3). Shared with the streaming builder.
@@ -896,11 +965,14 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
     return TRANSCRIBE_OK;
 }
 
-static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
-                                            ParakeetModel *               pm,
-                                            const float *                 pcm,
-                                            int                           n_samples,
-                                            const transcribe_run_params * params) {
+// External linkage: also driven per speaker by run_multitalker
+// (multitalker.cpp) with a supervision pass.
+transcribe_status run_one_shot_inner(ParakeetSession *             pc,
+                                     ParakeetModel *               pm,
+                                     const float *                 pcm,
+                                     int                           n_samples,
+                                     const transcribe_run_params * params,
+                                     const MultitalkerPass *       mt) {
     // Pre-run abort check (the single observation point on this path).
     if (pc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
@@ -924,6 +996,29 @@ static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         return mst;
     }
     pc->t_mel_us = ggml_time_us() - t_mel_start;
+
+    // Multitalker masked mode (NeMo mask_features): binarize the target
+    // speaker's per-diar-frame activity, expand 8x to feature frames from
+    // t=0, multiply the mel; feature frames past the supervision (or with
+    // an inactive target) zero out, and original exact-zero features take
+    // the log-floor mask_value. Mirrors the reference quirk exactly.
+    if (mt != nullptr && !mt->use_kernel) {
+        const int    sub    = pm->hparams.enc_subsampling_factor > 0 ? pm->hparams.enc_subsampling_factor : 8;
+        const size_t T_diar = mt->spk.size();
+        for (int m = 0; m < mel_n_mels; ++m) {
+            float * row = pc->mel_buf.data() + static_cast<size_t>(m) * mel_n_frames;
+            for (int f = 0; f < mel_n_frames; ++f) {
+                const size_t d      = static_cast<size_t>(f / sub);
+                const bool   active = d < T_diar && mt->spk[d] > mt->threshold;
+                const float  v      = row[f];
+                if (v == 0.0f) {
+                    row[f] = mt->mask_value;
+                } else if (!active) {
+                    row[f] = 0.0f;
+                }
+            }
+        }
+    }
 
     // ----- Reset per-call compute state -----
     // Free the previous run's compute_ctx; encoder_out is invalidated.
@@ -959,10 +1054,34 @@ static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         resolved_kv = GGML_TYPE_F16;
     }
 
-    EncoderBuild eb =
-        build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames, resolved_kv, pm->backend.c_str());
+    const bool   spk_supervision = (mt != nullptr && mt->use_kernel);
+    // Kernel-mode chunk gating: sanitize the orchestrator's keep list
+    // against the actual pre_encode output length (the orchestrator
+    // builds its chunk grid from the diar frame count, which can trail
+    // the encoder length by a frame at the clip tail).
+    std::vector<int32_t> mt_keep;
+    if (spk_supervision && !mt->keep_enc_frames.empty()) {
+        const bool causal =
+            (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+        const int T_pred = pre_encode_time_out(
+            pre_encode_time_out(pre_encode_time_out(mel_n_frames, causal), causal), causal);
+        mt_keep.reserve(mt->keep_enc_frames.size());
+        for (const int32_t i : mt->keep_enc_frames) {
+            if (i >= 0 && i < T_pred) {
+                mt_keep.push_back(i);
+            }
+        }
+    }
+    const int mt_keep_frames = static_cast<int>(mt_keep.size());
+    EncoderBuild eb = build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames, resolved_kv,
+                                          pm->backend.c_str(), /*buf_mask=*/nullptr, /*n_batch=*/1,
+                                          /*batch_var_len=*/false, spk_supervision, mt_keep_frames);
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;  // build_encoder_graph logged
+    }
+    if (spk_supervision && (eb.spk_mask_in == nullptr || eb.bg_mask_in == nullptr)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet run: speaker supervision requested but model has no spk kernel");
+        return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     // ----- Allocate compute tensors via the multi-backend scheduler.
@@ -987,6 +1106,48 @@ static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     ggml_backend_tensor_set(eb.mel_in, pc->mel_buf.data(), 0, pc->mel_buf.size() * sizeof(float));
 
     transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
+
+    // Multitalker kernel-mode supervision upload. Length alignment mirrors
+    // NeMo's solve_length_mismatch: pad LEFT with the default value (1.0
+    // for the target-speaker mask, 0.0 for background) when the
+    // supervision is short, keep the LAST T frames when it is long.
+    if (eb.spk_mask_in != nullptr && mt != nullptr) {
+        // Ungated encoder length (pre-gather); the injection masks are
+        // sized to the gathered length when chunk gating is active.
+        const int T_full = static_cast<int>(eb.dumps.pre_encode_out->ne[1]);
+        const int T_inj  = static_cast<int>(eb.spk_mask_in->ne[1]);
+        auto align_full  = [&](const std::vector<float> & src, float default_value) {
+            std::vector<float> buf(static_cast<size_t>(T_full), default_value);
+            const int          n = static_cast<int>(src.size());
+            if (n >= T_full) {
+                std::copy(src.end() - T_full, src.end(), buf.begin());
+            } else {
+                std::copy(src.begin(), src.end(), buf.begin() + (T_full - n));
+            }
+            return buf;
+        };
+        auto fill_mask = [&](ggml_tensor * dst, const std::vector<float> & src, float default_value) {
+            std::vector<float> full = align_full(src, default_value);
+            if (mt_keep_frames > 0) {
+                std::vector<float> gathered(static_cast<size_t>(T_inj), default_value);
+                for (int g = 0; g < T_inj && g < mt_keep_frames; ++g) {
+                    const int32_t i = mt_keep[static_cast<size_t>(g)];
+                    if (i >= 0 && i < T_full) {
+                        gathered[static_cast<size_t>(g)] = full[static_cast<size_t>(i)];
+                    }
+                }
+                ggml_backend_tensor_set(dst, gathered.data(), 0, gathered.size() * sizeof(float));
+            } else {
+                ggml_backend_tensor_set(dst, full.data(), 0, full.size() * sizeof(float));
+            }
+        };
+        fill_mask(eb.spk_mask_in, mt->spk, 1.0f);
+        fill_mask(eb.bg_mask_in, mt->bg, 0.0f);
+        if (eb.mt_keep_in != nullptr) {
+            ggml_backend_tensor_set(eb.mt_keep_in, mt_keep.data(), 0,
+                                    mt_keep.size() * sizeof(int32_t));
+        }
+    }
 
     // Prompt one-hot input (multilingual variants only): fill
     // prompt_one_hot_in with the resolved language's one-hot replicated
@@ -1185,6 +1346,8 @@ static transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     return decode_and_populate(pc, pm, params, pc->enc_host.data(), T_enc, d_enc, /*utt_index=*/-1, enc_dump_name);
 }
 
+namespace {
+
 // One-shot entry point. Validates session/pm, clears the previous result
 // snapshot, then forwards to the shared inference helper (also reused by
 // the streaming hooks).
@@ -1206,6 +1369,15 @@ transcribe_status run(transcribe_session *          session,
     }
 
     pc->clear_result();
+
+    // Multitalker bundle: diarize=ON routes through the embedded-sortformer
+    // orchestrator (per-speaker passes + merged speaker-tagged result).
+    // Without an embedded diarizer the dispatcher has already WARNed and we
+    // proceed single-speaker, preserving the shipped behavior.
+    if (params != nullptr && params->diarize == TRANSCRIBE_DIARIZE_MODE_ON && pm->diar != nullptr) {
+        return run_multitalker(pc, pm, pcm, n_samples, params);
+    }
+
     return run_one_shot_inner(pc, pm, pcm, n_samples, params);
 }
 
@@ -1486,6 +1658,15 @@ transcribe_status run_batch(transcribe_session *          session,
     }
     transcribe::debug::init();
 
+    // Multitalker is a transcribe_run concern for now: batch keeps the
+    // shipped single-speaker semantics even on a bundle model. Warn so a
+    // diarize=ON batch caller isn't silently downgraded.
+    if (params != nullptr && params->diarize == TRANSCRIBE_DIARIZE_MODE_ON && pm->diar != nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "parakeet: diarize=ON is not yet supported in transcribe_run_batch; "
+                "utterances are decoded single-speaker (use transcribe_run for multitalker)");
+    }
+
     // Compute each utterance's mel in parallel (pure host, no
     // cross-utterance state). A malformed utterance falls the whole call
     // back to the per-utterance path (keeps the batch tensor rectangular).
@@ -1763,8 +1944,6 @@ void compute_chunked_limited_with_rc_mask(float * out_buf,
     }
 }
 
-namespace {
-
 // Build, run, and post-process a single streaming encoder chunk.
 //
 //   mel_chunk_data         row-major [n_mels, n_mel_chunk_frames] f32.
@@ -1774,14 +1953,23 @@ namespace {
 //   mel_frames_advance     mel frames this chunk consumes from the input
 //                          (NOT n_mel_chunk_frames when a cache prepend
 //                          is in play).
+//   mt_spk / mt_bg / mt_mask_len  optional multitalker per-chunk
+//                          supervision (kernel injection masks over the
+//                          chunk's new encoder frames); both null for
+//                          the single-speaker paths.
 // On success, appends TdtTokens to pc->raw_tokens and advances the cache
-// + decoder state.
+// + decoder state. External linkage: the multitalker streaming pass in
+// multitalker.cpp drives this per active speaker with swapped-in
+// per-speaker cache/decoder state.
 transcribe_status emit_streaming_chunk(ParakeetSession * pc,
                                        ParakeetModel *   pm,
                                        const float *     mel_chunk_data,
                                        int               n_mel_chunk_frames,
                                        int               drop_extra_pre_encoded,
-                                       int               mel_frames_advance) {
+                                       int               mel_frames_advance,
+                                       const float *     mt_spk,
+                                       const float *     mt_bg,
+                                       int               mt_mask_len) {
     const auto & hp       = pm->hparams;
     const int    n_layers = static_cast<int>(pm->weights.blocks.size());
 
@@ -1853,8 +2041,10 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     cache_io.pos_proj     = pc->stream_caches.pos_proj;
     cache_io.pos_proj_len = pc->stream_caches.pos_proj_len;
 
+    const bool   mt_supervised = (mt_spk != nullptr && mt_bg != nullptr);
     EncoderBuild eb = build_encoder_graph_streaming(pc->compute_ctx, pm->weights, hp, n_mel_chunk_frames,
-                                                    drop_extra_pre_encoded, cache_io, resolved_kv, pm->backend.c_str());
+                                                    drop_extra_pre_encoded, cache_io, resolved_kv, pm->backend.c_str(),
+                                                    /*spk_supervision=*/mt_supervised);
     if (eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1883,6 +2073,23 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     const int T_virtual = static_cast<int>(eb.chunked_mask_in->ne[0]);
     const int T_cache   = hp.enc_att_context_left;
     const int T_q_new   = T_virtual - T_cache;
+
+    // Multitalker per-chunk supervision upload (kernel mode). Values
+    // cover this chunk's new encoder frames; pad with the mask defaults
+    // (spk 1.0 / bg 0.0) when the chunk's frame count trails the
+    // supplied length at the clip tail.
+    if (mt_supervised && eb.spk_mask_in != nullptr) {
+        const int T_inj = static_cast<int>(eb.spk_mask_in->ne[1]);
+        auto      fill  = [&](ggml_tensor * dst, const float * src, float default_value) {
+            std::vector<float> buf(static_cast<size_t>(T_inj), default_value);
+            for (int t = 0; t < T_inj && t < mt_mask_len; ++t) {
+                buf[static_cast<size_t>(t)] = src[t];
+            }
+            ggml_backend_tensor_set(dst, buf.data(), 0, buf.size() * sizeof(float));
+        };
+        fill(eb.spk_mask_in, mt_spk, 1.0f);
+        fill(eb.bg_mask_in, mt_bg, 0.0f);
+    }
 
     // Build & upload pos_emb. The zero-offset row sits at T_virtual - 1.
     // Null when every block consumes the memoized rel-pos projection.
@@ -2030,6 +2237,8 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     pc->stream_caches.mel_frames_consumed += mel_frames_advance;
     return TRANSCRIBE_OK;
 }
+
+namespace {
 
 // Rebuild the public result vectors (tokens, full_text) from the
 // committed raw_tokens; idempotent. Words/segments are NOT populated
@@ -2684,6 +2893,15 @@ transcribe_status stream_begin(transcribe_session *             session,
                              // clear_result doesn't touch it, so reset here
                              // or a back-to-back stream_begin carries tokens.
     pc->stream_run_params = *run_params;
+
+    // Multitalker is a transcribe_run concern for now: the incremental
+    // streaming API keeps the shipped single-speaker semantics even on a
+    // bundle model. Warn so a diarize=ON stream isn't silently downgraded.
+    if (run_params->diarize == TRANSCRIBE_DIARIZE_MODE_ON && pm->diar != nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "parakeet: diarize=ON is not yet supported on the streaming API; "
+                "the stream is decoded single-speaker (use transcribe_run for multitalker)");
+    }
 
     // Allocate streaming caches on first stream_begin (idempotent); zero
     // contents and reset cursors on every begin.

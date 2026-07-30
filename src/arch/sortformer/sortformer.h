@@ -27,8 +27,11 @@
 
 struct ggml_context;
 struct ggml_tensor;
+struct ggml_backend;
 struct ggml_backend_buffer;
 struct ggml_backend_sched;
+struct gguf_context;
+typedef struct ggml_backend *        ggml_backend_t;
 typedef struct ggml_backend_buffer * ggml_backend_buffer_t;
 typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
@@ -90,6 +93,19 @@ struct SortformerStreamParams {
     float weak_boost_rate             = 1.5f;
     float min_pos_scores_rate         = 0.5f;
     int   max_index                   = 99999;
+
+    // External-cadence chunking (multitalker bundle only; 0 = off, the
+    // standalone uniform-window path). When feat_first_chunk > 0 the core
+    // mirrors NeMo's CacheAwareStreamingAudioBuffer windows instead of the
+    // uniform streaming_feat_loader ones: the first chunk consumes
+    // feat_first_chunk mel frames, each later chunk consumes
+    // chunk_len*sub new frames with feat_cache frames of real left
+    // context prepended, and drop_pre_encode pre-encode output frames are
+    // discarded per later chunk (the duplicated / partially-contexted
+    // outputs). chunk_left/right_context must be 0 in this mode.
+    int feat_first_chunk = 0;
+    int feat_cache       = 0;
+    int drop_pre_encode  = 0;
 };
 
 // Host-side streaming state (AOSC speaker cache + FIFO), mirroring NeMo's
@@ -150,17 +166,14 @@ void streaming_update_sync(SortformerStreamState &        st,
 // spkcache_len frames, matching sortformer_modules._compress_spkcache.
 void compress_spkcache(SortformerStreamState & st, const SortformerStreamParams & p, int n_spk, int emb_dim);
 
-// Concrete context. Owns a per-call compute context and a persistent
-// multi-backend scheduler.
-struct SortformerSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
-    // Per-context scratch reused across runs.
-    std::vector<float> mel_buf;
+// Scratch for one streaming diarization forward, owned by whichever session
+// drives it: the sortformer session (standalone family) or the parakeet
+// session (multitalker bundle). compute_ctx is (re)created per chunk by
+// run_diar_streaming_core and freed by the destructor.
+struct DiarStreamScratch {
+    ggml_context *     compute_ctx = nullptr;
     std::vector<float> pos_buf;
     std::vector<float> pos_div_term;
-    std::vector<float> probs_host;  // [n_spk * T], read back from diar.preds
 
     // Streaming scratch (AOSC/FIFO path).
     SortformerStreamState stream;
@@ -169,8 +182,88 @@ struct SortformerSession final : public transcribe_session {
     std::vector<float>    concat_host;        // [T_concat * enc_d_model] Graph B input
     std::vector<float>    stream_preds_host;  // [T_concat * n_spk] Graph B readback
 
+    DiarStreamScratch() = default;
+    ~DiarStreamScratch();
+};
+
+// Concrete context. Owns a per-call compute context and a persistent
+// multi-backend scheduler.
+struct SortformerSession final : public transcribe_session {
+    ggml_context *       compute_ctx = nullptr;  // offline-forward graph ctx
+    ggml_backend_sched_t sched       = nullptr;
+
+    // Per-context scratch reused across runs.
+    std::vector<float> mel_buf;
+    std::vector<float> probs_host;  // [n_spk * T], read back from diar.preds
+
+    // Streaming scratch (AOSC/FIFO path + rel-pos tables, shared with the
+    // offline forward's pos_emb fill).
+    DiarStreamScratch scratch;
+
     SortformerSession() = default;
     ~SortformerSession() override;
 };
+
+// ---- Embedded-diarizer surface (multitalker bundle) -------------------- //
+//
+// A multitalker Parakeet bundle GGUF carries this diarizer's tensors under
+// a name prefix (stt.parakeet.diarizer.tensor_prefix, "sortformer.") next
+// to the ASR's own tensors, and its hparams under the usual
+// stt.sortformer.* KVs. The host family owns the storage (its ctx_meta /
+// backend buffers); this surface only resolves borrowed tensor pointers
+// and runs the forward on the host's scheduler.
+
+// Weight + hparam core of a diarizer embedded in another family's GGUF.
+struct SortformerEmbedded {
+    SortformerHParams                     hp;
+    transcribe::parakeet::ParakeetHParams conformer_hp;
+    transcribe::parakeet::ParakeetWeights conformer;  // pre_encode + blocks only
+    SortformerWeights                     weights;
+};
+
+// Read stt.sortformer.* hparams from `gguf` and resolve every diarizer
+// tensor (conformer + sortformer-specific) in `ctx_meta` under
+// `tensor_prefix`. Defined in model.cpp.
+transcribe_status init_embedded_diarizer(const gguf_context * gguf,
+                                         ggml_context *       ctx_meta,
+                                         const char *         tensor_prefix,
+                                         SortformerEmbedded & out);
+
+// Fuse the embedded conformer's BatchNorm into scale/bias tensors allocated
+// on `backend` (must run AFTER tensor data is uploaded). The caller owns and
+// frees *out_ctx / *out_buffer. Defined in model.cpp.
+transcribe_status fuse_embedded_diar_bn(SortformerEmbedded &    e,
+                                        ggml_backend_t          backend,
+                                        ggml_context **         out_ctx,
+                                        ggml_backend_buffer_t * out_buffer);
+
+// Full streaming AOSC/FIFO diarization forward over a precomputed mel
+// buffer (row-major [n_mels, n_frames]), on the caller's scheduler. On
+// success sc.stream.total_preds holds the accumulated row-major
+// [total_n, n_spk] probs (trim to ceil(n_frames / subsampling) frames;
+// see run_streaming in model.cpp). abort_session is polled per chunk when
+// non-null. Defined in model.cpp.
+transcribe_status run_diar_streaming_core(DiarStreamScratch &                           sc,
+                                          const SortformerHParams &                     hp,
+                                          const transcribe::parakeet::ParakeetHParams & chp,
+                                          const transcribe::parakeet::ParakeetWeights & conformer,
+                                          const SortformerWeights &                     w,
+                                          const char *                                  backend,
+                                          ggml_backend_sched_t                          sched,
+                                          int                                           n_threads,
+                                          const SortformerStreamParams &                P,
+                                          const float *                                 mel_buf,
+                                          int                                           mel_n_mels,
+                                          int                                           mel_n_frames,
+                                          transcribe_session *                          abort_session);
+
+// Threshold-based probs -> speaker_segment rows (probs row-major [T, n_spk],
+// speaker_id 1-based, p = NaN). Shared with the multitalker bundle path.
+void probs_to_speaker_segments(transcribe_session *       session,
+                               const std::vector<float> & probs,
+                               int                        T,
+                               int                        n_spk,
+                               double                     ms_per_frame,
+                               float                      threshold);
 
 }  // namespace transcribe::sortformer

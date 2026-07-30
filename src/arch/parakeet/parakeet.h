@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "../sortformer/sortformer.h"  // embedded diarizer (multitalker bundle)
 #include "decoder.h"
 #include "transcribe-backend.h"
 #include "transcribe-mel.h"
@@ -16,6 +17,7 @@
 #include "weights.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -111,6 +113,21 @@ struct ParakeetModel final : public transcribe_model {
     // decoder.h); the const-after-load mirror lets every context share it
     // without a per-run backend readback.
     HostDecoderWeights host_decoder;
+
+    // Embedded Sortformer diarizer (multitalker bundle GGUFs). Present iff
+    // stt.parakeet.diarizer.embedded = true in the GGUF. The weight slots
+    // are borrowed views into this model's ctx_meta (resolved under the
+    // bundle's tensor prefix); the diarizer conformer's fused-BN params
+    // live in their own ctx + buffer, freed in the dtor.
+    std::unique_ptr<transcribe::sortformer::SortformerEmbedded> diar;
+    ggml_context *        diar_bn_ctx    = nullptr;
+    ggml_backend_buffer_t diar_bn_buffer = nullptr;
+
+    // Diarizer mel front-end. Same acoustic settings as the ASR frontend
+    // (the compose step enforces agreement) but with the sortformer port's
+    // ceil framing, so the embedded forward sees exactly what the
+    // standalone sortformer port validated against.
+    std::optional<transcribe::MelFrontend> diar_mel;
 
     ParakeetModel() = default;
     ~ParakeetModel() override;
@@ -239,6 +256,10 @@ struct ParakeetSession final : public transcribe_session {
     std::vector<float>    enc_host;
     std::vector<TdtToken> raw_tokens;
 
+    // Multitalker bundle scratch: streaming-diarizer AOSC/FIFO state for
+    // the embedded sortformer forward (diarize=ON runs only).
+    transcribe::sortformer::DiarStreamScratch diar_scratch;
+
     // Per-call timings and the TDT decode result (tokens / words /
     // segments / full_text / result_kind / has_result) live on the base
     // transcribe_session; no per-family copies here.
@@ -297,5 +318,73 @@ struct ParakeetSession final : public transcribe_session {
     ParakeetSession() = default;
     ~ParakeetSession() override;
 };
+
+// ---- Multitalker (bundle) internals ----------------------------------- //
+
+// Per-speaker supervision for one multitalker decode pass, at the diar
+// frame rate (80 ms). Mirrors NeMo's SpeakerTaggedASR hand-off:
+//   masked mode (use_kernel=false, the NeMo example default): the mel is
+//     masked per feature frame with the 8x-expanded binarized target
+//     activity (mask_features: masked = mel * mask; original-zero
+//     features -> mask_value).
+//   kernel mode (use_kernel=true): spk (raw sigmoids) and bg (binarized
+//     union of other actives) drive the layer-0 speaker-kernel injection
+//     as graph inputs (set_speaker_targets path).
+struct MultitalkerPass {
+    bool               use_kernel = false;
+    float              threshold  = 0.5f;
+    float              mask_value = -16.6355f;
+    std::vector<float> spk;  // [T_diar] target-speaker activity
+    std::vector<float> bg;   // [T_diar] binarized union of other actives
+    // Kernel-mode chunk gating (reference cache_gating): encoder-frame
+    // indices of this speaker's ACTIVE 14-frame chunks, in order. The
+    // conformer + decoder see only these frames (gathered after the
+    // continuous pre_encode), mirroring the reference per-speaker cache
+    // that only advances on active chunks. Empty = no gating (masked
+    // mode / single-speaker).
+    std::vector<int32_t> keep_enc_frames;
+};
+
+// Shared one-utterance inference helper (mel -> encoder -> host decode ->
+// result build on pc). Defined in model.cpp; also driven per speaker by
+// the multitalker orchestrator with a supervision pass.
+transcribe_status run_one_shot_inner(ParakeetSession *             pc,
+                                     ParakeetModel *               pm,
+                                     const float *                 pcm,
+                                     int                           n_samples,
+                                     const transcribe_run_params * params,
+                                     const MultitalkerPass *       mt = nullptr);
+
+// Build tokens/words/segments/full_text on pc from pc->raw_tokens
+// (defined in model.cpp; shared by the offline decode and the
+// multitalker streaming pass).
+transcribe_status build_result_from_raw_tokens(ParakeetSession *             pc,
+                                               ParakeetModel *               pm,
+                                               const transcribe_run_params * params);
+
+// Streaming primitives (defined in model.cpp) shared with the
+// multitalker streaming pass, which drives one cache/decoder-state
+// instance per speaker by swapping it into pc around each call.
+transcribe_status init_streaming_caches(ParakeetSession * pc, ParakeetModel * pm);
+void              reset_streaming_decoder_state(ParakeetSession * pc, const ParakeetModel * pm);
+transcribe_status emit_streaming_chunk(ParakeetSession * pc,
+                                       ParakeetModel *   pm,
+                                       const float *     mel_chunk_data,
+                                       int               n_mel_chunk_frames,
+                                       int               drop_extra_pre_encoded,
+                                       int               mel_frames_advance,
+                                       const float *     mt_spk      = nullptr,
+                                       const float *     mt_bg       = nullptr,
+                                       int               mt_mask_len = 0);
+
+// Multitalker offline run (diarize=ON on a bundle model): embedded
+// sortformer streaming forward -> active-speaker selection -> one decode
+// pass per active speaker -> merged speaker-tagged result. Defined in
+// multitalker.cpp.
+transcribe_status run_multitalker(ParakeetSession *             pc,
+                                  ParakeetModel *               pm,
+                                  const float *                 pcm,
+                                  int                           n_samples,
+                                  const transcribe_run_params * params);
 
 }  // namespace transcribe::parakeet

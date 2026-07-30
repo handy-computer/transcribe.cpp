@@ -258,13 +258,26 @@ ggml_tensor * build_spk_kernel_ff(ggml_context * ctx, ggml_tensor * x, const Par
     return y;
 }
 
-// Single-speaker mode applies the speaker kernel to x and the background
-// kernel to zeros. The latter reduces to a per-channel constant broadcast
-// over time.
+// Speaker-kernel layer-0 injection (NeMo SpeakerKernelMixin pre-layer hook).
+//
+// Single-speaker mode (spk_mask == nullptr) mirrors spk_targets=None:
+// the speaker kernel sees x unmasked (mask defaults to all-ones) and the
+// background kernel sees zeros (bg default_value=0.0), which reduces to a
+// per-channel constant broadcast over time. This path is byte-identical
+// to the shipped single-speaker graph.
+//
+// Multitalker mode (spk_mask/bg_mask ne=[1, T] f32) mirrors
+// mask_with_speaker_targets: x_spk = FF_spk(x * m_spk) added to x, then
+// x_bg = FF_bg(x' * m_bg) added on the UPDATED x' (NeMo applies the bg
+// kernel after the spk residual), with m_spk the target speaker's raw
+// per-frame sigmoids and m_bg the binarized union of the other active
+// speakers.
 ggml_tensor * apply_spk_kernel_injection(ggml_context *          ctx,
                                          ggml_tensor *           x,
                                          const ParakeetWeights & w,
-                                         const ParakeetHParams & hp) {
+                                         const ParakeetHParams & hp,
+                                         ggml_tensor *           spk_mask = nullptr,
+                                         ggml_tensor *           bg_mask  = nullptr) {
     if (!hp.has_spk_kernel) {
         return x;
     }
@@ -272,14 +285,23 @@ ggml_tensor * apply_spk_kernel_injection(ggml_context *          ctx,
         if (kernel.layer != 0) {
             continue;  // loader rejects non-zero layers; defensive
         }
-        ggml_tensor * x_spk = build_spk_kernel_ff(ctx, x, kernel.spk);
-        x                   = ggml_add(ctx, x, x_spk);
-        if (kernel.has_bg) {
-            // W3_bg * relu(b0_bg) + b3_bg is broadcast over time.
-            ggml_tensor * hb   = ggml_relu(ctx, kernel.bg.lin0_b);
-            ggml_tensor * c_bg = ggml_mul_mat(ctx, kernel.bg.lin3_w, hb);
-            c_bg               = ggml_add(ctx, c_bg, kernel.bg.lin3_b);
-            x                  = ggml_add(ctx, x, c_bg);
+        if (spk_mask == nullptr) {
+            ggml_tensor * x_spk = build_spk_kernel_ff(ctx, x, kernel.spk);
+            x                   = ggml_add(ctx, x, x_spk);
+            if (kernel.has_bg) {
+                // W3_bg * relu(b0_bg) + b3_bg is broadcast over time.
+                ggml_tensor * hb   = ggml_relu(ctx, kernel.bg.lin0_b);
+                ggml_tensor * c_bg = ggml_mul_mat(ctx, kernel.bg.lin3_w, hb);
+                c_bg               = ggml_add(ctx, c_bg, kernel.bg.lin3_b);
+                x                  = ggml_add(ctx, x, c_bg);
+            }
+        } else {
+            ggml_tensor * x_spk = build_spk_kernel_ff(ctx, ggml_mul(ctx, x, spk_mask), kernel.spk);
+            x                   = ggml_add(ctx, x, x_spk);
+            if (kernel.has_bg && bg_mask != nullptr) {
+                ggml_tensor * x_bg = build_spk_kernel_ff(ctx, ggml_mul(ctx, x, bg_mask), kernel.bg);
+                x                  = ggml_add(ctx, x, x_bg);
+            }
         }
     }
     return x;
@@ -295,7 +317,9 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
                                  const char *                       backend_name,
                                  const BufferedStreamMaskOverride * buf_mask,
                                  int                                n_batch,
-                                 bool                               batch_var_len) {
+                                 bool                               batch_var_len,
+                                 bool                               spk_supervision,
+                                 int                                mt_keep_frames) {
     if (n_batch < 1) {
         n_batch = 1;
     }
@@ -386,9 +410,40 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         x                 = conf::named(x, "enc.pre_encode.xscaled");
     }
 
-    // NeMo applies the optional layer-0 injection after xscaling.
+    // NeMo applies the optional layer-0 injection after xscaling. With
+    // spk_supervision (multitalker bundle, n_batch == 1), the per-frame
+    // speaker/background masks become graph inputs the driver fills from
+    // the embedded diarizer's predictions.
+    // Kernel-mode chunk gating: keep only the target speaker's active
+    // chunks (reference cache_gating — inactive chunks never reach that
+    // speaker's conformer/decoder, and its attention context spans its
+    // own kept history, matching the per-speaker streaming caches).
+    // Applied after the continuous pre_encode + xscaling, before the
+    // layer-0 injection, exactly where the reference gathers instances.
+    if (spk_supervision && n_batch == 1 && mt_keep_frames > 0) {
+        ggml_tensor * keep = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, mt_keep_frames);
+        ggml_set_name(keep, "mt_keep.in");
+        ggml_set_input(keep);
+        eb.mt_keep_in = keep;
+        x             = ggml_get_rows(ctx, x, keep);
+        x             = conf::named(x, "enc.pre_encode.mt_gathered");
+    }
+
     if (hp.has_spk_kernel) {
-        x = apply_spk_kernel_injection(ctx, x, w, hp);
+        ggml_tensor * spk_mask = nullptr;
+        ggml_tensor * bg_mask  = nullptr;
+        if (spk_supervision && n_batch == 1) {
+            const int64_t T_inj = x->ne[1];
+            spk_mask            = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(spk_mask, "spk_mask.in");
+            ggml_set_input(spk_mask);
+            bg_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(bg_mask, "bg_mask.in");
+            ggml_set_input(bg_mask);
+            eb.spk_mask_in = spk_mask;
+            eb.bg_mask_in  = bg_mask;
+        }
+        x = apply_spk_kernel_injection(ctx, x, w, hp, spk_mask, bg_mask);
         x = conf::named(x, "enc.pre_encode.spk_injected");
     }
 
@@ -644,7 +699,8 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
                                            int                       drop_extra_pre_encoded,
                                            StreamingEncoderCacheIO & cache_io,
                                            ggml_type                 kv_type,
-                                           const char *              backend_name) {
+                                           const char *              backend_name,
+                                           bool                      spk_supervision) {
     conf::ConvPolicy policy{};
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
@@ -722,8 +778,24 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
     }
 
     // Apply the same optional layer-0 injection to each streaming chunk.
+    // With spk_supervision (multitalker streaming pass), the per-chunk
+    // speaker/background masks become graph inputs the driver fills from
+    // the diarizer predictions for this chunk's frames.
     if (hp.has_spk_kernel) {
-        x = apply_spk_kernel_injection(ctx, x, w, hp);
+        ggml_tensor * spk_mask = nullptr;
+        ggml_tensor * bg_mask  = nullptr;
+        if (spk_supervision) {
+            const int64_t T_inj = x->ne[1];
+            spk_mask            = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(spk_mask, "stream.spk_mask.in");
+            ggml_set_input(spk_mask);
+            bg_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(bg_mask, "stream.bg_mask.in");
+            ggml_set_input(bg_mask);
+            eb.spk_mask_in = spk_mask;
+            eb.bg_mask_in  = bg_mask;
+        }
+        x = apply_spk_kernel_injection(ctx, x, w, hp, spk_mask, bg_mask);
     }
 
     const int64_t T_q_new = x->ne[1];

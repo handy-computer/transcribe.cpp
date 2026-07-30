@@ -64,6 +64,12 @@ SortformerModel::~SortformerModel() {
     plan.primary = nullptr;
 }
 
+DiarStreamScratch::~DiarStreamScratch() {
+    if (compute_ctx != nullptr) {
+        ggml_free(compute_ctx);
+    }
+}
+
 SortformerSession::~SortformerSession() {
     if (sched != nullptr) {
         transcribe::safe_sched_free(sched);
@@ -111,12 +117,20 @@ void fill_conformer_hp(const SortformerHParams & s, pk::ParakeetHParams & p) {
 // Populate ONLY the pre_encode + block slots of a ParakeetWeights from the
 // GGUF (the conformer). Predictor / joint / head stay empty. Mirrors the
 // encoder portion of build_parakeet_weights (identical tensor names).
-transcribe_status load_conformer_weights(ggml_context * ctx, const pk::ParakeetHParams & hp, pk::ParakeetWeights & w) {
-    char name[128];
-    auto get = [&](const char * nm) -> ggml_tensor * {
-        ggml_tensor * t = ggml_get_tensor(ctx, nm);
+// `prefix` (nullable, standalone default "") namespaces every tensor name
+// for the multitalker bundle case.
+transcribe_status load_conformer_weights(ggml_context *              ctx,
+                                         const pk::ParakeetHParams & hp,
+                                         pk::ParakeetWeights &       w,
+                                         const char *                prefix = nullptr) {
+    const char * pfx = (prefix != nullptr) ? prefix : "";
+    char         name[160];
+    auto         get = [&](const char * nm) -> ggml_tensor * {
+        char full[192];
+        std::snprintf(full, sizeof(full), "%s%s", pfx, nm);
+        ggml_tensor * t = ggml_get_tensor(ctx, full);
         if (t == nullptr) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer: missing conformer tensor %s", nm);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer: missing conformer tensor %s", full);
         }
         return t;
     };
@@ -197,32 +211,37 @@ transcribe_status load_conformer_weights(ggml_context * ctx, const pk::ParakeetH
 
 // Fuse the conformer BatchNorm into scale + bias tensors (parakeet's
 // build_encoder_graph consumes conv_bn_fused_scale/bias, not the raw BN).
-transcribe_status fuse_conformer_bn(SortformerModel & m) {
-    const size_t n_blocks = m.conformer.blocks.size();
+// The fused tensors are allocated on `alloc_backend`; the caller owns and
+// frees *out_ctx / *out_buffer. Must run AFTER tensor data is uploaded.
+transcribe_status fuse_conformer_bn_core(std::vector<pk::ParakeetBlock> & blocks,
+                                         int64_t                          d,
+                                         ggml_backend_t                   alloc_backend,
+                                         ggml_context **                  out_ctx,
+                                         ggml_backend_buffer_t *          out_buffer) {
+    const size_t n_blocks = blocks.size();
     if (n_blocks == 0) {
         return TRANSCRIBE_OK;
     }
-    const int64_t d            = m.conformer_hp.enc_d_model;
-    const size_t  tensor_bytes = static_cast<size_t>(d) * sizeof(float);
+    const size_t tensor_bytes = static_cast<size_t>(d) * sizeof(float);
 
     const size_t     ctx_size = n_blocks * 2 * ggml_tensor_overhead() + 256;
     ggml_init_params params   = { ctx_size, nullptr, /*no_alloc=*/true };
-    m.bn_fused_ctx            = ggml_init(params);
-    if (m.bn_fused_ctx == nullptr) {
+    *out_ctx                  = ggml_init(params);
+    if (*out_ctx == nullptr) {
         return TRANSCRIBE_ERR_BACKEND;
     }
     for (size_t i = 0; i < n_blocks; ++i) {
-        auto & b              = m.conformer.blocks[i];
-        b.conv_bn_fused_scale = ggml_new_tensor_1d(m.bn_fused_ctx, GGML_TYPE_F32, d);
-        b.conv_bn_fused_bias  = ggml_new_tensor_1d(m.bn_fused_ctx, GGML_TYPE_F32, d);
+        auto & b              = blocks[i];
+        b.conv_bn_fused_scale = ggml_new_tensor_1d(*out_ctx, GGML_TYPE_F32, d);
+        b.conv_bn_fused_bias  = ggml_new_tensor_1d(*out_ctx, GGML_TYPE_F32, d);
     }
-    m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(m.bn_fused_ctx, m.plan.scheduler_list.back());
-    if (m.bn_fused_buffer == nullptr) {
+    *out_buffer = ggml_backend_alloc_ctx_tensors(*out_ctx, alloc_backend);
+    if (*out_buffer == nullptr) {
         return TRANSCRIBE_ERR_BACKEND;
     }
     std::vector<float> bn_w(d), bn_b(d), rm(d), rv(d), fused_s(d), fused_b(d);
     for (size_t i = 0; i < n_blocks; ++i) {
-        auto & b = m.conformer.blocks[i];
+        auto & b = blocks[i];
         ggml_backend_tensor_get(b.conv_bn_w, bn_w.data(), 0, tensor_bytes);
         ggml_backend_tensor_get(b.conv_bn_b, bn_b.data(), 0, tensor_bytes);
         ggml_backend_tensor_get(b.conv_bn_rm, rm.data(), 0, tensor_bytes);
@@ -236,6 +255,11 @@ transcribe_status fuse_conformer_bn(SortformerModel & m) {
         ggml_backend_tensor_set(b.conv_bn_fused_bias, fused_b.data(), 0, tensor_bytes);
     }
     return TRANSCRIBE_OK;
+}
+
+transcribe_status fuse_conformer_bn(SortformerModel & m) {
+    return fuse_conformer_bn_core(m.conformer.blocks, m.conformer_hp.enc_d_model, m.plan.scheduler_list.back(),
+                                  &m.bn_fused_ctx, &m.bn_fused_buffer);
 }
 
 // ---- diar-head graph helpers ----
@@ -412,15 +436,19 @@ struct PreEncodeBuild {
     ggml_tensor * out    = nullptr;
 };
 
-PreEncodeBuild build_pre_encode_graph(ggml_context * ctx, SortformerModel & m, int M) {
+PreEncodeBuild build_pre_encode_graph(ggml_context *                ctx,
+                                      const pk::ParakeetHParams &   chp,
+                                      const pk::ParakeetPreEncode & pe,
+                                      const char *                  backend,
+                                      int                           M) {
     PreEncodeBuild b{};
-    const int      n_mels = m.conformer_hp.fe_num_mels;
+    const int      n_mels = chp.fe_num_mels;
     ggml_tensor *  mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, M, n_mels, 1, 1);
     ggml_set_name(mel_in, "chunk.mel.in");
     ggml_set_input(mel_in);
-    const conf::ConvPolicy policy = sf_conv_policy(m.backend.c_str());
-    ggml_tensor * out = conf::build_pre_encode(ctx, sf_pre_view(m.conformer.pre_encode), mel_in, policy,
-                                               /*name_prefix=*/"chunk.pre_encode", /*error_tag=*/"sortformer", nullptr);
+    const conf::ConvPolicy policy = sf_conv_policy(backend);
+    ggml_tensor *          out    = conf::build_pre_encode(ctx, sf_pre_view(pe), mel_in, policy,
+                                                           /*name_prefix=*/"chunk.pre_encode", /*error_tag=*/"sortformer", nullptr);
     if (out == nullptr) {
         return b;
     }
@@ -441,9 +469,15 @@ struct StreamInferBuild {
     ggml_tensor * preds      = nullptr;
 };
 
-StreamInferBuild build_stream_infer_graph(ggml_context * ctx, SortformerModel & m, int T_concat) {
+StreamInferBuild build_stream_infer_graph(ggml_context *              ctx,
+                                          const SortformerHParams &   hp,
+                                          const pk::ParakeetHParams & chp,
+                                          const pk::ParakeetWeights & conformer,
+                                          const SortformerWeights &   w,
+                                          const char *                backend,
+                                          int                         T_concat) {
     StreamInferBuild b{};
-    const int        ed        = m.conformer_hp.enc_d_model;
+    const int        ed        = chp.enc_d_model;
     ggml_tensor *    concat_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ed, T_concat);
     ggml_set_name(concat_in, "stream.concat.in");
     ggml_set_input(concat_in);
@@ -458,13 +492,13 @@ StreamInferBuild build_stream_infer_graph(ggml_context * ctx, SortformerModel & 
 
     conf::BlockParams bp{};
     bp.d_model         = ed;
-    bp.n_head          = m.conformer_hp.enc_n_heads;
-    bp.conv_kernel     = m.conformer_hp.enc_conv_kernel;
+    bp.n_head          = chp.enc_n_heads;
+    bp.conv_kernel     = chp.enc_conv_kernel;
     bp.kv_type         = GGML_TYPE_F32;
     bool enc_use_flash = true, dec_use_flash = false;
     transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
     bp.use_flash          = enc_use_flash;
-    bp.policy             = sf_conv_policy(m.backend.c_str());
+    bp.policy             = sf_conv_policy(backend);
     bp.att_context_left   = -1;  // full (offline) attention over the concat
     bp.att_context_right  = -1;
     bp.att_context_style  = conf::BlockParams::AttContextStyle::Regular;
@@ -472,24 +506,24 @@ StreamInferBuild build_stream_infer_graph(ggml_context * ctx, SortformerModel & 
     bp.conv_context_right = -1;
     bp.conv_norm_type     = conf::BlockParams::ConvNormType::BatchNorm;
 
-    for (int i = 0; i < m.conformer_hp.enc_n_layers; ++i) {
-        x = conf::build_conformer_block(ctx, x, pos_emb_in, sf_block_view(m.conformer.blocks[static_cast<size_t>(i)]),
+    for (int i = 0; i < chp.enc_n_layers; ++i) {
+        x = conf::build_conformer_block(ctx, x, pos_emb_in, sf_block_view(conformer.blocks[static_cast<size_t>(i)]),
                                         bp);
     }
 
     // encoder_proj (enc_d_model -> tf_d_model) then 18x post-LN transformer.
-    ggml_tensor * t = linear(ctx, m.weights.enc_proj_w, x, m.weights.enc_proj_b);
-    const int     d = m.hparams.tf_d_model;
-    for (int i = 0; i < m.hparams.tf_n_layers; ++i) {
-        t = tf_block(ctx, m.weights.tf_blocks[static_cast<size_t>(i)], t, d, m.hparams.tf_n_heads, T_concat);
+    ggml_tensor * t = linear(ctx, w.enc_proj_w, x, w.enc_proj_b);
+    const int     d = hp.tf_d_model;
+    for (int i = 0; i < hp.tf_n_layers; ++i) {
+        t = tf_block(ctx, w.tf_blocks[static_cast<size_t>(i)], t, d, hp.tf_n_heads, T_concat);
     }
 
     // Diar head (forward_speaker_sigmoids). All frames valid in sync mode, so
     // the encoder_mask multiply is a no-op.
     ggml_tensor * h     = ggml_relu(ctx, t);
-    h                   = linear(ctx, m.weights.fc1_w, h, m.weights.fc1_b);
+    h                   = linear(ctx, w.fc1_w, h, w.fc1_b);
     h                   = ggml_relu(ctx, h);
-    ggml_tensor * s     = linear(ctx, m.weights.single_spk_head_w, h, m.weights.single_spk_head_b);
+    ggml_tensor * s     = linear(ctx, w.single_spk_head_w, h, w.single_spk_head_b);
     ggml_tensor * preds = ggml_sigmoid(ctx, s);  // [n_spk, T_concat]
 
     ggml_cgraph * graph = ggml_new_graph_custom(ctx, 8192, false);
@@ -602,6 +636,33 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     return TRANSCRIBE_OK;
 }
 
+// ---- Embedded-diarizer surface (multitalker bundle; see sortformer.h) ----
+
+transcribe_status init_embedded_diarizer(const gguf_context * gguf,
+                                         ggml_context *       ctx_meta,
+                                         const char *         tensor_prefix,
+                                         SortformerEmbedded & out) {
+    if (gguf == nullptr || ctx_meta == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const transcribe_status st = read_sortformer_hparams(gguf, out.hp); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    fill_conformer_hp(out.hp, out.conformer_hp);
+    if (const transcribe_status st = load_conformer_weights(ctx_meta, out.conformer_hp, out.conformer, tensor_prefix);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    return build_sortformer_weights(ctx_meta, out.hp, out.weights, tensor_prefix);
+}
+
+transcribe_status fuse_embedded_diar_bn(SortformerEmbedded &    e,
+                                        ggml_backend_t          backend,
+                                        ggml_context **         out_ctx,
+                                        ggml_backend_buffer_t * out_buffer) {
+    return fuse_conformer_bn_core(e.conformer.blocks, e.conformer_hp.enc_d_model, backend, out_ctx, out_buffer);
+}
+
 transcribe_status init_context(transcribe_model *                model,
                                const transcribe_session_params * params,
                                transcribe_session **             out_ctx) {
@@ -619,13 +680,14 @@ transcribe_status init_context(transcribe_model *                model,
 // Threshold-based probs -> speaker segments (simple offline segmentation;
 // the DER-grade dihard3 post-processing is a later, streaming-checkpoint
 // concern). probs is row-major [T, n_spk]. Emits one contiguous run per
-// speaker as a speaker_segment row.
-static void probs_to_speaker_segments(transcribe_session *       pc,
-                                      const std::vector<float> & probs,
-                                      int                        T,
-                                      int                        n_spk,
-                                      double                     ms_per_frame,
-                                      float                      threshold) {
+// speaker as a speaker_segment row. Non-static: the parakeet multitalker
+// bundle path emits its transcript-independent view through this too.
+void probs_to_speaker_segments(transcribe_session *       pc,
+                               const std::vector<float> & probs,
+                               int                        T,
+                               int                        n_spk,
+                               double                     ms_per_frame,
+                               float                      threshold) {
     for (int s = 0; s < n_spk; ++s) {
         int run_start = -1;
         for (int t = 0; t <= T; ++t) {
@@ -720,8 +782,9 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
     if (eb.pos_emb_in != nullptr) {
         const int d_model = pm->conformer_hp.enc_d_model;
         const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
-        fill_rel_pos_emb(pc->pos_buf, pc->pos_div_term, pos_len, d_model);
-        ggml_backend_tensor_set(eb.pos_emb_in, pc->pos_buf.data(), 0, pc->pos_buf.size() * sizeof(float));
+        fill_rel_pos_emb(pc->scratch.pos_buf, pc->scratch.pos_div_term, pos_len, d_model);
+        ggml_backend_tensor_set(eb.pos_emb_in, pc->scratch.pos_buf.data(), 0,
+                                pc->scratch.pos_buf.size() * sizeof(float));
     }
 
     transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
@@ -737,155 +800,222 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
     return TRANSCRIBE_OK;
 }
 
-// Streaming AOSC/FIFO forward (the product path). Chunks the mel per NeMo's
-// streaming_feat_loader, runs Graph A (pre_encode) then Graph B (blocks +
-// proj + transformer + head) over the [spkcache|fifo|chunk] concat, and drives
-// the host streaming_update_sync / _compress_spkcache state machine. Emits the
-// accumulated T x n_spk probs as diar.probs and the speaker segments.
-static transcribe_status run_streaming(SortformerSession *          pc,
-                                       SortformerModel *            pm,
-                                       int                          mel_n_mels,
-                                       int                          mel_n_frames,
-                                       double                       ms_per_frame,
-                                       transcribe_sortformer_preset preset) {
-    const SortformerStreamParams P        = resolve_stream_params(pm->hparams, preset);
-    const int                    ed       = pm->conformer_hp.enc_d_model;
-    const int                    n_spk    = pm->hparams.max_speakers;
-    const int                    sub      = pm->hparams.enc_subsampling_factor;
-    const int                    feat_len = mel_n_frames;
+// Streaming AOSC/FIFO forward core (the product path). Chunks the mel per
+// NeMo's streaming_feat_loader, runs Graph A (pre_encode) then Graph B
+// (blocks + proj + transformer + head) over the [spkcache|fifo|chunk]
+// concat, and drives the host streaming_update_sync / _compress_spkcache
+// state machine. Accumulates the T x n_spk probs in sc.stream.total_preds.
+// Family-agnostic: also driven by the parakeet multitalker bundle path.
+transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
+                                          const SortformerHParams &      hp,
+                                          const pk::ParakeetHParams &    chp,
+                                          const pk::ParakeetWeights &    conformer,
+                                          const SortformerWeights &      w,
+                                          const char *                   backend,
+                                          ggml_backend_sched_t           sched,
+                                          int                            n_threads,
+                                          const SortformerStreamParams & P,
+                                          const float *                  mel_buf,
+                                          int                            mel_n_mels,
+                                          int                            mel_n_frames,
+                                          transcribe_session *           abort_session) {
+    const int ed       = chp.enc_d_model;
+    const int n_spk    = hp.max_speakers;
+    const int sub      = hp.enc_subsampling_factor;
+    const int feat_len = mel_n_frames;
 
-    if (sub <= 0 || P.chunk_len <= 0) {
+    if (sub <= 0 || P.chunk_len <= 0 || sched == nullptr || mel_buf == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    pc->stream.reset(ed);
-    if (const transcribe_status st = ensure_sched(pc, pm); st != TRANSCRIBE_OK) {
-        return st;
+    sc.stream.reset(ed);
+
+    const bool external_cadence = P.feat_first_chunk > 0;
+    if (external_cadence && (P.chunk_left_context != 0 || P.chunk_right_context != 0)) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    const int64_t t_stream_start = ggml_time_us();
-    int           stt = 0, end = 0, chunk_idx = 0;
+    int stt = 0, end = 0, chunk_idx = 0;
     while (end < feat_len) {
-        if (pc->poll_abort()) {
+        if (abort_session != nullptr && abort_session->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
-        const int left_offset  = std::min(P.chunk_left_context * sub, stt);
-        end                    = std::min(stt + P.chunk_len * sub, feat_len);
-        const int right_offset = std::min(P.chunk_right_context * sub, feat_len - end);
-        const int win_lo       = stt - left_offset;
-        const int win_hi       = end + right_offset;
-        const int M            = win_hi - win_lo;
-        // Diar-frame context: left_offset is a multiple of sub -> round is
-        // exact; right_offset may be short on the final chunk -> ceil.
-        const int lc           = (left_offset + sub / 2) / sub;
-        const int rc           = (right_offset + sub - 1) / sub;
+        int win_lo = 0, win_hi = 0, lc = 0, rc = 0, drop = 0;
+        if (external_cadence) {
+            // NeMo CacheAwareStreamingAudioBuffer windows: first chunk is
+            // feat_first_chunk fresh frames; later chunks prepend
+            // feat_cache frames of real left context to chunk_len*sub new
+            // frames and drop the duplicated pre-encode outputs below.
+            if (chunk_idx == 0) {
+                end    = std::min(P.feat_first_chunk, feat_len);
+                win_lo = 0;
+            } else {
+                end    = std::min(stt + P.chunk_len * sub, feat_len);
+                win_lo = std::max(0, stt - P.feat_cache);
+                drop   = P.drop_pre_encode;
+            }
+            win_hi = end;
+        } else {
+            const int left_offset  = std::min(P.chunk_left_context * sub, stt);
+            end                    = std::min(stt + P.chunk_len * sub, feat_len);
+            const int right_offset = std::min(P.chunk_right_context * sub, feat_len - end);
+            win_lo                 = stt - left_offset;
+            win_hi                 = end + right_offset;
+            // Diar-frame context: left_offset is a multiple of sub -> round
+            // is exact; right_offset may be short on the final chunk -> ceil.
+            lc                     = (left_offset + sub / 2) / sub;
+            rc                     = (right_offset + sub - 1) / sub;
+        }
+        const int M = win_hi - win_lo;
 
-        if (pc->compute_ctx != nullptr) {
-            ggml_free(pc->compute_ctx);
-            pc->compute_ctx = nullptr;
+        if (sc.compute_ctx != nullptr) {
+            ggml_free(sc.compute_ctx);
+            sc.compute_ctx = nullptr;
         }
         {
             ggml_init_params ip{};
-            ip.mem_size     = 32 * 1024 * 1024;
-            ip.mem_buffer   = nullptr;
-            ip.no_alloc     = true;
-            pc->compute_ctx = ggml_init(ip);
-            if (pc->compute_ctx == nullptr) {
+            ip.mem_size    = 32 * 1024 * 1024;
+            ip.mem_buffer  = nullptr;
+            ip.no_alloc    = true;
+            sc.compute_ctx = ggml_init(ip);
+            if (sc.compute_ctx == nullptr) {
                 return TRANSCRIBE_ERR_GGUF;
             }
         }
-        ggml_context * ctx = pc->compute_ctx;
+        ggml_context * ctx = sc.compute_ctx;
         transcribe::debug::push_name_prefix("stream.chunk");
 
         // ---- Graph A: pre_encode over the mel window ----
-        PreEncodeBuild A = build_pre_encode_graph(ctx, *pm, M);
+        PreEncodeBuild A = build_pre_encode_graph(ctx, chp, conformer.pre_encode, backend, M);
         if (A.graph == nullptr) {
             transcribe::debug::pop_name_prefix();
             return TRANSCRIBE_ERR_GGUF;
         }
-        const int T_diar = static_cast<int>(A.out->ne[1]);
+        int T_diar = static_cast<int>(A.out->ne[1]);
 
         // Mel window [n_mels, M] from full mel [n_mels, feat_len], cols
         // [win_lo, win_hi). ggml ne=[M, n_mels] -> offset mel*M + col.
-        pc->chunk_mel_buf.resize(static_cast<size_t>(mel_n_mels) * M);
+        sc.chunk_mel_buf.resize(static_cast<size_t>(mel_n_mels) * M);
         for (int mel = 0; mel < mel_n_mels; ++mel) {
-            const float * src = pc->mel_buf.data() + static_cast<size_t>(mel) * feat_len + win_lo;
-            std::copy(src, src + M, pc->chunk_mel_buf.data() + static_cast<size_t>(mel) * M);
+            const float * src = mel_buf + static_cast<size_t>(mel) * feat_len + win_lo;
+            std::copy(src, src + M, sc.chunk_mel_buf.data() + static_cast<size_t>(mel) * M);
         }
 
-        ggml_backend_sched_reset(pc->sched);
-        if (!ggml_backend_sched_alloc_graph(pc->sched, A.graph)) {
+        ggml_backend_sched_reset(sched);
+        if (!ggml_backend_sched_alloc_graph(sched, A.graph)) {
             transcribe::debug::pop_name_prefix();
             return TRANSCRIBE_ERR_GGUF;
         }
-        ggml_backend_tensor_set(A.mel_in, pc->chunk_mel_buf.data(), 0, pc->chunk_mel_buf.size() * sizeof(float));
-        transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
-        if (ggml_backend_sched_graph_compute(pc->sched, A.graph) != GGML_STATUS_SUCCESS) {
+        ggml_backend_tensor_set(A.mel_in, sc.chunk_mel_buf.data(), 0, sc.chunk_mel_buf.size() * sizeof(float));
+        transcribe::configure_sched_n_threads(sched, n_threads);
+        if (ggml_backend_sched_graph_compute(sched, A.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: pre_encode compute failed");
             transcribe::debug::pop_name_prefix();
             return TRANSCRIBE_ERR_GGUF;
         }
-        pc->chunk_embs_host.resize(static_cast<size_t>(T_diar) * ed);
-        ggml_backend_tensor_get(A.out, pc->chunk_embs_host.data(), 0, pc->chunk_embs_host.size() * sizeof(float));
+        sc.chunk_embs_host.resize(static_cast<size_t>(T_diar) * ed);
+        ggml_backend_tensor_get(A.out, sc.chunk_embs_host.data(), 0, sc.chunk_embs_host.size() * sizeof(float));
+
+        // External cadence: discard the duplicated / partially-contexted
+        // pre-encode outputs (NeMo drop_extra_pre_encoded, applied right
+        // after pre_encode and before the encoder).
+        if (drop > 0) {
+            if (T_diar <= drop) {
+                // Degenerate tail chunk: nothing valid to append.
+                transcribe::debug::pop_name_prefix();
+                stt = end;
+                ++chunk_idx;
+                continue;
+            }
+            sc.chunk_embs_host.erase(sc.chunk_embs_host.begin(),
+                                     sc.chunk_embs_host.begin() + static_cast<size_t>(drop) * ed);
+            T_diar -= drop;
+        }
 
         // ---- host concat [spkcache | fifo | chunk_embs] ----
-        const int S        = pc->stream.spkcache_n;
-        const int F        = pc->stream.fifo_n;
+        const int S        = sc.stream.spkcache_n;
+        const int F        = sc.stream.fifo_n;
         const int T_concat = S + F + T_diar;
-        pc->concat_host.resize(static_cast<size_t>(T_concat) * ed);
-        std::copy(pc->stream.spkcache.begin(), pc->stream.spkcache.begin() + static_cast<size_t>(S) * ed,
-                  pc->concat_host.begin());
-        std::copy(pc->stream.fifo.begin(), pc->stream.fifo.begin() + static_cast<size_t>(F) * ed,
-                  pc->concat_host.begin() + static_cast<size_t>(S) * ed);
-        std::copy(pc->chunk_embs_host.begin(), pc->chunk_embs_host.end(),
-                  pc->concat_host.begin() + static_cast<size_t>(S + F) * ed);
+        sc.concat_host.resize(static_cast<size_t>(T_concat) * ed);
+        std::copy(sc.stream.spkcache.begin(), sc.stream.spkcache.begin() + static_cast<size_t>(S) * ed,
+                  sc.concat_host.begin());
+        std::copy(sc.stream.fifo.begin(), sc.stream.fifo.begin() + static_cast<size_t>(F) * ed,
+                  sc.concat_host.begin() + static_cast<size_t>(S) * ed);
+        std::copy(sc.chunk_embs_host.begin(), sc.chunk_embs_host.end(),
+                  sc.concat_host.begin() + static_cast<size_t>(S + F) * ed);
 
         // ---- Graph B: xscale + 17 blocks + proj + 18 tf + head ----
-        StreamInferBuild B = build_stream_infer_graph(ctx, *pm, T_concat);
+        StreamInferBuild B = build_stream_infer_graph(ctx, hp, chp, conformer, w, backend, T_concat);
         if (B.graph == nullptr) {
             transcribe::debug::pop_name_prefix();
             return TRANSCRIBE_ERR_GGUF;
         }
-        fill_rel_pos_emb(pc->pos_buf, pc->pos_div_term, 2 * T_concat - 1, ed);
+        fill_rel_pos_emb(sc.pos_buf, sc.pos_div_term, 2 * T_concat - 1, ed);
 
-        ggml_backend_sched_reset(pc->sched);
-        if (!ggml_backend_sched_alloc_graph(pc->sched, B.graph)) {
+        ggml_backend_sched_reset(sched);
+        if (!ggml_backend_sched_alloc_graph(sched, B.graph)) {
             transcribe::debug::pop_name_prefix();
             return TRANSCRIBE_ERR_GGUF;
         }
-        ggml_backend_tensor_set(B.concat_in, pc->concat_host.data(), 0, pc->concat_host.size() * sizeof(float));
-        ggml_backend_tensor_set(B.pos_emb_in, pc->pos_buf.data(), 0, pc->pos_buf.size() * sizeof(float));
-        transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
-        if (ggml_backend_sched_graph_compute(pc->sched, B.graph) != GGML_STATUS_SUCCESS) {
+        ggml_backend_tensor_set(B.concat_in, sc.concat_host.data(), 0, sc.concat_host.size() * sizeof(float));
+        ggml_backend_tensor_set(B.pos_emb_in, sc.pos_buf.data(), 0, sc.pos_buf.size() * sizeof(float));
+        transcribe::configure_sched_n_threads(sched, n_threads);
+        if (ggml_backend_sched_graph_compute(sched, B.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sortformer streaming: infer compute failed");
             transcribe::debug::pop_name_prefix();
             return TRANSCRIBE_ERR_GGUF;
         }
-        pc->stream_preds_host.resize(static_cast<size_t>(T_concat) * n_spk);
-        ggml_backend_tensor_get(B.preds, pc->stream_preds_host.data(), 0, pc->stream_preds_host.size() * sizeof(float));
+        sc.stream_preds_host.resize(static_cast<size_t>(T_concat) * n_spk);
+        ggml_backend_tensor_get(B.preds, sc.stream_preds_host.data(), 0, sc.stream_preds_host.size() * sizeof(float));
 
         transcribe::debug::pop_name_prefix();
 
         // ---- host streaming update (FIFO + AOSC compress) ----
-        streaming_update_sync(pc->stream, P, n_spk, ed, pc->chunk_embs_host, T_diar, pc->stream_preds_host, T_concat,
-                              lc, rc);
+        streaming_update_sync(sc.stream, P, n_spk, ed, sc.chunk_embs_host, T_diar, sc.stream_preds_host, T_concat, lc,
+                              rc);
 
         stt = end;
         ++chunk_idx;
     }
+    (void) chunk_idx;
+    return TRANSCRIBE_OK;
+}
+
+// Family wrapper: resolve the operating point, run the core, trim, dump,
+// and emit speaker segments on the session.
+static transcribe_status run_streaming(SortformerSession *          pc,
+                                SortformerModel *            pm,
+                                int                          mel_n_mels,
+                                int                          mel_n_frames,
+                                double                       ms_per_frame,
+                                transcribe_sortformer_preset preset) {
+    const SortformerStreamParams P = resolve_stream_params(pm->hparams, preset);
+    if (const transcribe_status st = ensure_sched(pc, pm); st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    const int64_t           t_stream_start = ggml_time_us();
+    const transcribe_status st =
+        run_diar_streaming_core(pc->scratch, pm->hparams, pm->conformer_hp, pm->conformer, pm->weights,
+                                pm->backend.c_str(), pc->sched, pc->n_threads, P, pc->mel_buf.data(), mel_n_mels,
+                                mel_n_frames, pc);
+    if (st != TRANSCRIBE_OK) {
+        return st;
+    }
     pc->t_encode_us = ggml_time_us() - t_stream_start;
 
     // Trim padding tail: NeMo total_preds[:, :ceil(feat_len/sub)].
-    const int n_frames = (feat_len + sub - 1) / sub;
-    const int used_n   = std::min(pc->stream.total_n, n_frames);
+    const int sub      = pm->hparams.enc_subsampling_factor;
+    const int n_spk    = pm->hparams.max_speakers;
+    const int n_frames = (mel_n_frames + sub - 1) / sub;
+    const int used_n   = std::min(pc->scratch.stream.total_n, n_frames);
 
     if (transcribe::debug::enabled()) {
         const long long shape[2] = { used_n, n_spk };
-        transcribe::debug::dump_host_f32("diar.probs", pc->stream.total_preds.data(),
+        transcribe::debug::dump_host_f32("diar.probs", pc->scratch.stream.total_preds.data(),
                                          static_cast<long long>(used_n) * n_spk, shape, 2, "diarize");
     }
 
-    probs_to_speaker_segments(pc, pc->stream.total_preds, used_n, n_spk, ms_per_frame, /*threshold=*/0.5f);
-    (void) chunk_idx;
+    probs_to_speaker_segments(pc, pc->scratch.stream.total_preds, used_n, n_spk, ms_per_frame, /*threshold=*/0.5f);
     return TRANSCRIBE_OK;
 }
 
