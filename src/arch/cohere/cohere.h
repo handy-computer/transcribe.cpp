@@ -33,6 +33,30 @@ namespace transcribe::cohere {
 
 void apply_family_invariants(transcribe_model & model);
 
+// Long-form window boundary picker: searches back from `target` over `search`
+// samples for a genuine pause to cut on, and returns -1 when the region is
+// continuous speech and no candidate qualifies. Declared here so the boundary
+// logic can be unit-tested without a model; see model.cpp for the full
+// contract and its limitations.
+int pick_split(const float * pcm, int n_samples, int target, int search);
+
+// Where two overlapping windows should be joined, in token space.
+struct TokenSeam {
+    int  previous_keep;  // tokens to keep from the accumulated hypothesis
+    int  current_skip;   // tokens to drop from the front of the new window
+    bool matched;        // false when no overlap was identified
+};
+
+// Find the join point between consecutive windows by matching the tail of
+// `previous` against the head of `current`. Timestamp-free, so it works for a
+// family that emits no alignment data. Ported from the canary long-form path
+// (see PR #112) so both families stitch the same way. Declared here for unit
+// testing; see model.cpp for the acceptance rules.
+TokenSeam token_seam(const std::vector<int> & previous,
+                     const std::vector<int> & current,
+                     int                      previous_search,
+                     int                      current_search);
+
 // KV cache for the autoregressive decoder. Flat 1D K/V tensors (whisper.cpp
 // pattern), per-layer slices via views. Self cache grows per step;
 // cross cache is computed once from encoder output, then reused.
@@ -171,6 +195,10 @@ struct CohereSession final : public transcribe_session {
     // TRANSCRIBE_FORCE_FLASH apply to both stages at once.
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
+
+    // Token ids the last decoded window produced, kept so the long-form path
+    // can stitch windows in token space instead of re-parsing decoded text.
+    std::vector<int> window_ids;
 
     CohereSession() = default;
     ~CohereSession() override;

@@ -32,6 +32,7 @@
 #include <cstring>
 #include <fstream>
 #include <ios>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -220,19 +221,187 @@ CohereModel::~CohereModel() {
     plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
+// Long-form windowing (see run() below for the rationale).
+//
+// Cohere Transcribe was trained on clips of at most 35 s -- `max_audio_clip_s`
+// in the HF feature-extractor config, recorded in the porting intake. That
+// value is not written to the GGUF today, so the trained window lives here as
+// a family constant; emitting it as `stt.cohere.max_audio_clip_s` and reading
+// it in read_cohere_hparams() (with this as the fallback for already-published
+// GGUFs) would be the tidier follow-up.
+constexpr double kTrainedClipSeconds = 35.0;
+
+// Fractions of a window searched backwards for a pause to cut on. The wider
+// pass is a fallback when the narrow one finds only continuous speech.
+constexpr double kSplitSearchFraction     = 0.25;
+constexpr double kSplitSearchFractionWide = 0.50;
+
+// A frame counts as a pause only if it is this much quieter than the mean of
+// the searched region. A minimum always exists; a pause does not.
+constexpr float kPauseRatio = 0.30f;
+
+// Search back from `target` for a genuine pause to cut on: the quietest 20 ms
+// frame within the trailing `search` samples, accepted only when it is clearly
+// quieter than that region's own mean amplitude.
+//
+// Returns the cut offset, or -1 when the region is continuous speech and no
+// pause qualifies -- the caller decides what to do rather than getting a
+// silently arbitrary cut.
+//
+// A pause is preferred but not required: windows overlap by kOverlapMs, so a
+// cut that lands mid-word still leaves that word whole in the next window, and
+// token_seam() removes the duplicate when the two are joined. Cutting on a
+// pause simply makes the seam easier to find.
+int pick_split(const float * pcm, int n_samples, int target, int search) {
+    constexpr int frame = 320;  // 20 ms @ 16 kHz
+    if (target >= n_samples || search < frame * 2 || target < frame * 2) {
+        return -1;
+    }
+
+    const int lo   = std::max(frame, target - search);
+    const int step = frame / 2;
+
+    double sum_amp  = 0.0;
+    int    n_frames = 0;
+    int    best_at  = -1;
+    float  best_amp = std::numeric_limits<float>::max();
+
+    for (int at = lo; at + frame <= target; at += step) {
+        float sum = 0.0f;
+        for (int i = 0; i < frame; ++i) {
+            sum += std::fabs(pcm[at + i]);
+        }
+        const float amp = sum / static_cast<float>(frame);
+
+        sum_amp += amp;
+        ++n_frames;
+
+        if (amp < best_amp) {
+            best_amp = amp;
+            best_at  = at + frame / 2;  // cut in the middle of the pause
+        }
+    }
+
+    if (n_frames == 0 || best_at < 0) {
+        return -1;
+    }
+
+    // Reject a "quietest" frame that is really just ordinary speech.
+    const float mean_amp = static_cast<float>(sum_amp / n_frames);
+    if (best_amp > mean_amp * kPauseRatio) {
+        return -1;
+    }
+    return best_at;
+}
+
+// Overlap carried between consecutive windows. A boundary that lands in
+// continuous speech splits a word; repeating a second of audio on both sides
+// means the word survives whole in at least one window, and token_seam() drops
+// the duplicate when the windows are joined.
+constexpr int kOverlapMs = 1000;
+
+// Seam search widths, in encoder frames' worth of tokens, derived from the
+// overlap rather than hardcoded.
+//
+// The two sides are deliberately ASYMMETRIC, and the small one is the load-
+// bearing part. Only the first ~1 s of a new window can legitimately duplicate
+// the previous one, so `current_search` must not reach past the overlap: a
+// wider window lets a genuinely repeated sentence match the accumulated tail
+// and be deleted as if it were overlap. `previous_search` can be looser because
+// the at-previous-end rule already constrains where a match may finish.
+//
+// Mirrors the canary long-form path (PR #112), which computes the same two
+// widths from its own overlap.
+int seam_search_previous(const CohereHParams & hp) {
+    const int frame_ms =
+        hp.fe_sample_rate > 0 ? hp.fe_hop_length * hp.enc_subsampling_factor * 1000 / hp.fe_sample_rate : 0;
+    const int delay_frames = std::max(1, frame_ms > 0 ? kOverlapMs / frame_ms : 12);
+    return delay_frames * 2;
+}
+
+int seam_search_current(const CohereHParams & hp) {
+    const int frame_ms =
+        hp.fe_sample_rate > 0 ? hp.fe_hop_length * hp.enc_subsampling_factor * 1000 / hp.fe_sample_rate : 0;
+    const int delay_frames = std::max(1, frame_ms > 0 ? kOverlapMs / frame_ms : 12);
+    return std::max(1, delay_frames * 3 / 5);
+}
+
+// Find where to join two consecutive windows by matching the tail of the
+// accumulated hypothesis against the head of the new window.
+//
+// The match is only accepted when it runs to the *end* of the previous
+// hypothesis. A match that stops earlier means the repeated text sits in the
+// interior, which is ambiguous -- the speaker may genuinely have repeated the
+// phrase, and trimming it would delete real speech. A single-token match is
+// accepted only at the very start of the new window, where it cannot be
+// coincidence.
+//
+// Ported from canary_token_seam() in the canary long-form path (PR #112) so the
+// two families stitch identically. Timestamp-free by construction, which is
+// what makes it usable here: cohere advertises max_timestamp_kind == NONE and
+// has no alignment data to fall back on.
+TokenSeam token_seam(const std::vector<int> & previous,
+                     const std::vector<int> & current,
+                     int                      previous_search,
+                     int                      current_search) {
+    TokenSeam seam{ static_cast<int>(previous.size()), 0, false };
+    if (previous.empty() || current.empty() || previous_search <= 0 || current_search <= 0) {
+        return seam;
+    }
+
+    const int previous_begin = std::max(0, static_cast<int>(previous.size()) - previous_search);
+    const int current_end    = std::min(static_cast<int>(current.size()), current_search);
+
+    int best_length   = 0;
+    int best_curr_end = 0;
+
+    for (int i = previous_begin; i < static_cast<int>(previous.size()); ++i) {
+        for (int j = 0; j < current_end; ++j) {
+            int length = 0;
+            while (i + length < static_cast<int>(previous.size()) && j + length < current_end &&
+                   previous[i + length] == current[j + length]) {
+                ++length;
+            }
+            const bool at_previous_end = (i + length) == static_cast<int>(previous.size());
+            if (!at_previous_end || !(length >= 2 || (length == 1 && j == 0))) {
+                continue;
+            }
+            if (length > best_length) {
+                best_length   = length;
+                best_curr_end = j + length;
+            }
+        }
+    }
+
+    // A seam that would swallow the entire new window is never overlap -- the
+    // window covers ~34 s of fresh audio and the overlap is 1 s. Treat it as a
+    // failed match and append whole; repeating a phrase is recoverable, dropping
+    // a window is the exact defect this path exists to prevent.
+    if (best_length > 0 && best_curr_end < static_cast<int>(current.size())) {
+        seam.current_skip = best_curr_end;
+        seam.matched      = true;
+    }
+    return seam;
+}
+
 namespace {
 
 constexpr float kBnEps = 1e-5f;
 
 // Input-length contract (canonical reference; see docs/input-limits.md).
-// Cohere ASR has TWO distinct limits:
-//   (a) INPUT — the encoder's relative positional-encoding table
-//       (enc_pos_emb_max_len). T_enc must stay within the trained pos-emb
-//       span or the runtime table aliases past the trained range. Binding
-//       input bound, gated up front; drives caps.max_audio_ms.
-//   (b) DECODER self-KV — dec_max_seq and a 512 max-new-tokens cap. Bound
-//       the *output*: an over-budget transcript is kept as a partial result
-//       and flagged via transcribe_was_truncated(), not rejected.
+// Cohere ASR has THREE bounds, only one of which a caller ever sees:
+//   (a) TRAINED CLIP SPAN — kTrainedClipSeconds, the window the model was
+//       trained on. run() windows longer audio to it, so this is what actually
+//       shapes behaviour. Because run() handles it, caps.max_audio_ms is 0
+//       (no practical limit) and the family sits in bucket 1.
+//   (b) ENCODER pos-emb table — enc_pos_emb_max_len. T_enc must stay within
+//       the trained span or the runtime table aliases. No longer the public
+//       limit: each window is ~35 s, far under it, so the up-front gate in
+//       run_window() is now a per-window assertion rather than a caller-facing
+//       bound.
+//   (c) DECODER self-KV — dec_max_seq and a 512 max-new-tokens cap. Bounds the
+//       *output* per window: an over-budget transcript is kept as a partial
+//       result and flagged via transcribe_was_truncated(), not rejected.
 
 // Predicted encoder frame count T_enc for a given mel frame count. The
 // FastConformer pre-encode downsamples time via three stride-2, kernel-3,
@@ -461,21 +630,28 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    // Publish the input-length ceiling now that the encoder pos-emb span
-    // and frontend rate are known (the encoder is the binding INPUT limit).
-    m->caps.max_audio_ms = cohere_max_audio_ms(m->hparams);
+    // No practical input-length limit: run() windows long audio to the trained
+    // clip span (kTrainedClipSeconds) before it ever reaches the encoder, so the
+    // encoder pos-emb table is never the binding bound for a caller. This puts
+    // cohere in the "chunked / unbounded" bucket of docs/input-limits.md,
+    // alongside whisper and parakeet. cohere_max_audio_ms() is still the
+    // per-window ceiling and is asserted inside run_window().
+    m->caps.max_audio_ms = 0;
 
     // Basis for the session-level limits query (transcribe_session_get_limits).
     // The LimitsBasis is a single context cap, filled from the DECODER side
-    // (dec_max_seq) so effective_n_ctx and max_kv_bytes are exact. Its derived
-    // effective_max_audio_ms therefore keys off the decoder ceiling and will
-    // NOT match caps.max_audio_ms (the encoder input bound) — for cohere the
-    // decoder context bounds the OUTPUT transcript, so that figure is advisory.
+    // (dec_max_seq) so effective_n_ctx and max_kv_bytes are exact. It bounds the
+    // OUTPUT transcript per window, which is why lowering n_ctx shrinks the
+    // per-window generation budget without changing how much audio the family
+    // accepts.
     if (m->hparams.dec_max_seq > 0 && m->hparams.enc_subsampling_factor > 0 && m->hparams.fe_hop_length > 0 &&
         m->hparams.fe_sample_rate > 0) {
         m->limits.has_context_cap        = true;
-        // Audio bound is the encoder table (caps.max_audio_ms), not the
-        // decoder context, so effective_max_audio_ms must not shrink with n_ctx.
+        // Take the audio bound straight from caps (0 = unbounded) rather than
+        // deriving it from the decoder ceiling: run() windows the input, so the
+        // amount of audio accepted does not shrink with n_ctx. Reporting
+        // effective_max_audio_ms == 0 keeps the session query consistent with
+        // caps.max_audio_ms.
         m->limits.audio_from_caps        = true;
         m->limits.model_max_ctx          = m->hparams.dec_max_seq;
         // Fixed control-token preamble (see run()'s prompt_pieces). Audio is
@@ -638,10 +814,13 @@ transcribe_status init_context(transcribe_model *                model,
     return TRANSCRIBE_OK;
 }
 
-transcribe_status run(transcribe_session *          session,
-                      const float *                 pcm,
-                      int                           n_samples,
-                      const transcribe_run_params * params) {
+// Transcribe one window of PCM. This is the single-pass path: mel -> encoder
+// -> autoregressive decode -> committed result. run() below drives it once for
+// short-form audio and repeatedly for long-form.
+transcribe_status run_window(transcribe_session *          session,
+                             const float *                 pcm,
+                             int                           n_samples,
+                             const transcribe_run_params * params) {
     if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -652,7 +831,7 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Pre-run abort check (cohere is single-chunk today).
+    // Pre-run abort check.
     if (cc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
@@ -684,7 +863,7 @@ transcribe_status run(transcribe_session *          session,
     if (cm->hparams.enc_pos_emb_max_len > 0) {
         const int t_enc_pred = cohere_predict_t_enc(mel_n_frames, cm->hparams.enc_subsampling_factor);
         if (t_enc_pred > cm->hparams.enc_pos_emb_max_len) {
-            const double max_s = static_cast<double>(cm->caps.max_audio_ms) / 1000.0;
+            const double max_s = static_cast<double>(cohere_max_audio_ms(cm->hparams)) / 1000.0;
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "cohere run: input too long — %d encoder frames exceed the %d "
                                 "the model supports (~%.0f s max). See "
@@ -1082,6 +1261,11 @@ transcribe_status run(transcribe_session *          session,
         auto commit_result = [&]() {
             cc->t_decode_us = ggml_time_us() - t_dec_start;
 
+            // Publish the raw ids so the long-form path in run() can stitch
+            // windows in token space. Set before the empty check so a window
+            // that produced nothing clears the previous window's ids.
+            cc->window_ids = generated_ids;
+
             if (generated_ids.empty()) {
                 return;
             }
@@ -1315,6 +1499,189 @@ transcribe_status run(transcribe_session *          session,
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
 }
 
+// Long-form entry point.
+//
+// The encoder's positional table spans ~400 s, so a clip well past the trained
+// window still encodes cleanly and the up-front gate lets it through. The
+// decoder is the problem: its cross-attention has no monotonicity constraint
+// (unlike an RNN-T, which walks the encoder frames in order), so past the
+// trained span it drifts, emits EOS early, and drops the tail. The run then
+// returns TRANSCRIBE_OK with a silently incomplete transcript -- exactly what
+// docs/input-limits.md promises never happens.
+//
+// So window the audio to the trained span. Windows overlap by kOverlapMs and
+// are stitched in token space by token_seam(), so a boundary that lands
+// mid-word costs nothing: the word survives whole in the next window and the
+// duplicate is trimmed at the join. Boundaries still prefer a pause where one
+// is detectable, which makes the seam easier to find. Short-form audio takes
+// the single-pass path unchanged.
+transcribe_status run(transcribe_session *          session,
+                      const float *                 pcm,
+                      int                           n_samples,
+                      const transcribe_run_params * params) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    auto * cc = static_cast<CohereSession *>(session);
+    auto * cm = static_cast<CohereModel *>(cc->model);
+    if (cm == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const int sample_rate    = cm->hparams.fe_sample_rate > 0 ? cm->hparams.fe_sample_rate : 16000;
+    const int window_samples = static_cast<int>(kTrainedClipSeconds * sample_rate);
+
+    // Short-form: one window, identical to the pre-windowing path.
+    if (window_samples <= 0 || n_samples <= window_samples) {
+        return run_window(session, pcm, n_samples, params);
+    }
+
+    const int search      = static_cast<int>(window_samples * kSplitSearchFraction);
+    const int search_wide = static_cast<int>(window_samples * kSplitSearchFractionWide);
+
+    const int overlap_samples = std::min(kOverlapMs * sample_rate / 1000, window_samples / 2);
+
+    // Windows are stitched in TOKEN space, then decoded once at the end. Two
+    // reasons: the seam search needs ids, and a single decode reproduces the
+    // tokenizer's own spacing exactly. Gluing decoded strings would either
+    // inject separators the model never emitted (fatal for unspaced scripts
+    // like Chinese and Japanese, both advertised by this family) or require
+    // re-deriving word boundaries from text.
+    std::vector<int> merged_ids;
+    int64_t          mel_us    = 0;
+    int64_t          encode_us = 0;
+    int64_t          decode_us = 0;
+    int              offset    = 0;
+
+    // Fold the accumulated ids into the session result. Windowing is an
+    // implementation detail: the caller still sees a single text-only segment,
+    // matching max_timestamp_kind == NONE.
+    auto commit_windows = [&]() {
+        cc->clear_result();
+        cc->t_mel_us    = mel_us;
+        cc->t_encode_us = encode_us;
+        cc->t_decode_us = decode_us;
+
+        if (merged_ids.empty()) {
+            return;
+        }
+
+        // raw_text keeps the untrimmed decode (the transcribe_raw_text
+        // contract); full_text applies the same single leading-space trim
+        // run_window() applies to a one-window run.
+        std::string raw_joined = cm->tok.decode(merged_ids.data(), static_cast<int>(merged_ids.size()));
+        std::string full       = raw_joined;
+        if (!full.empty() && full.front() == ' ') {
+            full.erase(full.begin());
+        }
+
+        transcribe_session::SegmentEntry seg;
+        seg.t0_ms       = 0;
+        seg.t1_ms       = 0;
+        seg.first_token = 0;
+        seg.n_tokens    = 0;
+        seg.first_word  = 0;
+        seg.n_words     = 0;
+        seg.text        = full;
+
+        cc->raw_text = std::move(raw_joined);
+        cc->segments.push_back(std::move(seg));
+        cc->full_text   = std::move(full);
+        cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        cc->has_result  = true;
+    };
+
+    int n_windows = 0;
+    while (offset < n_samples) {
+        const int remaining = n_samples - offset;
+        int       take      = remaining;
+
+        if (remaining > window_samples) {
+            // Prefer a pause; widen the search once before settling for a
+            // mid-speech cut.
+            int split = pick_split(pcm + offset, remaining, window_samples, search);
+            if (split < 0) {
+                split = pick_split(pcm + offset, remaining, window_samples, search_wide);
+            }
+            if (split > 0) {
+                take = split;
+            } else {
+                take = window_samples;
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                                    "cohere run: no pause near the window boundary at sample %d — "
+                                    "cutting mid-speech; a word may be split across windows.",
+                                    offset + window_samples);
+            }
+        }
+        if (take <= 0) {
+            take = std::min(remaining, window_samples);
+        }
+
+        // Drop the previous window's state *before* running. run_window() can
+        // return early (abort, mel failure, over-length gate, OOM) before it
+        // reaches its own clear_result(), and stale text would otherwise be
+        // captured a second time as if it belonged to this window. clear_result()
+        // does not touch the timing fields, so zero those explicitly or an
+        // early-returning window re-adds the previous window's numbers.
+        cc->clear_result();
+        cc->window_ids.clear();
+        cc->t_mel_us    = 0;
+        cc->t_encode_us = 0;
+        cc->t_decode_us = 0;
+
+        const transcribe_status st = run_window(session, pcm + offset, take, params);
+        ++n_windows;
+
+        mel_us += cc->t_mel_us;
+        encode_us += cc->t_encode_us;
+        decode_us += cc->t_decode_us;
+
+        if (!cc->window_ids.empty()) {
+            if (merged_ids.empty()) {
+                merged_ids = cc->window_ids;
+            } else {
+                // The windows share `overlap_samples` of audio, so the new one
+                // re-transcribes the tail of the previous. Drop that duplicate
+                // prefix; when no seam is found the text is appended whole,
+                // which repeats a little rather than losing anything.
+                const TokenSeam seam = token_seam(merged_ids, cc->window_ids, seam_search_previous(cm->hparams),
+                                                  seam_search_current(cm->hparams));
+                if (!seam.matched) {
+                    transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                                        "cohere run: no token seam at window %d — appending whole "
+                                        "(overlap may repeat a few words).",
+                                        n_windows);
+                }
+                merged_ids.insert(merged_ids.end(), cc->window_ids.begin() + seam.current_skip, cc->window_ids.end());
+            }
+        }
+
+        // OUTPUT_TRUNCATED keeps its partial text and is surfaced at the end
+        // through was_truncated; any other non-OK status stops the run, but the
+        // windows already decoded stay readable (the aborted-run contract).
+        if (st != TRANSCRIBE_OK && st != TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+            commit_windows();
+            return st;
+        }
+
+        // Step back by the overlap so the next window re-reads the tail of this
+        // one. Never on the final window (nothing follows), and never far
+        // enough to stall: `take` always exceeds the overlap because
+        // overlap_samples is capped at half a window.
+        const int advance = (offset + take >= n_samples) ? take : take - overlap_samples;
+        offset += advance > 0 ? advance : take;
+    }
+
+    commit_windows();
+
+    transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                        "cohere run: long-form windowed into %d windows (<= %.0f s each, %d ms overlap)", n_windows,
+                        kTrainedClipSeconds, kOverlapMs);
+
+    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+}
+
 // ===========================================================================
 // Offline batched decode (transcribe_run_batch)
 // ===========================================================================
@@ -1434,20 +1801,50 @@ transcribe_status run_batch_serial(CohereSession *               cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
+    // Session-level truncation is the OR across utterances; the exact
+    // per-utterance status stays in batch_results. Same shape as arch/moss.
+    bool any_truncated = false;
+
     for (int i = 0; i < n; ++i) {
         if (cc->poll_abort()) {
+            cc->was_truncated = any_truncated;
             return TRANSCRIBE_ERR_ABORTED;
         }
+
+        // Per-utterance state. transcribe_run_batch() resets was_truncated once
+        // for the whole call, so without this a single truncated utterance would
+        // leave every later one flagged truncated as well. clear_result() covers
+        // the case where run() is skipped entirely (invalid args) and the
+        // previous utterance's text would otherwise be captured again.
+        cc->clear_result();
+        cc->was_truncated = false;
+        cc->t_mel_us      = 0;
+        cc->t_encode_us   = 0;
+        cc->t_decode_us   = 0;
+
         const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
                                                                                 run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
+        any_truncated              = any_truncated || st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+
+        // Capture unconditionally, matching run_batched_encdec_*: a non-OK
+        // status that still produced text (OUTPUT_TRUNCATED, ABORTED) keeps that
+        // partial transcript readable. Discarding it here would contradict
+        // docs/input-limits.md, which guarantees the partial output survives.
+        cc->batch_results.push_back(cc->capture_result(st));
+
+        // A cancel that lands *inside* an utterance ends the batch. The
+        // poll_abort() at the top of the loop is not enough on its own: an
+        // edge-triggered callback may report true only once, and run() has
+        // already consumed it, so the remaining utterances would transcribe
+        // normally. Returning ABORTED lets the dispatcher fill the remaining
+        // slots via pad_batch_results_aborted().
+        if (st == TRANSCRIBE_ERR_ABORTED) {
+            cc->was_truncated = any_truncated;
+            return TRANSCRIBE_ERR_ABORTED;
         }
     }
+
+    cc->was_truncated = any_truncated;
     return TRANSCRIBE_OK;
 }
 
@@ -1470,7 +1867,23 @@ transcribe_status run_batch(transcribe_session *          session,
     const bool primary_is_gpu = cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
                                 cm->plan.primary_kind != transcribe::BackendKind::Accel &&
                                 cm->plan.primary_kind != transcribe::BackendKind::Unknown;
-    if (n == 1 || !cc->decoder_use_flash || !primary_is_gpu || transcribe::debug::enabled()) {
+
+    // Long-form windowing lives in run(), which the serial path calls per
+    // utterance. The batched decoder assumes exactly one encode per utterance
+    // and has nowhere to fan one input out into several windows, so a batch
+    // carrying any long clip goes serial. Without this, the same audio would
+    // be silently truncated or not depending on backend and batch size.
+    const int sample_rate    = cm->hparams.fe_sample_rate > 0 ? cm->hparams.fe_sample_rate : 16000;
+    const int window_samples = static_cast<int>(kTrainedClipSeconds * sample_rate);
+    bool      any_long_form  = false;
+    for (int i = 0; i < n; ++i) {
+        if (n_samples[i] > window_samples) {
+            any_long_form = true;
+            break;
+        }
+    }
+
+    if (n == 1 || !cc->decoder_use_flash || !primary_is_gpu || transcribe::debug::enabled() || any_long_form) {
         return run_batch_serial(cc, pcm, n_samples, n, params);
     }
 
@@ -1539,7 +1952,7 @@ transcribe_status run_batch(transcribe_session *          session,
         if (cm->hparams.enc_pos_emb_max_len > 0) {
             const int t_enc_pred = cohere_predict_t_enc(mel_nf[b], cm->hparams.enc_subsampling_factor);
             if (t_enc_pred > cm->hparams.enc_pos_emb_max_len) {
-                const double max_s = static_cast<double>(cm->caps.max_audio_ms) / 1000.0;
+                const double max_s = static_cast<double>(cohere_max_audio_ms(cm->hparams)) / 1000.0;
                 transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                     "cohere run_batch: utterance %d too long — %d encoder frames "
                                     "exceed the %d the model supports (~%.0f s max). See "
