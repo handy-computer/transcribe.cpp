@@ -1,0 +1,31 @@
+[project]
+name = "transcribe-crisperwhisper-env"
+version = "0.1.0"
+description = "Python env for CrisperWhisper 2.0 reference dumps (author repo, transformers backend)"
+requires-python = ">=3.11"
+dependencies = [
+    # Canonical reference. MIT-licensed (Part A of the upstream dual
+    # license); only the weights carry the non-commercial terms. The
+    # `transformers` extra is the pure-torch backend — deliberately NOT
+    # the `ct2` extra, which is a Linux/CUDA-only CTranslate2 fork with
+    # int8/fp16 fused kernels whose own DOCS warn about fp16
+    # batched-GEMM rounding divergence from this backend.
+    "crisperwhisper[transformers]==2.0.2",
+    # Exact pin: the checkpoints declare config.transformers_version
+    # 4.57.6, and the decode contract we instrument (explicit
+    # decoder_input_ids, suppress_tokens list semantics, eager
+    # cross-attention capture via output_attentions) is version-sensitive.
+    # crisperwhisper itself only asks for >=4.40, which would silently
+    # float onto transformers 5.x where WhisperEncoderLayer.forward
+    # returns a bare tensor instead of a tuple and generate() dropped
+    # forced_decoder_ids. Pin so the per-tensor tolerances captured here
+    # stay reproducible.
+    "transformers==4.57.6",
+    "torch>=2.4",
+    "accelerate>=0.26",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "safetensors>=0.4",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+]

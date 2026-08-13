@@ -176,9 +176,33 @@ def dediarize_text(text: str) -> str:
     stripped = re.sub(r"\[[^\]]*\]", " ", text)
     return normalize_text_for_compare(stripped)
 
+def manifest_gate_quant(manifest: dict) -> str | None:
+    """The GGUF quant the numerical gate must run against, or None.
+
+    Most families gate against the dtype they ship, so `find_gguf`'s default
+    BF16 > F32 > F16 preference is right and this returns None. A family whose
+    ORACLE runs a different regime than its shipped artifact declares the gate
+    explicitly via `validation.gguf_quant` in its golden manifest, because
+    silently gating the wrong file produces a wall of tolerance failures that
+    look like a code bug.
+
+    crisperwhisper is the case this exists for: it ships BF16, but its oracle
+    is BF16-storage-upcast-to-F32-compute, and ggml's BF16 kernel rounds
+    ACTIVATIONS to BF16 (vec_dot_type = GGML_TYPE_BF16) while torch at F32 does
+    not. Pairing the F32 oracle with an F32 GGUF built from the same weights
+    (BF16 -> F32 is lossless) measures graph correctness; pairing it with the
+    BF16 GGUF measures a precision gap ~1000x larger. The shipped BF16 artifact
+    is gated on WER instead.
+    """
+    validation = manifest.get("validation")
+    if not isinstance(validation, dict):
+        return None
+    quant = validation.get("gguf_quant")
+    return str(quant) if quant else None
+
 
 def find_gguf(repo: Path, family: str, slug: str | None = None,
-              variant: str | None = None) -> Path:
+              variant: str | None = None, gate_quant: str | None = None) -> Path:
     """Find a GGUF under models/.
 
     Discovery order:
@@ -206,7 +230,7 @@ def find_gguf(repo: Path, family: str, slug: str | None = None,
     if not model_root.is_dir():
         raise SystemExit(f"error: model root not found: {model_root}")
 
-    preferred_quants = ["BF16", "F32", "F16"]
+    preferred_quants = [gate_quant] if gate_quant else ["BF16", "F32", "F16"]
 
     def lookup_in(name: str) -> Path | None:
         variant_dir = model_root / name
@@ -437,7 +461,7 @@ def cmd_cpp(args: argparse.Namespace) -> int:
     cli = find_cli(repo)
     slug = manifest_source_model(manifest).split("/", 1)[-1]
     gguf = Path(args.gguf) if args.gguf else find_gguf(
-        repo, args.family, slug, variant=variant)
+        repo, args.family, slug, variant=variant, gate_quant=manifest_gate_quant(manifest))
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
@@ -497,6 +521,12 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             "--threads", os.environ.get("VALIDATE_CPP_THREADS", "1"),
             "-m", str(gguf),
         ]
+        # A family whose oracle regime differs from its AUTO KV policy pins the
+        # cache dtype in the manifest, so the gate does not silently fold KV
+        # rounding into the graph-drift measurement.
+        gate_kv = (manifest.get("validation") or {}).get("kv_type")
+        if gate_kv:
+            cmd += ["--kv-type", str(gate_kv)]
         if language is not None:
             cmd += ["--language", language]
         if args.family == "whisper":

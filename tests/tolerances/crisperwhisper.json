@@ -1,0 +1,241 @@
+{
+  "_comment": [
+    "CrisperWhisper 2.0 per-tensor tolerances for compare_tensors.py.",
+    "",
+    "CORRECTNESS REGIME (every number below was measured in exactly this one):",
+    "  reference : crisperwhisper 2.0.2, transformers backend, BF16 weights",
+    "              upcast to F32 compute (compute_type=float32), eager attention,",
+    "              CPU, torch-threads=1, greedy, all three rewind features OFF.",
+    "  C++       : crisperwhisper-2.0-small-F32.gguf, --backend cpu --threads 1",
+    "              --kv-type f32, production C++ MelFrontend (no ref-mel injection).",
+    "  cases     : jfk (clean read speech) + disfluency (filler/cutoff/repetition);",
+    "              each entry takes the max over both.",
+    "",
+    "WHY THE GATE USES THE F32 GGUF WHILE THE FAMILY SHIPS BF16:",
+    "  BF16 -> F32 is lossless, so the F32 GGUF holds values identical to the",
+    "  shipped BF16 file; what differs is the kernel. ggml's BF16 path sets",
+    "  vec_dot_type=GGML_TYPE_BF16 with from_float=ggml_cpu_fp32_to_bf16, so it",
+    "  rounds ACTIVATIONS to BF16 before every dot product, which torch at F32",
+    "  does not. Measured three pairings on enc.block.6.out:",
+    "      F32 oracle  / F32 GGUF    1.66e-02   <- this file",
+    "      F32 oracle  / BF16 GGUF   12.76",
+    "      BF16 oracle / BF16 GGUF   71.13",
+    "  BF16-on-both-sides is the WORST pairing, because torch at dtype=bfloat16",
+    "  stores every activation in BF16 (residual stream and embedding table",
+    "  included) while ggml keeps the graph in F32 and rounds only mul_mat src1.",
+    "  It also destroys the exact 0.0 on the pure-read tensors. So the gate",
+    "  measures graph correctness here, and the precision cost of the shipped",
+    "  BF16 artifact is measured on WER at Stage 4 Step 11 instead.",
+    "  The manifest pins this via validation.gguf_quant / validation.kv_type.",
+    "",
+    "ZERO-DRIFT ENTRIES (pinned at exact 0.0, not the 1e-6 floor):",
+    "  dec.token_emb / dec.pos_emb / enc.pos_emb are pure GGUF reads and",
+    "  dec.embed_sum is their pure F32 add. All four measure exactly 0.0.",
+    "  Any nonzero value here means an unintended dtype conversion crept into",
+    "  the lookup/add path - investigate, do not absorb.",
+    "",
+    "WIDENED vs the Stage 2 provisional budget (4 entries, all encoder residual):",
+    "  enc.block.{6,8,11}.out  35x,  enc.final  4.8x.",
+    "  Mechanism: NOT extra drift. The provisional formula scales by p99_abs,",
+    "  which badly under-represents these tensors because Whisper's encoder",
+    "  carries outlier channels - max|x| is ~800 where p99_abs is 4.3, a 180x",
+    "  gap. Relative to the actual peak the observed drift is 1.9e-05",
+    "  (enc.final 7.0e-05), i.e. TIGHTER than the 1e-4 relative budget the",
+    "  provisional formula was aiming for. Absolute drift is flat across",
+    "  blocks 6/8/11 (1.53e-02 each), consistent with a fixed rounding",
+    "  difference riding the residual stream rather than accumulation.",
+    "",
+    "MODE-TAG AND WORD-TIMING GATES (both now measured, nothing provisional):",
+    "  dec.intended.logits_raw : a second prompt pass in the OTHER mode, mirroring",
+    "                            the reference dumper's sibling pass. It proves the",
+    "                            [verbatim_N]/[intended_N] tags are a real control",
+    "                            surface, not decoration.",
+    "  dec.xattn.align         : head-averaged cross-attention, one row per",
+    "                            PREDICTED token including the row that emits EOT,",
+    "                            which is why it is one row longer than the",
+    "                            generated text. Post-softmax, so drift is ~1e-07."
+  ],
+  "dec.block.0.out": {
+    "max_abs": 0.00011,
+    "mean_abs": 2.7e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.block.11.out": {
+    "max_abs": 0.00077,
+    "mean_abs": 5.8e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.block.3.out": {
+    "max_abs": 0.00054,
+    "mean_abs": 6.2e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.block.6.out": {
+    "max_abs": 0.00053,
+    "mean_abs": 6.2e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.block.8.out": {
+    "max_abs": 0.00053,
+    "mean_abs": 6.2e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.embed_sum": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_exact": "pure GGUF read / pure F32 add - measured exactly 0.0"
+  },
+  "dec.intended.logits_raw": {
+    "max_abs": 0.00031,
+    "mean_abs": 4.9e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.logits": {
+    "max_abs": 0.0041,
+    "mean_abs": 0.00026,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.logits_raw": {
+    "max_abs": 0.0011,
+    "mean_abs": 5.1e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.logits_raw.gen20": {
+    "max_abs": 0.0037,
+    "mean_abs": 0.00031,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.out_before_head": {
+    "max_abs": 0.0025,
+    "mean_abs": 8.5e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "dec.pos_emb": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_exact": "pure GGUF read / pure F32 add - measured exactly 0.0"
+  },
+  "dec.token_emb": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_exact": "pure GGUF read / pure F32 add - measured exactly 0.0"
+  },
+  "dec.xattn.align": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.00015,
+    "mean_abs": 5.7e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "enc.block.11.out": {
+    "max_abs": 0.023,
+    "mean_abs": 5.8e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_widened": "32x vs provisional; p99_abs underestimates the outlier channels"
+  },
+  "enc.block.3.out": {
+    "max_abs": 0.00018,
+    "mean_abs": 6.1e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "enc.block.6.out": {
+    "max_abs": 0.023,
+    "mean_abs": 5.5e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_widened": "53x vs provisional; p99_abs underestimates the outlier channels"
+  },
+  "enc.block.8.out": {
+    "max_abs": 0.023,
+    "mean_abs": 5.5e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_widened": "46x vs provisional; p99_abs underestimates the outlier channels"
+  },
+  "enc.conv1.out": {
+    "max_abs": 5.1e-05,
+    "mean_abs": 1.6e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "enc.conv2.out": {
+    "max_abs": 0.00016,
+    "mean_abs": 4.1e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "enc.embed.out": {
+    "max_abs": 0.0002,
+    "mean_abs": 8.2e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "enc.final": {
+    "max_abs": 0.0034,
+    "mean_abs": 1.6e-05,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_widened": "7x vs provisional; p99_abs underestimates the outlier channels"
+  },
+  "enc.mel.in": {
+    "max_abs": 9.9e-05,
+    "mean_abs": 7.4e-06,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ]
+  },
+  "enc.pos_emb": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0,
+    "_seen_in": [
+      "crisperwhisper-2.0-small"
+    ],
+    "_exact": "pure GGUF read / pure F32 add - measured exactly 0.0"
+  }
+}

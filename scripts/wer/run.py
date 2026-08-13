@@ -209,6 +209,12 @@ def main() -> int:
                    choices=("auto", "f32", "f16"),
                    default=None,
                    help="Flash-attn KV cache type passthrough")
+    p.add_argument("--mode", default=None, choices=["verbatim", "intended"],
+                   help="crisperwhisper only: verbatim keeps disfluencies and the "
+                        "bracketed vocal-event tokens; intended returns the cleaned "
+                        "transcript. Omit to use the model's own default. The two "
+                        "modes are scored against different references, so a run "
+                        "must not mix them.")
     p.add_argument("--timestamps",
                    choices=("auto", "none", "segment", "word", "token"),
                    default=None,
@@ -357,6 +363,8 @@ def main() -> int:
         cmd += ["--kv-type", args.kv_type]
     if args.language:
         cmd += ["--language", args.language]
+    if args.mode:
+        cmd += ["--mode", args.mode]
     cmd += ["--timestamps", args.timestamps]
     if args.diarize:
         cmd += ["--diarize"]

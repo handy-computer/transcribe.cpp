@@ -1,0 +1,342 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "crisperwhisper",
+  "hf_repo": "nyralabs/CrisperWhisper2.0_small",
+  "hf_revision": "57750c47fde52dc1b016ec2bd4bf4704944cf3df",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "model_card": {
+      "kind": "hf_file",
+      "path": "README.md",
+      "status": "found",
+      "detail": "Nyra Verbatim Speech Benchmark disfluency F1 and TIMIT word-boundary error; no LibriSpeech number reported for 2.0"
+    },
+    "license": {
+      "kind": "hf_file",
+      "path": "LICENSE.md",
+      "status": "found",
+      "detail": "dual license: MIT for inference code (Part A), nyra health Non-Commercial Research License v1.0 for weights AND outputs (Part B), share-alike on derivative works"
+    },
+    "reference_code": {
+      "kind": "author_repo",
+      "path": "https://github.com/nyrahealth/CrisperWhisper @ main (2026-08-06), PyPI package `crisperwhisper`",
+      "status": "found",
+      "detail": "MIT-licensed. crisperwhisper/{prompt,transformers_engine,word_timing,features,hallucination,fallback}.py and crisperwhisper/longform/* define the full decode contract; there is NO modeling file — the graph is stock transformers Whisper loaded via AutoModelForSpeechSeq2Seq"
+    },
+    "paper": {
+      "kind": "manual",
+      "path": "https://arxiv.org/abs/2607.18934",
+      "status": "found",
+      "detail": "CrisperWhisper 2.0 paper referenced from the model card; not read for this intake"
+    }
+  },
+  "variants": [
+    {
+      "name": "crisperwhisper-2.0-small",
+      "memory_gb": 0.48,
+      "files": [
+        "model.safetensors",
+        "config.json",
+        "generation_config.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "added_tokens.json",
+        "special_tokens_map.json",
+        "vocab.json",
+        "merges.txt",
+        "normalizer.json",
+        "LICENSE.md"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-decoder"
+    ],
+    "key_fields": {
+      "activation_function": "gelu",
+      "architectures": [
+        "WhisperForConditionalGenerationWithAttentionLoss"
+      ],
+      "d_model": 768,
+      "decoder_attention_heads": 12,
+      "decoder_layers": 12,
+      "decoder_start_token_id": 50258,
+      "encoder_attention_heads": 12,
+      "encoder_layers": 12,
+      "max_source_positions": 1500,
+      "max_target_positions": 448,
+      "median_filter_width": 7,
+      "model_type": "whisper",
+      "num_hidden_layers": 12,
+      "num_mel_bins": 80,
+      "scale_embedding": false,
+      "vocab_size": 51896
+    },
+    "varying_across_variants": [
+      "d_model",
+      "encoder_layers",
+      "decoder_layers",
+      "encoder_attention_heads",
+      "decoder_attention_heads",
+      "num_mel_bins",
+      "vocab_size",
+      "begin_suppress_tokens",
+      "forced_decoder_ids"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "config",
+    "evidence": "config.dtype=bfloat16; safetensors header is uniformly BF16 across all 481 tensors (no F32 norms/biases). Same for medium, large, and turbo.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 481
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 51896,
+    "special_tokens": {
+      "bos": 50257,
+      "eos": 50257,
+      "pad": 50257,
+      "decoder_start": 50258
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "c4883442728ea9057d2d031c2abdf0e96dbc58cac3cb2a3461f027f4d3c0ec6d"
+  },
+  "capabilities": {
+    "languages": [
+      "en",
+      "zh",
+      "de",
+      "es",
+      "ru",
+      "ko",
+      "fr",
+      "ja",
+      "pt",
+      "tr",
+      "pl",
+      "ca",
+      "nl",
+      "ar",
+      "sv",
+      "it",
+      "id",
+      "hi",
+      "fi",
+      "vi",
+      "he",
+      "uk",
+      "el",
+      "ms",
+      "cs",
+      "ro",
+      "da",
+      "hu",
+      "ta",
+      "no",
+      "th",
+      "ur",
+      "hr",
+      "bg",
+      "lt",
+      "la",
+      "mi",
+      "ml",
+      "cy",
+      "sk",
+      "te",
+      "fa",
+      "lv",
+      "bn",
+      "sr",
+      "az",
+      "sl",
+      "kn",
+      "et",
+      "mk",
+      "br",
+      "eu",
+      "is",
+      "hy",
+      "ne",
+      "mn",
+      "bs",
+      "kk",
+      "sq",
+      "sw",
+      "gl",
+      "mr",
+      "pa",
+      "si",
+      "km",
+      "sn",
+      "yo",
+      "so",
+      "af",
+      "oc",
+      "ka",
+      "be",
+      "tg",
+      "sd",
+      "gu",
+      "am",
+      "yi",
+      "lo",
+      "uz",
+      "fo",
+      "ht",
+      "ps",
+      "tk",
+      "nn",
+      "mt",
+      "sa",
+      "lb",
+      "my",
+      "bo",
+      "tl",
+      "mg",
+      "as",
+      "tt",
+      "haw",
+      "ln",
+      "ha",
+      "ba",
+      "jw",
+      "su"
+    ],
+    "language_detection": true,
+    "translation": null,
+    "timestamps": [
+      "word"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Nyra Verbatim Speech Benchmark (10-language average)",
+      "language": null,
+      "metric": "other",
+      "score": 87.8,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nyralabs/CrisperWhisper2.0_small",
+      "notes": "Disfluency F1, higher is better. Reported for 'CrisperWhisper 2.0' as a line, not per size; the model card does not break the number down by small/medium/large/turbo. English and German use human-labeled sets, the other eight languages use synthetic verbatim sets."
+    },
+    {
+      "dataset": "TIMIT (read speech) word-boundary alignment",
+      "language": "en",
+      "metric": "other",
+      "score": 29.6,
+      "score_unit": null,
+      "source": "https://huggingface.co/nyralabs/CrisperWhisper2.0_small",
+      "notes": "Mean absolute word-boundary error in milliseconds, lower is better. Scored only over words the system gets right. Reported for 'CrisperWhisper 2.0', not per size."
+    },
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nyralabs/CrisperWhisper2.0_small",
+      "notes": "NOT REPORTED for CrisperWhisper 2.0. The publisher benchmarks disfluency F1 and word-boundary error, not standard WER. Recorded as null so the acceptance dataset stays visible; the Stage 7 gate uses the measured Oracle reference baseline. Sign-off decision (2026-08-07): report both mode=intended (standard normalizer) and mode=verbatim (normalizer additionally strips the 15 bracketed vocal-event tokens), and gate only on the intended number."
+    },
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.82,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nyralabs/CrisperWhisper/blob/main/.eval_results/open_asr_leaderboard.yaml",
+      "notes": "CONTEXT ONLY — this is CrisperWhisper v1 (nyrahealth/CrisperWhisper, a whisper-large-v2 finetune, deprecated), not 2.0. Open ASR Leaderboard entry dated 2024-08-29, normalized WER. Included to give an order of magnitude for a verbatim Whisper finetune under the leaderboard's text normalizer."
+    }
+  ],
+  "reference_framework": "author_repo_crisperwhisper",
+  "reference_rationale": "The publisher ships `crisperwhisper` (PyPI, MIT, https://github.com/nyrahealth/CrisperWhisper) as the documented and only entrypoint, and the model card sets library_name=crisperwhisper. That package contains no modeling code: the graph is stock `transformers` Whisper, loaded via `AutoModelForSpeechSeq2Seq.from_pretrained(..., attn_implementation='eager')` (the `WhisperForConditionalGenerationWithAttentionLoss` string in config.architectures is a training-time subclass that appears nowhere in the inference package and is never resolved — Auto classes dispatch on model_type='whisper'). What the package DOES own is the entire decode contract: the `[verbatim_N]`/`[intended_N]` prompt-tag prefix, `<ctx>`/`<htx>`/`<vtx>` prompt markers, the always-`<|notimestamps|>` decoder prefix, the Viterbi word-timing aligner over supervised cross-attention heads, `<ctx>`-based continuation longform, temperature fallback, early-EOT recovery, and rewind/escape hallucination repair. Plain `transformers` alone reproduces the tensors but not the model's advertised behavior, so it cannot be the reference. The package's `TransformersEngine` is pure-torch, single-threadable, and already runs with eager attention, so it is directly instrumentable for Stage 2 dumps and lets us reuse scripts/dump_reference_whisper_transformers.py for the encoder/decoder tensor path while taking prompts and post-processing from the author package. CTranslate2 (`ctranslate2-crisperwhisper`, the fast path) is NOT the reference: it is a Linux-only CUDA fork with int8/fp16 fused kernels and speculative decoding, and the DOCS explicitly warn about fp16 batched-GEMM rounding divergence between the two backends.",
+  "architecture_pattern": "encoder-decoder",
+  "known_risks": [
+    "FRONTEND IS STOCK WHISPER, INCLUDING ITS NON-STANDARD COMPRESSION: no statistical normalization is applied (hence frontend.normalization='none'), but the mel is followed by Whisper's per-utterance dynamic-range compression `log10(clip(mel, 1e-10)) -> max(x, x.max() - 8.0) -> (x + 4.0) / 4.0`. The publisher's CT2 path vendors faster-whisper 1.2.1's numpy FeatureExtractor (crisperwhisper/features.py) and the transformers path uses AutoProcessor/WhisperFeatureExtractor; both are bit-comparable to what our whisper family already implements, so the frontend is the one part that ports over unchanged.",
+    "FAMILY SHAPE: 'just size variants' is only true for small/medium/large. small (d_model 768, 12+12 layers), medium (1024, 24+24), and large (1280, 32+32) are whisper-v2-generation derivatives: 80 mel bins, 99 language tokens, vocab_size 51896. turbo is a whisper-large-v3-turbo derivative: 128 mel bins, 100 language tokens (adds <|yue|>), vocab_size 51897, and 4 decoder layers against a 32-layer encoder. EVERY special-token id above 50357 shifts by +1 on turbo (<|transcribe|> 50359 vs 50360, <|notimestamps|> 50363 vs 50364, timestamp base 50364 vs 50365, [UM] 51865 vs 51866). turbo also ships begin_suppress_tokens=[220,50256] and forced_decoder_ids=null where the others ship forced_decoder_ids=[[1,50259],[2,50359]] and begin_suppress_tokens=null. Nothing may hardcode a token id; all ids must be read from generation_config/tokenizer per variant.",
+    "LICENSE: the weights are under the nyra health Non-Commercial Research License v1.0, NOT Apache-2.0 like openai/whisper. Non-Commercial Use only; the restriction extends to Outputs (Sec. 4) and inherits share-alike to Derivative Works (Sec. 3.1-3.2), which a converted GGUF is. Redistribution is permitted for Non-Commercial Use but Sec. 3.3 requires (a) shipping a complete copy of the agreement, (b) contractually binding recipients before or upon access, and (c) a NOTICE file with the prescribed attribution text. (b) effectively means any handy-computer/* GGUF repo must be gated, not just private. The `_pro` variants (small_pro/medium_pro/large_pro/turbo_pro) are gated:manual with no README and are commercial-license-only — out of scope. The inference code we read is MIT (Part A) and imposes nothing.",
+    "DECODE CONTRACT IS NOT WHISPER'S: the model is always decoded with the <|notimestamps|> prefix and never emits timestamp tokens. Segment timestamps and the whisper timestamp-token/`condition_on_prev_tokens` long-form stitching that our whisper family implements DO NOT APPLY and must not be reused. Timing comes exclusively from a Viterbi alignment over supervised cross-attention (crisperwhisper/word_timing.py, ~23 KB) using generation_config.alignment_heads plus a mel-energy-derived blank state; long-form comes from `<ctx> last N words <ectx>` continuation over 30 s windows at a 26 s stride (crisperwhisper/longform/continuation.py, ~25 KB).",
+    "PROMPT PREFIX ORDERING: the mode tags precede the Whisper prefix, not follow it, and there is no <|startofprev|> wrapper. The decoder input is literally `encode('[verbatim_1]...[verbatim_5]' [+ ' <ctx> ctx words <ectx>'] [+ ' <htx> hotwords <ehtx>']) + [<|sot|>, <|lang|>, <|transcribe|>, <|notimestamps|>]` (crisperwhisper/prompt.py). Context comes BEFORE hotwords because that is the training order. Getting this order wrong silently changes the output rather than erroring.",
+    "31 NON-SPECIAL ADDED TOKENS: ids 51865-51895 (51866-51896 on turbo) are 15 vocal-event tokens ([UM],[UH],[laughter],[sniff],[throatclearing],[cough],[sigh],[breath],[lipsmack],[yawn],[noise],[crying],[fart],[scream],[sneeze]), 5 [verbatim_N], 5 [intended_N], and 6 markers (<vtx>,<evtx>,<ctx>,<ectx>,<htx>,<ehtx>). All carry special=false in tokenizer.json, so skip_special_tokens does NOT strip them; the reference filters them by explicit id list plus regex (prompt.strip_prompt_artifacts). The vocal-event tokens are intended output and must survive; the mode/marker tokens must be stripped. The converter must export the full added-token list or the rebuilt tokenizer will not cover the model's 51896-wide output space.",
+    "BASE BPE VOCAB IS UNCHANGED: vocab_sha256 c48834...ec6d is byte-identical to openai/whisper-small's, so vocab.json/merges.txt need no new handling; only added_tokens differ. This is a v2-model property — CrisperWhisper v1 (nyrahealth/CrisperWhisper) shipped a genuinely 'changed tokenizer' with remapped special-token strings, which the reference still special-cases. Do not port v1.",
+    "DTYPE: uniformly BF16 including norms and biases (481/481 tensors), unlike every openai/whisper checkpoint (F32 for tiny..large-v2, F16 for large-v3). scripts/convert-whisper.py already has a BF16 branch (MOSTLY_BF16) that demotes the conv stem to F16 because the loader has no BF16 conv kernel — that demotion is now on the accuracy-reference path, not an edge case, and must be re-justified against reference drift rather than inherited.",
+    "REFERENCE HARNESS DISABLES HF DEFAULTS: TransformersEngine sets generation_config.forced_decoder_ids=None and begin_suppress_tokens=None at load, and always passes an explicit resolved suppress_tokens list (an explicit [] must DISABLE suppression, not fall back to the config default). Any Stage 2 dump that lets HF apply its own forced ids or begin-suppression will diverge from the publisher's harness on the first decoded token.",
+    "LANGUAGE SCOPE VS CLAIM: the checkpoint carries all 99 (100 on turbo) Whisper language tokens and generation_config keeps forced_decoder_ids=[[1,null]] (HF's language-detection marker), but the model card declares only en+de and the published benchmark covers 10 languages. Language detection is inherited from Whisper and is neither exercised nor claimed by the author harness (transcribe() takes language='en' as a default and always forces a lang token). Detection quality on a verbatim finetune is unmeasured.",
+    "TRANSLATION IS INHERITED BUT UNVALIDATED: generation_config.task_to_id still contains translate=50358 and the <|translate|> token is in the vocab, but the author package exposes no translate path (get_decoder_prefix hardcodes transcribe_id) and neither the card nor DOCS.md mentions translation.",
+    "WER GATE SEMANTICS: default mode is 'verbatim', which by design emits [UM]/[UH]/[laughter]/... and preserves stutters and false starts. Scored against LibriSpeech's clean references with the standard normalizer this inflates WER for correct behavior. The Stage 7 WER gate must either run mode='intended' or normalize the bracketed event tokens away, and the choice must be identical for the Oracle reference baseline and the C++ run.",
+    "DECODE-LOOP FEATURES ON BY DEFAULT: transcribe() defaults hallucination_mitigation=True (rewind/escape repair, crisperwhisper/hallucination.py ~20 KB), early_eot_recovery=True (bans EOT for min_new_tokens and measures stop_prob), and temperature_fallback=True (collapse recovery). Reference dumps and any C++ parity target must pin these explicitly; leaving them at their defaults makes greedy-argmax parity untestable because the reference may rewind and re-decode.",
+    "max_new_tokens DEFAULTS TO 256, not max_target_positions=448. Prompt tokens consume decoder positions ahead of generation ([verbatim_1..5] alone is 5+ tokens; a 12-word <ctx> block adds ~15 more), so the usable generation budget per 30 s window is smaller than vanilla Whisper's and shrinks as context grows. The 448 position limit is a hard cap that prompt + context + output must jointly respect.",
+    "HOTWORDS ARE PRO-ONLY: the <htx>/<ehtx> path exists in the tokenizer and prompt builder for every checkpoint, but the standard (non-pro) models were never trained with hotword prompts and the reference raises a UserWarning and warns of degradation. Do not implement or validate hotword biasing against a non-pro checkpoint."
+  ],
+  "intake_gaps": [
+    {
+      "field": "capabilities.translation",
+      "reason": "left null. <|translate|> (50358) and task_to_id.translate survive in the checkpoint, but the publisher's package exposes no translate path and neither the model card nor DOCS.md claims translation. Inherited-but-unvalidated; resolve by measurement at Stage 2 or accept as OUT OF SCOPE at sign-off."
+    },
+    {
+      "field": "capabilities.languages",
+      "reason": "declared as the full 99 Whisper language codes (what the tokenizer and generation_config.lang_to_id actually carry and what the runtime must accept for --language). The model card declares only en+de and the published benchmark covers 10 languages. Accepted deliberately so GGUF general.languages is not narrower than the checkpoint; per-language accuracy beyond en/de is unmeasured."
+    },
+    {
+      "field": "capabilities.language_detection",
+      "reason": "declared true on mechanism evidence (99 <|lang|> tokens plus generation_config.forced_decoder_ids=[[1,null]], HF's detect-language marker). The author reference harness never exercises it, so the Stage 2 reference for this capability has to be stock transformers generate(language=None) rather than crisperwhisper.transcribe()."
+    },
+    {
+      "field": "license",
+      "reason": "RESOLVED at intake sign-off (2026-08-07): non-commercial research license with share-alike and a contractual-binding redistribution clause (Sec 3.3(b)). Maintainer decision is to port and ship C++ support but publish NO GGUF for this family; users convert their own checkpoints locally. No distribution means Sec 3.3 does not attach. The Non-Commercial restriction on Outputs (Sec 4) still binds our own use of transcripts, including as training data."
+    }
+  ]
+}

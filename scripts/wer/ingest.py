@@ -375,12 +375,91 @@ def ingest_eka_medical_asr(repo: Path, args: argparse.Namespace) -> int:
     return 0
 
 
+def ingest_nyra_disfluency(repo: Path, args: argparse.Namespace) -> int:
+    """nyralabs/disfluency_speech_english — paired verbatim/intended references.
+
+    Unlike every other source here, this dataset ships TWO ground truths for
+    the same audio: `verbatim_transcript` (what was actually said, fillers,
+    repetitions and cutoffs included) and `intended_transcript` (the cleaned
+    version). So one ingest writes one WAV directory and two manifests, and a
+    verbatim-mode run is scored against the verbatim references while an
+    intended-mode run is scored against the intended ones. Scoring both modes
+    against a single clean reference — which is all LibriSpeech can offer —
+    cannot distinguish the two modes at all.
+
+    Dataset is Apache-2.0 (unlike the CrisperWhisper weights it benchmarks).
+    Derived from amaai-lab/DisfluencySpeech (arXiv:2406.08820).
+    """
+    lang = "en"
+    repo_id = "nyralabs/disfluency_speech_english"
+    out_dir = repo / f"samples/wer/nyra-disfluency-{lang}"
+
+    wanted = (["verbatim", "intended"] if args.reference == "both"
+              else [args.reference])
+    manifests = {
+        r: repo / f"samples/wer/nyra-disfluency-{lang}-{r}.manifest.jsonl"
+        for r in wanted
+    }
+
+    if all(m.exists() for m in manifests.values()) and not args.force:
+        for r, m in manifests.items():
+            print(f"OK already exists: {m} ({sum(1 for _ in open(m))} utterances)")
+        print("Pass --force to regenerate.")
+        return 0
+
+    print(f"loading {repo_id} split={args.split}")
+    from datasets import load_dataset
+
+    ds = load_dataset(repo_id, split=args.split)
+    missing = [c for c in ("id", "audio", "verbatim_transcript",
+                           "intended_transcript") if c not in ds.column_names]
+    if missing:
+        print(f"error: {repo_id} is missing expected columns {missing}; "
+              f"got {ds.column_names}", file=sys.stderr)
+        return 2
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    entries: dict[str, list[dict]] = {r: [] for r in wanted}
+    n_converted = n_skipped = 0
+    for i, row in enumerate(ds):
+        stem = str(row.get("id") or f"row{i:05d}").replace("/", "_")
+        utt_id = f"nyra-disfluency-{lang}-{stem}"
+        wav_path = out_dir / f"{utt_id}.wav"
+        if not wav_path.exists():
+            audio = row["audio"]
+            write_wav_16k_mono(
+                np.asarray(audio["array"], dtype=np.float32),
+                int(audio["sampling_rate"]),
+                wav_path,
+            )
+            n_converted += 1
+        else:
+            n_skipped += 1
+        for r in wanted:
+            entries[r].append({
+                "id": utt_id,
+                "audio": str(wav_path),
+                "ref_text": row[f"{r}_transcript"],
+                "language": lang,
+            })
+
+    for r in wanted:
+        entries[r].sort(key=lambda e: e["id"])
+        write_manifest(entries[r], manifests[r])
+        print(f"manifest: {manifests[r]}")
+        print(f"  {len(entries[r])} utterances ({args.split} split, "
+              f"{r}_transcript as ref_text)")
+    print(f"  {n_converted} converted, {n_skipped} skipped (already existed)")
+    return 0
+
+
 # -------- Dispatch --------------------------------------------------------
 
 SOURCES = {
     "librispeech": ingest_librispeech,
     "fleurs": ingest_fleurs,
     "eka-medical-asr": ingest_eka_medical_asr,
+    "nyra-disfluency": ingest_nyra_disfluency,
 }
 
 
@@ -391,8 +470,9 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = p.add_subparsers(dest="source", required=True,
-                           metavar="{librispeech,fleurs,eka-medical-asr}")
+    sub = p.add_subparsers(
+        dest="source", required=True,
+        metavar="{librispeech,fleurs,eka-medical-asr,nyra-disfluency}")
 
     p_ls = sub.add_parser("librispeech",
                           help="LibriSpeech split (English-only).")
@@ -420,6 +500,23 @@ def main() -> int:
                       help="dataset split (default: test — the only split "
                            "ekacare publishes)")
     p_ek.add_argument("--force", action="store_true",
+                      help="Regenerate even if manifest already exists.")
+
+    p_nd = sub.add_parser("nyra-disfluency",
+                          help="nyralabs/disfluency_speech_english — verbatim "
+                               "ASR eval with paired verbatim/intended "
+                               "references (Apache-2.0).")
+    p_nd.add_argument("--split", default="test",
+                      choices=("test", "validation", "train"),
+                      help="dataset split (default: test — 249 utterances, "
+                           "3.6-10.7s each, all under the 30s window)")
+    p_nd.add_argument("--reference", default="both",
+                      choices=("both", "verbatim", "intended"),
+                      help="Which transcript column becomes ref_text. 'both' "
+                           "(default) writes one manifest per reference over "
+                           "the same WAVs, so each transcription mode is "
+                           "scored against its own ground truth.")
+    p_nd.add_argument("--force", action="store_true",
                       help="Regenerate even if manifest already exists.")
 
     args = p.parse_args()

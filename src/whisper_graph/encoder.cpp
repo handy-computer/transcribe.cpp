@@ -25,13 +25,13 @@
 #include "ggml.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-#include "weights.h"
+#include "whisper_graph.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
-namespace transcribe::whisper {
+namespace transcribe::whisper_graph {
 
 namespace {
 
@@ -153,7 +153,7 @@ ggml_tensor * ffn(ggml_context * ctx,
 //   y = y + FFN(LN_ffn(y))
 ggml_tensor * build_block(ggml_context *          ctx,
                           ggml_tensor *           x,
-                          const WhisperEncBlock & b,
+                          const EncBlock & b,
                           int                     n_heads,
                           int                     d_model,
                           bool                    use_flash) {
@@ -176,8 +176,8 @@ ggml_tensor * build_block(ggml_context *          ctx,
 }  // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *         ctx,
-                                 const WhisperWeights & w,
-                                 const WhisperHParams & hp,
+                                 const Weights & w,
+                                 const HParams & hp,
                                  int                    n_mel_frames,
                                  bool                   use_flash,
                                  const char *           backend_name) {
@@ -302,4 +302,4 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     return eb;
 }
 
-}  // namespace transcribe::whisper
+}  // namespace transcribe::whisper_graph

@@ -33,6 +33,10 @@ add_library(transcribe
     sanm/sanm.cpp
     causal_lm/causal_lm.cpp
     granite_conformer/shaw_attn.cpp
+    whisper_graph/whisper_graph.cpp
+    whisper_graph/encoder.cpp
+    whisper_graph/decoder.cpp
+    whisper_graph/kv_cache.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp
@@ -78,11 +82,13 @@ add_library(transcribe
     arch/canary_qwen/weights.cpp
     arch/canary_qwen/encoder.cpp
     arch/canary_qwen/decoder.cpp
+    arch/crisperwhisper/model.cpp
+    arch/crisperwhisper/capabilities.cpp
+    arch/crisperwhisper/weights.cpp
+    arch/crisperwhisper/word_timing.cpp
+    arch/crisperwhisper/public.cpp
     arch/whisper/model.cpp
     arch/whisper/capabilities.cpp
-    arch/whisper/weights.cpp
-    arch/whisper/encoder.cpp
-    arch/whisper/decoder.cpp
     arch/whisper/bin_load.cpp
     arch/whisper/public.cpp
     arch/moonshine/model.cpp

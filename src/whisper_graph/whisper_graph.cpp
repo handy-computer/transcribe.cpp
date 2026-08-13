@@ -1,6 +1,12 @@
-// arch/whisper/weights.cpp - read_whisper_hparams + build_whisper_weights.
-// Read every required KV explicitly, validate cross-field invariants, then
-// resolve each tensor slot against the GGUF with expected shape.
+// src/whisper_graph/whisper_graph.cpp - read_hparams + build_weights for the
+// shared Whisper encoder-decoder graph. Read every required KV explicitly,
+// validate cross-field invariants, then resolve each tensor slot against the
+// GGUF with expected shape.
+//
+// The KV prefix and the family tag used in error messages are parameters: the
+// `whisper` family passes ("stt.whisper", "whisper") and `crisperwhisper`
+// passes ("stt.crisperwhisper", "crisperwhisper"). Everything else is
+// identical, which is the whole reason this file is shared.
 //
 // Whisper notes: q/v/out carry bias, k does NOT (no "attn.k.bias" slot, both
 // self and cross); logits head has no separate lm_head, the decoder reuses
@@ -8,7 +14,7 @@
 // int32 arrays (empty for .en variants); normalize tag "whisper_logmel" =
 // per-utterance log10(max(mel, 1e-10)) -> clamp(max-8) -> (+4)/4.
 
-#include "weights.h"
+#include "whisper_graph.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -20,11 +26,19 @@
 #include <cstring>
 #include <initializer_list>
 
-namespace transcribe::whisper {
+namespace transcribe::whisper_graph {
 
 namespace {
 
-constexpr const char * kFamilyTag = "whisper";
+// Join a family KV prefix with a suffix: ("stt.whisper", "encoder.d_model")
+// -> pkey(kv_prefix, "encoder.d_model"). Returns a pointer into a caller-visible
+// thread_local buffer valid until the next call, which is safe because every
+// use below is a single read_*_kv argument consumed immediately.
+const char * pkey(const char * kv_prefix, const char * suffix) {
+    static thread_local char buf[256];
+    std::snprintf(buf, sizeof(buf), "%s.%s", kv_prefix, suffix);
+    return buf;
+}
 
 // Optional u32 KV. Absent leaves `out` untouched; BadType is fatal.
 transcribe_status read_optional_u32_kv(const gguf_context * gguf,
@@ -84,78 +98,84 @@ transcribe_status read_optional_f32_kv(const gguf_context * gguf,
 
 }  // namespace
 
-transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams & hp) {
+transcribe_status read_hparams(const gguf_context * gguf,
+                               const char *         kv_prefix,
+                               const char *         family_tag,
+                               HParams &            hp) {
+    if (kv_prefix == nullptr || family_tag == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
     if (gguf == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     // Encoder.
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.encoder.n_layers", kFamilyTag, hp.enc_n_layers);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "encoder.n_layers"), family_tag, hp.enc_n_layers);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.encoder.d_model", kFamilyTag, hp.enc_d_model);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "encoder.d_model"), family_tag, hp.enc_d_model);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.encoder.n_heads", kFamilyTag, hp.enc_n_heads);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "encoder.n_heads"), family_tag, hp.enc_n_heads);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.encoder.ffn_dim", kFamilyTag, hp.enc_ffn_dim);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "encoder.ffn_dim"), family_tag, hp.enc_ffn_dim);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.encoder.num_mel_bins", kFamilyTag, hp.enc_num_mel_bins);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "encoder.num_mel_bins"), family_tag, hp.enc_num_mel_bins);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.encoder.max_source_positions", kFamilyTag,
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "encoder.max_source_positions"), family_tag,
                                        hp.enc_max_source_positions);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_string_kv(gguf, "stt.whisper.encoder.activation", kFamilyTag, hp.enc_activation);
+    if (auto st = read_required_string_kv(gguf, pkey(kv_prefix, "encoder.activation"), family_tag, hp.enc_activation);
         st != TRANSCRIBE_OK) {
         return st;
     }
 
     // Decoder.
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder.n_layers", kFamilyTag, hp.dec_n_layers);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "decoder.n_layers"), family_tag, hp.dec_n_layers);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder.d_model", kFamilyTag, hp.dec_d_model);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "decoder.d_model"), family_tag, hp.dec_d_model);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder.n_heads", kFamilyTag, hp.dec_n_heads);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "decoder.n_heads"), family_tag, hp.dec_n_heads);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder.ffn_dim", kFamilyTag, hp.dec_ffn_dim);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "decoder.ffn_dim"), family_tag, hp.dec_ffn_dim);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder.max_target_positions", kFamilyTag,
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "decoder.max_target_positions"), family_tag,
                                        hp.dec_max_target_positions);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder.vocab_size", kFamilyTag, hp.dec_vocab_size);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "decoder.vocab_size"), family_tag, hp.dec_vocab_size);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_string_kv(gguf, "stt.whisper.decoder.activation", kFamilyTag, hp.dec_activation);
+    if (auto st = read_required_string_kv(gguf, pkey(kv_prefix, "decoder.activation"), family_tag, hp.dec_activation);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_bool_kv(gguf, "stt.whisper.decoder.tie_word_embeddings", kFamilyTag, true,
+    if (auto st = read_optional_bool_kv(gguf, pkey(kv_prefix, "decoder.tie_word_embeddings"), family_tag, true,
                                         hp.dec_tie_word_embeddings);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_bool_kv(gguf, "stt.whisper.decoder.scale_embedding", kFamilyTag, false,
+    if (auto st = read_optional_bool_kv(gguf, pkey(kv_prefix, "decoder.scale_embedding"), family_tag, false,
                                         hp.dec_scale_embedding);
         st != TRANSCRIBE_OK) {
         return st;
@@ -163,28 +183,28 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
 
     // Whisper generation contract.
     if (auto st =
-            read_required_u32_kv(gguf, "stt.whisper.decoder_start_token_id", kFamilyTag, hp.decoder_start_token_id);
+            read_required_u32_kv(gguf, pkey(kv_prefix, "decoder_start_token_id"), family_tag, hp.decoder_start_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
     if (auto st =
-            read_required_u32_kv(gguf, "stt.whisper.no_timestamps_token_id", kFamilyTag, hp.no_timestamps_token_id);
+            read_required_u32_kv(gguf, pkey(kv_prefix, "no_timestamps_token_id"), family_tag, hp.no_timestamps_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, "stt.whisper.sot_token_id", kFamilyTag, hp.sot_token_id);
+    if (auto st = read_optional_u32_kv(gguf, pkey(kv_prefix, "sot_token_id"), family_tag, hp.sot_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, "stt.whisper.transcribe_token_id", kFamilyTag, hp.transcribe_token_id);
+    if (auto st = read_optional_u32_kv(gguf, pkey(kv_prefix, "transcribe_token_id"), family_tag, hp.transcribe_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, "stt.whisper.translate_token_id", kFamilyTag, hp.translate_token_id);
+    if (auto st = read_optional_u32_kv(gguf, pkey(kv_prefix, "translate_token_id"), family_tag, hp.translate_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, "stt.whisper.prev_sot_token_id", kFamilyTag, hp.prev_sot_token_id);
+    if (auto st = read_optional_u32_kv(gguf, pkey(kv_prefix, "prev_sot_token_id"), family_tag, hp.prev_sot_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -195,83 +215,83 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
         hp.sot_token_id = hp.decoder_start_token_id;
     }
 
-    if (auto st = read_optional_i32_array_kv(gguf, "stt.whisper.suppress_tokens", kFamilyTag, hp.suppress_tokens);
+    if (auto st = read_optional_i32_array_kv(gguf, pkey(kv_prefix, "suppress_tokens"), family_tag, hp.suppress_tokens);
         st != TRANSCRIBE_OK) {
         return st;
     }
     if (auto st =
-            read_optional_i32_array_kv(gguf, "stt.whisper.begin_suppress_tokens", kFamilyTag, hp.begin_suppress_tokens);
+            read_optional_i32_array_kv(gguf, pkey(kv_prefix, "begin_suppress_tokens"), family_tag, hp.begin_suppress_tokens);
         st != TRANSCRIBE_OK) {
         return st;
     }
 
     // Frontend.
-    if (auto st = read_required_string_kv(gguf, "stt.frontend.type", kFamilyTag, hp.fe_type); st != TRANSCRIBE_OK) {
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.type", family_tag, hp.fe_type); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", kFamilyTag, hp.fe_num_mels);
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", family_tag, hp.fe_num_mels);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", kFamilyTag, hp.fe_sample_rate);
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", family_tag, hp.fe_sample_rate);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.n_fft", kFamilyTag, hp.fe_n_fft); st != TRANSCRIBE_OK) {
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.n_fft", family_tag, hp.fe_n_fft); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.win_length", kFamilyTag, hp.fe_win_length);
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.win_length", family_tag, hp.fe_win_length);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.hop_length", kFamilyTag, hp.fe_hop_length);
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.hop_length", family_tag, hp.fe_hop_length);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", kFamilyTag, hp.fe_window); st != TRANSCRIBE_OK) {
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", family_tag, hp.fe_window); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_required_string_kv(gguf, "stt.frontend.normalize", kFamilyTag, hp.fe_normalize);
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.normalize", family_tag, hp.fe_normalize);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.dither", kFamilyTag, 0.0f, hp.fe_dither);
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.dither", family_tag, 0.0f, hp.fe_dither);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.pre_emphasis", kFamilyTag, 0.0f, hp.fe_pre_emphasis);
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.pre_emphasis", family_tag, 0.0f, hp.fe_pre_emphasis);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_min", kFamilyTag, 0.0f, hp.fe_f_min);
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_min", family_tag, 0.0f, hp.fe_f_min);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_max", kFamilyTag, 8000.0f, hp.fe_f_max);
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_max", family_tag, 8000.0f, hp.fe_f_max);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_string_kv(gguf, "stt.frontend.pad_mode", kFamilyTag, "reflect", hp.fe_pad_mode);
+    if (auto st = read_optional_string_kv(gguf, "stt.frontend.pad_mode", family_tag, "reflect", hp.fe_pad_mode);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_bool_kv(gguf, "stt.frontend.center", kFamilyTag, true, hp.fe_center);
+    if (auto st = read_optional_bool_kv(gguf, "stt.frontend.center", family_tag, true, hp.fe_center);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_string_kv(gguf, "stt.frontend.mel_norm", kFamilyTag, "slaney", hp.fe_mel_norm);
+    if (auto st = read_optional_string_kv(gguf, "stt.frontend.mel_norm", family_tag, "slaney", hp.fe_mel_norm);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.chunk_length", kFamilyTag, hp.fe_chunk_length);
+    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.chunk_length", family_tag, hp.fe_chunk_length);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.n_samples", kFamilyTag, hp.fe_n_samples);
+    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.n_samples", family_tag, hp.fe_n_samples);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.nb_max_frames", kFamilyTag, hp.fe_nb_max_frames);
+    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.nb_max_frames", family_tag, hp.fe_nb_max_frames);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -281,15 +301,15 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
     // these into the public transcribe_capabilities struct, but we also
     // cache them here for easy access in decoder logic (supports_translate
     // gates the <|translate|> token availability etc).
-    if (auto st = read_optional_bool_kv(gguf, "stt.capability.lang_detect", kFamilyTag, false, hp.cap_lang_detect);
+    if (auto st = read_optional_bool_kv(gguf, "stt.capability.lang_detect", family_tag, false, hp.cap_lang_detect);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_bool_kv(gguf, "stt.capability.translate", kFamilyTag, false, hp.cap_translate);
+    if (auto st = read_optional_bool_kv(gguf, "stt.capability.translate", family_tag, false, hp.cap_translate);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_bool_kv(gguf, "stt.capability.timestamps", kFamilyTag, false, hp.cap_timestamps);
+    if (auto st = read_optional_bool_kv(gguf, "stt.capability.timestamps", family_tag, false, hp.cap_timestamps);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -297,21 +317,21 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
     // Cross-field invariants.
     if (hp.enc_n_layers <= 0 || hp.enc_d_model <= 0 || hp.enc_n_heads <= 0 || hp.enc_ffn_dim <= 0 ||
         hp.enc_num_mel_bins <= 0 || hp.enc_max_source_positions <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: encoder hparams must be positive");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: encoder hparams must be positive", family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: encoder d_model (%d) not divisible by n_heads (%d)",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: encoder d_model (%d) not divisible by n_heads (%d)", family_tag,
                 hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_d_model <= 0 || hp.dec_n_heads <= 0 || hp.dec_ffn_dim <= 0 ||
         hp.dec_max_target_positions <= 0 || hp.dec_vocab_size <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: decoder hparams must be positive");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: decoder hparams must be positive", family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_d_model % hp.dec_n_heads != 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: decoder d_model (%d) not divisible by n_heads (%d)",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: decoder d_model (%d) not divisible by n_heads (%d)", family_tag,
                 hp.dec_d_model, hp.dec_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -319,15 +339,15 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
         // Upstream whisper always uses d_model=d_model; a mismatch would
         // break the cross-attention K/V dim contract.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: encoder d_model (%d) != decoder d_model (%d); "
-                "cross-attention would mismatch",
+                "%s: encoder d_model (%d) != decoder d_model (%d); "
+                "cross-attention would mismatch", family_tag,
                 hp.enc_d_model, hp.dec_d_model);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_activation != "gelu" || hp.dec_activation != "gelu") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: only \"gelu\" activation is supported "
-                "(enc=\"%s\", dec=\"%s\")",
+                "%s: only \"gelu\" activation is supported "
+                "(enc=\"%s\", dec=\"%s\")", family_tag,
                 hp.enc_activation.c_str(), hp.dec_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -336,9 +356,9 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
         // would mean the converter shipped a separate head tensor we
         // don't currently load.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: stt.whisper.decoder.tie_word_embeddings=false "
+                "%s: stt.whisper.decoder.tie_word_embeddings=false "
                 "is not supported (no separate lm_head tensor in the "
-                "catalog)");
+                "catalog)", family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_scale_embedding) {
@@ -347,20 +367,20 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
         // if this ever flips we need to add the scale to the decoder graph
         // (both prefill and KV paths, after get_rows(token_embd, ...)).
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: stt.whisper.decoder.scale_embedding=true is "
+                "%s: stt.whisper.decoder.scale_embedding=true is "
                 "not supported (decoder graph does not apply the "
-                "sqrt(d_model) embed scale)");
+                "sqrt(d_model) embed scale)", family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.decoder_start_token_id < 0 || hp.no_timestamps_token_id < 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: decoder_start_token_id / no_timestamps_token_id "
-                "must be set");
+                "%s: decoder_start_token_id / no_timestamps_token_id "
+                "must be set", family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 || hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 ||
         hp.fe_hop_length <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: frontend dimensions must be positive");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: frontend dimensions must be positive", family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_win_length != hp.fe_n_fft) {
@@ -368,51 +388,51 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
         // A mismatch would require a windowed-shorter-than-FFT code path
         // that we don't implement.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: frontend win_length (%d) != n_fft (%d); "
-                "only full-length window is supported",
+                "%s: frontend win_length (%d) != n_fft (%d); "
+                "only full-length window is supported", family_tag,
                 hp.fe_win_length, hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_num_mels != hp.enc_num_mel_bins) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: frontend num_mels (%d) != encoder num_mel_bins (%d)",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: frontend num_mels (%d) != encoder num_mel_bins (%d)", family_tag,
                 hp.fe_num_mels, hp.enc_num_mel_bins);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: unsupported frontend type \"%s\" (only \"mel\")",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: unsupported frontend type \"%s\" (only \"mel\")", family_tag,
                 hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_window != "hann" && hp.fe_window != "hann_periodic") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend window \"%s\" "
-                "(only \"hann\"/\"hann_periodic\" is supported)",
+                "%s: unsupported frontend window \"%s\" "
+                "(only \"hann\"/\"hann_periodic\" is supported)", family_tag,
                 hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_normalize != "whisper_logmel") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend normalize \"%s\" "
-                "(only \"whisper_logmel\" is supported)",
+                "%s: unsupported frontend normalize \"%s\" "
+                "(only \"whisper_logmel\" is supported)", family_tag,
                 hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_mel_norm != "slaney") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend mel_norm \"%s\" "
-                "(only \"slaney\" is supported)",
+                "%s: unsupported frontend mel_norm \"%s\" "
+                "(only \"slaney\" is supported)", family_tag,
                 hp.fe_mel_norm.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_pad_mode != "reflect") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend pad_mode \"%s\" "
-                "(only \"reflect\" is supported)",
+                "%s: unsupported frontend pad_mode \"%s\" "
+                "(only \"reflect\" is supported)", family_tag,
                 hp.fe_pad_mode.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (!hp.fe_center) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: non-centered STFT is not supported");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: non-centered STFT is not supported", family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_dither != 0.0f) {
@@ -422,8 +442,8 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
         // reject it at load time rather than producing a silently-wrong
         // spectrogram.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: stt.frontend.dither=%g is not supported "
-                "(frontend is deterministic; expected 0.0)",
+                "%s: stt.frontend.dither=%g is not supported "
+                "(frontend is deterministic; expected 0.0)", family_tag,
                 hp.fe_dither);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -432,7 +452,8 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
 }
 
 // Frontend (mel filterbank + Hann window install)
-transcribe_status install_mel_from_buffers(const WhisperHParams &                   hp,
+transcribe_status install_mel_from_buffers(const HParams &                          hp,
+                                           const char *                             family_tag,
                                            std::vector<float>                       filterbank,
                                            std::vector<float>                       window,
                                            std::optional<transcribe::MelFrontend> & out_mel) {
@@ -455,7 +476,8 @@ transcribe_status install_mel_from_buffers(const WhisperHParams &               
     if (hp.fe_normalize == "whisper_logmel" || hp.fe_normalize == "per_utterance") {
         cfg.normalize = "per_utterance";
     } else {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: unsupported fe_normalize='%s'", hp.fe_normalize.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: unsupported fe_normalize='%s'", family_tag,
+                hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -470,8 +492,6 @@ transcribe_status install_mel_from_buffers(const WhisperHParams &               
 namespace {
 
 using transcribe::weights::lname;
-
-constexpr const char * kTag = kFamilyTag;
 
 #define GET_F32(slot, name, ...)                                                                          \
     do {                                                                                                  \
@@ -502,10 +522,15 @@ constexpr const char * kTag = kFamilyTag;
 
 }  // namespace
 
-transcribe_status build_whisper_weights(ggml_context * ctx_meta, const WhisperHParams & hp, WhisperWeights & weights) {
-    if (ctx_meta == nullptr) {
+transcribe_status build_weights(ggml_context * ctx_meta,
+                                const HParams & hp,
+                                const char *    family_tag,
+                                Weights &       weights) {
+    if (ctx_meta == nullptr || family_tag == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    // The GET_* macros below label find_tensor failures with this.
+    const char * const kTag = family_tag;
 
     const int64_t d_model    = hp.enc_d_model;
     const int64_t n_mel      = hp.enc_num_mel_bins;
@@ -536,7 +561,7 @@ transcribe_status build_whisper_weights(ggml_context * ctx_meta, const WhisperHP
     GET_F32(weights.enc_top.final_norm_b, "enc.final_norm.bias", d_model);
 
     // ----- encoder blocks -----
-    weights.enc_blocks.assign(hp.enc_n_layers, WhisperEncBlock{});
+    weights.enc_blocks.assign(hp.enc_n_layers, EncBlock{});
     for (int i = 0; i < hp.enc_n_layers; ++i) {
         auto & b = weights.enc_blocks[i];
 
@@ -569,7 +594,7 @@ transcribe_status build_whisper_weights(ggml_context * ctx_meta, const WhisperHP
     GET_F32(weights.dec_top.final_norm_b, "dec.final_norm.bias", dec_h);
 
     // ----- decoder blocks -----
-    weights.dec_blocks.assign(hp.dec_n_layers, WhisperDecBlock{});
+    weights.dec_blocks.assign(hp.dec_n_layers, DecBlock{});
     for (int i = 0; i < hp.dec_n_layers; ++i) {
         auto & b = weights.dec_blocks[i];
 
@@ -611,4 +636,4 @@ transcribe_status build_whisper_weights(ggml_context * ctx_meta, const WhisperHP
 #undef GET_CONV
 #undef GET_LIN
 
-}  // namespace transcribe::whisper
+}  // namespace transcribe::whisper_graph

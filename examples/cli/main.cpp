@@ -8,6 +8,7 @@
 #include "transcribe.h"
 #include "transcribe/parakeet.h"
 #include "transcribe/voxtral_realtime.h"
+#include "transcribe/crisperwhisper.h"
 #include "transcribe/whisper.h"
 #include "wav.h"
 
@@ -228,6 +229,11 @@ struct cli_args {
     bool itn_set           = false;
     bool keep_special_tags = false;  // --raw-tokens
 
+    // CrisperWhisper family knob. Ignored by every other family; passing
+    // --mode to a non-CrisperWhisper model is a hard error, not a no-op.
+    enum transcribe_crisperwhisper_mode cw_mode = TRANSCRIBE_CRISPERWHISPER_MODE_DEFAULT;
+    bool cw_mode_set = false;  // --mode verbatim|intended
+
     // Canary family knobs. Ignored by non-Canary families.
     bool canary_pnc     = true;   // default: punctuation+caps on
     bool canary_pnc_set = false;  // --pnc / --no-pnc set this
@@ -293,6 +299,8 @@ void print_usage(const char * argv0) {
                  "  --device N            GPU device index from --list-devices: 0 = auto\n"
                  "                        (first of kind), >0 selects that registry index\n"
                  "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
+                 "  --mode MODE           crisperwhisper: verbatim (keep disfluencies + [UM]/[UH]/...)\n"
+                 "                        or intended (cleaned transcript). Default: model's own.\n"
                  "  --batch FILE          batch mode: FILE has one wav path per line\n"
                  "  --batch-jsonl         output one JSON line per file (for batch)\n"
                  "  --batch-size N        group N utterances into one transcribe_run_batch\n"
@@ -492,6 +500,21 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --device must be >= 0 (0 = auto)\n");
                 return false;
             }
+        } else if (a == "--mode") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            const std::string mv = v;
+            if (mv == "verbatim") {
+                out.cw_mode = TRANSCRIBE_CRISPERWHISPER_MODE_VERBATIM;
+            } else if (mv == "intended") {
+                out.cw_mode = TRANSCRIBE_CRISPERWHISPER_MODE_INTENDED;
+            } else {
+                std::fprintf(stderr, "error: --mode must be verbatim or intended\n");
+                return false;
+            }
+            out.cw_mode_set = true;
         } else if (a == "--timestamps") {
             const char * v = take_value(a.c_str());
             if (!v) {
@@ -817,6 +840,24 @@ int main(int argc, char ** argv) {
             if (transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_WHISPER_RUN)) {
                 rp.family = &wx.ext;
             }
+        }
+
+        // CrisperWhisper run extension: verbatim vs intended. Same weights
+        // and same graph; only the prompt tag block differs, so it is a
+        // per-run choice. Allocated alongside wx so its bytes outlive the
+        // per-file loop.
+        struct transcribe_crisperwhisper_run_ext cwx;
+        transcribe_crisperwhisper_run_ext_init(&cwx);
+        if (args.cw_mode_set) {
+            if (!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN,
+                                                   TRANSCRIBE_EXT_KIND_CRISPERWHISPER_RUN)) {
+                std::fprintf(stderr, "error: --mode is only supported by the crisperwhisper family\n");
+                transcribe_session_free(ctx);
+                transcribe_model_free(model);
+                return EXIT_FAILURE;
+            }
+            cwx.mode  = args.cw_mode;
+            rp.family = &cwx.ext;
         }
 
         if (args.keep_special_tags) {
@@ -1230,6 +1271,24 @@ int main(int argc, char ** argv) {
             if (transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_WHISPER_RUN)) {
                 rp.family = &wx.ext;
             }
+        }
+
+        // CrisperWhisper run extension: verbatim vs intended. Same weights
+        // and same graph; only the prompt tag block differs, so it is a
+        // per-run choice. Allocated alongside wx so its bytes outlive the
+        // per-file loop.
+        struct transcribe_crisperwhisper_run_ext cwx;
+        transcribe_crisperwhisper_run_ext_init(&cwx);
+        if (args.cw_mode_set) {
+            if (!transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN,
+                                                   TRANSCRIBE_EXT_KIND_CRISPERWHISPER_RUN)) {
+                std::fprintf(stderr, "error: --mode is only supported by the crisperwhisper family\n");
+                transcribe_session_free(ctx);
+                transcribe_model_free(model);
+                return EXIT_FAILURE;
+            }
+            cwx.mode  = args.cw_mode;
+            rp.family = &cwx.ext;
         }
 
         if (args.keep_special_tags) {

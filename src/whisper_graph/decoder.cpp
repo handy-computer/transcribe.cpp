@@ -21,14 +21,14 @@
 #include "ggml.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-#include "weights.h"
-#include "whisper.h"
+#include "whisper_graph.h"
+#include "kv_cache.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 
-namespace transcribe::whisper {
+namespace transcribe::whisper_graph {
 
 namespace {
 
@@ -139,7 +139,7 @@ ggml_tensor * build_block(ggml_context *          ctx,
                           ggml_tensor *           x,
                           ggml_tensor *           encoder_hidden,
                           ggml_tensor *           causal_mask,
-                          const WhisperDecBlock & b,
+                          const DecBlock & b,
                           int                     n_heads,
                           int                     d_model,
                           bool                    use_flash) {
@@ -186,7 +186,7 @@ ggml_tensor * build_block(ggml_context *          ctx,
 ggml_tensor * mha_self_cached(ggml_context *   ctx,
                               ggml_cgraph *    gf,
                               ggml_tensor *    x,
-                              WhisperKvCache & kv_cache,
+                              KvCache & kv_cache,
                               ggml_tensor *    mask,
                               ggml_tensor *    q_w,
                               ggml_tensor *    q_b,
@@ -284,7 +284,7 @@ ggml_tensor * mha_self_cached(ggml_context *   ctx,
 ggml_tensor * mha_self_step(ggml_context *   ctx,
                             ggml_cgraph *    gf,
                             ggml_tensor *    x,
-                            WhisperKvCache & kv_cache,
+                            KvCache & kv_cache,
                             ggml_tensor *    mask,
                             ggml_tensor *    kv_idx,
                             ggml_tensor *    q_w,
@@ -372,7 +372,7 @@ ggml_tensor * mha_self_step(ggml_context *   ctx,
 // x: [d_model, n_tokens] query input -> returns [d_model, n_tokens].
 ggml_tensor * mha_cross_cached(ggml_context *   ctx,
                                ggml_tensor *    x,
-                               WhisperKvCache & kv_cache,
+                               KvCache & kv_cache,
                                ggml_tensor *    mask,
                                ggml_tensor *    q_w,
                                ggml_tensor *    q_b,
@@ -382,7 +382,8 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
                                int              d_model,
                                int              il,
                                int              T_enc,
-                               bool             use_flash) {
+                               bool             use_flash,
+                               ggml_tensor **   out_probs = nullptr) {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t n_tokens = x->ne[1];
@@ -412,13 +413,23 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
         ggml_view_3d(ctx, kv_cache.cross_v, head_dim, T_enc_pad, n_heads, v_elem * d_model, v_elem * head_dim,
                      v_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc_pad * d_model));
 
+    // Capturing the post-softmax probabilities forces the manual path:
+    // ggml_flash_attn_ext fuses the softmax and never materializes it. That is
+    // also the path the reference runs (attn_implementation="eager"), so a
+    // capture layer matches the oracle more closely, not less.
+    const bool want_probs = (out_probs != nullptr);
+
     ggml_tensor * o;
-    if (use_flash) {
+    if (use_flash && !want_probs) {
         o = ggml_flash_attn_ext(ctx, Q, K, V, mask, scale, 0.0f, 0.0f);
         o = ggml_reshape_2d(ctx, o, d_model, n_tokens);
     } else {
         ggml_tensor * kq      = ggml_mul_mat(ctx, K, Q);
         ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask, scale, 0.0f);
+        if (want_probs) {
+            // [T_enc_pad, n_tokens, n_heads], post-softmax.
+            *out_probs = kq_soft;
+        }
         ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, V, 1, 0, 2, 3));
         o                     = ggml_mul_mat(ctx, v_t, kq_soft);
         o                     = ggml_permute(ctx, o, 0, 2, 1, 3);
@@ -433,11 +444,50 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
     return o;
 }
 
+// Average the post-softmax cross-attention of the requested (layer, head)
+// pairs over the LAST query row, producing one [T_enc_pad] row.
+//
+// This is the C++ side of the reference's _stack_step_attention: it sums
+// step[layer][0, head, -1] over the alignment heads and divides by their
+// count. The last query row is the one that predicts this step's token, for
+// both the prompt pass (q_len = prompt length) and every step (q_len = 1), so
+// row k of the assembled matrix lines up 1-to-1 with generated token k.
+//
+// `probs_by_layer[i]` is null for layers that were not captured.
+ggml_tensor * average_align_heads(ggml_context *                                  ctx,
+                                  const std::vector<ggml_tensor *> &              probs_by_layer,
+                                  const std::vector<std::pair<int, int>> &        heads,
+                                  int                                             n_tokens) {
+    ggml_tensor * acc = nullptr;
+    int           n   = 0;
+    for (const auto & [layer, head] : heads) {
+        if (layer < 0 || layer >= static_cast<int>(probs_by_layer.size())) {
+            continue;
+        }
+        ggml_tensor * probs = probs_by_layer[static_cast<size_t>(layer)];
+        if (probs == nullptr) {
+            continue;
+        }
+        const int64_t T_pad = probs->ne[0];
+        // View the single row [T_pad] at (head, last query).
+        ggml_tensor * row = ggml_view_1d(ctx, probs, T_pad,
+                                         static_cast<size_t>(head) * probs->nb[2] +
+                                             static_cast<size_t>(n_tokens - 1) * probs->nb[1]);
+        row = ggml_cont(ctx, row);
+        acc = (acc == nullptr) ? row : ggml_add(ctx, acc, row);
+        n += 1;
+    }
+    if (acc == nullptr || n == 0) {
+        return nullptr;
+    }
+    return ggml_scale(ctx, acc, 1.0f / static_cast<float>(n));
+}
+
 }  // namespace
 
 DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
-                                         const WhisperWeights & w,
-                                         const WhisperHParams & hp,
+                                         const Weights & w,
+                                         const HParams & hp,
                                          int                    seq_len,
                                          int                    T_enc,
                                          bool                   use_flash) {
@@ -555,9 +605,9 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
 // KV-cached path: cross-KV precompute + prompt/step decoder graph.
 
 DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
-                                  const WhisperWeights & w,
-                                  const WhisperHParams & hp,
-                                  WhisperKvCache &       kv_cache,
+                                  const Weights & w,
+                                  const HParams & hp,
+                                  KvCache &       kv_cache,
                                   ggml_tensor *          encoder_out,
                                   int                    T_enc) {
     DecoderBuild db{};
@@ -619,15 +669,16 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
 }
 
 DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
-                                    const WhisperWeights & w,
-                                    const WhisperHParams & hp,
-                                    WhisperKvCache &       kv_cache,
+                                    const Weights & w,
+                                    const HParams & hp,
+                                    KvCache &       kv_cache,
                                     int                    n_tokens,
                                     int                    n_past,
                                     int                    T_enc,
                                     int                    kv_pad,
                                     bool                   skip_log_softmax,
-                                    bool                   use_flash) {
+                                    bool                   use_flash,
+                                    const AlignHeads *     align_heads) {
     DecoderBuild db{};
 
     if (ctx == nullptr || n_tokens <= 0 || T_enc <= 0) {
@@ -732,6 +783,19 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     // ---- Decoder blocks ----
     const int n_blocks = static_cast<int>(w.dec_blocks.size());
     db.dumps.block_outs.reserve(static_cast<size_t>(n_blocks));
+
+    const bool                 capture = (align_heads != nullptr && !align_heads->empty());
+    std::vector<bool>          capture_layer(static_cast<size_t>(n_blocks), false);
+    std::vector<ggml_tensor *> cross_probs(static_cast<size_t>(n_blocks), nullptr);
+    if (capture) {
+        for (const auto & [layer, head] : *align_heads) {
+            (void) head;
+            if (layer >= 0 && layer < n_blocks) {
+                capture_layer[static_cast<size_t>(layer)] = true;
+            }
+        }
+    }
+
     for (int i = 0; i < n_blocks; ++i) {
         const auto & b = w.dec_blocks[i];
 
@@ -747,7 +811,9 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, b.norm_cross_b);
             y = mha_cross_cached(ctx, y, kv_cache, cross_mask, b.cross_q_w, b.cross_q_b, b.cross_out_w, b.cross_out_b,
-                                 n_heads, d_model, i, T_enc, use_flash);
+                                 n_heads, d_model, i, T_enc, use_flash,
+                                 capture_layer[static_cast<size_t>(i)] ? &cross_probs[static_cast<size_t>(i)]
+                                                                       : nullptr);
             x = ggml_add(ctx, x, y);
         }
         // FFN.
@@ -796,17 +862,27 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     ggml_set_output(db.out);
     ggml_build_forward_expand(db.graph, db.out);
 
+    if (capture) {
+        db.cross_align = average_align_heads(ctx, cross_probs, *align_heads, static_cast<int>(n_tokens));
+        if (db.cross_align != nullptr) {
+            named(db.cross_align, "dec.xattn.align.row");
+            ggml_set_output(db.cross_align);
+            ggml_build_forward_expand(db.graph, db.cross_align);
+        }
+    }
+
     return db;
 }
 
 // Static-topology single-token step graph (GPU dispatch path).
-StepBuild build_step_graph(ggml_context *         ctx,
-                           const WhisperWeights & w,
-                           const WhisperHParams & hp,
-                           WhisperKvCache &       kv_cache,
-                           int                    max_n_kv,
-                           int                    T_enc,
-                           bool                   use_flash) {
+StepBuild build_step_graph(ggml_context *     ctx,
+                           const Weights &    w,
+                           const HParams &    hp,
+                           KvCache &          kv_cache,
+                           int                max_n_kv,
+                           int                T_enc,
+                           bool               use_flash,
+                           const AlignHeads * align_heads) {
     StepBuild sb{};
     sb.max_n_kv = max_n_kv;
 
@@ -860,6 +936,19 @@ StepBuild build_step_graph(ggml_context *         ctx,
     ggml_tensor * x       = ggml_add(ctx, tok_emb, pos_emb);
 
     const int n_blocks = static_cast<int>(w.dec_blocks.size());
+
+    const bool                 capture = (align_heads != nullptr && !align_heads->empty());
+    std::vector<bool>          capture_layer(static_cast<size_t>(n_blocks), false);
+    std::vector<ggml_tensor *> cross_probs(static_cast<size_t>(n_blocks), nullptr);
+    if (capture) {
+        for (const auto & [layer, head] : *align_heads) {
+            (void) head;
+            if (layer >= 0 && layer < n_blocks) {
+                capture_layer[static_cast<size_t>(layer)] = true;
+            }
+        }
+    }
+
     for (int i = 0; i < n_blocks; ++i) {
         const auto & b = w.dec_blocks[i];
 
@@ -875,7 +964,9 @@ StepBuild build_step_graph(ggml_context *         ctx,
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, b.norm_cross_b);
             y = mha_cross_cached(ctx, y, kv_cache, cross_mask_f16, b.cross_q_w, b.cross_q_b, b.cross_out_w,
-                                 b.cross_out_b, n_heads, d_model, i, T_enc, use_flash);
+                                 b.cross_out_b, n_heads, d_model, i, T_enc, use_flash,
+                                 capture_layer[static_cast<size_t>(i)] ? &cross_probs[static_cast<size_t>(i)]
+                                                                       : nullptr);
             x = ggml_add(ctx, x, y);
         }
         // FFN (pre-LN, GELU).
@@ -895,6 +986,15 @@ StepBuild build_step_graph(ggml_context *         ctx,
     sb.logits_out = logits;
     ggml_build_forward_expand(sb.graph, sb.logits_out);
 
+    if (capture) {
+        sb.cross_align = average_align_heads(ctx, cross_probs, *align_heads, /*n_tokens=*/1);
+        if (sb.cross_align != nullptr) {
+            ggml_set_name(sb.cross_align, "step.xattn.align.row");
+            ggml_set_output(sb.cross_align);
+            ggml_build_forward_expand(sb.graph, sb.cross_align);
+        }
+    }
+
     return sb;
 }
 
@@ -907,7 +1007,7 @@ namespace {
 ggml_tensor * mha_self_step_batched(ggml_context *   ctx,
                                     ggml_cgraph *    gf,
                                     ggml_tensor *    x,
-                                    WhisperKvCache & kv_cache,
+                                    KvCache & kv_cache,
                                     ggml_tensor *    mask,
                                     ggml_tensor *    kv_idx,
                                     ggml_tensor *    q_w,
@@ -979,7 +1079,7 @@ ggml_tensor * mha_self_step_batched(ggml_context *   ctx,
 // Whisper cross: q/out carry bias; k/v already live in the cache.
 ggml_tensor * mha_cross_step_batched(ggml_context *   ctx,
                                      ggml_tensor *    x,
-                                     WhisperKvCache & kv_cache,
+                                     KvCache & kv_cache,
                                      ggml_tensor *    cross_mask,
                                      ggml_tensor *    q_w,
                                      ggml_tensor *    q_b,
@@ -1022,9 +1122,9 @@ ggml_tensor * mha_cross_step_batched(ggml_context *   ctx,
 }  // namespace
 
 DecoderBuild build_cross_kv_graph_batched(ggml_context *         ctx,
-                                          const WhisperWeights & w,
-                                          const WhisperHParams & hp,
-                                          WhisperKvCache &       kv_cache,
+                                          const Weights & w,
+                                          const HParams & hp,
+                                          KvCache &       kv_cache,
                                           int                    T_enc_max,
                                           int                    n_batch) {
     DecoderBuild db{};
@@ -1072,9 +1172,9 @@ DecoderBuild build_cross_kv_graph_batched(ggml_context *         ctx,
 }
 
 StepBuildBatched build_step_graph_batched(ggml_context *         ctx,
-                                          const WhisperWeights & w,
-                                          const WhisperHParams & hp,
-                                          WhisperKvCache &       kv_cache,
+                                          const Weights & w,
+                                          const HParams & hp,
+                                          KvCache &       kv_cache,
                                           int                    max_n_kv,
                                           int                    T_enc_max,
                                           int                    n_batch,
@@ -1154,4 +1254,4 @@ StepBuildBatched build_step_graph_batched(ggml_context *         ctx,
     return sb;
 }
 
-}  // namespace transcribe::whisper
+}  // namespace transcribe::whisper_graph
