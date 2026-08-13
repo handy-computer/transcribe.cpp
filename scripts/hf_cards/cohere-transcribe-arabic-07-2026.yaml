@@ -1,11 +1,11 @@
 # Spec for the HF README of handy-computer/cohere-transcribe-arabic-07-2026-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
-hf_repo: handy-computer/cohere-transcribe-arabic-07-2026-gguf
-target_repo: CohereLabs/cohere-transcribe-arabic-07-2026
+hf_repo: CohereLabs/cohere-transcribe-arabic-07-2026
+target_repo: handy-computer/cohere-transcribe-arabic-07-2026-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-arabic-07-2026.md
 
-upstream_commit: 6a1364c
+upstream_commit: c3e911b42149bf7a1e53d5cef9878aee87515a23
 pin_date: 2026-07-31
 
 # Validation pin for the most recent upload. Updated on each release —

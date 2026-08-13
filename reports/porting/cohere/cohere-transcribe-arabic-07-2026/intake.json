@@ -80,7 +80,7 @@
     "mel_filterbank_norm": null
   },
   "tokenizer": {
-    "type": "bpe",
+    "type": "sentencepiece",
     "vocab_size": 16384,
     "special_tokens": {
       "bos": 4,

@@ -4,7 +4,7 @@
   "variant": "cohere-transcribe-arabic-07-2026",
   "source_model": {
     "hf_repo": "CohereLabs/cohere-transcribe-arabic-07-2026",
-    "hf_revision": "main"
+    "hf_revision": "c3e911b42149bf7a1e53d5cef9878aee87515a23"
   },
   "reference": {
     "kind": "transformers",
@@ -26,9 +26,14 @@
     "dither": 0.0
   },
   "tokenizer_summary": {
-    "type": "bpe",
-    "vocab_size": null,
-    "special_tokens": {}
+    "type": "sentencepiece",
+    "vocab_size": 16384,
+    "special_tokens": {
+      "bos": 4,
+      "eos": 3,
+      "pad": 2,
+      "decoder_start": 13764
+    }
   },
   "capabilities": {
     "languages": ["en", "ar"],
