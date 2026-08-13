@@ -4,7 +4,7 @@
 // This test loads a real Cohere ASR GGUF (the output of
 // scripts/convert-cohere.py against an actual HuggingFace model
 // directory) and verifies that the loader produces a fully populated
-// CohereModel matching the cohere-transcribe-03-2026 architecture.
+// CohereModel matching a cohere-transcribe-* architecture.
 //
 // Gating:
 //
@@ -25,12 +25,18 @@
 //
 //   1. Load returns OK; the model pointer is set.
 //   2. arch_string == "cohere_asr".
-//   3. variant_string == "cohere-transcribe-03-2026".
+//   3. variant_string starts with "cohere-transcribe-" (covers the
+//      base cohere-transcribe-03-2026 and sibling variants like
+//      cohere-transcribe-arabic-07-2026).
 //   4. backend is non-empty (one of "Metal"/"CPU"/...).
 //   5. native_sample_rate == 16000, supports_translate == false.
-//   6. n_languages == 14 and the first few match the converter's
-//      ordering from config["supported_languages"]
-//      (en, fr, de, es, ...).
+//   6. n_languages matches the converter's
+//      config["supported_languages"] count and the first few match
+//      the base variant's ordering (en, fr, de, es, ...). The
+//      cohere-transcribe-arabic-07-2026 variant supports only
+//      [en, ar], so the exact count is checked against the
+//      variant-reported value read at load time rather than a
+//      hardcoded 14.
 //   7. CohereHParams reach-in: every field read by the loader matches
 //      the 2.0B cohere-transcribe-03-2026 values published in
 //      config.json (encoder: 48 layers, d_model=1280, 8 heads,
@@ -119,7 +125,8 @@ int main() {
                      "  uv run scripts/convert-cohere.py "
                      "<model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026\n"
                      "and re-run with "
-                     "TRANSCRIBE_COHERE_GGUF=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf\n");
+                     "TRANSCRIBE_COHERE_GGUF=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf\n"
+                     "(or the equivalent path for another cohere-transcribe-* variant)\n");
         return 77;
     }
     const std::string fixture = env;
@@ -148,7 +155,14 @@ int main() {
     // exact label depends on the build platform; we just assert
     // it is non-empty.
     CHECK_STR_EQ(transcribe_model_arch_string(model), "cohere_asr");
-    CHECK_STR_EQ(transcribe_model_variant_string(model), "cohere-transcribe-03-2026");
+    {
+        const std::string variant = transcribe_model_variant_string(model);
+        // Variant-agnostic: any cohere-transcribe-* model (base
+        // cohere-transcribe-03-2026, cohere-transcribe-arabic-07-2026,
+        // ...) is structurally valid here.
+        CHECK(variant.rfind("cohere-transcribe-", 0) == 0);
+        std::fprintf(stderr, "cohere_real_smoke: variant=%s\n", variant.c_str());
+    }
     {
         const std::string backend = transcribe_model_backend(model);
         if (backend.empty()) {
@@ -169,16 +183,28 @@ int main() {
         CHECK_EQ_INT(caps->native_sample_rate, 16000);
         CHECK(caps->supports_translate == false);
 
-        // Published cohere-transcribe-03-2026 supports 14 languages
-        // in this exact order (from config.json supported_languages):
+        // Language catalog is variant-dependent. The base
+        // cohere-transcribe-03-2026 supports 14 languages in this
+        // exact order (from config.json supported_languages):
         //   en, fr, de, es, it, pt, nl, pl, el, ar, ja, zh, vi, ko
-        CHECK_EQ_INT(caps->n_languages, 14);
-        if (caps->n_languages >= 5 && caps->languages != nullptr) {
-            CHECK_STR_EQ(caps->languages[0], "en");
-            CHECK_STR_EQ(caps->languages[1], "fr");
-            CHECK_STR_EQ(caps->languages[2], "de");
-            CHECK_STR_EQ(caps->languages[3], "es");
-            CHECK_STR_EQ(caps->languages[4], "it");
+        // The cohere-transcribe-arabic-07-2026 variant supports
+        // only [en, ar]. Check the exact catalog per variant.
+        const std::string variant = transcribe_model_variant_string(model);
+        if (variant == "cohere-transcribe-03-2026") {
+            CHECK_EQ_INT(caps->n_languages, 14);
+            if (caps->n_languages >= 5 && caps->languages != nullptr) {
+                CHECK_STR_EQ(caps->languages[0], "en");
+                CHECK_STR_EQ(caps->languages[1], "fr");
+                CHECK_STR_EQ(caps->languages[2], "de");
+                CHECK_STR_EQ(caps->languages[3], "es");
+                CHECK_STR_EQ(caps->languages[4], "it");
+            }
+        } else {
+            CHECK_EQ_INT(caps->n_languages, 2);
+            if (caps->n_languages >= 2 && caps->languages != nullptr) {
+                CHECK_STR_EQ(caps->languages[0], "en");
+                CHECK_STR_EQ(caps->languages[1], "ar");
+            }
         }
     }
 

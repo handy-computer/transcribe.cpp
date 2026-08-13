@@ -73,6 +73,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -203,7 +205,7 @@ def read_hparams(config: dict, gen_config: dict) -> dict:
         "dec_max_seq":    int(dec["max_sequence_length"]),
         "dec_activation": str(dec["hidden_act"]).lower(),
 
-        "vocab_size":             int(config["vocab_size"]),
+        "vocab_size":             int(config.get("vocab_size") or config["head"]["num_classes"]),
         "decoder_start_token_id": int(gen_config["decoder_start_token_id"]),
         "bos_token_id":           int(gen_config["bos_token_id"]),
         "eos_token_id":           int(gen_config["eos_token_id"]),
@@ -427,8 +429,25 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
 
     hp = read_hparams(config, gen_config)
 
+    # Variant suffix from the HF repo id, e.g. "arabic-07-2026" for
+    # CohereLabs/cohere-transcribe-arabic-07-2026, "03-2026" for the base.
+    # Local dirs without --repo-id keep the base-model default.
+    if repo_id:
+        variant = os.path.basename(repo_id)
+        if variant.startswith("cohere-transcribe-"):
+            variant = variant[len("cohere-transcribe-"):]
+    else:
+        variant = "03-2026"
+
+    # Version tag: extra tag from the repo id ("arabic" for
+    # cohere-transcribe-arabic-07-2026). The base model has no extra tag,
+    # so fall back to the variant suffix ("03-2026") to keep today's
+    # metadata.
+    m = re.search(r"cohere-transcribe-(.+?)-\d{2}-\d{4}", repo_id or "")
+    version = m.group(1) if m else variant
+
     print(f"vocab_size = {hp['vocab_size']}")
-    print(f"Variant: cohere-transcribe-03-2026")
+    print(f"Variant: cohere-transcribe-{variant}")
 
     print(f"Reading tokenizer from {tokenizer_path}")
     tok = extract_tokenizer(tokenizer_path)
@@ -463,7 +482,7 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
         add_general_identity(
             writer,
             name="Cohere Transcribe",
-            version="03-2026",
+            version=version,
             basename="cohere-transcribe",
             size_label=size_label,
             file_type=REFERENCE_FILE_TYPE,
@@ -477,7 +496,7 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
         )
 
         # ----- stt.variant -----
-        writer.add_string("stt.variant", "cohere-transcribe-03-2026")
+        writer.add_string("stt.variant", f"cohere-transcribe-{variant}")
 
         # ----- tokenizer.ggml.* -----
         writer.add_string("tokenizer.ggml.model", "bpe")

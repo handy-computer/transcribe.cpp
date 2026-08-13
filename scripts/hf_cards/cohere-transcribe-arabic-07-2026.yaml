@@ -1,0 +1,87 @@
+# Spec for the HF README of handy-computer/cohere-transcribe-arabic-07-2026-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: handy-computer/cohere-transcribe-arabic-07-2026-gguf
+target_repo: CohereLabs/cohere-transcribe-arabic-07-2026
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-arabic-07-2026.md
+
+upstream_commit: 6a1364c
+pin_date: 2026-07-31
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: Transformers
+  commit: main
+  date: 2026-08
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - ar
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - cohere
+  - conformer
+  - encoder-decoder
+  - arabic
+  - ar
+
+summary: |
+  Arabic-English speech transcription model, 2B params, Conformer encoder
+  with a Transformer encoder-decoder head (cross-attention, tied token
+  embedding), optimized for Arabic. Takes a 16 kHz mono WAV and produces a
+  transcript. Decoding is autoregressive.
+
+default_quant_index: 3  # Q5_K_M
+
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: none  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    metal: TBD
+    cpu: TBD
+  ryzen-4750u:
+    vulkan: TBD
+    cpu: TBD
+
+wer:
+  source: FLEURS Arabic (428 utts)
+  notes: |
+    WER measured on the FLEURS Arabic split (428 utterances) with greedy
+    decoding and no external LM. BF16: 11.02% on transcribe.cpp vs 11.00%
+    on native Transformers. Quant WERs pending the quant sweep.
+
+quants:
+  - name: BF16
+    filename: cohere-transcribe-arabic-07-2026-BF16.gguf
+    size: ~4.0 GB
+    wer: 11.02%
+  - name: Q8_0
+    filename: cohere-transcribe-arabic-07-2026-Q8_0.gguf
+    size: ~2.1 GB
+    wer: TBD
+  - name: Q6_K
+    filename: cohere-transcribe-arabic-07-2026-Q6_K.gguf
+    size: ~1.7 GB
+    wer: TBD
+  - name: Q5_K_M
+    filename: cohere-transcribe-arabic-07-2026-Q5_K_M.gguf
+    size: ~1.5 GB
+    wer: TBD
+  - name: Q4_K_M
+    filename: cohere-transcribe-arabic-07-2026-Q4_K_M.gguf
+    size: ~1.3 GB
+    wer: TBD

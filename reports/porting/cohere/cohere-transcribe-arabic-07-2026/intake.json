@@ -1,0 +1,120 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "cohere",
+  "hf_repo": "CohereLabs/cohere-transcribe-arabic-07-2026",
+  "hf_revision": "c3e911b42149bf7a1e53d5cef9878aee87515a23",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    }
+  },
+  "variants": [
+    {
+      "name": "cohere-transcribe-arabic-07-2026",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-decoder"
+    ],
+    "key_fields": {
+      "model_type": "cohere_asr",
+      "architectures": [
+        "CohereAsrForConditionalGeneration"
+      ]
+    }
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "weights_header",
+    "evidence": "safetensors header BF16=2104, I64=48; BF16 selected as dominant floating dtype",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {
+        "I64": 48,
+        "BF16": 2104
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": null,
+    "n_mels": null,
+    "hop_length": null,
+    "fft_size": null,
+    "window": null,
+    "normalization": null,
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 16384,
+    "special_tokens": {
+      "bos": 4,
+      "eos": 3,
+      "pad": 2,
+      "decoder_start": 13764
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "c6e708e8cd5c72afb475a2268fcbae2cf86651d0439aeff395734e3c3cc85de5"
+  },
+  "capabilities": {
+    "languages": [
+      "en",
+      "ar"
+    ],
+    "language_detection": null,
+    "translation": null,
+    "timestamps": [],
+    "streaming": null,
+    "speaker_diarization": null
+  },
+  "upstream_benchmarks": [],
+  "reference_framework": null,
+  "reference_rationale": null,
+  "architecture_pattern": null,
+  "known_risks": [],
+  "intake_gaps": [
+    {
+      "field": "capabilities",
+      "reason": "translation, timestamps, streaming, VAD, and diarization flags require reading the model card; fill before intake sign-off"
+    },
+    {
+      "field": "upstream_benchmarks",
+      "reason": "publisher-reported WER/CER scores are not auto-scraped; add entries from the model card during research"
+    }
+  ]
+}
