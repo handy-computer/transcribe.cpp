@@ -6,7 +6,9 @@ use transcribe_cpp::{devices, Backend, Error, Model, ModelOptions};
 
 #[test]
 fn every_primary_device_can_be_selected_exactly() {
-    let Some((model_path, _)) = common::smoke_fixtures("every_primary_device_can_be_selected_exactly") else {
+    let Some((model_path, _)) =
+        common::smoke_fixtures("every_primary_device_can_be_selected_exactly")
+    else {
         return;
     };
 

@@ -225,7 +225,9 @@ impl Model {
     pub fn device(&self) -> Result<Device> {
         let handle = unsafe { sys::transcribe_model_device(self.inner.ptr) };
         if handle.is_null() {
-            return Err(crate::Error::Backend("model has no resolved device".to_string()));
+            return Err(crate::Error::Backend(
+                "model has no resolved device".to_string(),
+            ));
         }
         let mut raw: sys::transcribe_device_info = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_device_info_init(&mut raw) };
