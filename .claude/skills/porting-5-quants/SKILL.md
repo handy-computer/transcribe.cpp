@@ -60,15 +60,28 @@ intentionally lossy, and Stage 7 WER is the user-facing quant quality
 report.
 
 ```bash
+# transcribe-cli prints the literal string "(empty)" when a run produces no
+# text, so `grep '^text: .\+'` MATCHES a failed decode. Test for the absence
+# of "(empty)", never for the presence of characters.
 SAMPLE=samples/jfk.wav  # primary sample for the family
 for gguf in models/<variant>/<variant>-*.gguf; do
-  out="$(build/bin/transcribe-cli -m "$gguf" "$SAMPLE")" && \
-    printf '%s\n' "$out" | grep -q '^text: .\+' && echo "OK $gguf" \
-    || echo "FAIL $gguf"
+  text="$(build/bin/transcribe-cli -q -m "$gguf" "$SAMPLE" 2>/dev/null \
+            | sed -n 's/^text: //p')"
+  if [ -n "$text" ] && [ "$text" != "(empty)" ]; then
+    echo "OK   $gguf"
+  else
+    echo "FAIL $gguf  [${text:-no text: line}]"
+  fi
 done
 ```
 
 Any FAIL is a real bug; investigate before sign-off.
+
+If the family auto-detects language, pass an explicit `--language` as well and
+compare: a tier that fails only without the hint has a *detection* regression,
+not a decode regression, and the two have different fixes. Quantization
+degrades the single-forward language-detect pass well before it degrades
+transcription.
 
 ### Step 4: Publish quants to a private HF repo (execute)
 

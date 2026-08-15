@@ -404,14 +404,27 @@ It stays out of scope on evidence, not on that reasoning:
 
 **1. Upstream bug — repair is unreachable on the transformers backend.**
 `crisperwhisper/hallucination.py` does a module-level `import ctranslate2`, and
-`transformers_engine.generate_with_repair` imports from that module whenever
-repair is enabled. With only the documented `crisperwhisper[transformers]`
+`transformers_engine.generate_with_repair` lazily imports from that module
+whenever repair is enabled. With only the documented `crisperwhisper[transformers]`
 extra installed, `hallucination_mitigation=True` raises `ModuleNotFoundError:
-No module named 'ctranslate2'`. The helpers the transformers path actually
-needs (`find_token_loop`, `DEFAULT_REPAIR_THRESHOLDS`) are pure Python; the CT2
-symbol is used only in a CT2-only helper. Upstream `DOCS.md` lists
-"Hallucination mitigation (rewind/escape repair)" as supported on **both**
-backends. It is not. Worth reporting upstream.
+No module named 'ctranslate2'` — and since `transcribe()` defaults that flag to
+**True**, the documented install fails on its own default path. Upstream
+`DOCS.md` lists "Hallucination mitigation (rewind/escape repair)" as supported
+on **both** backends. It is not.
+
+The fix is one line, and the file is already set up for it. `hallucination.py`
+opens with `from __future__ import annotations` (so every annotation is a
+string, never evaluated) and already imports `TYPE_CHECKING`. Grepping the
+module, the *only* runtime reference to `ctranslate2` is the import itself —
+every other occurrence is inside an annotation on a CT2-only helper. Moving the
+import under `if TYPE_CHECKING:` unblocks the transformers path. Verified: with
+an **empty** `ctranslate2.py` stub on `PYTHONPATH`, `find_token_loop` and
+`DEFAULT_REPAIR_THRESHOLDS` import and run correctly.
+
+This downgrades the original blocker. "No working reference" was too strong: a
+one-line local patch produces a working repair-ON reference on the backend we
+already use, which is what a behavioural gate needs. Report upstream; patch
+locally to measure.
 
 **2. Forced through, it regresses.** Installing stock `ctranslate2` purely to
 satisfy the spurious import and re-decoding the 25 worst-WER verbatim
@@ -432,8 +445,22 @@ the domain repair is built for, and forcing an import the packaging does not
 support may mean measuring a broken backend rather than an ineffective
 algorithm. Both are reasons to re-measure on
 [the disfluency set](#disfluency-evaluation-set) at Stage 7, not reasons to port
-an unvalidated feature now. **We cannot port what we cannot first validate
-against a working reference.**
+an unvalidated feature now. **We do not ship a decode-altering feature that has
+only ever been measured as a regression.**
+
+**3. New evidence from Stage 5 — the failure mode is real, but rare.** Q4_K_M
+produced exactly one runaway on the disfluency set (`DISFLUENCY_TEST_000155`,
+130 words against an 18-word reference, a `s- s- s-` 1-gram loop) and it alone
+costs that tier 2.03 pp of WER. Fed the token shape of that failure,
+upstream's `find_token_loop` returns `(9, (777,))` — it fires exactly at the
+loop start and stays silent on clean sequences, so detection is not the hard
+part. What remains unvalidated is the *repair*: rewind plus a one-step ban on
+the loop starter, which is precisely the step that made things worse on
+LibriSpeech.
+
+Scope of the exposure across everything measured at Stage 5: **1 runaway in
+2,869 utterances**, confined to Q4_K_M. Zero at every other tier, and zero on
+all 2,620 LibriSpeech utterances at every tier.
 
 ## Disfluency evaluation set
 
@@ -937,6 +964,76 @@ delta of at most **+0.0056 pp**, and on the disfluency set BF16 scores
 *better* than the reference. Gating tensors at F32 and the shipped artifact on
 WER was the right split: the tensor gate stays tight enough to catch a real
 regression, and the number that matters is measured where it matters.
+
+## Quantization (Stage 5)
+
+Matrix produced by `scripts/quantize-all.py` from the BF16 reference GGUF.
+No tensor-level comparison is run on quantized tiers — quantization is
+intentionally lossy and WER is the acceptance signal.
+
+| Preset | Size | vs BF16 | LibriSpeech intended WER | nyra-disfluency verbatim WER |
+|---|---:|---:|---:|---:|
+| F32 (gate artifact) | 924 MB | 198 % | 3.230 | 3.54 |
+| BF16 (source) | 466 MB | — | 3.230 | 3.51 |
+| F16 | 470 MB | 101 % | 3.230 | 3.54 |
+| Q8_0 | 257 MB | 55 % | 3.220 | 3.58 |
+| Q6_K | 202 MB | 43 % | 3.240 | 3.58 |
+| Q5_K_M | 185 MB | 40 % | 3.280 | 3.78 |
+| Q4_K_M | 164 MB | 35 % | 3.440 | 6.30 |
+
+Oracle reference on the gated set is 3.22470, so every tier including
+Q4_K_M lands within +0.22 pp of the reference on LibriSpeech. Preliminary;
+Stage 7 is authoritative.
+
+### Q4_K_M repetition loop on the disfluency set
+
+Q4_K_M's disfluency number is not broad degradation — it is **one utterance**.
+`DISFLUENCY_TEST_000155` decodes to 130 words against an 18-word reference,
+degenerating into a `s- s- s-` loop, and contributes 114 of the tier's 152
+insertions. Excluding it, Q4_K_M scores 4.27 %. Every other tier, F32 through
+Q5_K_M, returns the same 11-word transcript for that utterance; the failure is
+deterministic and reproduces on both CPU and Metal.
+
+This is the failure mode the reference's rewind/escape hallucination repair and
+temperature fallback exist to catch, both of which are OUT OF SCOPE with
+evidence (see [Hallucination repair](#hallucination-repair-deferred-with-evidence)).
+With no repetition guard in the runtime, Q4_K_M is where that absence starts to
+cost measurable WER. LibriSpeech shows zero runaway utterances at every tier, so
+the exposure is content-dependent, not general.
+
+### Language auto-detection: a real bug the quant matrix exposed
+
+Q6_K and Q5_K_M originally detected `de` on `samples/jfk.wav` and then returned
+an **empty transcript**, because this checkpoint emits nothing when decoded
+under a wrong language token (forcing `--language de` at F32 is also empty, so
+that part is the model's behavior, not the quantizer's).
+
+The root cause was ours. `detect_language()` ran its forward with the family's
+mode-tag block in the prefix, `[verbatim_1..5] <|sot|>`, because every other
+decode on this family carries it. That wrecks the language head:
+
+| detection prefix | jfk top-1 | margin |
+|---|---|---:|
+| `[verbatim_1..5] <\|sot\|>` | en 0.207 (de 0.158, it 0.125, nl 0.124, sv 0.101) | 0.28 logits |
+| `<\|sot\|>` | en **0.998** | **8.05 logits** |
+
+A 0.28-logit margin across five European languages is a coin flip, so ordinary
+quantization noise decided it. Stock Whisper — and the HF bridge that is this
+capability row's reference — detects from a bare `<|sot|>`, which is now what
+the runtime does. Measured across all nine language samples the two prefixes
+agree on the answer everywhere; only the margin differs, and only the tagged
+one was close enough for noise to flip. After the fix all seven tiers, F32
+through Q4_K_M, detect `en` on jfk and transcribe it correctly.
+
+The general lesson for this family: **the language-detect forward degrades
+under quantization long before transcription does**, so it is the thing to
+smoke-test per tier. Two practical notes:
+
+1. `transcribe-cli` prints the literal string `(empty)` for an empty result, so
+   `grep '^text: .\+'` **passes** on a failed decode. Test for the absence of
+   `(empty)`, not for the presence of characters.
+2. `TRANSCRIBE_CW_DETECT_TOPK=1` prints the top-5 language posteriors and the
+   top-2 logit margin for the detection pass.
 
 ## Notes
 

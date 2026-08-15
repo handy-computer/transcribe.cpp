@@ -993,15 +993,23 @@ transcribe_status prime_cross_kv(CwSession * cc, CwModel * cm, int T_enc) {
 // no-hint path looks fine right up until it silently isn't.
 //
 // Requires the cross-attention cache to be populated for the current window.
-int32_t detect_language(CwSession * cc, CwModel * cm, CwMode mode, int T_enc) {
+int32_t detect_language(CwSession * cc, CwModel * cm, int T_enc) {
     const CwHParams & hp = cm->hparams;
     if (cm->lang_token_ids.empty() || !cc->kv_cache.cross_populated) {
         return -1;
     }
 
-    // Prefix only: mode tags + <|startoftranscript|>. The next position is
-    // where the model emits a language token.
-    std::vector<int32_t> ids = cm->contract.tags_for(mode);
+    // Detection prefix is a BARE <|startoftranscript|> — deliberately NOT the
+    // mode-tag block that every other decode on this family carries. Stock
+    // Whisper (and the HF bridge that is this row's reference) detects from a
+    // bare <|sot|>, and the mode tags wreck the language head: measured on
+    // samples/jfk.wav, `[verbatim_1..5] <|sot|>` yields en=0.207 over a
+    // 0.28-logit margin against de/it/nl/sv, so Q6_K and Q5_K_M flip to `de`
+    // and the run then decodes to empty text. A bare <|sot|> yields en=0.998
+    // over an 8.05-logit margin, stable on every quant tier down to Q4_K_M.
+    // Both prefixes agree on all nine language samples; only the margin
+    // differs, and only the tagged one is close enough for noise to flip.
+    std::vector<int32_t> ids;
     ids.push_back(hp.sot_token_id >= 0 ? hp.sot_token_id : hp.decoder_start_token_id);
     const int seq_len = static_cast<int>(ids.size());
 
@@ -1067,6 +1075,32 @@ int32_t detect_language(CwSession * cc, CwModel * cm, CwMode mode, int T_enc) {
             best_lp = row[static_cast<size_t>(lid)];
             best_id = lid;
         }
+    }
+
+    if (transcribe::env::flag("TRANSCRIBE_CW_DETECT_TOPK")) {
+        // lang_token_ids is ordered by language-token id and the converter
+        // writes general.languages in that same order, so index i lines up.
+        std::vector<std::pair<float, size_t>> lp;
+        for (size_t i = 0; i < cm->lang_token_ids.size(); ++i) {
+            const int32_t lid = cm->lang_token_ids[i];
+            if (lid >= 0 && lid < vocab) {
+                lp.emplace_back(row[static_cast<size_t>(lid)], i);
+            }
+        }
+        std::sort(lp.begin(), lp.end(), [](auto & a, auto & b) { return a.first > b.first; });
+        double sum = 0.0;
+        for (const auto & e : lp) {
+            sum += std::exp(static_cast<double>(e.first - lp[0].first));
+        }
+        std::fprintf(stderr, "cw-detect:");
+        for (size_t i = 0; i < lp.size() && i < 5; ++i) {
+            const double pr   = std::exp(static_cast<double>(lp[i].first - lp[0].first)) / sum;
+            const size_t idx  = lp[i].second;
+            const char * code = (idx < static_cast<size_t>(cm->caps.n_languages)) ? cm->caps.languages[idx] : "?";
+            std::fprintf(stderr, " %s=%.4f", code, pr);
+        }
+        std::fprintf(stderr, "  margin=%.4f\n",
+                     lp.size() > 1 ? static_cast<double>(lp[0].first - lp[1].first) : 0.0);
     }
 
     cc->kv_cache.n    = 0;
@@ -1324,7 +1358,7 @@ transcribe_status cw_run(transcribe_session *          session,
             if (const transcribe_status st = prime_cross_kv(cc, cm, T_enc); st != TRANSCRIBE_OK) {
                 return st;
             }
-            const int32_t detected = detect_language(cc, cm, mode, T_enc);
+            const int32_t detected = detect_language(cc, cm, T_enc);
             if (detected >= 0) {
                 lang_id = detected;
                 for (size_t i = 0; i < cm->lang_token_ids.size() && i < cm->lang_codes.size(); ++i) {

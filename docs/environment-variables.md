@@ -48,6 +48,7 @@ than silently falling back.
 | Variable | Effect |
 | --- | --- |
 | `TRANSCRIBE_MEL_FROM_REF=<dir>` | Inject a reference log-mel from `<dir>` instead of computing it, so encoder drift can be isolated from frontend drift. Each family reads its own dump filename/layout from the directory (`enc.mel.in.f32` for whisper / voxtral_realtime, `frontend.mel.out.f32` for gigaam, `mel.in.f32` for medasr). Driven by `scripts/validate.py --mel-from-ref`. |
+| `TRANSCRIBE_CW_DETECT_TOPK` | Print the top-5 language posteriors and the top-2 logit margin for the crisperwhisper language-detection forward. The detect pass degrades under quantization well before transcription does, so this is how you tell a detection regression from a decode regression. |
 | `TRANSCRIBE_DUMP_ALL_BLOCKS` | Dump every encoder block output (not just mid/last) for a layer-by-layer divergence bisect (parakeet, gigaam). Requires `TRANSCRIBE_DUMP_DIR`. |
 | `TRANSCRIBE_DUMP_SUB_BLOCKS=<csv>` | Dump intermediate sub-layer activations (ff1/attn/conv/ff2) for the listed block indices, e.g. `0,12,23` (parakeet). Requires `TRANSCRIBE_DUMP_DIR`. |
 
