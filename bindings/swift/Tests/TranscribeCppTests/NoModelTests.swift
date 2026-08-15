@@ -60,7 +60,7 @@ final class NoModelTests: XCTestCase {
     func testEnumeratedDevicesAreSelfConsistent() {
         let devices = Transcribe.devices()
         for (i, dev) in devices.enumerated() {
-            // `index` is the registry index — the value to pass as gpuDevice.
+            // `index` is the process-local registry position used for display.
             XCTAssertEqual(dev.index, i, "device \(i) index mismatch")
             // A CPU-kind device must classify on the CPU axis.
             if dev.kind == "cpu" {

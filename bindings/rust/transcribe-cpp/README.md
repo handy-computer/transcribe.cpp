@@ -60,6 +60,14 @@ available through `shared` and `dynamic-backends`; see the `transcribe-cpp-sys`
 README if you need runtime-loaded backend modules or custom
 `TRANSCRIBE_CMAKE_ARGS`.
 
+## Exact device selection
+
+`devices()` returns process-local `Device` handles. Leave
+`ModelOptions::device` as `None` for the backend's automatic policy, or pass
+`Some(device)` to select that exact primary device with no fallback. Persist
+`device_id` and resolve a fresh handle after backend initialization; registry
+indices and handles are not stable across processes.
+
 ## Packaging a distributable (`shared` / `dynamic-backends`)
 
 With the **default static** build there is nothing to do — the native code is

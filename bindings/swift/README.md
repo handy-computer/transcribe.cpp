@@ -81,8 +81,10 @@ Backends are compiled into the xcframework per Apple slice:
 | iOS device arm64     | Metal + CPU |
 | iOS simulator        | CPU only    |
 
-Request a backend with `ModelOptions(backend:)`; probe availability with
-`Transcribe.backendAvailable(_:)` or inspect `Transcribe.devices()`.
+Request a backend policy with `ModelOptions(backend:)`; probe availability with
+`Transcribe.backendAvailable(_:)`. For exact selection, pass an entry from
+`Transcribe.devices()` to `ModelOptions(device:)`; exact selection never falls
+back to another primary device.
 
 ## Concurrency and lifetime
 

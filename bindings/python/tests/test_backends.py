@@ -31,8 +31,8 @@ def test_backends_non_empty():
 
 
 def test_device_index_and_fields():
-    # Each device carries its registry index (the value Model(..., gpu_device=)
-    # selects with) and well-formed metadata. Pin the device-selection surface.
+    # Each device carries a process-local display index and an opaque selection
+    # handle, plus well-formed metadata. Pin the device-selection surface.
     devices = t.backends()
     for i, dev in enumerate(devices):
         assert dev.index == i, f"device {i} reported index {dev.index}"
@@ -93,6 +93,6 @@ def test_init_backends_rejects_bad_dirs():
 def test_init_backends_idempotent():
     lib = t._lib
     adir = str(_library.artifact_dir()).encode("utf-8")
-    n = lib.transcribe_backend_device_count()
+    n = lib.transcribe_device_count()
     assert lib.transcribe_init_backends(adir) == 0
-    assert lib.transcribe_backend_device_count() == n  # no re-registration
+    assert lib.transcribe_device_count() == n  # no re-registration

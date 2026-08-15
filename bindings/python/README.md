@@ -44,9 +44,11 @@ Long transcriptions can be cancelled from another thread with
 
 ## Backends
 
-`Model(backend=...)` picks the compute device (`"auto"` uses the best
-available). `transcribe_cpp.backends()` lists registered backends and
-`backend_available(kind)` checks one kind.
+`Model(backend=...)` applies a backend policy (`"auto"` uses the best
+available). `transcribe_cpp.backends()` returns process-local device objects;
+pass one as `Model(device=device)` for exact selection with no fallback. Persist
+a device's `device_id`, not its runtime handle or index. `backend_available(kind)`
+checks whether a backend policy can currently be satisfied.
 
 | Variable | Effect |
 |---|---|

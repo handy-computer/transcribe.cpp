@@ -590,7 +590,7 @@ transcribe_status load_from_bin(const char *                                path
     }
 
     // ---- Backend plan ----
-    if (auto st = transcribe::load_common::init_backends(params->backend, params->gpu_device, "whisper", m->plan);
+    if (auto st = transcribe::load_common::init_backends(params->backend, params->device, "whisper", m->plan);
         st != TRANSCRIBE_OK) {
         return st;
     }

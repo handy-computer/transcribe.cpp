@@ -288,7 +288,7 @@ pub enum AbiStruct {
     StreamText,
     SessionLimits,
     Ext,
-    BackendDevice,
+    DeviceInfo,
     SpeakerSegment,
 }
 
@@ -309,7 +309,7 @@ impl AbiStruct {
             AbiStruct::StreamText => A::TRANSCRIBE_ABI_STREAM_TEXT,
             AbiStruct::SessionLimits => A::TRANSCRIBE_ABI_SESSION_LIMITS,
             AbiStruct::Ext => A::TRANSCRIBE_ABI_EXT,
-            AbiStruct::BackendDevice => A::TRANSCRIBE_ABI_BACKEND_DEVICE,
+            AbiStruct::DeviceInfo => A::TRANSCRIBE_ABI_DEVICE_INFO,
             AbiStruct::SpeakerSegment => A::TRANSCRIBE_ABI_SPEAKER_SEGMENT,
         }
     }

@@ -55,7 +55,7 @@ void free_plan(transcribe::BackendPlan & plan) {
 void test_baseline_no_hook() {
     unset_env("TRANSCRIBE_TEST_DEV_INIT_THROW");
     transcribe::BackendPlan plan;
-    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", plan);
+    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", plan);
     CHECK(st == TRANSCRIBE_OK);
     CHECK(plan.primary != nullptr);
     CHECK(!plan.scheduler_list.empty());
@@ -65,7 +65,7 @@ void test_baseline_no_hook() {
 void test_nonmatching_hook_is_inert() {
     set_env("TRANSCRIBE_TEST_DEV_INIT_THROW", "no-such-device-name-xyzzy");
     transcribe::BackendPlan plan;
-    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", plan);
+    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", plan);
     CHECK(st == TRANSCRIBE_OK);
     CHECK(plan.primary != nullptr);
     free_plan(plan);
@@ -77,11 +77,11 @@ void test_empty_hook_value_is_inert() {
     // POSIX-only: Windows deletes the variable when setting an empty value.
     unset_env("TRANSCRIBE_TEST_DEV_INIT_THROW");
     transcribe::BackendPlan baseline;
-    CHECK(transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", baseline) == TRANSCRIBE_OK);
+    CHECK(transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", baseline) == TRANSCRIBE_OK);
 
     set_env("TRANSCRIBE_TEST_DEV_INIT_THROW", "");
     transcribe::BackendPlan plan;
-    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", plan);
+    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", plan);
     CHECK(st == TRANSCRIBE_OK);
     CHECK(plan.primary != nullptr);
     CHECK(plan.primary_kind == baseline.primary_kind);
@@ -95,7 +95,7 @@ void test_empty_hook_value_is_inert() {
 void test_auto_falls_back_to_cpu_when_every_device_throws() {
     set_env("TRANSCRIBE_TEST_DEV_INIT_THROW", "*");
     transcribe::BackendPlan plan;
-    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", plan);
+    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", plan);
     CHECK(st == TRANSCRIBE_OK);
     CHECK(plan.primary != nullptr);
     CHECK(plan.primary_kind == transcribe::BackendKind::Cpu);
@@ -113,7 +113,7 @@ void test_specific_gpu_request_fails_cleanly_when_every_device_throws() {
     };
     for (const auto kind : kinds) {
         transcribe::BackendPlan plan;
-        const transcribe_status st = transcribe::load_common::init_backends(kind, 0, "test", plan);
+        const transcribe_status st = transcribe::load_common::init_backends(kind, nullptr, "test", plan);
         CHECK(st == TRANSCRIBE_ERR_BACKEND);
         CHECK(plan.primary == nullptr);
     }
@@ -124,7 +124,7 @@ void test_cpu_request_unaffected_by_hook() {
     set_env("TRANSCRIBE_TEST_DEV_INIT_THROW", "*");
     for (const auto kind : { TRANSCRIBE_BACKEND_CPU, TRANSCRIBE_BACKEND_CPU_ACCEL }) {
         transcribe::BackendPlan plan;
-        const transcribe_status st = transcribe::load_common::init_backends(kind, 0, "test", plan);
+        const transcribe_status st = transcribe::load_common::init_backends(kind, nullptr, "test", plan);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(plan.primary_kind == transcribe::BackendKind::Cpu);
         free_plan(plan);
@@ -132,14 +132,14 @@ void test_cpu_request_unaffected_by_hook() {
     unset_env("TRANSCRIBE_TEST_DEV_INIT_THROW");
 }
 
-void test_explicit_gpu_device_fails_cleanly_when_it_throws() {
-    // Only meaningful when a GPU/IGPU device sits at index > 0.
+void test_explicit_device_fails_cleanly_when_it_throws() {
+    // Only meaningful when a GPU/IGPU device is registered.
     int       gpu_index = -1;
-    const int n         = transcribe_backend_device_count();
-    for (int i = 1; i < n; ++i) {
-        struct transcribe_backend_device dev;
-        transcribe_backend_device_init(&dev);
-        if (transcribe_get_backend_device(i, &dev) != TRANSCRIBE_OK) {
+    const int n         = transcribe_device_count();
+    for (int i = 0; i < n; ++i) {
+        struct transcribe_device_info dev;
+        transcribe_device_info_init(&dev);
+        if (transcribe_device_get_info(transcribe_device_get(i), &dev) != TRANSCRIBE_OK) {
             continue;
         }
         if (dev.device_type == TRANSCRIBE_DEVICE_TYPE_GPU || dev.device_type == TRANSCRIBE_DEVICE_TYPE_IGPU) {
@@ -153,7 +153,7 @@ void test_explicit_gpu_device_fails_cleanly_when_it_throws() {
     set_env("TRANSCRIBE_TEST_DEV_INIT_THROW", "*");
     transcribe::BackendPlan plan;
     const transcribe_status st =
-        transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, gpu_index, "test", plan);
+        transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, transcribe_device_get(gpu_index), "test", plan);
     CHECK(st == TRANSCRIBE_ERR_BACKEND);
     CHECK(plan.primary == nullptr);
     unset_env("TRANSCRIBE_TEST_DEV_INIT_THROW");
@@ -174,7 +174,7 @@ int main() {
     test_auto_falls_back_to_cpu_when_every_device_throws();
     test_specific_gpu_request_fails_cleanly_when_every_device_throws();
     test_cpu_request_unaffected_by_hook();
-    test_explicit_gpu_device_fails_cleanly_when_it_throws();
+    test_explicit_device_fails_cleanly_when_it_throws();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

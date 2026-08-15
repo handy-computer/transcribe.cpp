@@ -24,7 +24,7 @@ import ctypes
 import os
 import threading
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Optional, Sequence, Union
 
 from . import _abi, _generated
@@ -283,18 +283,16 @@ class BackendDevice:
     # (via backends() or Model.device) to refresh; backend-defined and not
     # comparable across device kinds.
     memory_free: int
-    # Registry index of this device — the value to pass as ``Model(...,
-    # gpu_device=index)`` to select it (0 means auto: discrete GPUs are
-    # probed before integrated).
-    # None when the device came from Model.device, since the underlying
-    # transcribe_model_get_device() does not expose an index; correlate such a
-    # device back to backends() by device_id / name instead. The index is
-    # order-dependent and not stable across driver updates or hosts.
+    # Registry index for display. Exact model selection uses the BackendDevice
+    # itself; indices are process-local and not stable across driver updates.
     index: Optional[int] = None
+    # Opaque process-local native device handle. Applications persist device_id,
+    # never this value.
+    _handle: Optional[int] = field(default=None, repr=False, compare=False)
 
 
-def _backend_device_from_raw(dev, index: Optional[int] = None) -> BackendDevice:
-    """Build a BackendDevice from a library-filled transcribe_backend_device."""
+def _backend_device_from_raw(dev, handle: Optional[int], index: Optional[int] = None) -> BackendDevice:
+    """Build a BackendDevice from a library-filled transcribe_device_info."""
     return BackendDevice(
         name=_decode(dev.name),
         description=_decode(dev.description),
@@ -304,6 +302,7 @@ def _backend_device_from_raw(dev, index: Optional[int] = None) -> BackendDevice:
         memory_total=int(dev.memory_total),
         memory_free=int(dev.memory_free),
         index=index,
+        _handle=handle,
     )
 
 
@@ -315,12 +314,15 @@ def backends() -> list[BackendDevice]:
     Each device's ``memory_free`` is live as of the call; call again to poll
     a device's available memory over time."""
     devices = []
-    for i in range(_lib.transcribe_backend_device_count()):
-        dev = _generated.transcribe_backend_device()
-        _lib.transcribe_backend_device_init(_byref(dev))
-        _check(_lib.transcribe_get_backend_device(i, _byref(dev)),
+    for i in range(_lib.transcribe_device_count()):
+        handle = _lib.transcribe_device_get(i)
+        if not handle:
+            continue
+        dev = _generated.transcribe_device_info()
+        _lib.transcribe_device_info_init(_byref(dev))
+        _check(_lib.transcribe_device_get_info(handle, _byref(dev)),
                f"reading backend device {i}")
-        devices.append(_backend_device_from_raw(dev, index=i))
+        devices.append(_backend_device_from_raw(dev, int(handle), index=i))
     return devices
 
 
@@ -857,7 +859,7 @@ class Model:
     """
 
     def __init__(self, path: str | os.PathLike, *,
-                 backend: Backend = "auto", gpu_device: int = 0):
+                 backend: Backend = "auto", device: BackendDevice | None = None):
         # Live sessions, tracked weakly: close() must free them before the
         # model, because transcribe_model_free is only valid once every
         # derived session is gone (use-after-free otherwise). Created before
@@ -870,7 +872,10 @@ class Model:
         params = _ModelLoadParams()
         _lib.transcribe_model_load_params_init(_byref(params))
         params.backend = _enum(_BACKENDS, backend, backend_source)
-        params.gpu_device = gpu_device
+        if device is not None:
+            if not isinstance(device, BackendDevice) or device._handle is None:
+                raise TypeError("device must be a BackendDevice returned by backends()")
+            params.device = device._handle
 
         handle = ctypes.c_void_p()
         status = _lib.transcribe_model_load_file(
@@ -905,11 +910,14 @@ class Model:
         live snapshot, so read this again to poll how much device memory is
         left after the model loaded. Raises if the model has no resolved
         compute device."""
-        dev = _generated.transcribe_backend_device()
-        _lib.transcribe_backend_device_init(_byref(dev))
-        _check(_lib.transcribe_model_get_device(self._h, _byref(dev)),
-               "model_get_device")
-        return _backend_device_from_raw(dev)
+        handle = _lib.transcribe_model_device(self._h)
+        if not handle:
+            raise BackendError("model has no resolved compute device")
+        dev = _generated.transcribe_device_info()
+        _lib.transcribe_device_info_init(_byref(dev))
+        _check(_lib.transcribe_device_get_info(handle, _byref(dev)),
+               "device_get_info")
+        return _backend_device_from_raw(dev, int(handle))
 
     @property
     def capabilities(self) -> Capabilities:
@@ -1431,7 +1439,7 @@ def transcribe(
     pcm: PCMLike,
     *,
     backend: Backend = "auto",
-    gpu_device: int = 0,
+    device: BackendDevice | None = None,
     n_threads: int = 0,
     kv_type: KVType = "auto",
     n_ctx: int = 0,
@@ -1449,7 +1457,7 @@ def transcribe(
     *model* may be a path (loaded and freed within this call) or an existing
     Model (reused and left open). Loading a model is not free, so to transcribe
     many clips keep a Model and call ``model.session().run(...)`` yourself; this
-    helper is for the one-shot case. ``backend`` / ``gpu_device`` apply only when
+    helper is for the one-shot case. ``backend`` / ``device`` apply only when
     *model* is a path — they are ignored when an already-loaded Model is passed.
     ``family`` / ``spec_k_drafts`` pass through to :meth:`Session.run`.
     """
@@ -1463,6 +1471,6 @@ def transcribe(
         with model.session(**session_opts) as session:
             return session.run(pcm, **run_opts)
 
-    with Model(model, backend=backend, gpu_device=gpu_device) as owned:
+    with Model(model, backend=backend, device=device) as owned:
         with owned.session(**session_opts) as session:
             return session.run(pcm, **run_opts)

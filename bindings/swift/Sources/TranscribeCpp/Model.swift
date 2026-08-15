@@ -27,7 +27,7 @@ public final class Model: @unchecked Sendable {
         var params = transcribe_model_load_params()
         transcribe_model_load_params_init(&params)
         params.backend = options.backend.cValue
-        params.gpu_device = options.gpuDevice
+        params.device = options.device?.handle
         var out: OpaquePointer?
         let status = transcribe_model_load_file(path, &params, &out)
         try TranscribeError.check(status, context: "loading \(path)")
@@ -79,11 +79,14 @@ public final class Model: @unchecked Sendable {
     /// has no resolved compute device.
     public var device: Device {
         get throws {
-            var raw = transcribe_backend_device()
-            transcribe_backend_device_init(&raw)
+            guard let handle = transcribe_model_device(ptr) else {
+                throw TranscribeError.backend("model has no resolved compute device")
+            }
+            var raw = transcribe_device_info()
+            transcribe_device_info_init(&raw)
             try TranscribeError.check(
-                transcribe_model_get_device(ptr, &raw), context: "model_get_device")
-            return Device(raw)
+                transcribe_device_get_info(handle, &raw), context: "device_get_info")
+            return Device(raw, handle: handle)
         }
     }
 

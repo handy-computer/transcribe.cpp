@@ -321,6 +321,8 @@ export function artifactDir(): string {
   return resolveLibrary().artifactDir;
 }
 
+const DEVICE_HANDLES = new WeakMap<BackendInfo, unknown>();
+
 const DEVICE_TYPE_NAMES: Record<number, DeviceType> = {
   [g.TRANSCRIBE_DEVICE_TYPE_CPU]: "cpu",
   [g.TRANSCRIBE_DEVICE_TYPE_GPU]: "gpu",
@@ -328,11 +330,15 @@ const DEVICE_TYPE_NAMES: Record<number, DeviceType> = {
   [g.TRANSCRIBE_DEVICE_TYPE_ACCEL]: "accel",
 };
 
-// Decode a koffi-filled transcribe_backend_device struct into a BackendInfo.
+// Decode a koffi-filled transcribe_device_info struct into a BackendInfo.
 // memory_* are uint64 (bigint from koffi) but stay well under 2^53 for any
 // real device, so num() narrows them losslessly.
-function deviceFromRaw(dev: any, index: number | null = null): BackendInfo {
-  return {
+function deviceFromRaw(
+  dev: any,
+  handle: unknown,
+  index: number | null = null,
+): BackendInfo {
+  const info: BackendInfo = {
     name: dev.name ?? "",
     description: dev.description ?? "",
     kind: dev.kind ?? "",
@@ -342,17 +348,21 @@ function deviceFromRaw(dev: any, index: number | null = null): BackendInfo {
     memoryFree: num(dev.memory_free),
     index,
   };
+  DEVICE_HANDLES.set(info, handle);
+  return info;
 }
 
 export function getAvailableBackends(): BackendInfo[] {
   const n = native();
-  const count = n.F.backendDeviceCount();
+  const count = n.F.deviceCount();
   const out: BackendInfo[] = [];
   for (let i = 0; i < count; i++) {
+    const handle = n.F.deviceGet(i);
+    if (!handle) continue;
     const dev: any = {};
-    n.F.backendDeviceInit(dev);
-    check(n, n.F.getBackendDevice(i, dev), `reading backend device ${i}`);
-    out.push(deviceFromRaw(dev, i));
+    n.F.deviceInfoInit(dev);
+    check(n, n.F.deviceGetInfo(handle, dev), `reading backend device ${i}`);
+    out.push(deviceFromRaw(dev, handle, i));
   }
   return out;
 }
@@ -1272,7 +1282,15 @@ export class TranscribeModel {
     const p: any = {};
     n.F.modelLoadParamsInit(p);
     if (opts.backend) p.backend = lookup(BACKENDS, opts.backend, "backend");
-    if (opts.gpuDevice !== undefined) p.gpu_device = opts.gpuDevice;
+    if (opts.device !== undefined) {
+      const handle = DEVICE_HANDLES.get(opts.device);
+      if (!handle) {
+        throw new TranscribeError(
+          "device must be an entry returned by getAvailableBackends() or model.device",
+        );
+      }
+      p.device = handle;
+    }
 
     const out: any[] = [null];
     const st = await callAsync<number>(n.F.modelLoadFile, path, p, out);
@@ -1405,14 +1423,12 @@ export class TranscribeModel {
    *  snapshot, so read this again to poll how much device memory is left
    *  after the model loaded. */
   get device(): BackendInfo {
+    const handle = this.#n.F.modelDevice(this.handle);
+    if (!handle) throw new TranscribeError("model has no resolved compute device");
     const dev: any = {};
-    this.#n.F.backendDeviceInit(dev);
-    check(
-      this.#n,
-      this.#n.F.modelGetDevice(this.handle, dev),
-      "reading model device",
-    );
-    return deviceFromRaw(dev);
+    this.#n.F.deviceInfoInit(dev);
+    check(this.#n, this.#n.F.deviceGetInfo(handle, dev), "reading model device");
+    return deviceFromRaw(dev, handle);
   }
 
   dispose(): void {

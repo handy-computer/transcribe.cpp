@@ -101,10 +101,13 @@ the model lease). Disposal is idempotent and order-independent.
 ```ts
 import { getAvailableBackends, backendAvailable } from "transcribe-cpp";
 
-getAvailableBackends(); // [{ kind: "metal", name: "MTL0", description: "…" }, …]
+const devices = getAvailableBackends();
 backendAvailable("rocm"); // boolean — never throws
 
-const model = await TranscribeModel.load("model.gguf", { backend: "rocm" });
+// Policy selection: first matching ROCm device.
+const automatic = await TranscribeModel.load("model.gguf", { backend: "rocm" });
+// Exact selection: use this process-local device or fail without fallback.
+const exact = await TranscribeModel.load("model.gguf", { device: devices[0] });
 ```
 
 `backend` defaults to `"auto"` (best accelerator, else CPU). A missing Vulkan

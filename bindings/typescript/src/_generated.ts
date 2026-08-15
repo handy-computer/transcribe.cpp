@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "7896d8d4c2a46147";
+export const PUBLIC_HEADER_HASH = "7df72bf9e667b8c2";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -46,7 +46,7 @@ export const TRANSCRIBE_ABI_STREAM_UPDATE = 9;
 export const TRANSCRIBE_ABI_STREAM_TEXT = 10;
 export const TRANSCRIBE_ABI_SESSION_LIMITS = 11;
 export const TRANSCRIBE_ABI_EXT = 12;
-export const TRANSCRIBE_ABI_BACKEND_DEVICE = 13;
+export const TRANSCRIBE_ABI_DEVICE_INFO = 13;
 export const TRANSCRIBE_ABI_SPEAKER_SEGMENT = 14;
 export const TRANSCRIBE_LOG_LEVEL_NONE = 0;
 export const TRANSCRIBE_LOG_LEVEL_INFO = 1;
@@ -118,8 +118,8 @@ export const TRANSCRIBE_EXT_KIND_WHISPER_RUN = 1314015319;
 export interface StructLayout { size: number; align: number; offsets: Record<string, number>; }
 export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_ext': { size: 16, align: 8, offsets: {'size': 0, 'kind': 8} },
-  'transcribe_backend_device': { size: 64, align: 8, offsets: {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24, 'device_id': 32, 'memory_total': 40, 'memory_free': 48, 'device_type': 56} },
-  'transcribe_model_load_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'backend': 8, 'gpu_device': 12} },
+  'transcribe_device_info': { size: 64, align: 8, offsets: {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24, 'device_id': 32, 'memory_total': 40, 'memory_free': 48, 'device_type': 56} },
+  'transcribe_model_load_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'backend': 8, 'device': 16} },
   'transcribe_session_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'n_threads': 8, 'kv_type': 12, 'n_ctx': 16} },
   'transcribe_run_params': { size: 72, align: 8, offsets: {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'diarize': 24, 'language': 32, 'target_language': 40, 'keep_special_tags': 48, 'family': 56, 'spec_k_drafts': 64} },
   'transcribe_capabilities': { size: 56, align: 8, offsets: {'struct_size': 0, 'native_sample_rate': 8, 'n_languages': 12, 'languages': 16, 'max_timestamp_kind': 24, 'supports_language_detect': 28, 'supports_translate': 29, 'supports_streaming': 30, 'supports_spec_decode': 31, 'max_audio_ms': 32, 'n_translate_target_languages': 40, 'translate_target_languages': 48} },
@@ -143,7 +143,7 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
 
 export const ABI_STRUCT_IDS: Record<string, number> = {
   'transcribe_ext': 12,
-  'transcribe_backend_device': 13,
+  'transcribe_device_info': 13,
   'transcribe_model_load_params': 0,
   'transcribe_session_params': 1,
   'transcribe_run_params': 2,
@@ -163,8 +163,8 @@ export const ABI_STRUCT_IDS: Record<string, number> = {
 export function defineTypes(koffi: any): Record<string, any> {
   const T: Record<string, any> = {};
   T['transcribe_ext'] = koffi.struct({ size: 'uint64_t', kind: 'uint32_t' });
-  T['transcribe_backend_device'] = koffi.struct({ struct_size: 'uint64_t', name: 'char *', description: 'char *', kind: 'char *', device_id: 'char *', memory_total: 'uint64_t', memory_free: 'uint64_t', device_type: 'int' });
-  T['transcribe_model_load_params'] = koffi.struct({ struct_size: 'uint64_t', backend: 'int', gpu_device: 'int' });
+  T['transcribe_device_info'] = koffi.struct({ struct_size: 'uint64_t', name: 'char *', description: 'char *', kind: 'char *', device_id: 'char *', memory_total: 'uint64_t', memory_free: 'uint64_t', device_type: 'int' });
+  T['transcribe_model_load_params'] = koffi.struct({ struct_size: 'uint64_t', backend: 'int', device: 'void *' });
   T['transcribe_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int', kv_type: 'int', n_ctx: 'int32_t' });
   T['transcribe_run_params'] = koffi.struct({ struct_size: 'uint64_t', task: 'int', timestamps: 'int', pnc: 'int', itn: 'int', diarize: 'int', language: 'char *', target_language: 'char *', keep_special_tags: 'bool', family: 'void *', spec_k_drafts: 'int32_t' });
   T['transcribe_capabilities'] = koffi.struct({ struct_size: 'uint64_t', native_sample_rate: 'int32_t', n_languages: 'int', languages: 'void *', max_timestamp_kind: 'int', supports_language_detect: 'bool', supports_translate: 'bool', supports_streaming: 'bool', supports_spec_decode: 'bool', max_audio_ms: 'int64_t', n_translate_target_languages: 'int', translate_target_languages: 'void *' });
@@ -192,8 +192,6 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_abi_struct_align': { ret: 'size_t', args: ['transcribe_abi_struct'] },
   'transcribe_abi_struct_size': { ret: 'size_t', args: ['transcribe_abi_struct'] },
   'transcribe_backend_available': { ret: '_Bool', args: ['transcribe_backend_request'] },
-  'transcribe_backend_device_count': { ret: 'int', args: [] },
-  'transcribe_backend_device_init': { ret: 'void', args: ['struct transcribe_backend_device *'] },
   'transcribe_batch_detected_language': { ret: 'const char *', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_full_text': { ret: 'const char *', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_get_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'int', 'struct transcribe_segment *'] },
@@ -212,9 +210,12 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_capabilities_init': { ret: 'void', args: ['struct transcribe_capabilities *'] },
   'transcribe_close': { ret: 'void', args: ['struct transcribe_session *'] },
   'transcribe_detected_language': { ret: 'const char *', args: ['const struct transcribe_session *'] },
+  'transcribe_device_count': { ret: 'int', args: [] },
+  'transcribe_device_get': { ret: 'transcribe_device_t', args: ['int'] },
+  'transcribe_device_get_info': { ret: 'transcribe_status', args: ['transcribe_device_t', 'struct transcribe_device_info *'] },
+  'transcribe_device_info_init': { ret: 'void', args: ['struct transcribe_device_info *'] },
   'transcribe_ext_check': { ret: 'transcribe_status', args: ['const struct transcribe_ext *', 'uint32_t', 'uint64_t'] },
   'transcribe_full_text': { ret: 'const char *', args: ['const struct transcribe_session *'] },
-  'transcribe_get_backend_device': { ret: 'transcribe_status', args: ['int', 'struct transcribe_backend_device *'] },
   'transcribe_get_model': { ret: 'const struct transcribe_model *', args: ['const struct transcribe_session *'] },
   'transcribe_get_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'struct transcribe_segment *'] },
   'transcribe_get_speaker_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'struct transcribe_speaker_segment *'] },
@@ -229,9 +230,9 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_model_accepts_ext_kind': { ret: '_Bool', args: ['const struct transcribe_model *', 'transcribe_ext_slot', 'uint32_t'] },
   'transcribe_model_arch_string': { ret: 'const char *', args: ['const struct transcribe_model *'] },
   'transcribe_model_backend': { ret: 'const char *', args: ['const struct transcribe_model *'] },
+  'transcribe_model_device': { ret: 'transcribe_device_t', args: ['const struct transcribe_model *'] },
   'transcribe_model_free': { ret: 'void', args: ['struct transcribe_model *'] },
   'transcribe_model_get_capabilities': { ret: 'transcribe_status', args: ['const struct transcribe_model *', 'struct transcribe_capabilities *'] },
-  'transcribe_model_get_device': { ret: 'transcribe_status', args: ['const struct transcribe_model *', 'struct transcribe_backend_device *'] },
   'transcribe_model_load_file': { ret: 'transcribe_status', args: ['const char *', 'const struct transcribe_model_load_params *', 'struct transcribe_model **'] },
   'transcribe_model_load_params_init': { ret: 'void', args: ['struct transcribe_model_load_params *'] },
   'transcribe_model_meta_val_str': { ret: 'const char *', args: ['const struct transcribe_model *', 'const char *'] },

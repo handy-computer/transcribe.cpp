@@ -146,7 +146,7 @@ static void test_backend_devices(void) {
      * compiled-in builds register at startup; dynamic-backend builds
      * register via transcribe_init_backends. This smoke runs in both
      * configurations. */
-    const int n_before = transcribe_backend_device_count();
+    const int n_before = transcribe_device_count();
     CHECK(n_before >= 0);
 
     /* init_backends argument contract. */
@@ -160,16 +160,16 @@ static void test_backend_devices(void) {
      * never re-registers (device count stable). */
     const int st1 = transcribe_init_backends(".");
     CHECK(st1 == TRANSCRIBE_OK || st1 == TRANSCRIBE_ERR_BACKEND);
-    const int n_after = transcribe_backend_device_count();
+    const int n_after = transcribe_device_count();
     const int st2     = transcribe_init_backends(".");
     CHECK(st2 == st1);
-    CHECK(transcribe_backend_device_count() == n_after);
+    CHECK(transcribe_device_count() == n_after);
 
     if (n_after > 0) {
-        struct transcribe_backend_device dev;
-        transcribe_backend_device_init(&dev);
+        struct transcribe_device_info dev;
+        transcribe_device_info_init(&dev);
         CHECK(dev.struct_size == sizeof(dev));
-        CHECK(transcribe_get_backend_device(0, &dev) == TRANSCRIBE_OK);
+        CHECK(transcribe_device_get_info(transcribe_device_get(0), &dev) == TRANSCRIBE_OK);
         CHECK(dev.name != NULL && dev.name[0] != '\0');
         CHECK(dev.description != NULL);
         CHECK(dev.kind != NULL && dev.kind[0] != '\0');
@@ -180,16 +180,16 @@ static void test_backend_devices(void) {
     }
 
     /* Out-of-range probes answer cleanly: error status or false, never UB. */
-    struct transcribe_backend_device dev2;
-    transcribe_backend_device_init(&dev2);
-    CHECK(transcribe_get_backend_device(-1, &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_get_backend_device(1 << 20, &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_get_backend_device(0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    struct transcribe_device_info dev2;
+    transcribe_device_info_init(&dev2);
+    CHECK(transcribe_device_get_info(transcribe_device_get(-1), &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_device_get_info(transcribe_device_get(1 << 20), &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_device_get_info(transcribe_device_get(0), NULL) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(!transcribe_backend_available((transcribe_backend_request) 999));
 
     /* ABI accessors must know the new struct. */
-    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_BACKEND_DEVICE) == sizeof(struct transcribe_backend_device));
-    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_BACKEND_DEVICE) == _Alignof(struct transcribe_backend_device));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_DEVICE_INFO) == sizeof(struct transcribe_device_info));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_DEVICE_INFO) == _Alignof(struct transcribe_device_info));
 }
 
 static void test_log_level_values(void) {
@@ -217,7 +217,7 @@ static void test_init_macros(void) {
     transcribe_model_load_params_init(&mp_macro);
     CHECK(mp_macro.struct_size == sizeof(struct transcribe_model_load_params));
     CHECK(mp_macro.backend == TRANSCRIBE_BACKEND_AUTO);
-    CHECK(mp_macro.gpu_device == 0);
+    CHECK(mp_macro.device == NULL);
 
     struct transcribe_session_params cp_macro;
     transcribe_session_params_init(&cp_macro);
@@ -425,15 +425,12 @@ static void test_load_invalid(void) {
           TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     CHECK(m == NULL);
 
-    /* gpu_device selection is validated during load against the live device
-     * registry (in load_common::init_backends), not as an upfront reserved-
-     * field check — so a nonzero gpu_device no longer short-circuits to
-     * INVALID_ARG before the file is even opened. A missing file still
-     * surfaces as FILE_NOT_FOUND regardless of gpu_device. */
+    /* Exact selection is validated by load_common after opening the model. A
+     * missing file therefore still reports FILE_NOT_FOUND first. */
     struct transcribe_model_load_params mp_dev;
     transcribe_model_load_params_init(&mp_dev);
-    mp_dev.gpu_device = 1;
-    m                 = (struct transcribe_model *) 0xdeadbeef;
+    mp_dev.device = transcribe_device_get(0);
+    m             = (struct transcribe_model *) 0xdeadbeef;
     CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf", &mp_dev, &m) ==
           TRANSCRIBE_ERR_FILE_NOT_FOUND);
     CHECK(m == NULL);

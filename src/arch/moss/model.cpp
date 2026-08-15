@@ -313,7 +313,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "moss", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "moss", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;

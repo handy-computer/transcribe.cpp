@@ -66,14 +66,15 @@ public enum Transcribe {
 
     /// The compute devices the native library has registered.
     public static func devices() -> [Device] {
-        let count = transcribe_backend_device_count()
+        let count = transcribe_device_count()
         var devices: [Device] = []
         devices.reserveCapacity(Int(count))
         for index in 0..<count {
-            var raw = transcribe_backend_device()
-            transcribe_backend_device_init(&raw)
-            guard transcribe_get_backend_device(index, &raw) == TRANSCRIBE_OK else { continue }
-            devices.append(Device(raw, index: Int(index)))
+            guard let handle = transcribe_device_get(index) else { continue }
+            var raw = transcribe_device_info()
+            transcribe_device_info_init(&raw)
+            guard transcribe_device_get_info(handle, &raw) == TRANSCRIBE_OK else { continue }
+            devices.append(Device(raw, handle: handle, index: Int(index)))
         }
         return devices
     }

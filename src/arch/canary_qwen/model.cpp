@@ -645,7 +645,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     // Backend plan + alloc + stream tensor data.
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0, "canary_qwen",
+    if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->device : nullptr, "canary_qwen",
                                              m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);

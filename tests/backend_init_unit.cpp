@@ -10,7 +10,7 @@
 //     actually returns, not on registry probes — a device can be
 //     registered but fail initialization.
 //   - AUTO: always succeeds; asserts based on the returned primary_kind.
-//   - Explicit gpu_device: rejects invalid selectors and, when a
+//   - Exact device: rejects invalid selectors and, when a
 //     nonzero GPU index exists, binds that exact registry device.
 //   - Invalid enum: returns TRANSCRIBE_ERR_INVALID_ARG.
 
@@ -83,7 +83,7 @@ int main() {
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU, 0, "test-cpu", plan);
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU, nullptr, "test-cpu", plan);
         REQUIRE(st == TRANSCRIBE_OK);
         CHECK_EQ(plan.primary_kind, BackendKind::Cpu);
         REQUIRE(plan.primary != nullptr);
@@ -104,7 +104,7 @@ int main() {
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU_ACCEL, 0, "test-cpu-accel", plan);
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU_ACCEL, nullptr, "test-cpu-accel", plan);
         REQUIRE(st == TRANSCRIBE_OK);
         CHECK_EQ(plan.primary_kind, BackendKind::Cpu);
         REQUIRE(plan.primary != nullptr);
@@ -129,7 +129,7 @@ int main() {
     // call init_backends() and assert based on what it returns.
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_METAL, 0, "test-metal", plan);
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_METAL, nullptr, "test-metal", plan);
 
         if (st == TRANSCRIBE_OK) {
             CHECK_EQ(plan.primary_kind, BackendKind::Metal);
@@ -146,7 +146,7 @@ int main() {
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_VULKAN, 0, "test-vulkan", plan);
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_VULKAN, nullptr, "test-vulkan", plan);
 
         if (st == TRANSCRIBE_OK) {
             CHECK_EQ(plan.primary_kind, BackendKind::Vulkan);
@@ -163,7 +163,7 @@ int main() {
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CUDA, 0, "test-cuda", plan);
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CUDA, nullptr, "test-cuda", plan);
 
         if (st == TRANSCRIBE_OK) {
             CHECK_EQ(plan.primary_kind, BackendKind::Cuda);
@@ -180,7 +180,7 @@ int main() {
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_ROCM, 0, "test-rocm", plan);
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_ROCM, nullptr, "test-rocm", plan);
 
         if (st == TRANSCRIBE_OK) {
             CHECK_EQ(plan.primary_kind, BackendKind::Rocm);
@@ -202,7 +202,7 @@ int main() {
     // primary_kind rather than pre-judging from the registry.
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test-auto", plan);
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test-auto", plan);
         REQUIRE(st == TRANSCRIBE_OK);
         CHECK(plan.primary != nullptr);
         CHECK(plan.primary_kind != BackendKind::Unknown);
@@ -224,57 +224,50 @@ int main() {
     // ---------------------------------------------------------------
     {
         BackendPlan       plan;
-        transcribe_status st = init_backends(static_cast<transcribe_backend_request>(999), 0, "test-invalid", plan);
+        transcribe_status st =
+            init_backends(static_cast<transcribe_backend_request>(999), nullptr, "test-invalid", plan);
         CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
 
     // ---------------------------------------------------------------
-    // 8. Explicit gpu_device validation
+    // 8. Exact device selection, including registry index zero
     // ---------------------------------------------------------------
-    {
-        BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, -1, "test-gpu-negative", plan);
-        CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
-    }
-    {
-        BackendPlan       plan;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU, 1, "test-gpu-cpu-request", plan);
-        CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
-    }
-    {
-        BackendPlan       plan;
-        const int         out_of_range = static_cast<int>(ggml_backend_dev_count()) + 1;
-        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, out_of_range, "test-gpu-out-of-range", plan);
-        CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
-    }
-
     const size_t n_dev = ggml_backend_dev_count();
-    for (size_t i = 1; i < n_dev; ++i) {
+    for (size_t i = 0; i < n_dev; ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        if (dev != nullptr && !is_gpu_device(dev)) {
+        if (dev == nullptr || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+            continue;
+        }
+        BackendPlan       plan;
+        transcribe_status st = init_backends(TRANSCRIBE_BACKEND_AUTO, reinterpret_cast<transcribe_device_t>(dev),
+                                             "test-device-explicit", plan);
+        if (st == TRANSCRIBE_OK) {
+            CHECK(plan.primary != nullptr);
+            CHECK(ggml_backend_get_device(plan.primary) == dev);
+            free_plan(plan);
+        } else {
+            CHECK_EQ(st, TRANSCRIBE_ERR_BACKEND);
+        }
+    }
+
+    for (size_t i = 0; i < n_dev; ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (dev != nullptr && is_gpu_device(dev)) {
             BackendPlan       plan;
-            transcribe_status st =
-                init_backends(TRANSCRIBE_BACKEND_AUTO, static_cast<int>(i), "test-gpu-non-gpu", plan);
+            transcribe_status st = init_backends(TRANSCRIBE_BACKEND_CPU, reinterpret_cast<transcribe_device_t>(dev),
+                                                 "test-device-kind-mismatch", plan);
             CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
             break;
         }
     }
 
-    for (size_t i = 1; i < n_dev; ++i) {
-        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        if (dev != nullptr && is_gpu_device(dev)) {
-            BackendPlan       plan;
-            transcribe_status st =
-                init_backends(TRANSCRIBE_BACKEND_AUTO, static_cast<int>(i), "test-gpu-explicit", plan);
-            if (st == TRANSCRIBE_OK) {
-                CHECK(plan.primary != nullptr);
-                CHECK(ggml_backend_get_device(plan.primary) == dev);
-                free_plan(plan);
-            } else {
-                CHECK_EQ(st, TRANSCRIBE_ERR_BACKEND);
-            }
-            break;
-        }
+    {
+        int               foreign_storage = 0;
+        BackendPlan       plan;
+        transcribe_status st =
+            init_backends(TRANSCRIBE_BACKEND_AUTO, reinterpret_cast<transcribe_device_t>(&foreign_storage),
+                          "test-device-foreign", plan);
+        CHECK_EQ(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
 
     // ---------------------------------------------------------------

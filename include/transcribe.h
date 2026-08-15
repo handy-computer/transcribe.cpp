@@ -362,7 +362,7 @@ typedef enum {
     TRANSCRIBE_ABI_STREAM_TEXT       = 10,
     TRANSCRIBE_ABI_SESSION_LIMITS    = 11,
     TRANSCRIBE_ABI_EXT               = 12,
-    TRANSCRIBE_ABI_BACKEND_DEVICE    = 13,
+    TRANSCRIBE_ABI_DEVICE_INFO       = 13,
     TRANSCRIBE_ABI_SPEAKER_SEGMENT   = 14,
 } transcribe_abi_struct;
 
@@ -794,12 +794,27 @@ TRANSCRIBE_API transcribe_status transcribe_init_backends(const char * artifact_
 TRANSCRIBE_API transcribe_status transcribe_init_backends_default(void);
 
 /*
+ * Opaque process-local compute-device handle. Handles are owned by the
+ * runtime, remain valid for the life of the process, and must not be freed.
+ * They may be compared for equality but are not persistent identifiers; use
+ * transcribe_device_get_info() and its device_id field for persistence.
+ */
+struct transcribe_device;
+typedef struct transcribe_device * transcribe_device_t;
+
+/*
  * Number of compute devices currently registered with the runtime
  * (compiled-in backends plus any modules loaded by
  * transcribe_init_backends). A device is something a model can be placed
  * on: the CPU, an Apple GPU via Metal, a Vulkan GPU, ...
  */
-TRANSCRIBE_API int transcribe_backend_device_count(void);
+TRANSCRIBE_API int transcribe_device_count(void);
+
+/*
+ * Return the registered device at `index`, or NULL when index is out of
+ * range. The returned handle is runtime-owned and process-local.
+ */
+TRANSCRIBE_API transcribe_device_t transcribe_device_get(int index);
 
 /*
  * Device type: ggml's vendor-agnostic classification of a device,
@@ -841,7 +856,7 @@ typedef enum {
  * this process's allocations; on a discrete GPU they are device-global; on
  * the CPU they are system RAM. 0 means the backend does not report it.
  */
-struct transcribe_backend_device {
+struct transcribe_device_info {
     uint64_t               struct_size;  /* sizeof(*this); set by _init() */
     const char *           name;         /* ggml device name, e.g. "Metal" */
     const char *           description;  /* human-readable, e.g. "Apple M4 Max" */
@@ -852,18 +867,18 @@ struct transcribe_backend_device {
     transcribe_device_type device_type;  /* CPU/GPU/IGPU/ACCEL axis */
 };
 
-TRANSCRIBE_API void transcribe_backend_device_init(struct transcribe_backend_device * p);
+TRANSCRIBE_API void transcribe_device_info_init(struct transcribe_device_info * p);
 
 /*
- * Fill *out (initialized via transcribe_backend_device_init) with device
- * `index` in [0, transcribe_backend_device_count()).
+ * Fill *out (initialized via transcribe_device_info_init) with information
+ * about `device`. memory_free is live as of this call; re-invoke to refresh it
+ * (e.g. to poll a device's available memory over time).
  *
- * memory_free is live as of this call; re-invoke to refresh it (e.g. to
- * poll a device's available memory over time). The device handles are
- * stable for the life of the process, so the same index always names the
- * same device.
+ * Returns TRANSCRIBE_ERR_INVALID_ARG if device or out is NULL, if device is
+ * not from this runtime's registry, or if out fails the struct-size check.
  */
-TRANSCRIBE_API transcribe_status transcribe_get_backend_device(int index, struct transcribe_backend_device * out);
+TRANSCRIBE_API transcribe_status transcribe_device_get_info(transcribe_device_t             device,
+                                                            struct transcribe_device_info * out);
 
 /*
  * Whether a backend request can be satisfied by some registered device:
@@ -876,19 +891,12 @@ TRANSCRIBE_API transcribe_status transcribe_get_backend_device(int index, struct
 TRANSCRIBE_API bool transcribe_backend_available(transcribe_backend_request kind);
 
 /*
- * Fill *out (initialized via transcribe_backend_device_init) with the
- * compute device this loaded model is running on — the device that owns its
- * weights and runs most of its graph. Same struct and same live-snapshot
- * semantics as transcribe_get_backend_device: memory_free is current as of
- * the call, so re-invoke to ask "how much memory is left on the device my
- * model landed on" at any time after load.
- *
- * Returns TRANSCRIBE_ERR_INVALID_ARG if model or out is NULL (or out fails
- * the struct-size check), or TRANSCRIBE_ERR_BACKEND if the model has no
- * resolved compute device.
+ * Return the compute device this loaded model is running on — the device
+ * that owns its weights and runs most of its graph. Returns NULL if model is
+ * NULL or has no resolved compute device. Pass the returned handle to
+ * transcribe_device_get_info() for metadata and a live memory snapshot.
  */
-TRANSCRIBE_API transcribe_status transcribe_model_get_device(const struct transcribe_model *    model,
-                                                             struct transcribe_backend_device * out);
+TRANSCRIBE_API transcribe_device_t transcribe_model_device(const struct transcribe_model * model);
 
 /*
  * Initialization of caller-owned params structs.
@@ -920,37 +928,26 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_device(const struct transc
  * backend:    which backend to request. See transcribe_backend_request
  *             for the semantics of each value. Default is AUTO.
  *
- * gpu_device: Multi-GPU selector. 0 (the default) means "auto / the first
- *             device of the chosen kind": AUTO picks the first GPU that
- *             initializes, and explicit METAL/VULKAN/CUDA/ROCM requests pick the
- *             first matching device — in both cases probing every discrete
- *             GPU before any integrated GPU, in ggml's registry order
- *             within each tier.
+ * device:  NULL (the default) applies the backend's automatic policy. AUTO
+ *          probes every discrete GPU before integrated GPUs and finally falls
+ *          back to CPU; an explicit GPU backend picks the first matching
+ *          device. A non-NULL handle selects that exact registered device,
+ *          including the device returned at index 0.
  *
- *             A value > 0 selects the GPU/IGPU device at that global ggml
- *             registry index — the same index space transcribe_get_backend_device()
- *             enumerates, so enumerate first to choose one. The selected
- *             device becomes the model's primary backend, validated against
- *             `backend`: it must be a GPU/IGPU, and for an explicit
- *             METAL/VULKAN/CUDA/ROCM request it must be that vendor. The index is
- *             order-dependent — ggml's registry order can shift across driver
- *             updates or hosts, so treat it as a runtime selection, not a
- *             stable identifier; correlate via the enumerated device's name /
- *             device_id when you need stability.
+ *          Exact selection never silently falls back to another primary
+ *          device. With backend=AUTO, the selected device determines the
+ *          backend. With an explicit backend, the device must match it. CPU
+ *          and CPU_ACCEL accept an exact CPU device; ACCEL devices cannot be
+ *          selected as a primary. Invalid, foreign, or mismatched handles are
+ *          rejected with TRANSCRIBE_ERR_INVALID_ARG.
  *
- *             gpu_device is rejected with TRANSCRIBE_ERR_INVALID_ARG when it
- *             is negative, out of range, names a non-GPU device, names a
- *             device whose vendor doesn't match an explicit GPU request, or
- *             is non-zero alongside a CPU / CPU_ACCEL request (there is no
- *             GPU to select). Note there is no way to explicitly select the
- *             device at registry index 0 — 0 is the auto sentinel. An
- *             integrated GPU sitting at index 0 is therefore reachable only
- *             via the probe order, when no discrete GPU initializes.
+ *          Handles are process-local. Persist device_id (when available), then
+ *          enumerate and resolve a fresh handle in each process.
  */
 struct transcribe_model_load_params {
     uint64_t                   struct_size;
     transcribe_backend_request backend;
-    int                        gpu_device;
+    transcribe_device_t        device;
 };
 
 TRANSCRIBE_API void transcribe_model_load_params_init(struct transcribe_model_load_params * params);

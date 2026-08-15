@@ -205,13 +205,13 @@ struct cli_args {
     bool                       list_devices = false;  // --list-devices: print devices and exit
     bool                       batch_jsonl  = false;  // --batch-jsonl: output JSONL
     std::string                output_path;           // -o/--output: write raw text here
-    int                        repeat     = 1;
-    int                        n_threads  = 0;        // 0 = library default (all cores)
-    int                        n_ctx      = 0;        // 0 = model's true max; >0 lowers the cap
-    transcribe_kv_type         kv_type    = TRANSCRIBE_KV_TYPE_AUTO;
-    transcribe_backend_request backend    = TRANSCRIBE_BACKEND_AUTO;
-    int                        gpu_device = 0;  // --device N: 0 = auto, >0 = registry index
-    transcribe_timestamp_kind  timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
+    int                        repeat       = 1;
+    int                        n_threads    = 0;      // 0 = library default (all cores)
+    int                        n_ctx        = 0;      // 0 = model's true max; >0 lowers the cap
+    transcribe_kv_type         kv_type      = TRANSCRIBE_KV_TYPE_AUTO;
+    transcribe_backend_request backend      = TRANSCRIBE_BACKEND_AUTO;
+    int                        device_index = -1;  // --device N: -1 = auto, >=0 = exact registry device
+    transcribe_timestamp_kind  timestamps   = TRANSCRIBE_TIMESTAMPS_AUTO;
 
     // Whisper-family knobs. Ignored for non-Whisper models.
     std::string                              initial_prompt;                    // --initial-prompt TEXT
@@ -292,8 +292,8 @@ void print_usage(const char * argv0) {
                  "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
                  "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan, cuda, rocm\n"
                  "                        (default: auto)\n"
-                 "  --device N            GPU device index from --list-devices: 0 = auto\n"
-                 "                        (first of kind), >0 selects that registry index\n"
+                 "  --device N            exact device index from --list-devices, including 0\n"
+                 "                        (default: automatic device selection)\n"
                  "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
                  "  --batch FILE          batch mode: FILE has one wav path per line\n"
                  "  --batch-jsonl         output one JSON line per file (for batch)\n"
@@ -351,16 +351,16 @@ int list_devices_main() {
                      "listing whatever registered\n",
                      (int) st);
     }
-    const int n = transcribe_backend_device_count();
+    const int n = transcribe_device_count();
     if (n <= 0) {
         std::fprintf(stderr, "no compute devices registered\n");
         return EXIT_FAILURE;
     }
     std::printf("%d compute device(s):\n", n);
     for (int i = 0; i < n; ++i) {
-        struct transcribe_backend_device d;
-        transcribe_backend_device_init(&d);
-        if (transcribe_get_backend_device(i, &d) != TRANSCRIBE_OK) {
+        struct transcribe_device_info d;
+        transcribe_device_info_init(&d);
+        if (transcribe_device_get_info(transcribe_device_get(i), &d) != TRANSCRIBE_OK) {
             continue;
         }
         const char * type_str = d.device_type == TRANSCRIBE_DEVICE_TYPE_CPU   ? "cpu" :
@@ -489,9 +489,9 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) {
                 return false;
             }
-            out.gpu_device = std::atoi(v);
-            if (out.gpu_device < 0) {
-                std::fprintf(stderr, "error: --device must be >= 0 (0 = auto)\n");
+            out.device_index = std::atoi(v);
+            if (out.device_index < 0) {
+                std::fprintf(stderr, "error: --device must be an index >= 0\n");
                 return false;
             }
         } else if (a == "--timestamps") {
@@ -790,8 +790,12 @@ int main(int argc, char ** argv) {
 
         struct transcribe_model_load_params mp;
         transcribe_model_load_params_init(&mp);
-        mp.backend                        = args.backend;
-        mp.gpu_device                     = args.gpu_device;
+        mp.backend = args.backend;
+        mp.device  = args.device_index >= 0 ? transcribe_device_get(args.device_index) : nullptr;
+        if (args.device_index >= 0 && mp.device == nullptr) {
+            std::fprintf(stderr, "error: --device index %d is not available\n", args.device_index);
+            return EXIT_FAILURE;
+        }
         struct transcribe_model * model   = nullptr;
         const transcribe_status   load_st = transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
         if (load_st != TRANSCRIBE_OK) {
@@ -1174,8 +1178,12 @@ int main(int argc, char ** argv) {
     if (!args.model_path.empty()) {
         struct transcribe_model_load_params mp;
         transcribe_model_load_params_init(&mp);
-        mp.backend                      = args.backend;
-        mp.gpu_device                   = args.gpu_device;
+        mp.backend = args.backend;
+        mp.device  = args.device_index >= 0 ? transcribe_device_get(args.device_index) : nullptr;
+        if (args.device_index >= 0 && mp.device == nullptr) {
+            std::fprintf(stderr, "error: --device index %d is not available\n", args.device_index);
+            return EXIT_FAILURE;
+        }
         struct transcribe_model * model = nullptr;
         const transcribe_status   st    = transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
         std::printf("model: %s -> %s\n", args.model_path.c_str(), transcribe_status_string(st));

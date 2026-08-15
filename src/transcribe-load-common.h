@@ -53,16 +53,11 @@ bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev)
 //                Library-internal classification of what each value
 //                actually picks up is documented in
 //                transcribe-backend.h.
-//   gpu_device:  multi-GPU selector. 0 (the default) means "auto / the
-//                first device of the chosen kind" — the existing
-//                first-of-kind behavior. A value > 0 selects the GPU/IGPU
-//                device at that global ggml registry index (the same index
-//                space transcribe_get_backend_device() enumerates) as the
-//                primary, validated against `requested`: the device must be
-//                a GPU/IGPU, and for a specific METAL/VULKAN/CUDA/ROCM request it
-//                must be that vendor. gpu_device is not valid for a
-//                CPU / CPU_ACCEL request (there is no GPU to pick) nor
-//                negative; both return TRANSCRIBE_ERR_INVALID_ARG.
+//   device:      NULL applies the requested backend's automatic policy. A
+//                non-NULL process-local handle selects that exact registered
+//                device. AUTO accepts a GPU, IGPU, or CPU; explicit backend
+//                requests require a matching device. ACCEL devices cannot be
+//                primary. Exact selection never falls back to another primary.
 //   error_tag:   log prefix, e.g. "parakeet".
 //   out:         populated on success. out.primary is the backend
 //                that owns the weight buffer; out.scheduler_list
@@ -72,17 +67,15 @@ bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev)
 //
 // Returns:
 //   TRANSCRIBE_OK         on success.
-//   TRANSCRIBE_ERR_INVALID_ARG if gpu_device is negative, out of range,
-//                          names a non-GPU device, names a device whose
-//                          vendor doesn't match a specific GPU request, or
-//                          is non-zero for a CPU request.
+//   TRANSCRIBE_ERR_INVALID_ARG if device is foreign, is an ACCEL device, or
+//                          does not match a specific backend request.
 //   TRANSCRIBE_ERR_BACKEND if the caller asked for a specific
 //                          backend (METAL / VULKAN / CUDA / ROCM) that could not
 //                          be initialized, or if the CPU backend
 //                          itself fails to initialize (there is no
 //                          fallback past CPU).
 transcribe_status init_backends(transcribe_backend_request requested,
-                                int                        gpu_device,
+                                transcribe_device_t        device,
                                 const char *               error_tag,
                                 BackendPlan &              out);
 
