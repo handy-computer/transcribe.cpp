@@ -14,9 +14,13 @@ modelTest("an enumerated device can be selected exactly", MODEL, async () => {
   const device = getAvailableBackends().find((d) => d.deviceType !== "accel");
   if (!device) return;
   try {
-    using model = await TranscribeModel.load(MODEL, { device });
-    assert.equal(model.device.name, device.name);
-    assert.equal(model.device.deviceId, device.deviceId);
+    const model = await TranscribeModel.load(MODEL, { device });
+    try {
+      assert.equal(model.device.name, device.name);
+      assert.equal(model.device.deviceId, device.deviceId);
+    } finally {
+      model.dispose();
+    }
   } catch (error) {
     // A registered device can still fail driver initialization. The important
     // contract is that native selection fails rather than moving elsewhere.
