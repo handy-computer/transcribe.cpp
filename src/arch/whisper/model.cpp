@@ -81,7 +81,6 @@ WhisperSession::~WhisperSession() {
     compute_ctx_size = 0;
 }
 
-
 namespace {
 
 constexpr const char k_default_variant[] = "whisper";

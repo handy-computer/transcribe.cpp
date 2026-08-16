@@ -6,9 +6,9 @@
 // Run with --help for the full option list.
 
 #include "transcribe.h"
+#include "transcribe/crisperwhisper.h"
 #include "transcribe/parakeet.h"
 #include "transcribe/voxtral_realtime.h"
-#include "transcribe/crisperwhisper.h"
 #include "transcribe/whisper.h"
 #include "wav.h"
 
@@ -231,8 +231,8 @@ struct cli_args {
 
     // CrisperWhisper family knob. Ignored by every other family; passing
     // --mode to a non-CrisperWhisper model is a hard error, not a no-op.
-    enum transcribe_crisperwhisper_mode cw_mode = TRANSCRIBE_CRISPERWHISPER_MODE_DEFAULT;
-    bool cw_mode_set = false;  // --mode verbatim|intended
+    enum transcribe_crisperwhisper_mode cw_mode     = TRANSCRIBE_CRISPERWHISPER_MODE_DEFAULT;
+    bool                                cw_mode_set = false;  // --mode verbatim|intended
 
     // Canary family knobs. Ignored by non-Canary families.
     bool canary_pnc     = true;   // default: punctuation+caps on

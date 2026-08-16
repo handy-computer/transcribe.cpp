@@ -182,13 +182,13 @@ transcribe_status read_hparams(const gguf_context * gguf,
     }
 
     // Whisper generation contract.
-    if (auto st =
-            read_required_u32_kv(gguf, pkey(kv_prefix, "decoder_start_token_id"), family_tag, hp.decoder_start_token_id);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "decoder_start_token_id"), family_tag,
+                                       hp.decoder_start_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st =
-            read_required_u32_kv(gguf, pkey(kv_prefix, "no_timestamps_token_id"), family_tag, hp.no_timestamps_token_id);
+    if (auto st = read_required_u32_kv(gguf, pkey(kv_prefix, "no_timestamps_token_id"), family_tag,
+                                       hp.no_timestamps_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -196,7 +196,8 @@ transcribe_status read_hparams(const gguf_context * gguf,
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_optional_u32_kv(gguf, pkey(kv_prefix, "transcribe_token_id"), family_tag, hp.transcribe_token_id);
+    if (auto st =
+            read_optional_u32_kv(gguf, pkey(kv_prefix, "transcribe_token_id"), family_tag, hp.transcribe_token_id);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -219,8 +220,8 @@ transcribe_status read_hparams(const gguf_context * gguf,
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st =
-            read_optional_i32_array_kv(gguf, pkey(kv_prefix, "begin_suppress_tokens"), family_tag, hp.begin_suppress_tokens);
+    if (auto st = read_optional_i32_array_kv(gguf, pkey(kv_prefix, "begin_suppress_tokens"), family_tag,
+                                             hp.begin_suppress_tokens);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -340,15 +341,15 @@ transcribe_status read_hparams(const gguf_context * gguf,
         // break the cross-attention K/V dim contract.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: encoder d_model (%d) != decoder d_model (%d); "
-                "cross-attention would mismatch", family_tag,
-                hp.enc_d_model, hp.dec_d_model);
+                "cross-attention would mismatch",
+                family_tag, hp.enc_d_model, hp.dec_d_model);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_activation != "gelu" || hp.dec_activation != "gelu") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: only \"gelu\" activation is supported "
-                "(enc=\"%s\", dec=\"%s\")", family_tag,
-                hp.enc_activation.c_str(), hp.dec_activation.c_str());
+                "(enc=\"%s\", dec=\"%s\")",
+                family_tag, hp.enc_activation.c_str(), hp.dec_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (!hp.dec_tie_word_embeddings) {
@@ -358,7 +359,8 @@ transcribe_status read_hparams(const gguf_context * gguf,
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: stt.whisper.decoder.tie_word_embeddings=false "
                 "is not supported (no separate lm_head tensor in the "
-                "catalog)", family_tag);
+                "catalog)",
+                family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_scale_embedding) {
@@ -369,13 +371,15 @@ transcribe_status read_hparams(const gguf_context * gguf,
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: stt.whisper.decoder.scale_embedding=true is "
                 "not supported (decoder graph does not apply the "
-                "sqrt(d_model) embed scale)", family_tag);
+                "sqrt(d_model) embed scale)",
+                family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.decoder_start_token_id < 0 || hp.no_timestamps_token_id < 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: decoder_start_token_id / no_timestamps_token_id "
-                "must be set", family_tag);
+                "must be set",
+                family_tag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 || hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 ||
@@ -389,8 +393,8 @@ transcribe_status read_hparams(const gguf_context * gguf,
         // that we don't implement.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: frontend win_length (%d) != n_fft (%d); "
-                "only full-length window is supported", family_tag,
-                hp.fe_win_length, hp.fe_n_fft);
+                "only full-length window is supported",
+                family_tag, hp.fe_win_length, hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_num_mels != hp.enc_num_mel_bins) {
@@ -406,29 +410,29 @@ transcribe_status read_hparams(const gguf_context * gguf,
     if (hp.fe_window != "hann" && hp.fe_window != "hann_periodic") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: unsupported frontend window \"%s\" "
-                "(only \"hann\"/\"hann_periodic\" is supported)", family_tag,
-                hp.fe_window.c_str());
+                "(only \"hann\"/\"hann_periodic\" is supported)",
+                family_tag, hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_normalize != "whisper_logmel") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: unsupported frontend normalize \"%s\" "
-                "(only \"whisper_logmel\" is supported)", family_tag,
-                hp.fe_normalize.c_str());
+                "(only \"whisper_logmel\" is supported)",
+                family_tag, hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_mel_norm != "slaney") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: unsupported frontend mel_norm \"%s\" "
-                "(only \"slaney\" is supported)", family_tag,
-                hp.fe_mel_norm.c_str());
+                "(only \"slaney\" is supported)",
+                family_tag, hp.fe_mel_norm.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_pad_mode != "reflect") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: unsupported frontend pad_mode \"%s\" "
-                "(only \"reflect\" is supported)", family_tag,
-                hp.fe_pad_mode.c_str());
+                "(only \"reflect\" is supported)",
+                family_tag, hp.fe_pad_mode.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (!hp.fe_center) {
@@ -443,8 +447,8 @@ transcribe_status read_hparams(const gguf_context * gguf,
         // spectrogram.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "%s: stt.frontend.dither=%g is not supported "
-                "(frontend is deterministic; expected 0.0)", family_tag,
-                hp.fe_dither);
+                "(frontend is deterministic; expected 0.0)",
+                family_tag, hp.fe_dither);
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -476,8 +480,7 @@ transcribe_status install_mel_from_buffers(const HParams &                      
     if (hp.fe_normalize == "whisper_logmel" || hp.fe_normalize == "per_utterance") {
         cfg.normalize = "per_utterance";
     } else {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: unsupported fe_normalize='%s'", family_tag,
-                hp.fe_normalize.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: unsupported fe_normalize='%s'", family_tag, hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -522,7 +525,7 @@ using transcribe::weights::lname;
 
 }  // namespace
 
-transcribe_status build_weights(ggml_context * ctx_meta,
+transcribe_status build_weights(ggml_context *  ctx_meta,
                                 const HParams & hp,
                                 const char *    family_tag,
                                 Weights &       weights) {

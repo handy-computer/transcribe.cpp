@@ -36,7 +36,7 @@ extern "C" {
 
 enum transcribe_crisperwhisper_mode {
     /* Use stt.crisperwhisper.mode.default from the GGUF. */
-    TRANSCRIBE_CRISPERWHISPER_MODE_DEFAULT = 0,
+    TRANSCRIBE_CRISPERWHISPER_MODE_DEFAULT  = 0,
     TRANSCRIBE_CRISPERWHISPER_MODE_VERBATIM = 1,
     TRANSCRIBE_CRISPERWHISPER_MODE_INTENDED = 2,
 };

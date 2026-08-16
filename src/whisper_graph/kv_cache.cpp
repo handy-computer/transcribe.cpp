@@ -56,13 +56,13 @@ int kv_pad_self_attn(transcribe::BackendKind kind, bool use_flash) {
     }
 }
 
-bool kv_cache_init(KvCache & cache,
-                   ggml_backend_t   backend,
-                   int              n_ctx,
-                   int              T_enc,
-                   int              d_model,
-                   int              n_layer,
-                   ggml_type        kv_type) {
+bool kv_cache_init(KvCache &      cache,
+                   ggml_backend_t backend,
+                   int            n_ctx,
+                   int            T_enc,
+                   int            d_model,
+                   int            n_layer,
+                   ggml_type      kv_type) {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "whisper_graph kv_cache: unsupported kv_type=%d "
@@ -124,14 +124,14 @@ bool kv_cache_init(KvCache & cache,
     return true;
 }
 
-bool kv_cache_init_batched(KvCache & cache,
-                           ggml_backend_t   backend,
-                           int              n_ctx,
-                           int              T_enc,
-                           int              d_model,
-                           int              n_layer,
-                           int              n_batch,
-                           ggml_type        kv_type) {
+bool kv_cache_init_batched(KvCache &      cache,
+                           ggml_backend_t backend,
+                           int            n_ctx,
+                           int            T_enc,
+                           int            d_model,
+                           int            n_layer,
+                           int            n_batch,
+                           ggml_type      kv_type) {
     if (n_batch <= 1) {
         // Degenerate batch — defer to the single-shot layout so callers
         // that accidentally pass n_batch==1 stay byte-identical.
@@ -192,6 +192,5 @@ bool kv_cache_init_batched(KvCache & cache,
 
     return true;
 }
-
 
 }  // namespace transcribe::whisper_graph

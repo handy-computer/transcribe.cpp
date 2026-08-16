@@ -57,8 +57,7 @@ inline transcribe_status install_mel_from_buffers(const WhisperHParams &        
                                                   std::vector<float>                       filterbank,
                                                   std::vector<float>                       window,
                                                   std::optional<transcribe::MelFrontend> & out_mel) {
-    return whisper_graph::install_mel_from_buffers(hp, k_family_tag, std::move(filterbank), std::move(window),
-                                                   out_mel);
+    return whisper_graph::install_mel_from_buffers(hp, k_family_tag, std::move(filterbank), std::move(window), out_mel);
 }
 
 }  // namespace transcribe::whisper

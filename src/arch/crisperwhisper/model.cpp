@@ -18,10 +18,6 @@
 // reports/porting/crisperwhisper/forward-map.md for the row-by-row map.
 
 #include "crisperwhisper.h"
-
-#include "transcribe/crisperwhisper.h"
-#include "word_timing.h"
-
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -35,8 +31,10 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
+#include "transcribe/crisperwhisper.h"
 #include "whisper_graph/decoder.h"
 #include "whisper_graph/encoder.h"
+#include "word_timing.h"
 
 #include <algorithm>
 #include <cmath>
@@ -109,9 +107,9 @@ bool ensure_compute_ctx(CwSession * cc, size_t mem) {
         cc->compute_ctx_size = 0;
     }
     ggml_init_params p{};
-    p.mem_size   = mem;
-    p.mem_buffer = nullptr;
-    p.no_alloc   = true;
+    p.mem_size      = mem;
+    p.mem_buffer    = nullptr;
+    p.no_alloc      = true;
     cc->compute_ctx = ggml_init(p);
     if (cc->compute_ctx == nullptr) {
         return false;
@@ -126,9 +124,7 @@ bool ensure_compute_ctx(CwSession * cc, size_t mem) {
 // load
 // ---------------------------------------------------------------------------
 
-transcribe_status cw_load(Loader &                             loader,
-                          const transcribe_model_load_params * params,
-                          transcribe_model **                  out_model) {
+transcribe_status cw_load(Loader & loader, const transcribe_model_load_params * params, transcribe_model ** out_model) {
     const int64_t t_load_start = ggml_time_us();
 
     auto m       = std::make_unique<CwModel>();
@@ -318,13 +314,13 @@ transcribe_status load_mel_from_ref(const char * ref_dir, int n_mels, int n_mel_
 
 // Run the encoder on one mel window; output lands in the backend-resident
 // cc->enc_out.tensor that the cross-KV graph reads via a view.
-transcribe_status run_encoder_on_window(CwSession *  cc,
-                                        CwModel *    cm,
+transcribe_status run_encoder_on_window(CwSession *   cc,
+                                        CwModel *     cm,
                                         const float * mel_data,
-                                        int          n_mels,
-                                        int          n_mel_frames,
-                                        bool         allow_dumps,
-                                        int &        out_T_enc) {
+                                        int           n_mels,
+                                        int           n_mel_frames,
+                                        bool          allow_dumps,
+                                        int &         out_T_enc) {
     if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: ensure_compute_ctx (encoder) failed", k_family_tag);
         return TRANSCRIBE_ERR_GGUF;
@@ -411,13 +407,10 @@ transcribe_status run_encoder_on_window(CwSession *  cc,
 // `context_text` is the last N confirmed words at a long-form seam, or empty.
 // Hotwords are deliberately unsupported (Pro-checkpoint feature; the open
 // weights were never trained with them and the reference warns of degradation).
-std::vector<int32_t> build_prompt(const CwModel &     cm,
-                                  CwMode              mode,
-                                  int32_t             lang_id,
-                                  const std::string & context_text) {
+std::vector<int32_t> build_prompt(const CwModel & cm, CwMode mode, int32_t lang_id, const std::string & context_text) {
     const CwDecodeContract & ct = cm.contract;
 
-    std::vector<int32_t> ids;
+    std::vector<int32_t>         ids;
     const std::vector<int32_t> & tags = ct.tags_for(mode);
     ids.insert(ids.end(), tags.begin(), tags.end());
 
@@ -472,6 +465,7 @@ std::vector<int32_t> strip_prompt_artifacts(const CwDecodeContract & ct, const s
         int32_t open;
         int32_t close;
     };
+
     const Span spans[] = {
         { ct.htx_id, ct.ehtx_id },
         { ct.vtx_id, ct.evtx_id },
@@ -605,7 +599,7 @@ transcribe_status decode_window(CwSession *                  cc,
         if (row == nullptr) {
             return;
         }
-        const int n = static_cast<int>(row->ne[0]);
+        const int    n   = static_cast<int>(row->ne[0]);
         const size_t off = cc->cross_attn.size();
         cc->cross_attn.resize(off + static_cast<size_t>(n));
         ggml_backend_tensor_get(row, cc->cross_attn.data() + off, 0, static_cast<size_t>(n) * sizeof(float));
@@ -645,11 +639,10 @@ transcribe_status decode_window(CwSession *                  cc,
             // ships BF16 weights, which take the F16 branch; an F32 reference
             // GGUF would get a lossless F32 cache.
             const ggml_tensor * probe = !cm->weights.dec_blocks.empty() ? cm->weights.dec_blocks[0].self_q_w : nullptr;
-            kv_type_g                 = (probe != nullptr && probe->type == GGML_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
+            kv_type_g = (probe != nullptr && probe->type == GGML_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
         }
         cc->kv_cache.free();
-        if (!kv_cache_init(cc->kv_cache, cm->plan.primary, n_ctx_decoder, T_enc, hp.dec_d_model, n_layers,
-                           kv_type_g)) {
+        if (!kv_cache_init(cc->kv_cache, cm->plan.primary, n_ctx_decoder, T_enc, hp.dec_d_model, n_layers, kv_type_g)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: KV cache init failed", k_family_tag);
             return TRANSCRIBE_ERR_BACKEND;
         }
@@ -693,8 +686,7 @@ transcribe_status decode_window(CwSession *                  cc,
         const int        kv_pad = kv_pad_self_attn(cm->plan.primary_kind, cc->decoder_use_flash);
         wg::DecoderBuild db     = wg::build_decoder_graph_kv(cc->compute_ctx, cm->weights, hp, cc->kv_cache,
                                                              /*n_tokens=*/seq_len, /*n_past=*/0, T_enc, kv_pad,
-                                                             /*skip_log_softmax=*/false, cc->decoder_use_flash,
-                                                             heads);
+                                                             /*skip_log_softmax=*/false, cc->decoder_use_flash, heads);
         if (db.out == nullptr || db.graph == nullptr) {
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -764,9 +756,9 @@ transcribe_status decode_window(CwSession *                  cc,
         }
 
         // Last prompt row predicts the first generated token.
-        ggml_tensor *  src        = db.dumps.logits_raw != nullptr ? db.dumps.logits_raw : db.out;
-        const size_t   row_bytes  = static_cast<size_t>(vocab_size) * sizeof(float);
-        const size_t   row_offset = static_cast<size_t>(seq_len - 1) * row_bytes;
+        ggml_tensor * src        = db.dumps.logits_raw != nullptr ? db.dumps.logits_raw : db.out;
+        const size_t  row_bytes  = static_cast<size_t>(vocab_size) * sizeof(float);
+        const size_t  row_offset = static_cast<size_t>(seq_len - 1) * row_bytes;
         ggml_backend_tensor_get(src, logits_row.data(), row_offset, row_bytes);
         next_id = argmax_with_suppression(logits_row.data(), vocab_size, hp.suppress_tokens);
         if (capture_align) {
@@ -871,11 +863,11 @@ transcribe_status decode_window(CwSession *                  cc,
             if (!ensure_compute_ctx(cc, 4 * 1024 * 1024)) {
                 return TRANSCRIBE_ERR_GGUF;
             }
-            const int        kv_pad  = kv_pad_self_attn(cm->plan.primary_kind, cc->decoder_use_flash);
-            wg::DecoderBuild step_db = wg::build_decoder_graph_kv(cc->compute_ctx, cm->weights, hp, cc->kv_cache,
-                                                                  /*n_tokens=*/1, /*n_past=*/n_past, T_enc, kv_pad,
-                                                                  /*skip_log_softmax=*/true, cc->decoder_use_flash,
-                                                                  heads);
+            const int        kv_pad = kv_pad_self_attn(cm->plan.primary_kind, cc->decoder_use_flash);
+            wg::DecoderBuild step_db =
+                wg::build_decoder_graph_kv(cc->compute_ctx, cm->weights, hp, cc->kv_cache,
+                                           /*n_tokens=*/1, /*n_past=*/n_past, T_enc, kv_pad,
+                                           /*skip_log_softmax=*/true, cc->decoder_use_flash, heads);
             if (step_db.out == nullptr || step_db.graph == nullptr) {
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -950,7 +942,7 @@ transcribe_status prime_cross_kv(CwSession * cc, CwModel * cm, int T_enc) {
         kv_type_g = GGML_TYPE_F16;
     } else {
         const ggml_tensor * probe = !cm->weights.dec_blocks.empty() ? cm->weights.dec_blocks[0].self_q_w : nullptr;
-        kv_type_g = (probe != nullptr && probe->type == GGML_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
+        kv_type_g                 = (probe != nullptr && probe->type == GGML_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
     }
     cc->kv_cache.free();
     if (!kv_cache_init(cc->kv_cache, cm->plan.primary, hp.dec_max_target_positions, T_enc, hp.dec_d_model,
@@ -1099,8 +1091,7 @@ int32_t detect_language(CwSession * cc, CwModel * cm, int T_enc) {
             const char * code = (idx < static_cast<size_t>(cm->caps.n_languages)) ? cm->caps.languages[idx] : "?";
             std::fprintf(stderr, " %s=%.4f", code, pr);
         }
-        std::fprintf(stderr, "  margin=%.4f\n",
-                     lp.size() > 1 ? static_cast<double>(lp[0].first - lp[1].first) : 0.0);
+        std::fprintf(stderr, "  margin=%.4f\n", lp.size() > 1 ? static_cast<double>(lp[0].first - lp[1].first) : 0.0);
     }
 
     cc->kv_cache.n    = 0;
@@ -1117,11 +1108,10 @@ int32_t detect_language(CwSession * cc, CwModel * cm, int T_enc) {
 // max 26.0 / mean 5.6 on the same audio). Validation-only: it runs after the
 // real decode, reuses the already-populated cross-attention cache, and its
 // output is discarded.
-transcribe_status dump_sibling_mode_logits(CwSession * cc, CwModel * cm, CwMode main_mode, int32_t lang_id,
-                                           int T_enc) {
-    const CwHParams & hp   = cm->hparams;
-    const CwMode sibling   = (main_mode == CwMode::Verbatim) ? CwMode::Intended : CwMode::Verbatim;
-    const char * dump_name = (sibling == CwMode::Intended) ? "dec.intended.logits_raw" : "dec.verbatim.logits_raw";
+transcribe_status dump_sibling_mode_logits(CwSession * cc, CwModel * cm, CwMode main_mode, int32_t lang_id, int T_enc) {
+    const CwHParams & hp        = cm->hparams;
+    const CwMode      sibling   = (main_mode == CwMode::Verbatim) ? CwMode::Intended : CwMode::Verbatim;
+    const char *      dump_name = (sibling == CwMode::Intended) ? "dec.intended.logits_raw" : "dec.verbatim.logits_raw";
 
     const std::vector<int32_t> prompt_ids = build_prompt(*cm, sibling, lang_id, /*context_text=*/"");
     const int                  seq_len    = static_cast<int>(prompt_ids.size());
@@ -1275,17 +1265,14 @@ transcribe_status cw_run(transcribe_session *          session,
     // request must be answered at that granularity rather than dropped
     // to NONE. Only TOKEN is finer than the ceiling, and the dispatcher
     // has already rejected it by the time we get here.
-    const transcribe_timestamp_kind req_ts =
-        params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_NONE;
-    const transcribe_timestamp_kind eff_ts =
-        req_ts == TRANSCRIBE_TIMESTAMPS_AUTO ? TRANSCRIBE_TIMESTAMPS_WORD : req_ts;
+    const transcribe_timestamp_kind req_ts = params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_NONE;
+    const transcribe_timestamp_kind eff_ts = req_ts == TRANSCRIBE_TIMESTAMPS_AUTO ? TRANSCRIBE_TIMESTAMPS_WORD : req_ts;
 
-    const bool want_words = eff_ts == TRANSCRIBE_TIMESTAMPS_WORD ||
-                            transcribe::debug::enabled() || is_longform;
+    const bool want_words = eff_ts == TRANSCRIBE_TIMESTAMPS_WORD || transcribe::debug::enabled() || is_longform;
 
-    const int n_mels       = hp.fe_num_mels;
-    const int n_mel_frames = hp.fe_nb_max_frames > 0 ? hp.fe_nb_max_frames : 3000;
-    const char * ref_mel_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF");
+    const int    n_mels       = hp.fe_num_mels;
+    const int    n_mel_frames = hp.fe_nb_max_frames > 0 ? hp.fe_nb_max_frames : 3000;
+    const char * ref_mel_dir  = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF");
 
     std::vector<std::string> confirmed_words;
     std::vector<CwWord>      global_words;
@@ -1294,10 +1281,10 @@ transcribe_status cw_run(transcribe_session *          session,
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
-        const auto [off, len]  = windows[wi];
-        const bool  is_last    = (wi + 1 == windows.size());
-        const float start_sec  = static_cast<float>(wi) * ct.longform_stride;
-        const bool  first_win  = (wi == 0);
+        const auto [off, len] = windows[wi];
+        const bool  is_last   = (wi + 1 == windows.size());
+        const float start_sec = static_cast<float>(wi) * ct.longform_stride;
+        const bool  first_win = (wi == 0);
 
         // ---- frontend ----
         if (ref_mel_dir != nullptr && ref_mel_dir[0] != '\0') {
@@ -1376,8 +1363,8 @@ transcribe_status cw_run(transcribe_session *          session,
         // the training order.
         std::string context_text;
         if (!first_win && !confirmed_words.empty()) {
-            const size_t take  = std::min<size_t>(confirmed_words.size(),
-                                                  static_cast<size_t>(std::max(ct.longform_context_words, 0)));
+            const size_t take =
+                std::min<size_t>(confirmed_words.size(), static_cast<size_t>(std::max(ct.longform_context_words, 0)));
             const size_t begin = confirmed_words.size() - take;
             for (size_t k = begin; k < confirmed_words.size(); ++k) {
                 if (!context_text.empty()) {
@@ -1390,9 +1377,9 @@ transcribe_status cw_run(transcribe_session *          session,
         const std::vector<int32_t> prompt_ids = build_prompt(*cm, mode, lang_id, context_text);
         std::vector<int32_t>       gen_ids;
         std::vector<int32_t>       align_ids;
-        if (const transcribe_status st = decode_window(cc, cm, prompt_ids, T_enc, k_default_max_new_tokens,
-                                                       /*emit_dumps=*/first_win, /*capture_align=*/want_words,
-                                                       gen_ids, align_ids);
+        if (const transcribe_status st =
+                decode_window(cc, cm, prompt_ids, T_enc, k_default_max_new_tokens,
+                              /*emit_dumps=*/first_win, /*capture_align=*/want_words, gen_ids, align_ids);
             st != TRANSCRIBE_OK) {
             return st;
         }
@@ -1405,7 +1392,7 @@ transcribe_status cw_run(transcribe_session *          session,
         std::vector<CwWord> words;
         if (want_words && cc->cross_attn_rows > 0 && !cc->mel_10ms.empty()) {
             const int rows   = std::min(cc->cross_attn_rows, static_cast<int>(align_ids.size()));
-            const int frames  = std::min(cc->cross_attn_frames, T_enc);
+            const int frames = std::min(cc->cross_attn_frames, T_enc);
 
             std::vector<float> attn(static_cast<size_t>(rows) * static_cast<size_t>(frames), 0.0f);
             for (int r = 0; r < rows; ++r) {
@@ -1414,9 +1401,8 @@ transcribe_status cw_run(transcribe_session *          session,
             }
             if (first_win && transcribe::debug::enabled()) {
                 const long long shape[2] = { rows, frames };
-                transcribe::debug::dump_host_f32("dec.xattn.align", attn.data(),
-                                                 static_cast<long long>(attn.size()), shape, 2,
-                                                 "decoder.xattn.align");
+                transcribe::debug::dump_host_f32("dec.xattn.align", attn.data(), static_cast<long long>(attn.size()),
+                                                 shape, 2, "decoder.xattn.align");
             }
             std::vector<int>         ids(align_ids.begin(), align_ids.begin() + rows);
             std::vector<std::string> pieces;
@@ -1462,7 +1448,7 @@ transcribe_status cw_run(transcribe_session *          session,
         const int n_words = static_cast<int>(words.size());
         int       keep    = n_words;
         if (!is_last) {
-            const int legacy = std::max(n_words - std::max(ct.longform_drop_words, 0), 0);
+            const int legacy     = std::max(n_words - std::max(ct.longform_drop_words, 0), 0);
             bool      any_placed = false;
             for (const CwWord & w : words) {
                 if (w.placed()) {
@@ -1551,7 +1537,6 @@ transcribe_status cw_run(transcribe_session *          session,
     return TRANSCRIBE_OK;
 }
 
-
 // ---------------------------------------------------------------------------
 // run_batch
 // ---------------------------------------------------------------------------
@@ -1567,9 +1552,9 @@ transcribe_status cw_run_batch_serial(CwSession *                   cc,
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0)
-                                         ? TRANSCRIBE_ERR_INVALID_ARG
-                                         : cw_run(cc, pcm[i], n_samples[i], params);
+        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ?
+                                         TRANSCRIBE_ERR_INVALID_ARG :
+                                         cw_run(cc, pcm[i], n_samples[i], params);
         if (st == TRANSCRIBE_OK) {
             cc->batch_results.push_back(cc->capture_result(st));
         } else {
@@ -1639,11 +1624,9 @@ transcribe_status cw_run_batch(transcribe_session *          session,
     // Same AUTO resolution as cw_run: AUTO means WORD for this family, and
     // the batched graph has no cross-attention capture, so both route to the
     // serial path that runs the Viterbi aligner.
-    const transcribe_timestamp_kind req_ts =
-        params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_NONE;
-    const transcribe_timestamp_kind eff_ts =
-        req_ts == TRANSCRIBE_TIMESTAMPS_AUTO ? TRANSCRIBE_TIMESTAMPS_WORD : req_ts;
-    const bool want_word_ts = eff_ts == TRANSCRIBE_TIMESTAMPS_WORD;
+    const transcribe_timestamp_kind req_ts = params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_NONE;
+    const transcribe_timestamp_kind eff_ts = req_ts == TRANSCRIBE_TIMESTAMPS_AUTO ? TRANSCRIBE_TIMESTAMPS_WORD : req_ts;
+    const bool                      want_word_ts = eff_ts == TRANSCRIBE_TIMESTAMPS_WORD;
     if (n == 1 || !cc->decoder_use_flash || !primary_is_gpu || transcribe::debug::enabled() || want_word_ts ||
         any_longform) {
         return cw_run_batch_serial(cc, pcm, n_samples, n, params);
@@ -1679,15 +1662,15 @@ transcribe_status cw_run_batch(transcribe_session *          session,
         }
     }
 
-    const std::vector<int32_t> prompt_ids = build_prompt(*cm, mode, lang_id, /*context_text=*/"");
-    const int                  prompt_len = static_cast<int>(prompt_ids.size());
-    const int                  B          = n;
-    const int                  d_model    = hp.dec_d_model;
-    const int                  n_layer    = hp.dec_n_layers;
-    const int                  vocab_size = hp.dec_vocab_size;
-    const int                  eos_id     = cm->tok.find("<|endoftext|>");
-    const int                  n_mels     = hp.fe_num_mels;
-    const int  n_mel_frames = hp.fe_nb_max_frames > 0 ? hp.fe_nb_max_frames : 3000;
+    const std::vector<int32_t> prompt_ids   = build_prompt(*cm, mode, lang_id, /*context_text=*/"");
+    const int                  prompt_len   = static_cast<int>(prompt_ids.size());
+    const int                  B            = n;
+    const int                  d_model      = hp.dec_d_model;
+    const int                  n_layer      = hp.dec_n_layers;
+    const int                  vocab_size   = hp.dec_vocab_size;
+    const int                  eos_id       = cm->tok.find("<|endoftext|>");
+    const int                  n_mels       = hp.fe_num_mels;
+    const int                  n_mel_frames = hp.fe_nb_max_frames > 0 ? hp.fe_nb_max_frames : 3000;
 
     // ---- per-utterance encoder ----
     std::vector<std::vector<float>> enc_hosts(static_cast<size_t>(B));
@@ -1739,7 +1722,7 @@ transcribe_status cw_run_batch(transcribe_session *          session,
         kv_type_g = GGML_TYPE_F16;
     } else {
         const ggml_tensor * probe = !cm->weights.dec_blocks.empty() ? cm->weights.dec_blocks[0].self_q_w : nullptr;
-        kv_type_g = (probe != nullptr && probe->type == GGML_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
+        kv_type_g                 = (probe != nullptr && probe->type == GGML_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
     }
     cc->kv_cache.free();
     if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary, max_n_kv, T_enc_max, d_model, n_layer, B, kv_type_g)) {
@@ -1845,8 +1828,8 @@ transcribe_status cw_run_batch(transcribe_session *          session,
         }
         std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * B, f16_ninf);
         for (int b = 0; b < B; ++b) {
-            std::fill(wider.data() + static_cast<size_t>(b) * win,
-                      wider.data() + static_cast<size_t>(b) * win + posv, f16_zero);
+            std::fill(wider.data() + static_cast<size_t>(b) * win, wider.data() + static_cast<size_t>(b) * win + posv,
+                      f16_zero);
         }
         smask.swap(wider);
         kv_window = win;
@@ -1855,8 +1838,8 @@ transcribe_status cw_run_batch(transcribe_session *          session,
 
     auto run_step = [&](int posv) -> transcribe_status {
         for (int b = 0; b < B; ++b) {
-            pos_buf[static_cast<size_t>(b)]   = posv;
-            kvidx_buf[static_cast<size_t>(b)] = posv;
+            pos_buf[static_cast<size_t>(b)]                  = posv;
+            kvidx_buf[static_cast<size_t>(b)]                = posv;
             smask[static_cast<size_t>(b) * kv_window + posv] = f16_zero;
         }
         ggml_backend_tensor_set(sb.token_ids_in, tok_buf.data(), 0, B * sizeof(int32_t));
@@ -1931,7 +1914,7 @@ transcribe_status cw_run_batch(transcribe_session *          session,
             const float * row = logits_host.data() + static_cast<size_t>(b) * vocab_size;
             const int     id  = argmax_with_suppression(row, vocab_size, hp.suppress_tokens);
             if (id < 0 || id == eos_id) {
-                fin[static_cast<size_t>(b)] = 1;
+                fin[static_cast<size_t>(b)]     = 1;
                 tok_buf[static_cast<size_t>(b)] = eos_id;
                 continue;
             }
@@ -1948,12 +1931,12 @@ transcribe_status cw_run_batch(transcribe_session *          session,
             text = cm->tok.decode(kept.data(), static_cast<int>(kept.size()));
         }
         transcribe_session::ResultSet rs;
-        rs.full_text   = normalize_ws(text);
+        rs.full_text = normalize_ws(text);
         // WORD (and AUTO, which resolves to it) never reaches this path.
-        rs.result_kind = eff_ts == TRANSCRIBE_TIMESTAMPS_SEGMENT ? TRANSCRIBE_TIMESTAMPS_SEGMENT
-                                                                 : TRANSCRIBE_TIMESTAMPS_NONE;
-        rs.has_result  = true;
-        rs.status      = TRANSCRIBE_OK;
+        rs.result_kind =
+            eff_ts == TRANSCRIBE_TIMESTAMPS_SEGMENT ? TRANSCRIBE_TIMESTAMPS_SEGMENT : TRANSCRIBE_TIMESTAMPS_NONE;
+        rs.has_result = true;
+        rs.status     = TRANSCRIBE_OK;
 
         transcribe_session::SegmentEntry seg;
         seg.text  = rs.full_text;
@@ -1991,8 +1974,7 @@ bool cw_accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot slo
 // ext before the prior result snapshot is wiped.
 transcribe_status cw_run_validate(const transcribe_session * ctx, const transcribe_run_params * params) {
     (void) ctx;
-    return transcribe_ext_check(params != nullptr ? params->family : nullptr,
-                                TRANSCRIBE_EXT_KIND_CRISPERWHISPER_RUN,
+    return transcribe_ext_check(params != nullptr ? params->family : nullptr, TRANSCRIBE_EXT_KIND_CRISPERWHISPER_RUN,
                                 sizeof(struct transcribe_crisperwhisper_run_ext));
 }
 

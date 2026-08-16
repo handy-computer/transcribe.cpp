@@ -27,12 +27,12 @@ inline constexpr float k_frame_duration_s = 0.02f;
 struct WordTimingParams {
     // extract_word_timings(sharpen=5.0): "empirically best for this verbatim
     // timing model (TIMIT 34.7 vs 39.3 at 3.0)".
-    float sharpen = 5.0f;
+    float sharpen         = 5.0f;
     // blank_gamma / blank_penalty = 3.0 / 3.0. The raw mel blank rates ordinary
     // low-energy conversational speech as half-silent and the Viterbi collapses
     // words onto their attention peak (Buckeye words ~26% of true length).
-    float blank_gamma   = 3.0f;
-    float blank_penalty = 3.0f;
+    float blank_gamma     = 3.0f;
+    float blank_penalty   = 3.0f;
     // split_gap_max_s=0.1: the Viterbi parks inter-word silence in a blank
     // state, so tight boundaries end up non-contiguous. Splitting gaps up to
     // 100 ms at their midpoint is a uniform win upstream; genuine pauses are

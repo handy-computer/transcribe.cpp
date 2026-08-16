@@ -79,12 +79,12 @@ struct DecoderBuild {
 // Build a decoder prefill graph in compute_ctx (no KV cache). Used
 // only by the language-detection forward pass on the first chunk;
 // every other decoder forward goes through build_decoder_graph_kv.
-DecoderBuild build_decoder_prefill_graph(ggml_context *         compute_ctx,
+DecoderBuild build_decoder_prefill_graph(ggml_context *  compute_ctx,
                                          const Weights & weights,
                                          const HParams & hp,
-                                         int                    seq_len,
-                                         int                    T_enc,
-                                         bool                   use_flash = true);
+                                         int             seq_len,
+                                         int             T_enc,
+                                         bool            use_flash = true);
 
 // Build a graph that computes cross-attention K/V for every decoder
 // layer from the encoder output and writes them into the cross-attn
@@ -95,12 +95,12 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         compute_ctx,
 // the encoder graph (shape [d_model, T_enc]). The cross-KV graph
 // reads it via a view in compute_ctx — no host roundtrip required.
 // Caller calls ggml_backend_sched_graph_compute after alloc_graph.
-DecoderBuild build_cross_kv_graph(ggml_context *         compute_ctx,
+DecoderBuild build_cross_kv_graph(ggml_context *  compute_ctx,
                                   const Weights & weights,
                                   const HParams & hp,
                                   KvCache &       kv_cache,
-                                  ggml_tensor *          encoder_out,
-                                  int                    T_enc);
+                                  ggml_tensor *   encoder_out,
+                                  int             T_enc);
 
 // Build a KV-cached decoder graph. Works for both prompt pass
 // (n_tokens > 1, n_past = 0) and step pass (n_tokens = 1, n_past =
@@ -117,17 +117,17 @@ DecoderBuild build_cross_kv_graph(ggml_context *         compute_ctx,
 // effective n_kv is rounded up to a multiple of kv_pad, and the
 // caller-supplied causal_mask_in covers the trailing padded slots
 // with -inf so they do not contribute to the FA output.
-DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
-                                    const Weights & weights,
-                                    const HParams & hp,
-                                    KvCache &       kv_cache,
-                                    int                    n_tokens,
-                                    int                    n_past,
-                                    int                    T_enc,
-                                    int                    kv_pad           = 1,
-                                    bool                   skip_log_softmax = false,
-                                    bool                   use_flash        = true,
-                                    const AlignHeads *     align_heads      = nullptr);
+DecoderBuild build_decoder_graph_kv(ggml_context *     compute_ctx,
+                                    const Weights &    weights,
+                                    const HParams &    hp,
+                                    KvCache &          kv_cache,
+                                    int                n_tokens,
+                                    int                n_past,
+                                    int                T_enc,
+                                    int                kv_pad           = 1,
+                                    bool               skip_log_softmax = false,
+                                    bool               use_flash        = true,
+                                    const AlignHeads * align_heads      = nullptr);
 
 // Static-topology single-token decoder graph. Built once per tier
 // after the prompt pass and reused for every step in the tier's
@@ -173,12 +173,12 @@ StepBuild build_step_graph(ggml_context *     compute_ctx,
 // Build a batched cross-attention K/V precompute graph. encoder_out_in is a
 // [d_model, T_enc_max, B] f32 input the caller fills with zero-padded
 // per-utterance encoder outputs. Writes into the batched cross cache.
-DecoderBuild build_cross_kv_graph_batched(ggml_context *         compute_ctx,
+DecoderBuild build_cross_kv_graph_batched(ggml_context *  compute_ctx,
                                           const Weights & weights,
                                           const HParams & hp,
                                           KvCache &       kv_cache,
-                                          int                    T_enc_max,
-                                          int                    n_batch);
+                                          int             T_enc_max,
+                                          int             n_batch);
 
 struct StepBuildBatched {
     ggml_tensor * token_ids_in  = nullptr;  // i32 [B]
@@ -192,13 +192,13 @@ struct StepBuildBatched {
     ggml_cgraph * graph         = nullptr;
 };
 
-StepBuildBatched build_step_graph_batched(ggml_context *         compute_ctx,
+StepBuildBatched build_step_graph_batched(ggml_context *  compute_ctx,
                                           const Weights & weights,
                                           const HParams & hp,
                                           KvCache &       kv_cache,
-                                          int                    max_n_kv,
-                                          int                    T_enc_max,
-                                          int                    n_batch,
-                                          bool                   use_flash = true);
+                                          int             max_n_kv,
+                                          int             T_enc_max,
+                                          int             n_batch,
+                                          bool            use_flash = true);
 
 }  // namespace transcribe::whisper_graph

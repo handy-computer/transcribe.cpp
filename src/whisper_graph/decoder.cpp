@@ -19,10 +19,10 @@
 #include "conformer/conformer.h"
 #include "encoder.h"  // for transcribe::conformer namespace alias context
 #include "ggml.h"
+#include "kv_cache.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
 #include "whisper_graph.h"
-#include "kv_cache.h"
 
 #include <algorithm>
 #include <cmath>
@@ -135,14 +135,14 @@ ggml_tensor * ffn(ggml_context * ctx,
     return o;
 }
 
-ggml_tensor * build_block(ggml_context *          ctx,
-                          ggml_tensor *           x,
-                          ggml_tensor *           encoder_hidden,
-                          ggml_tensor *           causal_mask,
+ggml_tensor * build_block(ggml_context *   ctx,
+                          ggml_tensor *    x,
+                          ggml_tensor *    encoder_hidden,
+                          ggml_tensor *    causal_mask,
                           const DecBlock & b,
-                          int                     n_heads,
-                          int                     d_model,
-                          bool                    use_flash) {
+                          int              n_heads,
+                          int              d_model,
+                          bool             use_flash) {
     // Self-attention (causal).
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, b.norm_self_b);
@@ -183,25 +183,25 @@ ggml_tensor * build_block(ggml_context *          ctx,
 //
 // Writes new K/V into the cache at [il, n_past..n_past+n_tokens), then reads
 // the full [il, 0..n_past+n_tokens) window. Returns [d_model, n_tokens].
-ggml_tensor * mha_self_cached(ggml_context *   ctx,
-                              ggml_cgraph *    gf,
-                              ggml_tensor *    x,
-                              KvCache & kv_cache,
-                              ggml_tensor *    mask,
-                              ggml_tensor *    q_w,
-                              ggml_tensor *    q_b,
-                              ggml_tensor *    k_w,
-                              ggml_tensor *    v_w,
-                              ggml_tensor *    v_b,
-                              ggml_tensor *    out_w,
-                              ggml_tensor *    out_b,
-                              int              n_heads,
-                              int              d_model,
-                              int              il,
-                              int              n_past,
-                              int              n_tokens,
-                              int              n_kv,
-                              bool             use_flash) {
+ggml_tensor * mha_self_cached(ggml_context * ctx,
+                              ggml_cgraph *  gf,
+                              ggml_tensor *  x,
+                              KvCache &      kv_cache,
+                              ggml_tensor *  mask,
+                              ggml_tensor *  q_w,
+                              ggml_tensor *  q_b,
+                              ggml_tensor *  k_w,
+                              ggml_tensor *  v_w,
+                              ggml_tensor *  v_b,
+                              ggml_tensor *  out_w,
+                              ggml_tensor *  out_b,
+                              int            n_heads,
+                              int            d_model,
+                              int            il,
+                              int            n_past,
+                              int            n_tokens,
+                              int            n_kv,
+                              bool           use_flash) {
     const int   head_dim = d_model / n_heads;
     const float scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int   n_ctx    = kv_cache.n_ctx;
@@ -281,24 +281,24 @@ ggml_tensor * mha_self_cached(ggml_context *   ctx,
 // go through ggml_set_rows at runtime row index `kv_idx`; reads span
 // the full [0, max_n_kv) window with `mask` gating valid positions.
 // n_tokens is implicitly 1.
-ggml_tensor * mha_self_step(ggml_context *   ctx,
-                            ggml_cgraph *    gf,
-                            ggml_tensor *    x,
-                            KvCache & kv_cache,
-                            ggml_tensor *    mask,
-                            ggml_tensor *    kv_idx,
-                            ggml_tensor *    q_w,
-                            ggml_tensor *    q_b,
-                            ggml_tensor *    k_w,
-                            ggml_tensor *    v_w,
-                            ggml_tensor *    v_b,
-                            ggml_tensor *    out_w,
-                            ggml_tensor *    out_b,
-                            int              n_heads,
-                            int              d_model,
-                            int              il,
-                            int              max_n_kv,
-                            bool             use_flash) {
+ggml_tensor * mha_self_step(ggml_context * ctx,
+                            ggml_cgraph *  gf,
+                            ggml_tensor *  x,
+                            KvCache &      kv_cache,
+                            ggml_tensor *  mask,
+                            ggml_tensor *  kv_idx,
+                            ggml_tensor *  q_w,
+                            ggml_tensor *  q_b,
+                            ggml_tensor *  k_w,
+                            ggml_tensor *  v_w,
+                            ggml_tensor *  v_b,
+                            ggml_tensor *  out_w,
+                            ggml_tensor *  out_b,
+                            int            n_heads,
+                            int            d_model,
+                            int            il,
+                            int            max_n_kv,
+                            bool           use_flash) {
     const int   head_dim = d_model / n_heads;
     const float scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int   n_ctx    = kv_cache.n_ctx;
@@ -370,20 +370,20 @@ ggml_tensor * mha_self_step(ggml_context *   ctx,
 
 // Cross-attention reading the pre-populated cross KV cache.
 // x: [d_model, n_tokens] query input -> returns [d_model, n_tokens].
-ggml_tensor * mha_cross_cached(ggml_context *   ctx,
-                               ggml_tensor *    x,
-                               KvCache & kv_cache,
-                               ggml_tensor *    mask,
-                               ggml_tensor *    q_w,
-                               ggml_tensor *    q_b,
-                               ggml_tensor *    out_w,
-                               ggml_tensor *    out_b,
-                               int              n_heads,
-                               int              d_model,
-                               int              il,
-                               int              T_enc,
-                               bool             use_flash,
-                               ggml_tensor **   out_probs = nullptr) {
+ggml_tensor * mha_cross_cached(ggml_context * ctx,
+                               ggml_tensor *  x,
+                               KvCache &      kv_cache,
+                               ggml_tensor *  mask,
+                               ggml_tensor *  q_w,
+                               ggml_tensor *  q_b,
+                               ggml_tensor *  out_w,
+                               ggml_tensor *  out_b,
+                               int            n_heads,
+                               int            d_model,
+                               int            il,
+                               int            T_enc,
+                               bool           use_flash,
+                               ggml_tensor ** out_probs = nullptr) {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t n_tokens = x->ne[1];
@@ -430,11 +430,11 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
             // [T_enc_pad, n_tokens, n_heads], post-softmax.
             *out_probs = kq_soft;
         }
-        ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, V, 1, 0, 2, 3));
-        o                     = ggml_mul_mat(ctx, v_t, kq_soft);
-        o                     = ggml_permute(ctx, o, 0, 2, 1, 3);
-        o                     = ggml_cont(ctx, o);
-        o                     = ggml_reshape_2d(ctx, o, d_model, n_tokens);
+        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, V, 1, 0, 2, 3));
+        o                 = ggml_mul_mat(ctx, v_t, kq_soft);
+        o                 = ggml_permute(ctx, o, 0, 2, 1, 3);
+        o                 = ggml_cont(ctx, o);
+        o                 = ggml_reshape_2d(ctx, o, d_model, n_tokens);
     }
 
     o = ggml_mul_mat(ctx, out_w, o);
@@ -454,10 +454,10 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
 // row k of the assembled matrix lines up 1-to-1 with generated token k.
 //
 // `probs_by_layer[i]` is null for layers that were not captured.
-ggml_tensor * average_align_heads(ggml_context *                                  ctx,
-                                  const std::vector<ggml_tensor *> &              probs_by_layer,
-                                  const std::vector<std::pair<int, int>> &        heads,
-                                  int                                             n_tokens) {
+ggml_tensor * average_align_heads(ggml_context *                           ctx,
+                                  const std::vector<ggml_tensor *> &       probs_by_layer,
+                                  const std::vector<std::pair<int, int>> & heads,
+                                  int                                      n_tokens) {
     ggml_tensor * acc = nullptr;
     int           n   = 0;
     for (const auto & [layer, head] : heads) {
@@ -470,9 +470,9 @@ ggml_tensor * average_align_heads(ggml_context *                                
         }
         const int64_t T_pad = probs->ne[0];
         // View the single row [T_pad] at (head, last query).
-        ggml_tensor * row = ggml_view_1d(ctx, probs, T_pad,
-                                         static_cast<size_t>(head) * probs->nb[2] +
-                                             static_cast<size_t>(n_tokens - 1) * probs->nb[1]);
+        ggml_tensor * row =
+            ggml_view_1d(ctx, probs, T_pad,
+                         static_cast<size_t>(head) * probs->nb[2] + static_cast<size_t>(n_tokens - 1) * probs->nb[1]);
         row = ggml_cont(ctx, row);
         acc = (acc == nullptr) ? row : ggml_add(ctx, acc, row);
         n += 1;
@@ -485,12 +485,12 @@ ggml_tensor * average_align_heads(ggml_context *                                
 
 }  // namespace
 
-DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
+DecoderBuild build_decoder_prefill_graph(ggml_context *  ctx,
                                          const Weights & w,
                                          const HParams & hp,
-                                         int                    seq_len,
-                                         int                    T_enc,
-                                         bool                   use_flash) {
+                                         int             seq_len,
+                                         int             T_enc,
+                                         bool            use_flash) {
     DecoderBuild db{};
 
     if (ctx == nullptr || seq_len <= 0 || T_enc <= 0) {
@@ -604,12 +604,12 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
 
 // KV-cached path: cross-KV precompute + prompt/step decoder graph.
 
-DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
+DecoderBuild build_cross_kv_graph(ggml_context *  ctx,
                                   const Weights & w,
                                   const HParams & hp,
                                   KvCache &       kv_cache,
-                                  ggml_tensor *          encoder_out,
-                                  int                    T_enc) {
+                                  ggml_tensor *   encoder_out,
+                                  int             T_enc) {
     DecoderBuild db{};
 
     if (ctx == nullptr || encoder_out == nullptr || T_enc <= 0) {
@@ -668,17 +668,17 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
     return db;
 }
 
-DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
-                                    const Weights & w,
-                                    const HParams & hp,
-                                    KvCache &       kv_cache,
-                                    int                    n_tokens,
-                                    int                    n_past,
-                                    int                    T_enc,
-                                    int                    kv_pad,
-                                    bool                   skip_log_softmax,
-                                    bool                   use_flash,
-                                    const AlignHeads *     align_heads) {
+DecoderBuild build_decoder_graph_kv(ggml_context *     ctx,
+                                    const Weights &    w,
+                                    const HParams &    hp,
+                                    KvCache &          kv_cache,
+                                    int                n_tokens,
+                                    int                n_past,
+                                    int                T_enc,
+                                    int                kv_pad,
+                                    bool               skip_log_softmax,
+                                    bool               use_flash,
+                                    const AlignHeads * align_heads) {
     DecoderBuild db{};
 
     if (ctx == nullptr || n_tokens <= 0 || T_enc <= 0) {
@@ -810,10 +810,10 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         // Cross-attention (pre-LN, reads cross cache).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, b.norm_cross_b);
-            y = mha_cross_cached(ctx, y, kv_cache, cross_mask, b.cross_q_w, b.cross_q_b, b.cross_out_w, b.cross_out_b,
-                                 n_heads, d_model, i, T_enc, use_flash,
-                                 capture_layer[static_cast<size_t>(i)] ? &cross_probs[static_cast<size_t>(i)]
-                                                                       : nullptr);
+            y               = mha_cross_cached(
+                ctx, y, kv_cache, cross_mask, b.cross_q_w, b.cross_q_b, b.cross_out_w, b.cross_out_b, n_heads, d_model,
+                i, T_enc, use_flash,
+                capture_layer[static_cast<size_t>(i)] ? &cross_probs[static_cast<size_t>(i)] : nullptr);
             x = ggml_add(ctx, x, y);
         }
         // FFN.
@@ -963,10 +963,10 @@ StepBuild build_step_graph(ggml_context *     ctx,
         // Cross-attention (pre-LN, reads pre-populated cross cache).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, b.norm_cross_b);
-            y = mha_cross_cached(ctx, y, kv_cache, cross_mask_f16, b.cross_q_w, b.cross_q_b, b.cross_out_w,
-                                 b.cross_out_b, n_heads, d_model, i, T_enc, use_flash,
-                                 capture_layer[static_cast<size_t>(i)] ? &cross_probs[static_cast<size_t>(i)]
-                                                                       : nullptr);
+            y               = mha_cross_cached(
+                ctx, y, kv_cache, cross_mask_f16, b.cross_q_w, b.cross_q_b, b.cross_out_w, b.cross_out_b, n_heads,
+                d_model, i, T_enc, use_flash,
+                capture_layer[static_cast<size_t>(i)] ? &cross_probs[static_cast<size_t>(i)] : nullptr);
             x = ggml_add(ctx, x, y);
         }
         // FFN (pre-LN, GELU).
@@ -1004,24 +1004,24 @@ namespace {
 // Batched self-attention step. x: [d_model, B] (one token per utterance).
 // Mirrors mha_self_step but threads the utterance batch on the trailing
 // flash axis (ne[3]); KV slab per layer is [d_model, n_ctx, B]. Flash-only.
-ggml_tensor * mha_self_step_batched(ggml_context *   ctx,
-                                    ggml_cgraph *    gf,
-                                    ggml_tensor *    x,
-                                    KvCache & kv_cache,
-                                    ggml_tensor *    mask,
-                                    ggml_tensor *    kv_idx,
-                                    ggml_tensor *    q_w,
-                                    ggml_tensor *    q_b,
-                                    ggml_tensor *    k_w,
-                                    ggml_tensor *    v_w,
-                                    ggml_tensor *    v_b,
-                                    ggml_tensor *    out_w,
-                                    ggml_tensor *    out_b,
-                                    int              n_heads,
-                                    int              d_model,
-                                    int              il,
-                                    int              max_n_kv,
-                                    int              B) {
+ggml_tensor * mha_self_step_batched(ggml_context * ctx,
+                                    ggml_cgraph *  gf,
+                                    ggml_tensor *  x,
+                                    KvCache &      kv_cache,
+                                    ggml_tensor *  mask,
+                                    ggml_tensor *  kv_idx,
+                                    ggml_tensor *  q_w,
+                                    ggml_tensor *  q_b,
+                                    ggml_tensor *  k_w,
+                                    ggml_tensor *  v_w,
+                                    ggml_tensor *  v_b,
+                                    ggml_tensor *  out_w,
+                                    ggml_tensor *  out_b,
+                                    int            n_heads,
+                                    int            d_model,
+                                    int            il,
+                                    int            max_n_kv,
+                                    int            B) {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t n_ctx    = kv_cache.n_ctx;
@@ -1077,19 +1077,19 @@ ggml_tensor * mha_self_step_batched(ggml_context *   ctx,
 // Batched cross-attention step. x: [d_model, B]; reads cross slab
 // [d_model, T_enc_max, B] per layer with a per-utterance cross-pad mask.
 // Whisper cross: q/out carry bias; k/v already live in the cache.
-ggml_tensor * mha_cross_step_batched(ggml_context *   ctx,
-                                     ggml_tensor *    x,
-                                     KvCache & kv_cache,
-                                     ggml_tensor *    cross_mask,
-                                     ggml_tensor *    q_w,
-                                     ggml_tensor *    q_b,
-                                     ggml_tensor *    out_w,
-                                     ggml_tensor *    out_b,
-                                     int              n_heads,
-                                     int              d_model,
-                                     int              il,
-                                     int              T_enc_max,
-                                     int              B) {
+ggml_tensor * mha_cross_step_batched(ggml_context * ctx,
+                                     ggml_tensor *  x,
+                                     KvCache &      kv_cache,
+                                     ggml_tensor *  cross_mask,
+                                     ggml_tensor *  q_w,
+                                     ggml_tensor *  q_b,
+                                     ggml_tensor *  out_w,
+                                     ggml_tensor *  out_b,
+                                     int            n_heads,
+                                     int            d_model,
+                                     int            il,
+                                     int            T_enc_max,
+                                     int            B) {
     const int    head_dim = d_model / n_heads;
     const float  scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const size_t k_elem   = ggml_element_size(kv_cache.cross_k);
@@ -1121,12 +1121,12 @@ ggml_tensor * mha_cross_step_batched(ggml_context *   ctx,
 
 }  // namespace
 
-DecoderBuild build_cross_kv_graph_batched(ggml_context *         ctx,
+DecoderBuild build_cross_kv_graph_batched(ggml_context *  ctx,
                                           const Weights & w,
                                           const HParams & hp,
                                           KvCache &       kv_cache,
-                                          int                    T_enc_max,
-                                          int                    n_batch) {
+                                          int             T_enc_max,
+                                          int             n_batch) {
     DecoderBuild db{};
     if (ctx == nullptr || T_enc_max <= 0 || n_batch <= 0) {
         return db;
@@ -1171,14 +1171,14 @@ DecoderBuild build_cross_kv_graph_batched(ggml_context *         ctx,
     return db;
 }
 
-StepBuildBatched build_step_graph_batched(ggml_context *         ctx,
+StepBuildBatched build_step_graph_batched(ggml_context *  ctx,
                                           const Weights & w,
                                           const HParams & hp,
                                           KvCache &       kv_cache,
-                                          int                    max_n_kv,
-                                          int                    T_enc_max,
-                                          int                    n_batch,
-                                          bool                   use_flash) {
+                                          int             max_n_kv,
+                                          int             T_enc_max,
+                                          int             n_batch,
+                                          bool            use_flash) {
     StepBuildBatched sb{};
     sb.max_n_kv = max_n_kv;
     sb.n_batch  = n_batch;

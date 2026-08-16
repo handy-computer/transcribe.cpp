@@ -35,7 +35,9 @@ bool is_special_piece(const std::string & p) {
            p == "<sot>" || p == "<eot>";
 }
 
-bool is_space_piece(int id, const std::string & p) { return id == k_space_token_id || p == " "; }
+bool is_space_piece(int id, const std::string & p) {
+    return id == k_space_token_id || p == " ";
+}
 
 std::string trim(const std::string & s) {
     size_t b = 0, e = s.size();
@@ -82,11 +84,11 @@ std::vector<float> resample_1d(const std::vector<float> & x, int target_len) {
     const double n_src = static_cast<double>(x.size());
     for (int i = 0; i < target_len; ++i) {
         // src grid is linspace(0,1,x.size()), dst grid linspace(0,1,target_len)
-        const double t   = (target_len == 1) ? 0.0 : static_cast<double>(i) / (target_len - 1.0);
-        const double pos = t * (n_src - 1.0);
-        const size_t lo  = static_cast<size_t>(std::floor(pos));
-        const size_t hi  = std::min(lo + 1, x.size() - 1);
-        const double f   = pos - static_cast<double>(lo);
+        const double t              = (target_len == 1) ? 0.0 : static_cast<double>(i) / (target_len - 1.0);
+        const double pos            = t * (n_src - 1.0);
+        const size_t lo             = static_cast<size_t>(std::floor(pos));
+        const size_t hi             = std::min(lo + 1, x.size() - 1);
+        const double f              = pos - static_cast<double>(lo);
         out[static_cast<size_t>(i)] = static_cast<float>(x[lo] * (1.0 - f) + x[hi] * f);
     }
     return out;
@@ -196,7 +198,7 @@ std::vector<CwWord> extract_word_timings(const std::vector<int> &         ids,
         }
         sum = std::max(sum, static_cast<double>(k_attn_eps));
         for (int f = 0; f < F; ++f) {
-            const double p              = tok_logp[static_cast<size_t>(t) * F + f] / sum;
+            const double p                           = tok_logp[static_cast<size_t>(t) * F + f] / sum;
             tok_logp[static_cast<size_t>(t) * F + f] = std::log(p + k_attn_eps);
         }
     }
@@ -241,7 +243,7 @@ std::vector<CwWord> extract_word_timings(const std::vector<int> &         ids,
                 continue;
             }
             for (int f = 0; f < F; ++f) {
-                double & dst = word_logp[static_cast<size_t>(w) * F + f];
+                double &     dst = word_logp[static_cast<size_t>(w) * F + f];
                 const double src = tok_logp[static_cast<size_t>(ti) * F + f];
                 dst = any ? static_cast<double>(logaddexp(static_cast<float>(dst), static_cast<float>(src))) : src;
             }
@@ -249,12 +251,12 @@ std::vector<CwWord> extract_word_timings(const std::vector<int> &         ids,
         }
     }
 
-    const int S = 2 * W + 1;
+    const int S    = 2 * W + 1;
     // emit[s][f]: even states are virtual blanks (all sharing blank_logp),
     // odd states emit their word's collapsed row.
-    auto emit = [&](int s, int f) -> double {
-        return (s % 2 == 0) ? static_cast<double>(blank_logp[static_cast<size_t>(f)])
-                            : word_logp[static_cast<size_t>((s - 1) / 2) * F + f];
+    auto      emit = [&](int s, int f) -> double {
+        return (s % 2 == 0) ? static_cast<double>(blank_logp[static_cast<size_t>(f)]) :
+                              word_logp[static_cast<size_t>((s - 1) / 2) * F + f];
     };
 
     std::vector<double>  dp(static_cast<size_t>(S) * static_cast<size_t>(F), k_neg_inf);
@@ -263,9 +265,9 @@ std::vector<CwWord> extract_word_timings(const std::vector<int> &         ids,
 
     for (int f = 1; f < F; ++f) {
         for (int s = 0; s < S; ++s) {
-            const double stay = dp[static_cast<size_t>(s) * F + (f - 1)];
-            const double adv  = (s >= 1) ? dp[static_cast<size_t>(s - 1) * F + (f - 1)] : k_neg_inf;
-            const bool   take = adv > stay;
+            const double stay                    = dp[static_cast<size_t>(s) * F + (f - 1)];
+            const double adv                     = (s >= 1) ? dp[static_cast<size_t>(s - 1) * F + (f - 1)] : k_neg_inf;
+            const bool   take                    = adv > stay;
             dp[static_cast<size_t>(s) * F + f]   = (take ? adv : stay) + emit(s, f);
             back[static_cast<size_t>(s) * F + f] = take ? 1 : 0;
         }
@@ -327,8 +329,8 @@ std::vector<CwWord> extract_word_timings(const std::vector<int> &         ids,
             }
         }
         for (size_t i = 0; i + 1 < placed.size(); ++i) {
-            CwWord & a   = *placed[i];
-            CwWord & b   = *placed[i + 1];
+            CwWord &    a   = *placed[i];
+            CwWord &    b   = *placed[i + 1];
             const float gap = b.start - a.end;
             if (gap > 0.0f && gap <= params.split_gap_max_s) {
                 const float mid = a.end + gap / 2.0f;

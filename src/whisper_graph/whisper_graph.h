@@ -211,7 +211,7 @@ struct Weights {
 // `family_tag` only labels error messages; the tensor names themselves are
 // identical across families by construction (the converters emit the same
 // catalog, which is what makes this component shareable).
-transcribe_status build_weights(ggml_context * ctx_meta,
+transcribe_status build_weights(ggml_context *  ctx_meta,
                                 const HParams & hp,
                                 const char *    family_tag,
                                 Weights &       weights);

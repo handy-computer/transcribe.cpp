@@ -151,12 +151,12 @@ ggml_tensor * ffn(ggml_context * ctx,
 // Build one pre-LN encoder block:
 //   y = x + MHSA(LN_attn(x))
 //   y = y + FFN(LN_ffn(y))
-ggml_tensor * build_block(ggml_context *          ctx,
-                          ggml_tensor *           x,
+ggml_tensor * build_block(ggml_context *   ctx,
+                          ggml_tensor *    x,
                           const EncBlock & b,
-                          int                     n_heads,
-                          int                     d_model,
-                          bool                    use_flash) {
+                          int              n_heads,
+                          int              d_model,
+                          bool             use_flash) {
     // Self-attention sublayer.
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_attn_w, b.norm_attn_b);
@@ -175,12 +175,12 @@ ggml_tensor * build_block(ggml_context *          ctx,
 
 }  // namespace
 
-EncoderBuild build_encoder_graph(ggml_context *         ctx,
+EncoderBuild build_encoder_graph(ggml_context *  ctx,
                                  const Weights & w,
                                  const HParams & hp,
-                                 int                    n_mel_frames,
-                                 bool                   use_flash,
-                                 const char *           backend_name) {
+                                 int             n_mel_frames,
+                                 bool            use_flash,
+                                 const char *    backend_name) {
     (void) backend_name;
 
     EncoderBuild eb{};

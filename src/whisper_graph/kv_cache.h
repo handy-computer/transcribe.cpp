@@ -137,27 +137,26 @@ constexpr int k_cross_kv_pad = 256;
 // fixed at 1500 for whisper (max_source_positions after the stride-2
 // conv). d_model is the per-layer hidden dim. kv_type is the storage
 // dtype for all four cache tensors.
-bool kv_cache_init(KvCache & cache,
-                   ggml_backend_t   backend,
-                   int              n_ctx,
-                   int              T_enc,
-                   int              d_model,
-                   int              n_layer,
-                   ggml_type        kv_type);
+bool kv_cache_init(KvCache &      cache,
+                   ggml_backend_t backend,
+                   int            n_ctx,
+                   int            T_enc,
+                   int            d_model,
+                   int            n_layer,
+                   ggml_type      kv_type);
 
 // Allocate batched cache tensors for the offline batched decode. Same as
 // kv_cache_init but each role tensor carries an n_batch dimension; the
 // cross cache uses T_enc (== T_enc_max, no 256-pad — the batched cross
 // graph + a per-utterance cross-pad mask handle the FA shape). n_batch==1
 // is byte-identical to kv_cache_init.
-bool kv_cache_init_batched(KvCache & cache,
-                           ggml_backend_t   backend,
-                           int              n_ctx,
-                           int              T_enc,
-                           int              d_model,
-                           int              n_layer,
-                           int              n_batch,
-                           ggml_type        kv_type);
-
+bool kv_cache_init_batched(KvCache &      cache,
+                           ggml_backend_t backend,
+                           int            n_ctx,
+                           int            T_enc,
+                           int            d_model,
+                           int            n_layer,
+                           int            n_batch,
+                           ggml_type      kv_type);
 
 }  // namespace transcribe::whisper_graph

@@ -59,11 +59,11 @@ struct EncoderBuild {
 // even values are accepted for test fixtures). use_flash selects
 // ggml_flash_attn_ext vs. manual mul_mat + soft_max; the caller gates it
 // against backend support. backend_name is informational only.
-EncoderBuild build_encoder_graph(ggml_context *         compute_ctx,
+EncoderBuild build_encoder_graph(ggml_context *  compute_ctx,
                                  const Weights & weights,
                                  const HParams & hp,
-                                 int                    n_mel_frames,
-                                 bool                   use_flash    = true,
-                                 const char *           backend_name = "");
+                                 int             n_mel_frames,
+                                 bool            use_flash    = true,
+                                 const char *    backend_name = "");
 
 }  // namespace transcribe::whisper_graph

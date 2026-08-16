@@ -19,9 +19,7 @@ constexpr const char * kTag = k_family_tag;
 // Required int32-array KV. Absent or wrong type is fatal: every array in the
 // contract is load-bearing (a missing mode-tag block means we cannot build a
 // prompt at all).
-transcribe_status read_required_i32_array(const gguf_context *   gguf,
-                                          const char *           key,
-                                          std::vector<int32_t> & out) {
+transcribe_status read_required_i32_array(const gguf_context * gguf, const char * key, std::vector<int32_t> & out) {
     const auto st = transcribe::read_int32_array_kv(gguf, key, out);
     if (st == transcribe::KvResult::Ok) {
         return TRANSCRIBE_OK;
@@ -54,13 +52,13 @@ transcribe_status read_cw_contract(const gguf_context * gguf, const CwHParams & 
     }
 
     // ---- mode tags ----
-    if (const auto st = read_required_i32_array(gguf, "stt.crisperwhisper.mode.verbatim_token_ids",
-                                                out.verbatim_tag_ids);
+    if (const auto st =
+            read_required_i32_array(gguf, "stt.crisperwhisper.mode.verbatim_token_ids", out.verbatim_tag_ids);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (const auto st = read_required_i32_array(gguf, "stt.crisperwhisper.mode.intended_token_ids",
-                                                out.intended_tag_ids);
+    if (const auto st =
+            read_required_i32_array(gguf, "stt.crisperwhisper.mode.intended_token_ids", out.intended_tag_ids);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -75,6 +73,7 @@ transcribe_status read_cw_contract(const gguf_context * gguf, const CwHParams & 
         const char * key;
         int32_t *    slot;
     };
+
     const MarkerSlot markers[] = {
         { "stt.crisperwhisper.marker.verbatimize_start_token_id", &out.vtx_id  },
         { "stt.crisperwhisper.marker.verbatimize_end_token_id",   &out.evtx_id },
@@ -114,8 +113,7 @@ transcribe_status read_cw_contract(const gguf_context * gguf, const CwHParams & 
 
     // ---- word timing alignment heads (flattened (layer, head) pairs) ----
     std::vector<int32_t> heads_flat;
-    if (const auto st =
-            read_required_i32_array(gguf, "stt.crisperwhisper.word_timing.alignment_heads", heads_flat);
+    if (const auto st = read_required_i32_array(gguf, "stt.crisperwhisper.word_timing.alignment_heads", heads_flat);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -144,8 +142,8 @@ transcribe_status read_cw_contract(const gguf_context * gguf, const CwHParams & 
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (const auto st = transcribe::read_required_f32_kv(gguf, "stt.crisperwhisper.longform.stride", kTag,
-                                                         out.longform_stride);
+    if (const auto st =
+            transcribe::read_required_f32_kv(gguf, "stt.crisperwhisper.longform.stride", kTag, out.longform_stride);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -199,8 +197,8 @@ transcribe_status read_cw_contract(const gguf_context * gguf, const CwHParams & 
 
     // ---- default mode ----
     std::string mode_str;
-    if (const auto st = transcribe::read_optional_string_kv(gguf, "stt.crisperwhisper.mode.default", kTag, "verbatim",
-                                                            mode_str);
+    if (const auto st =
+            transcribe::read_optional_string_kv(gguf, "stt.crisperwhisper.mode.default", kTag, "verbatim", mode_str);
         st != TRANSCRIBE_OK) {
         return st;
     }
