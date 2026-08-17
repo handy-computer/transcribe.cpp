@@ -11,6 +11,8 @@
 
 #include "transcribe.h"
 
+#include <cstddef>
+
 namespace transcribe {
 
 class Loader;
@@ -134,5 +136,25 @@ struct Arch {
 // Look up an architecture by name. Returns nullptr if no registered
 // family matches.
 const Arch * find_arch(const char * name);
+
+// Guarded read of the optional transcribe_run_params::hotwords tail field.
+// Returns nullptr when params is NULL, when the caller's struct_size predates
+// the field (old ABI), or when the string is NULL/empty. Families call this
+// instead of touching params->hotwords directly so a short-struct caller never
+// causes an out-of-bounds read. See the field docs in transcribe.h.
+inline const char * run_params_hotwords(const transcribe_run_params * params) {
+    if (params == nullptr) {
+        return nullptr;
+    }
+    const size_t field_end = offsetof(transcribe_run_params, hotwords) + sizeof(params->hotwords);
+    if (params->struct_size < static_cast<uint64_t>(field_end)) {
+        return nullptr;
+    }
+    const char * hw = params->hotwords;
+    if (hw == nullptr || hw[0] == '\0') {
+        return nullptr;
+    }
+    return hw;
+}
 
 }  // namespace transcribe

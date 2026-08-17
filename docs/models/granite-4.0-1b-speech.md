@@ -132,6 +132,7 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 | Translate (en↔ASR, en→it/zh) | Yes (`--translate --target-language <bcp47>`) |
 | Word-level timestamps       | No (use the `-plus` variant) |
 | Speaker diarization         | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
+| Keyword biasing (hotwords)  | Yes (`--hotwords "kw1, kw2"`) |
 
 ## Numerical Validation
 

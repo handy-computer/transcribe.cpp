@@ -81,7 +81,7 @@ public enum Diarize: Sendable {
 }
 
 public enum Feature: Sendable {
-    case initialPrompt, temperatureFallback, longForm, cancellation, pnc, itn, diarization
+    case initialPrompt, temperatureFallback, longForm, cancellation, pnc, itn, diarization, hotwords
     var cValue: transcribe_feature {
         switch self {
         case .initialPrompt: return TRANSCRIBE_FEATURE_INITIAL_PROMPT
@@ -91,6 +91,7 @@ public enum Feature: Sendable {
         case .pnc: return TRANSCRIBE_FEATURE_PNC
         case .itn: return TRANSCRIBE_FEATURE_ITN
         case .diarization: return TRANSCRIBE_FEATURE_DIARIZATION
+        case .hotwords: return TRANSCRIBE_FEATURE_HOTWORDS
         }
     }
 }
@@ -134,6 +135,8 @@ public struct RunOptions: Sendable {
     public var keepSpecialTags: Bool
     /// Speculative-decode draft length: -1 = family default, 0 = disabled.
     public var specKDrafts: Int32
+    /// Comma-joined keyword-biasing hint; ignored by families without support.
+    public var hotwords: String?
     /// Family-specific run extension (whisper run options); M3.
     public var family: RunExtension?
 
@@ -150,6 +153,7 @@ public struct RunOptions: Sendable {
         targetLanguage: String? = nil,
         keepSpecialTags: Bool = false,
         specKDrafts: Int32 = -1,
+        hotwords: String? = nil,
         family: RunExtension? = nil
     ) {
         self.task = task
@@ -161,12 +165,14 @@ public struct RunOptions: Sendable {
         self.targetLanguage = targetLanguage
         self.keepSpecialTags = keepSpecialTags
         self.specKDrafts = specKDrafts
+        self.hotwords = hotwords
         self.family = family
     }
 
     /// Materialize a `transcribe_run_params` and run `body` with a pointer to
-    /// it. The `language` / `target_language` C strings are kept alive for the
-    /// duration of `body` (the C side copies them before returning).
+    /// it. The `language` / `target_language` / `hotwords` C strings are kept
+    /// alive for the duration of `body` (the C side copies them before
+    /// returning).
     func withCParams<R>(_ body: (UnsafePointer<transcribe_run_params>) throws -> R) rethrows -> R {
         var params = transcribe_run_params()
         transcribe_run_params_init(&params)
@@ -181,9 +187,12 @@ public struct RunOptions: Sendable {
             params.language = lang
             return try withOptionalCString(targetLanguage) { tgt in
                 params.target_language = tgt
-                return try withRunExtension(family) { ext in
-                    params.family = ext
-                    return try withUnsafePointer(to: &params) { try body($0) }
+                return try withOptionalCString(hotwords) { hw in
+                    params.hotwords = hw
+                    return try withRunExtension(family) { ext in
+                        params.family = ext
+                        return try withUnsafePointer(to: &params) { try body($0) }
+                    }
                 }
             }
         }

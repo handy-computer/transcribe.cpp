@@ -61,6 +61,16 @@ def main() -> int:
              "Override only if you know what you are doing.",
     )
     p.add_argument(
+        "--hotwords",
+        default=None,
+        help="Optional caller-joined keyword list (e.g. \"kubernetes, gRPC\"); "
+             "appends IBM's trained \" Keywords: <list>\" clause. Keyword biasing "
+             "on granite-speech-4.1-2b uses a distinct trained stem "
+             "(\"transcribe the speech to text.\"), so when --instruction is "
+             "omitted this swaps the auto-selected base-2b stem to match the C++ "
+             "granite path.",
+    )
+    p.add_argument(
         "--system-prompt",
         default=None,
         help="System message content. When omitted, picked per-variant "
@@ -174,7 +184,20 @@ def main() -> int:
     else:
         system_content = ""
 
-    # Build the prompt once. Same prompt every utterance.
+    # Build the prompt once. Same prompt every utterance. Keyword biasing (KWB)
+    # uses a DISTINCT trained stem that varies by variant, mirroring the C++
+    # granite path (build_granite_affixes in src/arch/granite/model.cpp):
+    # granite-speech-4.1-2b swaps to "transcribe the speech to text." (ASR) or
+    # "translate the speech to <lang>." (AST); -plus/1b instead append
+    # " Keywords: <list>" to their plain-ASR prompt. The surface form is
+    # load-bearing (a paraphrase silently disables biasing), so only base-2b's
+    # auto-selected stem is swapped here. An explicit --instruction is honored
+    # verbatim — pass the trained AST-KWB stem there for translate parity, which
+    # this harness expresses only via --instruction.
+    if args.hotwords:
+        if args.instruction is None and variant == "granite-speech-4.1-2b":
+            instruction = "transcribe the speech to text."
+        instruction = f"{instruction} Keywords: {args.hotwords}"
     user_message = f"<|audio|>{instruction}"
     chat = []
     if system_content:

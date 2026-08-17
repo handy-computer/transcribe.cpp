@@ -91,7 +91,16 @@ CLI flags:
   `speaker_id` and speaker-turn rows; `--no-diarize` is the explicit off form.
 - Timestamp selection is independent: `--timestamps segment` or `auto` keeps
   parsed turn timing; `--timestamps none` returns attribution with zero times.
+- `--hotwords "kw1, kw2, kw3"` biases decoding toward domain terms (see below).
 - `full_text` is always clean marker-free text after a successful parse.
+
+### Hotword hints
+
+Pass `--hotwords "kw1, kw2, kw3"` with a comma-separated list to bias decoding
+toward names, jargon, or acronyms the model otherwise mis-transcribes. Speaker
+attribution and timestamps are unaffected. An empty or omitted value leaves the
+default behavior unchanged. Keep the list to a few dozen terms and measure —
+very long lists dilute the effect.
 
 ## Performance
 

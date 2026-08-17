@@ -20,6 +20,11 @@ void apply_family_invariants(transcribe_model & model) {
 
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_DIARIZATION, true);
+
+    // Hotword biasing: the runtime appends a "热词提示：<list>" clause to the
+    // baked prompt (see build_prompt_tokens / diarize split). Honored via
+    // transcribe_run_params::hotwords.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_HOTWORDS, true);
 }
 
 }  // namespace transcribe::moss

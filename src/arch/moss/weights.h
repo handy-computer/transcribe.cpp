@@ -66,6 +66,15 @@ struct MossHParams {
     std::vector<int32_t> prompt_suffix_tokens;
     std::vector<int32_t> digit_tokens;  // ids for '0'..'9'
 
+    // Runtime split of prompt_suffix_tokens at the first eos_token_id (the
+    // <|im_end|> that closes the baked prompt body): suffix body = tokens
+    // [0, prompt_suffix_split), generation-close tail = [prompt_suffix_split,
+    // end). Optional hotword ids are inserted at the boundary. Resolved at
+    // load once eos_token_id is known. When no eos id is present (unexpected),
+    // it equals prompt_suffix_tokens.size(), so there is no boundary and
+    // hotwords are disabled — the baked prompt is emitted verbatim.
+    size_t prompt_suffix_split = 0;
+
     // Token ids (resolved from tokenizer KV at load).
     int32_t bos_token_id = -1;
     int32_t eos_token_id = -1;

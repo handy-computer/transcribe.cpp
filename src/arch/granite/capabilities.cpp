@@ -26,6 +26,12 @@ void apply_family_invariants(transcribe_model & model) {
     // not apply to granite (the LLM produces a single greedy
     // transcript per utterance). No PNC/ITN runtime toggle.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+
+    // Keyword biasing (KWB): the granite-speech cards document appending a
+    // trained " Keywords: <list>" clause to the task instruction to bias
+    // decoding. Honored via transcribe_run_params::hotwords in
+    // build_granite_affixes().
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_HOTWORDS, true);
 }
 
 }  // namespace transcribe::granite

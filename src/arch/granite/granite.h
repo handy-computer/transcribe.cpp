@@ -51,6 +51,20 @@ namespace transcribe::granite {
 
 void apply_family_invariants(transcribe_model & model);
 
+// Select the exact user-turn instruction string for a granite run from the
+// variant name and resolved run params. Pure and model-free: the caller
+// resolves diarize_on (diarize_requested) and passes it in, and no tokenizer is
+// touched. This is the single source of truth for the trained prompt surface
+// form — a paraphrase is silently ignored by the model — which lets
+// granite_prompt_builder_unit assert every (variant × task × hotwords)
+// combination exactly. Returns TRANSCRIBE_ERR_INVALID_ARG for a missing/
+// unadvertised translate target or diarize combined with word timestamps,
+// matching the prompt builder used at decode time.
+transcribe_status select_granite_instruction(const std::string &           variant,
+                                             const transcribe_run_params * params,
+                                             bool                          diarize_on,
+                                             std::string &                 out_instruction);
+
 // Chat-template token ids resolved through the loaded tokenizer at load time
 // (bare-USER:/ASSISTANT: for 1b/2b, Granite-4 system-role for -plus). Every
 // piece is resolved ahead of time so vocab drift fails loudly at load instead

@@ -51,14 +51,17 @@ void build_audio_span(const MossHParams &    hp,
                       std::vector<int32_t> & out_span_ids,
                       std::vector<int32_t> & out_audio_offsets);
 
-// Assemble the full prompt: prefix_tokens + audio_span + suffix_tokens.
+// Assemble the full prompt: prefix_tokens + audio_span + suffix, with optional
+// hotword ids inserted at the baked suffix's body->close split (hp.
+// prompt_suffix_split). Pass an empty hotword_ids for the unbiased prompt.
 // out_audio_positions holds the absolute prompt positions of the audio_pad
 // tokens (in order), so the b-th audio feature is scattered to
 // input_ids[out_audio_positions[b]].
-void build_prompt_tokens(const MossHParams &    hp,
-                         int                    audio_seq_len,
-                         std::vector<int32_t> & out_ids,
-                         std::vector<int32_t> & out_audio_positions);
+void build_prompt_tokens(const MossHParams &          hp,
+                         int                          audio_seq_len,
+                         const std::vector<int32_t> & hotword_ids,
+                         std::vector<int32_t> &       out_ids,
+                         std::vector<int32_t> &       out_audio_positions);
 
 struct MossModel final : public transcribe_model {
     Tokenizer      tok;

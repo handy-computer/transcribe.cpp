@@ -513,28 +513,37 @@ static const char * granite_target_language_name(const char * code_or_name) {
     return nullptr;
 }
 
-// Build the prompt prefix/suffix token-id lists from the shared run params and
-// model variant (the audio tokens splice in between). Single source of truth
-// for run() and run_batch().
-static transcribe_status build_granite_affixes(GraniteModel *                cm,
-                                               const transcribe_run_params * params,
-                                               std::vector<int32_t> &        prefix_ids,
-                                               std::vector<int32_t> &        suffix_ids) {
+}  // namespace
+
+// Select the exact granite user-turn instruction. Declared in granite.h (has
+// external linkage) so granite_prompt_builder_unit can assert the surface form
+// for every variant × task × hotwords combination. Model-free: the caller
+// resolves diarize_on and passes it in.
+transcribe_status select_granite_instruction(const std::string &           variant,
+                                             const transcribe_run_params * params,
+                                             bool                          diarize_on,
+                                             std::string &                 out_instruction) {
     std::string instruction;
-    if (cm->hparams.variant == "granite-speech-4.1-2b") {
+    if (variant == "granite-speech-4.1-2b") {
         instruction = "transcribe the speech with proper punctuation and capitalization.";
-    } else if (cm->hparams.variant == "granite-speech-4.1-2b-plus") {
+    } else if (variant == "granite-speech-4.1-2b-plus") {
         instruction = " can you transcribe the speech into a written format?";
     } else {
         instruction = "can you transcribe the speech into a written format?";
     }
+
+    // Resolved once in the translate branch and reused by the AST+KWB stem so the
+    // language is never looked up (and never concatenated as a possible nullptr)
+    // twice.
+    const char * lang_name = nullptr;
+
     if (params != nullptr) {
         if (params->task == TRANSCRIBE_TASK_TRANSLATE) {
             if (params->target_language == nullptr || params->target_language[0] == '\0') {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: translate task requires --target-language");
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
-            const char * lang_name = granite_target_language_name(params->target_language);
+            lang_name = granite_target_language_name(params->target_language);
             if (lang_name == nullptr) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: target_language '%s' is not advertised",
                         params->target_language);
@@ -545,7 +554,7 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
             // -plus only (1b/2b advertise NONE, gated out upstream). AUTO does
             // NOT request timestamps. IBM's verbatim prompt; the model emits
             // per-word "[T:N]" centisecond markers (parsed in run()).
-            if (diarize_requested(cm, params)) {
+            if (diarize_on) {
                 // Upstream defines timestamps and speaker attribution as
                 // separate tasks (one instruction each); they do not compose.
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -556,12 +565,69 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
             instruction =
                 " Timestamps: Transcribe the speech. After each word, add a timestamp tag "
                 "showing the end time in centiseconds, e.g. hello [T:45] world [T:82]";
-        } else if (diarize_requested(cm, params)) {
+        } else if (diarize_on) {
             // -plus only (the DIARIZATION feature bit gates this). IBM's
             // verbatim speaker-attribution instruction; the model emits
             // "[Speaker N]:" tags before turns (split after decode).
             instruction = k_saa_instruction;
         }
+
+        // Keyword biasing (KWB) uses a DISTINCT trained instruction per task and
+        // variant — not an arbitrary suffix on the active prompt. An
+        // off-distribution prompt is silently ignored (the model falls back to
+        // plain transcription), so the base sentence has to match what was
+        // trained. IBM's granite-speech-4.1-2b card documents the KWB stems as
+        // "transcribe the speech to text. Keywords: <list>" (ASR) and "translate
+        // the speech to <lang>. Keywords: <list>" (AST) — neither reuses the
+        // punctuated-ASR sentence. The -plus card instead appends to its
+        // plain-ASR prompt ("... written format? Keywords: <list>"), and 1b
+        // publishes no KWB stem and has no punctuated variant, so it follows the
+        // same plain-ASR-append form. So only base-2b needs its stem swapped;
+        // -plus/1b already carry the correct plain-ASR instruction to append to.
+        if (const char * hw = transcribe::run_params_hotwords(params)) {
+            const bool ts_task = params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD;
+            const bool base_2b = variant == "granite-speech-4.1-2b";
+            if (ts_task || diarize_on) {
+                // -plus-only rich-transcription tasks. IBM documents KWB for
+                // ASR/AST only, so keep the task instruction and append
+                // best-effort, warning that the combination is unattested.
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                        "granite: hotwords combined with %s is unverified — IBM documents keyword "
+                        "biasing for ASR/AST only; the combination may weaken task output such as "
+                        "[Speaker N]: tags",
+                        ts_task ? "word timestamps" : "diarization");
+            } else if (base_2b && params->task == TRANSCRIBE_TASK_TRANSLATE) {
+                // AST + KWB on base-2b: attested stem. lang_name was resolved and
+                // validated in the translate branch above, so it is non-null.
+                instruction = std::string("translate the speech to ") + lang_name + ".";
+            } else if (base_2b) {
+                // ASR + KWB on base-2b: the trained stem differs from the
+                // punctuated-ASR instruction selected above.
+                instruction = "transcribe the speech to text.";
+            }
+            instruction += " Keywords: ";
+            instruction += hw;
+        }
+    }
+
+    out_instruction = std::move(instruction);
+    return TRANSCRIBE_OK;
+}
+
+namespace {
+
+// Build the prompt prefix/suffix token-id lists from the shared run params and
+// model variant (the audio tokens splice in between). Single source of truth
+// for run() and run_batch().
+static transcribe_status build_granite_affixes(GraniteModel *                cm,
+                                               const transcribe_run_params * params,
+                                               std::vector<int32_t> &        prefix_ids,
+                                               std::vector<int32_t> &        suffix_ids) {
+    std::string instruction;
+    if (const transcribe_status st =
+            select_granite_instruction(cm->hparams.variant, params, diarize_requested(cm, params), instruction);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
 
     const bool use_granite4_chat = cm->chat_template.find("<|start_of_role|>") != std::string::npos &&

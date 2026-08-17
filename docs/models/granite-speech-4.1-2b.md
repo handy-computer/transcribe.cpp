@@ -132,7 +132,21 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 | Transcribe (fr/de/es/pt/ja) | Yes    |
 | Translate (en↔ASR, en→it/zh) | Yes (`--translate --target-language <bcp47>`) |
 | Word-level timestamps       | No (use the `-plus` variant) |
-| Keyword biasing             | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
+| Keyword biasing (hotwords)  | Yes (`--hotwords "kw1, kw2"`) |
+
+Pass `--hotwords "term1, term2"` to bias decoding toward domain terms. Keyword
+biasing is a **distinct trained task**, not a suffix on the normal ASR prompt:
+IBM's model card gives the exact prompt as
+`transcribe the speech to text. Keywords: <kw1>, <kw2>, …` for ASR and
+`translate the speech to <lang>. Keywords: <kw1>, <kw2>, …` for translation, so
+the runtime swaps to that stem and passes your `, `-joined list through verbatim.
+The surface form is load-bearing — a paraphrased prompt is silently ignored and
+the model falls back to plain transcription — which is why the exact trained stem
+is used rather than appending to the punctuated-ASR prompt. Cap the list at a few
+dozen terms and measure. Because keyword biasing is its own task (the raw
+`transcribe the speech to text` stem, separate from the punctuated-ASR task),
+expect keyword-biased output to be raw/unpunctuated rather than the punctuated
+transcript the default prompt produces.
 
 ## Numerical Validation
 

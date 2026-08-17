@@ -14,7 +14,8 @@ export type Feature =
   | "cancellation"
   | "pnc"
   | "itn"
-  | "diarization";
+  | "diarization"
+  | "hotwords";
 
 /** Mono float32 PCM at the model's native sample rate (16 kHz for v1). */
 export type PcmLike = Float32Array | number[] | ArrayBuffer | Buffer;
@@ -157,6 +158,8 @@ export interface TranscribeOptions {
   keepSpecialTags?: boolean;
   /** Speculative-decode draft count; -1 = family default. */
   specKDrafts?: number;
+  /** Comma-joined keyword-biasing hint; ignored by families without support. */
+  hotwords?: string;
   /** Cancel the run cooperatively. */
   signal?: AbortSignal;
   /** A run-slot family extension (e.g. whisper). */
