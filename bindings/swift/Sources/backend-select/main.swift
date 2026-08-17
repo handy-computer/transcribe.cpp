@@ -1,9 +1,10 @@
-// backend-select — device discovery, explicit backend request, graceful failure.
+// backend-select — device discovery, exact selection, backend-policy failure.
 import ExampleSupport
 import TranscribeCpp
 
+let devices = Transcribe.devices()
 print("registered devices:")
-for device in Transcribe.devices() {
+for device in devices {
     print("  [\(device.kind)] \(device.name) — \(device.description)")
 }
 
@@ -13,17 +14,21 @@ for backend in [Backend.cpu, .metal, .vulkan, .cuda, .rocm] {
 }
 
 guard let modelPath = ExampleSupport.modelPath() else {
-    ExampleSupport.skip("set TRANSCRIBE_SMOKE_MODEL to demo explicit backend selection")
+    ExampleSupport.skip("set TRANSCRIBE_SMOKE_MODEL to demo exact device selection")
+}
+guard let cpu = devices.first(where: { $0.deviceType == .cpu }) else {
+    ExampleSupport.skip("no selectable CPU device")
 }
 
 // Scope the model so ARC frees it before exit, consistent with the other
-// examples (the Metal residency teardown — see transcribe-file). This load is
-// CPU-only so the assert wouldn't fire, but keeping the shape uniform avoids
-// "why doesn't this one scope?" confusion.
+// examples (the Metal residency teardown — see transcribe-file).
 do {
-    // CPU always succeeds.
-    let onCpu = try Model(path: modelPath, options: ModelOptions(backend: .cpu))
-    print("\nloaded with backend=cpu, bound to: \(onCpu.backend)")
+    // Exact selection passes an enumerated process-local Device, not its
+    // display index. CPU provides a deterministic example on every slice.
+    let exact = try Model(path: modelPath, options: ModelOptions(device: cpu))
+    let selected = try exact.device
+    print("\nselected exact device \(selected.name), bound to: \(exact.backend)")
+    precondition(selected == cpu)
 
     // A request that can't be satisfied fails cleanly from the load path.
     if !Transcribe.backendAvailable(.cuda) {

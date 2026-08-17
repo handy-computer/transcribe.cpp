@@ -1,15 +1,15 @@
-// backend-select — discover devices, request an explicit backend, fall back.
+// backend-select — discover devices, select exactly, show policy failure.
 //
 //   node examples/backend-select.mjs [model.gguf]
 //
-// Device discovery needs no model; the explicit-backend load is skipped when no
-// model is given.
+// Device discovery needs no model; model loads are skipped when none is given.
 
 import { getAvailableBackends, backendAvailable, TranscribeModel } from "../dist/index.js";
 import { model, skip } from "./_support.mjs";
 
+const devices = getAvailableBackends();
 console.log("discovered devices:");
-for (const d of getAvailableBackends()) {
+for (const d of devices) {
   console.log(`  ${d.kind.padEnd(7)} ${d.name} — ${d.description}`);
 }
 console.log("\nbackend availability:");
@@ -20,21 +20,26 @@ for (const b of ["cpu", "metal", "vulkan", "cuda", "rocm"]) {
 const path = model("TRANSCRIBE_SMOKE_MODEL");
 if (!path) skip("\nno model — device discovery only (set TRANSCRIBE_SMOKE_MODEL to load)");
 
-// Prefer an accelerator, fall back to CPU on a clean failure.
-const preferred = backendAvailable("metal")
-  ? "metal"
-  : backendAvailable("cuda")
-    ? "cuda"
-    : backendAvailable("rocm")
-      ? "rocm"
-      : "cpu";
-console.log(`\nrequesting backend: ${preferred}`);
-let m;
-try {
-  m = await TranscribeModel.load(path, { backend: preferred });
-} catch (e) {
-  console.log(`  ${preferred} unavailable (${e.constructor.name}); retrying on cpu`);
-  m = await TranscribeModel.load(path, { backend: "cpu" });
+// Exact selection passes an object returned by getAvailableBackends(), not its
+// display index. CPU provides a deterministic example on every platform.
+const cpu = devices.find((device) => device.deviceType === "cpu");
+if (!cpu) skip("no selectable CPU device");
+const exact = await TranscribeModel.load(path, { device: cpu });
+console.log(`\nselected exact device ${exact.device.name}, bound to: ${exact.backend}`);
+exact.dispose();
+
+// An explicit backend policy that cannot be satisfied fails cleanly.
+const unavailable = ["cuda", "rocm", "vulkan", "metal"].find(
+  (backend) => !backendAvailable(backend),
+);
+if (unavailable) {
+  try {
+    const unexpected = await TranscribeModel.load(path, { backend: unavailable });
+    unexpected.dispose();
+    console.log(`requesting ${unavailable} unexpectedly succeeded`);
+  } catch (error) {
+    console.log(`requesting ${unavailable} failed cleanly: ${error.message}`);
+  }
+} else {
+  console.log("every optional backend is available on this build");
 }
-console.log(`loaded on backend: ${m.backend}`);
-m.dispose();

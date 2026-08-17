@@ -9,6 +9,8 @@ build configuration the suite runs against.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 import transcribe_cpp as t
@@ -44,6 +46,13 @@ def test_device_index_and_fields():
         assert dev.device_id is None or isinstance(dev.device_id, str)
         assert isinstance(dev.name, str) and dev.name
         assert isinstance(dev.kind, str) and dev.kind
+
+
+def test_device_equality_uses_native_identity():
+    device = t.backends()[0]
+    refreshed = replace(device, memory_free=device.memory_free + 1, index=None)
+    assert refreshed == device
+    assert hash(refreshed) == hash(device)
 
 
 def test_cpu_always_available():

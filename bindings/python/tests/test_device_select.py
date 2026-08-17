@@ -15,8 +15,7 @@ def test_enumerated_device_can_be_passed_to_model(transcribe_cpp, model_path):
     device = devices[0]
     try:
         with transcribe_cpp.Model(model_path, device=device) as model:
-            assert model.device.name == device.name
-            assert model.device.device_id == device.device_id
+            assert model.device == device
     except transcribe_cpp.BackendError:
         # Registered devices may still fail driver initialization. Exact
         # selection must report that failure rather than choosing another.

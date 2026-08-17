@@ -123,6 +123,11 @@ impl Device {
 /// registered compute device (a dynamic build pointed at a directory with no
 /// usable modules). This call is idempotent per directory and NOT retryable in
 /// the same process.
+///
+/// This mutates the native process-global device registry. Complete every
+/// backend-init call before other threads enumerate devices, query backend
+/// availability, or load models; the native registry does not support racing
+/// registration against those operations.
 pub fn init_backends(dir: impl AsRef<Path>) -> Result<()> {
     let dir = dir.as_ref();
     // Pass the path bytes through faithfully (Unix) / reject non-UTF-8 (Windows),
@@ -143,19 +148,27 @@ pub fn init_backends(dir: impl AsRef<Path>) -> Result<()> {
 ///
 /// If your app uses a different layout, call [`init_backends`] with that
 /// resolved module directory instead. Like [`init_backends`], this is
-/// idempotent and must run once before the first model load.
+/// idempotent and must run once before the first model load. It must also
+/// complete before other threads enumerate devices or query backend
+/// availability; see [`init_backends`] for the registry-ordering contract.
 pub fn init_backends_default() -> Result<()> {
     let status = unsafe { sys::transcribe_init_backends_default() };
     check(status, "init_backends_default")
 }
 
 /// The number of compute devices currently registered.
+///
+/// Do not race this query with [`init_backends`] or [`init_backends_default`].
 pub fn device_count() -> usize {
     let n = unsafe { sys::transcribe_device_count() };
     n.max(0) as usize
 }
 
 /// Every registered compute device.
+///
+/// Do not race enumeration with [`init_backends`] or
+/// [`init_backends_default`]. Finish backend registration before sharing
+/// devices across threads.
 pub fn devices() -> Vec<Device> {
     let mut out = Vec::with_capacity(device_count());
     for i in 0..device_count() as i32 {
@@ -175,7 +188,8 @@ pub fn devices() -> Vec<Device> {
 
 /// Whether a backend request can be satisfied by some registered device. This
 /// is the probe to turn `Backend::Vulkan` on a machine without Vulkan into a
-/// clear error instead of a failed model load.
+/// clear error instead of a failed model load. Do not race this query with
+/// [`init_backends`] or [`init_backends_default`].
 pub fn backend_available(backend: Backend) -> bool {
     unsafe { sys::transcribe_backend_available(backend.to_raw()) }
 }

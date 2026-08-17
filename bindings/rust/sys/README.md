@@ -4,9 +4,12 @@ Raw native FFI bindings for
 [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), a C/C++
 speech-to-text library built on ggml.
 
-> **Status: in development (0.0.1).** This crate exposes the unsafe, generated
+> **Status: in development (0.2.0).** This crate exposes the unsafe, generated
 > FFI surface. Most users want the safe wrapper,
 > [`transcribe-cpp`](https://crates.io/crates/transcribe-cpp).
+
+Raw-FFI consumers upgrading from 0.1 should follow the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md).
 
 ## What it does
 

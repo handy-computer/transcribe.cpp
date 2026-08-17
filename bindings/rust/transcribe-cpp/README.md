@@ -4,8 +4,13 @@ Safe, idiomatic Rust bindings for
 [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), a C/C++
 speech-to-text library built on ggml.
 
-> **Status: in development (0.0.1).** Core model, session, run, stream,
+> **Status: in development (0.2.0).** Core model, session, run, stream,
 > cancellation, backend, and family-extension APIs are implemented and tested.
+
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `ModelOptions::gpu_device` with exact `Device`
+handles.
 
 ## Install
 
@@ -66,7 +71,10 @@ README if you need runtime-loaded backend modules or custom
 `ModelOptions::device` as `None` for the backend's automatic policy, or pass
 `Some(device)` to select that exact primary device with no fallback. Persist
 `device_id` and resolve a fresh handle after backend initialization; registry
-indices and handles are not stable across processes.
+indices and handles are not stable across processes. In dynamic-backend builds,
+finish `init_backends()` or `init_backends_default()` before any thread
+enumerates devices, queries backend availability, or loads a model; native
+registry mutation is a startup-only operation and must not race those calls.
 
 ## Packaging a distributable (`shared` / `dynamic-backends`)
 

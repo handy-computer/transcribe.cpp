@@ -185,6 +185,8 @@ static void test_backend_devices(void) {
     CHECK(transcribe_device_get_info(transcribe_device_get(-1), &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(transcribe_device_get_info(transcribe_device_get(1 << 20), &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(transcribe_device_get_info(transcribe_device_get(0), NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    struct transcribe_device_info dev_bad = { 0 };
+    CHECK(transcribe_device_get_info(transcribe_device_get(0), &dev_bad) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     CHECK(!transcribe_backend_available((transcribe_backend_request) 999));
 
     /* ABI accessors must know the new struct. */

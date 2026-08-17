@@ -6,6 +6,10 @@ a C/C++ speech-to-text library built on ggml.
 > **Status: in development.** Until wheels are published, use a locally built
 > `libtranscribe` through repo auto-discovery or `TRANSCRIBE_LIBRARY`.
 
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `gpu_device=` with exact device objects.
+
 ```python
 import transcribe_cpp
 
@@ -49,6 +53,12 @@ available). `transcribe_cpp.backends()` returns process-local device objects;
 pass one as `Model(device=device)` for exact selection with no fallback. Persist
 a device's `device_id`, not its runtime handle or index. `backend_available(kind)`
 checks whether a backend policy can currently be satisfied.
+
+```python
+device = next(d for d in transcribe_cpp.backends() if d.device_type == "cpu")
+with transcribe_cpp.Model("model.gguf", device=device) as model:
+    print(model.device)
+```
 
 | Variable | Effect |
 |---|---|

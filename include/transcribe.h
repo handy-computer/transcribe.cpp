@@ -813,6 +813,11 @@ TRANSCRIBE_API int transcribe_device_count(void);
 /*
  * Return the registered device at `index`, or NULL when index is out of
  * range. The returned handle is runtime-owned and process-local.
+ *
+ * IMPORTANT: NULL is also the automatic-selection sentinel in
+ * transcribe_model_load_params::device. Always check this return value before
+ * assigning it to model-load params; assigning an unchecked out-of-range
+ * result would request automatic selection rather than exact selection.
  */
 TRANSCRIBE_API transcribe_device_t transcribe_device_get(int index);
 
@@ -874,8 +879,9 @@ TRANSCRIBE_API void transcribe_device_info_init(struct transcribe_device_info * 
  * about `device`. memory_free is live as of this call; re-invoke to refresh it
  * (e.g. to poll a device's available memory over time).
  *
- * Returns TRANSCRIBE_ERR_INVALID_ARG if device or out is NULL, if device is
- * not from this runtime's registry, or if out fails the struct-size check.
+ * Returns TRANSCRIBE_ERR_INVALID_ARG if device or out is NULL or device is
+ * not from this runtime's registry. Returns TRANSCRIBE_ERR_BAD_STRUCT_SIZE if
+ * out fails the struct-size check.
  */
 TRANSCRIBE_API transcribe_status transcribe_device_get_info(transcribe_device_t             device,
                                                             struct transcribe_device_info * out);

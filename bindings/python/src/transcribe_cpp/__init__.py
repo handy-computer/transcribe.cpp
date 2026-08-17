@@ -266,9 +266,13 @@ _DEVICE_TYPE_NAMES = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class BackendDevice:
-    """One registered compute device (owned copies of the C strings)."""
+    """One registered compute device (owned copies of the C strings).
+
+    Equality compares opaque native identity; display index and live memory
+    snapshots do not affect whether two values name the same device.
+    """
 
     name: str
     description: str
@@ -289,6 +293,16 @@ class BackendDevice:
     # Opaque process-local native device handle. Applications persist device_id,
     # never this value.
     _handle: Optional[int] = field(default=None, repr=False, compare=False)
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, BackendDevice):
+            return NotImplemented
+        return self._handle is not None and self._handle == other._handle
+
+    def __hash__(self) -> int:
+        return hash(self._handle) if self._handle is not None else object.__hash__(self)
 
 
 def _backend_device_from_raw(dev, handle: Optional[int], index: Optional[int] = None) -> BackendDevice:

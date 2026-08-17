@@ -12,6 +12,7 @@
 #include "wav.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -22,6 +23,20 @@
 #include <vector>
 
 namespace {
+
+bool parse_device_index(const char * text, int & out) {
+    if (text == nullptr || text[0] == '\0') {
+        return false;
+    }
+    const char * end    = text + std::strlen(text);
+    int          parsed = 0;
+    const auto   result = std::from_chars(text, end, parsed);
+    if (result.ec != std::errc{} || result.ptr != end || parsed < 0) {
+        return false;
+    }
+    out = parsed;
+    return true;
+}
 
 // Minimal JSON string escape: covers the characters MUST be escaped by
 // the JSON spec (quote, backslash, control chars). Transcribed text is
@@ -489,9 +504,8 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) {
                 return false;
             }
-            out.device_index = std::atoi(v);
-            if (out.device_index < 0) {
-                std::fprintf(stderr, "error: --device must be an index >= 0\n");
+            if (!parse_device_index(v, out.device_index)) {
+                std::fprintf(stderr, "error: --device must be an integer index >= 0\n");
                 return false;
             }
         } else if (a == "--timestamps") {

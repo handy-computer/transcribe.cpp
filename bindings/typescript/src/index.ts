@@ -1281,6 +1281,11 @@ export class TranscribeModel {
     const n = native();
     const p: any = {};
     n.F.modelLoadParamsInit(p);
+    if ("gpuDevice" in opts) {
+      throw new TranscribeError(
+        "gpuDevice was removed in 0.2; pass a device from getAvailableBackends() instead",
+      );
+    }
     if (opts.backend) p.backend = lookup(BACKENDS, opts.backend, "backend");
     if (opts.device !== undefined) {
       const handle = DEVICE_HANDLES.get(opts.device);

@@ -146,7 +146,9 @@ Official bindings wrap the C API for other languages:
 | Swift / ObjC | [bindings/swift](bindings/swift) |
 
 See [`docs/bindings.md`](docs/bindings.md) for how the bindings are generated
-and kept in sync with the header.
+and kept in sync with the header. Upgrading from 0.1? Read the
+[0.2 migration guide](docs/migrating-to-0.2.md), including the new exact-device
+selection API and the changed meaning of CLI `--device 0`.
 
 ## Tests
 

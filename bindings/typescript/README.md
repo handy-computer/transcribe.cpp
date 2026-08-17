@@ -12,6 +12,10 @@ A matching prebuilt native package is selected automatically for your
 platform (`@transcribe-cpp/<platform>`); there is nothing to compile and no
 environment variables to set.
 
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `gpuDevice` with exact device objects.
+
 ## Quickstart
 
 ```ts
@@ -106,8 +110,10 @@ backendAvailable("rocm"); // boolean — never throws
 
 // Policy selection: first matching ROCm device.
 const automatic = await TranscribeModel.load("model.gguf", { backend: "rocm" });
-// Exact selection: use this process-local device or fail without fallback.
-const exact = await TranscribeModel.load("model.gguf", { device: devices[0] });
+// Exact selection: use this process-local CPU device or fail without fallback.
+const cpu = devices.find((device) => device.deviceType === "cpu");
+if (!cpu) throw new Error("CPU device is not registered");
+const exact = await TranscribeModel.load("model.gguf", { device: cpu });
 ```
 
 `backend` defaults to `"auto"` (best accelerator, else CPU). A missing Vulkan

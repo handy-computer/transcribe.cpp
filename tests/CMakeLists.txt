@@ -1295,4 +1295,10 @@ if(TRANSCRIBE_BUILD_EXAMPLES)
             -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
             -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-output-smoke
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_output_smoke.cmake)
+
+    add_test(NAME transcribe_cli_device_arg_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI=$<TARGET_FILE:transcribe-cli>
+            -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_device_arg_smoke.cmake)
 endif()

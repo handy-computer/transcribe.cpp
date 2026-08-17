@@ -89,6 +89,13 @@ test("invalid backend string is rejected, not silently coerced", () => {
   assert.throws(() => backendAvailable("nope"));
 });
 
+test("removed gpuDevice option is rejected instead of selecting auto", async () => {
+  await assert.rejects(
+    () => TranscribeModel.load("/no/such/model.gguf", { gpuDevice: 0 }),
+    /gpuDevice was removed in 0\.2/,
+  );
+});
+
 test("missing model file maps to ModelFileNotFound", async () => {
   await assert.rejects(
     () => TranscribeModel.load("/no/such/model.gguf"),

@@ -5,8 +5,12 @@ a C/C++ speech-to-text library built on ggml. Native code ships as a prebuilt
 `.xcframework` SwiftPM `binaryTarget`, with Metal embedded on supported Apple
 slices.
 
-> Status: in development (0.0.1). Core model, session, run, stream,
+> Status: in development (0.2.0). Core model, session, run, stream,
 > cancellation, backend, and family-extension APIs are implemented and tested.
+
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `gpuDevice` with exact `Device` values.
 
 ## Install
 
@@ -19,7 +23,7 @@ custom artifact path through `TRANSCRIBE_XCFRAMEWORK_PATH`.
 The standalone SwiftPM mirror is planned but not published yet:
 
 ```swift
-.package(url: "https://github.com/handy-computer/transcribe-cpp-swift.git", from: "0.0.1")
+.package(url: "https://github.com/handy-computer/transcribe-cpp-swift.git", from: "0.2.0")
 ```
 
 Until that mirror repo and tag exist, use the release xcframework directly when
@@ -28,7 +32,7 @@ you only need the raw C module:
 ```swift
 .binaryTarget(
     name: "CTranscribe",
-    url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.0.1/TranscribeCpp.xcframework.zip",
+    url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.2.0/TranscribeCpp.xcframework.zip",
     checksum: "<published with the release>"
 )
 ```
