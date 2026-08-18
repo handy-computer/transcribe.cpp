@@ -74,6 +74,14 @@ inline float sigmoidf(float x) {
 // y = W @ x + b, where W is [out, in] row-major (numpy shape), x is
 // [in], b is [out]. b may be nullptr to skip the add.
 void matvec_add(const float * W, const float * b, const float * x, int out, int in_dim, float * y) {
+#if TRANSCRIBE_HAS_BLAS
+    if (b != nullptr) {
+        std::memcpy(y, b, static_cast<size_t>(out) * sizeof(float));
+    } else {
+        std::fill(y, y + out, 0.0f);
+    }
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, out, in_dim, 1.0f, W, in_dim, x, 1, 1.0f, y, 1);
+#else
     for (int i = 0; i < out; ++i) {
         float         acc = (b != nullptr) ? b[i] : 0.0f;
         const float * row = W + static_cast<size_t>(i) * in_dim;
@@ -82,6 +90,7 @@ void matvec_add(const float * W, const float * b, const float * x, int out, int 
         }
         y[i] = acc;
     }
+#endif
 }
 
 }  // namespace
@@ -136,6 +145,11 @@ static void lstm_step(const float * x,
                       float *       c_out,
                       float *       scratch_gates) {
     // scratch_gates: [4*H]. Compute Wx @ x + Wh @ h_prev + b in place.
+#if TRANSCRIBE_HAS_BLAS
+    std::memcpy(scratch_gates, b, static_cast<size_t>(4 * H) * sizeof(float));
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, 4 * H, H, 1.0f, Wx, H, x, 1, 1.0f, scratch_gates, 1);
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, 4 * H, H, 1.0f, Wh, H, h_prev, 1, 1.0f, scratch_gates, 1);
+#else
     for (int i = 0; i < 4 * H; ++i) {
         float         acc    = b[i];
         const float * wx_row = Wx + static_cast<size_t>(i) * H;
@@ -145,6 +159,7 @@ static void lstm_step(const float * x,
         }
         scratch_gates[i] = acc;
     }
+#endif
 
     const float * gi = scratch_gates;
     const float * gf = scratch_gates + H;
@@ -202,6 +217,62 @@ static int joint_argmax(const HostDecoderWeights & h,
     return best_idx;
 }
 
+// Score consecutive encoder frames while the predictor state is fixed.
+// A blank does not update that state, so the scores stay valid through the
+// first non-blank token. One matrix-vector operation projects the predictor,
+// and one matrix operation projects all joint rows.
+static void joint_argmax_span(const HostDecoderWeights & h,
+                              const float *              enc_proj,
+                              const float *              g_t,
+                              int                        n_frames,
+                              int                        pred_d,
+                              int                        joint_h,
+                              int                        n_classes,
+                              std::vector<float> &       pred_proj,
+                              std::vector<float> &       join,
+                              std::vector<float> &       logits,
+                              std::vector<int> &         out_tokens) {
+    pred_proj.assign(joint_h, 0.0f);
+    join.resize(static_cast<size_t>(n_frames) * joint_h);
+    logits.resize(static_cast<size_t>(n_frames) * n_classes);
+    out_tokens.resize(n_frames);
+
+    matvec_add(h.joint_pred_w.data(), h.joint_pred_b.data(), g_t, joint_h, pred_d, pred_proj.data());
+    for (int t = 0; t < n_frames; ++t) {
+        const float * enc_row  = enc_proj + static_cast<size_t>(t) * joint_h;
+        float *       join_row = join.data() + static_cast<size_t>(t) * joint_h;
+        for (int j = 0; j < joint_h; ++j) {
+            const float value = enc_row[j] + pred_proj[j];
+            join_row[j]       = value > 0.0f ? value : 0.0f;
+        }
+    }
+
+#if TRANSCRIBE_HAS_BLAS
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, n_frames, n_classes, joint_h, 1.0f, join.data(), joint_h,
+                h.joint_out_w.data(), joint_h, 0.0f, logits.data(), n_classes);
+#else
+    for (int t = 0; t < n_frames; ++t) {
+        matvec_add(h.joint_out_w.data(), nullptr, join.data() + static_cast<size_t>(t) * joint_h, n_classes, joint_h,
+                   logits.data() + static_cast<size_t>(t) * n_classes);
+    }
+#endif
+
+    // Add the output bias during argmax instead of writing it to every row.
+    for (int t = 0; t < n_frames; ++t) {
+        float * row      = logits.data() + static_cast<size_t>(t) * n_classes;
+        int     best_idx = 0;
+        float   best_val = row[0] + h.joint_out_b[0];
+        for (int i = 1; i < n_classes; ++i) {
+            const float value = row[i] + h.joint_out_b[i];
+            if (value > best_val) {
+                best_val = value;
+                best_idx = i;
+            }
+        }
+        out_tokens[t] = best_idx;
+    }
+}
+
 // Run RNN-T greedy decode against the encoder output. `encoded` is a
 // host-side buffer laid out [T_enc * d_model] in T-major order (each
 // contiguous d_model-sized chunk is one time step's encoder vector) —
@@ -255,6 +326,10 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & host,
     std::vector<float> pred_in(H, 0.0f);  // embed lookup output
     std::vector<float> jh(joint_h, 0.0f);
     std::vector<float> logits(n_class, 0.0f);
+    std::vector<float> span_pred_proj;
+    std::vector<float> span_join;
+    std::vector<float> span_logits;
+    std::vector<int>   span_tokens;
 
     bool fresh = true;  // first step uses zero input + zero state (reference predict(None, None))
 
@@ -265,42 +340,71 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & host,
     // unconditional path.
     bool predictor_dirty = true;
 
-    for (int t = 0; t < T_enc; ++t) {
-        const float * enc_proj = enc_proj_all.data() + static_cast<size_t>(t) * joint_h;
-
-        int sym_count = 0;
-        for (;;) {
-            if (predictor_dirty) {
-                if (fresh) {
-                    std::fill(pred_in.begin(), pred_in.end(), 0.0f);
-                } else {
-                    const int prev = out_tokens.back();
-                    std::memcpy(pred_in.data(), host.pred_embed.data() + static_cast<size_t>(prev) * H,
-                                H * sizeof(float));
-                }
-                lstm_step(pred_in.data(), h_cur.data(), c_cur.data(), host.lstm_Wx[0].data(), host.lstm_Wh[0].data(),
-                          host.lstm_b[0].data(), H, h_next.data(), c_next.data(), gates.data());
-                predictor_dirty = false;
+    // Speculate over a short span. Consume all leading blank frames, but stop
+    // at the first token because it changes the predictor state.
+    constexpr int lookahead = 32;
+    int           t         = 0;
+    while (t < T_enc) {
+        if (predictor_dirty) {
+            if (fresh) {
+                std::fill(pred_in.begin(), pred_in.end(), 0.0f);
+            } else {
+                const int prev = out_tokens.back();
+                std::memcpy(pred_in.data(), host.pred_embed.data() + static_cast<size_t>(prev) * H, H * sizeof(float));
             }
+            lstm_step(pred_in.data(), h_cur.data(), c_cur.data(), host.lstm_Wx[0].data(), host.lstm_Wh[0].data(),
+                      host.lstm_b[0].data(), H, h_next.data(), c_next.data(), gates.data());
+            predictor_dirty = false;
+        }
 
-            const int tok = joint_argmax(host, enc_proj, h_next.data(), H, joint_h, n_class, jh, logits);
+        const int span = std::min(lookahead, T_enc - t);
+        joint_argmax_span(host, enc_proj_all.data() + static_cast<size_t>(t) * joint_h, h_next.data(), span, H, joint_h,
+                          n_class, span_pred_proj, span_join, span_logits, span_tokens);
 
+        int offset = 0;
+        while (offset < span && span_tokens[offset] == blank_id) {
+            ++offset;
+        }
+        if (offset == span) {
+            t += span;
+            continue;
+        }
+
+        // Commit the first token and candidate predictor state at its frame.
+        t += offset;
+        int tok = span_tokens[offset];
+        out_tokens.push_back(tok);
+        out_frames.push_back(t);
+        h_cur           = h_next;
+        c_cur           = c_next;
+        fresh           = false;
+        predictor_dirty = true;
+
+        // A frame may emit more than one token. Continue with scalar scoring
+        // on this frame until blank or max_symbols_per_step advances time.
+        int sym_count = 1;
+        while (max_symbols_per_step <= 0 || sym_count < max_symbols_per_step) {
+            const int prev = out_tokens.back();
+            std::memcpy(pred_in.data(), host.pred_embed.data() + static_cast<size_t>(prev) * H, H * sizeof(float));
+            lstm_step(pred_in.data(), h_cur.data(), c_cur.data(), host.lstm_Wx[0].data(), host.lstm_Wh[0].data(),
+                      host.lstm_b[0].data(), H, h_next.data(), c_next.data(), gates.data());
+            predictor_dirty     = false;
+            const float * enc_p = enc_proj_all.data() + static_cast<size_t>(t) * joint_h;
+            tok                 = joint_argmax(host, enc_p, h_next.data(), H, joint_h, n_class, jh, logits);
             if (tok == blank_id) {
-                // Advance time. Do NOT commit state. Predictor stays clean.
+                // A blank advances time without committing the candidate
+                // predictor state. The next frame can reuse h_next.
                 break;
             }
-            // Emit token; commit state.
+            // A token commits the candidate state and invalidates the cache.
             out_tokens.push_back(tok);
             out_frames.push_back(t);
             h_cur           = h_next;
             c_cur           = c_next;
-            fresh           = false;
             predictor_dirty = true;
             ++sym_count;
-            if (max_symbols_per_step > 0 && sym_count >= max_symbols_per_step) {
-                break;
-            }
         }
+        ++t;
     }
 
     return TRANSCRIBE_OK;
