@@ -213,7 +213,8 @@ tools/transcribe-quantize/ Quantization tool source
 bindings/                  Python, TypeScript, Rust, and Swift bindings
 docs/                      Porting and validation guidance
 scripts/                   Python converter + test tooling
-ggml/                      Vendored ggml (see ggml/UPSTREAM for pinned SHA)
+ggml/                      Vendored ggml (see ggml/UPSTREAM for its recipe)
+patches/ggml/              Downstream patches applied by scripts/sync-ggml.sh
 src/third_party/miniz/     Vendored miniz deflate codec (see its UPSTREAM file)
 samples/                   Test audio files
 tests/                     Unit and smoke tests

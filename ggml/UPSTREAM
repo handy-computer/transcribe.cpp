@@ -1,8 +1,9 @@
-repo: https://github.com/ggml-org/ggml
-sha:  707321c4cf6d21cb4bc831aa8b687dbf01a521ce
+repo: git@github.com:ggml-org/ggml.git
+sha:  8c63e70982c95ceb862e3a1073a2c1beef75d60a
+patches:
+  patches/ggml/0001-fix-threadpool-oversubscription.patch
 
-This directory is a vendored snapshot of ggml at the SHA above. Do not edit
-files in this directory by hand; local changes are overwritten on the next sync.
-To move the snapshot, run scripts/sync-ggml.sh <ref> from the repo root: it
-re-vendors this directory and rewrites this file. The snapshot is upstream's
-tracked tree at the SHA, minus .github/ (upstream CI, irrelevant to a vendor).
+This directory is generated from the upstream ggml tree at the SHA above, minus
+.github/, with the listed downstream patches applied in order. Do not edit it by
+hand. Run scripts/sync-ggml.sh <ref> from the repo root to reproduce or upgrade
+it; the script rewrites this file.
