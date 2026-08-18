@@ -187,10 +187,9 @@ ggml_tensor * build_rotary_attn(ggml_context *      ctx,
 
     ggml_tensor * o;
     if (flash) {
+        // Flash attention already writes contiguous
+        // [head_dim, n_head, T, B] data.
         o = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr, scale, 0.0f, 0.0f);
-        // ggml_flash_attn_ext returns [head_dim, n_head, T, B].
-        o = ggml_permute(ctx, o, 0, 2, 1, 3);
-        o = ggml_cont(ctx, o);
     } else {
         ggml_tensor * kq = ggml_mul_mat(ctx, k, q);  // [T_k, T_q, n_head, B]
         // Additive key-padding mask: ne=[T_k, 1, 1, B] broadcasts over
@@ -202,10 +201,11 @@ ggml_tensor * build_rotary_attn(ggml_context *      ctx,
         ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr, scale, 0.0f);
         ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
         o                     = ggml_mul_mat(ctx, v_t, kq_soft);
+        // Manual attention writes [head_dim, T, n_head, B]. Transpose it
+        // to the contiguous layout returned by flash attention.
+        o                     = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
     }
-    // o: [head_dim, T, n_head, B] -> [head_dim, n_head, T, B] -> [d_model, T, B]
-    o = ggml_permute(ctx, o, 0, 2, 1, 3);
-    o = ggml_cont(ctx, o);
+    // Fold [head_dim, n_head] into d_model without another copy.
     o = ggml_reshape_3d(ctx, o, d_model, T, Bb);
 
     // Output projection.
