@@ -40,6 +40,8 @@ Options:
                         (default: disabled). Only wall_ms regressions count.
     --fail-on-missing   fail (exit 1) if any cell is in baseline but not in
                         candidate, or vice versa.
+    --allow-output-change
+                        allow transcript/token changes (default: fail)
     --key FIELD         timing field to compare (default: wall_ms)
     --quiet             only print regressions and new/gone cells
 """
@@ -47,6 +49,7 @@ Options:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -78,6 +81,19 @@ class RunValue:
     total_ms: float
     mel_ms: float
     rtf: float
+    transcript_sha256: str
+    token_ids_sha256: str
+
+
+def _sha256_utf8(value: object) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest() if isinstance(value, str) else ""
+
+
+def output_fingerprints(run: dict) -> tuple[str, str]:
+    """Return the transcript and token ID fingerprints for one run."""
+    transcript = run.get("transcript_sha256") or _sha256_utf8(run.get("hyp_text"))
+    token_ids = run.get("token_ids_sha256") or _sha256_utf8(run.get("token_ids_csv"))
+    return str(transcript), str(token_ids)
 
 
 def parse_quant_from_path(model_path: str) -> str:
@@ -130,6 +146,7 @@ def load_report(path: Path) -> tuple[str, str, dict[RunKey, RunValue]]:
             rtf = r.get("rtf_wall_mean") or r.get("rtf_mean") or 0.0
             key = RunKey(variant=variant, backend=backend, quant=quant,
                          sample=sample)
+            transcript_sha256, token_ids_sha256 = output_fingerprints(r)
             runs[key] = RunValue(
                 wall_ms=extract_mean(summary, "wall_ms"),
                 encode_ms=extract_mean(summary, "encode_ms"),
@@ -137,6 +154,8 @@ def load_report(path: Path) -> tuple[str, str, dict[RunKey, RunValue]]:
                 total_ms=extract_mean(summary, "total_ms"),
                 mel_ms=extract_mean(summary, "mel_ms"),
                 rtf=float(rtf),
+                transcript_sha256=transcript_sha256,
+                token_ids_sha256=token_ids_sha256,
             )
 
     elif schema in ("transcribe-bench-v1", "transcribe-bench-v2"):
@@ -152,6 +171,7 @@ def load_report(path: Path) -> tuple[str, str, dict[RunKey, RunValue]]:
         rtf = data.get("rtf_wall_mean") or data.get("rtf_mean") or 0.0
         key = RunKey(variant=variant, backend=backend, quant=quant,
                      sample=sample)
+        transcript_sha256, token_ids_sha256 = output_fingerprints(data)
         runs[key] = RunValue(
             wall_ms=extract_mean(summary, "wall_ms"),
             encode_ms=extract_mean(summary, "encode_ms"),
@@ -159,6 +179,8 @@ def load_report(path: Path) -> tuple[str, str, dict[RunKey, RunValue]]:
             total_ms=extract_mean(summary, "total_ms"),
             mel_ms=extract_mean(summary, "mel_ms"),
             rtf=float(rtf),
+            transcript_sha256=transcript_sha256,
+            token_ids_sha256=token_ids_sha256,
         )
 
     else:
@@ -210,6 +232,9 @@ def main() -> int:
     p.add_argument("--fail-on-missing", action="store_true",
                    help="Fail if any cell is present on one side but not "
                         "the other (new or gone)")
+    p.add_argument("--allow-output-change", action="store_true",
+                   help="Do not fail when transcript or token IDs differ. "
+                        "By default output identity is a mandatory gate.")
     p.add_argument("--key", type=str, default="wall_ms",
                    choices=["wall_ms", "total_ms", "encode_ms", "decode_ms",
                             "mel_ms"],
@@ -248,6 +273,7 @@ def main() -> int:
     rows: list[tuple[str, ...]] = []
     regressions: list[tuple[RunKey, float]] = []
     missing_cells: list[tuple[RunKey, str]] = []  # (key, "new" | "gone")
+    output_failures: list[tuple[RunKey, str]] = []
 
     for key in all_keys:
         bv = base_runs.get(key)
@@ -271,9 +297,25 @@ def main() -> int:
         else:
             delta_pct = 0.0
 
+        changed = []
+        unverified = []
+        for name in ("transcript_sha256", "token_ids_sha256"):
+            base_fingerprint = getattr(bv, name)
+            candidate_fingerprint = getattr(cv, name)
+            if not base_fingerprint or not candidate_fingerprint:
+                unverified.append(name.removesuffix("_sha256"))
+            elif base_fingerprint != candidate_fingerprint:
+                changed.append(name.removesuffix("_sha256"))
+
         # Positive delta = regression (slower), negative = improvement.
         status = "ok"
-        if args.threshold is not None and delta_pct > args.threshold:
+        if changed:
+            status = "OUTPUT_CHANGED"
+            output_failures.append((key, ", ".join(changed)))
+        elif unverified:
+            status = "OUTPUT_UNVERIFIED"
+            output_failures.append((key, ", ".join(unverified)))
+        elif args.threshold is not None and delta_pct > args.threshold:
             status = "REGRESSED"
             regressions.append((key, delta_pct))
 
@@ -301,7 +343,7 @@ def main() -> int:
         print("  " + "-" * (sum(widths) + 3 * (len(widths) - 1)))
 
     for row in rows:
-        is_notable = row[7] in ("REGRESSED", "new", "gone")
+        is_notable = row[7] in ("REGRESSED", "OUTPUT_CHANGED", "OUTPUT_UNVERIFIED", "new", "gone")
         if args.quiet and not is_notable:
             continue
         print(fmt_row(row))
@@ -331,11 +373,19 @@ def main() -> int:
         if args.fail_on_missing:
             exit_code = 1
 
+    if output_failures:
+        print(f"\n{len(output_failures)} output identity failure(s):")
+        for key, fields in output_failures:
+            print(f"  {key.variant}/{key.backend}/{key.quant}/{key.sample}: {fields}")
+        if not args.allow_output_change:
+            exit_code = 1
+
     if exit_code == 0:
         detail = ""
         if args.threshold is not None:
             detail += f" (threshold {args.threshold:.1f}%)"
-        print(f"\n{n_cells} cell(s) compared, no regressions{detail}")
+        output_status = "output changes allowed" if output_failures else "outputs identical"
+        print(f"\n{n_cells} cell(s) compared, {output_status}, no regressions{detail}")
 
     return exit_code
 

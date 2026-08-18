@@ -94,6 +94,18 @@ per-cell delta table. Use `--name pre-refactor` / `--name post-refactor`
 for stable named baselines that overwrite on re-run, then compare the
 named pair.
 
+The comparison is also a correctness gate. Each matching cell must have the
+same UTF-8 transcript bytes and token IDs. An output mismatch causes a failed
+comparison. Use `--allow-output-change` only for an intentional output change.
+Review the output change separately from the performance change.
+
+```bash
+uv run scripts/bench/compare.py \
+  --baseline reports/perf/<machine>/pre-refactor_<variant>_<backend>.json \
+  --candidate reports/perf/<machine>/post-refactor_<variant>_<backend>.json \
+  --fail-on-missing
+```
+
 ## Quant coverage
 
 The default `--quants f16,q8_0,q4_k_m` covers the canonical tiers.
