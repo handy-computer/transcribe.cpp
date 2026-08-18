@@ -146,6 +146,15 @@ transcribe_apply_warnings(transcribe_backend_init_unit)
 add_test(NAME transcribe_backend_init_unit
     COMMAND transcribe_backend_init_unit)
 
+if(TRANSCRIBE_METAL)
+    add_executable(transcribe_metal_conv_2d_dw_unit metal_conv_2d_dw_unit.cpp)
+    target_link_libraries(transcribe_metal_conv_2d_dw_unit PRIVATE transcribe ggml)
+    target_include_directories(transcribe_metal_conv_2d_dw_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    transcribe_apply_warnings(transcribe_metal_conv_2d_dw_unit)
+    add_test(NAME transcribe_metal_conv_2d_dw_unit COMMAND transcribe_metal_conv_2d_dw_unit)
+    set_tests_properties(transcribe_metal_conv_2d_dw_unit PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # -----------------------------------------------------------------------------
 # Parakeet chunked_limited_with_rc attention mask unit test
 # -----------------------------------------------------------------------------

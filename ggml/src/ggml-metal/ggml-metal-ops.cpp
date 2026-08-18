@@ -387,6 +387,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_conv_2d(ctx, idx);
             } break;
+        case GGML_OP_CONV_2D_DW:
+            {
+                n_fuse = ggml_metal_op_conv_2d_dw(ctx, idx);
+            } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
                 n_fuse = ggml_metal_op_conv_transpose_1d(ctx, idx);
@@ -3735,6 +3739,48 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_dispatch_threadgroups(enc, tg, 1, 1, nth, 1, 1);
 
+    return 1;
+}
+
+int ggml_metal_op_conv_2d_dw(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
+
+    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->type == GGML_TYPE_F32);
+
+    ggml_metal_kargs_conv_2d args = {
+        nb00, nb01, nb02, nb03,
+        nb10, nb11, nb12, nb13,
+        nb0, nb1, nb2, nb3,
+        ne10, ne11, ne00, ne01, ne12, ne12, ne0, ne1, ne3,
+        ((const int32_t *) op->op_params)[0],
+        ((const int32_t *) op->op_params)[1],
+        ((const int32_t *) op->op_params)[2],
+        ((const int32_t *) op->op_params)[3],
+        ((const int32_t *) op->op_params)[4],
+        ((const int32_t *) op->op_params)[5],
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_conv_2d_dw(ctx->lib, op);
+    int nth = std::clamp(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), 1, 256);
+    const uint64_t n_out = ggml_nelements(op);
+    const uint64_t tg = std::max<uint64_t>(1, (n_out + nth - 1)/nth);
+
+    ggml_metal_encoder_set_pipeline(ctx->enc, pipeline);
+    ggml_metal_encoder_set_bytes   (ctx->enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (ctx->enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (ctx->enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    ggml_metal_encoder_set_buffer  (ctx->enc, ggml_metal_get_buffer_id(op),         3);
+    ggml_metal_encoder_dispatch_threadgroups(ctx->enc, tg, 1, 1, nth, 1, 1);
     return 1;
 }
 

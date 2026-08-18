@@ -4906,6 +4906,47 @@ kernel void kernel_conv_2d<half>(
         uint3   tpitg[[thread_position_in_threadgroup]],
         uint3     ntg[[threads_per_threadgroup]]);
 
+kernel void kernel_conv_2d_dw_f32(
+        constant ggml_metal_kargs_conv_2d & args,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
+        uint gid [[thread_position_in_grid]]) {
+    // One thread computes one [ow, oh, channel, batch] output. Depthwise
+    // convolution reads only the matching channel from input and weights.
+    const uint64_t total = (uint64_t) args.N * args.IC * args.OH * args.OW;
+    if (gid >= total) {
+        return;
+    }
+
+    uint64_t index = gid;
+    const int32_t ow = index % args.OW; index /= args.OW;
+    const int32_t oh = index % args.OH; index /= args.OH;
+    const int32_t  c = index % args.IC; index /= args.IC;
+    const int32_t  n = index;
+    const int32_t base_x = ow * args.s0 - args.p0;
+    const int32_t base_y = oh * args.s1 - args.p1;
+
+    float acc = 0.0f;
+    for (int32_t ky = 0; ky < args.KH; ++ky) {
+        const int32_t iy = base_y + ky * args.d1;
+        if (iy < 0 || iy >= args.IH) {
+            continue;
+        }
+        for (int32_t kx = 0; kx < args.KW; ++kx) {
+            const int32_t ix = base_x + kx * args.d0;
+            if (ix < 0 || ix >= args.IW) {
+                continue;
+            }
+            const uint64_t woff = (uint64_t) kx * args.nb00 + (uint64_t) ky * args.nb01 + (uint64_t) c * args.nb03;
+            const uint64_t xoff = (uint64_t) ix * args.nb10 + (uint64_t) iy * args.nb11 + (uint64_t) c * args.nb12 + (uint64_t) n * args.nb13;
+            acc += *(device const float *)(src + xoff) * *(device const float *)(weights + woff);
+        }
+    }
+    const uint64_t doff = (uint64_t) ow * args.nb0 + (uint64_t) oh * args.nb1 + (uint64_t) c * args.nb2 + (uint64_t) n * args.nb3;
+    *(device float *)(dst + doff) = acc;
+}
+
 typedef void (conv_transpose_1d_t)(
         constant ggml_metal_kargs_conv_transpose_1d & args,
         device const float * src0,
