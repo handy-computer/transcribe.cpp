@@ -31,7 +31,7 @@ cp "${REPO_ROOT}/src/third_party/miniz/LICENSE" "${XCFRAMEWORK}/LICENSE.miniz"
 # Deterministic zip from the output dir (store the path as
 # "TranscribeCpp.xcframework/..." so SwiftPM unpacks it correctly).
 rm -f "$ZIP"
-( cd "$OUT_DIR" && /usr/bin/zip -qr -X "$(basename "$ZIP")" "$(basename "$XCFRAMEWORK")" )
+( cd "$OUT_DIR" && /usr/bin/zip -qry -X "$(basename "$ZIP")" "$(basename "$XCFRAMEWORK")" )
 
 echo "zip:      $ZIP"
 echo "size:     $(du -h "$ZIP" | cut -f1)"
