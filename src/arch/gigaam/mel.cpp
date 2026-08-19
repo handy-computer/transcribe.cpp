@@ -9,6 +9,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "transcribe-batch-util.h"
 #include "weights.h"
 
 #if TRANSCRIBE_HAS_BLAS
@@ -122,7 +123,8 @@ int GigaamMelFrontend::n_frames_for(size_t n_samples) const {
 transcribe_status GigaamMelFrontend::compute(const float *        pcm,
                                              size_t               n_samples,
                                              std::vector<float> & out_mel,
-                                             int &                out_n_frames) const {
+                                             int &                out_n_frames,
+                                             int                  n_threads) const {
     if (pcm == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -138,9 +140,11 @@ transcribe_status GigaamMelFrontend::compute(const float *        pcm,
     // Frame FFTs are independent. Store their power spectra in
     // [n_frames, n_freq] so one matrix operation can project all frames.
     std::vector<float> power(static_cast<size_t>(n_frames) * n_freq);
-    const unsigned int available = std::max(1u, std::thread::hardware_concurrency());
-    const int          n_workers = std::min(n_frames, static_cast<int>(available));
-    auto               worker    = [&](int worker_id) {
+    if (n_threads <= 0) {
+        n_threads = transcribe::default_n_threads();
+    }
+    const int n_workers = std::max(1, std::min(n_frames, n_threads));
+    auto      worker    = [&](int worker_id) {
         // Each worker reuses its FFT scratch buffers across assigned frames.
         std::vector<float> fft_in(2 * n_fft);
         std::vector<float> fft_out(8 * n_fft);

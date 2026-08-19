@@ -362,7 +362,7 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
     }
 #endif
     if (!mel_from_ref) {
-        if (auto st = gm->mel.compute(pcm, static_cast<size_t>(n_samples), gc->mel_buf, mel_n_frames);
+        if (auto st = gm->mel.compute(pcm, static_cast<size_t>(n_samples), gc->mel_buf, mel_n_frames, gc->n_threads);
             st != TRANSCRIBE_OK) {
             return st;
         }
@@ -720,20 +720,29 @@ transcribe_status run_batch(transcribe_session *          session,
     const int                       n_mels = gm->hparams.fe_num_mels;
     std::vector<std::vector<float>> mels(static_cast<size_t>(n));
     std::vector<int>                nf(static_cast<size_t>(n), 0);
-    const int64_t                   t_mel_start  = ggml_time_us();
-    const bool                      all_ok       = transcribe::parallel_for_all(n, gc->n_threads, [&](int i) -> bool {
+
+    // Share one bounded thread budget between utterance-level and frame-level
+    // parallelism. This keeps batch execution from nesting n_threads full mel
+    // pools while still using the budget when the batch contains one clip.
+    const int total_threads = gc->n_threads > 0 ? gc->n_threads : transcribe::default_n_threads();
+    const int outer_threads = std::max(1, std::min(n, total_threads));
+    const int mel_threads   = std::max(1, total_threads / outer_threads);
+
+    const int64_t t_mel_start  = ggml_time_us();
+    const bool    all_ok       = transcribe::parallel_for_all(n, outer_threads, [&](int i) -> bool {
         if (pcm[i] == nullptr || n_samples[i] <= 0) {
             return false;
         }
         int                     this_frames = 0;
-        const transcribe_status st = gm->mel.compute(pcm[i], static_cast<size_t>(n_samples[i]), mels[i], this_frames);
+        const transcribe_status st =
+            gm->mel.compute(pcm[i], static_cast<size_t>(n_samples[i]), mels[i], this_frames, mel_threads);
         if (st != TRANSCRIBE_OK || this_frames <= 0) {
             return false;
         }
         nf[i] = this_frames;
         return true;
     });
-    const int64_t                   total_mel_us = ggml_time_us() - t_mel_start;
+    const int64_t total_mel_us = ggml_time_us() - t_mel_start;
 
     if (all_ok) {
         // Per-utterance soft-window advisory before the shared encode; the
