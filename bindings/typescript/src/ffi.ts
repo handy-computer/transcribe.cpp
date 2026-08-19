@@ -11,6 +11,18 @@
 import koffi from "koffi";
 import { defineTypes } from "./_generated.js";
 
+// Koffi defaults async FFI workers to a 128 KiB stack. That is too small for
+// ggml Vulkan model initialization on Windows (observed as an uncatchable
+// 0xC0000005 access violation on Intel Iris Xe). Keep calls asynchronous, but
+// raise the stack floor with headroom for other models and compiler changes.
+// Preserve a larger application-provided value because Koffi configuration is
+// process-global.
+const MIN_ASYNC_STACK_SIZE = 512 * 1024;
+const koffiConfig = koffi.config();
+if ((koffiConfig.async_stack_size ?? 0) < MIN_ASYNC_STACK_SIZE) {
+  koffi.config({ async_stack_size: MIN_ASYNC_STACK_SIZE });
+}
+
 export interface Bound {
   koffi: typeof koffi;
   lib: ReturnType<typeof koffi.load>;

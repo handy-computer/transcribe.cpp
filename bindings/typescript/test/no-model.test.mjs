@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import koffi from "koffi";
 import {
   version,
   getAvailableBackends,
@@ -14,6 +15,10 @@ import {
   ModelFileNotFound,
   ModelLoadError,
 } from "../dist/index.js";
+
+test("async FFI stack is large enough for Vulkan model loading", () => {
+  assert.ok(koffi.config().async_stack_size >= 512 * 1024);
+});
 
 test("Stream does not expose internal lease/teardown controls", () => {
   // releaseLease()/deactivate() must NOT be reachable from user code — calling
