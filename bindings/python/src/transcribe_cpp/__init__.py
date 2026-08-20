@@ -211,6 +211,11 @@ _DIARIZE = {
     "off": _generated.TRANSCRIBE_DIARIZE_MODE_OFF,
     "on": _generated.TRANSCRIBE_DIARIZE_MODE_ON,
 }
+_ITN = {
+    "default": _generated.TRANSCRIBE_ITN_MODE_DEFAULT,
+    "off": _generated.TRANSCRIBE_ITN_MODE_OFF,
+    "on": _generated.TRANSCRIBE_ITN_MODE_ON,
+}
 _COMMIT_POLICIES = {
     "auto": _generated.TRANSCRIBE_STREAM_COMMIT_AUTO,
     "on_finalize": _generated.TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE,
@@ -638,7 +643,7 @@ def _stream_update_from(u) -> StreamUpdate:
 
 
 def _build_run_params(task, language, target_language, timestamps,
-                      keep_special_tags, spec_k_drafts, diarize="default"):
+                      keep_special_tags, spec_k_drafts, diarize="default", itn="default"):
     if not isinstance(spec_k_drafts, int) or spec_k_drafts < -1:
         raise InvalidArgument(
             f"spec_k_drafts must be -1 (family default), 0 (disabled), or a "
@@ -649,6 +654,7 @@ def _build_run_params(task, language, target_language, timestamps,
     params.task = _enum(_TASKS, task, "task")
     params.timestamps = _enum(_TIMESTAMPS, timestamps, "timestamps")
     params.diarize = _enum(_DIARIZE, diarize, "diarize")
+    params.itn = _enum(_ITN, itn, "itn")
     params.language = language.encode("utf-8") if language else None
     params.target_language = target_language.encode("utf-8") if target_language else None
     params.keep_special_tags = keep_special_tags
@@ -1080,6 +1086,7 @@ class Session:
             target_language: str | None = None,
             timestamps: Timestamps = "auto",
             diarize: Diarize = "default",
+            itn: Literal["default", "off", "on"] = "default",
             keep_special_tags: bool = False,
             spec_k_drafts: int = -1,
             family: FamilyExtension | None = None) -> Result:
@@ -1097,7 +1104,7 @@ class Session:
         self._cancel.clear()
         array, n_samples = _pcm_to_carray(pcm)
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts, diarize)
+                                   keep_special_tags, spec_k_drafts, diarize, itn)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
