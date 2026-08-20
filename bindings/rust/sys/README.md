@@ -76,6 +76,27 @@ $env:CARGO_TARGET_DIR = "C:\tc-target"
 cargo build --features vulkan
 ```
 
+## Linking a prebuilt install
+
+Set `TRANSCRIBE_DIR` (OPENSSL_DIR-style) to skip the source build and link an
+existing install prefix instead:
+
+```bash
+cmake -B build -DTRANSCRIBE_INSTALL=ON [-DTRANSCRIBE_BUILD_SHARED=ON ...]
+cmake --build build
+cmake --install build --prefix /opt/transcribe
+TRANSCRIBE_DIR=/opt/transcribe cargo build
+```
+
+The prefix must contain the installed `lib*/transcribe-link.json` manifest;
+the link line is reconstructed from it exactly as in a source build. Cargo
+features (`shared`, `vulkan`, ...) do not apply on this path — the prebuilt
+already fixed its configuration, and the manifest records it (including
+static vs shared). For a shared-library prefix, running consumer binaries
+may additionally need the prefix's lib dir on the loader path (e.g.
+`LD_LIBRARY_PATH=$TRANSCRIBE_DIR/lib`): the rpath the build emits does not
+propagate to downstream binaries.
+
 ## Build-flag escape hatch
 
 The features above cover the common, tested configurations. Anything else CMake
