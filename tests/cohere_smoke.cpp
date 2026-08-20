@@ -51,6 +51,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #ifndef TRANSCRIBE_TEST_FIXTURES_DIR
 #    error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
@@ -382,6 +383,137 @@ int main() {
     } else {
         std::fprintf(stderr, "FAIL pre_encode.conv0_b is null\n");
         ++g_failures;
+    }
+
+    // ----- Long-form window boundary picker -----
+    // pick_split() must find a real pause when one exists and must refuse to
+    // invent one in continuous speech: a minimum always exists, so returning
+    // it unconditionally would cut a word in half at the window boundary.
+    {
+        const int          n    = 32000;  // 2 s @ 16 kHz
+        const int          tgt  = 16000;  // nominal boundary at 1 s
+        const int          srch = 8000;   // search the preceding 0.5 s
+        std::vector<float> pcm(static_cast<size_t>(n), 0.5f);
+
+        // Uniform speech: no frame is meaningfully quieter -> refusal.
+        CHECK_EQ_INT(transcribe::cohere::pick_split(pcm.data(), n, tgt, srch), -1);
+
+        // Carve a silence inside the search span; the cut must land in it.
+        const int gap_lo = 12000;
+        const int gap_hi = 15200;
+        for (int i = gap_lo; i < gap_hi; ++i) {
+            pcm[static_cast<size_t>(i)] = 0.0f;
+        }
+        const int split = transcribe::cohere::pick_split(pcm.data(), n, tgt, srch);
+        CHECK(split >= gap_lo && split <= gap_hi);
+
+        // Degenerate inputs are refusals, not arbitrary offsets.
+        CHECK_EQ_INT(transcribe::cohere::pick_split(pcm.data(), n, n, srch), -1);
+        CHECK_EQ_INT(transcribe::cohere::pick_split(pcm.data(), n, tgt, 100), -1);
+    }
+
+    // ----- Long-form window stitching -----
+    // token_seam() joins overlapping windows by matching the tail of the
+    // accumulated hypothesis against the head of the next window. It must trim
+    // a genuine overlap and must refuse an ambiguous one: text repeated in the
+    // interior may be speech the speaker actually repeated, and trimming it
+    // would delete real words.
+    {
+        using transcribe::cohere::token_seam;
+
+        // Clean overlap: previous ends 4,5 and current starts 4,5.
+        {
+            const auto seam = token_seam({ 1, 2, 3, 4, 5 }, { 4, 5, 6, 7 }, 5, 4);
+            CHECK(seam.matched);
+            CHECK_EQ_INT(seam.current_skip, 2);
+        }
+
+        // Match sits in the previous hypothesis's interior (2,3 is followed by
+        // 9), so it is not a seam -- refuse rather than delete the tail.
+        {
+            const auto seam = token_seam({ 1, 2, 3, 9 }, { 2, 3, 4 }, 4, 3);
+            CHECK(!seam.matched);
+            CHECK_EQ_INT(seam.current_skip, 0);
+        }
+
+        // No overlap at all: append the whole window.
+        {
+            const auto seam = token_seam({ 1, 2, 3 }, { 7, 8, 9 }, 3, 3);
+            CHECK(!seam.matched);
+            CHECK_EQ_INT(seam.current_skip, 0);
+        }
+
+        // A single shared token counts only at the very head of the new window.
+        {
+            const auto seam = token_seam({ 1, 2, 3 }, { 3, 8, 9 }, 3, 3);
+            CHECK(seam.matched);
+            CHECK_EQ_INT(seam.current_skip, 1);
+        }
+
+        // Degenerate inputs never claim a match.
+        {
+            CHECK(!token_seam({}, { 1, 2 }, 4, 4).matched);
+            CHECK(!token_seam({ 1, 2 }, {}, 4, 4).matched);
+            CHECK(!token_seam({ 1, 2 }, { 1, 2 }, 0, 4).matched);
+        }
+    }
+
+    // ----- Batch cancellation contract -----
+    // A cancel that lands *inside* an utterance must end the whole batch, not
+    // just that utterance. The abort callback here is edge-triggered: it fires
+    // once and then reports false forever, which is exactly the case a
+    // poll_abort()-at-loop-top check alone would miss — run() consumes the
+    // single true, and the remaining utterances would transcribe normally.
+    //
+    // Per include/transcribe.h, an aborted batch still exposes one slot per
+    // input utterance (the dispatcher pads the ones that never ran).
+    {
+        transcribe_session_params cp;
+        transcribe_session_params_init(&cp);
+
+        struct transcribe_session * ctx = nullptr;
+        if (transcribe_session_init(model, &cp, &ctx) == TRANSCRIBE_OK && ctx != nullptr) {
+            struct AbortOnce {
+                int  polls   = 0;
+                bool fired   = false;
+                int  fire_at = 2;  // let the loop-top poll pass, trip inside run()
+            } gate;
+
+            transcribe_set_abort_callback(
+                ctx,
+                [](void * ud) -> bool {
+                    auto * g = static_cast<AbortOnce *>(ud);
+                    if (g->fired) {
+                        return false;  // edge-triggered: never true twice
+                    }
+                    if (++g->polls >= g->fire_at) {
+                        g->fired = true;
+                        return true;
+                    }
+                    return false;
+                },
+                &gate);
+
+            std::vector<float>    utt(4000, 0.1f);  // toy PCM; never fully decoded
+            const float *         pcm3[3]  = { utt.data(), utt.data(), utt.data() };
+            const int             lens3[3] = { static_cast<int>(utt.size()), static_cast<int>(utt.size()),
+                                               static_cast<int>(utt.size()) };
+            transcribe_run_params rp;
+            transcribe_run_params_init(&rp);
+
+            const transcribe_status bst = transcribe_run_batch(ctx, pcm3, lens3, 3, &rp);
+
+            CHECK(bst == TRANSCRIBE_ERR_ABORTED);
+            CHECK_EQ_INT(transcribe_batch_n_results(ctx), 3);
+            // The trailing utterances never ran, so they must report ABORTED
+            // rather than a stale OK from a previous utterance.
+            CHECK(transcribe_batch_status(ctx, 2) == TRANSCRIBE_ERR_ABORTED);
+
+            transcribe_session_free(ctx);
+        } else {
+            std::fprintf(stderr, "FAIL: could not init session for batch-abort check\n");
+            ++g_failures;
+        }
     }
 
     // ----- Lifecycle -----

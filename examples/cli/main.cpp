@@ -1232,6 +1232,16 @@ int main(int argc, char ** argv) {
         {
             struct transcribe_session_limits lim;
             transcribe_session_limits_init(&lim);
+
+            // A model that advertises no input ceiling of its own is unbounded
+            // however small its decoder context is -- the family windows the
+            // audio internally. Without this, a family that is both windowed
+            // and context-capped (cohere) reads as "context too small".
+            struct transcribe_capabilities lim_caps;
+            transcribe_capabilities_init(&lim_caps);
+            const bool model_is_unbounded =
+                transcribe_model_get_capabilities(model, &lim_caps) == TRANSCRIBE_OK && lim_caps.max_audio_ms == 0;
+
             if (transcribe_session_get_limits(ctx, &lim) == TRANSCRIBE_OK) {
                 if (lim.effective_max_audio_ms > 0) {
                     std::printf("  max audio:  %.1f s", (double) lim.effective_max_audio_ms / 1000.0);
@@ -1240,7 +1250,7 @@ int main(int argc, char ** argv) {
                                     (long long) (lim.max_kv_bytes >> 20));
                     }
                     std::printf("\n");
-                } else if (lim.effective_n_ctx > 0) {
+                } else if (lim.effective_n_ctx > 0 && !model_is_unbounded) {
                     // Capped family whose context is too small to fit any audio
                     // plus a prompt (e.g. an aggressively low --n-ctx).
                     std::printf(

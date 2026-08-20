@@ -243,7 +243,7 @@ typedef enum {
      * Returned by transcribe_run / transcribe_run_batch when the input
      * audio is longer than the loaded model can process in a single
      * decode. Hard-context-cap families (LLM-style decoders: qwen3_asr,
-     * canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere,
+     * canary_qwen, funasr_nano, granite, granite_nar, voxtral,
      * canary) reject an over-length clip UP FRONT — before the decode
      * (and, where the binding limit is the encoder's positional table,
      * before the encoder) — by comparing the audio's prefill token count

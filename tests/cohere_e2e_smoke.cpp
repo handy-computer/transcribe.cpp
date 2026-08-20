@@ -130,6 +130,11 @@ const char * const k_jfk_reference_text =
 
 constexpr int k_max_edit_distance = 3;
 
+// How many times the sample is repeated to build the long-form clip. Four
+// copies of jfk.wav is ~44 s, comfortably past the 35 s trained window, and
+// repeated speech is the adversarial case for overlap trimming.
+constexpr int k_long_form_repeats = 4;
+
 }  // namespace
 
 int main() {
@@ -321,6 +326,80 @@ int main() {
         CHECK_EQ_INT(seg.n_tokens, 0);
     }
 
+    // ---- Long-form windowing -----------------------------------------
+    //
+    // Repeat the clip past the trained clip span (35 s) so run() has to split
+    // it into several windows. The assertions are model-independent invariants
+    // rather than an exact transcript: windowing must not lose text, must not
+    // invent separators the model never emitted, and must keep raw_text as the
+    // untrimmed decode.
+    {
+        std::vector<float> long_pcm;
+        for (int r = 0; r < k_long_form_repeats; ++r) {  // 4 x 11 s = 44 s -> at least two windows
+            long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
+        }
+
+        const transcribe_status st = transcribe_run(ctx, long_pcm.data(), static_cast<int>(long_pcm.size()), &rp);
+        CHECK(st == TRANSCRIBE_OK);
+
+        const char *      full_c  = transcribe_full_text(ctx);
+        const char *      raw_c   = transcribe_raw_text(ctx);
+        const std::string lf_full = full_c ? full_c : "";
+        const std::string lf_raw  = raw_c ? raw_c : "";
+
+        // The clip is the same sentence four times over, so the transcript must
+        // contain it four times. Counting a distinctive phrase is the assertion
+        // that matters: a length-only check passes with three repetitions, which
+        // is precisely the silent-loss defect this path exists to prevent. The
+        // seam search must trim the ~1 s overlap without mistaking a genuinely
+        // repeated sentence for it.
+        CHECK(!lf_full.empty());
+        CHECK(lf_full.size() > actual.size());
+
+        const auto count_occurrences = [](const std::string & haystack, const std::string & needle) {
+            int    n   = 0;
+            size_t pos = haystack.find(needle);
+            while (pos != std::string::npos) {
+                ++n;
+                pos = haystack.find(needle, pos + needle.size());
+            }
+            return n;
+        };
+        CHECK_EQ_INT(count_occurrences(lf_full, "fellow Americans"), k_long_form_repeats);
+        CHECK_EQ_INT(count_occurrences(lf_full, "ask not"), k_long_form_repeats);
+
+        // Bound the other direction too. Counting phrases catches dropped
+        // speech but not duplicated speech: when the seam search finds no exact
+        // token match -- a capitalised word at a sentence start tokenises
+        // differently from its lower-case form mid-sentence -- the window is
+        // appended whole and the overlap leaves a short repeated fragment. That
+        // trade is deliberate (repeating is recoverable, dropping is not), but
+        // it must stay small. One overlap's worth per seam is ~1 s of speech;
+        // allow a generous margin and fail if duplication ever runs away.
+        const size_t expected = actual.size() * static_cast<size_t>(k_long_form_repeats);
+        CHECK(lf_full.size() >= expected * 9 / 10);
+        CHECK(lf_full.size() <= expected * 6 / 5);
+
+        // raw_text must stay the untrimmed decode, exactly as a single-window
+        // run leaves it: this clip is English, so the tokenizer emits a leading
+        // word-start space that full_text trims and raw_text keeps. Asserting
+        // the space is present is what distinguishes accumulating raw decodes
+        // from accumulating already-trimmed text and re-joining it, which would
+        // leave raw_text == full_text and quietly break the
+        // transcribe_raw_text contract.
+        CHECK(!lf_raw.empty());
+        CHECK(lf_raw[0] == ' ');
+        CHECK(lf_raw.size() == lf_full.size() + 1);
+        CHECK(lf_raw.compare(1, std::string::npos, lf_full) == 0);
+
+        // Windows are concatenated as raw decodes so the tokenizer's own
+        // spacing survives untouched. A doubled space at a seam would mean a
+        // separator was injected on top of it — the bug that a hardcoded ' '
+        // join introduces (and which would corrupt unspaced scripts like
+        // Chinese and Japanese outright).
+        CHECK(lf_full.find("  ") == std::string::npos);
+    }
+
     // ---- Verify capability-aware dispatcher rejections ---------------
     //
     // A second run with a request that exceeds NONE must be rejected
@@ -329,22 +408,23 @@ int main() {
     // alignment returns ERR_UNSUPPORTED_TIMESTAMPS, not a synthetic
     // fake entry.
     //
-    // Critically, a failed transcribe_run must replace the prior
-    // result with the empty-sentinel state — not silently leave
-    // the last successful run's text hanging on the context. This
-    // is the "transcribe_run replaces the previous result" rule
-    // from include/transcribe.h applied to the failure path.
+    // The rejection happens in caller-param validation, which runs BEFORE the
+    // dispatcher's clear_result(), so the previous snapshot survives: see the
+    // "Caller-param rejections ... preserve the previous snapshot" contract in
+    // src/transcribe.cpp. A typo'd timestamp request must not destroy the
+    // utterance the caller already has.
+    const std::string before_rejection = transcribe_full_text(ctx) ? transcribe_full_text(ctx) : "";
+    CHECK(!before_rejection.empty());
     {
         transcribe_run_params rp2;
         transcribe_run_params_init(&rp2);
         rp2.timestamps             = TRANSCRIBE_TIMESTAMPS_WORD;
         const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
         CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
-        // The prior successful result must be gone: no stale text,
-        // no stale segments/words/tokens, returned_timestamp_kind
-        // back to the pre-run sentinel.
-        CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
-        CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
+        CHECK_STR_EQ(transcribe_full_text(ctx), before_rejection);
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
+        // Cohere advertises NONE, so the preserved result carries no word or
+        // token substructure either way.
         CHECK_EQ_INT(transcribe_n_words(ctx), 0);
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
@@ -355,8 +435,8 @@ int main() {
         rp2.timestamps             = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
         CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
-        CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
-        CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
+        CHECK_STR_EQ(transcribe_full_text(ctx), before_rejection);
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
     }
 
     // ---- Teardown ----------------------------------------------------
