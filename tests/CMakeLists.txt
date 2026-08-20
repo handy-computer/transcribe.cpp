@@ -1217,6 +1217,23 @@ add_test(NAME transcribe_tokenizer_decode_only_unit
     COMMAND transcribe_tokenizer_decode_only_unit)
 
 # -----------------------------------------------------------------------------
+# Whisper .bin synthesized suppression metadata
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_whisper_bin_suppress_unit
+    whisper_bin_suppress_unit.cpp)
+
+target_link_libraries(transcribe_whisper_bin_suppress_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_whisper_bin_suppress_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_whisper_bin_suppress_unit)
+
+add_test(NAME transcribe_whisper_bin_suppress_unit
+    COMMAND transcribe_whisper_bin_suppress_unit)
+
+# -----------------------------------------------------------------------------
 # Whisper .bin parser unit test
 # -----------------------------------------------------------------------------
 #

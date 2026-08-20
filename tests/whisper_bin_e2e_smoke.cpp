@@ -19,6 +19,8 @@
 //   - caps.languages == ["en"] and caps.n_languages == 1
 //   - JFK transcribes without language hint (auto-detect short-
 //     circuits to "en" since the model has no language tokens)
+//   - affected English pieces such as " computers" and " graduate" remain
+//     available during whole-earth.wav transcription
 //   - --language en accepted; --language de rejected with a non-OK
 //     status
 //   - translate task rejected (no <|translate|> token)
@@ -298,8 +300,9 @@ void test_multilingual(const char * model_path) {
 
 void test_english_only(const char * model_path) {
     std::vector<float> jfk;
-    if (!load_wav("jfk.wav", jfk)) {
-        std::fprintf(stderr, "FAIL: could not load jfk.wav\n");
+    std::vector<float> whole_earth;
+    if (!load_wav("jfk.wav", jfk) || !load_wav("whole-earth.wav", whole_earth)) {
+        std::fprintf(stderr, "FAIL: could not load English sample wavs\n");
         ++g_failures;
         return;
     }
@@ -359,6 +362,19 @@ void test_english_only(const char * model_path) {
         st          = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(contains(transcribe_full_text(ctx), "country"));
+    }
+
+    // Regression for English .bin suppression metadata. The multilingual
+    // suppression ids map to ordinary English pieces including " computers"
+    // and " graduate", producing "computer" / "graduates" on this sample.
+    {
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
+        rp.language = "en";
+        st          = transcribe_run(ctx, whole_earth.data(), static_cast<int>(whole_earth.size()), &rp);
+        CHECK(st == TRANSCRIBE_OK);
+        CHECK(contains(transcribe_full_text(ctx), "personal computers"));
+        CHECK(contains(transcribe_full_text(ctx), "graduate to begin anew"));
     }
 
     // Non-English language — rejected with a non-OK status.
