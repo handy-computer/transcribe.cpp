@@ -106,6 +106,22 @@ not give up the clean transcript. It is present on single, batch, and full
 structured stream snapshots (and may be empty before a stream has produced a
 successful hypothesis).
 
+## Generic parameter parity
+
+First-class high-level bindings expose every field of the generic model-load,
+session, run, and stream parameter structs. Generated/raw FFI coverage is not
+sufficient: an application must not need private binding internals to set a
+public generic option. In particular, `transcribe_run_params::pnc` and `itn`
+are typed three-state controls (`default`, `off`, `on`) and must flow through
+single-run, batch, streaming, and one-shot convenience surfaces wherever those
+surfaces exist.
+
+Every generic option needs model-free enum/type coverage (plus direct
+materialization coverage where the binding architecture permits it) and, when a
+supporting model exists, a model-gated behavior test. A new field added to a
+generic parameter struct must update all first-class bindings and this
+conformance coverage in the same change.
+
 When adding a new family extension, update:
 
 - `include/transcribe/<family>.h` with the typed struct, kind constant, and

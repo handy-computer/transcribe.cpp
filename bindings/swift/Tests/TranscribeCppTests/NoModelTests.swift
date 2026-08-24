@@ -90,12 +90,14 @@ final class NoModelTests: XCTestCase {
     // not shadow Swift's concurrency `Task`). Lock the public name + `task:`
     // option here so an accidental rename is caught without a model.
     func testTranscriptionTaskOptionRoundTrips() {
-        let translate = RunOptions(task: .translate, diarize: .on)
+        let translate = RunOptions(task: .translate, pnc: .off, itn: .on, diarize: .on)
         guard case .translate = translate.task else {
             return XCTFail("task option did not round-trip to .translate")
         }
         let task: TranscriptionTask = .transcribe
         guard case .transcribe = task else { return XCTFail("TranscriptionTask.transcribe") }
+        guard case .off = translate.pnc else { return XCTFail("Pnc.off") }
+        guard case .on = translate.itn else { return XCTFail("Itn.on") }
         guard case .on = translate.diarize else { return XCTFail("Diarize.on") }
     }
 

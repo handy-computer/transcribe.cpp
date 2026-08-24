@@ -6,6 +6,8 @@ export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "rocm" | "vulkan" 
 export type KvType = "auto" | "f32" | "f16";
 export type Task = "transcribe" | "translate";
 export type TimestampKind = "none" | "auto" | "segment" | "word" | "token";
+export type Pnc = "default" | "off" | "on";
+export type Itn = "default" | "off" | "on";
 export type Diarize = "default" | "off" | "on";
 export type Feature =
   | "initial_prompt"
@@ -153,6 +155,10 @@ export interface TranscribeOptions {
   targetLanguage?: string;
   /** Default "auto" (richest the model supports, per-family). */
   timestamps?: TimestampKind;
+  /** Punctuation and capitalization control; default preserves the family default. */
+  pnc?: Pnc;
+  /** Inverse text normalization control; default preserves the family default. */
+  itn?: Itn;
   /** Default "default" (speaker attribution off for every family). */
   diarize?: Diarize;
   keepSpecialTags?: boolean;
@@ -202,6 +208,8 @@ export interface StreamOptions {
   language?: string;
   targetLanguage?: string;
   timestamps?: TimestampKind;
+  pnc?: Pnc;
+  itn?: Itn;
   diarize?: Diarize;
   keepSpecialTags?: boolean;
   commitPolicy?: CommitPolicy;

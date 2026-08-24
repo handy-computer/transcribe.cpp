@@ -36,9 +36,11 @@ import type {
   ExtSlot,
   FamilyExtension,
   Feature,
+  Itn,
   KvType,
   ModelOptions,
   PcmLike,
+  Pnc,
   Segment,
   SpeakerSegment,
   SessionLimits,
@@ -90,6 +92,16 @@ const TIMESTAMPS: Record<TimestampKind, number> = {
 const TIMESTAMP_NAMES: Record<number, TimestampKind> = Object.fromEntries(
   Object.entries(TIMESTAMPS).map(([k, v]) => [v, k as TimestampKind]),
 );
+const PNC: Record<Pnc, number> = {
+  default: g.TRANSCRIBE_PNC_MODE_DEFAULT,
+  off: g.TRANSCRIBE_PNC_MODE_OFF,
+  on: g.TRANSCRIBE_PNC_MODE_ON,
+};
+const ITN: Record<Itn, number> = {
+  default: g.TRANSCRIBE_ITN_MODE_DEFAULT,
+  off: g.TRANSCRIBE_ITN_MODE_OFF,
+  on: g.TRANSCRIBE_ITN_MODE_ON,
+};
 const DIARIZE: Record<Diarize, number> = {
   default: g.TRANSCRIBE_DIARIZE_MODE_DEFAULT,
   off: g.TRANSCRIBE_DIARIZE_MODE_OFF,
@@ -828,6 +840,8 @@ export class Session {
     // whisper resolves it to "segment" (its robust path), no-timestamp
     // families resolve to "none".
     p.timestamps = lookup(TIMESTAMPS, opts.timestamps ?? "auto", "timestamps");
+    p.pnc = lookup(PNC, opts.pnc ?? "default", "pnc");
+    p.itn = lookup(ITN, opts.itn ?? "default", "itn");
     p.diarize = lookup(DIARIZE, opts.diarize ?? "default", "diarize");
     if (opts.language !== undefined) p.language = opts.language;
     if (opts.targetLanguage !== undefined)
@@ -929,6 +943,8 @@ export class Session {
       language: opts.language,
       targetLanguage: opts.targetLanguage,
       timestamps: opts.timestamps,
+      pnc: opts.pnc,
+      itn: opts.itn,
       diarize: opts.diarize,
       keepSpecialTags: opts.keepSpecialTags,
       specKDrafts: -1,

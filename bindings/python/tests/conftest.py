@@ -59,6 +59,8 @@ VOXTRAL_MODEL = (
     REPO
     / "models/Voxtral-Mini-4B-Realtime-2602/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf"
 )
+PNC_MODEL = REPO / "models/canary-180m-flash/canary-180m-flash-Q8_0.gguf"
+ITN_MODEL = REPO / "models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf"
 
 
 def load_wav(path: Path) -> "array.array":
@@ -157,3 +159,15 @@ def parakeet_buffered_model_path() -> Path:
 def voxtral_model_path() -> Path:
     """Voxtral realtime streaming canary (accepts VOXTRAL_REALTIME_STREAM)."""
     return _family_model("TRANSCRIBE_SMOKE_VOXTRAL_MODEL", VOXTRAL_MODEL)
+
+
+@pytest.fixture(scope="session")
+def pnc_model_path() -> Path:
+    """Canary model whose generic PNC run parameter changes the prompt."""
+    return _family_model("TRANSCRIBE_SMOKE_PNC_MODEL", PNC_MODEL)
+
+
+@pytest.fixture(scope="session")
+def itn_model_path() -> Path:
+    """SenseVoice model whose generic ITN parameter changes text normalization."""
+    return _family_model("TRANSCRIBE_SMOKE_ITN_MODEL", ITN_MODEL)

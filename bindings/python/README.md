@@ -31,6 +31,18 @@ pcm = np.asarray(audio, dtype=np.float32)   # 1-D, 16 kHz mono
 result = session.run(pcm)
 ```
 
+### Punctuation, capitalization, and text normalization
+
+Generic run controls use `"default"` to preserve each model family's shipped
+behavior. Models advertising `model.supports("pnc")` accept `pnc="off"` or
+`pnc="on"`; models advertising `model.supports("itn")` accept the equivalent
+`itn` values. The options are available on `run()`, `run_batch()`, `stream()`,
+and the one-shot `transcribe()` helper.
+
+```python
+result = session.run(pcm, pnc="off", itn="on")
+```
+
 Streaming models expose incremental transcription with committed/tentative
 text views — see `examples/stream_wav.py`:
 

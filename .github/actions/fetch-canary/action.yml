@@ -1,10 +1,11 @@
 name: fetch-canary
 description: >
-  Cache + fetch the private canary GGUFs and export TRANSCRIBE_SMOKE_MODEL /
-  TRANSCRIBE_SMOKE_STREAMING_MODEL / the two parakeet family canaries. Skips
-  cleanly when hf-token is empty (forks have no secret): the model tests then
-  skip, exactly as before this action existed. Always fetches ALL CI canaries
-  (whisper-tiny + moonshine-streaming ~95 MB, plus the two parakeet 0.6b
+  Cache + fetch the CI canary GGUFs and export TRANSCRIBE_SMOKE_MODEL /
+  TRANSCRIBE_SMOKE_STREAMING_MODEL / generic PNC+ITN canaries / the two
+  parakeet family canaries. Skips cleanly when hf-token is empty (forks have no
+  secret): the model tests then skip, exactly as before this action existed.
+  Always fetches ALL CI canaries (whisper-tiny + moonshine-streaming ~95 MB,
+  Canary+SenseVoice text-control canaries ~290 MB, plus the two parakeet 0.6b
   family-extension canaries — cache-aware + buffered — at Q4_K_M ~0.95 GB)
   under one cache key — a per-consumer subset would let one job save the shared
   key with only its subset in it, and every other consumer would re-download
@@ -34,7 +35,7 @@ runs:
       uses: actions/cache@v5
       with:
         path: canary
-        key: canary-models-v2
+        key: canary-models-v3
     - name: Fetch canary models (cache miss only)
       if: inputs.hf-token != ''
       shell: bash
@@ -47,6 +48,13 @@ runs:
         [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
           uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
             moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+        # Generic run-parameter canaries: PNC (Canary) and ITN (SenseVoice).
+        [ -f canary/canary-180m-flash-Q4_K_M.gguf ] || \
+          uvx --from huggingface_hub hf download handy-computer/canary-180m-flash-gguf \
+            canary-180m-flash-Q4_K_M.gguf --local-dir canary
+        [ -f canary/SenseVoiceSmall-Q4_K_M.gguf ] || \
+          uvx --from huggingface_hub hf download handy-computer/SenseVoiceSmall-gguf \
+            SenseVoiceSmall-Q4_K_M.gguf --local-dir canary
         # Parakeet family-extension canaries (cache-aware + buffered streaming).
         # Q4_K_M keeps the CI canary set light (~0.95 GB for the pair); the
         # family-ext tests are content-lenient (assert non-empty, not accuracy),
@@ -65,5 +73,7 @@ runs:
         if [ -z "$prefix" ]; then prefix="$GITHUB_WORKSPACE"; fi
         echo "TRANSCRIBE_SMOKE_MODEL=$prefix/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
         echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$prefix/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+        echo "TRANSCRIBE_SMOKE_PNC_MODEL=$prefix/canary/canary-180m-flash-Q4_K_M.gguf" >> "$GITHUB_ENV"
+        echo "TRANSCRIBE_SMOKE_ITN_MODEL=$prefix/canary/SenseVoiceSmall-Q4_K_M.gguf" >> "$GITHUB_ENV"
         echo "TRANSCRIBE_SMOKE_PARAKEET_STREAM_MODEL=$prefix/canary/nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf" >> "$GITHUB_ENV"
         echo "TRANSCRIBE_SMOKE_PARAKEET_BUFFERED_MODEL=$prefix/canary/parakeet-unified-en-0.6b-Q4_K_M.gguf" >> "$GITHUB_ENV"

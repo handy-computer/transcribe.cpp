@@ -35,6 +35,17 @@ for (const seg of result.segments) {
 model.dispose();
 ```
 
+### Punctuation, capitalization, and text normalization
+
+`pnc` and `itn` default to `"default"`, preserving each model family's shipped
+behavior. Probe `model.supports("pnc")` or `model.supports("itn")` before
+selecting `"off"`/`"on"`. Both options are available on single runs, batches,
+and streams.
+
+```ts
+const result = await model.transcribe(pcm, { pnc: "off", itn: "on" });
+```
+
 ### Streaming
 
 ```ts

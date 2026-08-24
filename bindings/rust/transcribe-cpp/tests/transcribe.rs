@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 use std::thread;
 
-use transcribe_cpp::{Error, Model, RunOptions, TimestampKind};
+use transcribe_cpp::{Error, Feature, Itn, Model, Pnc, RunOptions, TimestampKind};
 
 #[test]
 fn transcribes_jfk_with_segments() {
@@ -70,6 +70,69 @@ fn capabilities_and_identity() {
     assert!(model.backend().to_lowercase().contains("cpu") || !model.backend().is_empty());
     let caps = model.capabilities();
     assert!(caps.native_sample_rate > 0, "{caps:?}");
+}
+
+#[test]
+fn pnc_changes_canary_prompt() {
+    let (Some(model_path), Some(pcm)) = (common::smoke_pnc_model(), common::smoke_audio()) else {
+        eprintln!("skip pnc_changes_canary_prompt: PNC model/audio unavailable");
+        return;
+    };
+    let model = Model::load(model_path).unwrap();
+    assert!(model.supports(Feature::Pnc));
+    let mut session = model.session().unwrap();
+    let run = |session: &mut transcribe_cpp::Session, pnc| {
+        session
+            .run(
+                &pcm,
+                &RunOptions {
+                    language: Some("en".into()),
+                    pnc,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .text
+    };
+    let default = run(&mut session, Pnc::Default);
+    let enabled = run(&mut session, Pnc::On);
+    let disabled = run(&mut session, Pnc::Off);
+    assert_eq!(default, enabled);
+    assert_ne!(disabled, enabled);
+    assert_eq!(disabled, disabled.to_lowercase());
+}
+
+#[test]
+fn itn_changes_sensevoice_text_normalization() {
+    let (Some(model_path), Some(pcm)) = (common::smoke_itn_model(), common::smoke_audio()) else {
+        eprintln!("skip itn_changes_sensevoice_text_normalization: ITN model/audio unavailable");
+        return;
+    };
+    let model = Model::load(model_path).unwrap();
+    assert!(model.supports(Feature::Itn));
+    let mut session = model.session().unwrap();
+    let run = |session: &mut transcribe_cpp::Session, itn| {
+        session
+            .run(
+                &pcm,
+                &RunOptions {
+                    language: Some("en".into()),
+                    itn,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+    };
+    let default = run(&mut session, Itn::Default);
+    let disabled = run(&mut session, Itn::Off);
+    let enabled = run(&mut session, Itn::On);
+    assert_eq!(
+        (default.text, default.raw_text),
+        (disabled.text.clone(), disabled.raw_text.clone())
+    );
+    assert_ne!(enabled.text, disabled.text);
+    assert!(disabled.raw_text.contains("<|woitn|>"));
+    assert!(enabled.raw_text.contains("<|withitn|>"));
 }
 
 #[test]

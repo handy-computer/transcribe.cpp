@@ -60,6 +60,18 @@ for segment in transcript.segments {
 `run` is blocking; `try await session.run(pcm)` uses the async convenience
 overload and hops the work off the caller's thread.
 
+### Punctuation, capitalization, and text normalization
+
+`RunOptions.pnc` and `RunOptions.itn` default to preserving each model family's
+shipped behavior. Probe `model.supports(.pnc)` or `.itn` before selecting
+`.off`/`.on`. The same `RunOptions` is accepted by single runs, batches,
+streams, and `Transcribe.transcribe`.
+
+```swift
+let options = RunOptions(pnc: .off, itn: .on)
+let transcript = try session.run(pcm, options: options)
+```
+
 Streaming models expose committed/tentative text for UI display:
 
 ```swift

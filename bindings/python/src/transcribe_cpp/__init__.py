@@ -53,6 +53,8 @@ Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda", "rocm"]
 KVType = Literal["auto", "f32", "f16"]
 Task = Literal["transcribe", "translate"]
 Timestamps = Literal["none", "auto", "segment", "word", "token"]
+Pnc = Literal["default", "off", "on"]
+Itn = Literal["default", "off", "on"]
 Diarize = Literal["default", "off", "on"]
 SortformerPreset = Literal["default", "very_high_latency", "high_latency", "low_latency"]
 CommitPolicy = Literal["auto", "on_finalize", "stable_prefix"]
@@ -89,6 +91,8 @@ __all__ = [
     "KVType",
     "Task",
     "Timestamps",
+    "Pnc",
+    "Itn",
     "Diarize",
     "CommitPolicy",
     "Feature",
@@ -206,15 +210,20 @@ _TIMESTAMPS = {
     "token": _generated.TRANSCRIBE_TIMESTAMPS_TOKEN,
 }
 _TIMESTAMP_NAMES = {v: k for k, v in _TIMESTAMPS.items()}
-_DIARIZE = {
-    "default": _generated.TRANSCRIBE_DIARIZE_MODE_DEFAULT,
-    "off": _generated.TRANSCRIBE_DIARIZE_MODE_OFF,
-    "on": _generated.TRANSCRIBE_DIARIZE_MODE_ON,
+_PNC = {
+    "default": _generated.TRANSCRIBE_PNC_MODE_DEFAULT,
+    "off": _generated.TRANSCRIBE_PNC_MODE_OFF,
+    "on": _generated.TRANSCRIBE_PNC_MODE_ON,
 }
 _ITN = {
     "default": _generated.TRANSCRIBE_ITN_MODE_DEFAULT,
     "off": _generated.TRANSCRIBE_ITN_MODE_OFF,
     "on": _generated.TRANSCRIBE_ITN_MODE_ON,
+}
+_DIARIZE = {
+    "default": _generated.TRANSCRIBE_DIARIZE_MODE_DEFAULT,
+    "off": _generated.TRANSCRIBE_DIARIZE_MODE_OFF,
+    "on": _generated.TRANSCRIBE_DIARIZE_MODE_ON,
 }
 _COMMIT_POLICIES = {
     "auto": _generated.TRANSCRIBE_STREAM_COMMIT_AUTO,
@@ -643,7 +652,8 @@ def _stream_update_from(u) -> StreamUpdate:
 
 
 def _build_run_params(task, language, target_language, timestamps,
-                      keep_special_tags, spec_k_drafts, diarize="default", itn="default"):
+                      keep_special_tags, spec_k_drafts, diarize="default",
+                      pnc="default", itn="default"):
     if not isinstance(spec_k_drafts, int) or spec_k_drafts < -1:
         raise InvalidArgument(
             f"spec_k_drafts must be -1 (family default), 0 (disabled), or a "
@@ -653,8 +663,9 @@ def _build_run_params(task, language, target_language, timestamps,
     _lib.transcribe_run_params_init(_byref(params))
     params.task = _enum(_TASKS, task, "task")
     params.timestamps = _enum(_TIMESTAMPS, timestamps, "timestamps")
-    params.diarize = _enum(_DIARIZE, diarize, "diarize")
+    params.pnc = _enum(_PNC, pnc, "pnc")
     params.itn = _enum(_ITN, itn, "itn")
+    params.diarize = _enum(_DIARIZE, diarize, "diarize")
     params.language = language.encode("utf-8") if language else None
     params.target_language = target_language.encode("utf-8") if target_language else None
     params.keep_special_tags = keep_special_tags
@@ -1085,13 +1096,16 @@ class Session:
             language: str | None = None,
             target_language: str | None = None,
             timestamps: Timestamps = "auto",
+            pnc: Pnc = "default",
+            itn: Itn = "default",
             diarize: Diarize = "default",
-            itn: Literal["default", "off", "on"] = "default",
             keep_special_tags: bool = False,
             spec_k_drafts: int = -1,
             family: FamilyExtension | None = None) -> Result:
         """Transcribe 16 kHz mono float32 PCM and return a materialized Result.
 
+        ``pnc`` controls punctuation/capitalization and ``itn`` controls
+        inverse text normalization on models advertising those features.
         ``family`` is an optional family-specific extension (e.g.
         WhisperRunOptions) carrying per-run knobs for models that accept it.
         ``spec_k_drafts`` tunes speculative decoding on models whose
@@ -1104,7 +1118,7 @@ class Session:
         self._cancel.clear()
         array, n_samples = _pcm_to_carray(pcm)
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts, diarize, itn)
+                                   keep_special_tags, spec_k_drafts, diarize, pnc, itn)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1123,6 +1137,8 @@ class Session:
                   language: str | None = None,
                   target_language: str | None = None,
                   timestamps: Timestamps = "auto",
+                  pnc: Pnc = "default",
+                  itn: Itn = "default",
                   diarize: Diarize = "default",
                   keep_special_tags: bool = False,
                   spec_k_drafts: int = -1,
@@ -1160,7 +1176,7 @@ class Session:
             counts[k] = n
 
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags, spec_k_drafts, diarize)
+                                   keep_special_tags, spec_k_drafts, diarize, pnc, itn)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
@@ -1211,6 +1227,7 @@ class Session:
 
     def stream(self, *, task: Task = "transcribe", language: str | None = None,
                target_language: str | None = None, timestamps: Timestamps = "none",
+               pnc: Pnc = "default", itn: Itn = "default",
                diarize: Diarize = "default",
                keep_special_tags: bool = False, commit_policy: CommitPolicy = "auto",
                stable_prefix_agreement_n: int = 0,
@@ -1226,7 +1243,7 @@ class Session:
         # spec_k_drafts is an offline-decode knob; streaming always uses the
         # family default (-1).
         run_params = _build_run_params(task, language, target_language, timestamps,
-                                       keep_special_tags, -1, diarize)
+                                       keep_special_tags, -1, diarize, pnc, itn)
         sp = _StreamParams()
         _lib.transcribe_stream_params_init(_byref(sp))
         sp.commit_policy = _enum(_COMMIT_POLICIES, commit_policy, "commit_policy")
@@ -1473,6 +1490,8 @@ def transcribe(
     language: str | None = None,
     target_language: str | None = None,
     timestamps: Timestamps = "auto",
+    pnc: Pnc = "default",
+    itn: Itn = "default",
     diarize: Diarize = "default",
     keep_special_tags: bool = False,
     spec_k_drafts: int = -1,
@@ -1489,7 +1508,7 @@ def transcribe(
     """
     session_opts = dict(n_threads=n_threads, kv_type=kv_type, n_ctx=n_ctx)
     run_opts = dict(task=task, language=language, target_language=target_language,
-                    timestamps=timestamps, diarize=diarize,
+                    timestamps=timestamps, pnc=pnc, itn=itn, diarize=diarize,
                     keep_special_tags=keep_special_tags,
                     spec_k_drafts=spec_k_drafts, family=family)
 
