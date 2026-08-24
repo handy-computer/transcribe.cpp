@@ -40,6 +40,7 @@ with model.session() as session, session.stream() as stream:
         stream.feed(chunk)
         text = stream.text()        # .committed (stable) + .tentative
     stream.finalize()
+    result = stream.snapshot()      # language, segments, words, tokens, timings
 ```
 
 Long transcriptions can be cancelled from another thread with

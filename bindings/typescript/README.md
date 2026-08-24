@@ -27,7 +27,7 @@ const model = await TranscribeModel.load("whisper-tiny-Q5_K_M.gguf");
 const result = await model.transcribe(pcm, { timestamps: "segment" });
 
 console.log(result.text);
-console.log(result.language); // detected or requested
+console.log(result.language); // model-detected, or "" when unavailable/a hint was supplied
 for (const seg of result.segments) {
   console.log(`[${seg.t0Ms}–${seg.t1Ms}ms] ${seg.text}`);
 }
@@ -47,6 +47,7 @@ for (const chunk of pcmChunks) {
   render(committed, tentative);
 }
 await stream.finalize();
+const snapshot = stream.snapshot; // text, language, segments, words, tokens, timings
 stream.reset();
 ```
 
@@ -146,8 +147,9 @@ the teardown — is refused with `Busy`, by design.
 Because the compute is genuinely on another thread, **do not touch a session
 while a call against it is in flight** — it is single-threaded in the C library:
 
-- Reading a stream's `text`/`state`/`revision`/`lastStatus`, or a session's
-  `limits`/`wasAborted`, during an un-awaited `feed`/`finalize`/`run` **throws**.
+- Reading a stream's `text`/`snapshot`/`state`/`revision`/`lastStatus`, or a
+  session's `limits`/`wasAborted`, during an un-awaited
+  `feed`/`finalize`/`run`/`runBatch` **throws**.
 - `reset()` and `dispose()` are safe to call any time: the native teardown is
   deferred behind any in-flight call, so it never frees a session mid-compute.
 - Disposing a `Session` or `TranscribeModel` while a stream is still active

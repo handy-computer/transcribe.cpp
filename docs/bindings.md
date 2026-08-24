@@ -65,6 +65,17 @@ automatic: Python `ctypes.c_char_p` / `.decode()`, Go `C.GoString`, Rust
 hands out a zero-copy view must scope it to the current callback/update turn
 and document that it dies at the next stream mutation.
 
+First-class bindings expose both streaming result shapes as owned values:
+
+- the UI-facing `transcribe_stream_get_text()` view (full, committed, and
+  tentative text), and
+- a full structured snapshot built from the ordinary current-result accessors
+  (clean/raw text, detected language, timestamp kind, segments, speaker turns,
+  words, tokens, and timings).
+
+The structured snapshot must be copied completely before the next feed or
+finalize call; bindings must not return the session-owned pointers directly.
+
 ## Diarization result contract
 
 First-class bindings expose the generic diarization surface rather than only
@@ -91,8 +102,9 @@ whitespace trims). It equals the clean text modulo whitespace for families
 that emit clean text natively, and is the recommended replacement for
 `keep_special_tags` when the goal is recovering what the model emitted —
 unlike the flag it works for every family, covers plain-text markers, and does
-not give up the clean transcript. Offline runs (single and batch) only;
-streaming results do not carry it.
+not give up the clean transcript. It is present on single, batch, and full
+structured stream snapshots (and may be empty before a stream has produced a
+successful hypothesis).
 
 When adding a new family extension, update:
 

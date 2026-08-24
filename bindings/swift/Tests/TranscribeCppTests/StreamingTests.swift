@@ -11,6 +11,12 @@ final class StreamingTests: XCTestCase {
         let stream = try session.stream()
         try Fixtures.drive(stream, pcm: pcm)
         XCTAssertTrue(stream.text.full.lowercased().contains("country"), stream.text.full)
+        let snapshot = stream.snapshot
+        XCTAssertFalse(snapshot.text.isEmpty)
+        if let language = snapshot.language { XCTAssertFalse(language.isEmpty) }
+        XCTAssertFalse(snapshot.segments.isEmpty)
+        _ = snapshot.words
+        _ = snapshot.tokens
     }
 
     func testOnFinalizePolicyCommitsAtFinalize() throws {

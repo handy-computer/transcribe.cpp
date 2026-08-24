@@ -177,6 +177,9 @@ public final class Stream {
         _ = transcribe_stream_get_text(session.ptr, &t)
         return StreamText(t)
     }
+
+    /// Full structured snapshot of the current hypothesis (owned copies).
+    public var snapshot: Transcript { session.readTranscript() }
 }
 
 extension Session {

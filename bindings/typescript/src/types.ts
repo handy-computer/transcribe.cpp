@@ -83,12 +83,13 @@ export interface SessionLimits {
   maxKvBytes: number;
 }
 
-export interface TranscriptionResult {
+export interface Transcript {
   text: string;
   /** The model's decoded output before family post-processing (diarization
    *  markers, timestamp/special tokens, tag filtering, whitespace trims).
    *  Equal to `text` modulo whitespace for families that emit clean text. */
   rawText: string;
+  /** Model-detected language, or an empty string when none applies. */
   language: string;
   timestampKind: TimestampKind;
   segments: Segment[];
@@ -96,6 +97,10 @@ export interface TranscriptionResult {
   words: Word[];
   tokens: Token[];
   timings: Timings;
+}
+
+/** An offline transcript plus terminal run status flags. */
+export interface TranscriptionResult extends Transcript {
   aborted: boolean;
   truncated: boolean;
 }

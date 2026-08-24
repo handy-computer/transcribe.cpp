@@ -16,15 +16,22 @@ modelTest("streaming commits text and finalizes", STREAMING_MODEL, async () => {
     assert.equal(stream.lastStatus, null, "a healthy finished stream has no failure status");
     const t = stream.text;
     assert.ok((t.committed + t.full).trim().length > 0, "expected non-empty streamed text");
+    const snapshot = stream.snapshot;
+    assert.ok(snapshot.text.trim().length > 0, "expected non-empty structured snapshot");
+    assert.ok(snapshot.segments.length > 0, "expected structured segment rows");
+    assert.ok(Array.isArray(snapshot.words));
+    assert.ok(Array.isArray(snapshot.tokens));
+    assert.equal(typeof snapshot.language, "string");
     stream.reset();
     assert.equal(stream.state, "idle");
+    assert.throws(() => stream.snapshot, /reset/i, "reading .snapshot after reset must throw");
     s.dispose();
   } finally {
     m.dispose();
   }
 });
 
-modelTest("stream reads reject while a feed is in flight", STREAMING_MODEL, async () => {
+modelTest("stream reads reject while the session is computing", STREAMING_MODEL, async () => {
   const m = await TranscribeModel.load(STREAMING_MODEL);
   try {
     const s = m.createSession();
@@ -34,6 +41,7 @@ modelTest("stream reads reject while a feed is in flight", STREAMING_MODEL, asyn
     const pending = stream.feed(chunk); // do NOT await — leave it in flight
     await Promise.resolve(); // let the feed's native call reach the worker
     assert.throws(() => stream.text, /in flight/i, "reading .text mid-feed must throw");
+    assert.throws(() => stream.snapshot, /in flight/i, "reading .snapshot mid-feed must throw");
     assert.throws(() => stream.state, /in flight/i);
     assert.throws(() => stream.revision, /in flight/i);
     assert.throws(() => s.limits, /in flight/i);
@@ -41,6 +49,17 @@ modelTest("stream reads reject while a feed is in flight", STREAMING_MODEL, asyn
 
     await pending; // once awaited, reads are fine again
     assert.doesNotThrow(() => stream.text);
+    assert.doesNotThrow(() => stream.snapshot);
+
+    // A finished stream wrapper still reads the same session-owned result
+    // storage. Guard it during a later offline call on that session too, not
+    // only during the wrapper's own feed/finalize calls.
+    await stream.finalize();
+    const runPending = s.run(jfk());
+    await Promise.resolve(); // let run() reach its worker
+    assert.throws(() => stream.snapshot, /run\(\).*in flight/i);
+    assert.throws(() => stream.text, /run\(\).*in flight/i);
+    await runPending;
 
     stream.reset();
     s.dispose();

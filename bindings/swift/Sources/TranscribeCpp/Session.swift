@@ -181,7 +181,7 @@ public final class Session {
         }
     }
 
-    private func readTranscript() -> Transcript {
+    func readTranscript() -> Transcript {
         var segments: [Segment] = []
         for i in 0..<Int(transcribe_n_segments(ptr)) {
             var s = transcribe_segment(); transcribe_segment_init(&s)

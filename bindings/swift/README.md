@@ -69,6 +69,7 @@ for chunk in chunks {                 // 16 kHz mono float32 frames
     if update.committedChanged { print(stream.text.committed) }
 }
 try stream.finalize()
+let transcript = stream.snapshot // language, segments, words, tokens, timings
 ```
 
 Runnable examples live in

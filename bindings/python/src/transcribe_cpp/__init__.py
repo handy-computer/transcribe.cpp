@@ -1413,6 +1413,11 @@ class Stream:
             tentative=_decode(txt.tentative_text),
         )
 
+    def snapshot(self) -> Result:
+        """Full structured snapshot of the current hypothesis (owned copies)."""
+        _ = self._h  # validate that this stream has not been reset
+        return self._session._materialize()
+
     @property
     def state(self) -> str:
         """``"idle"`` / ``"active"`` / ``"finished"`` / ``"failed"``."""
