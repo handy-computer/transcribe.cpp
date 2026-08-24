@@ -36,6 +36,18 @@ println!("{}", result.text);
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+Streaming exposes both UI-stable text and a fully materialized structured
+snapshot:
+
+```rust
+let mut stream = session.stream(&RunOptions::default(), &Default::default())?;
+stream.feed(&chunk)?;
+println!("{}", stream.text().committed);
+stream.finalize()?;
+let transcript = stream.snapshot(); // language, segments, words, tokens, timings
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Runnable examples:
 
 ```sh
