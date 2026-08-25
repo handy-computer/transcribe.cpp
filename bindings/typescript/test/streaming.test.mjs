@@ -7,7 +7,10 @@ modelTest("streaming commits text and finalizes", STREAMING_MODEL, async () => {
   try {
     assert.equal(m.capabilities.supportsStreaming, true);
     const s = m.createSession();
-    const stream = await s.stream({ commitPolicy: "stable_prefix" });
+    const stream = await s.stream({
+      context: "Vocabulary: Kennedy, Massachusetts",
+      commitPolicy: "stable_prefix",
+    });
     assert.equal(stream.state, "active");
     await feedChunks(stream, jfk());
     const fin = await stream.finalize();

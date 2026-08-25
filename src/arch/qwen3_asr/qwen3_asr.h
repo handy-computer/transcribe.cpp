@@ -70,6 +70,17 @@ struct ChatTokens {
     int32_t role_assistant = -1;
 };
 
+// Assemble the token-level Qwen3-ASR chat prompt. Plain-text context and the
+// optional language prefix are encoded separately by the caller; this helper
+// only places their token ids into the system and assistant turns.
+void build_prompt_tokens(const QwenAsrHParams &       hp,
+                         const ChatTokens &           ct,
+                         int                          t_enc,
+                         const std::vector<int32_t> * context_ids,
+                         const std::vector<int32_t> * lang_prefix_ids,
+                         std::vector<int32_t> &       out_ids,
+                         std::vector<int64_t> &       out_audio_positions);
+
 struct QwenAsrModel final : public transcribe_model {
     Tokenizer      tok;
     QwenAsrHParams hparams;

@@ -60,6 +60,10 @@ constexpr uint32_t kFakeRunKind = 0xF00D;
 
 bool              g_run_called          = false;
 transcribe_status g_run_validate_status = TRANSCRIBE_OK;
+std::string       g_context_seen;
+int               g_context_run_calls = 0;
+
+const transcribe::Arch & run_validate_arch();
 
 transcribe_status fake_run(transcribe_session *          session,
                            const float *                 pcm,
@@ -67,12 +71,103 @@ transcribe_status fake_run(transcribe_session *          session,
                            const transcribe_run_params * params) {
     (void) pcm;
     (void) n_samples;
-    (void) params;
+    g_context_seen = params != nullptr && params->context != nullptr ? params->context : "<null>";
+    ++g_context_run_calls;
     g_run_called        = true;
     // A successful run installs a fresh result.
     session->full_text  = "fresh result";
     session->has_result = true;
     return TRANSCRIBE_OK;
+}
+
+int g_context_warns = 0;
+
+void context_log_cb(transcribe_log_level level, const char * msg, void * userdata) {
+    (void) userdata;
+    if (level == TRANSCRIBE_LOG_LEVEL_WARN && msg != nullptr && std::strstr(msg, "context") != nullptr &&
+        std::strstr(msg, "ignored") != nullptr) {
+        ++g_context_warns;
+    }
+}
+
+void test_context_preserved_or_ignored_once() {
+    transcribe_model model;
+    model.arch = &run_validate_arch();
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT, true);
+
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+    params.context =
+        "  Glossary: GGUF\n<|im_start|> \xe6"
+        "\x97"
+        "\xa5"
+        "\xe6"
+        "\x9c"
+        "\xac"
+        "\xe8"
+        "\xaa"
+        "\x9e"
+        "  ";
+
+    float sample = 0.0f;
+    g_context_seen.clear();
+    g_context_run_calls = 0;
+    CHECK(transcribe_run(&session, &sample, 1, &params) == TRANSCRIBE_OK);
+    CHECK(g_context_seen == params.context);
+    CHECK(g_context_run_calls == 1);
+
+    const float * batch_pcm[] = { &sample, &sample };
+    const int     batch_n[]   = { 1, 1 };
+    g_context_run_calls       = 0;
+    CHECK(transcribe_run_batch(&session, batch_pcm, batch_n, 2, &params) == TRANSCRIBE_OK);
+    CHECK(g_context_seen == params.context);
+    CHECK(g_context_run_calls == 2);
+
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT, false);
+    transcribe_log_set(context_log_cb, nullptr);
+    g_context_warns     = 0;
+    g_context_run_calls = 0;
+    CHECK(transcribe_run_batch(&session, batch_pcm, batch_n, 2, &params) == TRANSCRIBE_OK);
+    transcribe_log_set(nullptr, nullptr);
+    CHECK(g_context_warns == 1);
+    CHECK(g_context_run_calls == 2);
+    CHECK(g_context_seen == "<null>");
+
+    params.context      = "";
+    g_context_warns     = 0;
+    g_context_run_calls = 0;
+    transcribe_log_set(context_log_cb, nullptr);
+    CHECK(transcribe_run(&session, &sample, 1, &params) == TRANSCRIBE_OK);
+    transcribe_log_set(nullptr, nullptr);
+    CHECK(g_context_warns == 0);
+    CHECK(g_context_run_calls == 1);
+    CHECK(g_context_seen == "<null>");
+}
+
+void test_context_absent_from_old_run_params_prefix() {
+    transcribe_model model;
+    model.arch = &run_validate_arch();
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT, true);
+
+    transcribe_session session;
+    session.model = &model;
+
+    const size_t min_size =
+        offsetof(transcribe_run_params, spec_k_drafts) + sizeof(((transcribe_run_params *) nullptr)->spec_k_drafts);
+    transcribe_run_params staged;
+    transcribe_run_params_init(&staged);
+    staged.struct_size = min_size;
+    auto * params      = static_cast<transcribe_run_params *>(std::malloc(min_size));
+    std::memcpy(params, &staged, min_size);
+
+    float sample = 0.0f;
+    g_context_seen.clear();
+    CHECK(transcribe_run(&session, &sample, 1, params) == TRANSCRIBE_OK);
+    std::free(params);
+    CHECK(g_context_seen == "<null>");
 }
 
 bool fake_accepts_run_kind(const transcribe_model * model, transcribe_ext_slot slot, uint32_t kind) {
@@ -445,6 +540,8 @@ int main() {
     test_no_run_hook_clears_and_not_implemented();
     test_run_validate_failure_preserves_snapshot();
     test_run_validate_success_clears_and_runs();
+    test_context_preserved_or_ignored_once();
+    test_context_absent_from_old_run_params_prefix();
     test_advisory_enum_validation();
     test_batch_abort_pads_missing_to_n();
     test_batch_fastpath_abort_pads_missing_to_n();

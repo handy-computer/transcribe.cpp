@@ -211,6 +211,8 @@ pub enum Feature {
     Itn,
     /// Produces structured speaker attribution.
     Diarization,
+    /// Accepts best-effort recognition background text.
+    Context,
 }
 
 impl Feature {
@@ -224,6 +226,7 @@ impl Feature {
             Feature::Pnc => F::TRANSCRIBE_FEATURE_PNC,
             Feature::Itn => F::TRANSCRIBE_FEATURE_ITN,
             Feature::Diarization => F::TRANSCRIBE_FEATURE_DIARIZATION,
+            Feature::Context => F::TRANSCRIBE_FEATURE_CONTEXT,
         }
     }
 }

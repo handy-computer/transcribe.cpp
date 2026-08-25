@@ -151,6 +151,34 @@ int main() {
         check_ids_equal(label, f.pub_name, f.ids, f.n_ids, got);
     }
 
+    // Section 3: full chat-prompt parity. These literals come from the
+    // publisher tokenizer/template: context is plain text in the system turn,
+    // audio pads occupy the user turn, and language remains an independent
+    // assistant prefix.
+    {
+        std::vector<int32_t> context_ids;
+        std::vector<int32_t> language_ids;
+        if (tok.encode("line1\nline2", context_ids) != TRANSCRIBE_OK ||
+            transcribe::qwen3_asr::encode_language_prefix(tok, "en", language_ids) != TRANSCRIBE_OK) {
+            std::fprintf(stderr, "FAIL[prompt] could not encode context or language prefix\n");
+            ++g_failures;
+        }
+
+        std::vector<int32_t> prompt_ids;
+        std::vector<int64_t> audio_positions;
+        transcribe::qwen3_asr::build_prompt_tokens(qm->hparams, qm->chat_tokens, 2, &context_ids, &language_ids,
+                                                   prompt_ids, audio_positions);
+        const int32_t expected[] = {
+            151644, 8948,   198,    1056,   16,     198, 1056,   17,    151645, 198,   151644, 872,    198,
+            151669, 151676, 151676, 151670, 151645, 198, 151644, 77091, 198,    11528, 6364,   151704,
+        };
+        check_ids_equal("prompt", "line1\\nline2 + en", expected, sizeof(expected) / sizeof(expected[0]), prompt_ids);
+        if (audio_positions != std::vector<int64_t>({ 14, 15 })) {
+            std::fprintf(stderr, "FAIL[prompt] audio positions differ\n");
+            ++g_failures;
+        }
+    }
+
     transcribe_model_free(model);
 
     if (g_failures > 0) {

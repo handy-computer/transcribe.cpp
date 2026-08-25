@@ -46,7 +46,9 @@ family. That ceiling is there to bound memory and sits far beyond any normal
 clip; audio past it is rejected up front with `TRANSCRIBE_ERR_INPUT_TOO_LONG`
 rather than silently truncated. Lowering `--n-ctx` lowers the limit (and the
 KV-cache footprint), and `transcribe_session_get_limits()` reports the exact
-per-session value. See the [input-length contract](../input-limits.md).
+context-free per-session value. Recognition context also consumes tokens from
+this window; a context-heavy request can therefore reject audio below that
+advisory limit. See the [input-length contract](../input-limits.md).
 
 ## Quick start
 
@@ -58,8 +60,16 @@ cmake --build build
 
 build/bin/transcribe-cli \
   -m models/qwen3-asr-0.6b/qwen3-asr-0.6b-Q8_0.gguf \
+  --context "Vocabulary: GGUF, ggml, Qwen3-ASR" \
   samples/jfk.wav
 ```
+
+`--context` supplies background text that can improve recognition of names,
+jargon, and other ambiguous terms. It is inserted into Qwen3-ASR's system turn,
+but it is not an instruction prompt: task changes, formatting, translation,
+punctuation, and style control are not guaranteed. C callers set
+`transcribe_run_params::context`; other bindings expose the same `context`
+option. Probe `TRANSCRIBE_FEATURE_CONTEXT` when selecting the option dynamically.
 
 The repo doesn't ship the GGUFs — pull them from the corresponding
 `handy-computer/<variant>-gguf` repo on Hugging Face, or convert from
@@ -72,6 +82,7 @@ All Qwen3-ASR variants support:
 
 - **Transcription** of 16 kHz mono WAV input.
 - **Auto language detection** across 30 languages.
+- **Recognition context** through `transcribe_run_params::context`.
 
 What's not supported (consistent across the family): translation,
 real-time streaming, VAD, speaker diarization, timestamps. See the

@@ -16,7 +16,8 @@ export type Feature =
   | "cancellation"
   | "pnc"
   | "itn"
-  | "diarization";
+  | "diarization"
+  | "context";
 
 /** Mono float32 PCM at the model's native sample rate (16 kHz for v1). */
 export type PcmLike = Float32Array | number[] | ArrayBuffer | Buffer;
@@ -153,6 +154,8 @@ export interface TranscribeOptions {
   task?: Task;
   language?: string;
   targetLanguage?: string;
+  /** Best-effort recognition background text (names, jargon, terminology). */
+  context?: string;
   /** Default "auto" (richest the model supports, per-family). */
   timestamps?: TimestampKind;
   /** Punctuation and capitalization control; default preserves the family default. */
@@ -207,6 +210,8 @@ export interface StreamOptions {
   task?: Task;
   language?: string;
   targetLanguage?: string;
+  /** Best-effort recognition background text. */
+  context?: string;
   timestamps?: TimestampKind;
   pnc?: Pnc;
   itn?: Itn;

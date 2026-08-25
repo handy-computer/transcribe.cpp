@@ -72,6 +72,14 @@ let options = RunOptions(pnc: .off, itn: .on)
 let transcript = try session.run(pcm, options: options)
 ```
 
+Models advertising `model.supports(.context)` accept best-effort recognition
+background text for names and terminology. It is not an instruction prompt.
+
+```swift
+let options = RunOptions(context: "Vocabulary: GGUF, ggml, Qwen3-ASR")
+let transcript = try session.run(pcm, options: options)
+```
+
 Streaming models expose committed/tentative text for UI display:
 
 ```swift
@@ -135,3 +143,11 @@ task cancellation when no custom token is installed.
 The xcframework also exposes the raw C module as `CTranscribe`. Objective-C and
 C++ callers use the bundled C headers directly, for example
 `#import <CTranscribe/transcribe/extensions.h>`.
+
+```objc
+#import <CTranscribe/transcribe.h>
+
+transcribe_run_params params;
+transcribe_run_params_init(&params);
+params.context = "Vocabulary: GGUF, ggml, Qwen3-ASR";
+```

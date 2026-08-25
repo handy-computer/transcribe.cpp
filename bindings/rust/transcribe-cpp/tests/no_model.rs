@@ -44,10 +44,15 @@ fn generic_text_control_options_round_trip() {
     let options = RunOptions {
         pnc: Pnc::Off,
         itn: Itn::On,
+        context: Some("  Glossary: GGUF\n\u{65e5}\u{672c}\u{8a9e}  ".into()),
         ..Default::default()
     };
     assert_eq!(options.pnc, Pnc::Off);
     assert_eq!(options.itn, Itn::On);
+    assert_eq!(
+        options.context.as_deref(),
+        Some("  Glossary: GGUF\n\u{65e5}\u{672c}\u{8a9e}  ")
+    );
 }
 
 #[test]

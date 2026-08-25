@@ -138,6 +138,13 @@ reports the model's default-context ceiling (`n_ctx == 0`); it is not re-derived
 for a session that narrows `n_ctx`. A session that lowers `n_ctx` may therefore
 reject audio shorter than the advertised `max_audio_ms`.
 
+Per-run prompt material also shares this window. In particular, a non-empty
+`transcribe_run_params::context` on Qwen3-ASR lowers the audio-token budget for
+that request. Session limits remain context-free advisories because context is
+not known until run time; the exact combined audio + prompt gate is enforced by
+`transcribe_run` / `transcribe_run_batch`, which return
+`TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than truncating context.
+
 Encoder-bound families are different. For cohere and canary, the input-audio
 limit is the encoder positional table, while `n_ctx` only bounds the decoder
 self-KV / output budget. In those families `transcribe_session_get_limits()`

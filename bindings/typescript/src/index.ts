@@ -115,6 +115,7 @@ const FEATURES: Record<Feature, number> = {
   pnc: g.TRANSCRIBE_FEATURE_PNC,
   itn: g.TRANSCRIBE_FEATURE_ITN,
   diarization: g.TRANSCRIBE_FEATURE_DIARIZATION,
+  context: g.TRANSCRIBE_FEATURE_CONTEXT,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -846,6 +847,7 @@ export class Session {
     if (opts.language !== undefined) p.language = opts.language;
     if (opts.targetLanguage !== undefined)
       p.target_language = opts.targetLanguage;
+    if (opts.context !== undefined) p.context = opts.context;
     if (opts.keepSpecialTags !== undefined)
       p.keep_special_tags = opts.keepSpecialTags;
     if (opts.specKDrafts !== undefined) p.spec_k_drafts = opts.specKDrafts;
@@ -942,6 +944,7 @@ export class Session {
       task: opts.task,
       language: opts.language,
       targetLanguage: opts.targetLanguage,
+      context: opts.context,
       timestamps: opts.timestamps,
       pnc: opts.pnc,
       itn: opts.itn,

@@ -169,6 +169,8 @@ int main() {
         CHECK_EQ_INT(caps->n_languages, 4);
         CHECK(caps->languages != nullptr);
         CHECK_EQ_INT(caps->max_timestamp_kind, TRANSCRIBE_TIMESTAMPS_NONE);
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_CONTEXT));
+        CHECK(!transcribe_model_supports(model, TRANSCRIBE_FEATURE_INITIAL_PROMPT));
     }
 
     // Internal-view assertions.
@@ -237,6 +239,24 @@ int main() {
         CHECK_EQ_INT(ct.role_system, 5);
         CHECK_EQ_INT(ct.role_user, 6);
         CHECK_EQ_INT(ct.role_assistant, 7);
+
+        const std::vector<int32_t> context_ids  = { 10, 11 };
+        const std::vector<int32_t> language_ids = { 12 };
+        std::vector<int32_t>       prompt_ids;
+        std::vector<int64_t>       audio_positions;
+        transcribe::qwen3_asr::build_prompt_tokens(hp, ct, 2, &context_ids, &language_ids, prompt_ids, audio_positions);
+        const std::vector<int32_t> expected = {
+            2, 5, 4, 10, 11, 3, 4, 2, 6, 4, 16, 18, 18, 17, 3, 4, 2, 7, 4, 12,
+        };
+        CHECK(prompt_ids == expected);
+        CHECK(audio_positions == std::vector<int64_t>({ 11, 12 }));
+
+        transcribe::qwen3_asr::build_prompt_tokens(hp, ct, 1, nullptr, nullptr, prompt_ids, audio_positions);
+        const std::vector<int32_t> expected_empty = {
+            2, 5, 4, 3, 4, 2, 6, 4, 16, 18, 17, 3, 4, 2, 7, 4,
+        };
+        CHECK(prompt_ids == expected_empty);
+        CHECK(audio_positions == std::vector<int64_t>({ 9 }));
     }
 
     // ----- Encoder subsample slots populated -----

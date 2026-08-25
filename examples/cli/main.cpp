@@ -211,6 +211,7 @@ struct cli_args {
     std::string                model_path;
     std::string                language;
     std::string                target_language;   // --target-language: target lang for translation
+    std::string                context;           // --context: recognition background text
     std::string                batch_file;        // --batch: one wav path per line
     int                        batch_size   = 0;  // --batch-size: >1 groups utterances into
                                                   // transcribe_run_batch calls (offline only).
@@ -314,6 +315,7 @@ void print_usage(const char * argv0) {
                  "  --batch-jsonl         output one JSON line per file (for batch)\n"
                  "  --batch-size N        group N utterances into one transcribe_run_batch\n"
                  "                        call (offline only; 0/1 = per-file serial loop)\n"
+                 "  --context TEXT        recognition background text (names, jargon, terminology)\n"
                  "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
                  "  --temperature F       (whisper) tier-0 sampling temperature (default 0 = greedy)\n"
                  "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
@@ -559,6 +561,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             }
             out.initial_prompt = v;
             out.whisper_set    = true;
+        } else if (a == "--context") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.context = v;
         } else if (a == "--temperature") {
             const char * v = take_value(a.c_str());
             if (!v) {
@@ -843,6 +851,9 @@ int main(int argc, char ** argv) {
         }
         rp.timestamps    = args.timestamps;
         rp.spec_k_drafts = args.spec_k_drafts;
+        if (!args.context.empty()) {
+            rp.context = args.context.c_str();
+        }
 
         if (args.itn_set) {
             rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON : TRANSCRIBE_ITN_MODE_OFF;
@@ -1266,6 +1277,9 @@ int main(int argc, char ** argv) {
         }
         rp.timestamps    = args.timestamps;
         rp.spec_k_drafts = args.spec_k_drafts;
+        if (!args.context.empty()) {
+            rp.context = args.context.c_str();
+        }
 
         if (args.itn_set) {
             rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON : TRANSCRIBE_ITN_MODE_OFF;

@@ -5,7 +5,9 @@ import { TranscribeModel } from "../dist/index.js";
 modelTest("offline transcription returns text + detected language", MODEL, async () => {
   const m = await TranscribeModel.load(MODEL);
   try {
-    const r = await m.transcribe(jfk());
+    const r = await m.transcribe(jfk(), {
+      context: "Vocabulary: GGUF, ggml, Qwen3-ASR",
+    });
     assert.match(r.text, /ask not what your country/i);
     assert.equal(r.language, "en");
     assert.equal(r.aborted, false);
@@ -35,6 +37,7 @@ modelTest("capabilities + identity", MODEL, async () => {
     const c = m.capabilities;
     assert.equal(c.nativeSampleRate, 16000);
     assert.ok(c.languages.length > 0);
+    assert.equal(typeof m.supports("context"), "boolean");
     assert.equal(typeof m.arch, "string");
     assert.ok(m.arch.length > 0);
     assert.ok(m.backend.length > 0);

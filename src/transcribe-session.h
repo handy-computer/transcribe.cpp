@@ -256,13 +256,14 @@ struct transcribe_session {
 
     // Session-owned copies of the caller's run-params strings, refreshed
     // on every transcribe_stream_begin. The dispatcher hands the family
-    // hooks a params view whose language/target_language point HERE, so a
+    // hooks a params view whose language/target_language/context point HERE, so a
     // family that captures *run_params holds pointers into library-owned
     // storage (the public contract lets the caller free its params pointers
     // the moment begin returns). Stable for the stream's lifetime; only the
     // next begin mutates them.
     std::string stream_language_owned;
     std::string stream_target_language_owned;
+    std::string stream_context_owned;
 
     // UI-facing streaming text state. `full_text` above remains the raw
     // model hypothesis. `stream_committed_text` is the append-only public

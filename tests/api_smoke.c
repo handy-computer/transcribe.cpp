@@ -206,6 +206,12 @@ static void test_log_level_values(void) {
     CHECK(TRANSCRIBE_LOG_LEVEL_CONT == 5);
 }
 
+static void test_feature_values(void) {
+    /* Feature values are append-only because model feature bits use them as
+     * stable bit positions. */
+    CHECK(TRANSCRIBE_FEATURE_CONTEXT == 7);
+}
+
 static void test_log_set_null(void) {
     /* Disabling the log sink must not crash. */
     transcribe_log_set(NULL, NULL);
@@ -239,6 +245,7 @@ static void test_init_macros(void) {
     CHECK(rp_macro.target_language == NULL);
     CHECK(rp_macro.keep_special_tags == false);
     CHECK(rp_macro.family == NULL);
+    CHECK(rp_macro.context == NULL);
 
     struct transcribe_stream_params sp_macro;
     transcribe_stream_params_init(&sp_macro);
@@ -532,6 +539,7 @@ static void test_model_introspection_null(void) {
     CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_PNC) == false);
     CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_ITN) == false);
     CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_DIARIZATION) == false);
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_CONTEXT) == false);
     CHECK(transcribe_model_supports(NULL, (transcribe_feature) 9999) == false);
 }
 
@@ -813,6 +821,7 @@ int main(void) {
     test_abi_metadata();
     test_backend_devices();
     test_log_level_values();
+    test_feature_values();
     test_log_set_null();
     test_init_macros();
     test_log_set_publication();

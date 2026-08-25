@@ -50,6 +50,19 @@ let result = session.run(&pcm, &options)?;
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+Models advertising `Feature::Context` accept best-effort recognition background
+text for names and terminology. It is not an instruction prompt.
+
+```rust
+use transcribe_cpp::RunOptions;
+let options = RunOptions {
+    context: Some("Vocabulary: GGUF, ggml, Qwen3-ASR".into()),
+    ..Default::default()
+};
+let result = session.run(&pcm, &options)?;
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Streaming exposes both UI-stable text and a fully materialized structured
 snapshot:
 

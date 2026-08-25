@@ -37,6 +37,8 @@ pub struct RunOptions {
     pub language: Option<String>,
     /// Target language for translation, or `None`.
     pub target_language: Option<String>,
+    /// Best-effort recognition background text (names, jargon, terminology).
+    pub context: Option<String>,
     /// Keep special vocab tags (e.g. `<|...|>`) in the returned text.
     pub keep_special_tags: bool,
     /// Speculative-decode draft length. `-1` = family default, `0` = disabled.
@@ -55,6 +57,7 @@ impl Default for RunOptions {
             diarize: Diarize::Default,
             language: None,
             target_language: None,
+            context: None,
             keep_special_tags: false,
             spec_k_drafts: -1,
             family: None,
@@ -148,7 +151,7 @@ impl Session {
     /// On an aborted or truncated decode the partial transcript is preserved
     /// on the returned [`Error::Aborted`] / [`Error::OutputTruncated`].
     pub fn run(&mut self, pcm: &[f32], options: &RunOptions) -> Result<Transcript> {
-        let (params, _lang, _target, _family) = build_run_params(options)?;
+        let (params, _lang, _target, _context, _family) = build_run_params(options)?;
         let n = clamp_len(pcm.len())?;
 
         // The compute path is serialized per model; hold the lock for the native
@@ -191,7 +194,7 @@ impl Session {
         pcms: &[&[f32]],
         options: &RunOptions,
     ) -> Result<Vec<Result<Transcript>>> {
-        let (params, _lang, _target, _family) = build_run_params(options)?;
+        let (params, _lang, _target, _context, _family) = build_run_params(options)?;
         let ptrs: Vec<*const f32> = pcms.iter().map(|p| p.as_ptr()).collect();
         let lens: Vec<i32> = pcms
             .iter()
@@ -267,7 +270,7 @@ impl Session {
     /// Dropping the returned `Stream` abandons it and returns the session to
     /// idle.
     pub fn stream(&mut self, run: &RunOptions, stream: &StreamOptions) -> Result<Stream<'_>> {
-        let (run_params, _lang, _target, _family) = build_run_params(run)?;
+        let (run_params, _lang, _target, _context, _family) = build_run_params(run)?;
         let (stream_params, _stream_family) = build_stream_params(stream);
         {
             // Claim the model's compute lease for the whole stream lifetime: a
@@ -422,6 +425,7 @@ type RunParamsBundle = (
     sys::transcribe_run_params,
     Option<CString>,
     Option<CString>,
+    Option<CString>,
     Option<RunExtRaw>,
 );
 
@@ -442,8 +446,10 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
 
     let lang = o.language.as_deref().map(CString::new).transpose()?;
     let target = o.target_language.as_deref().map(CString::new).transpose()?;
+    let context = o.context.as_deref().map(CString::new).transpose()?;
     params.language = lang.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
     params.target_language = target.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    params.context = context.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
 
     let family = o
         .family
@@ -452,7 +458,7 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
         .transpose()?;
     params.family = family.as_ref().map_or(std::ptr::null(), |f| f.ext_ptr());
 
-    Ok((params, lang, target, family))
+    Ok((params, lang, target, context, family))
 }
 
 /// PCM/utterance lengths cross the ABI as `int`; reject anything that overflows.
