@@ -525,6 +525,4 @@ fn stage_windows_dlls(prefix: &Path) {
             }
         }
     }
-    // Re-stage when the built DLLs change.
-    println!("cargo:rerun-if-changed={}", bin_dir.display());
 }
