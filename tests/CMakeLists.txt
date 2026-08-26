@@ -703,6 +703,23 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_parakeet_multitalker_e2e_smoke)
     set_tests_properties(transcribe_parakeet_multitalker_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Buffered-stream tail regression; skips when the unified model is absent.
+    add_executable(transcribe_parakeet_buffered_stream_eos_smoke
+        parakeet_buffered_stream_eos_smoke.cpp)
+
+    target_link_libraries(transcribe_parakeet_buffered_stream_eos_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_parakeet_buffered_stream_eos_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_parakeet_buffered_stream_eos_smoke)
+
+    add_test(NAME transcribe_parakeet_buffered_stream_eos_smoke
+        COMMAND transcribe_parakeet_buffered_stream_eos_smoke)
+    set_tests_properties(transcribe_parakeet_buffered_stream_eos_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------

@@ -2292,6 +2292,13 @@ void rebuild_streaming_result_text(ParakeetSession * pc, const ParakeetModel * p
         }
         pc->raw_text = tok.decode(raw_ids.data(), static_cast<int>(raw_ids.size()));
     }
+    if (pc->buf_active) {
+        const int64_t max_ms = us_to_ms(pc->stream_audio_input_us);
+        for (auto & token : pc->tokens) {
+            token.t1_ms = std::min(token.t1_ms, max_ms);
+            token.t0_ms = std::min(token.t0_ms, token.t1_ms);
+        }
+    }
     pc->has_result  = true;
     pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 }
@@ -2300,12 +2307,8 @@ void rebuild_streaming_result_text(ParakeetSession * pc, const ParakeetModel * p
 //
 // Mirrors NeMo's speech_to_text_streaming_infer_rnnt.py. Variable-stride
 // per step: step 0 num_new = samples_chunk + samples_right; steady state
-// num_new = samples_chunk; the final step (finalize) consumes the rest
-// and folds the right slot into chunk. Each step updates the buffer's
-// ContextSize (buf_ctx_*), slices the encoder window, computes mel,
-// builds the graph with a BufferedStreamMaskOverride, then slices off the
-// ctx_left frames and decodes ctx_chunk (or all remaining on last) with a
-// carried RNN-T LstmState.
+// num_new = samples_chunk. Finalize folds the retained right slot and any
+// ragged tail into the decoded chunk.
 static void buf_ctx_add_frames(ParakeetSession * pc, int64_t num_new, bool is_last) {
     pc->buf_ctx_left += pc->buf_ctx_chunk;
     pc->buf_ctx_chunk = 0;
@@ -2324,10 +2327,13 @@ static void buf_ctx_add_frames(ParakeetSession * pc, int64_t num_new, bool is_la
     pc->buf_ctx_left -= extra;
 }
 
+// The final chunk may append silence for right-context lookahead. Padding
+// extends the decoded window but never advances the real-audio cursor.
 transcribe_status emit_buffered_chunk(ParakeetSession * pc,
                                       ParakeetModel *   pm,
                                       int64_t           num_new_samples,
-                                      bool              is_last_chunk) {
+                                      bool              is_last_chunk,
+                                      int64_t           eos_pad_samples = 0) {
     if (pc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
@@ -2345,9 +2351,10 @@ transcribe_status emit_buffered_chunk(ParakeetSession * pc,
 
     // ----- Update buffer ContextSize (mirrors NeMo's add_frames_get_removed_) -----
     buf_ctx_add_frames(pc, num_new_samples, is_last_chunk);
+    pc->buf_ctx_chunk += eos_pad_samples;
 
     // ----- Build the [left | chunk | right] PCM window from absolute coords -----
-    const int64_t end_abs     = pc->buf_next_audio_read + num_new_samples;
+    const int64_t end_abs     = pc->buf_next_audio_read + num_new_samples + eos_pad_samples;
     const int64_t total_now   = pc->buf_ctx_left + pc->buf_ctx_chunk + pc->buf_ctx_right;
     const int     effective_T = static_cast<int>(total_now / samples_per_frame);
     const int64_t start_abs   = end_abs - total_now;
@@ -2831,6 +2838,8 @@ transcribe_status stream_begin(transcribe_session *             session,
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
 
+    pc->stream_audio_input_samples = 0;
+
     // -------- Buffered streaming path (parakeet-unified-en-0.6b) --------
     //
     // chunked_limited_with_rc with a 3-tuple training menu. Re-runs the
@@ -2961,7 +2970,8 @@ transcribe_status stream_feed(transcribe_session *       session,
     }
 
     pc->stream_pcm_buffer.insert(pc->stream_pcm_buffer.end(), pcm, pcm + n_samples);
-    pc->stream_audio_input_us += samples_to_us(n_samples);
+    pc->stream_audio_input_samples += n_samples;
+    pc->stream_audio_input_us = samples_to_us(pc->stream_audio_input_samples);
 
     const int prev_n_tokens = static_cast<int>(pc->raw_tokens.size());
 
@@ -2979,6 +2989,7 @@ transcribe_status stream_feed(transcribe_session *       session,
     // job). Step 0 needs samples_chunk + samples_right; steady-state
     // needs samples_chunk.
     if (pc->buf_active) {
+        bool emitted = false;
         while (true) {
             if (pc->poll_abort()) {
                 return TRANSCRIBE_ERR_ABORTED;
@@ -2994,6 +3005,7 @@ transcribe_status stream_feed(transcribe_session *       session,
                 st != TRANSCRIBE_OK) {
                 return st;
             }
+            emitted = true;
         }
         const bool tokens_changed = static_cast<int>(pc->raw_tokens.size()) != prev_n_tokens;
         if (tokens_changed) {
@@ -3002,8 +3014,10 @@ transcribe_status stream_feed(transcribe_session *       session,
             pc->n_committed_words    = 0;
             pc->n_committed_segments = 0;
             pc->stream_revision += 1;
-            pc->stream_audio_committed_us =
-                pc->buf_next_audio_read * 1000000LL / std::max<int64_t>(pm->hparams.fe_sample_rate, 1);
+        }
+        if (emitted) {
+            // The retained right slot has been read but not decoded.
+            pc->stream_audio_committed_us = samples_to_us(pc->buf_next_audio_read - pc->buf_ctx_right);
         }
         if (update != nullptr) {
             update->result_changed     = tokens_changed;
@@ -3183,18 +3197,19 @@ transcribe_status stream_finalize(transcribe_session * session, transcribe_strea
     const int prev_n_tokens = static_cast<int>(pc->raw_tokens.size());
 
     // -------- Buffered streaming finalize --------
-    //
-    // One final emit consuming all remaining audio with is_last_chunk=true;
-    // add_frames_get_removed_ folds the right slot + this num_new into the
-    // chunk slot so the decoder gets every frame past ctx_left (no zero-pad).
+    // Flush retained right context even when the read cursor is already at
+    // EOS, then append R frames of silence so the final speech frames keep
+    // their trained lookahead. Synthetic samples are not counted as input.
     if (pc->buf_active) {
         const int64_t total = static_cast<int64_t>(pc->stream_pcm_buffer.size());
-        if (pc->buf_next_audio_read < total) {
+        // An exact C+R+k*C input leaves right context retained at EOS.
+        if (pc->buf_next_audio_read < total || pc->buf_ctx_right > 0) {
             if (pc->poll_abort()) {
                 return TRANSCRIBE_ERR_ABORTED;
             }
             const int64_t num_new = total - pc->buf_next_audio_read;
-            if (const transcribe_status st = emit_buffered_chunk(pc, pm, num_new, /*is_last_chunk=*/true);
+            const int64_t eos_pad = static_cast<int64_t>(pc->buf_samples_right);
+            if (const transcribe_status st = emit_buffered_chunk(pc, pm, num_new, /*is_last_chunk=*/true, eos_pad);
                 st != TRANSCRIBE_OK) {
                 return st;
             }
@@ -3305,6 +3320,7 @@ transcribe_status stream_finalize(transcribe_session * session, transcribe_strea
 void stream_reset(transcribe_session * session) {
     auto * pc = static_cast<ParakeetSession *>(session);
     pc->stream_pcm_buffer.clear();  // keep the allocation
+    pc->stream_audio_input_samples = 0;
 }
 
 // Kind+slot probe. No run-slot extensions (always false on _RUN). On

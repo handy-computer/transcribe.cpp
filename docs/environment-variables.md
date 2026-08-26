@@ -81,6 +81,7 @@ its var is unset. Convention: `TRANSCRIBE_<FAMILY>_GGUF`.
 | Variable | Test(s) |
 | --- | --- |
 | `TRANSCRIBE_PARAKEET_GGUF` | `parakeet_real_smoke`, `decoder_smoke` |
+| `TRANSCRIBE_PARAKEET_UNIFIED_GGUF` | `parakeet_buffered_stream_eos_smoke` |
 | `TRANSCRIBE_COHERE_GGUF` | `cohere_real_smoke`, `cohere_e2e_smoke` |
 | `TRANSCRIBE_WHISPER_GGUF` | `whisper_e2e_smoke`, `whisper_tokenize_parity` |
 | `TRANSCRIBE_QWEN3_ASR_GGUF` (+ `_0_6B_GGUF` / `_1_7B_GGUF`) | qwen3_asr smokes / parity |

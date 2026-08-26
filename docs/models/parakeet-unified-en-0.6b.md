@@ -134,6 +134,17 @@ variable-stride algorithm — step 0 consumes `chunk + right` audio,
 steady-state consumes `chunk`, and the final step folds the trailing
 right slot plus the ragged tail into one `is_last` emit.
 
+### End of stream
+
+Finalize flushes retained right context even when the input ends exactly
+on a chunk boundary. It also appends `R` frames of silence so final speech
+frames keep their trained lookahead and delayed RNN-T tokens are emitted.
+Synthetic samples are not included in stream audio accounting, and token
+timestamps are clamped to the real input duration. This deliberately
+differs from NeMo on the final `R` real frames only. Decoding the masked
+conv-overhang frame instead was rejected because it hallucinated trailing
+words on naturally ending clips.
+
 ### Supported configurations
 
 The runtime `(L, C, R)` is set via `--stream-buf-left-ms /
@@ -159,20 +170,17 @@ F32 cpp vs the same NeMo buffered-streaming reference loop. The
 
 | `(L, C, R)` | Latency | REF WER% (CI)         | cpp F32 WER% (CI)     |     Δpp |
 | ----------- | ------: | --------------------- | --------------------- | ------: |
-| `(70, 1, 0)` |   80ms | 5.57% [4.86, 6.31]    | 5.76% [5.02, 6.58]    | **+0.19** |
+| `(70, 1, 0)` |   80ms | 5.57% [4.86, 6.31]    | 5.76% [5.03, 6.59]    | **+0.19** |
 | `(70, 1, 1)` |  160ms | 1.90% [1.61, 2.26]    | 1.90% [1.61, 2.26]    |   +0.00 |
-| `(70, 2, 2)` |  320ms | 1.64% [1.33, 1.95]    | 1.64% [1.33, 1.95]    |   -0.00 |
-| `(70, 2, 4)` |  480ms | 1.54% [1.26, 1.88]    | 1.57% [1.28, 1.91]    |   +0.03 |
+| `(70, 2, 2)` |  320ms | 1.64% [1.33, 1.95]    | 1.64% [1.33, 1.95]    |   +0.00 |
+| `(70, 2, 4)` |  480ms | 1.54% [1.26, 1.88]    | 1.55% [1.27, 1.89]    |   +0.01 |
 | `(70, 7, 7)` |  1.12s | 1.42% [1.15, 1.74]    | 1.40% [1.13, 1.72]    |   -0.02 |
 | `(70, 13, 13)` | 2.08s | 1.44% [1.16, 1.79]   | 1.44% [1.16, 1.78]    |   +0.00 |
 
-Five of six configurations land within 0.03pp of the NeMo reference
-(well inside the parakeet family's 0.5% gate); `(70, 1, 1)` and
-`(70, 2, 2)` are bit-identical at the Sub/Del/Ins level. The
-`(70, 1, 0)` zero-lookahead row is an outlier in both REF (5.57%)
-and cpp (5.76%): the model itself doesn't generalize well to this
-configuration, and the 4× WER jump vs. `(70, 1, 1)` makes it a poor
-choice in practice — use `(70, 1, 1)` if you want the lowest
+The cpp column includes the end-of-stream handling described above.
+Five of six configurations land within 0.02pp of the NeMo reference,
+well inside the parakeet family's 0.5% gate. The zero-lookahead row is
+an outlier in both implementations; use `(70, 1, 1)` for the lowest
 practical latency.
 
 ### Streaming parity reproduction
