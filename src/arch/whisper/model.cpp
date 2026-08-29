@@ -1256,13 +1256,53 @@ transcribe_status whisper_run(transcribe_session *          session,
     //        same — only short-form pads to 30s). The seek loop slices
     //        3000-frame windows and zero-pads the trailing short window.
     const int  n_mels                 = cm->hparams.enc_num_mel_bins;
-    const int  n_mel_frames_per_chunk = cm->hparams.fe_nb_max_frames > 0 ? cm->hparams.fe_nb_max_frames : 3000;
-    const int  n_samples_per_chunk    = cm->hparams.fe_n_samples > 0 ? cm->hparams.fe_n_samples : 480000;
+    int        n_mel_frames_per_chunk = cm->hparams.fe_nb_max_frames > 0 ? cm->hparams.fe_nb_max_frames : 3000;
+    int        n_samples_per_chunk    = cm->hparams.fe_n_samples > 0 ? cm->hparams.fe_n_samples : 480000;
     // Short-form = fits a single 30s window. Controls PCM padding only (HF's
     // processor pads short-form PCM to 30s before the mel, long-form does
     // not); the seek loop below is unified across both forms, matching HF's
     // generate(), which since 5.x runs one seek loop for every input length.
-    const bool is_short_form          = (n_samples <= n_samples_per_chunk);
+    bool is_short_form          = (n_samples <= n_samples_per_chunk);
+
+    // Adaptive short-form encoder window (opt-in).
+    //
+    // Whisper encodes a fixed 30 s window, so a 4 s utterance pays for 26 s of
+    // silence: measured encode cost is a flat ~275 ms at any clip length. The
+    // encoder graph is rebuilt per window (run_whisper_encoder_on_window takes
+    // n_mel_frames and reallocates on T_enc change), so the window can be sized
+    // to the audio instead.
+    //
+    // Only short-form is touched. Shrinking the window globally also re-chunks
+    // long-form, and that was measured to destroy it (long-form WER 4.31% ->
+    // 85.34% at a 20 s window) — the seek/stitch path assumes the native size.
+    //
+    // Positional embeddings were trained at 30 s, so this is a real accuracy
+    // trade; TRANSCRIBE_WINDOW_MARGIN_SECS and TRANSCRIBE_WINDOW_MIN_SECS exist
+    // so the eval harness can price it.
+    if (is_short_form && transcribe::env::flag("TRANSCRIBE_ADAPTIVE_WINDOW")) {
+        int margin = 2;
+        if (const char * mv = transcribe::env::str("TRANSCRIBE_WINDOW_MARGIN_SECS")) {
+            const int parsed = std::atoi(mv);
+            if (parsed >= 0 && parsed <= 30) { margin = parsed; }
+        }
+        int min_secs = 10;
+        if (const char * mv = transcribe::env::str("TRANSCRIBE_WINDOW_MIN_SECS")) {
+            const int parsed = std::atoi(mv);
+            if (parsed > 0 && parsed <= 30) { min_secs = parsed; }
+        }
+        const int audio_secs  = (n_samples + 16000 - 1) / 16000;
+        const int native_secs = n_samples_per_chunk / 16000;
+        int       want_secs   = audio_secs + margin;
+        if (want_secs < min_secs) { want_secs = min_secs; }
+        if (want_secs < native_secs) {
+            const int frames = want_secs * 100;   // 10 ms hop
+            if (frames % 2 == 0 && frames / 2 <= cm->hparams.enc_max_source_positions) {
+                n_mel_frames_per_chunk = frames;
+                n_samples_per_chunk    = want_secs * 16000;
+                is_short_form          = (n_samples <= n_samples_per_chunk);
+            }
+        }
+    }
 
     const int64_t t_mel_start      = ggml_time_us();
     int           total_mel_frames = 0;
