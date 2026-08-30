@@ -3,15 +3,14 @@
 //
 // The dispatcher releases per-run compute scratch (the scheduler) after every
 // offline transcribe_run / transcribe_run_batch. Streaming sessions re-create
-// the scheduler lazily, so a stream that follows an offline run — and an
-// offline run that follows a stream — must behave exactly like the same call
+// the scheduler lazily, so a stream that follows an offline run, and an
+// offline run that follows a stream, must behave exactly like the same call
 // on a fresh session.
 //
 // Sequence on one session (per model):
 //   stream -> run -> stream -> run -> stream(reset mid-way) -> run -> stream
 // (transcribe_run_batch is exercised by the dispatcher unit test and the
-// gigaam workspace smoke; parakeet's batched encoder currently asserts for
-// n >= 2 independently of this test, so it is not part of the sequence.)
+// gigaam workspace smoke, so it is not part of the sequence.)
 // Every stream result must equal the fresh-session stream result and every
 // offline result must equal the fresh-session offline result.
 //
@@ -98,7 +97,8 @@ bool run_stream(transcribe_session * s, const std::vector<float> & pcm, int rese
 
 int test_model(const char * label, const char * path, const std::vector<float> & pcm) {
     std::printf("== %s: %s\n", label, path);
-    transcribe_session * fresh = nullptr;
+    const int            failures_before = g_failures;  // per-model verdict, not cumulative
+    transcribe_session * fresh           = nullptr;
     if (transcribe_open(path, nullptr, nullptr, &fresh) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "FAIL %s: transcribe_open failed\n", label);
         return 1;
@@ -138,7 +138,7 @@ int test_model(const char * label, const char * path, const std::vector<float> &
     CHECK(run_offline(s, pcm, t) && t == ref_offline);
     CHECK(run_stream(s, pcm, -1, t) && t == ref_stream);
     transcribe_close(s);
-    std::printf("   interleave: %s\n", g_failures == 0 ? "ok" : "FAILED");
+    std::printf("   interleave: %s\n", g_failures == failures_before ? "ok" : "FAILED");
     return 0;
 }
 

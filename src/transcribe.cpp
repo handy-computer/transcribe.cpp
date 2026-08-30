@@ -2070,9 +2070,29 @@ extern "C" transcribe_status transcribe_stream_get_text(const struct transcribe_
 // return preserves the previous result snapshot exactly as the original
 // transcribe_run contract documented (see the inline comments).
 // `committed` (optional) is set true once the call passes the pre-clear
-// gates and commits to producing a fresh result, i.e. the family run hook is
-// about to be invoked; the caller uses it to decide whether compute scratch
-// needs releasing.
+// gates and commits to replacing the result. The caller uses it to decide
+// whether compute scratch needs releasing.
+//
+// Scope guard that calls transcribe_session::release_scratch on exit once
+// armed. Both offline entry points use it so release also happens when a
+// family hook throws and the api_guard unwinds the stack, including the path
+// where memory pressure matters most. release_scratch is noexcept, so running
+// it during unwinding is safe.
+namespace {
+
+struct scratch_release_guard {
+    transcribe_session * session = nullptr;
+    bool                 armed   = false;
+
+    ~scratch_release_guard() {
+        if (armed && session != nullptr) {
+            session->release_scratch();
+        }
+    }
+};
+
+}  // namespace
+
 static transcribe_status run_one_inner(struct transcribe_session *          session,
                                        const float *                        pcm,
                                        int                                  n_samples,
@@ -2226,12 +2246,12 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *        
     if (session != nullptr && pcm != nullptr && n_samples > 0) {
         session->batch_results.clear();
     }
-    bool                    committed = false;
-    const transcribe_status st        = run_one_inner(session, pcm, n_samples, params, &committed);
-    if (committed) {
-        session->release_scratch();
-    }
-    return st;
+    // run_one_inner arms the guard at its commit point, so a pre-clear
+    // rejection never releases and everything after (family error, abort,
+    // throw) always does.
+    scratch_release_guard scratch_release;
+    scratch_release.session = session;
+    return run_one_inner(session, pcm, n_samples, params, &scratch_release.armed);
 }
 
 // Batch run (offline)
@@ -2344,11 +2364,9 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
     // Release the compute scratch once the batch has run, whichever path it
     // took (see transcribe_session::release_scratch). Once per call, not per
     // utterance, so the serial fallback keeps its workspace across the loop.
-    struct ScratchRelease {
-        transcribe_session * s;
-
-        ~ScratchRelease() { s->release_scratch(); }
-    } const scratch_release{ session };
+    scratch_release_guard scratch_release;
+    scratch_release.session = session;
+    scratch_release.armed   = true;
 
     // Fast path: a family with a batched compute graph owns the whole loop.
     if (session->model->arch->run_batch != nullptr) {

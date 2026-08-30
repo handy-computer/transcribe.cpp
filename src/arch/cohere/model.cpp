@@ -48,19 +48,10 @@ static_assert(std::is_base_of_v<transcribe_session, CohereSession>);
 
 CohereSession::~CohereSession() {
     kv_cache.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-    encoder_out = nullptr;
 }
 
-void CohereSession::release_scratch() noexcept {
-    transcribe::release_compute_scratch(sched, compute_ctx);
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void CohereSession::on_scratch_released() noexcept {
     encoder_out = nullptr;
 }
 

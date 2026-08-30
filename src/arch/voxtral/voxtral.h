@@ -74,9 +74,6 @@ struct VoxtralModel final : public transcribe_model {
 };
 
 struct VoxtralSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     transcribe::causal_lm::KvCache kv_cache;
 
     // Offline batched decode (transcribe_run_batch): a batched KV cache with
@@ -94,7 +91,6 @@ struct VoxtralSession final : public transcribe_session {
 
     VoxtralSession() = default;
     ~VoxtralSession() override;
-    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::voxtral

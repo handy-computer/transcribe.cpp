@@ -3,7 +3,7 @@
 // so a long utterance cannot pin its workspace for the session's lifetime, and
 // the scheduler rebuild does not change numerics.
 
-#include "arch/gigaam/gigaam.h"
+#include "transcribe-session.h"  // base-owned sched (internal header)
 #include "transcribe.h"
 
 #include <cmath>
@@ -15,7 +15,8 @@
 
 namespace {
 
-constexpr int k_rate = 16000;
+constexpr int    k_rate = 16000;
+constexpr double k_pi   = 3.14159265358979323846;  // M_PI is not portable (MSVC)
 
 // Deterministic input whose length controls the workspace size.
 std::vector<float> make_pcm(double seconds) {
@@ -23,14 +24,14 @@ std::vector<float> make_pcm(double seconds) {
     std::vector<float> pcm(n);
     for (size_t i = 0; i < n; ++i) {
         const double t   = static_cast<double>(i) / k_rate;
-        const double env = 0.5 + 0.5 * std::sin(2.0 * M_PI * 0.7 * t);
-        pcm[i]           = static_cast<float>(0.2 * env * std::sin(2.0 * M_PI * (220.0 + 60.0 * std::sin(t)) * t));
+        const double env = 0.5 + 0.5 * std::sin(2.0 * k_pi * 0.7 * t);
+        pcm[i]           = static_cast<float>(0.2 * env * std::sin(2.0 * k_pi * (220.0 + 60.0 * std::sin(t)) * t));
     }
     return pcm;
 }
 
 bool sched_live(const transcribe_session * s) {
-    return static_cast<const transcribe::gigaam::GigaamSession *>(s)->sched != nullptr;
+    return s->sched != nullptr;  // owned by the base session, family-agnostic
 }
 
 int fail(const char * what) {
@@ -75,7 +76,7 @@ int main() {
         return fail("long run");
     }
     if (sched_live(s)) {
-        return fail("long run: expected the scheduler to be released (workspace above the cap)");
+        return fail("long run: expected the scheduler to be released");
     }
     std::printf("long run: scheduler released\n");
 

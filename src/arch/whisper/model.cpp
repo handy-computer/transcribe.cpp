@@ -70,19 +70,10 @@ WhisperModel::~WhisperModel() {
 WhisperSession::~WhisperSession() {
     kv_cache.free();
     enc_out.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-    compute_ctx_size = 0;
 }
 
-void WhisperSession::release_scratch() noexcept {
-    transcribe::release_compute_scratch(sched, compute_ctx);
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void WhisperSession::on_scratch_released() noexcept {
     compute_ctx_size = 0;
 }
 

@@ -42,20 +42,7 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, SenseVoiceModel>);
 static_assert(std::is_base_of_v<transcribe_session, SenseVoiceSession>);
 
-SenseVoiceSession::~SenseVoiceSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-}
-
-void SenseVoiceSession::release_scratch() noexcept {
-    transcribe::release_compute_scratch(sched, compute_ctx);
-}
+SenseVoiceSession::~SenseVoiceSession() = default;
 
 SenseVoiceModel::~SenseVoiceModel() {
     if (ctx_meta != nullptr) {

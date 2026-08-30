@@ -186,12 +186,9 @@ struct DiarStreamScratch {
     ~DiarStreamScratch();
 };
 
-// Concrete context. Owns a per-call compute context and a persistent
-// multi-backend scheduler.
+// Concrete context. The per-call compute context and multi-backend
+// scheduler are owned by the transcribe_session base (sched / compute_ctx).
 struct SortformerSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;  // offline-forward graph ctx
-    ggml_backend_sched_t sched       = nullptr;
-
     // Per-context scratch reused across runs.
     std::vector<float> mel_buf;
     std::vector<float> probs_host;  // [n_spk * T], read back from diar.preds
@@ -202,7 +199,6 @@ struct SortformerSession final : public transcribe_session {
 
     SortformerSession() = default;
     ~SortformerSession() override;
-    void release_scratch() noexcept override;
 };
 
 // ---- Embedded-diarizer surface (multitalker bundle) -------------------- //

@@ -48,20 +48,10 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, MedAsrModel>);
 static_assert(std::is_base_of_v<transcribe_session, MedAsrSession>);
 
-MedAsrSession::~MedAsrSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-    encoder_out = nullptr;
-}
+MedAsrSession::~MedAsrSession() = default;
 
-void MedAsrSession::release_scratch() noexcept {
-    transcribe::release_compute_scratch(sched, compute_ctx);
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void MedAsrSession::on_scratch_released() noexcept {
     encoder_out = nullptr;
 }
 

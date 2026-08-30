@@ -52,20 +52,7 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, GraniteNarModel>);
 static_assert(std::is_base_of_v<transcribe_session, GraniteNarSession>);
 
-GraniteNarSession::~GraniteNarSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-}
-
-void GraniteNarSession::release_scratch() noexcept {
-    transcribe::release_compute_scratch(sched, compute_ctx);
-}
+GraniteNarSession::~GraniteNarSession() = default;
 
 GraniteNarModel::~GraniteNarModel() {
     if (bn_fused_ctx != nullptr) {

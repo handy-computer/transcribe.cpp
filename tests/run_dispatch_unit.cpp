@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <string>
 
 namespace {
@@ -59,6 +60,7 @@ void test_no_run_hook_clears_and_not_implemented() {
 constexpr uint32_t kFakeRunKind = 0xF00D;
 
 bool              g_run_called          = false;
+bool              g_run_throw           = false;  // fake_run throws std::bad_alloc
 transcribe_status g_run_validate_status = TRANSCRIBE_OK;
 
 transcribe_status fake_run(transcribe_session *          session,
@@ -68,7 +70,10 @@ transcribe_status fake_run(transcribe_session *          session,
     (void) pcm;
     (void) n_samples;
     (void) params;
-    g_run_called        = true;
+    g_run_called = true;
+    if (g_run_throw) {
+        throw std::bad_alloc();
+    }
     // A successful run installs a fresh result.
     session->full_text  = "fresh result";
     session->has_result = true;
@@ -443,14 +448,17 @@ void test_raw_text_single_batch_and_alias() {
 
 // ---------------------------------------------------------------------------
 // release_scratch: the dispatcher releases per-run compute scratch after
-// every offline run / batch that reached the run hook — exactly once per
-// public call — and never on a pre-clear rejection.
+// every offline run or batch that reached its commit point: exactly once per
+// public call, and never on a pre-clear rejection.
 // ---------------------------------------------------------------------------
 
+// release_scratch itself is non-virtual on the base (it always frees the
+// base-owned sched/compute_ctx, both null here); count via the family hook
+// it invokes afterwards.
 struct CountingSession final : public transcribe_session {
     int releases = 0;
 
-    void release_scratch() noexcept override { ++releases; }
+    void on_scratch_released() noexcept override { ++releases; }
 };
 
 void test_release_scratch_after_run_and_batch() {
@@ -488,6 +496,16 @@ void test_release_scratch_after_run_and_batch() {
     const int     lens[3] = { 1, 1, 1 };
     CHECK(transcribe_run_batch(&session, pcms, lens, 3, &params) == TRANSCRIBE_OK);
     CHECK(session.releases == 2);
+
+    // A family hook that throws is mapped to a status by the api_guard and
+    // must still release exactly once: the scratch is at its high-water mark
+    // on precisely this path. Single run and batch (serial fallback).
+    g_run_throw = true;
+    CHECK(transcribe_run(&session, &pcm, 1, &params) == TRANSCRIBE_ERR_OOM);
+    CHECK(session.releases == 3);
+    CHECK(transcribe_run_batch(&session, pcms, lens, 3, &params) == TRANSCRIBE_ERR_OOM);
+    CHECK(session.releases == 4);
+    g_run_throw = false;
 }
 
 int main() {

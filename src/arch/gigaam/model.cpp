@@ -41,20 +41,10 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, GigaamModel>);
 static_assert(std::is_base_of_v<transcribe_session, GigaamSession>);
 
-GigaamSession::~GigaamSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-    encoder_out = nullptr;
-}
+GigaamSession::~GigaamSession() = default;
 
-void GigaamSession::release_scratch() noexcept {
-    transcribe::release_compute_scratch(sched, compute_ctx);
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void GigaamSession::on_scratch_released() noexcept {
     encoder_out = nullptr;
 }
 

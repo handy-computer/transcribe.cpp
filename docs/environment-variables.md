@@ -81,12 +81,15 @@ its var is unset. Convention: `TRANSCRIBE_<FAMILY>_GGUF`.
 | Variable | Test(s) |
 | --- | --- |
 | `TRANSCRIBE_PARAKEET_GGUF` | `parakeet_real_smoke`, `decoder_smoke` |
-| `TRANSCRIBE_PARAKEET_UNIFIED_GGUF` | `parakeet_buffered_stream_eos_smoke` |
+| `TRANSCRIBE_PARAKEET_UNIFIED_GGUF` | `parakeet_buffered_stream_eos_smoke`, `stream_offline_interleave_smoke` |
+| `TRANSCRIBE_GIGAAM_GGUF` | `gigaam_workspace_release_smoke` |
+| `TRANSCRIBE_MULTITALKER_BUNDLE_GGUF` | `parakeet_multitalker_e2e_smoke` |
+| `TRANSCRIBE_SORTFORMER_GGUF` | `sortformer_stream_ext_unit` |
 | `TRANSCRIBE_COHERE_GGUF` | `cohere_real_smoke`, `cohere_e2e_smoke` |
 | `TRANSCRIBE_WHISPER_GGUF` | `whisper_e2e_smoke`, `whisper_tokenize_parity` |
 | `TRANSCRIBE_QWEN3_ASR_GGUF` (+ `_0_6B_GGUF` / `_1_7B_GGUF`) | qwen3_asr smokes / parity |
-| `TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF` | moonshine_streaming smokes |
-| `TRANSCRIBE_VOXTRAL_REALTIME_GGUF` | `voxtral_realtime_real_smoke` |
+| `TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF` | moonshine_streaming smokes, `stream_offline_interleave_smoke` |
+| `TRANSCRIBE_VOXTRAL_REALTIME_GGUF` | `voxtral_realtime_real_smoke`, `stream_offline_interleave_smoke` |
 | `TRANSCRIBE_WHISPER_BIN_*` | whisper.cpp `.bin` parser/e2e fixtures |
 
 Other test/tooling vars:

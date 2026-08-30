@@ -233,18 +233,10 @@ struct ParakeetStreamingDecoderState {
     bool initialized = false;
 };
 
-// Concrete context. Owns a per-call compute context and a persistent
-// multi-backend scheduler that dispatches encoder graph ops to the best
-// available backend.
+// Concrete context. The per-call compute context and the multi-backend
+// scheduler that dispatches encoder graph ops to the best available backend
+// are owned by the transcribe_session base (sched / compute_ctx).
 struct ParakeetSession final : public transcribe_session {
-    // Compute context: cgraph + intermediate tensor metadata. no_alloc;
-    // data lives in sched-managed buffers. Reset each run().
-    ggml_context * compute_ctx = nullptr;
-
-    // Multi-backend scheduler. Persists across calls; manages compute
-    // buffer allocation and reuses buffers when topology is unchanged.
-    ggml_backend_sched_t sched = nullptr;
-
     // Encoder forward output, borrowed into compute_ctx; invalidated when
     // compute_ctx is reset next run().
     ggml_tensor * encoder_out = nullptr;
@@ -316,7 +308,7 @@ struct ParakeetSession final : public transcribe_session {
 
     ParakeetSession() = default;
     ~ParakeetSession() override;
-    void release_scratch() noexcept override;
+    void on_scratch_released() noexcept override;
 };
 
 // ---- Multitalker (bundle) internals ----------------------------------- //
