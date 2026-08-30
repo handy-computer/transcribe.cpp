@@ -92,8 +92,8 @@ int main() {
         return fail("short run #2: transcript changed after the scheduler rebuild");
     }
 
-    const float * pcms[2]    = { long_pcm.data(), long_pcm.data() };
-    const int     lens[2]    = { static_cast<int>(long_pcm.size()), static_cast<int>(long_pcm.size()) };
+    const float * pcms[2] = { long_pcm.data(), long_pcm.data() };
+    const int     lens[2] = { static_cast<int>(long_pcm.size()), static_cast<int>(long_pcm.size()) };
     if (transcribe_run_batch(s, pcms, lens, 2, nullptr) != TRANSCRIBE_OK) {
         return fail("batch run");
     }

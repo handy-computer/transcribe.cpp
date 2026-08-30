@@ -149,10 +149,11 @@ int main() {
         const char * label;
         const char * env;
     };
+
     const Entry entries[] = {
-        { "parakeet-unified", "TRANSCRIBE_PARAKEET_UNIFIED_GGUF" },
+        { "parakeet-unified",    "TRANSCRIBE_PARAKEET_UNIFIED_GGUF"         },
         { "moonshine-streaming", "TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF" },
-        { "voxtral-realtime", "TRANSCRIBE_VOXTRAL_REALTIME_GGUF" },
+        { "voxtral-realtime",    "TRANSCRIBE_VOXTRAL_REALTIME_GGUF"         },
     };
 
     std::vector<float> pcm;
