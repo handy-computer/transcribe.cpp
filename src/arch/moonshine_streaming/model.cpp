@@ -70,6 +70,10 @@ MoonshineStreamingSession::~MoonshineStreamingSession() {
     }
 }
 
+void MoonshineStreamingSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 MoonshineStreamingModel::~MoonshineStreamingModel() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);

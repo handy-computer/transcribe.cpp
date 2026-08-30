@@ -184,6 +184,7 @@ struct MoonshineStreamingSession final : public transcribe_session {
 
     MoonshineStreamingSession() = default;
     ~MoonshineStreamingSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::moonshine_streaming

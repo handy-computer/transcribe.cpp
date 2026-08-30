@@ -79,6 +79,10 @@ SortformerSession::~SortformerSession() {
     }
 }
 
+void SortformerSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 namespace {
 
 // Map the Sortformer hparams onto the parakeet encoder hparams that

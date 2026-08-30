@@ -53,6 +53,11 @@ GigaamSession::~GigaamSession() {
     encoder_out = nullptr;
 }
 
+void GigaamSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+    encoder_out = nullptr;
+}
+
 GigaamModel::~GigaamModel() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
@@ -321,7 +326,6 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
     if (gm == nullptr || gm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-
     if (gc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }

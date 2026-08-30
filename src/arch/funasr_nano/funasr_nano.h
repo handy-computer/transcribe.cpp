@@ -95,6 +95,7 @@ struct FunAsrNanoSession final : public transcribe_session {
 
     FunAsrNanoSession() = default;
     ~FunAsrNanoSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::funasr_nano

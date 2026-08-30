@@ -58,6 +58,7 @@ struct MedAsrSession final : public transcribe_session {
 
     MedAsrSession() = default;
     ~MedAsrSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::medasr

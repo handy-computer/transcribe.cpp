@@ -114,6 +114,7 @@ struct QwenAsrSession final : public transcribe_session {
 
     QwenAsrSession() = default;
     ~QwenAsrSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::qwen3_asr

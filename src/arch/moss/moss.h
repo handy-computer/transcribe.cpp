@@ -99,6 +99,7 @@ struct MossSession final : public transcribe_session {
 
     MossSession() = default;
     ~MossSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::moss

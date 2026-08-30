@@ -128,6 +128,7 @@ struct GraniteSession final : public transcribe_session {
 
     GraniteSession() = default;
     ~GraniteSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::granite

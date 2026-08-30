@@ -108,6 +108,10 @@ MossSession::~MossSession() {
     }
 }
 
+void MossSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 MossModel::~MossModel() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);

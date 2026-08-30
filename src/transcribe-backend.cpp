@@ -6,6 +6,7 @@
 
 #include "transcribe-backend.h"
 
+#include "ggml.h"
 #include "transcribe-log.h"
 
 #include <cstdlib>
@@ -146,6 +147,15 @@ void safe_sched_free(ggml_backend_sched_t sched) noexcept {
         return;
     }
     contained_free("ggml_backend_sched_free", [&] { ggml_backend_sched_free(sched); });
+}
+
+void release_compute_scratch(ggml_backend_sched_t & sched, struct ggml_context *& compute_ctx) noexcept {
+    safe_sched_free(sched);
+    sched = nullptr;
+    if (compute_ctx != nullptr) {
+        ggml_free(compute_ctx);
+        compute_ctx = nullptr;
+    }
 }
 
 }  // namespace transcribe

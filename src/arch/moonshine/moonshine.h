@@ -146,6 +146,7 @@ struct MoonshineSession final : public transcribe_session {
 
     MoonshineSession() = default;
     ~MoonshineSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::moonshine

@@ -59,6 +59,11 @@ CohereSession::~CohereSession() {
     encoder_out = nullptr;
 }
 
+void CohereSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+    encoder_out = nullptr;
+}
+
 bool kv_cache_init(CohereKvCache & cache,
                    ggml_backend_t  backend,
                    int             n_ctx,

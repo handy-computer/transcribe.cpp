@@ -202,6 +202,7 @@ struct SortformerSession final : public transcribe_session {
 
     SortformerSession() = default;
     ~SortformerSession() override;
+    void release_scratch() noexcept override;
 };
 
 // ---- Embedded-diarizer surface (multitalker bundle) -------------------- //

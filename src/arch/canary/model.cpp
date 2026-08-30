@@ -56,6 +56,11 @@ CanarySession::~CanarySession() {
     encoder_out = nullptr;
 }
 
+void CanarySession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+    encoder_out = nullptr;
+}
+
 bool kv_cache_init(CanaryKvCache & cache,
                    ggml_backend_t  backend,
                    int             n_ctx,

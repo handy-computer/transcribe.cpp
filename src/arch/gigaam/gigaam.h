@@ -76,6 +76,7 @@ struct GigaamSession final : public transcribe_session {
 
     GigaamSession() = default;
     ~GigaamSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::gigaam

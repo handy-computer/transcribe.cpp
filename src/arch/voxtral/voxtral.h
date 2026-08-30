@@ -94,6 +94,7 @@ struct VoxtralSession final : public transcribe_session {
 
     VoxtralSession() = default;
     ~VoxtralSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::voxtral

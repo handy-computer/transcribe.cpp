@@ -316,6 +316,7 @@ struct ParakeetSession final : public transcribe_session {
 
     ParakeetSession() = default;
     ~ParakeetSession() override;
+    void release_scratch() noexcept override;
 };
 
 // ---- Multitalker (bundle) internals ----------------------------------- //

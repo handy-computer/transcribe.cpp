@@ -60,6 +60,7 @@ struct SenseVoiceSession final : public transcribe_session {
 
     SenseVoiceSession() = default;
     ~SenseVoiceSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::sensevoice

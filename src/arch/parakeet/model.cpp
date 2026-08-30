@@ -96,6 +96,11 @@ ParakeetSession::~ParakeetSession() {
     stream_caches.initialized = false;
 }
 
+void ParakeetSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+    encoder_out = nullptr;
+}
+
 ParakeetModel::~ParakeetModel() {
     // Teardown order: ctx_meta → backend_buffer → plan backends. The
     // buffer must be freed before the backends (it holds a backend ref);

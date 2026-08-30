@@ -441,8 +441,58 @@ void test_raw_text_single_batch_and_alias() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// release_scratch: the dispatcher releases per-run compute scratch after
+// every offline run / batch that reached the run hook — exactly once per
+// public call — and never on a pre-clear rejection.
+// ---------------------------------------------------------------------------
+
+struct CountingSession final : public transcribe_session {
+    int releases = 0;
+
+    void release_scratch() noexcept override { ++releases; }
+};
+
+void test_release_scratch_after_run_and_batch() {
+    transcribe_model model;
+    model.arch = &run_validate_arch();  // run_batch == nullptr -> serial fallback
+
+    CountingSession session;
+    session.model = &model;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+    g_run_validate_status = TRANSCRIBE_OK;
+
+    float pcm = 0.0f;
+    CHECK(transcribe_run(&session, &pcm, 1, &params) == TRANSCRIBE_OK);
+    CHECK(session.releases == 1);
+
+    // A malformed call never reaches the run hook and must not release.
+    CHECK(transcribe_run(&session, nullptr, 1, &params) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(session.releases == 1);
+
+    // Family preflight rejection: nothing ran, nothing released.
+    transcribe_ext ext;
+    ext.size              = sizeof(transcribe_ext);
+    ext.kind              = kFakeRunKind;
+    params.family         = &ext;
+    g_run_validate_status = TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+    CHECK(transcribe_run(&session, &pcm, 1, &params) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(session.releases == 1);
+    params.family         = nullptr;
+    g_run_validate_status = TRANSCRIBE_OK;
+
+    // Batch (serial fallback, 3 utterances): once per call, not per item.
+    const float * pcms[3] = { &pcm, &pcm, &pcm };
+    const int     lens[3] = { 1, 1, 1 };
+    CHECK(transcribe_run_batch(&session, pcms, lens, 3, &params) == TRANSCRIBE_OK);
+    CHECK(session.releases == 2);
+}
+
 int main() {
     test_no_run_hook_clears_and_not_implemented();
+    test_release_scratch_after_run_and_batch();
     test_run_validate_failure_preserves_snapshot();
     test_run_validate_success_clears_and_runs();
     test_advisory_enum_validation();

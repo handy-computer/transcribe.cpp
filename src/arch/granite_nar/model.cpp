@@ -63,6 +63,10 @@ GraniteNarSession::~GraniteNarSession() {
     }
 }
 
+void GraniteNarSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 GraniteNarModel::~GraniteNarModel() {
     if (bn_fused_ctx != nullptr) {
         ggml_free(bn_fused_ctx);

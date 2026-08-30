@@ -142,6 +142,7 @@ struct CanarySession final : public transcribe_session {
 
     CanarySession() = default;
     ~CanarySession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::canary

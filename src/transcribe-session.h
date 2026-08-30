@@ -276,6 +276,19 @@ struct transcribe_session {
 
     void clear_result();
 
+    // Release per-run compute scratch (scheduler / compute context and any
+    // host scratch that tracks input size). The dispatcher calls this after
+    // every offline transcribe_run / transcribe_run_batch, success or
+    // failure, so a session parks no workspace between calls: the
+    // scheduler's allocator only ever grows, and without this a single long
+    // utterance would pin its high-water mark for the session's lifetime
+    // (Handy #2000). Families re-create the scheduler lazily on the next
+    // run, so this is transparent; the measured cost is ~10 ms per run.
+    // Streaming entry points do not go through this hook: their per-chunk
+    // workspace is bounded by construction and is released at stream end
+    // or session destruction as before. Must not throw.
+    virtual void release_scratch() noexcept {}
+
     transcribe_session() = default;
     virtual ~transcribe_session();
 

@@ -2069,10 +2069,15 @@ extern "C" transcribe_status transcribe_stream_get_text(const struct transcribe_
 // below clears batch_results once before delegating here. Every early
 // return preserves the previous result snapshot exactly as the original
 // transcribe_run contract documented (see the inline comments).
+// `committed` (optional) is set true once the call passes the pre-clear
+// gates and commits to producing a fresh result, i.e. the family run hook is
+// about to be invoked; the caller uses it to decide whether compute scratch
+// needs releasing.
 static transcribe_status run_one_inner(struct transcribe_session *          session,
                                        const float *                        pcm,
                                        int                                  n_samples,
-                                       const struct transcribe_run_params * params) {
+                                       const struct transcribe_run_params * params,
+                                       bool *                               committed = nullptr) {
     // Parameter-shape validation runs first and does not touch session
     // state. A caller that passes NULL pointers or a non-positive sample
     // count gets ERR_INVALID_ARG back without any visible side effect
@@ -2183,6 +2188,9 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     // their own front-matter checks succeed; that call is now
     // redundant but idempotent, and removing it is a refactor
     // deferred to a later pass.
+    if (committed != nullptr) {
+        *committed = true;
+    }
     session->clear_result();
     session->t_mel_us      = 0;
     session->t_encode_us   = 0;
@@ -2218,7 +2226,12 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *        
     if (session != nullptr && pcm != nullptr && n_samples > 0) {
         session->batch_results.clear();
     }
-    return run_one_inner(session, pcm, n_samples, params);
+    bool                    committed = false;
+    const transcribe_status st        = run_one_inner(session, pcm, n_samples, params, &committed);
+    if (committed) {
+        session->release_scratch();
+    }
+    return st;
 }
 
 // Batch run (offline)
@@ -2327,6 +2340,15 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
     session->was_truncated = false;
     session->stream_state  = TRANSCRIBE_STREAM_IDLE;
     session->batch_results.clear();
+
+    // Release the compute scratch once the batch has run, whichever path it
+    // took (see transcribe_session::release_scratch). Once per call, not per
+    // utterance, so the serial fallback keeps its workspace across the loop.
+    struct ScratchRelease {
+        transcribe_session * s;
+
+        ~ScratchRelease() { s->release_scratch(); }
+    } const scratch_release{ session };
 
     // Fast path: a family with a batched compute graph owns the whole loop.
     if (session->model->arch->run_batch != nullptr) {

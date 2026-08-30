@@ -139,6 +139,7 @@ struct Session final : public transcribe_session {
 
     Session() = default;
     ~Session() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::voxtral_realtime

@@ -330,6 +330,7 @@ struct WhisperSession final : public transcribe_session {
 
     WhisperSession() = default;
     ~WhisperSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::whisper

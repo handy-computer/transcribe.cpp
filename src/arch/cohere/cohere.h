@@ -174,6 +174,7 @@ struct CohereSession final : public transcribe_session {
 
     CohereSession() = default;
     ~CohereSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::cohere

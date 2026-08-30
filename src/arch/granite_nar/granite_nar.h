@@ -73,6 +73,7 @@ struct GraniteNarSession final : public transcribe_session {
 
     GraniteNarSession() = default;
     ~GraniteNarSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::granite_nar

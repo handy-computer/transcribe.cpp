@@ -53,6 +53,10 @@ QwenAsrSession::~QwenAsrSession() {
     }
 }
 
+void QwenAsrSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 QwenAsrModel::~QwenAsrModel() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);

@@ -51,6 +51,10 @@ GraniteSession::~GraniteSession() {
     }
 }
 
+void GraniteSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 GraniteModel::~GraniteModel() {
     if (bn_fused_ctx != nullptr) {
         ggml_free(bn_fused_ctx);

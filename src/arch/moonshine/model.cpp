@@ -54,6 +54,10 @@ MoonshineSession::~MoonshineSession() {
     }
 }
 
+void MoonshineSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 MoonshineModel::~MoonshineModel() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);

@@ -119,6 +119,7 @@ struct CanaryQwenSession final : public transcribe_session {
 
     CanaryQwenSession() = default;
     ~CanaryQwenSession() override;
+    void release_scratch() noexcept override;
 };
 
 }  // namespace transcribe::canary_qwen

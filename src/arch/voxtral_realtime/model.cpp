@@ -71,6 +71,10 @@ Session::~Session() {
     }
 }
 
+void Session::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
 Model::~Model() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);

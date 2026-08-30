@@ -81,6 +81,11 @@ WhisperSession::~WhisperSession() {
     compute_ctx_size = 0;
 }
 
+void WhisperSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+    compute_ctx_size = 0;
+}
+
 bool enc_out_init(WhisperEncOut & enc_out, ggml_backend_t backend, int d_model, int T_enc) {
     enc_out.free();
 

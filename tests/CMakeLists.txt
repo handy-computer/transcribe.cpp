@@ -685,6 +685,22 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     set_tests_properties(transcribe_parakeet_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
+    # Real-model GigaAM workspace-retention regression.
+    add_executable(transcribe_gigaam_workspace_release_smoke
+        gigaam_workspace_release_smoke.cpp)
+
+    target_link_libraries(transcribe_gigaam_workspace_release_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_gigaam_workspace_release_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_gigaam_workspace_release_smoke)
+
+    add_test(NAME transcribe_gigaam_workspace_release_smoke
+        COMMAND transcribe_gigaam_workspace_release_smoke)
+    set_tests_properties(transcribe_gigaam_workspace_release_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
     # Multitalker bundle end-to-end smoke (diarize=ON on the composed
     # parakeet + sortformer bundle; both supervision modes). Gated on
     # TRANSCRIBE_MULTITALKER_BUNDLE_GGUF at runtime, exit 77 when unset.
@@ -755,6 +771,27 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_test(NAME transcribe_moonshine_streaming_stream_parity
         COMMAND transcribe_moonshine_streaming_stream_parity)
     set_tests_properties(transcribe_moonshine_streaming_stream_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# Streaming <-> offline interleave on one session (release_scratch after
+# offline runs must be transparent to a following stream and vice versa).
+# Runs for each streaming model env var that is set; RC 77 when none is.
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_stream_offline_interleave_smoke
+        stream_offline_interleave_smoke.cpp)
+
+    target_link_libraries(transcribe_stream_offline_interleave_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_stream_offline_interleave_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_stream_offline_interleave_smoke)
+
+    add_test(NAME transcribe_stream_offline_interleave_smoke
+        COMMAND transcribe_stream_offline_interleave_smoke)
+    set_tests_properties(transcribe_stream_offline_interleave_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
 

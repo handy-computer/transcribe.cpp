@@ -60,6 +60,11 @@ MedAsrSession::~MedAsrSession() {
     encoder_out = nullptr;
 }
 
+void MedAsrSession::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+    encoder_out = nullptr;
+}
+
 MedAsrModel::~MedAsrModel() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
