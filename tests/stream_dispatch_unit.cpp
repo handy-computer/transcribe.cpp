@@ -1395,6 +1395,7 @@ void test_two_sessions_independent_streams() {
 
 transcribe_run_params g_retained_rp;  // the family-side shallow copy
 std::string           g_language_seen_at_feed;
+std::string           g_context_seen_at_feed;
 
 transcribe_status retain_stream_begin(transcribe_session *             session,
                                       const transcribe_run_params *    run_params,
@@ -1414,6 +1415,7 @@ transcribe_status retain_stream_feed(transcribe_session *       session,
     (void) n_samples;
     (void) update;
     g_language_seen_at_feed = g_retained_rp.language != nullptr ? g_retained_rp.language : "<null>";
+    g_context_seen_at_feed  = g_retained_rp.context != nullptr ? g_retained_rp.context : "<null>";
     return TRANSCRIBE_OK;
 }
 
@@ -1436,6 +1438,7 @@ void test_begin_copies_param_strings_out() {
     model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT, true);
 
     transcribe_session session;
     session.model = &model;
@@ -1447,18 +1450,34 @@ void test_begin_copies_param_strings_out() {
     transcribe_run_params_init(rp);
     char * lang = static_cast<char *>(std::malloc(16));
     std::snprintf(lang, 16, "en-US");
-    rp->language = lang;
+    rp->language   = lang;
+    char * context = static_cast<char *>(std::malloc(32));
+    std::snprintf(context, 32,
+                  "  context \xe6"
+                  "\x97"
+                  "\xa5"
+                  "\xe6"
+                  "\x9c"
+                  "\xac"
+                  "\xe8"
+                  "\xaa"
+                  "\x9e"
+                  "  ");
+    rp->context = context;
 
     transcribe_stream_params sp;
     transcribe_stream_params_init(&sp);
     g_language_seen_at_feed.clear();
+    g_context_seen_at_feed.clear();
     CHECK(transcribe_stream_begin(&session, rp, &sp) == TRANSCRIBE_OK);
 
     // Caller destroys its storage: scribble (still owned, so well-defined),
     // then free.
     std::memset(lang, 'X', 15);
+    std::memset(context, 'Y', 31);
     std::memset(rp, 0x5A, sizeof(*rp));
     std::free(lang);
+    std::free(context);
     std::free(rp);
 
     transcribe_stream_update up;
@@ -1466,6 +1485,17 @@ void test_begin_copies_param_strings_out() {
     const float pcm[160] = {};
     CHECK(transcribe_stream_feed(&session, pcm, 160, &up) == TRANSCRIBE_OK);
     CHECK(g_language_seen_at_feed == "en-US");
+    CHECK(g_context_seen_at_feed ==
+          "  context \xe6"
+          "\x97"
+          "\xa5"
+          "\xe6"
+          "\x9c"
+          "\xac"
+          "\xe8"
+          "\xaa"
+          "\x9e"
+          "  ");
     // The run-slot family ext pointer must not survive into the retained
     // copy either: it is consumed during begin per its copy-out contract,
     // and a stale pointer would dangle just like the strings.
@@ -1504,6 +1534,7 @@ void test_begin_accepts_min_prefix_run_params() {
     model.arch                    = &arch;
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT, true);
 
     transcribe_session session;
     session.model = &model;
@@ -1525,6 +1556,7 @@ void test_begin_accepts_min_prefix_run_params() {
     transcribe_stream_params_init(&sp);
     g_retained_rp = transcribe_run_params{};
     g_language_seen_at_feed.clear();
+    g_context_seen_at_feed.clear();
     CHECK(transcribe_stream_begin(&session, rp, &sp) == TRANSCRIBE_OK);
     std::free(rp);
 
@@ -1540,6 +1572,7 @@ void test_begin_accepts_min_prefix_run_params() {
     const float pcm[160] = {};
     CHECK(transcribe_stream_feed(&session, pcm, 160, &up) == TRANSCRIBE_OK);
     CHECK(g_language_seen_at_feed == "en");
+    CHECK(g_context_seen_at_feed == "<null>");
 
     transcribe_stream_reset(&session);
 }

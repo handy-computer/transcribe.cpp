@@ -54,6 +54,14 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
 
 add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
 
+if(APPLE AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    add_test(NAME transcribe_objc_context_header_smoke
+        COMMAND ${CMAKE_C_COMPILER}
+            -fsyntax-only
+            -I${PROJECT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/objc_context_header_smoke.m)
+endif()
+
 add_test(
     NAME transcribe_extension_umbrella_check
     COMMAND ${CMAKE_COMMAND}
@@ -1322,6 +1330,21 @@ if(TRANSCRIBE_BUILD_EXAMPLES)
             ${CMAKE_SOURCE_DIR}/samples/jfk.wav)
     set_tests_properties(transcribe_cli_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION "duration:")
+
+    add_test(NAME transcribe_cli_context_parse_smoke
+        COMMAND $<TARGET_FILE:transcribe-cli>
+            --context "Glossary: GGUF, ggml"
+            ${CMAKE_SOURCE_DIR}/samples/jfk.wav)
+    set_tests_properties(transcribe_cli_context_parse_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION "duration:")
+
+    add_test(NAME transcribe_cli_context_model_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI=$<TARGET_FILE:transcribe-cli>
+            -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_context_model_smoke.cmake)
+    set_tests_properties(transcribe_cli_context_model_smoke PROPERTIES
+        SKIP_REGULAR_EXPRESSION "SKIP:")
 
     add_test(NAME transcribe_cli_output_smoke
         COMMAND ${CMAKE_COMMAND}

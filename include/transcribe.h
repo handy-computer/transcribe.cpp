@@ -1043,8 +1043,20 @@ TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_par
  *
  * target_language: target language for translation tasks, or NULL.
  *
- * String-pointer lifetime (language / target_language): caller-owned, and
- * the library copies what it needs before the API call returns. This holds
+ * context:        optional UTF-8 background text used to bias recognition of
+ *                 names, jargon, and other ambiguous terms. NULL (default)
+ *                 and the empty string both mean no context. The library
+ *                 preserves non-empty text byte-for-byte: it does not trim,
+ *                 normalize, or interpret special-token-looking substrings.
+ *                 This is not an instruction prompt and does not guarantee
+ *                 task, output-format, style, punctuation, or language
+ *                 control. Probe TRANSCRIBE_FEATURE_CONTEXT before use. A
+ *                 non-empty context on an unsupported model emits a WARN, is
+ *                 ignored, and the run proceeds. In transcribe_run_batch the
+ *                 one context value is shared by every utterance.
+ *
+ * String-pointer lifetime (language / target_language / context): caller-owned,
+ * and the library copies what it needs before the API call returns. This holds
  * for transcribe_run / transcribe_run_batch (synchronous) AND for
  * transcribe_stream_begin: the dispatcher copies these strings into
  * session-owned storage at begin, so the caller may free its params —
@@ -1109,6 +1121,8 @@ struct transcribe_run_params {
      *   to know whether the field will take effect.
      */
     int32_t spec_k_drafts;
+
+    const char * context;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);
@@ -1300,6 +1314,11 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct 
  *                        prompt to bias decoding. Today: whisper
  *                        only; reached via transcribe_whisper_run_ext.
  *
+ *   CONTEXT              The model accepts transcribe_run_params::context as
+ *                        best-effort background information for recognition.
+ *                        It does not imply instruction-following behavior.
+ *                        Today: qwen3_asr.
+ *
  *   TEMPERATURE_FALLBACK The model runs a multi-tier temperature loop
  *                        with metric-driven fallback. Today: whisper.
  *
@@ -1347,6 +1366,7 @@ typedef enum {
     TRANSCRIBE_FEATURE_PNC                  = 4,
     TRANSCRIBE_FEATURE_ITN                  = 5,
     TRANSCRIBE_FEATURE_DIARIZATION          = 6,
+    TRANSCRIBE_FEATURE_CONTEXT              = 7,
 } transcribe_feature;
 
 TRANSCRIBE_API bool transcribe_model_supports(const struct transcribe_model * model, transcribe_feature feature);

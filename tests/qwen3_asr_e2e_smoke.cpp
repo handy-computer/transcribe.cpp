@@ -241,6 +241,8 @@ int main() {
     }
 
     CHECK_STR_EQ(transcribe_model_arch_string(model), "qwen3_asr");
+    CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_CONTEXT));
+    CHECK(!transcribe_model_supports(model, TRANSCRIBE_FEATURE_INITIAL_PROMPT));
 
     // Language hinting contract:
     //   - A BCP-47 code advertised in caps.languages must be accepted
@@ -315,7 +317,52 @@ int main() {
             ++g_failures;
         }
 
+        // Context and language occupy independent chat-template fields and
+        // may be used together through the public ABI.
+        rp_lang.language                   = "en";
+        rp_lang.context                    = "Vocabulary: fellow Americans, country.";
+        const transcribe_status st_context = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_lang);
+        if (st_context != TRANSCRIBE_OK || std::strlen(transcribe_full_text(ctx)) == 0) {
+            std::fprintf(stderr, "FAIL: context + language run returned %s\n", transcribe_status_string(st_context));
+            ++g_failures;
+        }
+
         transcribe_session_free(ctx);
+    }
+
+    // Context tokens share the decoder window with audio and generation. A
+    // request that cannot fit is rejected rather than silently truncating the
+    // caller's background text. The same run-level context is broadcast to all
+    // batch rows.
+    {
+        transcribe_session_params cp;
+        transcribe_session_params_init(&cp);
+        cp.n_ctx                 = 512;
+        transcribe_session * ctx = nullptr;
+        if (transcribe_session_init(model, &cp, &ctx) != TRANSCRIBE_OK || ctx == nullptr) {
+            std::fprintf(stderr, "FAIL: context-limit session init failed\n");
+            ++g_failures;
+        } else {
+            std::string long_context;
+            for (int i = 0; i < 700; ++i) {
+                long_context += "context ";
+            }
+            transcribe_run_params rp;
+            transcribe_run_params_init(&rp);
+            rp.context = long_context.c_str();
+
+            const std::vector<float> silence(1600, 0.0f);
+            CHECK(transcribe_run(ctx, silence.data(), static_cast<int>(silence.size()), &rp) ==
+                  TRANSCRIBE_ERR_INPUT_TOO_LONG);
+
+            const float * batch_pcm[] = { silence.data(), silence.data() };
+            const int     batch_n[]   = { static_cast<int>(silence.size()), static_cast<int>(silence.size()) };
+            CHECK(transcribe_run_batch(ctx, batch_pcm, batch_n, 2, &rp) == TRANSCRIBE_OK);
+            CHECK(transcribe_batch_n_results(ctx) == 2);
+            CHECK(transcribe_batch_status(ctx, 0) == TRANSCRIBE_ERR_INPUT_TOO_LONG);
+            CHECK(transcribe_batch_status(ctx, 1) == TRANSCRIBE_ERR_INPUT_TOO_LONG);
+            transcribe_session_free(ctx);
+        }
     }
 
     // Case 1: jfk.wav (single-chunk).

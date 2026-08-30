@@ -46,6 +46,15 @@ and streams.
 const result = await model.transcribe(pcm, { pnc: "off", itn: "on" });
 ```
 
+Models advertising `model.supports("context")` accept best-effort recognition
+background text for names and terminology. It is not an instruction prompt.
+
+```ts
+const result = await model.transcribe(pcm, {
+  context: "Vocabulary: GGUF, ggml, Qwen3-ASR",
+});
+```
+
 ### Streaming
 
 ```ts

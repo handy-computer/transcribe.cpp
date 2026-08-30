@@ -17,9 +17,11 @@ void apply_family_invariants(transcribe_model & model) {
     // lists the BCP-47 codes). Translation is not advertised.
     caps.supports_translate = false;
 
-    // Cancellation is wired at the per-run level. No PNC/ITN toggle; the
-    // Whisper-specific features do not apply here.
+    // Cancellation is wired at the per-run level. Free-text recognition
+    // context is inserted into the chat template's system turn. No PNC/ITN
+    // toggle; the Whisper-specific features do not apply here.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT, true);
 }
 
 }  // namespace transcribe::qwen3_asr

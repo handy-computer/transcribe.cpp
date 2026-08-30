@@ -745,6 +745,7 @@ constexpr size_t k_min_context_params_size          = TRANSCRIBE_FIELD_END(trans
 // pre-0.2 caller that bypasses the SONAME/abihash checks (dlopen by path,
 // stale static link, hand-rolled FFI) gets BAD_STRUCT_SIZE instead.
 constexpr size_t k_min_run_params_size              = TRANSCRIBE_FIELD_END(transcribe_run_params, spec_k_drafts);
+constexpr size_t k_run_params_context_size          = TRANSCRIBE_FIELD_END(transcribe_run_params, context);
 constexpr size_t k_min_stream_params_size           = TRANSCRIBE_FIELD_END(transcribe_stream_params, family);
 constexpr size_t k_stream_params_commit_policy_size = TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_policy);
 constexpr size_t k_stream_params_agreement_n_size =
@@ -778,6 +779,19 @@ using transcribe::copy_out_prefix;
 
 static bool has_field(uint64_t struct_size, size_t field_end) {
     return struct_size >= static_cast<uint64_t>(field_end);
+}
+
+// Materialize a full library-sized view without reading past an older
+// caller's declared prefix. Keep the caller's struct_size in the view so
+// downstream has_field checks retain the original ABI truth. Empty context is
+// normalized to the documented NULL form; non-empty text is not modified.
+void stage_run_params(const transcribe_run_params * caller, transcribe_run_params & out) {
+    transcribe_run_params_init(&out);
+    std::memcpy(&out, caller, static_cast<size_t>(std::min<uint64_t>(caller->struct_size, sizeof(out))));
+    if (!has_field(caller->struct_size, k_run_params_context_size) || out.context == nullptr ||
+        out.context[0] == '\0') {
+        out.context = nullptr;
+    }
 }
 
 // Takes the RAW integer, not the enum: a C caller can store any int in the
@@ -1364,14 +1378,14 @@ static void publish_observable_delta(transcribe_session *       session,
     }
 }
 
-// Advisory pnc/itn warning. Emits a WARN when a non-DEFAULT request hits a
-// model that does not support runtime control of that axis, then returns so
-// the dispatcher proceeds with best-effort semantics. The reserved
+// Advisory run-param warning. Emits a WARN when an optional request hits a
+// model that does not support the requested behavior, then returns so the
+// dispatcher proceeds with best-effort semantics. The reserved
 // TRANSCRIBE_ERR_UNSUPPORTED_PNC / _ITN codes are NOT returned today
 // (placeholders for a future opt-in strict mode). The message includes the
 // arch + variant strings to pinpoint which model dropped the request.
-void warn_unsupported_advisory(const struct transcribe_model * model, const struct transcribe_run_params * rp) {
-    if (model == nullptr || rp == nullptr) {
+void apply_unsupported_advisories(const transcribe_model * model, transcribe_run_params & rp) {
+    if (model == nullptr) {
         return;
     }
     const char * arch_name = (model->arch != nullptr && model->arch->name != nullptr) ? model->arch->name : "(unknown)";
@@ -1383,9 +1397,9 @@ void warn_unsupported_advisory(const struct transcribe_model * model, const stru
     // Defense in depth: keep raw reads here even though every dispatcher
     // validates before warning. A future call-site reorder must not turn a
     // malformed C enum into a typed C++ load.
-    const int pnc_raw     = enum_field_raw(&rp->pnc);
-    const int itn_raw     = enum_field_raw(&rp->itn);
-    const int diarize_raw = enum_field_raw(&rp->diarize);
+    const int pnc_raw     = enum_field_raw(&rp.pnc);
+    const int itn_raw     = enum_field_raw(&rp.itn);
+    const int diarize_raw = enum_field_raw(&rp.diarize);
 
     char buf[512];
     if (pnc_raw != TRANSCRIBE_PNC_MODE_DEFAULT && !transcribe::has_feature(model, TRANSCRIBE_FEATURE_PNC)) {
@@ -1421,6 +1435,16 @@ void warn_unsupported_advisory(const struct transcribe_model * model, const stru
                       "to pre-check.",
                       req, arch_name, variant);
         transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
+    }
+    if (rp.context != nullptr && !transcribe::has_feature(model, TRANSCRIBE_FEATURE_CONTEXT)) {
+        std::snprintf(buf, sizeof(buf),
+                      "transcribe_run: caller provided context but model '%s' "
+                      "(variant '%s') does not support recognition context; the context "
+                      "is ignored. Use transcribe_model_supports(model, "
+                      "TRANSCRIBE_FEATURE_CONTEXT) to pre-check.",
+                      arch_name, variant);
+        transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
+        rp.context = nullptr;
     }
 }
 
@@ -1735,6 +1759,9 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     if (const auto st = check_input_struct_size(run_params->struct_size, k_min_run_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
+    transcribe_run_params run_params_staged;
+    stage_run_params(run_params, run_params_staged);
+    run_params = &run_params_staged;
     if (const auto st = check_input_struct_size(stream_params->struct_size, k_min_stream_params_size);
         st != TRANSCRIBE_OK) {
         return st;
@@ -1806,7 +1833,7 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     // expose the corresponding runtime toggle. Emitted before
     // clear_result so the pre-hook "snapshot preserved on rejection"
     // contract is undisturbed.
-    warn_unsupported_advisory(session->model, run_params);
+    apply_unsupported_advisories(session->model, run_params_staged);
 
     // Optional family preflight: validates extension field values
     // (e.g. parakeet's (L, C, R) menu) without mutating state. On
@@ -1841,6 +1868,7 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     // wants a run-slot ext at stream begin must plumb it deliberately.
     session->stream_language_owned        = run_params->language != nullptr ? run_params->language : "";
     session->stream_target_language_owned = run_params->target_language != nullptr ? run_params->target_language : "";
+    session->stream_context_owned         = run_params->context != nullptr ? run_params->context : "";
     // PREFIX copy, not struct assignment: the size gate above admits any
     // struct_size >= k_min_run_params_size, so a conforming caller's
     // allocation may be SHORTER than sizeof (fields past `family`, e.g.
@@ -1855,7 +1883,8 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     run_params_owned.language = run_params->language != nullptr ? session->stream_language_owned.c_str() : nullptr;
     run_params_owned.target_language =
         run_params->target_language != nullptr ? session->stream_target_language_owned.c_str() : nullptr;
-    run_params_owned.family = nullptr;
+    run_params_owned.context = run_params->context != nullptr ? session->stream_context_owned.c_str() : nullptr;
+    run_params_owned.family  = nullptr;
 
     const transcribe_status st = session->model->arch->stream_begin(session, &run_params_owned, stream_params);
     if (st != TRANSCRIBE_OK) {
@@ -2102,6 +2131,9 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     if (const auto st = check_input_struct_size(params->struct_size, k_min_run_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
+    transcribe_run_params params_staged;
+    stage_run_params(params, params_staged);
+    params = &params_staged;
     // A run cannot replace an active stream's results — that would
     // strand the in-flight stream's per-family state. Caller must
     // finalize or reset first. FINISHED and FAILED both fall through;
@@ -2147,7 +2179,7 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
         if (const transcribe_status st = validate_run_params_common(session, params); st != TRANSCRIBE_OK) {
             return st;
         }
-        warn_unsupported_advisory(session->model, params);
+        apply_unsupported_advisories(session->model, params_staged);
         if (params->task == TRANSCRIBE_TASK_TRANSLATE && !session->model->caps.supports_translate) {
             return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
         }
@@ -2283,6 +2315,9 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
     if (const auto st = check_input_struct_size(params->struct_size, k_min_run_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
+    transcribe_run_params params_staged;
+    stage_run_params(params, params_staged);
+    params = &params_staged;
     if (session->stream_state == TRANSCRIBE_STREAM_ACTIVE) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -2303,7 +2338,7 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
         if (const transcribe_status st = validate_run_params_common(session, params); st != TRANSCRIBE_OK) {
             return st;
         }
-        warn_unsupported_advisory(session->model, params);
+        apply_unsupported_advisories(session->model, params_staged);
         if (params->task == TRANSCRIBE_TASK_TRANSLATE && !session->model->caps.supports_translate) {
             return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
         }

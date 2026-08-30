@@ -43,6 +43,13 @@ and the one-shot `transcribe()` helper.
 result = session.run(pcm, pnc="off", itn="on")
 ```
 
+Models advertising `model.supports("context")` accept best-effort recognition
+background text for names and terminology. It is not an instruction prompt.
+
+```python
+result = session.run(pcm, context="Vocabulary: GGUF, ggml, Qwen3-ASR")
+```
+
 Streaming models expose incremental transcription with committed/tentative
 text views — see `examples/stream_wav.py`:
 

@@ -137,10 +137,25 @@ def test_pnc_and_itn_modes_map_to_native_run_params():
             )
 
 
+def test_context_maps_to_native_run_params_without_normalization():
+    from transcribe_cpp import _build_run_params
+
+    params = _build_run_params(
+        "transcribe", None, None, "none", False, -1,
+        context="  Glossary: GGUF\n\u65e5\u672c\u8a9e  ",
+    )
+    assert params.context == "  Glossary: GGUF\n\u65e5\u672c\u8a9e  ".encode()
+
+    empty = _build_run_params(
+        "transcribe", None, None, "none", False, -1, context="",
+    )
+    assert empty.context is None
+
+
 def test_public_run_surfaces_cover_every_generic_option():
     common = {
         "task", "language", "target_language", "timestamps", "pnc", "itn",
-        "diarize", "keep_special_tags", "family",
+        "diarize", "keep_special_tags", "family", "context",
     }
     expected = {
         t.Session.run: common | {"spec_k_drafts"},

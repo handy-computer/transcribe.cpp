@@ -90,7 +90,12 @@ final class NoModelTests: XCTestCase {
     // not shadow Swift's concurrency `Task`). Lock the public name + `task:`
     // option here so an accidental rename is caught without a model.
     func testTranscriptionTaskOptionRoundTrips() {
-        let translate = RunOptions(task: .translate, pnc: .off, itn: .on, diarize: .on)
+        let translate = RunOptions(
+            task: .translate,
+            pnc: .off,
+            itn: .on,
+            diarize: .on,
+            context: "  Glossary: GGUF\n\u{65E5}\u{672C}\u{8A9E}  ")
         guard case .translate = translate.task else {
             return XCTFail("task option did not round-trip to .translate")
         }
@@ -99,6 +104,12 @@ final class NoModelTests: XCTestCase {
         guard case .off = translate.pnc else { return XCTFail("Pnc.off") }
         guard case .on = translate.itn else { return XCTFail("Itn.on") }
         guard case .on = translate.diarize else { return XCTFail("Diarize.on") }
+        XCTAssertEqual(translate.context, "  Glossary: GGUF\n\u{65E5}\u{672C}\u{8A9E}  ")
+        translate.withCParams { params in
+            XCTAssertEqual(
+                String(cString: params.pointee.context),
+                "  Glossary: GGUF\n\u{65E5}\u{672C}\u{8A9E}  ")
+        }
     }
 
     func testJunkFileIsModelLoadError() throws {

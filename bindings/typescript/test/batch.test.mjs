@@ -7,7 +7,10 @@ modelTest("batch returns one result per utterance", MODEL, async () => {
   try {
     const s = m.createSession();
     const pcm = jfk();
-    const items = await s.runBatch([pcm, pcm.subarray(0, pcm.length / 2)]);
+    const items = await s.runBatch(
+      [pcm, pcm.subarray(0, pcm.length / 2)],
+      { context: "Vocabulary: GGUF, ggml, Qwen3-ASR" },
+    );
     assert.equal(items.length, 2);
     assert.ok(items[0].ok && /ask not/i.test(items[0].result.text));
     assert.ok(items[1].ok);
