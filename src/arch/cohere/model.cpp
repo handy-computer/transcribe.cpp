@@ -634,6 +634,70 @@ transcribe_status init_context(transcribe_model *                model,
     return TRANSCRIBE_OK;
 }
 
+// Degenerate-repetition guard for the greedy decoder.
+//
+// Token selection here is a plain argmax with no repetition penalty, no
+// no-repeat-ngram and no coverage term, so there is nothing to pull the model
+// out of a self-reinforcing state: if the most likely continuation of a phrase
+// is that same phrase, it emits it until the token budget runs out. Measured on
+// real French dictation, one 21-second recording produced "Je suis allé à la
+// médiation." twelve times over — and Q8_0 and Q4_K_M did it identically, token
+// for token, which rules out quantisation and points at the search.
+//
+// The test looks at the TAIL only, so a deliberate repetition earlier in the
+// utterance survives untouched. A block must also cover at least
+// kMinLoopTokens tokens in total before it counts, which is what keeps an
+// emphatic "non non non" from being mistaken for a loop.
+namespace {
+
+constexpr int kMaxLoopBlock  = 16;   // longest repeating unit considered
+constexpr int kMinLoopRepeat = 3;    // a block must recur at least this often
+constexpr int kMinLoopTokens = 12;   // …and span at least this many tokens
+
+// Length of the repeating block at the tail, or 0 when the tail is not looping.
+int looping_tail_block(const std::vector<int32_t> & ids) {
+    const int n = static_cast<int>(ids.size());
+    for (int block = 1; block <= kMaxLoopBlock; ++block) {
+        const int repeats = std::max(kMinLoopRepeat, (kMinLoopTokens + block - 1) / block);
+        if (n < block * repeats) {
+            continue;
+        }
+        bool same = true;
+        for (int r = 1; r < repeats && same; ++r) {
+            for (int i = 0; i < block; ++i) {
+                if (ids[n - 1 - i] != ids[n - 1 - i - r * block]) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if (same) {
+            return block;
+        }
+    }
+    return 0;
+}
+
+// Drop every copy of the repeating block but the first. What precedes the loop
+// is usually correct; only the runaway tail is discarded.
+void trim_looping_tail(std::vector<int32_t> & ids, int block) {
+    while (static_cast<int>(ids.size()) >= 2 * block) {
+        const int n = static_cast<int>(ids.size());
+        bool      same = true;
+        for (int i = 0; i < block && same; ++i) {
+            if (ids[n - 1 - i] != ids[n - 1 - i - block]) {
+                same = false;
+            }
+        }
+        if (!same) {
+            break;
+        }
+        ids.resize(static_cast<size_t>(n - block));
+    }
+}
+
+}   // namespace
+
 transcribe_status run(transcribe_session *          session,
                       const float *                 pcm,
                       int                           n_samples,
@@ -1212,6 +1276,17 @@ transcribe_status run(transcribe_session *          session,
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
                 }
+
+                if (const int block = looping_tail_block(generated_ids); block > 0) {
+                    trim_looping_tail(generated_ids, block);
+                    transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                                        "cohere run: degenerate repetition stopped at step %d "
+                                        "(block=%d tokens); the runaway tail was dropped and the "
+                                        "transcript kept up to the loop.",
+                                        step, block);
+                    next_token = eos_id;
+                    break;
+                }
             }
         } else {
             // ---------- Dynamic-graph step path (CPU) ----------
@@ -1282,6 +1357,17 @@ transcribe_status run(transcribe_session *          session,
 
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
+                }
+
+                if (const int block = looping_tail_block(generated_ids); block > 0) {
+                    trim_looping_tail(generated_ids, block);
+                    transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                                        "cohere run: degenerate repetition stopped at step %d "
+                                        "(block=%d tokens); the runaway tail was dropped and the "
+                                        "transcript kept up to the loop.",
+                                        step, block);
+                    next_token = eos_id;
+                    break;
                 }
             }
         }
