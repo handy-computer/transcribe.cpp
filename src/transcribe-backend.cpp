@@ -6,11 +6,17 @@
 
 #include "transcribe-backend.h"
 
+#include "ggml-vulkan.h"
 #include "ggml.h"
+#include "transcribe-env.h"
+#include "transcribe-gpu-denylist-data.h"
 #include "transcribe-log.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <stdexcept>
 
 namespace transcribe {
@@ -105,6 +111,139 @@ std::vector<size_t> gpu_probe_order(const std::vector<enum ggml_backend_dev_type
         }
     }
     return order;
+}
+
+namespace {
+
+constexpr uint32_t kVendorIntel = 0x8086;
+constexpr uint32_t kVendorAmd   = 0x1002;
+
+template <size_t N> bool id_in(const uint16_t (&table)[N], uint32_t device_id) {
+    if (device_id > 0xffff) {
+        return false;
+    }
+    return std::binary_search(std::begin(table), std::end(table), static_cast<uint16_t>(device_id));
+}
+
+// Parse the TRANSCRIBE_TEST_GPU_HW_IDS hook. Returns false when unset,
+// empty, or malformed (malformed values are ignored with a warning rather
+// than trusted).
+bool test_hw_ids_override(GpuHwInfo & out) {
+    const char * spec = env::str("TRANSCRIBE_TEST_GPU_HW_IDS");
+    if (spec == nullptr) {
+        return false;
+    }
+    unsigned  vendor = 0;
+    unsigned  device = 0;
+    unsigned  cores  = 0;
+    const int n      = std::sscanf(spec, "%x:%x:%u", &vendor, &device, &cores);
+    if (n < 2) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "TRANSCRIBE_TEST_GPU_HW_IDS=\"%s\" is not <vendor>:<device>[:<cores>]; ignored", spec);
+        return false;
+    }
+    out                   = GpuHwInfo{};
+    out.vendor_id         = vendor;
+    out.device_id         = device;
+    out.shader_core_count = (n >= 3) ? cores : 0;
+    return true;
+}
+
+}  // namespace
+
+bool query_gpu_hw_info(ggml_backend_dev_t dev, GpuHwInfo & out) noexcept {
+    if (dev == nullptr) {
+        return false;
+    }
+    try {
+        const auto dev_type = ggml_backend_dev_type(dev);
+        if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU && dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            return false;
+        }
+        if (test_hw_ids_override(out)) {
+            return true;
+        }
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if (reg == nullptr) {
+            return false;
+        }
+        // Resolved by name so this works identically for a compiled-in backend
+        // and a dynamically loaded module; nullptr means the module predates
+        // the patch (or is not Vulkan) and the device simply has no identity.
+        auto fn = reinterpret_cast<ggml_backend_vk_get_device_hw_info_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_get_device_hw_info"));
+        if (fn == nullptr) {
+            return false;
+        }
+        ggml_vk_device_hw_info info = {};
+        if (!fn(dev, &info)) {
+            return false;
+        }
+        out.vendor_id         = info.vendor_id;
+        out.device_id         = info.device_id;
+        out.driver_id         = info.driver_id;
+        out.shader_core_count = info.shader_core_count;
+        return true;
+    } catch (const std::exception & e) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "device hardware query threw: %s - treating identity as unknown", e.what());
+        return false;
+    } catch (...) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "device hardware query threw an unknown exception - treating identity as unknown");
+        return false;
+    }
+}
+
+GpuDenyInput gpu_deny_input(ggml_backend_dev_t dev) noexcept {
+    GpuDenyInput in;
+    if (dev == nullptr) {
+        return in;
+    }
+    try {
+        in.dev_type = ggml_backend_dev_type(dev);
+    } catch (...) {
+        return in;
+    }
+    if (in.dev_type != GGML_BACKEND_DEVICE_TYPE_GPU && in.dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+        return in;
+    }
+    if (test_hw_ids_override(in.hw)) {
+        // The hook pretends the device is the named integrated part.
+        in.dev_type = GGML_BACKEND_DEVICE_TYPE_IGPU;
+        return in;
+    }
+    query_gpu_hw_info(dev, in.hw);
+    return in;
+}
+
+const char * gpu_auto_deny_reason(const GpuDenyInput & in) {
+    // Only integrated parts are ever denied: a discrete GPU, however old, has
+    // its own memory bus and is not the failure mode this guards against.
+    if (in.dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+        return nullptr;
+    }
+    switch (in.hw.vendor_id) {
+        case kVendorIntel:
+            if (id_in(gpu_denylist_data::kIntelPreXe, in.hw.device_id)) {
+                return "pre-Xe Intel integrated graphics (Gen 11 or older) is slower than the CPU for ASR";
+            }
+            return nullptr;
+        case kVendorAmd:
+            if (id_in(gpu_denylist_data::kAmdGcnApu, in.hw.device_id)) {
+                return "GCN 1-3 AMD APU graphics is slower than the CPU for ASR";
+            }
+            if (in.hw.shader_core_count >= 1 && in.hw.shader_core_count <= 2) {
+                return "AMD integrated graphics with only 1-2 compute units is a display adapter, slower than the CPU "
+                       "for ASR";
+            }
+            return nullptr;
+        default:
+            return nullptr;
+    }
+}
+
+bool gpu_denylist_disabled() {
+    return env::flag("TRANSCRIBE_NO_GPU_DENYLIST");
 }
 
 namespace {

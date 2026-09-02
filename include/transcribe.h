@@ -677,11 +677,19 @@ TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(const struct transcribe_mo
  *         in ggml's device registry order — which is build-time
  *         prioritized (Metal on Apple, Vulkan / CUDA / ROCm / SYCL on
  *         Linux, …). An integrated GPU is selected only when no
- *         discrete GPU initializes. Host-memory accelerators (BLAS,
- *         AMX, …) are additionally layered onto the scheduler when
- *         present — they run on the same memory as the CPU backend
- *         and are orthogonal to the GPU/CPU split. Always succeeds:
- *         CPU is the final fallback when no GPU initializes.
+ *         discrete GPU initializes. Integrated GPUs known to be slower
+ *         than the CPU for ASR are skipped (with a WARN log naming the
+ *         device and reason): pre-Xe Intel graphics (Gen 11 and older,
+ *         e.g. UHD 620), GCN 1-3 AMD APU graphics, and 1-2 compute-unit
+ *         AMD display adapters — identified by PCI id, never by name.
+ *         The skip applies to AUTO only; an explicit backend or device
+ *         selection always honors the device, and setting the
+ *         TRANSCRIBE_NO_GPU_DENYLIST environment variable disables the
+ *         skip. Host-memory accelerators (BLAS, AMX, …) are additionally
+ *         layered onto the scheduler when present — they run on the
+ *         same memory as the CPU backend and are orthogonal to the
+ *         GPU/CPU split. Always succeeds: CPU is the final fallback
+ *         when no GPU initializes.
  *
  * CPU     Strict CPU only. No GPU, no IGPU, and no host-memory
  *         accelerators (BLAS/AMX). This is the right choice for

@@ -17866,6 +17866,55 @@ static std::string ggml_backend_vk_get_device_pci_id(int device_idx) {
     return std::string(pci_bus_id);
 }
 
+// Hardware identity from the physical device only. Mirrors the shader core
+// count logic in ggml_vk_get_device without creating a logical device.
+static ggml_vk_device_hw_info ggml_backend_vk_query_device_hw_info(int device_idx) {
+    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
+
+    vk::PhysicalDevice device = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device_idx]];
+
+    bool sm_builtins = false;
+    bool amd_shader_core_properties2 = false;
+    for (const auto& properties : device.enumerateDeviceExtensionProperties()) {
+        if (strcmp("VK_NV_shader_sm_builtins", properties.extensionName) == 0) {
+            sm_builtins = true;
+        } else if (strcmp("VK_AMD_shader_core_properties2", properties.extensionName) == 0) {
+            amd_shader_core_properties2 = true;
+        }
+    }
+
+    vk::PhysicalDeviceProperties2 props2;
+    vk::PhysicalDeviceDriverProperties driver_props;
+    vk::PhysicalDeviceShaderSMBuiltinsPropertiesNV sm_props;
+    vk::PhysicalDeviceShaderCoreProperties2AMD amd_shader_core_properties2_props;
+    props2.pNext = &driver_props;
+    VkBaseOutStructure * last_struct = (VkBaseOutStructure *)&driver_props;
+    if (sm_builtins) {
+        last_struct->pNext = (VkBaseOutStructure *)&sm_props;
+        last_struct = (VkBaseOutStructure *)&sm_props;
+    }
+    if (amd_shader_core_properties2) {
+        last_struct->pNext = (VkBaseOutStructure *)&amd_shader_core_properties2_props;
+        last_struct = (VkBaseOutStructure *)&amd_shader_core_properties2_props;
+    }
+    device.getProperties2(&props2);
+
+    ggml_vk_device_hw_info info = {};
+    info.vendor_id = props2.properties.vendorID;
+    info.device_id = props2.properties.deviceID;
+    info.driver_id = (uint32_t) driver_props.driverID;
+    if (sm_builtins) {
+        info.shader_core_count = sm_props.shaderSMCount;
+    } else if (amd_shader_core_properties2) {
+        info.shader_core_count = amd_shader_core_properties2_props.activeComputeUnitCount;
+    } else if (info.vendor_id == VK_VENDOR_ID_INTEL) {
+        info.shader_core_count = ggml_vk_intel_shader_core_count(device);
+    } else {
+        info.shader_core_count = 0;
+    }
+    return info;
+}
+
 //////////////////////////
 
 struct ggml_backend_vk_device_context {
@@ -17874,6 +17923,7 @@ struct ggml_backend_vk_device_context {
     std::string description;
     bool is_integrated_gpu;
     std::string pci_bus_id;
+    ggml_vk_device_hw_info hw_info;
     int op_offload_min_batch_size;
 };
 
@@ -18711,6 +18761,7 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
                 ctx->description = desc;
                 ctx->is_integrated_gpu = ggml_backend_vk_get_device_type(i) == vk::PhysicalDeviceType::eIntegratedGpu;
                 ctx->pci_bus_id = ggml_backend_vk_get_device_pci_id(i);
+                ctx->hw_info = ggml_backend_vk_query_device_hw_info(i);
                 ctx->op_offload_min_batch_size = min_batch_size;
                 devices.push_back(new ggml_backend_device {
                     /* .iface   = */ ggml_backend_vk_device_i,
@@ -18726,11 +18777,28 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
+bool ggml_backend_vk_get_device_hw_info(ggml_backend_dev_t dev, struct ggml_vk_device_hw_info * info) {
+    if (dev == nullptr || info == nullptr || dev->reg != ggml_backend_vk_reg()) {
+        return false;
+    }
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    *info = ctx->hw_info;
+    return true;
+}
+
+static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    UNUSED(reg);
+    if (strcmp(name, "ggml_backend_vk_get_device_hw_info") == 0) {
+        return (void *)ggml_backend_vk_get_device_hw_info;
+    }
+    return nullptr;
+}
+
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {

@@ -25,6 +25,7 @@
 #include <fstream>
 #include <ios>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace transcribe::load_common {
@@ -56,6 +57,21 @@ bool metal_backend_lacks_simdgroup_mm(ggml_backend_t be, ggml_backend_dev_t dev)
 }
 
 namespace {
+
+// " [8086:5917, 0 cores]" style suffix for device log lines, empty when the
+// backend reports no hardware identity.
+std::string hw_id_suffix(const GpuHwInfo & hw) {
+    if (hw.vendor_id == 0) {
+        return "";
+    }
+    char buf[64];
+    if (hw.shader_core_count != 0) {
+        std::snprintf(buf, sizeof(buf), " [%04x:%04x, %u cores]", hw.vendor_id, hw.device_id, hw.shader_core_count);
+    } else {
+        std::snprintf(buf, sizeof(buf), " [%04x:%04x]", hw.vendor_id, hw.device_id);
+    }
+    return buf;
+}
 
 // Device init can throw from GPU drivers. Treat that like nullptr so AUTO can
 // keep probing and explicit backend requests fail cleanly.
@@ -109,16 +125,36 @@ ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, Backend
     for (const size_t i : gpu_probe_order(dev_types)) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
-        if (wanted != BackendKind::OtherGpu && classify_device(dev) != wanted) {
+        const BackendKind kind = classify_device(dev);
+        if (wanted != BackendKind::OtherGpu && kind != wanted) {
             continue;
+        }
+
+        // Integrated GPUs known to be slower than the CPU (Handy issue #1884)
+        // are decided on hardware identity before init, so AUTO never pays
+        // for their logical device or shader compilation. An explicit backend
+        // request is an override: honor the device and warn.
+        const GpuDenyInput deny_in = gpu_deny_input(dev);
+        if (const char * why = gpu_auto_deny_reason(deny_in); why != nullptr && !gpu_denylist_disabled()) {
+            const char * dname = ggml_backend_dev_name(dev);
+            const char * ddesc = ggml_backend_dev_description(dev);
+            if (wanted == BackendKind::OtherGpu) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                        "%s: skipping %s device \"%s\" (%s%s): %s; select it explicitly or set "
+                        "TRANSCRIBE_NO_GPU_DENYLIST=1 to use it anyway",
+                        error_tag, kind_name(kind), dname != nullptr ? dname : "?", ddesc != nullptr ? ddesc : "?",
+                        hw_id_suffix(deny_in.hw).c_str(), why);
+                continue;
+            }
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: %s device \"%s\" (%s%s): %s; using it because %s was requested",
+                    error_tag, kind_name(kind), dname != nullptr ? dname : "?", ddesc != nullptr ? ddesc : "?",
+                    hw_id_suffix(deny_in.hw).c_str(), why, kind_name(wanted));
         }
 
         ggml_backend_t be = dev_init_checked(dev, error_tag);
         if (be == nullptr) {
             continue;
         }
-
-        const BackendKind kind = classify_device(dev);
 
         // A Metal device without simdgroup matmul yields garbage transcripts
         // (see metal_backend_lacks_simdgroup_mm): skip it under AUTO, honor
@@ -139,8 +175,8 @@ ggml_backend_t try_init_kind(BackendKind wanted, const char * error_tag, Backend
                     error_tag, dname != nullptr ? dname : "?");
         }
 
-        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend: %s", error_tag, kind_name(kind),
-                ggml_backend_dev_name(dev));
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend: %s%s", error_tag, kind_name(kind),
+                ggml_backend_dev_name(dev), hw_id_suffix(deny_in.hw).c_str());
         out_kind = kind;
         return be;
     }
@@ -251,14 +287,25 @@ transcribe_status init_backends_explicit_device(transcribe_backend_request reque
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    // Exact selection is the user's override of the AUTO denylist: warn, never
+    // refuse (mirrors the Metal simdgroup gate below).
+    const GpuDenyInput deny_in = gpu_deny_input(dev);
+    if (const char * why = gpu_auto_deny_reason(deny_in); why != nullptr && !gpu_denylist_disabled()) {
+        const char * ddesc = ggml_backend_dev_description(dev);
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "%s: selected %s device \"%s\" (%s%s): %s; using it because it was selected explicitly", error_tag,
+                kind_name(got), ggml_backend_dev_name(dev), ddesc != nullptr ? ddesc : "?",
+                hw_id_suffix(deny_in.hw).c_str(), why);
+    }
+
     ggml_backend_t primary = dev_init_checked(dev, error_tag);
     if (primary == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to initialize selected device %s", error_tag,
                 ggml_backend_dev_name(dev));
         return TRANSCRIBE_ERR_BACKEND;
     }
-    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using selected %s device: %s", error_tag, kind_name(got),
-            ggml_backend_dev_name(dev));
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using selected %s device: %s%s", error_tag, kind_name(got),
+            ggml_backend_dev_name(dev), hw_id_suffix(deny_in.hw).c_str());
 
     if (got == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(primary, dev)) {
         const char * dname = ggml_backend_dev_name(dev);

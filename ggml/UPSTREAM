@@ -2,6 +2,7 @@ repo: git@github.com:ggml-org/ggml.git
 sha:  8c63e70982c95ceb862e3a1073a2c1beef75d60a
 patches:
   patches/ggml/0001-fix-threadpool-oversubscription.patch
+  patches/ggml/0002-vulkan-expose-device-hw-info.patch
 
 This directory is generated from the upstream ggml tree at the SHA above, minus
 .github/, with the listed downstream patches applied in order. Do not edit it by

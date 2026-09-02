@@ -369,6 +369,41 @@ add_test(NAME transcribe_backend_metal_simdgroup_gate_unit
     COMMAND transcribe_backend_metal_simdgroup_gate_unit)
 
 # -----------------------------------------------------------------------------
+# AUTO GPU denylist (Handy issue #1884)
+# -----------------------------------------------------------------------------
+# Policy core: gpu_auto_deny_reason over literal PCI ids, no GPU required.
+
+add_executable(transcribe_backend_gpu_denylist_unit
+    backend_gpu_denylist_unit.cpp)
+
+target_link_libraries(transcribe_backend_gpu_denylist_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_gpu_denylist_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_gpu_denylist_unit)
+
+add_test(NAME transcribe_backend_gpu_denylist_unit
+    COMMAND transcribe_backend_gpu_denylist_unit)
+
+# Runtime gate: AUTO skips a denylisted identity (via the
+# TRANSCRIBE_TEST_GPU_HW_IDS hook) and falls back to CPU; explicit backend and
+# device selection honor it. No-op on machines without a GPU device.
+
+add_executable(transcribe_backend_gpu_denylist_gate_unit
+    backend_gpu_denylist_gate_unit.cpp)
+
+target_link_libraries(transcribe_backend_gpu_denylist_gate_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_gpu_denylist_gate_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_gpu_denylist_gate_unit)
+
+add_test(NAME transcribe_backend_gpu_denylist_gate_unit
+    COMMAND transcribe_backend_gpu_denylist_gate_unit)
+
+# -----------------------------------------------------------------------------
 # No-throw teardown wrappers (safe_backend_free & co.)
 # -----------------------------------------------------------------------------
 #
