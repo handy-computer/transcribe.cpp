@@ -57,6 +57,7 @@ value at the default context; for the effective limit under a lowered
 | Families | Limit | Behavior |
 | --- | --- | --- |
 | whisper, parakeet (all variants), voxtral_realtime | none (`max_audio_ms = 0`) | Long audio is windowed internally and stitched (whisper), processed by an unbounded/streaming encoder (parakeet, voxtral_realtime), or padded if short. No practical limit; all three **ignore `n_ctx`** (it cannot lower a limit they don't have). whisper and parakeet never error on length. voxtral_realtime has one exception — its absolute `dec_max_position` cap (~2.9 h, see below): a clip past it returns `INPUT_TOO_LONG` (one-shot/batch), and a stream that reaches it flags `was_truncated`. |
+| cohere | none (`max_audio_ms = 0`) | Windowed to the trained clip span (35 s) before the encoder, then the per-window transcripts are concatenated. Unlike the three above, cohere **does honor `n_ctx`**: it still bounds the decoder self-KV and therefore the per-window output budget, but no longer bounds input length. |
 
 Whisper slices audio into 30 s windows with prev-context stitching; parakeet's
 conformer is effectively unbounded (the encoder positional table is recomputed
@@ -67,11 +68,27 @@ constant-memory caches (`cache_last_channel` / `cache_last_time` + the decoder
 LSTM state) rather than a growing KV, so it is unbounded. These families do not
 need and do not have a length gate.
 
+Cohere is windowed for a different reason. Its encoder positional table spans
+~400 s, so a much longer clip than the model was trained on still encodes
+cleanly and an input gate keyed on that table lets it through. The decoder is
+what breaks: its cross-attention has no monotonicity constraint (unlike an
+RNN-T, which walks encoder frames in order), so past the trained clip span
+(`max_audio_clip_s`, 35 s) it loses alignment, emits EOS early, and drops the
+rest of the audio — returning `TRANSCRIBE_OK` with a silently incomplete
+transcript, which is exactly what this document promises never happens. So the
+family windows to the trained span and stitches the windows back together.
+Windows overlap by one second and are joined in token space by matching the tail
+of the accumulated hypothesis against the head of the next window, so a boundary
+landing mid-word costs nothing — the word survives whole in the next window and
+the duplicate is trimmed at the join. Boundaries still prefer a detected pause,
+which makes that match easier to find. When no join is identified the window is
+appended whole, repeating a few words rather than dropping any.
+
 ### 2. Hard context cap — reject up front
 
 | Families | Limit source | Behavior |
 | --- | --- | --- |
-| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or the encoder positional table (`enc_pos_emb_max_len`, for cohere/canary) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
+| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, canary | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or the encoder positional table (`enc_pos_emb_max_len`, for canary) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
 
 These families wrap an LLM-style decoder whose context window
 (`audio_tokens + prompt + generation`) is the binding constraint. The number of
@@ -138,16 +155,21 @@ reports the model's default-context ceiling (`n_ctx == 0`); it is not re-derived
 for a session that narrows `n_ctx`. A session that lowers `n_ctx` may therefore
 reject audio shorter than the advertised `max_audio_ms`.
 
-Encoder-bound families are different. For cohere and canary, the input-audio
-limit is the encoder positional table, while `n_ctx` only bounds the decoder
-self-KV / output budget. In those families `transcribe_session_get_limits()`
-reports a smaller `effective_n_ctx` and `max_kv_bytes` when `n_ctx` is lowered,
-but `effective_max_audio_ms` stays pinned to the encoder input bound.
+Encoder-bound families are different. For canary, the input-audio limit is the
+encoder positional table, while `n_ctx` only bounds the decoder self-KV / output
+budget. There `transcribe_session_get_limits()` reports a smaller
+`effective_n_ctx` and `max_kv_bytes` when `n_ctx` is lowered, but
+`effective_max_audio_ms` stays pinned to the encoder input bound.
 
-**Chunked / unbounded families (bucket 1) ignore `n_ctx` entirely.** whisper,
-parakeet, and voxtral_realtime have no lowerable context ceiling, so a non-zero
-`n_ctx` is a documented no-op and `transcribe_session_get_limits()` keeps
-reporting them unbounded. voxtral_realtime is the subtle case: it *does* have an
+Cohere is the hybrid: it windows its input (bucket 1, `max_audio_ms = 0`) but
+its decoder self-KV is still `n_ctx`-bounded, so a lowered `n_ctx` shrinks the
+per-window output budget without changing how much audio it accepts.
+
+**Most chunked / unbounded families (bucket 1) ignore `n_ctx` entirely** —
+cohere, described just above, is the exception. whisper, parakeet, and
+voxtral_realtime have no lowerable context ceiling, so a non-zero `n_ctx` is a
+documented no-op and `transcribe_session_get_limits()` keeps reporting them
+unbounded. voxtral_realtime is the subtle case: it *does* have an
 absolute decoder position cap (`dec_max_position`, ~2.9 h of audio), but that is
 the model's true RoPE wall — not a memory ceiling a caller can lower — so
 `n_ctx` does not narrow it (its decoder KV is a constant-memory sliding ring;

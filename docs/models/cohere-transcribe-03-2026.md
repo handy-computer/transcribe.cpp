@@ -21,10 +21,24 @@ pinned 2026-04-16.
 
 ## Input limits
 
-Accepts up to about **6.7 minutes (400 s)** of 16 kHz mono audio per call — the
-encoder's positional table is the binding limit. Longer audio is rejected up
-front with `TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than silently truncated; split
-it into shorter segments. See the [input-length contract](../input-limits.md).
+**No practical limit** (`max_audio_ms = 0`): audio longer than the model's
+trained clip span (`max_audio_clip_s`, 35 s) is windowed internally and the
+per-window transcripts are concatenated, so a caller never has to segment input
+by hand.
+
+Windowing is required, not an optimization. The encoder's positional table
+spans ~400 s, so a much longer clip than the model ever saw in training still
+encodes cleanly; the decoder is what fails. Its cross-attention has no
+monotonicity constraint, so past the trained span it loses alignment, emits EOS
+early, and drops the rest of the audio — returning `TRANSCRIBE_OK` with a
+silently incomplete transcript. Windows overlap by one second and are joined in
+token space, so a boundary that lands mid-word is harmless — the word survives
+whole in the next window and the duplicate is trimmed at the join. Boundaries
+still prefer a detected pause, which makes that match easier to find.
+
+`n_ctx` still applies: it bounds the decoder self-KV, and therefore the output
+budget *per window*, but no longer bounds input length. See the
+[input-length contract](../input-limits.md).
 
 ## Download
 
