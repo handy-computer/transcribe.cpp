@@ -4,20 +4,23 @@
 """Generate a PEP 503 "simple repository" index from this repo's GitHub
 release assets, for wheels too large or too specialized for PyPI.
 
-The cu12 CUDA provider is ~197 MB — over PyPI's 100 MB cap — so it cannot live
-on PyPI; future Windows-CUDA / cu13 / ROCm providers ride the same index.
+The cu12 and cu13 CUDA providers are ~197 MB — over PyPI's 100 MB cap — so they
+cannot live on PyPI; future ROCm providers ride the same index.
 GitHub hosts the wheels (as release assets); GitHub Pages hosts the few KB of
 HTML this produces. pip/uv consume it as:
 
     pip install "transcribe-cpp[cu12]" \
         --extra-index-url https://<owner>.github.io/<repo>/whl/cu12
+    # or for CUDA 13:
+    pip install "transcribe-cpp[cu13]" \
+        --extra-index-url https://<owner>.github.io/<repo>/whl/cu13
 
 Modeled on llama-cpp-python's releases-to-pep-503.sh, with one simplification:
-our flavors are distinguished by PACKAGE NAME (transcribe-cpp-native-cu12), not
-by a build-tag suffix on the release, so a single release can carry every
-flavor's wheels and we just filter assets by distribution name. No sha256 in
-the URLs (would mean downloading every 197 MB wheel each run — the same
-trade-off llama-cpp-python makes; assets are served over HTTPS from GitHub).
+our flavors are distinguished by PACKAGE NAME (e.g. transcribe-cpp-native-cu12,
+transcribe-cpp-native-cu13), not by a build-tag suffix on the release, so a single
+release can carry every flavor's wheels and we just filter assets by distribution
+name. No sha256 in the URLs (would mean downloading every 197 MB wheel each run —
+the same trade-off llama-cpp-python makes; assets are served over HTTPS from GitHub).
 
 Usage (CI):
     GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=*** \
@@ -35,10 +38,11 @@ from pathlib import Path
 
 #: flavor (index subdir) -> provider packages whose wheels live under it.
 #: A wheel is matched to a flavor purely by its distribution name, so the same
-#: flavor holds every platform tag of that package (linux + windows cu12).
+#: flavor holds every platform tag of that package (linux + windows cu12/cu13).
 FLAVORS: dict[str, list[str]] = {
     "cu12": ["transcribe-cpp-native-cu12"],
-    # future: "cu13": ["transcribe-cpp-native-cu13"], "rocm": [...]
+    "cu13": ["transcribe-cpp-native-cu13"],
+    # future: "rocm": [...]
 }
 
 _API = "https://api.github.com"
