@@ -30,7 +30,7 @@ tags:
   - rnnt
 
 summary: |
-  Offline English speech-to-text with punctuation and capitalization. A 0.6B-parameter FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in offline mode only — streaming attention contexts are present in the GGUF but transcribe.cpp does not yet expose a streaming entry.
+  English speech-to-text with punctuation and capitalization. A 0.6B-parameter FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in both offline and buffered streaming modes.
 
 default_quant_index: 2  # Q8_0
 

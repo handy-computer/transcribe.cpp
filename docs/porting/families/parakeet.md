@@ -402,9 +402,9 @@ Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
 The first cache-aware streaming variant in the family. Same 24-layer /
 d_model=1024 / n_mels=128 / RNNT-head geometry as `parakeet-unified-en-0.6b`,
 but trained with chunked attention + causal conv + LayerNorm rather than
-full attention + symmetric conv + BatchNorm. v1 transcribe.cpp targets
-offline transcription only; the streaming session API is deferred. The
-chunked-attention mask, causal conv, and LayerNorm conv module are all
+full attention + symmetric conv + BatchNorm. transcribe.cpp supports both
+offline transcription and cache-aware streaming. The chunked-attention mask,
+causal conv, and LayerNorm conv module are all
 preserved at inference so the offline transcript reproduces NeMo's
 published 2.32% LibriSpeech test-clean WER at `att_context_size=[70,13]`
 (1.12s chunk, w/o PnC).

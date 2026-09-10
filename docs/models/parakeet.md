@@ -25,8 +25,8 @@ Most users want one of three:
 - **German → `parakeet-primeline`.** primeLine's German fine-tune of
   v3. Same size and speed; tuned for German while keeping the other 24
   v3 languages usable.
-- **Streaming / real-time → Nemotron streaming.** Parakeet here is
-  offline-only. For low-latency streaming use the FastConformer-lineage
+- **Streaming / real-time → Nemotron streaming.** Most Parakeet variants here
+  are offline-only. For low-latency streaming use the FastConformer-lineage
   [`nemotron-3.5-asr-streaming-0.6b`](nemotron-3.5-asr-streaming-0.6b.md)
   (multilingual) or
   [`nemotron-speech-streaming-en-0.6b`](nemotron-speech-streaming-en-0.6b.md)
