@@ -39,11 +39,77 @@ LibriSpeech WER:
 | Fallback thresholds | compression `2.4`, logprob `-1.0`, no-speech `0.6` | Library defaults (`transcribe_whisper_run_ext_init`). |
 | Condition on prev | **off** | Library default; long-form conditioning is not part of short-form WER. |
 | Normalization | `EnglishTextNormalizer` (en) / `BasicTextNormalizer` (other) | Applied to both ref and hyp at score time (`score.py`). |
+| ITN | **off** (`--no-itn`) | Spoken form, matching what the reference runs produce (`run_reference_sensevoice.py` / `run_reference_funasr_nano.py` default `--use-itn` off). Only `sensevoice` and `funasr_nano` have a runtime ITN toggle; every other family ignores the flag. |
 | Dataset | full LibriSpeech `test-clean` (2620 utts) | — |
 
 The recipe is **stamped into the hyp JSONL `batch_header`** (`recipe` field)
 by `run.py`, so every artifact is self-describing and a methodology drift
 shows up in the file rather than silently shifting the number.
+
+> **ITN is pinned, not inherited.** The run-time ITN default is per-family and
+> is a product decision that can move: `sensevoice` resolves it to *on* (there
+> the ITN toggle is also the only source of casing and punctuation, so ITN-off
+> hands an unconfigured caller lowercase unpunctuated text), while
+> `funasr_nano` keeps upstream's `itn=False`. The benchmark follows neither:
+> `run.py` always passes `--no-itn`, because the reference runs it is gated
+> against produce spoken form. Explicit for every family, so a future default
+> flip cannot silently restate what a published number means.
+>
+> This is not just a formatting difference that normalization would absorb.
+> ITN changes the decode itself, so it moves WER on its own — **in the upstream
+> model, not only in this port.** Measured on LibriSpeech test-clean:
+>
+> | Arm | ITN off | ITN on | Δ | n |
+> | --- | ---: | ---: | ---: | ---: |
+> | SenseVoice — FunASR 1.3.1 reference, FP32/CPU | 2.538% | 2.685% | **+0.147pp** | 512 |
+> | SenseVoice — transcribe.cpp F32/CPU | 2.556% | 2.666% | **+0.110pp** | 512 |
+> | SenseVoice — transcribe.cpp Q8_0/Metal | 2.556% | 2.731% | +0.175pp | 512 |
+> | Fun-ASR-Nano-2512 BF16 | 1.754% | 1.840% | +0.086pp | 200 |
+> | Fun-ASR-MLT-Nano-2512 BF16 | 1.668% | 1.711% | +0.043pp | 200 |
+>
+> The ITN cost is a property of the model. At matched dtype the port's ITN
+> penalty (+0.110pp) is *smaller* than the reference's (+0.147pp), and the
+> degradation is the same degradation: of the 32 utterances where the port
+> regresses under ITN, 26 also regress in the reference, and the top cases are
+> byte-identical on both sides (`arcadian` → `arrcadian`, `sententiously` →
+> `sentiously`, `gilchrist` → `gilcht`, `pride` → `bride`). Comparing the Q8_0
+> arm against the FP32 reference overstates the gap: ITN-on is somewhat more
+> quant-sensitive, which is the +0.065pp between the F32 and Q8_0 rows.
+>
+> On English it is not number rendering — only 2.5% of ITN-on hypotheses
+> contain a digit, so `EnglishTextNormalizer` has almost nothing to absorb.
+>
+> **On Chinese the sign flips, and the reason is the reference's convention.**
+> `BasicTextNormalizer` (used for every non-English language) strips
+> punctuation but does no number mapping — and the FLEURS-zh reference is
+> itself written with digits (`桥下垂直净空 15 米 … 于 2011 年 8 月完工`). So
+> ITN-*off*, which emits spoken form (`二零一一年八月`), mismatches the
+> reference on every date and quantity, while ITN-on matches it:
+>
+> | Model | FLEURS-zh CER off | on | Δ | n |
+> | --- | ---: | ---: | ---: | ---: |
+> | SenseVoiceSmall F32 | 10.100% | 8.070% | **−2.030pp** | 945 |
+> | Fun-ASR-Nano-2512 BF16 | 7.920% | 6.640% | **−1.280pp** | 250 |
+> | Fun-ASR-MLT-Nano-2512 BF16 | 7.980% | 6.960% | **−1.020pp** | 250 |
+>
+> The SenseVoice row is the full 945-utterance split and its arms' 95% CIs
+> barely overlap ([9.19, 11.02] off vs [7.25, 8.96] on); the Fun-ASR rows are a
+> 250-utterance subset, so compare deltas within a row, not absolutes across
+> rows.
+>
+> Read that as "ITN-on matches the FLEURS-zh scoring convention," not "the
+> model recognizes Chinese better with ITN on" — the gain is digit rendering
+> lining up with the reference, not improved recognition.
+>
+> None of this argues for unpinning the harness. The published tables were
+> measured at ITN-off and `run_reference_*.py` defaults ITN off; the pin exists
+> to keep both sides on the same convention, whichever direction that
+> convention happens to favor.
+>
+> If the library default is ever revisited, this pin stays put unless the
+> reference side is re-run to match. `scripts/validate.py` pins `--no-itn` for
+> the same two families and the same reason — there the prefix embedding /
+> prompt change would break tensor comparison outright.
 
 **What does and doesn't move WER (measured on whisper-medium F16):**
 

@@ -215,6 +215,16 @@ labels.
 
 ## Notes
 
+- **Post-port change (ITN).** `TRANSCRIBE_ITN_MODE_DEFAULT` now resolves to ITN
+  **on** for this family, diverging from upstream's `itn=False`. SenseVoice has
+  no separate PNC toggle, so ITN off means users get lowercase, unpunctuated
+  text out of the box. Two knock-on corrections to the acceptance row above,
+  which is left as the record of what was verified at the time: the CLI pair is
+  now `--itn` / `--no-itn` (ITN-on is the unflagged path), and the family-param
+  struct it names (`transcribe_sensevoice_params{ .use_itn = true }`) no longer
+  exists — the control is the generic `transcribe_run_params::itn` enum. The
+  WER harness pins `--no-itn` (`scripts/wer/run.py --itn`), so the Stage 7
+  numbers still describe ITN-off text and the reference comparison is unchanged.
 - This is the first FunASR-native port in the repo. Existing ports
   (Whisper, Parakeet, Cohere, Qwen3-ASR) all live under HF Transformers
   or NeMo, both of which expose `config.json` / preprocessor / tokenizer

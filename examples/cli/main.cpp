@@ -239,8 +239,10 @@ struct cli_args {
 
     // SenseVoice / FunASR-Nano family knobs. The `--itn` flag is shared:
     // it routes to whichever family the loaded model belongs to. Ignored
-    // by non-ITN-aware families.
-    bool use_itn           = false;  // --itn
+    // by non-ITN-aware families. Unset leaves the library default in place,
+    // which differs per family (sensevoice: on; funasr-nano: off), so the
+    // initializer here is only read once --itn / --no-itn has been seen.
+    bool use_itn           = false;  // --itn / --no-itn
     bool itn_set           = false;
     bool keep_special_tags = false;  // --raw-tokens
 
@@ -318,7 +320,10 @@ void print_usage(const char * argv0) {
                  "  --temperature F       (whisper) tier-0 sampling temperature (default 0 = greedy)\n"
                  "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
                  "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
-                 "  --itn                 (sensevoice/funasr-nano) enable inverse text normalization\n"
+                 "  --itn                 (sensevoice/funasr-nano) enable inverse text\n"
+                 "                        normalization (sensevoice: on unless --no-itn)\n"
+                 "  --no-itn              (sensevoice/funasr-nano) emit the upstream\n"
+                 "                        spoken-form text instead\n"
                  "  --pnc                 (canary) emit punctuation and capitalization (default)\n"
                  "  --no-pnc              (canary) emit lowercase de-punctuated text\n"
                  "  --diarize             (moss/granite-plus) speaker attribution: segments carry\n"
@@ -587,6 +592,9 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             out.whisper_set = true;
         } else if (a == "--itn") {
             out.use_itn = true;
+            out.itn_set = true;
+        } else if (a == "--no-itn") {
+            out.use_itn = false;
             out.itn_set = true;
         } else if (a == "--pnc") {
             out.canary_pnc     = true;

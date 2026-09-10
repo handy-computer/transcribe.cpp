@@ -16,7 +16,32 @@ The same CTC head also emits language ID, simple emotion labels (`<|HAPPY|>`,
 `<|NEUTRAL|>`, `<|SAD|>`, `<|ANGRY|>`, `<|EMO_UNKNOWN|>`), audio-event tags
 (`<|Speech|>`, `<|BGM|>`, `<|Applause|>`, …), and an inverse-text-normalization
 flag (`<|withitn|>` / `<|woitn|>`). These are stripped from the transcript by
-default; pass `--raw-tokens` to keep them, and `--itn` to enable ITN.
+default; pass `--raw-tokens` to keep them.
+
+**ITN is on by default.** SenseVoice has no separate punctuation/capitalization
+control — the ITN flag is what produces casing, punctuation, and digits — so
+transcribe.cpp resolves the run-time default to on rather than following
+upstream's `itn=False`. Pass `--no-itn` (library: `itn = TRANSCRIBE_ITN_MODE_OFF`)
+for upstream's verbatim spoken form.
+
+ITN changes the CTC decode, not just the rendering, so it moves accuracy — and
+the direction depends on the language:
+
+- **English costs a little.** LibriSpeech test-clean (512 utts, F32/CPU):
+  **+0.110pp WER** (2.556% → 2.666%), diffuse single-word corruption
+  (`arcadian` → `arrcadian`). This is upstream behavior, not a port artifact —
+  the FunASR 1.3.1 reference shows a *larger* penalty on the same data
+  (+0.147pp) and mangles the same words byte-for-byte. The cost is inside the
+  table's bootstrap CI.
+- **Chinese gains a lot.** FLEURS-zh (945 utts, F32/CPU): **−2.030pp CER**
+  (10.100% → 8.070%). The FLEURS-zh reference is digit-normalized, so ITN-on's
+  `2011年8月` matches it where ITN-off's `二零一一年八月` does not. This is a
+  scoring-convention match, not measured evidence of better recognition.
+
+Readable output is judged the better default for interactive use; `--no-itn` is
+the right choice for a pipeline that scores or post-processes text. The WER
+numbers below are measured with ITN **off**, matching the reference runs; see
+[WER methodology](../tools/wer.md).
 
 See FunAudioLLM's [model card](https://huggingface.co/FunAudioLLM/SenseVoiceSmall)
 for training data, intended use, and upstream evaluation methodology.
@@ -76,14 +101,21 @@ build/bin/transcribe-cli \
 ```
 
 Pass `--language zh` / `yue` / `ja` / `ko` (or omit for auto-detection) for
-the other supported languages. Raw control tokens and ITN are opt-in:
+the other supported languages.
 
 ```bash
-# Keep <|en|><|HAPPY|><|Speech|><|woitn|>… in the output text:
+# Keep <|en|><|HAPPY|><|Speech|><|withitn|>… in the output text:
 build/bin/transcribe-cli --raw-tokens -m … samples/jfk.wav
 
-# Render numbers/punctuation in formal form:
-build/bin/transcribe-cli --itn -m … samples/jfk.wav
+# Default (ITN on):
+#   And so my fellow Americans ask not what your country can do for you, ask
+#   what you can do for your country.
+build/bin/transcribe-cli -m … samples/jfk.wav
+
+# Upstream spoken form — lowercase, unpunctuated, numbers as words:
+#   and so my fellow americans ask not what your country can do for you ask
+#   what you can do for your country
+build/bin/transcribe-cli --no-itn -m … samples/jfk.wav
 ```
 
 If your audio is not already 16 kHz mono WAV, convert it first:
