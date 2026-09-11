@@ -12,13 +12,15 @@ RNN-T decoding. Outputs cased, punctuated transcripts. Token- and
 word-level timestamps are available.
 
 Upstream this is a **multitalker (speaker-attributed)** checkpoint: it can
-transcribe several overlapping speakers into per-speaker channels. That
-path depends on machinery this port does **not** ship (see
-[Known limitations](#known-limitations)). transcribe.cpp exposes only the
-model's `single_speaker_mode` ASR path, which disables the multitalker
-machinery and runs the checkpoint as a cache-aware streaming RNN-T with
-the base model's frontend, encoder backbone, decoder, and tokenizer plus
-the checkpoint's always-on layer-0 speaker-kernel injection.
+transcribe several overlapping speakers into per-speaker channels. This
+port ships that path too, via **bundle GGUFs** that embed the
+[`nvidia/diar_streaming_sortformer_4spk-v2.1`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1)
+streaming diarizer alongside the ASR model. A plain (non-bundle) GGUF runs
+the model's `single_speaker_mode` ASR path — a cache-aware streaming RNN-T
+with the checkpoint's always-on layer-0 speaker-kernel injection. A bundle
+GGUF with `--diarize` runs the full multitalker pipeline and emits a
+speaker-tagged transcript (see
+[Multitalker](#multitalker-speaker-attributed-asr)).
 
 This port runs the model in both **offline** and **cache-aware streaming**
 modes.
@@ -49,6 +51,21 @@ scoring (PnC-stripped), and no external LM. F32 reference baseline: 2.19%.
 The measured NeMo `single_speaker_mode` reference on the same split is
 2.19%, and NVIDIA's self-reported number is 2.19% (from the
 [HF model card](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1)).
+
+### Multitalker bundles
+
+Bundle GGUFs embed the streaming Sortformer diarizer. The tier names the
+ASR half's dtype; the embedded diarizer is F32 for the F32 bundle, F16 for
+F16, and Q8_0 for all k-quant tiers.
+
+| Bundle | Download | Size |
+| --- | --- | ---: |
+| F32    | [bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf)       | 2.96 GB |
+| F16    | [bundle/multitalker-parakeet-streaming-0.6b-v1-F16.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-F16.gguf)       | 1.48 GB |
+| Q8_0   | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf)     | 873 MB  |
+| Q6_K   | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf)     | 743 MB  |
+| Q5_K_M | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf) | 681 MB  |
+| Q4_K_M | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf) | 617 MB  |
 
 ## Streaming parity
 
@@ -82,9 +99,15 @@ uv run --project scripts/envs/parakeet scripts/validate_streaming.py \
 cmake -B build
 cmake --build build
 
+# Plain GGUF: single-speaker transcription.
 build/bin/transcribe-cli \
   -m models/multitalker-parakeet-streaming-0.6b-v1/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf \
   samples/jfk.wav
+
+# Bundle GGUF: speaker-attributed transcription.
+build/bin/transcribe-cli --diarize \
+  -m models/multitalker-parakeet-streaming-0.6b-v1/bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf \
+  meeting.wav
 ```
 
 If your audio is not already 16 kHz mono WAV, convert it first:
@@ -165,20 +188,67 @@ CPU same-length tensor parity is bit-exact (max_abs 0.0) at batch=4 on
 `jfk.wav`, diverse-length flash tensor parity is bit-exact across arbitrary
 length mixes, and full test-clean batch-8 WER equals batch-1 (2.19%).
 
+## Multitalker (speaker-attributed ASR)
+
+A **bundle GGUF** (composed by `scripts/compose-multitalker-bundle.py`)
+embeds the streaming Sortformer diarizer. Running it with `--diarize`
+produces a speaker-tagged transcript (speaker ids on segments, with words
+linked through their segment; up to 4 speakers): the embedded diarizer
+streams over the clip at the reference operating point (14-frame chunks,
+spkcache/FIFO 188), per-chunk cache gating selects which speakers are
+active, and each active speaker gets a private cache-aware streaming
+encoder+decoder instance fed only its active chunks. Encoder/decoder
+working state is constant in clip length (~5 MB per active speaker), while
+total call memory remains O(T) for the input audio, whole-clip mel, and
+accumulated diarizer predictions. It does not allocate the O(T²) attention
+buffers used by the optional offline replay.
+
+Two supervision modes, selected via `TRANSCRIBE_MULTITALKER_MODE`:
+
+- **kernel** (default): trained speaker-kernel injection at conformer
+  layer 0 (`masked_asr=False` upstream). Audio is unmodified; the model
+  suppresses non-target speech.
+- **masked**: mel feature masking (`masked_asr=True`, the NeMo example
+  default). Non-target frames are zero-masked before pre-encode.
+
+cpWER on ami-ihm-test (16 meetings, meeteval, refs from `edinburghcstr/ami`
+segment transcripts; NeMo baseline = the pinned reference pipeline on
+L40S, batch 1):
+
+| system | kernel | masked |
+| --- | ---: | ---: |
+| transcribe.cpp (CUDA F32) | **19.35%** | 23.73% |
+| NeMo reference            | 21.39%     | 24.00% |
+| NVIDIA self-reported      | 21.26%     | — |
+
+Kernel mode is the default because it wins on both implementations. The
+C++ kernel number is *better* than the reference for a verified reason:
+the reference harness has a background-slot indexing bug
+(`get_active_speakers_info` builds `inactive_speaker_ids` from
+`range(len(active))` minus a slot id), confirmed at tensor level from the
+reference's own supervision dumps. With
+`TRANSCRIBE_MULTITALKER_REF_BG_COMPAT=1` (parity tooling only) the port
+reproduces that bug and scores 21.23% — matching the reference (and
+NVIDIA's published 21.26%). Under matched configuration both modes are
+transcript-exact vs the reference on CPU F32 (0 differing words on a
+3-minute 4-speaker AMI slice); on long meetings a measured ~3e-5 F32 pred
+drift eventually flips near-tie top-k picks inside the diarizer's
+spkcache compression (a discontinuous selection both sides implement
+bit-identically vs a neutral arbiter), after which trajectories diverge
+benignly (~0.4 cpWER on the affected meeting).
+
+`TRANSCRIBE_MULTITALKER_OFFLINE=1` selects the older offline whole-clip
+replay instead of the streaming pass (parity/dump tooling; attention
+buffers grow quadratically with clip length — do not use on meetings
+longer than ~15 minutes).
+
 ## Known limitations
 
-- **Single-speaker only. The multitalker / speaker-attributed ASR path is
-  not ported.** Upstream, this checkpoint transcribes several overlapping
-  speakers into per-speaker channels. That path requires (1) an external
-  streaming speaker-diarization model
-  ([`nvidia/diar_streaming_sortformer_4spk-v2.1`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1),
-  a separate Sortformer checkpoint that this repo does not ship), (2)
-  per-frame speaker-kernel injection driven by that diarizer's supervision,
-  (3) one encoder+decoder instance per speaker (up to 4), and (4) a
-  speaker-tagged SegLST output contract. None of these exist in
-  transcribe.cpp today, so the port runs `single_speaker_mode` and produces
-  a single flat transcript. It does **not** separate speakers, diarize, or
-  emit speaker turns.
+- **Multitalker is offline-API only.** `--diarize` on a bundle runs the
+  streaming pipeline internally, but the public streaming API
+  (`stream_feed`) still exposes single-speaker transcription only; a
+  per-speaker streaming text ABI is future work. `run_batch` on a bundle
+  warns and runs single-speaker.
 - **English only.** The model is English-only by training.
 - **No translation and no language detection.**
 

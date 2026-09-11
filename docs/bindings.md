@@ -39,7 +39,10 @@ binding's generated files:
   `GGML_BACKEND_DL` installs — `module_dir`, the directory to hand to
   `transcribe_init_backends()`. Proven per push by the link-smoke CI lane,
   which compiles a toy C consumer from nothing but this manifest in both
-  static and shared postures.
+  static and shared postures. The Rust `-sys` crate consumes it from two
+  sources: its own vendored source build (the default), or — with the
+  `TRANSCRIBE_DIR` env var pointing at an installed prefix — a prebuilt
+  tree, skipping the source build entirely.
 
 ## Result text pointers: copy at the FFI boundary
 
@@ -64,6 +67,17 @@ automatic: Python `ctypes.c_char_p` / `.decode()`, Go `C.GoString`, Rust
 `CStr::to_str().to_owned()`, Swift `String(cString:)`. A binding that instead
 hands out a zero-copy view must scope it to the current callback/update turn
 and document that it dies at the next stream mutation.
+
+First-class bindings expose both streaming result shapes as owned values:
+
+- the UI-facing `transcribe_stream_get_text()` view (full, committed, and
+  tentative text), and
+- a full structured snapshot built from the ordinary current-result accessors
+  (clean/raw text, detected language, timestamp kind, segments, speaker turns,
+  words, tokens, and timings).
+
+The structured snapshot must be copied completely before the next feed or
+finalize call; bindings must not return the session-owned pointers directly.
 
 ## Diarization result contract
 
@@ -91,8 +105,25 @@ whitespace trims). It equals the clean text modulo whitespace for families
 that emit clean text natively, and is the recommended replacement for
 `keep_special_tags` when the goal is recovering what the model emitted —
 unlike the flag it works for every family, covers plain-text markers, and does
-not give up the clean transcript. Offline runs (single and batch) only;
-streaming results do not carry it.
+not give up the clean transcript. It is present on single, batch, and full
+structured stream snapshots (and may be empty before a stream has produced a
+successful hypothesis).
+
+## Generic parameter parity
+
+First-class high-level bindings expose every field of the generic model-load,
+session, run, and stream parameter structs. Generated/raw FFI coverage is not
+sufficient: an application must not need private binding internals to set a
+public generic option. In particular, `transcribe_run_params::pnc` and `itn`
+are typed three-state controls (`default`, `off`, `on`) and must flow through
+single-run, batch, streaming, and one-shot convenience surfaces wherever those
+surfaces exist.
+
+Every generic option needs model-free enum/type coverage (plus direct
+materialization coverage where the binding architecture permits it) and, when a
+supporting model exists, a model-gated behavior test. A new field added to a
+generic parameter struct must update all first-class bindings and this
+conformance coverage in the same change.
 
 When adding a new family extension, update:
 

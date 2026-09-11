@@ -29,12 +29,12 @@ tags:
   - encoder-decoder
 
 summary: |
-  Offline English speech-to-text. A 123M-parameter encoder-decoder ASR model
-  designed for streaming use (ergodic encoder + sliding-window attention,
-  50 Hz time-domain frontend). Same family as moonshine-streaming-tiny;
-  deeper encoder/decoder (10 / 10 layers) and wider hidden dims (encoder 620 /
-  decoder 512). Takes a 16 kHz mono WAV and produces a transcript.
-  No translation, no multilingual capability, no timestamps.
+  English speech-to-text in both one-shot and streaming modes. A 123M-parameter
+  encoder-decoder ASR model designed for streaming use (ergodic encoder +
+  sliding-window attention, 50 Hz time-domain frontend). Same family as
+  moonshine-streaming-tiny; deeper encoder/decoder (10 / 10 layers) and wider
+  hidden dims (encoder 620 / decoder 512). Takes a 16 kHz mono WAV and produces
+  a transcript. No translation, no multilingual capability, no timestamps.
 
 default_quant_index: 2  # Q8_0
 

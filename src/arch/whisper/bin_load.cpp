@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -118,20 +119,28 @@ WhisperSpecials compute_specials(int n_vocab) {
     return s;
 }
 
-// HF generation_config.suppress_tokens for whisper (~88 ids never emitted in
-// transcripts). Hardcoded here because the .bin doesn't store it; source is HF
-// generation_config.json (identical across variants; suppressing ids absent in
-// the smaller .en vocab is a no-op).
-const int32_t k_whisper_suppress_tokens[] = {
-    1,     2,     7,     8,     9,     10,    14,    25,    26,    27,    28,    29,    31,    58,    59,
-    60,    61,    62,    63,    90,    91,    92,    93,    359,   503,   522,   542,   873,   893,   902,
-    918,   922,   931,   1350,  1853,  1982,  2460,  2627,  3246,  3253,  3268,  3536,  3846,  3961,  4183,
-    4667,  6585,  6647,  7273,  9061,  9383,  10428, 10929, 11938, 12033, 12331, 12562, 13793, 14157, 14635,
-    15265, 15618, 16553, 16604, 18362, 18956, 20075, 21675, 22520, 26130, 26161, 26435, 28279, 29464, 31650,
-    32302, 32470, 36865, 42863, 47425, 49870, 50254, 50258, 50358, 50359, 50360, 50361, 50362,
+// OpenAI Whisper's tokenizer-derived non-speech ids, excluding the six
+// control tokens appended by synthesize_bin_suppress_tokens(). The legacy
+// format stores the vocabulary but not generation_config; its two tokenizer
+// families assign different meanings to most ids above the shared punctuation
+// prefix.
+const int32_t k_whisper_english_non_speech_tokens[] = {
+    1,     2,     7,     8,     9,     10,    14,    25,    26,    27,    28,    29,    31,    58,
+    59,    60,    61,    62,    63,    90,    91,    92,    93,    357,   366,   438,   532,   685,
+    705,   796,   930,   1058,  1220,  1267,  1279,  1303,  1343,  1377,  1391,  1635,  1782,  1875,
+    2162,  2361,  2488,  3467,  4008,  4211,  4600,  4808,  5299,  5855,  6329,  7203,  9609,  9959,
+    10563, 10786, 11420, 11709, 11907, 13163, 13697, 13700, 14808, 15306, 16410, 16791, 17992, 19203,
+    19510, 20724, 22305, 22935, 27007, 30109, 30420, 33409, 34949, 40283, 40493, 40549, 47282, 49146,
 };
-constexpr int k_whisper_n_suppress =
-    static_cast<int>(sizeof(k_whisper_suppress_tokens) / sizeof(k_whisper_suppress_tokens[0]));
+
+const int32_t k_whisper_multilingual_non_speech_tokens[] = {
+    1,     2,     7,     8,     9,     10,    14,    25,    26,    27,    28,    29,    31,    58,
+    59,    60,    61,    62,    63,    90,    91,    92,    93,    359,   503,   522,   542,   873,
+    893,   902,   918,   922,   931,   1350,  1853,  1982,  2460,  2627,  3246,  3253,  3268,  3536,
+    3846,  3961,  4183,  4667,  6585,  6647,  7273,  9061,  9383,  10428, 10929, 11938, 12033, 12331,
+    12562, 13793, 14157, 14635, 15265, 15618, 16553, 16604, 18362, 18956, 20075, 21675, 22520, 26130,
+    26161, 26435, 28279, 29464, 31650, 32302, 32470, 36865, 42863, 47425, 49870, 50254,
+};
 
 // Tensor rename rules: legacy whisper.cpp name -> canonical transcribe.cpp
 // name. collapse_to_1d drops the size-1 dim whisper.cpp uses for conv biases.
@@ -259,12 +268,8 @@ void fill_whisper_hparams(const transcribe::bin_loader::WhisperBinModel & bm, Wh
     hp.translate_token_id     = bm.is_multilingual ? sp.translate : -1;
     hp.prev_sot_token_id      = sp.prev;
 
-    // Suppression list — same across all multilingual whisper.cpp .bin
-    // variants. For .en, suppressing ids that don't exist in the
-    // smaller vocab is a no-op; the runtime check `id < vocab_size`
-    // gates application.
-    hp.suppress_tokens.assign(k_whisper_suppress_tokens, k_whisper_suppress_tokens + k_whisper_n_suppress);
-    hp.begin_suppress_tokens.assign({ 220, sp.eot });
+    hp.suppress_tokens       = synthesize_bin_suppress_tokens(bm.is_multilingual, bm.hp.n_vocab);
+    hp.begin_suppress_tokens = { 220, sp.eot };
 
     // Frontend (fixed across whisper variants — no .bin field carries
     // these so we use the canonical preprocessor_config.json values).
@@ -528,6 +533,20 @@ transcribe_status install_tokenizer(WhisperModel & m, const transcribe::bin_load
 
 }  // namespace
 
+std::vector<int32_t> synthesize_bin_suppress_tokens(bool is_multilingual, int n_vocab) {
+    std::vector<int32_t> result;
+    if (is_multilingual) {
+        result.assign(std::begin(k_whisper_multilingual_non_speech_tokens),
+                      std::end(k_whisper_multilingual_non_speech_tokens));
+    } else {
+        result.assign(std::begin(k_whisper_english_non_speech_tokens), std::end(k_whisper_english_non_speech_tokens));
+    }
+
+    const WhisperSpecials sp = compute_specials(n_vocab);
+    result.insert(result.end(), { sp.sot, sp.translate, sp.transcribe, sp.solm, sp.prev, sp.nosp });
+    return result;
+}
+
 transcribe_status load_from_bin(const char *                                path,
                                 const struct transcribe_model_load_params * params,
                                 struct transcribe_model **                  out_model) {
@@ -590,7 +609,7 @@ transcribe_status load_from_bin(const char *                                path
     }
 
     // ---- Backend plan ----
-    if (auto st = transcribe::load_common::init_backends(params->backend, params->gpu_device, "whisper", m->plan);
+    if (auto st = transcribe::load_common::init_backends(params->backend, params->device, "whisper", m->plan);
         st != TRANSCRIBE_OK) {
         return st;
     }

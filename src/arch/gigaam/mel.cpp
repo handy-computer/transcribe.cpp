@@ -9,12 +9,22 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "transcribe-batch-util.h"
 #include "weights.h"
+
+#if TRANSCRIBE_HAS_BLAS
+#    ifdef __APPLE__
+#        include <Accelerate/Accelerate.h>
+#    else
+#        include <cblas.h>
+#    endif
+#endif
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 namespace transcribe::gigaam {
 
@@ -113,7 +123,8 @@ int GigaamMelFrontend::n_frames_for(size_t n_samples) const {
 transcribe_status GigaamMelFrontend::compute(const float *        pcm,
                                              size_t               n_samples,
                                              std::vector<float> & out_mel,
-                                             int &                out_n_frames) const {
+                                             int &                out_n_frames,
+                                             int                  n_threads) const {
     if (pcm == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -126,49 +137,69 @@ transcribe_status GigaamMelFrontend::compute(const float *        pcm,
 
     out_mel.assign(static_cast<size_t>(n_mels) * n_frames, 0.0f);
 
-    // Scratch buffers for the FFT. Reused across frames.
-    std::vector<float> fft_in(2 * n_fft);
-    std::vector<float> fft_out(8 * n_fft);
-    std::vector<float> power_spec(n_freq);
+    // Frame FFTs are independent. Store their power spectra in
+    // [n_frames, n_freq] so one matrix operation can project all frames.
+    std::vector<float> power(static_cast<size_t>(n_frames) * n_freq);
+    if (n_threads <= 0) {
+        n_threads = transcribe::default_n_threads();
+    }
+    const int n_workers = std::max(1, std::min(n_frames, n_threads));
+    auto      worker    = [&](int worker_id) {
+        // Each worker reuses its FFT scratch buffers across assigned frames.
+        std::vector<float> fft_in(2 * n_fft);
+        std::vector<float> fft_out(8 * n_fft);
+        for (int t = worker_id; t < n_frames; t += n_workers) {
+            const size_t start = static_cast<size_t>(t) * hop_length;
+            // Window x[start..start + win_length) with hann. GigaAM uses
+            // n_fft == win_length. Keep the FFT tail zeroed for larger FFTs.
+            std::fill(fft_in.begin(), fft_in.begin() + n_fft, 0.0f);
+            for (int k = 0; k < win_length; ++k) {
+                fft_in[k] = pcm[start + k] * hann[k];
+            }
+            mixed_radix_fft(fft_in.data(), n_fft, fft_out.data());
 
-    for (int t = 0; t < n_frames; ++t) {
-        const size_t start = static_cast<size_t>(t) * hop_length;
-        // Window the frame: x[start..start+win_length) * hann.
-        // n_fft == win_length for gigaam, so the FFT input is exactly
-        // the windowed frame (no zero-pad needed). The pre-zeroed
-        // scratch space ahead of the FFT_in[win_length..n_fft) covers
-        // the unlikely n_fft > win_length case for completeness.
-        std::fill(fft_in.begin(), fft_in.begin() + n_fft, 0.0f);
-        for (int k = 0; k < win_length; ++k) {
-            fft_in[k] = pcm[start + k] * hann[k];
-        }
-        mixed_radix_fft(fft_in.data(), n_fft, fft_out.data());
-
-        // power_spec[k] = |X[k]|^2 (power=2).
-        for (int k = 0; k < n_freq; ++k) {
-            const float re = fft_out[2 * k];
-            const float im = fft_out[2 * k + 1];
-            power_spec[k]  = re * re + im * im;
-        }
-
-        // mel[m] = sum_k filterbank[m, k] * power_spec[k]; then
-        // log(clamp(x, 1e-9, 1e9)).
-        for (int m = 0; m < n_mels; ++m) {
-            const float * row = mel_fb.data() + static_cast<size_t>(m) * n_freq;
-            float         acc = 0.0f;
+            // power[t, k] = |X_t[k]|^2 (power=2).
+            float * power_row = power.data() + static_cast<size_t>(t) * n_freq;
             for (int k = 0; k < n_freq; ++k) {
-                acc += row[k] * power_spec[k];
+                const float re = fft_out[2 * k];
+                const float im = fft_out[2 * k + 1];
+                power_row[k]   = re * re + im * im;
             }
-            if (acc < 1.0e-9f) {
-                acc = 1.0e-9f;
-            }
-            // The upper clamp at 1e9 in the reference is unreachable for
-            // realistic 16-bit PCM, but mirror it for byte-equivalence.
-            if (acc > 1.0e9f) {
-                acc = 1.0e9f;
-            }
-            out_mel[static_cast<size_t>(m) * n_frames + t] = std::log(acc);
         }
+    };
+    std::vector<std::thread> workers;
+    workers.reserve(n_workers > 0 ? static_cast<size_t>(n_workers - 1) : 0);
+    for (int worker_id = 1; worker_id < n_workers; ++worker_id) {
+        workers.emplace_back(worker, worker_id);
+    }
+    worker(0);
+    for (auto & thread : workers) {
+        thread.join();
+    }
+
+    // mel[m, t] = sum_k filterbank[m, k] * power[t, k].
+#if TRANSCRIBE_HAS_BLAS
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, n_mels, n_frames, n_freq, 1.0f, mel_fb.data(), n_freq,
+                power.data(), n_freq, 0.0f, out_mel.data(), n_frames);
+#else
+    for (int m = 0; m < n_mels; ++m) {
+        const float * filter = mel_fb.data() + static_cast<size_t>(m) * n_freq;
+        for (int t = 0; t < n_frames; ++t) {
+            const float * power_row = power.data() + static_cast<size_t>(t) * n_freq;
+            float         acc       = 0.0f;
+            for (int k = 0; k < n_freq; ++k) {
+                acc += filter[k] * power_row[k];
+            }
+            out_mel[static_cast<size_t>(m) * n_frames + t] = acc;
+        }
+    }
+#endif
+
+    // Finish mel[m, t] = log(clamp(mel[m, t], 1e-9, 1e9)).
+    // The upper limit is not expected for normalized PCM, but it matches
+    // the reference behavior.
+    for (float & value : out_mel) {
+        value = std::log(std::clamp(value, 1.0e-9f, 1.0e9f));
     }
     return TRANSCRIBE_OK;
 }

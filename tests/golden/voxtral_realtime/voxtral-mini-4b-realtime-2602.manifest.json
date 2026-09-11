@@ -11,8 +11,8 @@
     "source": "https://github.com/huggingface/transformers",
     "revision": "v5.10.2",
     "entrypoint": "scripts/dump_reference_voxtral_realtime_transformers.py",
-    "dump_args": [],
-    "notes": "Offline whole-clip oracle is the per-tensor contract (decode subcommand). A separate streaming-replay pass (stream subcommand) dumps the streaming transcript + per-step logits so Stage 4 can verify offline<->streaming numerical equivalence (intake risk #1). num_delay_tokens defaults to the processor value (config default 6 = 480ms, the publisher-recommended setting). The processor is auto-detect only (TranscriptionRequest language=None); --language is accepted but ignored."
+    "dump_args": ["--num-delay-tokens", "30"],
+    "notes": "The offline oracle uses delay 30 to match transcribe_run and transcribe_run_batch. The separate stream oracle uses the model's delay-6 default. The processor is auto-detect only; --language is accepted but ignored."
   },
   "expected_dtype": "bfloat16",
   "dtype_source": "config",

@@ -62,6 +62,17 @@ fn streams_jfk_committed_text() {
         "stream text: {:?}",
         text.full
     );
+
+    let snapshot = stream.snapshot();
+    assert!(!snapshot.text.is_empty(), "structured snapshot is empty");
+    if let Some(language) = &snapshot.language {
+        assert!(!language.is_empty(), "detected language must not be empty");
+    }
+    assert!(
+        !snapshot.segments.is_empty(),
+        "structured segments are empty"
+    );
+    let _ = (&snapshot.words, &snapshot.tokens);
 }
 
 #[test]

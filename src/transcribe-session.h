@@ -21,6 +21,14 @@
 
 struct transcribe_model;
 
+// ggml handle types for the base-owned compute scratch. Forward-declared so
+// this internal header does not pull the ggml headers into every includer
+// (the public transcribe.h never sees them); transcribe-backend.h uses the
+// same pattern for ggml_backend_t.
+struct ggml_context;
+struct ggml_backend_sched;
+typedef struct ggml_backend_sched * ggml_backend_sched_t;
+
 // Read transcribe_session_params::n_ctx with a struct_size guard. n_ctx is
 // a trailing field appended after kv_type, so an older caller's smaller
 // struct may not include it; in that case (or a NULL params) the default 0
@@ -276,11 +284,58 @@ struct transcribe_session {
 
     void clear_result();
 
+    // Per-run ggml compute scratch, owned by the base so every family
+    // releases it the same way and none can forget to: the backend
+    // scheduler (whose graph allocator only ever grows) and the no_alloc
+    // graph context. Families create both lazily inside their run / stream
+    // hooks and use them directly; the base frees them in release_scratch
+    // and in its destructor (scheduler first, then context).
+    ggml_backend_sched_t sched       = nullptr;
+    ggml_context *       compute_ctx = nullptr;
+
+    // Release the per-run ggml compute scratch (sched, then compute_ctx;
+    // see transcribe::release_compute_scratch), then let the family drop
+    // pointers that lived in them (on_scratch_released).
+    // The dispatcher calls this after every offline transcribe_run or
+    // transcribe_run_batch that passes pre-clear validation and reaches its
+    // commit point, whether family execution succeeds, fails, or throws.
+    // Without this, a single long utterance would pin the scheduler's
+    // high-water mark in backend compute memory for the session's lifetime
+    // (Handy #2000). Families re-create the scheduler lazily on the next run.
+    // The measured recreation cost is about 1 ms per run on Metal and up to
+    // about 10 ms on CPU for families that reserve a worst-case decoder
+    // workspace each run, such as Canary and Cohere.
+    //
+    // Host-side vectors that scale with input length, such as mel buffers,
+    // encoder host copies, and positional banks, deliberately retain their
+    // capacity. Family KV caches sized by the last batch are also retained;
+    // this hook releases only the ggml scheduler and compute context.
+    //
+    // Streaming entry points do not invoke this hook. A streaming session
+    // keeps its scheduler until a later offline run or session destruction.
+    // Parakeet and Voxtral Realtime use per-chunk bounded stream workspaces;
+    // Moonshine Streaming's decode graph cross-attends over the complete
+    // committed stream, so its workspace grows with total stream length.
+    // Must not throw. Non-virtual: a family cannot opt out of the release.
+    void release_scratch() noexcept;
+
     transcribe_session() = default;
+    // Frees sched / compute_ctx after the derived destructor has run. The
+    // scheduler owns only its own allocator buffers and references
+    // model-owned backends, so freeing it after the family's KV caches and
+    // stream buffers is order-independent.
     virtual ~transcribe_session();
 
     transcribe_session(const transcribe_session &)             = delete;
     transcribe_session & operator=(const transcribe_session &) = delete;
     transcribe_session(transcribe_session &&)                  = delete;
     transcribe_session & operator=(transcribe_session &&)      = delete;
+
+  protected:
+    // Family hook, called by release_scratch after sched / compute_ctx are
+    // freed: null out tensors borrowed from the freed context (encoder_out)
+    // or reset capacity bookkeeping (whisper compute_ctx_size). Most
+    // families need nothing. Not called from the base destructor because
+    // derived members are already destroyed by then. Must not throw.
+    virtual void on_scratch_released() noexcept {}
 };

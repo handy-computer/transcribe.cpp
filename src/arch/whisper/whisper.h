@@ -289,12 +289,10 @@ struct WhisperModel final : public transcribe_model {
 };
 
 struct WhisperSession final : public transcribe_session {
-    ggml_context *       compute_ctx      = nullptr;
     // Currently-allocated capacity of compute_ctx (mem_size). Used by
     // ensure_compute_ctx to decide between ggml_reset (cheap reuse)
     // and ggml_free + ggml_init (only when more space is needed).
-    size_t               compute_ctx_size = 0;
-    ggml_backend_sched_t sched            = nullptr;
+    size_t compute_ctx_size = 0;
 
     // Persistent backend-resident encoder output (see WhisperEncOut).
     WhisperEncOut enc_out;
@@ -330,6 +328,7 @@ struct WhisperSession final : public transcribe_session {
 
     WhisperSession() = default;
     ~WhisperSession() override;
+    void on_scratch_released() noexcept override;
 };
 
 }  // namespace transcribe::whisper

@@ -124,6 +124,7 @@ option(TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 option(TRANSCRIBE_METAL          "Enable Metal backend"     ${TRANSCRIBE_IS_APPLE_SILICON})
 option(TRANSCRIBE_VULKAN         "Enable Vulkan backend"    OFF)  # post-v1
 option(TRANSCRIBE_CUDA           "Enable CUDA backend"      OFF)  # opt-in; Linux + nvcc
+option(TRANSCRIBE_HIP            "Enable HIP/ROCm backend"  OFF)  # opt-in; Linux + ROCm 6.1+
 option(TRANSCRIBE_SANITIZE       "Enable ASan + UBSan"      OFF)
 option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 
@@ -277,7 +278,20 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(GGML_METAL    ${TRANSCRIBE_METAL}  CACHE BOOL "" FORCE)
 set(GGML_VULKAN   ${TRANSCRIBE_VULKAN} CACHE BOOL "" FORCE)
 set(GGML_CUDA     ${TRANSCRIBE_CUDA}   CACHE BOOL "" FORCE)
+set(GGML_HIP      ${TRANSCRIBE_HIP}    CACHE BOOL "" FORCE)
 set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+
+# HIP needs position-independent code even in the default static posture.
+# hipcc does not pick up the distro toolchain's default-PIE codegen the way the
+# system g++ does: its objects keep absolute relocations (R_X86_64_32 against
+# .rodata), and ggml only sets POSITION_INDEPENDENT_CODE when BUILD_SHARED_LIBS
+# is on. Linking that static archive into the PIE executables every default-PIE
+# distro produces then fails at link time. Set the directory-scope default
+# before add_subdirectory(ggml) so every target — ours and ggml's — is PIC.
+if(TRANSCRIBE_HIP)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # tinyBLAS (Justine Tunney's llamafile_sgemm CPU kernels): ~29% faster encoder on
 # CPU (q8_0 GEMM), numerically WER-equivalent. On by default; CPU-backend only.
 set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)

@@ -12,8 +12,8 @@ pin_date: 2026-07-12
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: NeMo
-  commit: c55a09d
-  date: 2026-07-12
+  commit: 3083021
+  date: 2026-08-03
 
 # Upstream is the NVIDIA Open Model License (not a standard SPDX id), so
 # the HF `license` field gets `other` and `license_name` / `license_link`
@@ -37,15 +37,19 @@ tags:
   - rnnt
   - streaming
   - cache-aware
+  - diarization
+  - multitalker
+  - sortformer
 
 summary: |
-  Offline and cache-aware streaming English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder, fine-tuned from nvidia/nemotron-speech-streaming-en-0.6b. Upstream this is a multitalker (speaker-attributed) checkpoint, but transcribe.cpp ships only its single_speaker_mode ASR path: the multitalker machinery (external Sortformer diarization, per-speaker instances, speaker-tagged SegLST output) is not ported, so this port produces a single flat transcript and does not separate speakers. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask; all four latency lookahead settings are selectable.
+  Offline and cache-aware streaming English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder, fine-tuned from nvidia/nemotron-speech-streaming-en-0.6b. Plain GGUFs run the single_speaker_mode ASR path, while bundle GGUFs under `bundle/` embed nvidia/diar_streaming_sortformer_4spk-v2.1 and, with `--diarize`, transcribe up to four overlapping speakers into a speaker-tagged transcript. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask; all four latency lookahead settings are selectable.
 
 default_quant_index: 2  # Q8_0
 
 # Capability flags for the transcribe_cpp metadata block.
 capabilities:
   streaming: true
+  diarize: true
   translate: false
   lang_detect: false
   timestamps: token  # none | segment | word | token
@@ -61,10 +65,36 @@ perf:
     cpu: 13
     vulkan: 25
 
+metrics:
+  cpwer_ami_ihm_test:
+    bundle_f32_kernel: 19.35
+    bundle_f32_masked: 23.73
+
 wer:
   source: LibriSpeech test-clean, offline
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) in single_speaker_mode with greedy RNN-T decoding and whisper-normalizer (PnC-stripped) scoring. F32 reference baseline: 2.19%. The measured NeMo single_speaker_mode reference and NVIDIA's self-reported number on the same split are both 2.19%. The multitalker / speaker-attribution path is not ported; see the transcribe.cpp model page for details.
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) in single_speaker_mode with greedy RNN-T decoding and whisper-normalizer (PnC-stripped) scoring. F32 reference baseline: 2.19%. The measured NeMo single_speaker_mode reference and NVIDIA's self-reported number on the same split are both 2.19%.
+
+    ### Multitalker bundles (speaker-attributed ASR)
+
+    Bundle GGUFs embed the streaming Sortformer diarizer alongside the ASR model. Run them with `--diarize` to get a speaker-tagged transcript with up to four speakers. The tier names the ASR half's dtype; the embedded diarizer is F32 for the F32 bundle, F16 for F16, and Q8_0 for all k-quant tiers.
+
+    | Bundle | Download | Size |
+    | --- | --- | ---: |
+    | F32 | [bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf) | 2.96 GB |
+    | F16 | [bundle/multitalker-parakeet-streaming-0.6b-v1-F16.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-F16.gguf) | 1.48 GB |
+    | Q8_0 | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf) | 873 MB |
+    | Q6_K | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf) | 743 MB |
+    | Q5_K_M | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf) | 681 MB |
+    | Q4_K_M | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf) | 617 MB |
+
+    cpWER on AMI-IHM test (16 meetings, F32 bundle) is 19.35% in the default kernel mode and 23.73% in masked mode. The matched NeMo reference scores 21.39% and 24.00%, respectively; see the transcribe.cpp model page for the exactness accounting.
+
+    ```bash
+    build/bin/transcribe-cli --diarize \
+      -m bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf \
+      meeting.wav
+    ```
 
 quants:
   - name: F32

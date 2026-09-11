@@ -22,9 +22,11 @@ Real-time and offline speech-to-text from a 16 kHz mono WAV.
 
 - **Streaming transcription** — incremental emission with a configurable
   latency/quality trade-off. `--stream-chunk-ms <N>` feeds audio in N-ms
-  chunks; the final transcript is byte-equal to the offline path.
-- **Configurable delay** — `--stream-voxtral-delay <N>` (default 6 = 480 ms;
-  range 80 ms–2.4 s) sets the transcription delay.
+  chunks.
+- **Configurable streaming delay** — `--stream-voxtral-delay <N>` (default 6 =
+  480 ms; range 80 ms–2.4 s) sets the transcription delay.
+- **Accuracy-first offline default** — one-shot and batch inference use the
+  publisher's most accurate evaluated delay, 30 tokens (2.4 s).
 - Auto language detection (the streaming processor is auto-detect only).
 
 ## Input limits
@@ -51,8 +53,9 @@ text and sets `transcribe_was_truncated()` (finalize still returns OK). See the
 | Q4_K_M | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf) | 2.83 GB | 2.08% |
 
 WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
-with the Whisper-style English text normalizer, offline path, batch size 8
-on an NVIDIA L40S. The same-machine HuggingFace `transformers` reference
+with the Whisper-style English text normalizer, offline path at delay 6, batch
+size 8 on an NVIDIA L40S. A delay-30 remeasurement is pending. The same-machine
+HuggingFace `transformers` reference
 (`VoxtralForConditionalGeneration`, BF16, greedy) lands at **2.08%**, and the
 BF16 GGUF matches it (**2.08%**). Every shipped quant stays within bootstrap
 noise of the reference (2.07–2.09%; 95% CI ≈ ±0.18), so the quantization
@@ -147,10 +150,10 @@ Families that do not advertise this bit silently ignore the field.
 ## Numerical Validation
 
 The streaming scheduler is validated against the upstream `transformers`
-reference for true incremental equivalence: the offline and streaming paths
-produce byte-equal transcripts, and the encoder StaticCache / decoder
-sliding-window rings are gated bit-exact (or within matmul reduction-order
-noise) against the reference. See the family port notes in
+reference for true incremental equivalence: at the same delay, the offline and
+streaming paths produce byte-equal transcripts, and the encoder StaticCache /
+decoder sliding-window rings are gated bit-exact (or within matmul
+reduction-order noise) against the reference. See the family port notes in
 `docs/porting/families/voxtral_realtime.md` for the full streaming contract.
 
 Upstream: [`mistralai/Voxtral-Mini-4B-Realtime-2602`](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602).

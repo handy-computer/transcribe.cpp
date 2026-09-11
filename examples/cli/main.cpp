@@ -12,6 +12,7 @@
 #include "wav.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -22,6 +23,20 @@
 #include <vector>
 
 namespace {
+
+bool parse_device_index(const char * text, int & out) {
+    if (text == nullptr || text[0] == '\0') {
+        return false;
+    }
+    const char * end    = text + std::strlen(text);
+    int          parsed = 0;
+    const auto   result = std::from_chars(text, end, parsed);
+    if (result.ec != std::errc{} || result.ptr != end || parsed < 0) {
+        return false;
+    }
+    out = parsed;
+    return true;
+}
 
 // Minimal JSON string escape: covers the characters MUST be escaped by
 // the JSON spec (quote, backslash, control chars). Transcribed text is
@@ -204,12 +219,13 @@ struct cli_args {
     bool                       quiet        = false;
     bool                       list_devices = false;  // --list-devices: print devices and exit
     bool                       batch_jsonl  = false;  // --batch-jsonl: output JSONL
+    std::string                output_path;           // -o/--output: write raw text here
     int                        repeat       = 1;
     int                        n_threads    = 0;      // 0 = library default (all cores)
     int                        n_ctx        = 0;      // 0 = model's true max; >0 lowers the cap
     transcribe_kv_type         kv_type      = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend      = TRANSCRIBE_BACKEND_AUTO;
-    int                        gpu_device   = 0;  // --device N: 0 = auto, >0 = registry index
+    int                        device_index = -1;  // --device N: -1 = auto, >=0 = exact registry device
     transcribe_timestamp_kind  timestamps   = TRANSCRIBE_TIMESTAMPS_AUTO;
 
     // Whisper-family knobs. Ignored for non-Whisper models.
@@ -282,16 +298,17 @@ void print_usage(const char * argv0) {
                  "  --target-language ISO target language for translation (e.g. de, es, fr)\n"
                  "  -q, --quiet           suppress library log output\n"
                  "  -r, --repeat N        run N times per file (benchmark)\n"
+                 "  -o, --output PATH     write transcribed text to PATH (stdout unchanged)\n"
                  "  --threads N           CPU threads (default: all cores)\n"
                  "  --n-ctx N             session context/KV cap in tokens (bounds decoder\n"
                  "                        KV memory; cannot extend the model): 0 = model\n"
                  "                        max, >max is clamped down. Lowers the effective\n"
                  "                        max audio.\n"
                  "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
-                 "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan, cuda\n"
+                 "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan, cuda, rocm\n"
                  "                        (default: auto)\n"
-                 "  --device N            GPU device index from --list-devices: 0 = auto\n"
-                 "                        (first of kind), >0 selects that registry index\n"
+                 "  --device N            exact device index from --list-devices, including 0\n"
+                 "                        (default: automatic device selection)\n"
                  "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
                  "  --batch FILE          batch mode: FILE has one wav path per line\n"
                  "  --batch-jsonl         output one JSON line per file (for batch)\n"
@@ -349,16 +366,16 @@ int list_devices_main() {
                      "listing whatever registered\n",
                      (int) st);
     }
-    const int n = transcribe_backend_device_count();
+    const int n = transcribe_device_count();
     if (n <= 0) {
         std::fprintf(stderr, "no compute devices registered\n");
         return EXIT_FAILURE;
     }
     std::printf("%d compute device(s):\n", n);
     for (int i = 0; i < n; ++i) {
-        struct transcribe_backend_device d;
-        transcribe_backend_device_init(&d);
-        if (transcribe_get_backend_device(i, &d) != TRANSCRIBE_OK) {
+        struct transcribe_device_info d;
+        transcribe_device_info_init(&d);
+        if (transcribe_device_get_info(transcribe_device_get(i), &d) != TRANSCRIBE_OK) {
             continue;
         }
         const char * type_str = d.device_type == TRANSCRIBE_DEVICE_TYPE_CPU   ? "cpu" :
@@ -476,8 +493,10 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 out.backend = TRANSCRIBE_BACKEND_VULKAN;
             } else if (vs == "cuda") {
                 out.backend = TRANSCRIBE_BACKEND_CUDA;
+            } else if (vs == "rocm") {
+                out.backend = TRANSCRIBE_BACKEND_ROCM;
             } else {
-                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, vulkan, or cuda\n");
+                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, vulkan, cuda, or rocm\n");
                 return false;
             }
         } else if (a == "--device") {
@@ -485,9 +504,8 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) {
                 return false;
             }
-            out.gpu_device = std::atoi(v);
-            if (out.gpu_device < 0) {
-                std::fprintf(stderr, "error: --device must be >= 0 (0 = auto)\n");
+            if (!parse_device_index(v, out.device_index)) {
+                std::fprintf(stderr, "error: --device must be an integer index >= 0\n");
                 return false;
             }
         } else if (a == "--timestamps") {
@@ -528,6 +546,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --batch-size must be >= 0\n");
                 return false;
             }
+        } else if (a == "-o" || a == "--output") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.output_path = v;
         } else if (a == "--initial-prompt") {
             const char * v = take_value(a.c_str());
             if (!v) {
@@ -688,6 +712,23 @@ void log_cb(transcribe_log_level level, const char * msg, void * userdata) {
     std::fprintf(stderr, "%s %s%s", prefix, msg, (msg && *msg && msg[std::strlen(msg) - 1] == '\n') ? "" : "\n");
 }
 
+bool write_output_file(std::ofstream * output, const std::string & path, const char * text) {
+    if (output == nullptr) {
+        return true;
+    }
+    const char * value = text != nullptr ? text : "";
+    *output << value;
+    if (value[0] == '\0' || value[std::strlen(value) - 1] != '\n') {
+        *output << '\n';
+    }
+    output->flush();
+    if (!*output) {
+        std::fprintf(stderr, "error: cannot write %s\n", path.c_str());
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char ** argv) {
@@ -712,6 +753,18 @@ int main(int argc, char ** argv) {
     if (!args.quiet) {
         transcribe_log_set(log_cb, nullptr);
     }
+
+    std::ofstream   output_file;
+    std::ofstream * output = nullptr;
+    if (!args.output_path.empty()) {
+        output_file.open(args.output_path, std::ios::binary | std::ios::trunc);
+        if (!output_file) {
+            std::fprintf(stderr, "error: cannot open %s for writing\n", args.output_path.c_str());
+            return EXIT_FAILURE;
+        }
+        output = &output_file;
+    }
+    bool output_ok = true;
 
     // Batch mode: --batch reads a file list, one wav path per line. Loads
     // the model ONCE and reuses the context across all files. Outputs one
@@ -751,8 +804,12 @@ int main(int argc, char ** argv) {
 
         struct transcribe_model_load_params mp;
         transcribe_model_load_params_init(&mp);
-        mp.backend                        = args.backend;
-        mp.gpu_device                     = args.gpu_device;
+        mp.backend = args.backend;
+        mp.device  = args.device_index >= 0 ? transcribe_device_get(args.device_index) : nullptr;
+        if (args.device_index >= 0 && mp.device == nullptr) {
+            std::fprintf(stderr, "error: --device index %d is not available\n", args.device_index);
+            return EXIT_FAILURE;
+        }
         struct transcribe_model * model   = nullptr;
         const transcribe_status   load_st = transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
         if (load_st != TRANSCRIBE_OK) {
@@ -860,10 +917,11 @@ int main(int argc, char ** argv) {
                     std::string        wav_err;
                     if (!transcribe_cli::load_wav_mono_16k(wav_paths[i], pcm, wav_err)) {
                         if (args.batch_jsonl) {
+                            const std::string file_esc = json_escape(wav_paths[i].c_str());
                             std::printf(
                                 "{\"file\":\"%s\",\"text\":\"\","
                                 "\"error\":\"wav: %s\"}\n",
-                                wav_paths[i].c_str(), wav_err.c_str());
+                                file_esc.c_str(), json_escape(wav_err.c_str()).c_str());
                         } else {
                             std::fprintf(stderr, "SKIP %s: %s\n", wav_paths[i].c_str(), wav_err.c_str());
                         }
@@ -889,10 +947,11 @@ int main(int argc, char ** argv) {
                     // error line per file in the group and continue.
                     for (size_t k = 0; k < src_index.size(); ++k) {
                         if (args.batch_jsonl) {
+                            const std::string file_esc = json_escape(wav_paths[src_index[k]].c_str());
                             std::printf(
                                 "{\"file\":\"%s\",\"text\":\"\","
                                 "\"error\":\"%s\"}\n",
-                                wav_paths[src_index[k]].c_str(), json_escape(transcribe_status_string(bst)).c_str());
+                                file_esc.c_str(), json_escape(transcribe_status_string(bst)).c_str());
                         }
                         ++n_fail;
                     }
@@ -941,12 +1000,13 @@ int main(int argc, char ** argv) {
                         struct transcribe_timings tm;
                         transcribe_timings_init(&tm);
                         (void) transcribe_batch_get_timings(ctx, static_cast<int>(k), &tm);
+                        const std::string file_esc = json_escape(wav.c_str());
                         std::printf(
                             "{\"file\":\"%s\",\"text\":\"%s\"%s,"
                             "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
                             "\"decode_ms\":%.1f%s}\n",
-                            wav.c_str(), escaped.c_str(), segments.c_str(), (double) tm.mel_ms, (double) tm.encode_ms,
-                            (double) tm.decode_ms, err_field.c_str());
+                            file_esc.c_str(), escaped.c_str(), segments.c_str(), (double) tm.mel_ms,
+                            (double) tm.encode_ms, (double) tm.decode_ms, err_field.c_str());
                     } else {
                         std::printf("[%zu/%zu] %s", src_index[k] + 1, total, wav.c_str());
                         if (ust == TRANSCRIBE_OK) {
@@ -957,6 +1017,7 @@ int main(int argc, char ** argv) {
                             std::printf("  ERROR: %s\n", transcribe_status_string(ust));
                         }
                     }
+                    output_ok = write_output_file(output, args.output_path, text) && output_ok;
                     std::fflush(stdout);
                 }
             }
@@ -968,10 +1029,11 @@ int main(int argc, char ** argv) {
                 std::string        wav_err;
                 if (!transcribe_cli::load_wav_mono_16k(wav, pcm, wav_err)) {
                     if (args.batch_jsonl) {
+                        const std::string file_esc = json_escape(wav.c_str());
                         std::printf(
                             "{\"file\":\"%s\",\"text\":\"\","
                             "\"error\":\"wav: %s\"}\n",
-                            wav.c_str(), wav_err.c_str());
+                            file_esc.c_str(), json_escape(wav_err.c_str()).c_str());
                     } else {
                         std::fprintf(stderr, "SKIP %s: %s\n", wav.c_str(), wav_err.c_str());
                     }
@@ -1079,11 +1141,12 @@ int main(int argc, char ** argv) {
                         err_field += json_escape(transcribe_status_string(run_st));
                         err_field += "\"";
                     }
+                    const std::string file_esc = json_escape(wav.c_str());
                     std::printf(
                         "{\"file\":\"%s\",\"text\":\"%s\"%s,"
                         "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
                         "\"decode_ms\":%.1f%s}\n",
-                        wav.c_str(), escaped.c_str(), segments.c_str(), (double) tm.mel_ms, (double) tm.encode_ms,
+                        file_esc.c_str(), escaped.c_str(), segments.c_str(), (double) tm.mel_ms, (double) tm.encode_ms,
                         (double) tm.decode_ms, err_field.c_str());
                 } else {
                     std::printf("[%zu/%zu] %s", i + 1, wav_paths.size(), wav.c_str());
@@ -1095,6 +1158,7 @@ int main(int argc, char ** argv) {
                         std::printf("  ERROR: %s\n", transcribe_status_string(run_st));
                     }
                 }
+                output_ok = write_output_file(output, args.output_path, text) && output_ok;
                 std::fflush(stdout);
             }
         }
@@ -1108,7 +1172,7 @@ int main(int argc, char ** argv) {
         transcribe_model_free(model);
         // OUTPUT_TRUNCATED is result-bearing and does not fail the batch, but
         // hard per-utterance failures must remain visible to automation.
-        return n_fail > 0 ? EXIT_FAILURE : EXIT_SUCCESS;
+        return n_fail > 0 || !output_ok ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
     // Single-file mode.
@@ -1128,8 +1192,12 @@ int main(int argc, char ** argv) {
     if (!args.model_path.empty()) {
         struct transcribe_model_load_params mp;
         transcribe_model_load_params_init(&mp);
-        mp.backend                      = args.backend;
-        mp.gpu_device                   = args.gpu_device;
+        mp.backend = args.backend;
+        mp.device  = args.device_index >= 0 ? transcribe_device_get(args.device_index) : nullptr;
+        if (args.device_index >= 0 && mp.device == nullptr) {
+            std::fprintf(stderr, "error: --device index %d is not available\n", args.device_index);
+            return EXIT_FAILURE;
+        }
         struct transcribe_model * model = nullptr;
         const transcribe_status   st    = transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
         std::printf("model: %s -> %s\n", args.model_path.c_str(), transcribe_status_string(st));
@@ -1341,6 +1409,7 @@ int main(int argc, char ** argv) {
         if (result_present) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
+            output_ok = write_output_file(output, args.output_path, text) && output_ok;
 
             // A truncated decode hit the model's context/output budget before
             // end-of-stream; the text above is incomplete.
@@ -1418,7 +1487,7 @@ int main(int argc, char ** argv) {
         transcribe_session_free(ctx);
         transcribe_model_free(model);
 
-        if (run_st != TRANSCRIBE_OK) {
+        if (run_st != TRANSCRIBE_OK || !output_ok) {
             return EXIT_FAILURE;
         }
     } else {

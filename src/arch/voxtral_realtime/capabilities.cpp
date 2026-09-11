@@ -14,10 +14,9 @@ void apply_family_invariants(transcribe_model & model) {
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     caps.supports_translate = false;
 
-    // Native streaming. stream_finalize runs the offline forward over the
-    // accumulated buffer (byte-identical to transcribe_run); stream_feed
-    // emits throttled tentative hypotheses. The configurable transcription
-    // delay (num_delay_tokens) is exposed via the stream extension in
+    // Native streaming. At the same delay, stream_finalize matches
+    // transcribe_run; stream_feed emits throttled tentative hypotheses. The
+    // configurable delay is exposed via the stream extension in
     // include/transcribe/voxtral_realtime.h.
     caps.supports_streaming = true;
 

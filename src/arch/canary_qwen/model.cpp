@@ -60,14 +60,6 @@ static_assert(std::is_base_of_v<transcribe_session, CanaryQwenSession>);
 CanaryQwenSession::~CanaryQwenSession() {
     kv_cache.free();
     kv_cache_batch.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 CanaryQwenModel::~CanaryQwenModel() {
@@ -645,7 +637,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     // Backend plan + alloc + stream tensor data.
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0, "canary_qwen",
+    if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->device : nullptr, "canary_qwen",
                                              m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);

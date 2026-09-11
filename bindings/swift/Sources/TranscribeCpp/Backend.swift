@@ -1,7 +1,7 @@
 import CTranscribe
 
 /// A backend request. `auto` always succeeds (CPU is the final fallback);
-/// `metal`/`vulkan`/`cuda` require that backend to be present in the build.
+/// Explicit GPU choices require that backend to be present in the build.
 public enum Backend: Sendable, Equatable {
     case auto
     case cpu
@@ -9,6 +9,7 @@ public enum Backend: Sendable, Equatable {
     case metal
     case vulkan
     case cuda
+    case rocm
 
     var cValue: transcribe_backend_request {
         switch self {
@@ -18,6 +19,7 @@ public enum Backend: Sendable, Equatable {
         case .metal: return TRANSCRIBE_BACKEND_METAL
         case .vulkan: return TRANSCRIBE_BACKEND_VULKAN
         case .cuda: return TRANSCRIBE_BACKEND_CUDA
+        case .rocm: return TRANSCRIBE_BACKEND_ROCM
         }
     }
 }
@@ -49,12 +51,12 @@ public enum DeviceType: Sendable, Equatable {
 }
 
 /// A registered compute device.
-public struct Device: Sendable, Equatable {
+public struct Device: @unchecked Sendable, Equatable {
     /// ggml device name, e.g. "Metal".
     public let name: String
     /// Human-readable description, e.g. "Apple M4 Max".
     public let description: String
-    /// Classified vendor kind string, e.g. "cpu", "metal", "vulkan", "cuda".
+    /// Classified vendor kind string, e.g. "cpu", "metal", "vulkan", "cuda", "rocm".
     public let kind: String
     /// The CPU/GPU/IGPU/ACCEL axis, orthogonal to `kind`.
     public let deviceType: DeviceType
@@ -67,17 +69,14 @@ public struct Device: Sendable, Equatable {
     /// unreported. Re-query (`TranscribeCpp.devices()` or `Model.device`) to
     /// refresh; backend-defined and not comparable across device kinds.
     public let memoryFree: UInt64
-    /// Registry index of this device — the value to pass as
-    /// `ModelOptions(gpuDevice:)` to select it (0 selects the auto / first
-    /// device). `nil` when this `Device` came from `Model.device`, since
-    /// `transcribe_model_get_device` does not expose an index; correlate such a
-    /// device back to `devices()` by `deviceId` / `name` instead.
-    /// Order-dependent and not stable across driver updates or hosts.
+    /// Process-local registry index for display. Pass this `Device` through
+    /// `ModelOptions(device:)` for exact selection; persist `deviceId` instead.
     public let index: Int?
+    let handle: transcribe_device_t
 
     /// Build from the raw C struct the library filled. `index` is the registry
     /// index when the device came from enumeration, else nil.
-    init(_ raw: transcribe_backend_device, index: Int? = nil) {
+    init(_ raw: transcribe_device_info, handle: transcribe_device_t, index: Int? = nil) {
         name = raw.name.map { String(cString: $0) } ?? ""
         description = raw.description.map { String(cString: $0) } ?? ""
         kind = raw.kind.map { String(cString: $0) } ?? ""
@@ -86,6 +85,11 @@ public struct Device: Sendable, Equatable {
         memoryTotal = raw.memory_total
         memoryFree = raw.memory_free
         self.index = index
+        self.handle = handle
+    }
+
+    public static func == (lhs: Device, rhs: Device) -> Bool {
+        lhs.handle == rhs.handle
     }
 }
 
@@ -105,7 +109,7 @@ public enum AbiStruct: Sendable {
     case streamText
     case sessionLimits
     case ext
-    case backendDevice
+    case deviceInfo
 
     var cValue: transcribe_abi_struct {
         switch self {
@@ -122,7 +126,7 @@ public enum AbiStruct: Sendable {
         case .streamText: return TRANSCRIBE_ABI_STREAM_TEXT
         case .sessionLimits: return TRANSCRIBE_ABI_SESSION_LIMITS
         case .ext: return TRANSCRIBE_ABI_EXT
-        case .backendDevice: return TRANSCRIBE_ABI_BACKEND_DEVICE
+        case .deviceInfo: return TRANSCRIBE_ABI_DEVICE_INFO
         }
     }
 }

@@ -8,7 +8,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 
 | Family | Variants | Docs |
 | --- | --- | --- |
-| Parakeet | 10 variants: TDT, RNN-T, CTC, TDT+CTC (110M–1.1B) | [docs/models/parakeet.md](docs/models/parakeet.md) |
+| Parakeet | 11 variants: TDT, RNN-T, CTC, TDT+CTC (110M–1.1B), incl. German `parakeet-primeline` | [docs/models/parakeet.md](docs/models/parakeet.md) |
 | Canary | `canary-1b`, `canary-1b-v2`, `canary-1b-flash`, `canary-180m-flash` | [docs/models/canary.md](docs/models/canary.md) |
 | Canary-Qwen | `canary-qwen-2.5b` (FastConformer + Qwen3-1.7B SALM) | [docs/models/canary-qwen-2.5b.md](docs/models/canary-qwen-2.5b.md) |
 | Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
@@ -44,6 +44,9 @@ Metal is enabled automatically on Apple Silicon. For Vulkan (Linux/Windows):
 # Ubuntu/Debian
 sudo apt install build-essential cmake libvulkan-dev glslc libopenblas-dev
 
+# Fedora
+sudo dnf install vulkan-headers openblas-devel glslc spirv-headers-devel
+
 cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
 ```
@@ -59,6 +62,18 @@ For CUDA (Linux + NVIDIA GPU):
 cmake -B build -DTRANSCRIBE_CUDA=ON
 cmake --build build
 ```
+
+For HIP/ROCm (Linux + AMD GPU), which needs ROCm 6.1 or newer:
+
+```bash
+cmake -B build -DTRANSCRIBE_HIP=ON -DAMDGPU_TARGETS=gfx1201
+cmake --build build
+```
+
+Replace `gfx1201` with your GPU architecture — `rocminfo | grep gfx` prints it.
+Pass a semicolon-separated list for several architectures. ROCm devices report
+as the `rocm` backend kind, are picked up by the default `auto` backend, and can
+be required explicitly with `--backend rocm`.
 
 `libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 
@@ -131,7 +146,9 @@ Official bindings wrap the C API for other languages:
 | Swift / ObjC | [bindings/swift](bindings/swift) |
 
 See [`docs/bindings.md`](docs/bindings.md) for how the bindings are generated
-and kept in sync with the header.
+and kept in sync with the header. Upgrading from 0.1? Read the
+[0.2 migration guide](docs/migrating-to-0.2.md), including the new exact-device
+selection API and the changed meaning of CLI `--device 0`.
 
 ## Tests
 
@@ -196,7 +213,8 @@ tools/transcribe-quantize/ Quantization tool source
 bindings/                  Python, TypeScript, Rust, and Swift bindings
 docs/                      Porting and validation guidance
 scripts/                   Python converter + test tooling
-ggml/                      Vendored ggml (see ggml/UPSTREAM for pinned SHA)
+ggml/                      Vendored ggml (see ggml/UPSTREAM for its recipe)
+patches/ggml/              Downstream patches applied by scripts/sync-ggml.sh
 src/third_party/miniz/     Vendored miniz deflate codec (see its UPSTREAM file)
 samples/                   Test audio files
 tests/                     Unit and smoke tests

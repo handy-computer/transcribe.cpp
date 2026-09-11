@@ -41,15 +41,10 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, GigaamModel>);
 static_assert(std::is_base_of_v<transcribe_session, GigaamSession>);
 
-GigaamSession::~GigaamSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
+GigaamSession::~GigaamSession() = default;
+
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void GigaamSession::on_scratch_released() noexcept {
     encoder_out = nullptr;
 }
 
@@ -135,7 +130,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0,
+    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->device : nullptr,
                                                          "gigaam", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
@@ -321,7 +316,6 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
     if (gm == nullptr || gm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-
     if (gc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
@@ -362,7 +356,7 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
     }
 #endif
     if (!mel_from_ref) {
-        if (auto st = gm->mel.compute(pcm, static_cast<size_t>(n_samples), gc->mel_buf, mel_n_frames);
+        if (auto st = gm->mel.compute(pcm, static_cast<size_t>(n_samples), gc->mel_buf, mel_n_frames, gc->n_threads);
             st != TRANSCRIBE_OK) {
             return st;
         }
@@ -720,20 +714,29 @@ transcribe_status run_batch(transcribe_session *          session,
     const int                       n_mels = gm->hparams.fe_num_mels;
     std::vector<std::vector<float>> mels(static_cast<size_t>(n));
     std::vector<int>                nf(static_cast<size_t>(n), 0);
-    const int64_t                   t_mel_start  = ggml_time_us();
-    const bool                      all_ok       = transcribe::parallel_for_all(n, gc->n_threads, [&](int i) -> bool {
+
+    // Share one bounded thread budget between utterance-level and frame-level
+    // parallelism. This keeps batch execution from nesting n_threads full mel
+    // pools while still using the budget when the batch contains one clip.
+    const int total_threads = gc->n_threads > 0 ? gc->n_threads : transcribe::default_n_threads();
+    const int outer_threads = std::max(1, std::min(n, total_threads));
+    const int mel_threads   = std::max(1, total_threads / outer_threads);
+
+    const int64_t t_mel_start  = ggml_time_us();
+    const bool    all_ok       = transcribe::parallel_for_all(n, outer_threads, [&](int i) -> bool {
         if (pcm[i] == nullptr || n_samples[i] <= 0) {
             return false;
         }
         int                     this_frames = 0;
-        const transcribe_status st = gm->mel.compute(pcm[i], static_cast<size_t>(n_samples[i]), mels[i], this_frames);
+        const transcribe_status st =
+            gm->mel.compute(pcm[i], static_cast<size_t>(n_samples[i]), mels[i], this_frames, mel_threads);
         if (st != TRANSCRIBE_OK || this_frames <= 0) {
             return false;
         }
         nf[i] = this_frames;
         return true;
     });
-    const int64_t                   total_mel_us = ggml_time_us() - t_mel_start;
+    const int64_t total_mel_us = ggml_time_us() - t_mel_start;
 
     if (all_ok) {
         // Per-utterance soft-window advisory before the shared encode; the

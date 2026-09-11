@@ -29,6 +29,7 @@ def test_streaming_real(streaming_model_path, audio_pcm):
                 stream.feed(audio_pcm[i : i + 16000])
             update = stream.finalize()
             committed = stream.text().committed
+            snapshot = stream.snapshot()
             revision, state = stream.revision, stream.state
             last_status = stream.last_status
     assert update.is_final, update
@@ -36,6 +37,11 @@ def test_streaming_real(streaming_model_path, audio_pcm):
     assert revision >= 1
     assert last_status is None, last_status
     assert "country" in committed.lower(), committed
+    assert snapshot.text
+    assert isinstance(snapshot.language, str)
+    assert snapshot.segments
+    assert isinstance(snapshot.words, tuple)
+    assert isinstance(snapshot.tokens, tuple)
 
 
 def test_streaming_with_language_hint(prompted_streaming_model_path, audio_pcm):
@@ -122,6 +128,8 @@ def test_stream_use_after_reset_rejected(streaming_model_path, audio_pcm):
             stream.feed(audio_pcm[:16000])
         with pytest.raises(t.TranscribeError, match="reset"):
             stream.text()
+        with pytest.raises(t.TranscribeError, match="reset"):
+            stream.snapshot()
 
 
 def test_stream_reset_idempotent_and_session_reusable(

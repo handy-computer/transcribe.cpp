@@ -46,7 +46,7 @@ one matching GGUF is benched.
     --iters N                        measured iterations per cell (default: 2)
     --warmup N                       warmup iterations per cell (default: 1)
     --backends B[,B...]|all          backends to bench (default: all, auto-detected)
-                                     valid: metal,cpu,cpu_accel,vulkan,cuda,all
+                                     valid: metal,cpu,cpu_accel,vulkan,cuda,rocm,all
     --name LABEL                     stable label for named baselines; when set,
                                      output filenames use <name> instead of <ts>
                                      and are overwritten on re-run
@@ -67,6 +67,9 @@ bench binary so the library selector is exercised end-to-end):
     cuda   -> repo/build/bin/transcribe-bench         --backend cuda
               (falls through to repo/build-cuda/bin/transcribe-bench
               only when build/bin/transcribe-bench does not exist)
+    rocm   -> repo/build/bin/transcribe-bench         --backend rocm
+              (falls through to repo/build-rocm/bin/transcribe-bench
+              only when build/bin/transcribe-bench does not exist)
 
 Auto-detection (when --backends is unset or 'all'):
     metal  available if build/bin/transcribe-bench exists AND sys.platform=='darwin'
@@ -78,6 +81,8 @@ Auto-detection (when --backends is unset or 'all'):
     cuda   available only if build-cuda/bin/transcribe-bench exists
            (same caveat as vulkan; pass --backends cuda explicitly to
            bench CUDA from a unified build)
+    rocm   available only if build-rocm/bin/transcribe-bench exists
+           (same caveat; pass --backends rocm explicitly for a unified build)
 
 Output: one aggregated JSON per (variant, backend) at
     reports/perf/<machine-slug>/<timestamp-or-name>_<variant>_<backend>.json
@@ -101,7 +106,7 @@ from pathlib import Path
 
 DEFAULT_QUANTS = ["f16", "q8_0", "q4_k_m"]
 DEFAULT_SAMPLES = ["jfk", "dots"]
-KNOWN_BACKENDS = ["metal", "cpu", "cpu_accel", "vulkan", "cuda"]
+KNOWN_BACKENDS = ["metal", "cpu", "cpu_accel", "vulkan", "cuda", "rocm"]
 
 
 @dataclass(slots=True)
@@ -367,22 +372,27 @@ def _cuda_binary(repo: Path) -> Path:
     return repo / "build-cuda/bin/transcribe-bench"
 
 
+def _rocm_binary(repo: Path) -> Path:
+    """Prefer build/bin/transcribe-bench, then the legacy ROCm build tree."""
+    primary = repo / "build/bin/transcribe-bench"
+    if primary.exists():
+        return primary
+    return repo / "build-rocm/bin/transcribe-bench"
+
+
 def auto_detect_backends(repo: Path) -> list[str]:
     """Return list of backend ids that appear usable on this host.
 
-    Auto-detect is conservative for vulkan/cuda: we cannot tell from a
-    path alone whether build/bin/transcribe-bench was compiled with
-    either backend, and a --backends all that silently included a
-    binary missing the backend would hard-fail. So vulkan/cuda only
-    auto-detect when the user has the legacy build-vulkan/ or
-    build-cuda/ tree (a strong signal they built that backend
-    separately). To benchmark a GPU backend from a unified build, pass
-    --backends vulkan or --backends cuda explicitly.
+    Auto-detect is conservative for vulkan/cuda/rocm: we cannot tell from a
+    path alone whether build/bin/transcribe-bench was compiled with one of
+    those backends. They auto-detect only from their legacy split-build tree.
+    To benchmark a GPU backend from a unified build, pass it explicitly.
     """
     found: list[str] = []
     metal_bin = _metal_binary(repo)
     legacy_vulkan_bin = repo / "build-vulkan/bin/transcribe-bench"
     legacy_cuda_bin = repo / "build-cuda/bin/transcribe-bench"
+    legacy_rocm_bin = repo / "build-rocm/bin/transcribe-bench"
     if metal_bin.exists() and sys.platform == "darwin":
         found.append("metal")
     if metal_bin.exists():
@@ -391,6 +401,8 @@ def auto_detect_backends(repo: Path) -> list[str]:
         found.append("vulkan")
     if legacy_cuda_bin.exists():
         found.append("cuda")
+    if legacy_rocm_bin.exists():
+        found.append("rocm")
     return found
 
 
@@ -459,6 +471,11 @@ def resolve_backends(repo: Path, requested: str | None,
             backend_arg = "cuda"
             if not binary.exists():
                 missing.append(f"cuda: {binary}")
+        elif name == "rocm":
+            binary = bench_bin_override or _rocm_binary(repo)
+            backend_arg = "rocm"
+            if not binary.exists():
+                missing.append(f"rocm: {binary}")
         else:  # pragma: no cover
             continue
         specs.append(BackendSpec(name=name, binary=binary, backend_arg=backend_arg))

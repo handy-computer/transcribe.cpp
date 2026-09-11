@@ -2,22 +2,20 @@
 #
 # sync-ggml.sh — re-vendor ggml/ from upstream ggml-org/ggml at a given ref.
 #
-# ggml is vendored (not a submodule): ggml/ is a verbatim snapshot of the
-# upstream tracked tree at the SHA recorded in ggml/UPSTREAM. That SHA is the
-# single source of truth — nothing else in the build, CI, or docs pins ggml.
-# This script is the supported way to move the snapshot, replacing the old
-# "re-clone and replace by hand" note in ggml/UPSTREAM.
+# ggml is vendored (not a submodule): ggml/ is the upstream tracked tree at the
+# SHA recorded in ggml/UPSTREAM, plus the ordered downstream patches in
+# patches/ggml/. The SHA and patch directory are the complete vendor recipe.
 #
 # What it does:
 #   1. Fetches the upstream tracked tree at <ref> (a SHA, tag, or branch).
 #   2. Materializes it via `git archive` (tracked files only — no .git, no
 #      build cruft), minus the paths in EXCLUDES below.
-#   3. Swaps it into ggml/ and rewrites ggml/UPSTREAM with the resolved SHA.
+#   3. Applies patches/ggml/*.patch in filename order.
+#   4. Swaps the result into ggml/ and rewrites ggml/UPSTREAM.
 #
-# The snapshot is faithful to upstream: examples/ and tests/ are kept (they are
-# not built — TRANSCRIBE_*/GGML_BUILD_* leave them off — but keeping them makes
-# the vendor diff reviewable). Only .github/ is dropped: those are upstream's
-# own CI workflows, irrelevant to a vendored copy and noise in this repo.
+# Upstream examples and tests are kept (they are not built — TRANSCRIBE_*/
+# GGML_BUILD_* leave them off — but keeping them makes the vendor diff
+# reviewable). Only .github/ is dropped: upstream CI is irrelevant here.
 #
 # Usage:
 #   scripts/sync-ggml.sh                 # re-vendor the CURRENT pinned SHA (repair / verify)
@@ -40,9 +38,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GGML_DIR="${REPO_ROOT}/ggml"
 UPSTREAM_FILE="${GGML_DIR}/UPSTREAM"
+PATCH_DIR="${REPO_ROOT}/patches/ggml"
 
 # Upstream paths to drop from the snapshot (relative to the ggml tree root).
 EXCLUDES=( ".github" )
+
+shopt -s nullglob
+PATCHES=( "${PATCH_DIR}"/*.patch )
+shopt -u nullglob
 
 # ---- parse args -------------------------------------------------------------
 REF=""
@@ -110,17 +113,42 @@ for ex in "${EXCLUDES[@]}"; do
     rm -rf "${STAGE_DIR:?}/${ex}"
 done
 
+# ---- apply downstream patches ----------------------------------------------
+STAGE_NAME="$(basename "$STAGE_DIR")"
+for patch in "${PATCHES[@]}"; do
+    echo "sync-ggml: applying patches/ggml/$(basename "$patch")"
+    git -C "$REPO_ROOT" apply --check --directory="$STAGE_NAME" "$patch" \
+        || die "patch does not apply: patches/ggml/$(basename "$patch")"
+    git -C "$REPO_ROOT" apply --directory="$STAGE_NAME" "$patch"
+done
+
 # ---- regenerate UPSTREAM ----------------------------------------------------
-cat > "${STAGE_DIR}/UPSTREAM" <<EOF
+{
+    cat <<EOF
 repo: ${REPO}
 sha:  ${RESOLVED}
-
-This directory is a vendored snapshot of ggml at the SHA above. Do not edit
-files in this directory by hand; local changes are overwritten on the next sync.
-To move the snapshot, run scripts/sync-ggml.sh <ref> from the repo root: it
-re-vendors this directory and rewrites this file. The snapshot is upstream's
-tracked tree at the SHA, minus .github/ (upstream CI, irrelevant to a vendor).
+patches:
 EOF
+    if [ "${#PATCHES[@]}" -eq 0 ]; then
+        echo "  (none)"
+    else
+        for patch in "${PATCHES[@]}"; do
+            echo "  patches/ggml/$(basename "$patch")"
+        done
+    fi
+    cat <<'EOF'
+
+This directory is generated from the upstream ggml tree at the SHA above, minus
+.github/, with the listed downstream patches applied in order. Do not edit it by
+hand. Run scripts/sync-ggml.sh <ref> from the repo root to reproduce or upgrade
+it; the script rewrites this file.
+EOF
+} > "${STAGE_DIR}/UPSTREAM"
+
+# git archive preserves upstream commit times, which can be older than objects
+# in an existing build tree. Refresh source mtimes so an incremental build after
+# an upgrade cannot accidentally link stale ggml objects.
+find "$STAGE_DIR" -type f -exec touch {} +
 
 # ---- dry-run: report and stop ----------------------------------------------
 if [ "$DRY_RUN" -eq 1 ]; then

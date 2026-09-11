@@ -70,14 +70,10 @@ WhisperModel::~WhisperModel() {
 WhisperSession::~WhisperSession() {
     kv_cache.free();
     enc_out.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
+}
+
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void WhisperSession::on_scratch_released() noexcept {
     compute_ctx_size = 0;
 }
 
@@ -473,7 +469,7 @@ transcribe_status whisper_load(Loader &                             loader,
     // Backend plan.
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "whisper", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "whisper", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;

@@ -11,7 +11,7 @@
     "source": "https://github.com/NVIDIA-NeMo/NeMo",
     "revision": "6967f48fda2a",
     "entrypoint": "scripts/dump_reference_parakeet_nemo.py",
-    "note": "EncDecMultiTalkerRNNTBPEModel run in single-speaker mode (no diarization/speaker targets set -> layer-0 speaker kernel applies with an all-ones mask; bg kernel with a zeros mask). Multitalker path is OUT OF SCOPE per Stage 1 sign-off."
+    "note": "EncDecMultiTalkerRNNTBPEModel run in single-speaker mode (no diarization/speaker targets set -> layer-0 speaker kernel applies with an all-ones mask; bg kernel with a zeros mask). This manifest intentionally pins the plain-GGUF ASR tensor path; bundle multitalker behavior is covered by the real-model e2e smoke and AMI-IHM cpWER acceptance run."
   },
   "expected_dtype": "float32",
   "dtype_source": "manual",

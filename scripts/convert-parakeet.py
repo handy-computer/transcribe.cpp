@@ -149,6 +149,37 @@ VARIANT_PROFILES: dict[str, dict] = {
         "license_name": "Creative Commons Attribution 4.0",
         "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
+    # primeLine's German fine-tune of v3. The .nemo carries a
+    # model_config.yaml whose encoder/decoder/joint/decoding/
+    # preprocessor/tokenizer/model_defaults/loss sections are identical
+    # to nvidia/parakeet-tdt-0.6b-v3, and the same 8192-token SPM
+    # (byte-identical tokenizer.model / tokenizer.vocab). Weights-only
+    # fine-tune, so no converter or loader work beyond this entry.
+    #
+    # general.languages keeps the full v3 set. The fine-tune targets
+    # German but did not collapse the base model's multilingual
+    # ability: measured on 150-utterance FLEURS subsets, this checkpoint
+    # scores en 4.24%, es 3.24%, ru 7.89%, uk 8.06% WER with correct
+    # per-language casing and punctuation. Narrowing general.languages
+    # to ["de"] would make transcribe-cli reject `-l en` with
+    # "unsupported language" and block usable capability, so the list
+    # stays at 25. German-primary positioning belongs in the docs, not
+    # in a capability gate.
+    "parakeet-primeline": {
+        "variant": "tdt-0.6b-primeline",
+        "display_name": "Parakeet TDT 0.6B primeLine (German-tuned)",
+        "version": "v1",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
+        "languages": V3_LANGUAGES,
+        "lang_detect": True,
+        "author": "primeLine",
+        "organization": "primeline",
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
+    },
     # 1.1B English-only TDT. Predates the v2/v3 split; the upstream
     # repo carries no version suffix, so general.version is "v1".
     "parakeet-tdt-1.1b": {
@@ -1421,8 +1452,8 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
         version=profile["version"],
         file_type=REFERENCE_FILE_TYPE,
         languages=profile["languages"],
-        author="NVIDIA",
-        organization="nvidia",
+        author=profile.get("author", "NVIDIA"),
+        organization=profile.get("organization", "nvidia"),
         license=profile["license"],
         license_name=profile["license_name"],
         license_link=profile["license_link"],

@@ -46,14 +46,10 @@ static_assert(std::is_base_of_v<transcribe_session, CanarySession>);
 
 CanarySession::~CanarySession() {
     kv_cache.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
+}
+
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void CanarySession::on_scratch_released() noexcept {
     encoder_out = nullptr;
 }
 
@@ -491,7 +487,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "canary", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "canary", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;

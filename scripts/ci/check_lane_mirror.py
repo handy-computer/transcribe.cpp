@@ -90,6 +90,7 @@ def derive(posture: dict[str, str]) -> dict[str, str]:
         "TRANSCRIBE_METAL": [("GGML_METAL", None)],
         "TRANSCRIBE_VULKAN": [("GGML_VULKAN", None)],
         "TRANSCRIBE_CUDA": [("GGML_CUDA", None)],
+        "TRANSCRIBE_HIP": [("GGML_HIP", None)],
         # BACKEND_DL forces GGML_BACKEND_DL and GGML_NATIVE=OFF.
         "TRANSCRIBE_GGML_BACKEND_DL": [("GGML_BACKEND_DL", None),
                                        ("GGML_NATIVE", "OFF")],

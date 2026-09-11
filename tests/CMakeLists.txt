@@ -128,7 +128,7 @@ add_test(NAME transcribe_backend_probe_order_unit
 #
 # Covers the runtime backend-selection matrix: strict CPU invariants,
 # conditional explicit-backend error paths, AUTO fallback, and invalid
-# enum rejection. Hardware-dependent cases (Metal/Vulkan present or
+# enum rejection. Hardware-dependent cases (vendor GPU present or
 # absent) are probed at runtime inside the test binary — the test
 # always runs but exercises different branches depending on what the
 # build configured and what hardware is available.
@@ -185,6 +185,21 @@ target_include_directories(transcribe_batch_mask_unit PRIVATE
 transcribe_apply_warnings(transcribe_batch_mask_unit)
 
 add_test(NAME transcribe_batch_mask_unit COMMAND transcribe_batch_mask_unit)
+
+# -----------------------------------------------------------------------------
+# Chunked-prefill causal mask geometry (pure host, no model)
+
+add_executable(transcribe_prefill_chunk_mask_unit
+    prefill_chunk_mask_unit.cpp)
+
+target_link_libraries(transcribe_prefill_chunk_mask_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_prefill_chunk_mask_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_prefill_chunk_mask_unit)
+
+add_test(NAME transcribe_prefill_chunk_mask_unit COMMAND transcribe_prefill_chunk_mask_unit)
 
 # -----------------------------------------------------------------------------
 # MOSS diarized-transcript parser unit test (pure host, no model)
@@ -669,6 +684,58 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_parakeet_real_smoke)
     set_tests_properties(transcribe_parakeet_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Real-model GigaAM workspace-retention regression.
+    add_executable(transcribe_gigaam_workspace_release_smoke
+        gigaam_workspace_release_smoke.cpp)
+
+    target_link_libraries(transcribe_gigaam_workspace_release_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_gigaam_workspace_release_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_gigaam_workspace_release_smoke)
+
+    add_test(NAME transcribe_gigaam_workspace_release_smoke
+        COMMAND transcribe_gigaam_workspace_release_smoke)
+    set_tests_properties(transcribe_gigaam_workspace_release_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # Multitalker bundle end-to-end smoke (diarize=ON on the composed
+    # parakeet + sortformer bundle; both supervision modes). Gated on
+    # TRANSCRIBE_MULTITALKER_BUNDLE_GGUF at runtime, exit 77 when unset.
+    add_executable(transcribe_parakeet_multitalker_e2e_smoke
+        parakeet_multitalker_e2e_smoke.cpp)
+
+    target_link_libraries(transcribe_parakeet_multitalker_e2e_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_parakeet_multitalker_e2e_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_parakeet_multitalker_e2e_smoke)
+
+    add_test(NAME transcribe_parakeet_multitalker_e2e_smoke
+        COMMAND transcribe_parakeet_multitalker_e2e_smoke)
+    set_tests_properties(transcribe_parakeet_multitalker_e2e_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # Buffered-stream tail regression; skips when the unified model is absent.
+    add_executable(transcribe_parakeet_buffered_stream_eos_smoke
+        parakeet_buffered_stream_eos_smoke.cpp)
+
+    target_link_libraries(transcribe_parakeet_buffered_stream_eos_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_parakeet_buffered_stream_eos_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_parakeet_buffered_stream_eos_smoke)
+
+    add_test(NAME transcribe_parakeet_buffered_stream_eos_smoke
+        COMMAND transcribe_parakeet_buffered_stream_eos_smoke)
+    set_tests_properties(transcribe_parakeet_buffered_stream_eos_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -704,6 +771,27 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_test(NAME transcribe_moonshine_streaming_stream_parity
         COMMAND transcribe_moonshine_streaming_stream_parity)
     set_tests_properties(transcribe_moonshine_streaming_stream_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# Streaming <-> offline interleave on one session (release_scratch after
+# offline runs must be transparent to a following stream and vice versa).
+# Runs for each streaming model env var that is set; RC 77 when none is.
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_stream_offline_interleave_smoke
+        stream_offline_interleave_smoke.cpp)
+
+    target_link_libraries(transcribe_stream_offline_interleave_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_stream_offline_interleave_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_stream_offline_interleave_smoke)
+
+    add_test(NAME transcribe_stream_offline_interleave_smoke
+        COMMAND transcribe_stream_offline_interleave_smoke)
+    set_tests_properties(transcribe_stream_offline_interleave_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
 
@@ -1183,6 +1271,23 @@ add_test(NAME transcribe_tokenizer_decode_only_unit
     COMMAND transcribe_tokenizer_decode_only_unit)
 
 # -----------------------------------------------------------------------------
+# Whisper .bin synthesized suppression metadata
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_whisper_bin_suppress_unit
+    whisper_bin_suppress_unit.cpp)
+
+target_link_libraries(transcribe_whisper_bin_suppress_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_whisper_bin_suppress_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_whisper_bin_suppress_unit)
+
+add_test(NAME transcribe_whisper_bin_suppress_unit
+    COMMAND transcribe_whisper_bin_suppress_unit)
+
+# -----------------------------------------------------------------------------
 # Whisper .bin parser unit test
 # -----------------------------------------------------------------------------
 #
@@ -1254,4 +1359,17 @@ if(TRANSCRIBE_BUILD_EXAMPLES)
             ${CMAKE_SOURCE_DIR}/samples/jfk.wav)
     set_tests_properties(transcribe_cli_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION "duration:")
+
+    add_test(NAME transcribe_cli_output_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI=$<TARGET_FILE:transcribe-cli>
+            -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-output-smoke
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_output_smoke.cmake)
+
+    add_test(NAME transcribe_cli_device_arg_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DCLI=$<TARGET_FILE:transcribe-cli>
+            -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_device_arg_smoke.cmake)
 endif()

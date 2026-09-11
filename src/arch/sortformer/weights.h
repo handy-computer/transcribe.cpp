@@ -112,8 +112,14 @@ transcribe_status read_sortformer_hparams(const gguf_context * gguf, SortformerH
 // head) by name in ctx_meta, validate shapes against hp, store borrowed
 // pointers. Returns TRANSCRIBE_ERR_GGUF (naming the tensor) on any
 // missing / mis-shaped tensor.
+//
+// tensor_prefix (nullable, standalone default "") is prepended to every
+// tensor name: the multitalker bundle GGUF embeds these tensors under a
+// "sortformer." namespace so they cannot collide with the host family's
+// own enc.* catalog.
 transcribe_status build_sortformer_weights(ggml_context *            ctx_meta,
                                            const SortformerHParams & hp,
-                                           SortformerWeights &       weights);
+                                           SortformerWeights &       weights,
+                                           const char *              tensor_prefix = nullptr);
 
 }  // namespace transcribe::sortformer

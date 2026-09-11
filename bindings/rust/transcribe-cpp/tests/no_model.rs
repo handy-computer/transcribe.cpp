@@ -5,7 +5,8 @@ mod common;
 
 use transcribe_cpp::{
     abi_struct_size, backend_available, compiled_version, device_count, devices, header_hash,
-    init_backends_default, version, AbiStruct, Backend, DeviceType, Error, Model,
+    init_backends_default, version, AbiStruct, Backend, DeviceType, Error, Itn, Model, Pnc,
+    RunOptions,
 };
 
 #[test]
@@ -36,6 +37,17 @@ fn abi_struct_sizes_are_live() {
     ] {
         assert!(abi_struct_size(which) > 0, "{which:?} reported size 0");
     }
+}
+
+#[test]
+fn generic_text_control_options_round_trip() {
+    let options = RunOptions {
+        pnc: Pnc::Off,
+        itn: Itn::On,
+        ..Default::default()
+    };
+    assert_eq!(options.pnc, Pnc::Off);
+    assert_eq!(options.itn, Itn::On);
 }
 
 #[test]

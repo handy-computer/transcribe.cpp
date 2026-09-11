@@ -226,8 +226,8 @@ extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
             return sizeof(struct transcribe_session_limits);
         case TRANSCRIBE_ABI_EXT:
             return sizeof(struct transcribe_ext);
-        case TRANSCRIBE_ABI_BACKEND_DEVICE:
-            return sizeof(struct transcribe_backend_device);
+        case TRANSCRIBE_ABI_DEVICE_INFO:
+            return sizeof(struct transcribe_device_info);
         case TRANSCRIBE_ABI_SPEAKER_SEGMENT:
             return sizeof(struct transcribe_speaker_segment);
     }
@@ -262,8 +262,8 @@ extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
             return alignof(struct transcribe_session_limits);
         case TRANSCRIBE_ABI_EXT:
             return alignof(struct transcribe_ext);
-        case TRANSCRIBE_ABI_BACKEND_DEVICE:
-            return alignof(struct transcribe_backend_device);
+        case TRANSCRIBE_ABI_DEVICE_INFO:
+            return alignof(struct transcribe_device_info);
         case TRANSCRIBE_ABI_SPEAKER_SEGMENT:
             return alignof(struct transcribe_speaker_segment);
     }
@@ -583,7 +583,7 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
     p->max_new_tokens = -1;  // family default
     // Default to AUTO (richest output compatible with the model and selected
     // run tasks, resolved per-family) rather than the memset NONE.
-    p->timestamps    = TRANSCRIBE_TIMESTAMPS_AUTO;
+    p->timestamps     = TRANSCRIBE_TIMESTAMPS_AUTO;
 }
 
 extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {
@@ -650,7 +650,7 @@ extern "C" void transcribe_segment_init(struct transcribe_segment * p) {
     p->struct_size = sizeof(*p);
 }
 
-extern "C" void transcribe_backend_device_init(struct transcribe_backend_device * p) {
+extern "C" void transcribe_device_info_init(struct transcribe_device_info * p) {
     if (p == nullptr) {
         return;
     }
@@ -736,7 +736,7 @@ namespace {
 // library-side prefix do NOT raise this value.
 #define TRANSCRIBE_FIELD_END(type, field) (offsetof(type, field) + sizeof(((type *) 0)->field))
 
-constexpr size_t k_min_model_params_size            = TRANSCRIBE_FIELD_END(transcribe_model_load_params, gpu_device);
+constexpr size_t k_min_model_params_size            = TRANSCRIBE_FIELD_END(transcribe_model_load_params, device);
 constexpr size_t k_min_context_params_size          = TRANSCRIBE_FIELD_END(transcribe_session_params, kv_type);
 // run_params is the one 0.2.0 exception to the append-only rule: `diarize`
 // was inserted mid-struct, shifting every field from `language` on by 8
@@ -763,7 +763,7 @@ constexpr size_t k_min_word_size            = TRANSCRIBE_FIELD_END(transcribe_wo
 constexpr size_t k_min_token_size           = TRANSCRIBE_FIELD_END(transcribe_token, text);
 constexpr size_t k_min_speaker_segment_size = TRANSCRIBE_FIELD_END(transcribe_speaker_segment, p);
 constexpr size_t k_min_timings_size         = TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
-constexpr size_t k_min_backend_device_size  = TRANSCRIBE_FIELD_END(transcribe_backend_device, kind);
+constexpr size_t k_min_device_info_size     = TRANSCRIBE_FIELD_END(transcribe_device_info, kind);
 // k_min_whisper_chunk_trace_size lives in arch/whisper/public.cpp with
 // the chunk-trace accessor that uses it.
 
@@ -981,10 +981,10 @@ transcribe_device_type to_device_type(enum ggml_backend_dev_type t) {
     }
 }
 
-// Fill a caller-owned transcribe_backend_device from a ggml device, honoring
+// Fill a caller-owned transcribe_device_info from a ggml device, honoring
 // the caller's declared struct_size via copy_out_prefix. ggml_backend_dev_get_props
 // queries memory live, so every call observes a fresh memory_free snapshot.
-void fill_backend_device(ggml_backend_dev_t dev, uint64_t caller_size, struct transcribe_backend_device * out) {
+void fill_device_info(ggml_backend_dev_t dev, uint64_t caller_size, struct transcribe_device_info * out) {
     ggml_backend_dev_props props{};
     ggml_backend_dev_get_props(dev, &props);
 
@@ -999,7 +999,7 @@ void fill_backend_device(ggml_backend_dev_t dev, uint64_t caller_size, struct tr
         description = props.description != nullptr ? props.description : "";
     }
 
-    struct transcribe_backend_device staged{};
+    struct transcribe_device_info staged{};
     staged.struct_size  = caller_size;
     staged.name         = name;
     staged.description  = description;
@@ -1013,22 +1013,43 @@ void fill_backend_device(ggml_backend_dev_t dev, uint64_t caller_size, struct tr
 
 }  // namespace
 
-static int transcribe_backend_device_count_impl(void) {
+static int transcribe_device_count_impl(void) {
     return static_cast<int>(ggml_backend_dev_count());
 }
 
-static transcribe_status transcribe_get_backend_device_impl(int index, struct transcribe_backend_device * out) {
+static transcribe_device_t transcribe_device_get_impl(int index) {
+    if (index < 0 || index >= static_cast<int>(ggml_backend_dev_count())) {
+        return nullptr;
+    }
+    return reinterpret_cast<transcribe_device_t>(ggml_backend_dev_get(static_cast<size_t>(index)));
+}
+
+static ggml_backend_dev_t device_from_handle(transcribe_device_t device) {
+    if (device == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_dev_t candidate = reinterpret_cast<ggml_backend_dev_t>(device);
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        if (ggml_backend_dev_get(i) == candidate) {
+            return candidate;
+        }
+    }
+    return nullptr;
+}
+
+static transcribe_status transcribe_device_get_info_impl(transcribe_device_t             device,
+                                                         struct transcribe_device_info * out) {
     if (out == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    if (const auto st = check_struct_size(out->struct_size, k_min_backend_device_size); st != TRANSCRIBE_OK) {
+    if (const auto st = check_struct_size(out->struct_size, k_min_device_info_size); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (index < 0 || index >= static_cast<int>(ggml_backend_dev_count())) {
+    ggml_backend_dev_t dev = device_from_handle(device);
+    if (dev == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    ggml_backend_dev_t dev = ggml_backend_dev_get(static_cast<size_t>(index));
-    fill_backend_device(dev, out->struct_size, out);
+    fill_device_info(dev, out->struct_size, out);
     return TRANSCRIBE_OK;
 }
 
@@ -1054,6 +1075,9 @@ static bool transcribe_backend_available_impl(int raw) {
             break;
         case TRANSCRIBE_BACKEND_CUDA:
             want = transcribe::BackendKind::Cuda;
+            break;
+        case TRANSCRIBE_BACKEND_ROCM:
+            want = transcribe::BackendKind::Rocm;
             break;
         default:
             return false;
@@ -1431,11 +1455,9 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
         return st;
     }
 
-    // gpu_device is validated where the device registry is available — in
-    // load_common::init_backends, which each family calls. 0 means auto/first
-    // of kind; a positive index selects a specific GPU; negative / out of
-    // range / kind-mismatched values return TRANSCRIBE_ERR_INVALID_ARG from
-    // there. See the public header and transcribe-load-common.h.
+    // device is validated where the registry is available, in
+    // load_common::init_backends. NULL means automatic selection; a non-NULL
+    // handle selects that exact registered device or fails.
 
     // Raw-validate the backend request before the families' first
     // enum-typed load of it (see enum_field_raw). init_backends re-checks
@@ -1448,6 +1470,7 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
         case TRANSCRIBE_BACKEND_VULKAN:
         case TRANSCRIBE_BACKEND_CPU_ACCEL:
         case TRANSCRIBE_BACKEND_CUDA:
+        case TRANSCRIBE_BACKEND_ROCM:
             break;
         default:
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: invalid backend request %d",
@@ -2041,16 +2064,40 @@ extern "C" transcribe_status transcribe_stream_get_text(const struct transcribe_
     return TRANSCRIBE_OK;
 }
 
+// Scope guard that calls transcribe_session::release_scratch on exit once
+// armed. Both offline entry points use it so release also happens when a
+// family hook throws and the api_guard unwinds the stack, including the path
+// where memory pressure matters most. release_scratch is noexcept, so running
+// it during unwinding is safe.
+namespace {
+
+struct scratch_release_guard {
+    transcribe_session * session = nullptr;
+    bool                 armed   = false;
+
+    ~scratch_release_guard() {
+        if (armed && session != nullptr) {
+            session->release_scratch();
+        }
+    }
+};
+
+}  // namespace
+
 // Shared one-utterance run body. Does NOT touch session->batch_results, so
 // the batch dispatcher can call it once per utterance inside a loop without
 // erasing already-accumulated entries; the public transcribe_run wrapper
 // below clears batch_results once before delegating here. Every early
 // return preserves the previous result snapshot exactly as the original
 // transcribe_run contract documented (see the inline comments).
+// `committed` (optional) is set true once the call passes the pre-clear
+// gates and commits to replacing the result. The caller uses it to decide
+// whether compute scratch needs releasing.
 static transcribe_status run_one_inner(struct transcribe_session *          session,
                                        const float *                        pcm,
                                        int                                  n_samples,
-                                       const struct transcribe_run_params * params) {
+                                       const struct transcribe_run_params * params,
+                                       bool *                               committed = nullptr) {
     // Parameter-shape validation runs first and does not touch session
     // state. A caller that passes NULL pointers or a non-positive sample
     // count gets ERR_INVALID_ARG back without any visible side effect
@@ -2161,6 +2208,9 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     // their own front-matter checks succeed; that call is now
     // redundant but idempotent, and removing it is a refactor
     // deferred to a later pass.
+    if (committed != nullptr) {
+        *committed = true;
+    }
     session->clear_result();
     session->t_mel_us      = 0;
     session->t_encode_us   = 0;
@@ -2196,7 +2246,12 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *        
     if (session != nullptr && pcm != nullptr && n_samples > 0) {
         session->batch_results.clear();
     }
-    return run_one_inner(session, pcm, n_samples, params);
+    // run_one_inner arms the guard at its commit point, so a pre-clear
+    // rejection never releases and everything after (family error, abort,
+    // throw) always does.
+    scratch_release_guard scratch_release;
+    scratch_release.session = session;
+    return run_one_inner(session, pcm, n_samples, params, &scratch_release.armed);
 }
 
 // Batch run (offline)
@@ -2305,6 +2360,13 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
     session->was_truncated = false;
     session->stream_state  = TRANSCRIBE_STREAM_IDLE;
     session->batch_results.clear();
+
+    // Release the compute scratch once the batch has run, whichever path it
+    // took (see transcribe_session::release_scratch). Once per call, not per
+    // utterance, so the serial fallback keeps its workspace across the loop.
+    scratch_release_guard scratch_release;
+    scratch_release.session = session;
+    scratch_release.armed   = true;
 
     // Fast path: a family with a batched compute graph owns the whole loop.
     if (session->model->arch->run_batch != nullptr) {
@@ -2535,25 +2597,15 @@ extern "C" const char * transcribe_model_backend(const struct transcribe_model *
     return model->backend.c_str();
 }
 
-static transcribe_status transcribe_model_get_device_impl(const struct transcribe_model *    model,
-                                                          struct transcribe_backend_device * out) {
-    if (model == nullptr || out == nullptr) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    if (const auto st = check_struct_size(out->struct_size, k_min_backend_device_size); st != TRANSCRIBE_OK) {
-        return st;
-    }
-    // The model's primary backend is bound by per-family load(); a model
-    // that never resolved one has none.
-    if (model->primary_backend == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+static transcribe_device_t transcribe_model_device_impl(const struct transcribe_model * model) {
+    if (model == nullptr || model->primary_backend == nullptr) {
+        return nullptr;
     }
     ggml_backend_dev_t dev = ggml_backend_get_device(model->primary_backend);
-    if (dev == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+    if (dev == nullptr || device_from_handle(reinterpret_cast<transcribe_device_t>(dev)) == nullptr) {
+        return nullptr;
     }
-    fill_backend_device(dev, out->struct_size, out);
-    return TRANSCRIBE_OK;
+    return reinterpret_cast<transcribe_device_t>(dev);
 }
 
 // Timings
@@ -3118,14 +3170,18 @@ extern "C" transcribe_status transcribe_init_backends_default(void) {
                             [&] { return transcribe_init_backends_default_impl(); });
 }
 
-extern "C" int transcribe_backend_device_count(void) {
-    return api_guard_value("transcribe_backend_device_count", 0,
-                           [&] { return transcribe_backend_device_count_impl(); });
+extern "C" int transcribe_device_count(void) {
+    return api_guard_value("transcribe_device_count", 0, [&] { return transcribe_device_count_impl(); });
 }
 
-extern "C" transcribe_status transcribe_get_backend_device(int index, struct transcribe_backend_device * out) {
-    return api_guard_status("transcribe_get_backend_device",
-                            [&] { return transcribe_get_backend_device_impl(index, out); });
+extern "C" transcribe_device_t transcribe_device_get(int index) {
+    return api_guard_value("transcribe_device_get", static_cast<transcribe_device_t>(nullptr),
+                           [&] { return transcribe_device_get_impl(index); });
+}
+
+extern "C" transcribe_status transcribe_device_get_info(transcribe_device_t             device,
+                                                        struct transcribe_device_info * out) {
+    return api_guard_status("transcribe_device_get_info", [&] { return transcribe_device_get_info_impl(device, out); });
 }
 
 extern "C" bool transcribe_backend_available(transcribe_backend_request kind) {
@@ -3225,10 +3281,9 @@ extern "C" void transcribe_stream_reset(struct transcribe_session * session) {
     api_guard_void("transcribe_stream_reset", [&] { transcribe_stream_reset_impl(session); });
 }
 
-extern "C" transcribe_status transcribe_model_get_device(const struct transcribe_model *    model,
-                                                         struct transcribe_backend_device * out) {
-    return api_guard_status("transcribe_model_get_device",
-                            [&] { return transcribe_model_get_device_impl(model, out); });
+extern "C" transcribe_device_t transcribe_model_device(const struct transcribe_model * model) {
+    return api_guard_value("transcribe_model_device", static_cast<transcribe_device_t>(nullptr),
+                           [&] { return transcribe_model_device_impl(model); });
 }
 
 extern "C" int transcribe_tokenize(const struct transcribe_model * model,

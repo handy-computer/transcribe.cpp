@@ -48,15 +48,10 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, MedAsrModel>);
 static_assert(std::is_base_of_v<transcribe_session, MedAsrSession>);
 
-MedAsrSession::~MedAsrSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
+MedAsrSession::~MedAsrSession() = default;
+
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void MedAsrSession::on_scratch_released() noexcept {
     encoder_out = nullptr;
 }
 
@@ -183,7 +178,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0,
+    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->device : nullptr,
                                                          "medasr", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);

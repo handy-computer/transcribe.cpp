@@ -56,9 +56,6 @@ struct GraniteNarModel final : public transcribe_model {
 };
 
 struct GraniteNarSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     // Encoder output buffered between encode and projector/LM.
     std::vector<float> mel_buf;
     std::vector<float> enc_cat_host;         // [T_enc, num_encoder_layers * enc_hidden]

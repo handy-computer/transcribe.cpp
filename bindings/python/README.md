@@ -6,6 +6,10 @@ a C/C++ speech-to-text library built on ggml.
 > **Status: in development.** Until wheels are published, use a locally built
 > `libtranscribe` through repo auto-discovery or `TRANSCRIBE_LIBRARY`.
 
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `gpu_device=` with exact device objects.
+
 ```python
 import transcribe_cpp
 
@@ -27,6 +31,18 @@ pcm = np.asarray(audio, dtype=np.float32)   # 1-D, 16 kHz mono
 result = session.run(pcm)
 ```
 
+### Punctuation, capitalization, and text normalization
+
+Generic run controls use `"default"` to preserve each model family's shipped
+behavior. Models advertising `model.supports("pnc")` accept `pnc="off"` or
+`pnc="on"`; models advertising `model.supports("itn")` accept the equivalent
+`itn` values. The options are available on `run()`, `run_batch()`, `stream()`,
+and the one-shot `transcribe()` helper.
+
+```python
+result = session.run(pcm, pnc="off", itn="on")
+```
+
 Streaming models expose incremental transcription with committed/tentative
 text views — see `examples/stream_wav.py`:
 
@@ -36,6 +52,7 @@ with model.session() as session, session.stream() as stream:
         stream.feed(chunk)
         text = stream.text()        # .committed (stable) + .tentative
     stream.finalize()
+    result = stream.snapshot()      # language, segments, words, tokens, timings
 ```
 
 Long transcriptions can be cancelled from another thread with
@@ -44,9 +61,17 @@ Long transcriptions can be cancelled from another thread with
 
 ## Backends
 
-`Model(backend=...)` picks the compute device (`"auto"` uses the best
-available). `transcribe_cpp.backends()` lists registered backends and
-`backend_available(kind)` checks one kind.
+`Model(backend=...)` applies a backend policy (`"auto"` uses the best
+available). `transcribe_cpp.backends()` returns process-local device objects;
+pass one as `Model(device=device)` for exact selection with no fallback. Persist
+a device's `device_id`, not its runtime handle or index. `backend_available(kind)`
+checks whether a backend policy can currently be satisfied.
+
+```python
+device = next(d for d in transcribe_cpp.backends() if d.device_type == "cpu")
+with transcribe_cpp.Model("model.gguf", device=device) as model:
+    print(model.device)
+```
 
 | Variable | Effect |
 |---|---|

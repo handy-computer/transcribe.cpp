@@ -1,11 +1,17 @@
 //! Build script for `transcribe-cpp-sys`.
 //!
-//! Source build is the primary (and currently only) path: the `cmake` crate
-//! drives the vendored C++ tree with `TRANSCRIBE_INSTALL=ON`, and the link
-//! line is reconstructed from NOTHING but the installed
-//! `lib/transcribe-link.json` manifest — the same artifact the `link_smoke`
-//! CI lane compiles a toy C consumer against. No per-platform link lists are
-//! hardcoded here (the whisper-rs drift class this avoids).
+//! Source build is the primary path: the `cmake` crate drives the vendored
+//! C++ tree with `TRANSCRIBE_INSTALL=ON`, and the link line is reconstructed
+//! from NOTHING but the installed `lib/transcribe-link.json` manifest — the
+//! same artifact the `link_smoke` CI lane compiles a toy C consumer against.
+//! No per-platform link lists are hardcoded here (the whisper-rs drift class
+//! this avoids).
+//!
+//! Prebuilt path: setting TRANSCRIBE_DIR (OPENSSL_DIR-style) to an install
+//! prefix produced by `cmake --install` of a TRANSCRIBE_INSTALL=ON build
+//! skips the source build entirely and links against that prefix's manifest
+//! instead. Cargo features are inert there: the prebuilt already decided its
+//! configuration (static/shared, backends), and the manifest records it.
 //!
 //! Cargo features map directly to CMake options:
 //!   `shared`           -> TRANSCRIBE_BUILD_SHARED=ON (default: static)
@@ -14,6 +20,7 @@
 //!   `metal`            -> TRANSCRIBE_METAL=ON   (Apple targets only; no-op elsewhere)
 //!   `vulkan`           -> TRANSCRIBE_VULKAN=ON
 //!   `cuda`             -> TRANSCRIBE_CUDA=ON
+//!   `rocm`             -> TRANSCRIBE_HIP=ON
 //!   `openmp`           -> TRANSCRIBE_USE_OPENMP=ON
 //! Official-artifact hygiene flags (OpenMP/BLAS off) are deliberately NOT
 //! forced here: a source build is the consumer's build (same philosophy as
@@ -81,6 +88,29 @@ fn main() {
         "bindings/rust/sys/src",
     ] {
         println!("cargo:rerun-if-changed={}", root.join(p).display());
+    }
+
+    // Prebuilt path: TRANSCRIBE_DIR points at an existing install prefix (a
+    // `cmake --install` tree from a TRANSCRIBE_INSTALL=ON configure). Skip the
+    // source build and emit the link line from that prefix's manifest; the
+    // manifest records the install's own posture (static/shared, backends), so
+    // the Cargo features below never apply here.
+    println!("cargo:rerun-if-env-changed=TRANSCRIBE_DIR");
+    if let Some(dir) = env::var_os("TRANSCRIBE_DIR") {
+        let prefix = PathBuf::from(dir);
+        let manifest = find_manifest(&prefix).unwrap_or_else(|| {
+            panic!(
+                "TRANSCRIBE_DIR is set but no lib/transcribe-link.json (or lib64/) exists \
+                 under {}. It must point at an install prefix of this library, produced by \
+                 `cmake -B build -DTRANSCRIBE_INSTALL=ON && cmake --build build && \
+                 cmake --install build --prefix <dir>`. Unset TRANSCRIBE_DIR to build \
+                 the vendored sources instead.",
+                prefix.display()
+            )
+        });
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        emit_link_lines(&prefix, &manifest);
+        return;
     }
 
     // `dynamic-backends` (loadable backend modules) requires a shared library,
@@ -159,6 +189,9 @@ fn main() {
     }
     if feature("CUDA") {
         cfg.define("TRANSCRIBE_CUDA", "ON");
+    }
+    if feature("ROCM") {
+        cfg.define("TRANSCRIBE_HIP", "ON");
     }
     // Keep OpenMP OFF unless explicitly opted in. TRANSCRIBE_USE_OPENMP already
     // defaults OFF in CMake (the native ggml threadpool is the default path); we
@@ -346,6 +379,27 @@ fn find_manifest(prefix: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Convert a conventional absolute Unix library filename into the Cargo native
+/// library kind/name pair. `rustc-link-lib` propagates through dependent Rust
+/// crates; a raw `rustc-link-arg=/path/to/lib` does not.
+fn cargo_library_name(path: &Path) -> Option<(&'static str, String)> {
+    let file = path.file_name()?.to_str()?;
+    let file = file.strip_prefix("lib")?;
+
+    if let Some(name) = file.strip_suffix(".dll.a") {
+        return Some(("dylib", name.to_owned()));
+    }
+    if let Some(name) = file.strip_suffix(".a") {
+        return Some(("static", name.to_owned()));
+    }
+    for suffix in [".so", ".dylib", ".tbd"] {
+        if let Some(name) = file.strip_suffix(suffix) {
+            return Some(("dylib", name.to_owned()));
+        }
+    }
+    None
+}
+
 fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
     let text = std::fs::read_to_string(manifest_path).expect("read transcribe-link.json");
     let json: serde_json::Value = serde_json::from_str(&text).expect("parse transcribe-link.json");
@@ -373,9 +427,21 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
         println!("cargo:rustc-link-lib={kind}={name}");
     }
 
-    // Absolute library paths (e.g. a find_package(BLAS) result): link the file.
+    // Absolute library paths (e.g. ROCm SDK libraries, compiler-rt, or a
+    // find_package(BLAS) result). Express conventional library files as
+    // search-dir + rustc-link-lib rather than a raw rustc-link-arg: native
+    // library directives propagate from this -sys crate to final downstream
+    // binaries, while link arguments only affect this crate's own artifacts.
+    // Keep the exact-path fallback for an unusual linker input that cannot be
+    // represented as a conventional native library.
     for path in strs("library_paths") {
-        println!("cargo:rustc-link-arg={path}");
+        let path = Path::new(&path);
+        if let (Some(parent), Some((kind, name))) = (path.parent(), cargo_library_name(path)) {
+            println!("cargo:rustc-link-search=native={}", parent.display());
+            println!("cargo:rustc-link-lib={kind}={name}");
+        } else {
+            println!("cargo:rustc-link-arg={}", path.display());
+        }
     }
     // System libraries the C++/backend archives drag in.
     for name in strs("system_libs") {
@@ -488,6 +554,4 @@ fn stage_windows_dlls(prefix: &Path) {
             }
         }
     }
-    // Re-stage when the built DLLs change.
-    println!("cargo:rerun-if-changed={}", bin_dir.display());
 }

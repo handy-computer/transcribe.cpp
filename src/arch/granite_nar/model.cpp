@@ -52,16 +52,7 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, GraniteNarModel>);
 static_assert(std::is_base_of_v<transcribe_session, GraniteNarSession>);
 
-GraniteNarSession::~GraniteNarSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-}
+GraniteNarSession::~GraniteNarSession() = default;
 
 GraniteNarModel::~GraniteNarModel() {
     if (bn_fused_ctx != nullptr) {
@@ -340,7 +331,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "granite_nar", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "granite_nar", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;

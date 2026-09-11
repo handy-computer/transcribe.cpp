@@ -13,6 +13,8 @@ Two layers, both model-free:
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 import transcribe_cpp as t
@@ -102,3 +104,53 @@ def test_invalid_spec_k_drafts_rejected_before_native_call():
         _build_run_params("transcribe", None, None, "none", False, -2)
     with pytest.raises(t.InvalidArgument, match="spec_k_drafts"):
         _build_run_params("transcribe", None, None, "none", False, "many")
+
+
+def test_pnc_and_itn_modes_map_to_native_run_params():
+    from transcribe_cpp import _build_run_params, _generated
+
+    modes = {
+        "default": (
+            _generated.TRANSCRIBE_PNC_MODE_DEFAULT,
+            _generated.TRANSCRIBE_ITN_MODE_DEFAULT,
+        ),
+        "off": (
+            _generated.TRANSCRIBE_PNC_MODE_OFF,
+            _generated.TRANSCRIBE_ITN_MODE_OFF,
+        ),
+        "on": (
+            _generated.TRANSCRIBE_PNC_MODE_ON,
+            _generated.TRANSCRIBE_ITN_MODE_ON,
+        ),
+    }
+    for mode, (pnc, itn) in modes.items():
+        params = _build_run_params(
+            "transcribe", None, None, "none", False, -1, pnc=mode, itn=mode
+        )
+        assert params.pnc == pnc
+        assert params.itn == itn
+
+    for name in ("pnc", "itn"):
+        with pytest.raises(t.InvalidArgument, match=name):
+            _build_run_params(
+                "transcribe", None, None, "none", False, -1, **{name: "maybe"}
+            )
+
+
+def test_public_run_surfaces_cover_every_generic_option():
+    common = {
+        "task", "language", "target_language", "timestamps", "pnc", "itn",
+        "diarize", "keep_special_tags", "family",
+    }
+    expected = {
+        t.Session.run: common | {"spec_k_drafts"},
+        t.Session.run_batch: common | {"spec_k_drafts"},
+        # Speculative decoding is explicitly offline-only.
+        t.Session.stream: common,
+        t.transcribe: common | {"spec_k_drafts"},
+    }
+    for callable_, required in expected.items():
+        parameters = inspect.signature(callable_).parameters
+        assert required <= parameters.keys()
+    assert "Pnc" in t.__all__
+    assert "Itn" in t.__all__

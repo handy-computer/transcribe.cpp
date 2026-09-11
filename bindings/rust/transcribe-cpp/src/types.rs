@@ -175,6 +175,8 @@ pub enum Backend {
     Vulkan,
     /// Require CUDA; errors if this build has no CUDA.
     Cuda,
+    /// Require ROCm; errors if this build has no ROCm.
+    Rocm,
 }
 
 impl Backend {
@@ -187,6 +189,7 @@ impl Backend {
             Backend::Metal => B::TRANSCRIBE_BACKEND_METAL,
             Backend::Vulkan => B::TRANSCRIBE_BACKEND_VULKAN,
             Backend::Cuda => B::TRANSCRIBE_BACKEND_CUDA,
+            Backend::Rocm => B::TRANSCRIBE_BACKEND_ROCM,
         }
     }
 }
@@ -285,7 +288,7 @@ pub enum AbiStruct {
     StreamText,
     SessionLimits,
     Ext,
-    BackendDevice,
+    DeviceInfo,
     SpeakerSegment,
 }
 
@@ -306,7 +309,7 @@ impl AbiStruct {
             AbiStruct::StreamText => A::TRANSCRIBE_ABI_STREAM_TEXT,
             AbiStruct::SessionLimits => A::TRANSCRIBE_ABI_SESSION_LIMITS,
             AbiStruct::Ext => A::TRANSCRIBE_ABI_EXT,
-            AbiStruct::BackendDevice => A::TRANSCRIBE_ABI_BACKEND_DEVICE,
+            AbiStruct::DeviceInfo => A::TRANSCRIBE_ABI_DEVICE_INFO,
             AbiStruct::SpeakerSegment => A::TRANSCRIBE_ABI_SPEAKER_SEGMENT,
         }
     }

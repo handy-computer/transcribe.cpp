@@ -93,7 +93,7 @@ void test_hook_unset_matches_hardware_verdict() {
     }
     unset_env("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM");
     transcribe::BackendPlan plan;
-    CHECK(transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", plan) == TRANSCRIBE_OK);
+    CHECK(transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", plan) == TRANSCRIBE_OK);
     CHECK(plan.primary_kind == expected_auto_kind());
     free_plan(plan);
 }
@@ -105,7 +105,7 @@ void test_nonmatching_hook_is_inert() {
     }
     set_env("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM", "no-such-device-name-xyzzy");
     transcribe::BackendPlan plan;
-    CHECK(transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", plan) == TRANSCRIBE_OK);
+    CHECK(transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", plan) == TRANSCRIBE_OK);
     CHECK(plan.primary_kind == expected_auto_kind());
     free_plan(plan);
     unset_env("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM");
@@ -118,7 +118,7 @@ void test_auto_skips_gated_metal_and_falls_back_to_cpu() {
     }
     set_env("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM", "*");
     transcribe::BackendPlan plan;
-    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, 0, "test", plan);
+    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_AUTO, nullptr, "test", plan);
     CHECK(st == TRANSCRIBE_OK);
     CHECK(plan.primary != nullptr);
     CHECK(plan.primary_kind == transcribe::BackendKind::Cpu);
@@ -134,7 +134,8 @@ void test_explicit_metal_is_honored_despite_gate() {
     }
     set_env("TRANSCRIBE_TEST_METAL_NO_SIMDGROUP_MM", "*");
     transcribe::BackendPlan plan;
-    const transcribe_status st = transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_METAL, 0, "test", plan);
+    const transcribe_status st =
+        transcribe::load_common::init_backends(TRANSCRIBE_BACKEND_METAL, nullptr, "test", plan);
     CHECK(st == TRANSCRIBE_OK);
     CHECK(plan.primary_kind == transcribe::BackendKind::Metal);
     free_plan(plan);

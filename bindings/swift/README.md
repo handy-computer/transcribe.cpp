@@ -5,8 +5,12 @@ a C/C++ speech-to-text library built on ggml. Native code ships as a prebuilt
 `.xcframework` SwiftPM `binaryTarget`, with Metal embedded on supported Apple
 slices.
 
-> Status: in development (0.0.1). Core model, session, run, stream,
+> Status: in development (0.2.0). Core model, session, run, stream,
 > cancellation, backend, and family-extension APIs are implemented and tested.
+
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `gpuDevice` with exact `Device` values.
 
 ## Install
 
@@ -19,7 +23,7 @@ custom artifact path through `TRANSCRIBE_XCFRAMEWORK_PATH`.
 The standalone SwiftPM mirror is planned but not published yet:
 
 ```swift
-.package(url: "https://github.com/handy-computer/transcribe-cpp-swift.git", from: "0.0.1")
+.package(url: "https://github.com/handy-computer/transcribe-cpp-swift.git", from: "0.2.0")
 ```
 
 Until that mirror repo and tag exist, use the release xcframework directly when
@@ -28,7 +32,7 @@ you only need the raw C module:
 ```swift
 .binaryTarget(
     name: "CTranscribe",
-    url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.0.1/TranscribeCpp.xcframework.zip",
+    url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.2.0/TranscribeCpp.xcframework.zip",
     checksum: "<published with the release>"
 )
 ```
@@ -56,6 +60,18 @@ for segment in transcript.segments {
 `run` is blocking; `try await session.run(pcm)` uses the async convenience
 overload and hops the work off the caller's thread.
 
+### Punctuation, capitalization, and text normalization
+
+`RunOptions.pnc` and `RunOptions.itn` default to preserving each model family's
+shipped behavior. Probe `model.supports(.pnc)` or `.itn` before selecting
+`.off`/`.on`. The same `RunOptions` is accepted by single runs, batches,
+streams, and `Transcribe.transcribe`.
+
+```swift
+let options = RunOptions(pnc: .off, itn: .on)
+let transcript = try session.run(pcm, options: options)
+```
+
 Streaming models expose committed/tentative text for UI display:
 
 ```swift
@@ -65,6 +81,7 @@ for chunk in chunks {                 // 16 kHz mono float32 frames
     if update.committedChanged { print(stream.text.committed) }
 }
 try stream.finalize()
+let transcript = stream.snapshot // language, segments, words, tokens, timings
 ```
 
 Runnable examples live in
@@ -81,8 +98,10 @@ Backends are compiled into the xcframework per Apple slice:
 | iOS device arm64     | Metal + CPU |
 | iOS simulator        | CPU only    |
 
-Request a backend with `ModelOptions(backend:)`; probe availability with
-`Transcribe.backendAvailable(_:)` or inspect `Transcribe.devices()`.
+Request a backend policy with `ModelOptions(backend:)`; probe availability with
+`Transcribe.backendAvailable(_:)`. For exact selection, pass an entry from
+`Transcribe.devices()` to `ModelOptions(device:)`; exact selection never falls
+back to another primary device.
 
 ## Concurrency and lifetime
 

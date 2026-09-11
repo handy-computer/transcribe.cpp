@@ -99,11 +99,11 @@ public enum Feature: Sendable {
 
 public struct ModelOptions: Sendable {
     public var backend: Backend
-    /// GPU device registry index. 0 means auto / first matching device.
-    public var gpuDevice: Int32
-    public init(backend: Backend = .auto, gpuDevice: Int32 = 0) {
+    /// Exact process-local device. `nil` applies the backend's automatic policy.
+    public var device: Device?
+    public init(backend: Backend = .auto, device: Device? = nil) {
         self.backend = backend
-        self.gpuDevice = gpuDevice
+        self.device = device
     }
 }
 

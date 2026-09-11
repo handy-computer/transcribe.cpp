@@ -33,10 +33,9 @@ CI-overlap grounds; see the family WER summary for rationale.
     `nemotron-3.5-asr-streaming-0.6b` (multilingual, 40 locales,
     language one-hot conditioning) — intake only, Stages 2-8 TODO,
     `multitalker-parakeet-streaming-0.6b-v1` (English-only, fine-tuned
-    from `nemotron-speech-streaming-en-0.6b`; ships the
-    `single_speaker_mode` ASR path only — the multitalker /
-    speaker-attribution machinery is out of scope, see Capability
-    Validation rows)
+    from `nemotron-speech-streaming-en-0.6b`; plain GGUFs run the
+    `single_speaker_mode` ASR path and bundle GGUFs embed the streaming
+    Sortformer diarizer for speaker-attributed ASR)
 
 Per-variant intake JSON: `reports/porting/parakeet/<variant>/intake.json`.
 
@@ -157,8 +156,8 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | multitalker-parakeet-streaming-0.6b-v1 | Streaming (single_speaker_mode, cache reuse across chunks) | streaming | `build/bin/transcribe-cli -m <gguf> --language en --backend cpu --threads 1 --stream-chunk-ms 1120 --stream-att-right 13 samples/jfk.wav` | byte-equal transcript vs single-speaker one-shot at the default `att_context_size=[70,13]` (1.12s chunk) | PASS |
 | multitalker-parakeet-streaming-0.6b-v1 | Other latency settings ([70,0]/[70,1]/[70,6]/[70,13]) | runtime-selectable att_context_size | `… --stream-chunk-ms 1120 --stream-att-right {0,1,6,13} …` | all four R settings stream a valid single-speaker transcript; R=6/13 byte-equal to one-shot, R=0/1 differ only in trailing punctuation (lower lookahead) | PASS |
 | multitalker-parakeet-streaming-0.6b-v1 | Batch (offline, single_speaker_mode) | run_batch fast path | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --batch-sizes 2,4,8 --backend cpu --language en` + `uv run scripts/batch_tensor_parity.py --model <gguf> --wav samples/jfk.wav --batch 4 --backend cpu` | text byte-equal vs serial at sizes 2/4/8 (golden frozen at `tests/golden/batch/multitalker-parakeet-streaming-0.6b-v1.cpu.json`); same-length CPU tensor parity bit-exact (max_abs=0.0) at batch=4 on jfk.wav; **diverse-length** flash tensor parity bit-exact (max_abs=0.0) across arbitrary length mixes; full test-clean batch-8 WER == batch-1 (2.19%) after the causal var-len pre-encode masking fix (see forward-map Deviations) | PASS |
-| multitalker-parakeet-streaming-0.6b-v1 | Multitalker / speaker-attributed ASR (speaker-kernel injection + external Sortformer diarization + multi-instance + SegLST) | multitalker | (no runtime surface today) | per-speaker cpWER vs NeMo `speech_to_text_multitalker_streaming_infer.py` on AMI/CH109/Mixer6 | SKIP — not exposed by runtime (OUT OF SCOPE) — the single-speaker kernel path is implemented, but full speaker attribution still requires (1) a ported streaming Sortformer diarizer, (2) target-driven per-frame kernel masks, (3) N-instance-per-speaker orchestration, and (4) a SegLST speaker-tagged output contract. |
-| multitalker-parakeet-streaming-0.6b-v1 | Speaker diarization (produce speaker turns) | diarization | (not a capability of this checkpoint) | n/a | SKIP — not exposed by runtime (OUT OF SCOPE) — this checkpoint CONSUMES external diarization (Sortformer); it does not produce speaker turns. Brought back in scope only if a Sortformer diarizer is ported as a separate family. |
+| multitalker-parakeet-streaming-0.6b-v1 | Multitalker / speaker-attributed ASR (speaker-kernel injection + embedded Sortformer diarization + multi-instance + speaker-tagged segments) | multitalker | `TRANSCRIBE_MULTITALKER_BUNDLE_GGUF=<bundle-F32.gguf> ctest --test-dir build -R parakeet_multitalker` plus `scripts/diar/run_cpp_multitalker.py` / `score_cpwer.py` on AMI-IHM | structural two-speaker smoke in both supervision modes; cpWER vs NeMo `speech_to_text_multitalker_streaming_infer.py` | PASS — bundle GGUFs embed `diar_streaming_sortformer_4spk-v2.1`; `--diarize` runs bounded-state per-speaker streaming encoder/decoder instances and emits speaker-tagged segments. AMI-IHM F32 cpWER: C++ 19.35% kernel / 23.73% masked; NeMo 21.39% / 24.00%. |
+| multitalker-parakeet-streaming-0.6b-v1 | Speaker diarization (produce speaker turns) | diarization | same bundle smoke; inspect `transcribe_n_speaker_segments` | non-empty 1-based speaker turns, independent of transcript rows | PASS on bundle GGUFs — embedded Sortformer predictions populate speaker segments; plain GGUFs intentionally retain the single-speaker capability surface. |
 | all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |
 
 ## Open decisions before Stage 3 (convert)
@@ -210,9 +209,14 @@ be resolved before the corresponding port enters porting-3-convert:
    `bg_spk_kernels.0.{0,3}.{weight,bias}` (2 FF modules) and emit a GGUF KV
    marking layer-0 injection; Stage 4 MUST apply the injection at the layer-0
    input. Skipping it silently degrades single-speaker WER (a structural-cfg
-   distinction, not a shape change). The full multitalker path (per-frame
-   diarization mask instead of all-ones, N-instance orchestration, SegLST) is
-   OUT OF SCOPE per Stage 1 — see the multitalker integration brief.
+   distinction, not a shape change).
+
+   **Multitalker integration (DONE).** Bundle GGUFs embed the validated
+   streaming Sortformer checkpoint. The runtime feeds its per-frame
+   predictions into target/background masks, maintains one cache-aware
+   encoder/decoder state per active speaker, and merges the resulting text
+   into speaker-tagged segment rows. Plain GGUFs preserve the original
+   single-speaker path.
 
    **Stage 3 resolution (DONE).** `convert-parakeet.py` gates emission on a
    `spk_kernel_layers` profile key. The 8 source tensors are emitted verbatim
@@ -398,9 +402,9 @@ Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
 The first cache-aware streaming variant in the family. Same 24-layer /
 d_model=1024 / n_mels=128 / RNNT-head geometry as `parakeet-unified-en-0.6b`,
 but trained with chunked attention + causal conv + LayerNorm rather than
-full attention + symmetric conv + BatchNorm. v1 transcribe.cpp targets
-offline transcription only; the streaming session API is deferred. The
-chunked-attention mask, causal conv, and LayerNorm conv module are all
+full attention + symmetric conv + BatchNorm. transcribe.cpp supports both
+offline transcription and cache-aware streaming. The chunked-attention mask,
+causal conv, and LayerNorm conv module are all
 preserved at inference so the offline transcript reproduces NeMo's
 published 2.32% LibriSpeech test-clean WER at `att_context_size=[70,13]`
 (1.12s chunk, w/o PnC).

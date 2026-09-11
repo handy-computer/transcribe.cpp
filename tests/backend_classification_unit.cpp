@@ -38,6 +38,8 @@ int main() {
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "Metal"), BackendKind::Metal);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_IGPU, "Vulkan"), BackendKind::Vulkan);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "CUDA"), BackendKind::Cuda);
+    CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "ROCm"), BackendKind::Rocm);
+    CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "ROCm0"), BackendKind::Rocm);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "SYCL"), BackendKind::Sycl);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, "WebGPU"), BackendKind::OtherGpu);
     CHECK_EQ(classify_backend_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr), BackendKind::OtherGpu);

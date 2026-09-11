@@ -119,9 +119,6 @@ struct MoonshineStreamingModel final : public transcribe_model {
 };
 
 struct MoonshineStreamingSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     // Host-side mirror of the post-adapter encoder hidden. The adapter
     // pos_emb add (and proj when present) is applied once per session;
     // this host buffer feeds the cross_kv precompute graph.

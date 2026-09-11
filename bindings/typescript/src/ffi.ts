@@ -11,6 +11,18 @@
 import koffi from "koffi";
 import { defineTypes } from "./_generated.js";
 
+// Koffi defaults async FFI workers to a 128 KiB stack. That is too small for
+// ggml Vulkan model initialization on Windows (observed as an uncatchable
+// 0xC0000005 access violation on Intel Iris Xe). Keep calls asynchronous, but
+// raise the stack floor with headroom for other models and compiler changes.
+// Preserve a larger application-provided value because Koffi configuration is
+// process-global.
+const MIN_ASYNC_STACK_SIZE = 512 * 1024;
+const koffiConfig = koffi.config();
+if ((koffiConfig.async_stack_size ?? 0) < MIN_ASYNC_STACK_SIZE) {
+  koffi.config({ async_stack_size: MIN_ASYNC_STACK_SIZE });
+}
+
 export interface Bound {
   koffi: typeof koffi;
   lib: ReturnType<typeof koffi.load>;
@@ -39,13 +51,14 @@ export function bindLibrary(libraryPath: string): Bound {
     // backends
     initBackends: lib.func("transcribe_init_backends", "int", ["str"]),
     initBackendsDefault: lib.func("transcribe_init_backends_default", "int", []),
-    backendDeviceCount: lib.func("transcribe_backend_device_count", "int", []),
-    backendDeviceInit: lib.func("transcribe_backend_device_init", "void", [
-      outp(T.transcribe_backend_device),
+    deviceCount: lib.func("transcribe_device_count", "int", []),
+    deviceGet: lib.func("transcribe_device_get", "void *", ["int"]),
+    deviceInfoInit: lib.func("transcribe_device_info_init", "void", [
+      outp(T.transcribe_device_info),
     ]),
-    getBackendDevice: lib.func("transcribe_get_backend_device", "int", [
-      "int",
-      iop(T.transcribe_backend_device),
+    deviceGetInfo: lib.func("transcribe_device_get_info", "int", [
+      "void *",
+      iop(T.transcribe_device_info),
     ]),
     backendAvailable: lib.func("transcribe_backend_available", "bool", ["int"]),
 
@@ -65,10 +78,7 @@ export function bindLibrary(libraryPath: string): Bound {
     modelArch: lib.func("transcribe_model_arch_string", "str", ["void *"]),
     modelVariant: lib.func("transcribe_model_variant_string", "str", ["void *"]),
     modelBackend: lib.func("transcribe_model_backend", "str", ["void *"]),
-    modelGetDevice: lib.func("transcribe_model_get_device", "int", [
-      "void *",
-      iop(T.transcribe_backend_device),
-    ]),
+    modelDevice: lib.func("transcribe_model_device", "void *", ["void *"]),
     modelSupports: lib.func("transcribe_model_supports", "bool", ["void *", "int"]),
     tokenize: lib.func("transcribe_tokenize", "int", ["void *", "str", "int32_t *", "size_t"]),
     capabilitiesInit: lib.func("transcribe_capabilities_init", "void", [

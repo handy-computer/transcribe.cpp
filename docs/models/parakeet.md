@@ -5,9 +5,9 @@ family ported to transcribe.cpp. A FastConformer encoder paired with one
 of three decoder heads — TDT (transducer with a duration prediction
 head), classical RNN-T, or CTC — and a TDT+CTC hybrid that ships both
 heads in one checkpoint. All variants take 16 kHz mono PCM through an
-80-bin mel frontend; English-only across the family, with the single
-exception of `parakeet-tdt-0.6b-v3` which extends to 25 European
-languages.
+80-bin mel frontend; English-only across the family, except
+`parakeet-tdt-0.6b-v3` and its German fine-tune `parakeet-primeline`,
+which cover 25 European languages.
 
 For the architecture deep-dive, validation contract, and porting notes,
 see the family doc at
@@ -22,8 +22,11 @@ Most users want one of three:
 - **Multilingual (25 European languages) → `parakeet-tdt-0.6b-v3`.** The
   only multilingual variant; same size as v2, broader coverage at a
   small English-WER cost.
-- **Streaming / real-time → Nemotron streaming.** Parakeet here is
-  offline-only. For low-latency streaming use the FastConformer-lineage
+- **German → `parakeet-primeline`.** primeLine's German fine-tune of
+  v3. Same size and speed; tuned for German while keeping the other 24
+  v3 languages usable.
+- **Streaming / real-time → Nemotron streaming.** Most Parakeet variants here
+  are offline-only. For low-latency streaming use the FastConformer-lineage
   [`nemotron-3.5-asr-streaming-0.6b`](nemotron-3.5-asr-streaming-0.6b.md)
   (multilingual) or
   [`nemotron-speech-streaming-en-0.6b`](nemotron-speech-streaming-en-0.6b.md)
@@ -54,6 +57,7 @@ quant matrix and the comparison to NVIDIA's self-reported numbers.
 | --- | --- | ---: | ---: | ---: | --- | --- |
 | `parakeet-tdt-0.6b-v2`     | TDT       | 0.6B | 730 MB  | 1.69% | English | [parakeet-tdt-0.6b-v2.md](parakeet-tdt-0.6b-v2.md) |
 | `parakeet-tdt-0.6b-v3`     | TDT       | 0.6B | 740 MB  | 1.94% | 25 European | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
+| `parakeet-primeline`       | TDT       | 0.6B | 740 MB  | 6.00%* | 25 European, German-tuned | [parakeet-primeline.md](parakeet-primeline.md) |
 | `parakeet-tdt-1.1b`        | TDT       | 1.1B | 1.27 GB | 1.38% | English | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |
 | `parakeet-tdt_ctc-110m`    | TDT+CTC   | 110M | 135 MB  | 2.43% | English | [parakeet-tdt_ctc-110m.md](parakeet-tdt_ctc-110m.md) |
 | `parakeet-tdt_ctc-1.1b`    | TDT+CTC   | 1.1B | 1.27 GB | 1.87% | English | [parakeet-tdt_ctc-1.1b.md](parakeet-tdt_ctc-1.1b.md) |
@@ -62,6 +66,10 @@ quant matrix and the comparison to NVIDIA's self-reported numbers.
 | `parakeet-ctc-0.6b`        | CTC       | 0.6B | 722 MB  | 1.87% | English | [parakeet-ctc-0.6b.md](parakeet-ctc-0.6b.md) |
 | `parakeet-ctc-1.1b`        | CTC       | 1.1B | 1.26 GB | 1.85% | English | [parakeet-ctc-1.1b.md](parakeet-ctc-1.1b.md) |
 | `parakeet-unified-en-0.6b` | RNN-T     | 0.6B | 731 MB  | 1.60% | English | [parakeet-unified-en-0.6b.md](parakeet-unified-en-0.6b.md) |
+
+\* `parakeet-primeline` is scored on FLEURS German (862 utterances),
+not LibriSpeech test-clean, so its number is not comparable to the rest
+of the column. Its NeMo reference on the same manifest is 5.98%.
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
@@ -110,6 +118,10 @@ CLI surface. Other Parakeet variants run offline only.
 
 What's not supported (consistent across the family): translation,
 VAD, speaker diarization. Language coverage is English-only except
-`parakeet-tdt-0.6b-v3` (25 European languages, no auto-detect —
-language hint required). See the family doc for the full runtime
+`parakeet-tdt-0.6b-v3` and `parakeet-primeline` (25 European languages,
+no auto-detect — language hint required). Note that the v3 lineage,
+including `parakeet-primeline`, writes German `ss` where standard
+orthography uses `ß`; see
+[parakeet-primeline.md](parakeet-primeline.md#orthography-ß-vs-ss) for
+why and what to do about it. See the family doc for the full runtime
 contract.

@@ -9,9 +9,9 @@ decoder 640).
 
 ## What it's for
 
-Offline English speech-to-text. The model takes a 16 kHz mono WAV and produces
-a transcript. It does not translate, has no multilingual capability, and does
-not emit timestamps. 
+English speech-to-text in both one-shot and streaming modes. The model takes a
+16 kHz mono WAV and produces a transcript. It does not translate, has no
+multilingual capability, and does not emit timestamps.
 
 See Useful Sensors' [model card](https://huggingface.co/UsefulSensors/moonshine-streaming-medium)
 for training data, intended use, and upstream evaluation methodology.

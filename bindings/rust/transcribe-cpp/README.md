@@ -4,8 +4,13 @@ Safe, idiomatic Rust bindings for
 [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), a C/C++
 speech-to-text library built on ggml.
 
-> **Status: in development (0.0.1).** Core model, session, run, stream,
+> **Status: in development (0.2.0).** Core model, session, run, stream,
 > cancellation, backend, and family-extension APIs are implemented and tested.
+
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `ModelOptions::gpu_device` with exact `Device`
+handles.
 
 ## Install
 
@@ -31,6 +36,32 @@ println!("{}", result.text);
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+### Punctuation, capitalization, and text normalization
+
+`RunOptions::pnc` and `RunOptions::itn` default to preserving each model
+family's shipped behavior. Probe `model.supports(Feature::Pnc)` or
+`Feature::Itn` before selecting `Pnc::Off`/`On` or `Itn::Off`/`On`. The same
+`RunOptions` is used by single runs, batches, streams, and `transcribe()`.
+
+```rust
+use transcribe_cpp::{Itn, Pnc, RunOptions};
+let options = RunOptions { pnc: Pnc::Off, itn: Itn::On, ..Default::default() };
+let result = session.run(&pcm, &options)?;
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
+Streaming exposes both UI-stable text and a fully materialized structured
+snapshot:
+
+```rust
+let mut stream = session.stream(&RunOptions::default(), &Default::default())?;
+stream.feed(&chunk)?;
+println!("{}", stream.text().committed);
+stream.finalize()?;
+let transcript = stream.snapshot(); // language, segments, words, tokens, timings
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Runnable examples:
 
 ```sh
@@ -48,7 +79,7 @@ is the safe wrapper.
 ## Backends
 
 Backends are selected with cargo features forwarded to `transcribe-cpp-sys`:
-`metal` (default on Apple), `vulkan`, `cuda`, and `openmp`.
+`metal` (default on Apple), `vulkan`, `cuda`, `rocm`, and `openmp`.
 
 On Windows, `vulkan` requires the Vulkan SDK. Deep Cargo output paths are
 shortened automatically during the native build; see the
@@ -59,6 +90,17 @@ The default link is static and self-contained. Advanced packaging modes are
 available through `shared` and `dynamic-backends`; see the `transcribe-cpp-sys`
 README if you need runtime-loaded backend modules or custom
 `TRANSCRIBE_CMAKE_ARGS`.
+
+## Exact device selection
+
+`devices()` returns process-local `Device` handles. Leave
+`ModelOptions::device` as `None` for the backend's automatic policy, or pass
+`Some(device)` to select that exact primary device with no fallback. Persist
+`device_id` and resolve a fresh handle after backend initialization; registry
+indices and handles are not stable across processes. In dynamic-backend builds,
+finish `init_backends()` or `init_backends_default()` before any thread
+enumerates devices, queries backend availability, or loads a model; native
+registry mutation is a startup-only operation and must not race those calls.
 
 ## Packaging a distributable (`shared` / `dynamic-backends`)
 

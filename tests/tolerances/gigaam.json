@@ -27,11 +27,19 @@
     "- Observed drift is ~5–25× tighter than the Stage 2 magnitude-aware",
     "  provisional budgets (1e-4 × p99_abs), so finalization tightens every",
     "  entry rather than keeping the provisional ceiling.",
+    "- 2026-08-18 performance-path recalibration: the mel-filterbank projection",
+    "  moved from a scalar fp32 loop to CBLAS SGEMM. All four variants were",
+    "  remeasured on Apple Accelerate; full FLEURS-ru Q8_0 WER against main was",
+    "  unchanged for both RNN-T variants and improved by 0.0066/0.0199 pp for",
+    "  the CTC/e2e-CTC variants. Only downstream entries whose new measured",
+    "  worst case exceeded the prior envelope were recalibrated with the same",
+    "  1.5x rule.",
     "",
     "DRIFT SOURCES (named)",
     "- frontend.mel.out: mixed-radix FFT accumulation order vs torchaudio's",
-    "  rfft, plus fp32 mel-filterbank multiply-add (worst at high-freq bins",
-    "  with low power, where log() amplifies small absolute differences).",
+    "  rfft, plus CBLAS SGEMM mel-filterbank reduction order (Accelerate on",
+    "  Apple, system CBLAS elsewhere). The worst differences are at high-freq",
+    "  bins with low power, where log() amplifies small absolute differences.",
     "- enc.subsample.out: depthwise/pointwise conv1d reduction order in",
     "  ggml-cpu vs torch Conv1d. Concentrated at the boundary frames",
     "  (causal-padding seam under center=false), spread evenly elsewhere.",
@@ -87,7 +95,7 @@
     ]
   },
   "enc.block.15.out": {
-    "max_abs": 2.6e-05,
+    "max_abs": 5.5e-05,
     "mean_abs": 1.0e-06,
     "_seen_in": [
       "gigaam-v3-ctc",
@@ -97,7 +105,7 @@
     ]
   },
   "enc.out": {
-    "max_abs": 2.6e-05,
+    "max_abs": 5.5e-05,
     "mean_abs": 1.0e-06,
     "_seen_in": [
       "gigaam-v3-ctc",
@@ -115,16 +123,16 @@
     ]
   },
   "ctc.logits.raw": {
-    "max_abs": 2.9e-04,
-    "mean_abs": 4.6e-06,
+    "max_abs": 6.2e-04,
+    "mean_abs": 6.5e-06,
     "_seen_in": [
       "gigaam-v3-ctc",
       "gigaam-v3-e2e-ctc"
     ]
   },
   "ctc.log_probs": {
-    "max_abs": 5.4e-04,
-    "mean_abs": 9.2e-06,
+    "max_abs": 1.2e-03,
+    "mean_abs": 1.8e-05,
     "_seen_in": [
       "gigaam-v3-ctc",
       "gigaam-v3-e2e-ctc"

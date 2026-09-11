@@ -2,10 +2,12 @@
 
 import type { TranscribeError } from "./errors.js";
 
-export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "vulkan" | "metal";
+export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "rocm" | "vulkan" | "metal";
 export type KvType = "auto" | "f32" | "f16";
 export type Task = "transcribe" | "translate";
 export type TimestampKind = "none" | "auto" | "segment" | "word" | "token";
+export type Pnc = "default" | "off" | "on";
+export type Itn = "default" | "off" | "on";
 export type Diarize = "default" | "off" | "on";
 export type Feature =
   | "initial_prompt"
@@ -83,12 +85,13 @@ export interface SessionLimits {
   maxKvBytes: number;
 }
 
-export interface TranscriptionResult {
+export interface Transcript {
   text: string;
   /** The model's decoded output before family post-processing (diarization
    *  markers, timestamp/special tokens, tag filtering, whitespace trims).
    *  Equal to `text` modulo whitespace for families that emit clean text. */
   rawText: string;
+  /** Model-detected language, or an empty string when none applies. */
   language: string;
   timestampKind: TimestampKind;
   segments: Segment[];
@@ -96,6 +99,10 @@ export interface TranscriptionResult {
   words: Word[];
   tokens: Token[];
   timings: Timings;
+}
+
+/** An offline transcript plus terminal run status flags. */
+export interface TranscriptionResult extends Transcript {
   aborted: boolean;
   truncated: boolean;
 }
@@ -120,22 +127,18 @@ export interface BackendInfo {
    *  unreported. Re-query (via {@link getAvailableBackends} or `model.device`)
    *  to refresh; backend-defined and not comparable across device kinds. */
   memoryFree: number;
-  /** Registry index of this device — the value to pass as
-   *  {@link ModelOptions.gpuDevice} to select it (0 means auto: discrete
-   *  GPUs are probed before integrated). `null` when this came from
-   *  `model.device`, since `transcribe_model_get_device` does not expose an
-   *  index; correlate such a device back to {@link getAvailableBackends} by
-   *  `deviceId` / `name` instead. Order-dependent and not stable across
-   *  driver updates or hosts. */
+  /** Process-local registry index for display. Pass this object via
+   *  {@link ModelOptions.device} for exact selection; persist `deviceId`, not
+   *  the index. */
   index: number | null;
 }
 
 export interface ModelOptions {
   /** "auto" (default), or an explicit backend. */
   backend?: Backend;
-  /** GPU device registry index. 0 means auto: the first device that
-   *  initializes, probing discrete GPUs before integrated. */
-  gpuDevice?: number;
+  /** Exact device returned by {@link getAvailableBackends}. Omit for the
+   *  backend's automatic policy. Exact selection never falls back. */
+  device?: BackendInfo;
 }
 
 export interface SessionOptions {
@@ -152,6 +155,10 @@ export interface TranscribeOptions {
   targetLanguage?: string;
   /** Default "auto" (richest the model supports, per-family). */
   timestamps?: TimestampKind;
+  /** Punctuation and capitalization control; default preserves the family default. */
+  pnc?: Pnc;
+  /** Inverse text normalization control; default preserves the family default. */
+  itn?: Itn;
   /** Default "default" (speaker attribution off for every family). */
   diarize?: Diarize;
   keepSpecialTags?: boolean;
@@ -203,6 +210,8 @@ export interface StreamOptions {
   language?: string;
   targetLanguage?: string;
   timestamps?: TimestampKind;
+  pnc?: Pnc;
+  itn?: Itn;
   diarize?: Diarize;
   keepSpecialTags?: boolean;
   commitPolicy?: CommitPolicy;

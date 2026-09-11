@@ -64,6 +64,46 @@ final class TranscribeTests: XCTestCase {
         XCTAssertGreaterThan(model.capabilities.nativeSampleRate, 0)
     }
 
+    func testPncChangesCanaryPrompt() throws {
+        guard let path = Fixtures.pncModelPath(), let audio = Fixtures.audioPath() else {
+            throw XCTSkip("PNC model/audio unavailable")
+        }
+        let model = try Model(path: path, options: ModelOptions(backend: .cpu))
+        XCTAssertTrue(model.supports(.pnc))
+        let session = try model.session()
+        let pcm = try Fixtures.loadWav(audio)
+        let run = { (pnc: Pnc) in
+            try session.run(pcm, options: RunOptions(pnc: pnc, language: "en")).text
+        }
+        let defaultText = try run(.default)
+        let enabled = try run(.on)
+        let disabled = try run(.off)
+        XCTAssertEqual(defaultText, enabled)
+        XCTAssertNotEqual(disabled, enabled)
+        XCTAssertEqual(disabled, disabled.lowercased())
+    }
+
+    func testItnChangesSenseVoiceTextNormalization() throws {
+        guard let path = Fixtures.itnModelPath(), let audio = Fixtures.audioPath() else {
+            throw XCTSkip("ITN model/audio unavailable")
+        }
+        let model = try Model(path: path, options: ModelOptions(backend: .cpu))
+        XCTAssertTrue(model.supports(.itn))
+        let session = try model.session()
+        let pcm = try Fixtures.loadWav(audio)
+        let run = { (itn: Itn) in
+            try session.run(pcm, options: RunOptions(itn: itn, language: "en"))
+        }
+        let defaultResult = try run(.default)
+        let disabled = try run(.off)
+        let enabled = try run(.on)
+        XCTAssertEqual(defaultResult.text, disabled.text)
+        XCTAssertEqual(defaultResult.rawText, disabled.rawText)
+        XCTAssertNotEqual(enabled.text, disabled.text)
+        XCTAssertTrue(disabled.rawText.contains("<|woitn|>"))
+        XCTAssertTrue(enabled.rawText.contains("<|withitn|>"))
+    }
+
     func testSessionLimitsAreSane() throws {
         guard let path = Fixtures.modelPath() else { throw XCTSkip("no canary model") }
         let limits = try Model(path: path).session().limits

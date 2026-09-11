@@ -39,7 +39,7 @@ tags:
   - cache-aware
 
 summary: |
-  Offline English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in offline mode. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end. transcribe.cpp does not yet expose a streaming session API.
+  English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in both offline and cache-aware streaming modes. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end.
 
 default_quant_index: 2  # Q8_0
 

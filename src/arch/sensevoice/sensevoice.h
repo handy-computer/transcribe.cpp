@@ -49,9 +49,6 @@ struct SenseVoiceModel final : public transcribe_model {
 
 struct SenseVoiceSession final : public transcribe_session {
     // Per-call compute state. Reset at the top of every run() call.
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     // Reusable host scratch.
     std::vector<float>   frontend_buf;  // [T_lfr, d_input]
     std::vector<float>   pe_buf;        // [T, d_input]

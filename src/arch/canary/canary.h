@@ -123,9 +123,7 @@ struct CanaryModel final : public transcribe_model {
 };
 
 struct CanarySession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-    ggml_tensor *        encoder_out = nullptr;
+    ggml_tensor * encoder_out = nullptr;
 
     CanaryKvCache kv_cache;
 
@@ -142,6 +140,7 @@ struct CanarySession final : public transcribe_session {
 
     CanarySession() = default;
     ~CanarySession() override;
+    void on_scratch_released() noexcept override;
 };
 
 }  // namespace transcribe::canary

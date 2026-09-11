@@ -135,7 +135,73 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
         list(APPEND _frameworks Accelerate)
     endif()
     if("vulkan" IN_LIST _kinds)
-        list(APPEND _system_libs vulkan)
+        # The Vulkan import library's basename is platform-specific: Windows'
+        # LunarG SDK ships `vulkan-1.lib` (the import lib for the
+        # driver-installed vulkan-1.dll loader); every other platform links
+        # `libvulkan`. Emit the right name per-OS so a non-CMake consumer
+        # reconstructing the link line from this manifest resolves it — a bare
+        # `vulkan` becomes `vulkan.lib` on MSVC, which the SDK does not provide,
+        # so the link dies with LNK1181.
+        if(WIN32)
+            list(APPEND _system_libs vulkan-1)
+        else()
+            list(APPEND _system_libs vulkan)
+        endif()
+    endif()
+    if("rocm" IN_LIST _kinds)
+        # ggml-hip is an archive in this posture, but its HIP/rocBLAS/hipBLAS
+        # dependencies are shared ROCm SDK libraries. CMake propagates those
+        # imported targets while linking in-tree executables; an installed
+        # non-CMake consumer has only this manifest, so record absolute paths
+        # rather than assuming /opt/rocm/lib is in its linker search path.
+        if(DEFINED ENV{ROCM_PATH} AND EXISTS "$ENV{ROCM_PATH}")
+            set(_rocm_root "$ENV{ROCM_PATH}")
+        elseif(EXISTS "/opt/rocm")
+            set(_rocm_root "/opt/rocm")
+        else()
+            set(_rocm_root "/usr")
+        endif()
+        foreach(_rocm_lib IN ITEMS amdhip64 rocblas hipblas)
+            unset(_transcribe_rocm_library CACHE)
+            unset(_transcribe_rocm_library)
+            find_library(_transcribe_rocm_library
+                NAMES ${_rocm_lib}
+                HINTS "${_rocm_root}/lib" "${_rocm_root}/lib64")
+            if(NOT _transcribe_rocm_library)
+                message(FATAL_ERROR
+                    "transcribe install: could not resolve ROCm library "
+                    "${_rocm_lib} for the static link manifest")
+            endif()
+            list(APPEND _library_paths "${_transcribe_rocm_library}")
+        endforeach()
+
+        # Some HIP packages add compiler-rt builtins directly to hip::host's
+        # interface. hip::host is created in ggml-hip's directory and imported
+        # targets are directory-scoped, so it normally is not visible here.
+        # Query it when a package promotes it to global; otherwise reproduce
+        # hip-config.cmake's compiler query using CMake's HIP compiler.
+        if(TARGET hip::host)
+            get_target_property(_hip_host_links hip::host INTERFACE_LINK_LIBRARIES)
+            foreach(_hip_host_link IN LISTS _hip_host_links)
+                if(IS_ABSOLUTE "${_hip_host_link}" AND EXISTS "${_hip_host_link}")
+                    list(APPEND _library_paths "${_hip_host_link}")
+                endif()
+            endforeach()
+        elseif(CMAKE_HIP_COMPILER)
+            execute_process(
+                COMMAND "${CMAKE_HIP_COMPILER}"
+                    -print-libgcc-file-name --rtlib=compiler-rt
+                OUTPUT_VARIABLE _hip_compiler_rt
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+                RESULT_VARIABLE _hip_compiler_rt_result)
+            if(_hip_compiler_rt_result EQUAL 0
+                    AND IS_ABSOLUTE "${_hip_compiler_rt}"
+                    AND EXISTS "${_hip_compiler_rt}")
+                list(APPEND _library_paths "${_hip_compiler_rt}")
+            endif()
+        endif()
+        list(REMOVE_DUPLICATES _library_paths)
     endif()
     if(_frameworks)
         list(REMOVE_DUPLICATES _frameworks)

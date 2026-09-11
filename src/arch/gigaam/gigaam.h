@@ -65,9 +65,6 @@ struct GigaamModel final : public transcribe_model {
 // Concrete context. One scheduler + compute_ctx lifecycle per context,
 // mirroring parakeet.
 struct GigaamSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     ggml_tensor * encoder_out = nullptr;
 
     std::vector<float> mel_buf;
@@ -76,6 +73,7 @@ struct GigaamSession final : public transcribe_session {
 
     GigaamSession() = default;
     ~GigaamSession() override;
+    void on_scratch_released() noexcept override;
 };
 
 }  // namespace transcribe::gigaam

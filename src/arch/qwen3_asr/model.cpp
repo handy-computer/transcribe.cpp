@@ -44,14 +44,6 @@ static_assert(std::is_base_of_v<transcribe_session, QwenAsrSession>);
 QwenAsrSession::~QwenAsrSession() {
     kv_cache.free();
     kv_cache_batch.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 QwenAsrModel::~QwenAsrModel() {
@@ -254,7 +246,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     // Backend plan.
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "qwen3_asr", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "qwen3_asr", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
@@ -751,8 +743,7 @@ transcribe_status run(transcribe_session *          session,
                             "leave no room for output within the %d-token context (need %lld). "
                             "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
                             "split it into segments.",
-                            T_enc, prefix_len + suffix_len, ceiling,
-                            static_cast<long long>(T_prompt) + max_new);
+                            T_enc, prefix_len + suffix_len, ceiling, static_cast<long long>(T_prompt) + max_new);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 

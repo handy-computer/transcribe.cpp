@@ -68,7 +68,13 @@ def build_transcribe_cpp_block(spec: dict) -> str:
             }
     for machine, backends in spec["perf"].items():
         block[f"rtf_{machine.replace('-', '_')}"] = backends
+    # Optional non-WER task metrics (for example cpWER for
+    # speaker-attributed ASR). Values are emitted verbatim so the spec keeps
+    # the metric's natural shape and units.
+    block.update(spec.get("metrics", {}))
     block["streaming"] = bool(caps.get("streaming", False))
+    if "diarize" in caps:
+        block["diarize"] = bool(caps["diarize"])
     block["translate"] = bool(caps.get("translate", False))
     block["lang_detect"] = bool(caps.get("lang_detect", False))
     block["timestamps"] = caps.get("timestamps", "none")

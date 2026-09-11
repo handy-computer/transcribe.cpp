@@ -12,6 +12,10 @@ A matching prebuilt native package is selected automatically for your
 platform (`@transcribe-cpp/<platform>`); there is nothing to compile and no
 environment variables to set.
 
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `gpuDevice` with exact device objects.
+
 ## Quickstart
 
 ```ts
@@ -23,12 +27,23 @@ const model = await TranscribeModel.load("whisper-tiny-Q5_K_M.gguf");
 const result = await model.transcribe(pcm, { timestamps: "segment" });
 
 console.log(result.text);
-console.log(result.language); // detected or requested
+console.log(result.language); // model-detected, or "" when unavailable/a hint was supplied
 for (const seg of result.segments) {
   console.log(`[${seg.t0Ms}–${seg.t1Ms}ms] ${seg.text}`);
 }
 
 model.dispose();
+```
+
+### Punctuation, capitalization, and text normalization
+
+`pnc` and `itn` default to `"default"`, preserving each model family's shipped
+behavior. Probe `model.supports("pnc")` or `model.supports("itn")` before
+selecting `"off"`/`"on"`. Both options are available on single runs, batches,
+and streams.
+
+```ts
+const result = await model.transcribe(pcm, { pnc: "off", itn: "on" });
 ```
 
 ### Streaming
@@ -43,6 +58,7 @@ for (const chunk of pcmChunks) {
   render(committed, tentative);
 }
 await stream.finalize();
+const snapshot = stream.snapshot; // text, language, segments, words, tokens, timings
 stream.reset();
 ```
 
@@ -101,10 +117,15 @@ the model lease). Disposal is idempotent and order-independent.
 ```ts
 import { getAvailableBackends, backendAvailable } from "transcribe-cpp";
 
-getAvailableBackends(); // [{ kind: "metal", name: "MTL0", description: "…" }, …]
-backendAvailable("cuda"); // boolean — never throws
+const devices = getAvailableBackends();
+backendAvailable("rocm"); // boolean — never throws
 
-const model = await TranscribeModel.load("model.gguf", { backend: "metal" });
+// Policy selection: first matching ROCm device.
+const automatic = await TranscribeModel.load("model.gguf", { backend: "rocm" });
+// Exact selection: use this process-local CPU device or fail without fallback.
+const cpu = devices.find((device) => device.deviceType === "cpu");
+if (!cpu) throw new Error("CPU device is not registered");
+const exact = await TranscribeModel.load("model.gguf", { device: cpu });
 ```
 
 `backend` defaults to `"auto"` (best accelerator, else CPU). A missing Vulkan
@@ -137,8 +158,9 @@ the teardown — is refused with `Busy`, by design.
 Because the compute is genuinely on another thread, **do not touch a session
 while a call against it is in flight** — it is single-threaded in the C library:
 
-- Reading a stream's `text`/`state`/`revision`/`lastStatus`, or a session's
-  `limits`/`wasAborted`, during an un-awaited `feed`/`finalize`/`run` **throws**.
+- Reading a stream's `text`/`snapshot`/`state`/`revision`/`lastStatus`, or a
+  session's `limits`/`wasAborted`, during an un-awaited
+  `feed`/`finalize`/`run`/`runBatch` **throws**.
 - `reset()` and `dispose()` are safe to call any time: the native teardown is
   deferred behind any in-flight call, so it never frees a session mid-compute.
 - Disposing a `Session` or `TranscribeModel` while a stream is still active

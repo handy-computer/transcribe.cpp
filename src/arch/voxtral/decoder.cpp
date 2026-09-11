@@ -230,6 +230,127 @@ PrefillBuild build_prefill_graph(ggml_context *                   ctx,
     return pb;
 }
 
+PrefillChunkBuild build_prefill_chunk_graph(ggml_context *                   ctx,
+                                            const VoxtralWeights &           weights,
+                                            const VoxtralHParams &           hp,
+                                            transcribe::causal_lm::KvCache & kv_cache,
+                                            int                              T_chunk,
+                                            int                              max_n_kv,
+                                            int                              pre_n,
+                                            int                              aud_n,
+                                            int                              suf_n,
+                                            bool                             use_flash,
+                                            bool                             want_logits) {
+    PrefillChunkBuild pb{};
+    pb.T_chunk  = T_chunk;
+    pb.max_n_kv = max_n_kv;
+
+    if (ctx == nullptr || T_chunk <= 0 || max_n_kv < T_chunk) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral decoder: invalid chunk (T_chunk=%d max_n_kv=%d)", T_chunk,
+                max_n_kv);
+        return pb;
+    }
+    if (pre_n < 0 || aud_n < 0 || suf_n < 0 || pre_n + aud_n + suf_n != T_chunk) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral decoder: chunk segments %d+%d+%d != T_chunk(%d)", pre_n, aud_n,
+                suf_n, T_chunk);
+        return pb;
+    }
+    if (kv_cache.self_k == nullptr || kv_cache.self_v == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral decoder: kv_cache not initialized");
+        return pb;
+    }
+    if (max_n_kv > kv_cache.n_ctx) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral decoder: max_n_kv=%d exceeds kv_cache.n_ctx=%d", max_n_kv,
+                kv_cache.n_ctx);
+        return pb;
+    }
+
+    const int64_t hidden  = hp.dec_hidden;
+    const int64_t vocab   = hp.dec_vocab_size;
+    const int     n_layer = hp.dec_n_layers;
+    const auto    bp      = to_block_params(hp);
+    const float   rms_eps = hp.dec_rms_norm_eps;
+
+    // A chunk landing wholly inside the audio run needs no token embeddings
+    // at all. Leave the tensor out rather than creating one the graph never
+    // reaches — the scheduler only allocates tensors it can see, so an unused
+    // input would have no buffer to upload into.
+    if (pre_n + suf_n > 0) {
+        pb.input_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_chunk);
+        named(pb.input_ids_in, "dec.chunk.input_ids");
+        ggml_set_input(pb.input_ids_in);
+    }
+
+    if (aud_n > 0) {
+        pb.enc_out_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, aud_n);
+        named(pb.enc_out_in, "dec.chunk.enc_out");
+        ggml_set_input(pb.enc_out_in);
+    }
+
+    pb.positions_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_chunk);
+    named(pb.positions_in, "dec.chunk.positions");
+    ggml_set_input(pb.positions_in);
+
+    pb.kv_idx_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, T_chunk);
+    named(pb.kv_idx_in, "dec.chunk.kv_idx");
+    ggml_set_input(pb.kv_idx_in);
+
+    pb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, max_n_kv, T_chunk);
+    named(pb.mask_in, "dec.chunk.attn_mask");
+    ggml_set_input(pb.mask_in);
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
+    if (gf == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral decoder: ggml_new_graph_custom failed");
+        return pb;
+    }
+    pb.graph = gf;
+
+    // Same three-way splice as the single-shot builder, restricted to the part
+    // of each run that falls inside this chunk.
+    ggml_tensor * token_emb =
+        (pb.input_ids_in != nullptr) ? ggml_get_rows(ctx, weights.dec_embed.token_w, pb.input_ids_in) : nullptr;
+    const size_t emb_elem = (token_emb != nullptr) ? ggml_element_size(token_emb) : 0;
+
+    ggml_tensor * x = nullptr;
+    if (pre_n > 0) {
+        x = ggml_cont(ctx, ggml_view_2d(ctx, token_emb, hidden, pre_n, emb_elem * hidden, /*off=*/0));
+    }
+    if (aud_n > 0) {
+        x = (x == nullptr) ? pb.enc_out_in : ggml_concat(ctx, x, pb.enc_out_in, /*dim=*/1);
+    }
+    if (suf_n > 0) {
+        ggml_tensor * x_suffix = ggml_cont(ctx, ggml_view_2d(ctx, token_emb, hidden, suf_n, emb_elem * hidden,
+                                                             emb_elem * hidden * static_cast<size_t>(pre_n + aud_n)));
+        x                      = (x == nullptr) ? x_suffix : ggml_concat(ctx, x, x_suffix, /*dim=*/1);
+    }
+
+    for (int il = 0; il < n_layer; ++il) {
+        x = causal_lm::block_step_n(ctx, gf, x, to_block_view(weights.dec_blocks[il]), bp, kv_cache, il, T_chunk,
+                                    max_n_kv, pb.mask_in, pb.positions_in, pb.kv_idx_in, use_flash);
+    }
+
+    if (want_logits) {
+        x = ggml_mul(ctx, ggml_rms_norm(ctx, x, rms_eps), weights.dec_final.norm_w);
+
+        ggml_tensor * last_x = ggml_view_2d(ctx, x, hidden, 1, ggml_element_size(x) * hidden,
+                                            ggml_element_size(x) * hidden * static_cast<size_t>(T_chunk - 1));
+        last_x               = ggml_cont(ctx, last_x);
+
+        ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.output_w, last_x);
+        logits               = ggml_reshape_1d(ctx, logits, vocab);
+        named(logits, "dec.logits_raw");
+        transcribe::debug::mark_tensor_for_dump(logits);
+
+        pb.out = logits;
+        ggml_set_output(pb.out);
+        ggml_build_forward_expand(gf, pb.out);
+    } else {
+        ggml_build_forward_expand(gf, x);
+    }
+    return pb;
+}
+
 StepBuild build_step_graph(ggml_context *                   ctx,
                            const VoxtralWeights &           weights,
                            const VoxtralHParams &           hp,

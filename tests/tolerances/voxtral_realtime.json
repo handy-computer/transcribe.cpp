@@ -3,7 +3,7 @@
     "Voxtral Realtime (2602) FINALIZED tolerances. Correctness regime:",
     "  - reference: transformers VoxtralRealtimeForConditionalGeneration,",
     "    dtype=bfloat16, attn_implementation=eager; jfk offline whole-clip",
-    "    teacher-forced decode; num_delay_tokens=6 (480 ms).",
+    "    teacher-forced decode; num_delay_tokens=30 (2400 ms).",
     "  - C++: BF16 reference GGUF, backend cpu, KV cache f16 (AUTO). Encoder flash",
     "    attention is the DEFAULT since Stage 6; the gate is validated against it",
     "    (44/44 within tolerance, transcript exact) and the non-flash soft_max path",
@@ -36,8 +36,8 @@
     "smoothly with depth and the transcript is exact.",
     "",
     "stream.* entries gate the incremental streaming path (Stage 4 Step 2b)",
-    "against the `stream` oracle; for jfk (T_enc=748 < sliding_window=750) the",
-    "streaming logits equal the offline logits, so they mirror dec.logits_raw.*."
+    "against the delay-6 `stream` oracle. Offline tolerances were rechecked at",
+    "delay 30 without widening; streaming and offline logits only match at equal delay."
   ],
 
   "enc.mel.in":        { "max_abs": 6.0e-3,   "mean_abs": 5.0e-4,
@@ -64,7 +64,7 @@
     "_comment": "logits after 8 greedy steps; argmax matches reference" },
 
   "stream.logits_raw":     { "max_abs": 2.6e-1, "mean_abs": 9.3e-2,
-    "_comment": "streaming gen0 logits; mirrors dec.logits_raw (offline==stream for jfk)" },
+    "_comment": "streaming gen0 logits at delay 6" },
   "stream.logits_raw.gen8":{ "max_abs": 3.1e-1, "mean_abs": 7.3e-2,
-    "_comment": "streaming gen8 logits; mirrors dec.logits_raw.gen8" }
+    "_comment": "streaming gen8 logits at delay 6" }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "transcribe-cpp"
-version = "0.2.0"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.74"
 description = "Rust bindings for transcribe.cpp, a C/C++ speech-to-text library built on ggml"
@@ -26,6 +26,7 @@ default = ["metal"]
 metal = ["transcribe-cpp-sys/metal"]
 vulkan = ["transcribe-cpp-sys/vulkan"]
 cuda = ["transcribe-cpp-sys/cuda"]
+rocm = ["transcribe-cpp-sys/rocm"]
 openmp = ["transcribe-cpp-sys/openmp"]
 # `shared` links a shared libtranscribe; `dynamic-backends` additionally ships
 # each compute backend as a runtime-loaded module (and implies `shared`, both
@@ -40,7 +41,7 @@ dynamic-backends = ["shared", "transcribe-cpp-sys/dynamic-backends"]
 # `transcribe-cpp --no-default-features`, silently re-enabling Metal. The backend
 # features below forward explicitly, so the default (`metal`) still reaches sys
 # via `metal = ["transcribe-cpp-sys/metal"]`.
-transcribe-cpp-sys = { version = "0.2.0", path = "../../..", default-features = false }
+transcribe-cpp-sys = { version = "0.2.3", path = "../../..", default-features = false }
 thiserror = "2"
 log = "0.4"
 

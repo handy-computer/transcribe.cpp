@@ -61,14 +61,6 @@ Session::~Session() {
         ggml_free(ada_ctx);
         ada_ctx = nullptr;
     }
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 Model::~Model() {
@@ -92,6 +84,9 @@ Model::~Model() {
 namespace {
 
 constexpr const char k_default_variant[] = "voxtral-mini-4b-realtime-2602";
+
+// Offline inference has no latency tradeoff, so use the best evaluated delay.
+constexpr int k_offline_num_delay_tokens = 30;
 
 // Resolve BOS / STREAMING_PAD / EOS against the loaded tokenizer.
 transcribe_status resolve_specials(const transcribe::Tokenizer & tok, const HParams & hp, PromptSpecials & out) {
@@ -258,7 +253,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0,
+    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->device : nullptr,
                                                          "voxtral_realtime", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
@@ -1055,7 +1050,8 @@ transcribe_status forward_buffer(Session *     cc,
         }
 
         ggml_backend_tensor_set(tf.input_ids_in, full_ids.data(), 0, full_ids.size() * sizeof(int32_t));
-        ggml_backend_tensor_set(tf.audio_in, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
+        ggml_backend_tensor_set(tf.audio_in, cc->enc_host.data(), 0,
+                                static_cast<size_t>(dec_h) * n_audio * sizeof(float));
         std::vector<int32_t> positions(n_audio);
         for (int i = 0; i < n_audio; ++i) {
             positions[i] = i;
@@ -1183,8 +1179,7 @@ transcribe_status run(transcribe_session *          session,
     }
 
     std::string text;
-    if (auto st =
-            forward_buffer(cc, cm, pcm, n_samples, cm->hparams.default_num_delay_tokens, dumps_on, k_drafts, text);
+    if (auto st = forward_buffer(cc, cm, pcm, n_samples, k_offline_num_delay_tokens, dumps_on, k_drafts, text);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -1206,7 +1201,8 @@ transcribe_status run(transcribe_session *          session,
 // a forward over the accumulated audio yields embeddings identical to the
 // offline whole-clip forward. The incremental scheduler below (conv padding
 // cache + encoder StaticCache ring + decoder sliding-KV) is therefore numerically
-// identical to the offline path; stream_finalize matches transcribe_run.
+// identical to the offline path when both use the same delay. Streaming keeps
+// the model's low-latency default; offline inference uses delay 30.
 
 constexpr int k_default_min_decode_interval_ms = 1000;
 
@@ -2216,7 +2212,7 @@ transcribe_status run_batch(transcribe_session *          session,
     }
 
     transcribe::debug::init();
-    const int              num_delay = cm->hparams.default_num_delay_tokens;
+    const int              num_delay = k_offline_num_delay_tokens;
     const int              n_mels    = cm->hparams.enc_num_mel_bins;
     const int              dec_h     = cm->hparams.dec_hidden;
     const int              down      = cm->hparams.proj_downsample;

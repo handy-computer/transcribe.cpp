@@ -30,18 +30,19 @@ use crate::version;
 /// Options for loading a model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelOptions {
-    /// Which backend to request. Default [`Backend::Auto`].
+    /// Which backend to request. Default [`Backend::Auto`]. An explicit device
+    /// must match a non-Auto backend request.
     pub backend: Backend,
-    /// GPU device registry index. 0 means auto: the first device that
-    /// initializes, probing discrete GPUs before integrated.
-    pub gpu_device: i32,
+    /// Exact process-local compute device. `None` applies the backend's
+    /// automatic policy; `Some` selects that device or fails without fallback.
+    pub device: Option<crate::Device>,
 }
 
 impl Default for ModelOptions {
     fn default() -> Self {
         ModelOptions {
             backend: Backend::Auto,
-            gpu_device: 0,
+            device: None,
         }
     }
 }
@@ -121,7 +122,10 @@ impl Model {
         let mut params: sys::transcribe_model_load_params = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_model_load_params_init(&mut params) };
         params.backend = options.backend.to_raw();
-        params.gpu_device = options.gpu_device;
+        params.device = options
+            .device
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |device| device.handle);
 
         let mut out: *mut sys::transcribe_model = std::ptr::null_mut();
         let status = unsafe { sys::transcribe_model_load_file(c_path.as_ptr(), &params, &mut out) };
@@ -219,11 +223,17 @@ impl Model {
     /// much memory is left on the device after the model loaded. Errors with
     /// [`Error::Backend`](crate::Error) if the model has no resolved device.
     pub fn device(&self) -> Result<Device> {
-        let mut raw: sys::transcribe_backend_device = unsafe { std::mem::zeroed() };
-        unsafe { sys::transcribe_backend_device_init(&mut raw) };
-        let status = unsafe { sys::transcribe_model_get_device(self.inner.ptr, &mut raw) };
-        check(status, "model_get_device")?;
-        Ok(Device::from_raw(&raw, None))
+        let handle = unsafe { sys::transcribe_model_device(self.inner.ptr) };
+        if handle.is_null() {
+            return Err(crate::Error::Backend(
+                "model has no resolved device".to_string(),
+            ));
+        }
+        let mut raw: sys::transcribe_device_info = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_device_info_init(&mut raw) };
+        let status = unsafe { sys::transcribe_device_get_info(handle, &mut raw) };
+        check(status, "device_get_info")?;
+        Ok(Device::from_raw(&raw, handle, None))
     }
 
     /// Tokenize plain UTF-8 text into the model's vocabulary (no BOS/EOS, no

@@ -156,6 +156,41 @@ ggml_tensor * block_step(ggml_context *      ctx,
                          ggml_tensor *       kv_idx,    // [1] i64
                          bool                use_flash);
 
+// Pick a reusable KV-cache context for one utterance. Preserve the historical
+// 1K/2K/4K buckets for short inputs, then grow in 4K increments to avoid the
+// large memory cliffs caused by power-of-two rounding. The result is capped at
+// model_max; callers reject inputs that do not fit before calling this helper.
+int pick_kv_cache_context(int needed, int model_max);
+
+// Host-side causal mask for one CHUNKED-PREFILL chunk, to be uploaded into
+// the [max_n_kv, T_chunk] f16 mask that block_step_n takes (ne[0] = KV
+// extent, ne[1] = queries; element (k, q) lives at q*max_n_kv + k).
+//
+// Query q of the chunk sits at absolute position n_past + q, so it may attend
+// to KV rows [0, n_past + q] and nothing beyond. The result is a trapezoid,
+// not the square a single-shot prefill uses: rows below n_past are fully
+// visible to every query, and the triangular part only covers this chunk.
+// n_past == 0 && max_n_kv == T_chunk reproduces the plain causal triangle.
+//
+// `dst` must have room for max_n_kv * T_chunk entries. Callers are expected
+// to reuse one buffer sized for the largest chunk rather than allocating per
+// chunk. Requires 0 <= n_past and n_past + T_chunk <= max_n_kv.
+void fill_prefill_chunk_mask(ggml_fp16_t * dst, int max_n_kv, int T_chunk, int n_past);
+
+// Default chunk width for chunked prefill, and the env override that changes
+// it (TRANSCRIBE_PREFILL_CHUNK). The override exists so the chunked path can
+// be forced on short audio for parity testing against single-shot prefill;
+// it is not a user-facing tuning knob.
+//
+// The cap matters for two independent reasons: the Metal flash-attention
+// kernel asserts ne01 < 65536 (query rows per call), and the prefill mask is
+// O(T_prompt * chunk) — at 2048 that is ~380 MB for a 2 h clip instead of the
+// ~17 GB a single-shot [T, T] mask would need.
+constexpr int k_prefill_chunk_default = 2048;
+constexpr int k_prefill_chunk_max     = 32768;
+
+int prefill_chunk_size();
+
 // Block forward (multi-position step). Like block_step but processes
 // T_seq positions in one forward: writes T_seq rows at the indices in
 // `kv_idx` (i64 [T_seq]) and reads the full [0, max_n_kv) window. `mask`

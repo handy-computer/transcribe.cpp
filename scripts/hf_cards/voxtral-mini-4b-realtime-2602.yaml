@@ -50,7 +50,7 @@ summary: |
   conditioning, emitting one text token per 80 ms audio slot (12.5 Hz). Takes a
   16 kHz mono WAV and supports both incremental streaming (configurable
   latency/quality via --stream-chunk-ms and --stream-voxtral-delay) and offline
-  transcription with a byte-equal final transcript. Architecturally distinct
+  transcription using an accuracy-first 2400 ms delay. Architecturally distinct
   from the offline Voxtral 2507 family — own arch, streaming frontend, causal
   encoder, additive audio fusion.
 
@@ -77,8 +77,9 @@ wer:
   source: LibriSpeech test-clean
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-    the Whisper English text normalizer, offline path, batch size 8 on an NVIDIA
-    L40S. Same-machine HuggingFace transformers reference
+    the Whisper English text normalizer, offline path at delay 6, batch size 8
+    on an NVIDIA L40S. A delay-30 remeasurement is pending. Same-machine
+    HuggingFace transformers reference
     (VoxtralRealtimeForConditionalGeneration, BF16, greedy): 2.08%; the BF16 GGUF
     matches at 2.08%. Every shipped quant stays within bootstrap noise
     (2.07-2.09%), so the quantization ladder is WER-neutral down to Q4_K_M. The

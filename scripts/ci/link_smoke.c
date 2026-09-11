@@ -31,16 +31,16 @@ int main(int argc, char ** argv) {
         }
     }
 
-    int n = transcribe_backend_device_count();
+    int n = transcribe_device_count();
     printf("devices=%d\n", n);
     if (n < 1) {
         fprintf(stderr, "link-smoke: no registered compute devices\n");
         return 1;
     }
     for (int i = 0; i < n; i++) {
-        struct transcribe_backend_device dev;
-        transcribe_backend_device_init(&dev);
-        if (transcribe_get_backend_device(i, &dev) != TRANSCRIBE_OK) {
+        struct transcribe_device_info dev;
+        transcribe_device_info_init(&dev);
+        if (transcribe_device_get_info(transcribe_device_get(i), &dev) != TRANSCRIBE_OK) {
             fprintf(stderr, "link-smoke: device %d query failed\n", i);
             return 1;
         }

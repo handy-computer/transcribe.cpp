@@ -62,7 +62,7 @@ struct transcribe_model {
     // The resolved primary compute backend this model runs on (the handle
     // that owns the weight buffer). Set by per-family load() right where it
     // sets `backend`, from BackendPlan::primary. Used by the public
-    // transcribe_model_get_device() accessor to recover the device — and its
+    // transcribe_model_device() accessor to recover the device — and its
     // live memory — without exposing the per-family BackendPlan. nullptr
     // until a family binds it.
     ggml_backend_t primary_backend = nullptr;
