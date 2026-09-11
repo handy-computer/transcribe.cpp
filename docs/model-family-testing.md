@@ -127,7 +127,9 @@ Inputs:
 - Reference dumps come from the per-family `scripts/dump_reference_*.py`.
 - Tolerances come from `tests/tolerances/<family>.json`.
 - Transcript artifacts are `transcript.json`; when the reference writes
-  one, validation requires exact C++ vs reference text equality.
+  one, validation requires exact C++ vs reference text equality. When the
+  reference artifact also carries word rows, validation additionally compares
+  each word's start and end against the family's `timestamps` tolerance.
 
 Do not grow bespoke C++ tensor-comparison smoke tests per family. C++
 smokes should cover load/run/API behavior; the dump/compare workflow
@@ -155,14 +157,19 @@ Tolerances are data, not C++ literals. The source of truth is:
 tests/tolerances/<family>.json
 ```
 
-Use the current flat tensor-name mapping across families:
+Use the current flat mapping across families, with tensor names and the optional
+`timestamps` entry as top-level keys:
 
 ```json
 {
   "_comment": ["why the tolerances are what they are"],
+  "timestamps": {"max_abs_ms": 80.0},
   "enc.final": {"max_abs": 1e-4, "mean_abs": 1e-6}
 }
 ```
+
+`timestamps.max_abs_ms` bounds each word's start and end deviation from the
+reference in milliseconds; `validate.py` uses it for the word-timestamp compare.
 
 Generic fallback tolerances belong in the tool, for example
 `compare_tensors.py --max-abs` and `--mean-abs`. Family-specific

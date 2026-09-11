@@ -120,6 +120,10 @@
     "matches NeMo's [257,1024] shape, drift is well inside tolerance,",
     "and the JFK transcript matches exactly."
   ],
+  "timestamps": {
+    "_comment": "One encoder frame: 80 ms from 8x subsampling and a 0.01 s frontend hop. Pinned NeMo 2.8.0rc0 (6967f48fda2a) AbstractRNNTDecoding.compute_rnnt_timestamps computes a raw TDT token end as emission offset + token_duration. Its post-processing makes punctuation-only tokens in NeMo's supported set zero-length at the previous token's end, except for the first token; words inherit the clamped end.",
+    "max_abs_ms": 80.0
+  },
   "enc.mel.in": {
     "max_abs": 10.0,
     "mean_abs": 0.01
