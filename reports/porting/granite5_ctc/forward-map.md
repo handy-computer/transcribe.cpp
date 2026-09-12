@@ -134,3 +134,20 @@ required (the Stage-4 mid-generation rule is scoped to KV-cache decoders).
   Stage 4. `subsample_layers=[0,1]`, `num_hidden_layers=16` (self-conditioning
   after block 7), `context_size=128`, `max_position_embeddings=512`,
   `conv_kernel_size=7`, `conv_expansion_factor=2`.
+- `granite-speech-5.0-470m-turboctc-nc`: identical forward graph. `config.json` is
+  byte-identical to the baseline and the 550 shipped tensor names are an exact set
+  match, so every row of the map above applies unchanged and no `src/arch/granite5_ctc/`
+  code was touched to bring it up. Three things differ, none of them graph shape:
+  - **Tokenizer family.** SentencePiece-derived BPE with byte fallback instead of
+    byte-level BPE. GGUF `tokenizer.ggml.model = "bpe"` selects
+    `DecodeMode::SentencePiece`; `decode_sentencepiece` already handled `U+2581` and
+    `<0xHH>` reassembly, so this is a converter concern only. Blank piece is `<unk>`
+    (id 0, same as the baseline's `<|blank|>`).
+  - **Validation coverage.** This variant dumps and gates ALL 16 encoder blocks via
+    the manifest's `reference.dump_args`, not the dumper's 6-block default.
+  - **Drift profile.** Blocks 10-13 carry a massive-activation channel (570) at
+    |value| 190-481 against ~20-28 elsewhere, and it dominates BF16 drift: 10-35x the
+    baseline's at those blocks, even though the baseline's own outlier channel (612)
+    is a comparable size. An F32 GGUF of the same checkpoint through the same graph
+    cuts the drift 100-2500x, which is what rules out a graph bug. Tolerances live in
+    `tests/tolerances/granite5_ctc-nc.json`, per-variant on purpose.

@@ -51,6 +51,7 @@
 #include "arch/granite5_ctc/granite5_ctc.h"
 #include "ggml.h"
 #include "transcribe-model.h"
+#include "transcribe-tokenizer.h"
 #include "transcribe.h"
 
 #include <sys/stat.h>
@@ -159,7 +160,16 @@ int main() {
 
     // --- 2/3: public ABI sanity ---------------------------------------
     CHECK_STR_EQ(transcribe_model_arch_string(model), "granite_speech5_ctc");
-    CHECK_STR_EQ(transcribe_model_variant_string(model), "granite-speech-5.0-470m-turboctc");
+
+    // Two variants share this arch and this loader. They are identical in
+    // config and tensor names; only the tokenizer, licence and training data
+    // differ, so every structural assertion below applies to both.
+    const std::string variant = transcribe_model_variant_string(model);
+    const bool        is_nc   = (variant == "granite-speech-5.0-470m-turboctc-nc");
+    if (variant != "granite-speech-5.0-470m-turboctc" && !is_nc) {
+        std::fprintf(stderr, "FAIL: unexpected variant string \"%s\"\n", variant.c_str());
+        ++g_failures;
+    }
     {
         const std::string backend = transcribe_model_backend(model);
         if (backend.empty()) {
@@ -244,6 +254,56 @@ int main() {
         // decide the pointwise bucket, so a regression to the 3-D layout
         // would silently pin 201 MB at F16 in every quant tier.
         check_shape("enc_blocks[0].conv_pointwise1_w", b.conv_pointwise1_w, { 1024, 4096 });
+    }
+
+    // --- 9: tokenizer decode contract ---------------------------------
+    //
+    // The two variants ship different tokenizer FAMILIES behind identical
+    // configs: byte-level BPE (Apache) vs SentencePiece-derived BPE with byte
+    // fallback (-nc). The -nc side has two decode paths that the byte-level
+    // side cannot reach at all, and both were signed MUST PASS at Stage 1:
+    // byte-fallback reassembly, and the 254 reserved <|tokN|> placeholders.
+    //
+    // Expected strings below are the reference ParakeetTokenizer's own output,
+    // captured at Stage 2 in
+    //   build/validate/granite5_ctc/<variant>/tokenizer_decode_oracle.json
+    // via tokenizer.decode(ids, skip_special_tokens=True).
+    //
+    // Every sequence is free of ADJACENT DUPLICATE ids on purpose:
+    // ParakeetTokenizer._decode performs the CTC run-length collapse itself,
+    // so an already-collapsed sequence containing [A, A] (legal, from a
+    // [A, blank, A] input) would collapse twice in the reference and record a
+    // wrong expectation. With no adjacent duplicates the collapse is a no-op
+    // and the oracle is pure detokenization -- exactly what Tokenizer::decode
+    // must reproduce.
+    {
+        const transcribe::Tokenizer * tok = g5->tokenizer();
+        CHECK(tok != nullptr);
+        if (tok != nullptr) {
+            auto decode = [&](const std::vector<int> & ids) {
+                return tok->decode(ids.data(), static_cast<int>(ids.size()));
+            };
+            if (is_nc) {
+                // byte fallback: <0xNN> ids are 255 + byte value.
+                // "naïve" -> 0xC3 0xAF for the ï.
+                CHECK_STR_EQ(decode({ 7942, 255 + 0xC3, 255 + 0xAF, 561 }), " naïve");
+                // 3-byte UTF-8 through byte fallback: U+6F22 -> E6 BC A2.
+                CHECK_STR_EQ(decode({ 515, 1114, 255 + 0xE6, 255 + 0xBC, 255 + 0xA2 }), " the word漢");
+                // 4-byte UTF-8: U+1F600 -> F0 9F 98 80.
+                CHECK_STR_EQ(decode({ 1515, 255 + 0xF0, 255 + 0x9F, 255 + 0x98, 255 + 0x80 }), " ok😀");
+                // Reserved placeholders decode to their LITERAL text. The
+                // reference suppresses nothing, so neither may we.
+                CHECK_STR_EQ(decode({ 515, 1, 2288 }), " the<|tok0|> dog");
+                CHECK_STR_EQ(decode({ 1, 2, 3 }), "<|tok0|><|tok1|><|tok2|>");
+                // Plain words: U+2581 becomes a leading ASCII space. The
+                // reference strips exactly one; build_result's
+                // collapse_whitespace does that for full_text, so the raw
+                // decode legitimately keeps it here.
+                CHECK_STR_EQ(decode({ 515, 1773, 2977, 5384 }), " the quick brown fox");
+            } else {
+                CHECK_STR_EQ(decode({ 406, 1731, 2855, 5723 }), "the quick brown fox");
+            }
+        }
     }
 
     transcribe_model_free(model);

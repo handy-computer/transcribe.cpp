@@ -379,7 +379,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # family's dumper accepts --revision. The dumper itself ignores
         # --revision when --model resolves to a local directory.
         hf_revision = (manifest.get("source_model") or {}).get("hf_revision")
-        if hf_revision and args.family in ("qwen3_asr", "granite_nar"):
+        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc"):
             common_args += ["--revision", str(hf_revision)]
 
         # Forward any manifest-declared dumper args verbatim. Used today

@@ -1,18 +1,54 @@
 # Granite Speech 5.0 CTC (TurboCTC)
 
-Status: shipped (Stages 1-8; private HF repo only, public flip deferred).
-Stage 6 bench currently covers the `apple-m4` rig only; the publication
-rigs (Apple M4 Max, AMD Ryzen 7 PRO 4750U) are still pending.
+Status, per variant:
+
+- `granite-speech-5.0-470m-turboctc` (Apache-2.0): shipped (Stages 1-8; private
+  HF repo only, public flip deferred). Stage 6 bench currently covers the
+  `apple-m4` rig only; the publication rigs (Apple M4 Max, AMD Ryzen 7 PRO
+  4750U) are still pending.
+- `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0): **Stages 1-7 complete**,
+  except that Stage 6 is `INCOMPLETE — both publication rigs pending` (benched on a
+  base Apple M4 only; CJ signed off 2026-09-12 on carrying that forward). Gates A and B
+  green, `validate.py all` green, Stage 7 ref-dtype WER gate PASS (1.29% vs 1.29%
+  reference), all five quants accepted, matrix published private. Stage 8 not started;
+  it must either close the rig gap or carry an explicit user sign-off for the card.
+
+Everything below that is not explicitly marked per-variant was established for
+the Apache-2.0 variant and applies unchanged to the `-nc` variant: `config.json`,
+`preprocessor_config.json`, `processor_config.json` and `generation_config.json`
+are byte-identical between the two repos, and the 550 shipped tensor names are an
+exact set match. The `-nc` deltas are the tokenizer, the licence, and the training
+corpus -- see **Tokenizer**, **Identity** and **Notes**.
 
 ## Identity
 
 - Family key: `granite5_ctc`
 - Upstream architecture string: `granite_speech5_ctc` (`GraniteSpeech5ForCTC`); encoder `granite_speech5_encoder` (`GraniteSpeech5Encoder`)
-- Hugging Face repo: `ibm-granite/granite-speech-5.0-470m-turboctc` (pinned `18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0`)
-- Hugging Face revision: `18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0`
-- License: Apache-2.0
 - Variants:
-  - `granite-speech-5.0-470m-turboctc`: 473 M params, English-only, encoder + CTC head, non-autoregressive greedy decode.
+  - `granite-speech-5.0-470m-turboctc`: 473 M params, English-only, encoder + CTC
+    head, non-autoregressive greedy decode.
+    - Hugging Face repo: `ibm-granite/granite-speech-5.0-470m-turboctc`
+    - Hugging Face revision: `18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0`
+    - License: Apache-2.0
+    - Tokenizer: GPT-2-style byte-level BPE (GGUF `tokenizer.ggml.model = "gpt2"`)
+    - Training corpus: ~60,000 h English
+  - `granite-speech-5.0-470m-turboctc-nc`: same 473 M params and the same
+    architecture, shapes and frontend; differs only in tokenizer, licence and
+    training data.
+    - Hugging Face repo: `ibm-granite/granite-speech-5.0-470m-turboctc-nc`
+    - Hugging Face revision: `0eb7b4fe726a294815dc45d342860465b5af68ef`
+    - License: **CC-BY-NC-SA-4.0** (non-commercial, ShareAlike)
+    - Tokenizer: SentencePiece-derived BPE with byte fallback (GGUF
+      `tokenizer.ggml.model = "bpe"`)
+    - Training corpus: ~75,000 h English (adds GigaSpeech 10,000 h and SPGI
+      Speech 4,900 h)
+
+The `-nc` licence is a shipping constraint, not a technical one. ShareAlike makes
+every converted GGUF a derivative that must itself carry CC-BY-NC-SA-4.0, so the
+Stage 5 HF repo and the Stage 8 card YAML must both declare it, and the two
+variants must stay separately named and separately licensed end to end. The `-nc`
+variant is never a drop-in replacement for the Apache one in a commercial
+deployment.
 
 Kept out of the existing `granite` family: that family is `audio-llm` (Conformer
 encoder plus a BLIP-2 Q-Former projector plus a Granite-4.0 LLM decoder), while
@@ -26,6 +62,7 @@ autoregressive model can take its own key without a rename.
 
 - Canonical reference: mainline `transformers >= 5.16.0` (`transformers.models.granite_speech5`). No `trust_remote_code`: `config.json` carries no `auto_map`, so `AutoModelForCTC.from_pretrained` resolves to the in-tree classes. Pin `5.17.0` (current on PyPI) in `scripts/envs/granite5_ctc/` at Stage 2.
 - Instrumented reference: same as canonical.
+- Both variants share this reference exactly. Verified on `transformers 5.17.0`: `AutoTokenizer.from_pretrained` returns `ParakeetTokenizer` for the `-nc` repo as well, and its `_decode` performs the same CTC run-length collapse, so the tokenizer half of the reference path is live on both.
 - Cross-check references:
   - `src/arch/granite/encoder.cpp` + `src/granite_conformer/shaw_attn.h`: the block-local Shaw relative-position attention is the same scheme (different `context_size`).
   - `src/conformer/conformer.{h,cpp}` (`build_conformer_block`, `ConvNormType::BatchNorm`): the macaron conformer block used by `parakeet`.
@@ -118,13 +155,75 @@ granite-4.x extractor except the normalization formula.
 
 ## Tokenizer
 
+This is the **only** structural difference between the two variants, and it is a
+different tokenizer family, not just a different vocabulary. Both are 16384 entries
+with the CTC blank at id 0 and both declare `tokenizer_class=ParakeetTokenizer`
+(load-bearing: `ParakeetTokenizer._decode` is where the CTC run-length collapse
+lives, see Notes).
+
+### `granite-speech-5.0-470m-turboctc` (Apache-2.0)
+
 GPT-2-style byte-level BPE, 16384 entries, no normalizer, `ByteLevel` pre-tokenizer
-(`add_prefix_space=false`) and `ByteLevel` decoder (`add_prefix_space=true`). The only
-added token is `<|blank|>` at id 0, which is simultaneously the CTC blank and
-`pad_token_id`. `tokenizer_config.json` declares `tokenizer_class=ParakeetTokenizer`,
-but the artifact is byte-level BPE; spaces come from the byte-level round-trip, not
-from SentencePiece detokenization. `vocab_sha256`:
+(`add_prefix_space=false`) and `ByteLevel` decoder (`add_prefix_space=true`), 16127
+merges. The only added token is `<|blank|>` at id 0, which is simultaneously the CTC
+blank and `pad_token_id`. Spaces come from the byte-level round-trip, not from
+SentencePiece detokenization. GGUF `tokenizer.ggml.model = "gpt2"` ->
+`DecodeMode::Gpt2ByteUnicode`. `vocab_sha256`:
 `3a2c2ef57ee23c9ecbe72f220b9c1e838783df49a159082c39f9ed91c32e7fde`.
+
+### `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0)
+
+SentencePiece-derived BPE exported to the HF `tokenizers` format, 16384 entries,
+30161 merges, `byte_fallback = true`, `unk_token = <unk>`.
+
+- Normalizer: `Sequence[Replace("\r\n" -> "\n\n"), Precompiled(charsmap)]`.
+  **Encode-side only.** CTC inference never encodes text, so this is inert for the
+  port and must not be reimplemented or carried into the GGUF.
+- `pre_tokenizer`: `null`.
+- Decoder: `Sequence[Replace(U+2581 -> " "), ByteFallback, Fuse, Strip(" ", start=1)]`.
+- Vocabulary layout:
+  - id 0: `<unk>` -- simultaneously the CTC blank and `pad_token_id`. The **piece**
+    differs from the Apache variant (`<|blank|>` there); the **id** is 0 on both.
+  - ids 1..254: 254 reserved placeholders `<|tok0|>`..`<|tok253|>`, declared in
+    `added_tokens` with `special: false` and carrying no training signal. They are
+    inside the 16384-way CTC head, so greedy argmax can select one and nothing in the
+    reference suppresses it.
+  - ids 255..510: the 256 byte-fallback pieces `<0x00>`..`<0xFF>`.
+  - ids 511..16383: SentencePiece word pieces; 12918 of the 16384 entries carry a
+    leading `U+2581`.
+- GGUF `tokenizer.ggml.model = "bpe"` -> `DecodeMode::SentencePiece`. Emitting
+  `"gpt2"` would produce mojibake on every `U+2581`. `tokenizer.ggml.pre = "granite"`
+  is meaningless on the SentencePiece path and must not be carried over.
+- `vocab_sha256`:
+  `3735804bd7e9167ed5c02aafb832e9253bb586618bd7d51d85dc5a5ad9076f91`.
+
+**The two vocabularies share no ids** -- `the` is 406 on the Apache variant and 515
+here. Because `config.json` is byte-identical between the repos, nothing in the config
+or the tensor shapes would catch a crossed checkpoint/tokenizer pairing: a GGUF built
+from one checkpoint with the other's tokenizer loads cleanly and emits fluent-looking
+garbage. The GGUF must carry `vocab_sha256` and Stage 3/4 must assert it. This is the
+highest-severity silent-failure mode of the `-nc` port.
+
+C++ impact is small: `src/transcribe-tokenizer.cpp`'s `decode_sentencepiece` already
+substitutes `U+2581` and already reassembles `<0xHH>` byte-fallback pieces
+(`try_byte_fallback`), and concatenating raw bytes is equivalent to the decoder's
+`Fuse`. Two things are genuinely new and belong to Stages 3/4:
+
+1. `scripts/convert-granite5_ctc.py` looks up the blank by the literal string
+   `<|blank|>` (raises `ValueError` otherwise) and cross-checks it against
+   `config.pad_token_id`. That lookup must become variant-aware -- accept the piece
+   named by `tokenizer_config.json:pad_token`, or fall back to `config.pad_token_id`.
+2. `Strip(" ", start=1)`. A SentencePiece decode of a transcript opens with an ASCII
+   space. `collapse_whitespace` in `src/arch/granite5_ctc/decoder.cpp` already trims
+   it, so `cc.full_text` matches the reference, but `cc.raw_text` is assigned *before*
+   the collapse and will carry a leading space on this variant while the Apache
+   variant's does not. Stage 4 decides whether to mirror the single `Strip` into
+   `raw_text` or document the divergence; any text-parity harness comparing `raw_text`
+   must account for it.
+
+`Tokenizer::encode()` is legitimately unavailable for the `-nc` variant
+(SentencePiece flavors return `NOT_IMPLEMENTED`). That is correct: a CTC model has no
+prompt, no chat template and no forced-decoder-id surface.
 
 ## Dtype
 
@@ -146,9 +245,13 @@ Stage 4 the ability to diff the BN parameters against the reference dumps.
 
 ## Oracle (Stage 2)
 
-Oracle dtype is **F32**, not the BF16 the weights ship as. The BF16 to F32 upcast is
-lossless, so these are the shipped weights unchanged, and F32 activations over BF16
-weights is exactly the transcribe.cpp compute regime. Measured on jfk: a BF16 forward
+Oracle dtype is **F32** on both variants, not the BF16 the weights ship as.
+
+### `granite-speech-5.0-470m-turboctc` (Apache-2.0)
+
+The BF16 to F32 upcast is lossless, The BF16 to F32 upcast is
+so these are the shipped weights unchanged, and F32 activations over BF16 weights is
+exactly the transcribe.cpp compute regime. Measured on jfk: a BF16 forward
 gives an identical transcript and identical token ids, but tensors differ from F32 by up
 to 2-3 % of `p99_abs` (worst: `enc.block.1.post_ff2`, max |diff| = 0.44), roughly 250x
 the `1e-4 x p99_abs` tolerance budget. A BF16 oracle would have forced blind tolerance
@@ -185,6 +288,68 @@ test-clean, 95 % CI [1.20 %, 1.47 %], 2620 utterances, 0 errors (527 sub / 87 de
 number, so there is nothing to compare it against; the gate is this measured run, not a
 published score. Artifacts:
 `reports/wer/granite-speech-5.0-470m-turboctc-REF.test-clean.{jsonl,score.json}`.
+
+### `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0)
+
+Dumped with the **unmodified** family dumper and the unmodified reference WER runner;
+`--model` is their only repo-dependent input, so no new Stage 1 code was needed. Same
+F32 oracle dtype, same eager attention, same two cases, for the reasons above.
+
+The frontend is confirmed identical across variants, not merely assumed: `jfk` produced
+`input_features (1, 550, 320)` with `valid=550` and `dots` produced `(1, 1767, 320)`
+with `valid=1767`, matching the Apache variant frame for frame. The even/odd
+`mel_frames` coverage argument therefore carries over unchanged.
+
+Per-variant artifacts:
+
+- Manifest: `tests/golden/granite5_ctc/granite-speech-5.0-470m-turboctc-nc.manifest.json`
+- Dumps: `build/validate/granite5_ctc/granite-speech-5.0-470m-turboctc-nc/{jfk,dots}/ref/`
+  (48 tensor sidecars, 24 distinct names per case)
+- Tolerances: `tests/tolerances/granite5_ctc-nc.json` — **per-variant on purpose.**
+  `tests/tolerances/granite5_ctc.json` is flat per-tensor and Stage-4-finalized for the
+  Apache variant; the two checkpoints differ (~75,000 h vs ~60,000 h of training audio)
+  and will drift differently, so they cannot share a budget. The manifest's
+  `tolerance_file` key points here. Precedent: `whisper-base.json`,
+  `qwen3_asr-1.7b.json`.
+
+**Tokenizer decode oracle** (`.../granite-speech-5.0-470m-turboctc-nc/tokenizer_decode_oracle.json`):
+the two `-nc`-only MUST PASS capability rows signed at Stage 1 — SentencePiece
+byte-fallback decode, and the 254 reserved `<|tokN|>` ids — are reachable at runtime but
+are not covered by the tensor dumps or the case transcripts, so neither row had anything
+to resolve against. This file records `tokenizer.decode(ids, skip_special_tokens=True)`
+from the reference `ParakeetTokenizer` for ten id sequences. Stage 4 runs the C++
+tokenizer over each `ids` and compares byte for byte against `expected_text`.
+
+Every case is built so **no two adjacent ids are equal**, and that is load-bearing:
+`ParakeetTokenizer._decode` performs the CTC run-length collapse itself, so handing it an
+already-collapsed sequence containing `[A, A]` (which is legal — it comes from a
+`[A, blank, A]` input) would collapse a second time and record the wrong answer. With no
+adjacent duplicates the collapse is a no-op and `expected_text` is exactly the
+detokenization the C++ must reproduce.
+
+Two results from that oracle settle open Stage 1 questions:
+
+- The reserved ids are **not** suppressed anywhere in the reference.
+  `[▁the, <|tok0|>, ▁dog]` decodes to `the<|tok0|> dog` — literal text, no space inserted
+  before it. The C++ must match this rather than invent a suppression rule.
+- Byte-fallback runs fuse correctly into multi-byte UTF-8 at 2, 3 and 4 bytes
+  (`naïve`, `the word漢`, `ok😀`), which is what `decode_sentencepiece`'s raw-byte
+  concatenation has to reproduce.
+
+**Reference WER baseline (the Stage 4 / Stage 7 gate):** 1.29 % on LibriSpeech
+test-clean, 95 % CI [1.15 %, 1.42 %], 2620 utterances, 0 errors (519 sub / 83 del /
+82 ins). Scored with `EnglishTextNormalizer`, same manifest
+(`samples/wer/test-clean.manifest.jsonl`) and same runner as the Apache variant, at F32
+on MPS. Artifacts:
+`reports/wer/granite-speech-5.0-470m-turboctc-nc-REF.test-clean.{jsonl,score.json}`.
+
+The publisher reports no LibriSpeech number for either variant, so there is nothing to
+compare this against; the gate is this measured run. For context only, the Apache
+variant's reference measured 1.33 % on the same manifest, so the `-nc` variant is 0.04 pp
+better here — the same direction as the published Open ASR aggregate (4.85 % vs 5.00 %)
+but well inside both confidence intervals, so test-clean does not independently confirm
+that ordering. **This number gates the `-nc` C++ only.** It is not interchangeable with
+the Apache variant's 1.33 % gate in either direction.
 
 ## Conversion (Stage 3)
 
@@ -289,7 +454,72 @@ Loader-open smoke returns `unsupported architecture`, which is the expected Stag
 outcome for a family whose `src/arch/granite5_ctc/` does not exist yet — the GGUF
 header and KV block parsed, and dispatch is what failed. Stage 4 brings up the arch.
 
+### `granite-speech-5.0-470m-turboctc-nc` (Stage 3)
+
+Reference dtype **BF16**, same as the Apache variant. Output:
+`models/granite-speech-5.0-470m-turboctc-nc/granite-speech-5.0-470m-turboctc-nc-BF16.gguf`,
+948,103,840 bytes, sha256 `5a6b4c796207e5b20ee164ccc380df3f5ad2ea368bf414ba6814e820237879bc`.
+Manifest: `reports/convert/granite-speech-5.0-470m-turboctc-nc-BF16.json`. 518 tensors,
+947,138,560 bytes of tensor data — identical to the Apache variant, as expected from an
+exact tensor-name match; the ~279 KB file-size delta is metadata (30161 merges vs 16127).
+
+The converter needed three changes, all confined to variant-dependent metadata. None
+touches tensor emission, and the Apache variant's output was verified **byte-identical
+before and after** (sha256 `8b17c76f…` both ways, regenerated to a scratch path and
+compared).
+
+4. **Tokenizer flavor is detected from `tokenizer.json`'s decoder chain**, not
+   hard-coded. `_detect_decode_flavor` walks the decoder spec: a `ByteLevel` decoder
+   means `tokenizer.ggml.model = "gpt2"`, a `Replace(U+2581 -> " ")` means `"bpe"`, and
+   anything ambiguous raises rather than guesses. The decoder chain is the authoritative
+   statement of how pieces reassemble into text, so it is the right thing to key on. This
+   value selects `DecodeMode` in `src/transcribe-tokenizer.cpp`; getting it wrong is
+   silent, because a SentencePiece vocabulary decoded as byte-level still produces
+   text-shaped output, just mojibake at every `U+2581`. `tokenizer.ggml.pre = "granite"`
+   drives `encode()` on the byte-level path only and is **not** emitted for the
+   SentencePiece flavor, where it is meaningless.
+5. **The CTC blank is located by `tokenizer_config.json:pad_token`**, not by the literal
+   string `<|blank|>`. The piece is `<|blank|>` on the Apache checkpoint and `<unk>` on
+   the `-nc` one; the id is 0 on both, and the converter still cross-checks it against
+   `config.pad_token_id`. The old hard-coded lookup raised `ValueError` on the `-nc`
+   checkpoint. Token types are now assigned per flavor: on `-nc`, `<unk>` is `UNKNOWN`
+   (and `tokenizer.ggml.unknown_token_id` is emitted), the 254 reserved
+   `<|tok0|>`..`<|tok253|>` are `USER`, and the 256 `<0xHH>` are `BYTE`. The reserved
+   pieces are deliberately **not** `CONTROL`: the Stage 2 tokenizer oracle showed the
+   reference decodes them to literal text, so `CONTROL` would assert a suppression the
+   oracle does not have. Emitted histogram: 1 UNKNOWN / 254 USER / 256 BYTE / 15873
+   NORMAL. (`granite5_ctc` never calls `Tokenizer::is_control`, so these types are
+   descriptive for this family — but they must still be truthful.)
+6. **`general.name` and the `general.license*` block are derived from the variant.**
+   The first `-nc` build stamped `license: apache-2.0` and the Apache display name,
+   which the loader smoke surfaced. That is a licensing misstatement, not cosmetics:
+   CC-BY-NC-SA-4.0 is non-commercial with ShareAlike, so the GGUF is a derivative that
+   must carry the same terms, and every downstream consumer reads `general.license`.
+   The `-nc` build now emits `name = "Granite Speech 5.0 470M TurboCTC NC"`,
+   `license = "cc-by-nc-sa-4.0"`, the matching license name/link, a `non-commercial`
+   tag, and a description sentence stating it is not a drop-in replacement for the
+   Apache variant in commercial deployments.
+
+Gate B is **identical to the Apache variant's**: PASS on `dtype_consistency`,
+`tokenizer_alignment` and `capabilities`, with the same two documented WARNs
+(`frontend_config`, `architecture_sanity`) and no FAIL.
+
+Unlike the Apache variant's Stage 3, the loader-open smoke **passes here** (exit 0):
+`src/arch/granite5_ctc/` already exists, so this is a real end-to-end run rather than a
+header-parse check. It transcribed `samples/jfk.wav` to
+`and so my fellow americans ask not what your country can do for you ask what you can do
+for your country`, character-identical to the Stage 2 reference transcript, at 108x
+realtime on Metal. **The SentencePiece decode path required no C++ changes** —
+`decode_sentencepiece` already handles `U+2581` substitution and `<0xHH>` byte-fallback
+reassembly. Stage 4 still owns tensor-level parity and the two tokenizer capability rows.
+
+`scripts/lib/test_quant_policy_sync.py`: 5/5 over 59 tensor names. The converter's dtype
+bucketing was untouched, so no `policy.cpp` change was needed.
+
 ## Commands
+
+Both variants use the same scripts; `--model` (and the matching `--revision` /
+output paths) is the only thing that changes.
 
 Reference run (Stage 2):
 
@@ -299,16 +529,31 @@ uv run --project scripts/envs/granite5_ctc \
     --model ibm-granite/granite-speech-5.0-470m-turboctc \
     --manifest samples/wer/test-clean.manifest.jsonl \
     --out reports/wer/granite-speech-5.0-470m-turboctc-REF.test-clean.jsonl
+
+# -nc variant
+uv run --project scripts/envs/granite5_ctc \
+  scripts/wer/run_reference_granite5_ctc_transformers.py \
+    --model ibm-granite/granite-speech-5.0-470m-turboctc-nc \
+    --revision 0eb7b4fe726a294815dc45d342860465b5af68ef \
+    --device mps \
+    --manifest samples/wer/test-clean.manifest.jsonl \
+    --out reports/wer/granite-speech-5.0-470m-turboctc-nc-REF.test-clean.jsonl
+uv run scripts/wer/score.py reports/wer/granite-speech-5.0-470m-turboctc-nc-REF.test-clean.jsonl
 ```
 
-Reference dumps (Stage 2):
+Reference dumps (Stage 2). Note the subcommand is `decode`: `encoder` is a no-op that
+only creates the output directory, and the dumps land in `<case>/ref/`, which is the
+layout `validate.py` reads (`build/validate/{family}/{variant}/{case}/{ref,cpp}`).
 
 ```bash
-uv run --project scripts/envs/granite5_ctc \
-  scripts/dump_reference_granite5_ctc_transformers.py encoder \
-    --model ibm-granite/granite-speech-5.0-470m-turboctc \
-    --audio samples/jfk.wav \
-    --out build/validate/granite5_ctc/granite-speech-5.0-470m-turboctc/jfk/encoder/ref
+for CASE in jfk dots; do
+  uv run --project scripts/envs/granite5_ctc \
+    scripts/dump_reference_granite5_ctc_transformers.py decode \
+      --model ibm-granite/granite-speech-5.0-470m-turboctc-nc \
+      --revision 0eb7b4fe726a294815dc45d342860465b5af68ef \
+      --audio samples/${CASE}.wav \
+      --out build/validate/granite5_ctc/granite-speech-5.0-470m-turboctc-nc/${CASE}/ref
+done
 ```
 
 Conversion (Stage 3, preserves source bf16):
@@ -525,6 +770,72 @@ bottleneck. Metal is unaffected (247 ms, RTF ~44x), which is what the WER
 gates ran on. Not a Stage 4 blocker; recorded here so Stage 6 does not
 rediscover it.
 
+### `granite-speech-5.0-470m-turboctc-nc` (Stage 4)
+
+**Zero C++ changes.** `src/arch/granite5_ctc/` was not touched. The variant came up on
+the existing arch via the Stage 1 sibling-variant path; everything below is validation,
+not implementation.
+
+`validate.py all` exits **0**, 35/35 tensors within tolerance on both cases, transcripts
+matching. The shipped Apache variant was re-validated afterwards and also exits 0, so
+none of the shared-code edits below regressed it.
+
+Shared-code edits this variant required (all metadata/plumbing, none in the graph):
+
+- `scripts/convert-granite5_ctc.py` — the three tokenizer/identity changes recorded under
+  Conversion above. Apache output verified byte-identical before and after.
+- `tests/golden/.../-nc.manifest.json` — `reference.dump_args` forces all 16 encoder
+  blocks. The Apache manifest declares none, so its 6-block default is untouched.
+- `scripts/dump_reference_granite5_ctc_transformers.py` — the `encoder` subcommand now
+  accepts and ignores `--enc-blocks`. `validate.py` passes manifest `dump_args` to both
+  subcommands, and only `decode` previously declared the flag.
+- `scripts/validate.py` — `granite5_ctc` added to the family tuple that forwards
+  `--revision` to the dumper. Before this, granite5_ctc reference dumps ran unpinned and
+  recorded `model_revision: null` in every sidecar despite the manifest pinning a SHA.
+  Same behavior for both variants today; it just makes the pin real.
+- `tests/granite5_ctc_real_smoke.cpp` — variant-aware (accepts either variant string)
+  plus the tokenizer decode assertions described below.
+
+**Drift.** See the `_comment` block in `tests/tolerances/granite5_ctc-nc.json` for the
+full account. Summary: blocks 10-13 carry a massive-activation channel (570) at
+|value| 190-481 while the rest of those tensors sit at 20-28, and it dominates BF16
+drift, carrying 34-73% of all squared error. This variant drifts 10-35x the Apache
+sibling at those blocks even though the sibling's own outlier channel is a comparable
+size, so magnitude alone does not explain it. It was accepted only after an F32 control:
+the same C++ graph on an F32 GGUF of the same checkpoint drops drift 100-2500x
+(`enc.out` 2.187e-01 -> 2.039e-04), which a graph, mask or indexing bug would not do.
+Supporting evidence: argmax agreement 441/441 and 137/137; minimum CTC safety margin
+0.804 logits at a frame drifting 0.024 (34x); and the WER results below.
+
+**Capability Validation**: all 5 `MUST PASS` rows resolved to `PASS`; the 6
+`OUT OF SCOPE` rows resolved to `SKIP`. No row remains `TODO` and nothing was
+re-signed. The two `-nc`-only tokenizer rows are checked by
+`tests/granite5_ctc_real_smoke.cpp` (gated on `TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON` and
+`TRANSCRIBE_GRANITE5_CTC_GGUF`) against the Stage 2 `tokenizer_decode_oracle.json`; it
+passes on both variants.
+
+**Batch parity**: text byte-equal vs serial and vs the frozen golden at 2/4/8 over 24
+mixed-length utterances (`tests/golden/batch/granite-speech-5.0-470m-turboctc-nc.cpu.json`,
+list copied from the sibling so the two are comparable); CPU tensor parity bit-exact
+(max_abs = 0.0) at batch 4.
+
+**Ref-dtype WER gate** (full LibriSpeech test-clean, 2620 utterances):
+
+| run | WER | 95% CI | sub/del/ins |
+|-----|-----|--------|-------------|
+| Stage 2 Oracle reference (F32, transformers) | 1.29% | [1.15, 1.42] | 519 / 83 / 82 |
+| C++ BF16 batch 1 | **1.29%** | [1.15, 1.42] | 519 / 82 / 82 |
+| C++ BF16 batch 8 | **1.29%** | [1.15, 1.42] | 519 / 82 / 82 |
+
+Gate is `C++ b1 <= Oracle + 0.01pp`: **PASS** (1.29 <= 1.30). Only 2 of 2620 hypotheses
+differ from the reference at all, and on one of them the C++ is the better transcription
+(`regular house cleaning` vs the reference's truncated `regular housean`). Batch 8 is
+byte-identical to batch 1 on all 2620 hypotheses, so batching is WER-neutral by
+construction rather than by rounding.
+
+Ref-dtype GGUF published to the private
+`handy-computer/granite-speech-5.0-470m-turboctc-nc-gguf`.
+
 ## Quant matrix (Stage 5)
 
 `uv run scripts/quantize-all.py models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf`
@@ -614,6 +925,47 @@ Q4_K_M, since the 2B LLM decoder dominates the file). Deferred past Stage 8
 by user decision. The policy rule is shape-driven, so granite 4.x picks the
 win up automatically once its converter emits 2-D.
 
+### `granite-speech-5.0-470m-turboctc-nc` (Stage 5)
+
+Full matrix built by `scripts/quantize-all.py` from the BF16 reference tier. All six
+GGUFs load and emit a valid transcript on `samples/jfk.wav`, and all six produce the
+**identical** jfk transcript, character for character.
+
+| preset | bytes | tentative WER | delta vs BF16 | sibling (shipped) |
+|--------|-------|---------------|---------------|-------------------|
+| BF16 (ref tier) | 948,103,840 | 1.29% | — | 1.33% |
+| F16 | 948,562,592 | 1.29% | +0.00 | 1.33% |
+| Q8_0 | 505,885,856 | 1.30% | +0.01 | 1.34% |
+| Q6_K | 392,115,360 | 1.28% | -0.01 | 1.33% |
+| Q5_K_M | 336,016,544 | 1.29% | +0.00 | 1.34% |
+| Q4_K_M | 279,393,440 | 1.33% | **+0.04** | 1.34% |
+
+Full LibriSpeech test-clean, 2620 utterances, local CPU/Metal, no `--n-utts` subsetting.
+**Tentative**: Stage 7 re-runs and owns the published numbers.
+
+Quant tensor breakdown at Q4_K_M: 357 F32 / 33 Q8_0 / 130 Q4_K, 265.6 MB of tensor data
+from 903.3 MB, 179 requantized and 341 copied. The high F32 count is the
+`reference_dtype_for` bucketing (norms, biases, BN stats, positional tables) plus the
+frontend buffers, and the 33 Q8_0 tensors are the ConvPw shape-aware pin.
+
+**On the Stage 4 K-quant watch item.** Stage 4 flagged the channel-570 massive
+activation (|value| up to 481, ~20x the rest of its tensor) as a K-quant risk, because a
+value that size dominates the scale of whatever quant block it lands in, and warned that
+the sibling's quant results would not transfer. Partly borne out, and mildly:
+
+- Q4_K_M is the only preset that moved, at +0.04 pp over its own BF16 tier. The sibling's
+  Q4_K_M moved +0.01 pp over its BF16 tier, so this variant is ~4x more Q4-sensitive in
+  delta terms, which is the direction the watch item predicted.
+- In absolute terms it is still 1.33%, i.e. exactly the sibling's shipped Q4_K_M number,
+  and the 95% CI [1.19, 1.46] overlaps the BF16 tier's [1.15, 1.42] heavily. Q6_K and
+  Q5_K_M did not degrade at all.
+- So the effect is real but small, and Q4_K_M remains shippable on the evidence so far.
+  Stage 7 should still look at Q4_K_M on this variant specifically rather than assuming
+  the sibling's result carries over.
+
+Matrix published to the private `handy-computer/granite-speech-5.0-470m-turboctc-nc-gguf`
+(3.41 GB across six files; repo confirmed still private).
+
 ## Benchmarks (Stage 6)
 
 Reproduction (apple-m4, `build/`):
@@ -680,11 +1032,66 @@ NOT downgrade the `Batch (offline)` capability row, which is PASS on its own
 terms (a real `run_batch()` ships and is byte-identical to serial); it just
 means the feature buys throughput only on CPU or for shorter clips.
 
+### `granite-speech-5.0-470m-turboctc-nc` (Stage 6)
+
+**Status: INCOMPLETE — both publication rigs pending.** Carried forward deliberately:
+**CJ signed off 2026-09-12 on advancing to Stage 7 with this gap open**, on the grounds
+that Stage 7 is WER and therefore rig-independent. The rig coverage becomes a Stage 8
+decision, at the point where the model card actually needs the numbers. This is NOT a
+sign-off that apple-m4 numbers may be published. Neither required rig was
+reachable. This session ran on a base **Apple M4** (16 GB), which is neither the
+Apple M4 Max nor the AMD Ryzen 7 PRO 4750U, so per the Stage 6 rules these numbers are
+iteration data and do not substitute for either rig. The Apache sibling is in the same
+state, so the two remain directly comparable; the family carries this gap into Stage 8.
+
+Publication scope on `apple-m4`, `--name granite-speech-5-0-470m-turboctc-nc-publication`,
+q8_0/q4_k_m x jfk/dots, iters 3, warmup 1. Vulkan cells do not exist on macOS and were
+correctly skipped. Mean `encode_ms` (the stage counter; `rtf_wall` is not a perf number):
+
+| backend | preset | jfk (11.0 s) | dots (35.3 s) |
+|---------|--------|--------------|---------------|
+| Metal   | Q8_0   | 94.0 ms | 251.9 ms |
+| Metal   | Q4_K_M | 96.8 ms | 259.4 ms |
+| CPU     | Q8_0   | 377.2 ms | 1152.3 ms |
+| CPU     | Q4_K_M | 408.5 ms | 1239.7 ms |
+
+Reproducible: an earlier baseline capture at the same scope agreed to within ~1% on
+every cell. Against the Apache sibling on the same rig, encode is within +0.2% on Metal
+and 1.2-2.2% FASTER on CPU — i.e. indistinguishable, which is expected since the two
+variants share the graph, the shapes and the quant policy. Q4_K_M is consistently ~3%
+slower than Q8_0 in encode on both backends despite being 45% smaller; this is an
+encoder-bound model, not a bandwidth-bound one.
+
+Schema check: all required fields present in both reports. `git_dirty` is absent, but it
+is absent in the sibling's reports too — a pre-existing bench-harness gap, not a
+regression, and a harness task rather than a porting one. (`git_sha` records `54b241e`;
+the working tree had Python/doc/test edits at capture time, none of which reach
+`libtranscribe` or `transcribe-bench`, so the SHA does describe the benched code.)
+
+Iterations run: **0**. No optimization hypothesis was raised, and the Step 6 loop is
+human-driven, so no `validate.py all` accept-gate was triggered.
+
+#### Batch throughput (Step 4b, non-gating)
+
+`transcribe-batch-bench`, F16, jfk, Metal, iters 3:
+
+| batch | 1 | 2 | 4 | 8 | 16 | 32 |
+|-------|---|---|---|---|----|----|
+| per-utt ms | 97.2 | 94.2 | 94.1 | 95.0 | 96.6 | 97.5 |
+
+Flat. Batching buys ~3% at batch 2-4 and gives it back by 32. This does **not** change
+the Stage 4 `Batch (offline)` row, which is `PASS` on its own terms (a real `run_batch()`
+ships and its output is byte-identical to batch 1 across all 2620 test-clean utterances).
+It does mean batching is a latency-hiding convenience on this family rather than a
+throughput win, which is worth knowing before anyone optimizes for it.
+
 ## Capability Validation
 
 `Target` is the Stage 1 scope decision (user-signed). `Status` is the Stage 4
 observed outcome and is `TODO` until then. A `MUST PASS` row may not be
 downgraded without the user re-signing.
+
+### `granite-speech-5.0-470m-turboctc` (Apache-2.0)
 
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |------------|------|----------------|---------------------|--------|--------|
@@ -697,6 +1104,75 @@ downgraded without the user re-signing.
 | Word timestamps | word granularity | `build/bin/transcribe-cli -m <BF16> --timestamps word samples/jfk.wav` | `TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS` | OUT OF SCOPE — **re-signed by CJ 2026-09-12**, down from MUST PASS at intake. An implementation existed and passed the structural check, but its word END times were wrong (see below) and there is no reference alignment to validate against, so it was stripped rather than shipped. Returns in scope with a real word-end rule plus something to check it against | SKIP — not exposed by runtime; the word-building code was removed from `decoder.cpp` and `max_timestamp_kind` left at `TRANSCRIBE_TIMESTAMPS_NONE` |
 | Streaming | `--stream-chunk-ms` | not exercised | `capabilities.streaming: false`; and the `per_utterance` log-mel floor depends on an utterance-global maximum, so chunked decoding changes the feature values | OUT OF SCOPE — non-streaming model with a non-causal frontend; would return in scope only with a fixed-max ("global") frontend variant plus an upstream streaming recipe | SKIP — not exposed by runtime |
 | Speaker diarization | multi-speaker | not exercised | single-speaker CTC output, no speaker head | OUT OF SCOPE — no diarizer in the architecture | SKIP — not exposed by runtime |
+
+### `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0)
+
+Stage 1 targets, **signed by CJ 2026-09-11**. The capability set is identical to
+the Apache-2.0 variant's -- same architecture, same config, same advertised
+capabilities -- so the targets mirror it row for row, including the
+already-re-signed `OUT OF SCOPE` on word timestamps. The two `-nc`-only tokenizer
+rows were signed `MUST PASS`. `Status` filled by Stage 4: every `MUST PASS` row
+resolved to `PASS`; no row was downgraded and no re-sign was needed.
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|------------|------|----------------|---------------------|--------|--------|
+| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-5.0-470m-turboctc-nc/granite-speech-5.0-470m-turboctc-nc-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript, character-identical to the `-nc` reference transcript | MUST PASS | PASS — `and so my fellow americans ask not what your country can do for you ask what you can do for your country`, character-identical to the Stage 2 reference |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-5.0-470m-turboctc-nc/granite-speech-5.0-470m-turboctc-nc-BF16.gguf samples/jfk.wav` | same transcript as the hinted run (`--language` reaches no branch) | MUST PASS | PASS — byte-identical to the hinted run |
+| Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model models/granite-speech-5.0-470m-turboctc-nc/granite-speech-5.0-470m-turboctc-nc-BF16.gguf --list tests/golden/batch/granite-speech-5.0-470m-turboctc-nc.list --batch-sizes 2,4,8 --backend cpu --golden-in tests/golden/batch/granite-speech-5.0-470m-turboctc-nc.cpu.json`<br>`uv run scripts/batch_tensor_parity.py --model <same> --wav samples/jfk.wav --batch 4 --backend cpu --dump-name dec.ctc_logits` | byte-identical hypotheses + CPU tensor parity | MUST PASS | PASS — text byte-equal vs serial AND vs the frozen golden at 2/4/8 over the same 24 mixed-length utterances as the sibling; CPU tensor parity bit-exact (max_abs=0.0) at batch 4 on `dec.ctc_logits`; and on the full 2620-utterance test-clean run batch 8 is byte-identical to batch 1 on every hypothesis (0 differing) |
+| Tokenizer | SentencePiece byte-fallback decode | `TRANSCRIBE_GRANITE5_CTC_GGUF=<BF16> build/bin/transcribe_granite5_ctc_real_smoke` (built with `-DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON`) | byte-identical UTF-8 out of the `Fuse`d byte run | MUST PASS | PASS — 2-, 3- and 4-byte runs (`naïve`, `the word漢`, `ok😀`) decode byte-identically to the Stage 2 `tokenizer_decode_oracle.json` |
+| Tokenizer | reserved `<\|tokN\|>` ids (1..254) | same gated test as the row above | byte-identical; the C++ must not invent a suppression rule the reference does not have | MUST PASS | PASS — `[▁the, <\|tok0\|>, ▁dog]` → `the<\|tok0\|> dog` and `[<\|tok0\|>,<\|tok1\|>,<\|tok2\|>]` → literal text, matching the reference exactly; no suppression added |
+| Language detection | auto-detect | not exercised | model is English-only; no detection branch and no language tokens in the 16384-entry vocab | OUT OF SCOPE — monolingual English model; would return in scope only if IBM ships a multilingual Granite 5.0 CTC variant | SKIP — not exposed by runtime |
+| Translate | `--target-language` | not exercised | no translation head, no prompt surface, no non-English training data | OUT OF SCOPE — English-only ASR; would return in scope only with an upstream AST-capable variant | SKIP — not exposed by runtime |
+| Segment timestamps | segment granularity | `build/bin/transcribe-cli -m <BF16> --timestamps segment samples/jfk.wav` | `TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS` | OUT OF SCOPE — no segmentation policy is defined for this family; would return in scope once a split rule (silence or max-duration) is chosen | SKIP — not exposed by runtime |
+| Word timestamps | word granularity | `build/bin/transcribe-cli -m <BF16> --timestamps word samples/jfk.wav` | `TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS` | OUT OF SCOPE — inherits the Apache variant's re-signed decision (CJ, 2026-09-12): CTC gives an emitting frame, not a word span, and there is no reference alignment to validate against. Returns in scope with a real word-end rule plus an alignment oracle | SKIP — not exposed by runtime |
+| Streaming | `--stream-chunk-ms` | not exercised | `capabilities.streaming: false`; the `per_utterance` log-mel floor depends on an utterance-global maximum, so chunked decoding changes the feature values | OUT OF SCOPE — non-streaming model with a non-causal frontend; would return in scope only with a fixed-max ("global") frontend variant plus an upstream streaming recipe | SKIP — not exposed by runtime |
+| Speaker diarization | multi-speaker | not exercised | single-speaker CTC output, no speaker head | OUT OF SCOPE — no diarizer in the architecture | SKIP — not exposed by runtime |
+
+Two rows above are `-nc`-only and have no counterpart on the Apache variant: the
+byte-fallback and reserved-id decode checks. They are listed as capabilities
+because the SentencePiece vocabulary makes both reachable at runtime, and neither
+path is exercised anywhere on the Apache variant's byte-level BPE.
+
+### `granite-speech-5.0-470m-turboctc-nc` (Stage 7)
+
+Acceptance dataset **LibriSpeech test-clean**, `samples/wer/test-clean.manifest.jsonl`,
+2620 utterances, `EnglishTextNormalizer`. Summary:
+`reports/wer/granite-speech-5.0-470m-turboctc-nc.test-clean.summary.md`.
+
+**Ref-dtype gate: PASS.** `reference=1.29 cpp=1.29 max_allowed=1.30 over_by=-0.01`,
+against the Stage 2 measured Oracle reference (transformers 5.17.0 at F32), not a
+publisher score. Only 2 of 2620 hypotheses differ from the reference at all.
+
+| Preset | Size | WER | Δ vs BF16 | 95% CI | hyps ≠ reference | Disposition |
+|--------|------|-----|-----------|--------|------------------|-------------|
+| BF16 (ref dtype) | 948 MB | 1.29% | — | [1.15, 1.42] | 2 / 2620 | PASS (gate) |
+| F16 | 949 MB | 1.29% | +0.00 | [1.15, 1.42] | 2 / 2620 | ACCEPTED |
+| Q8_0 | 506 MB | 1.30% | +0.01 | [1.16, 1.43] | 10 / 2620 | ACCEPTED |
+| Q6_K | 392 MB | 1.28% | -0.01 | [1.15, 1.42] | 31 / 2620 | ACCEPTED |
+| Q5_K_M | 336 MB | 1.29% | +0.00 | [1.16, 1.42] | 56 / 2620 | ACCEPTED |
+| Q4_K_M | 279 MB | 1.33% | +0.04 | [1.19, 1.46] | 94 / 2620 | ACCEPTED |
+
+All five quants accepted by CJ on 2026-09-12, unconditionally. Every preset reproduced
+Stage 5's tentative read exactly on a rebuilt binary. Batch neutrality was established at
+Stage 4 on this same manifest: batch 8 byte-identical to batch 1 across all 2620.
+
+Dataset-selection note: the intake's `upstream_benchmarks[0]` is the Open ASR aggregate
+(4.85%, publisher-reported, no per-set breakdown). The acceptance dataset is
+`upstream_benchmarks[1]`, LibriSpeech test-clean, which is what Stage 2 measured the
+Oracle on and therefore what the gate compares against. Deriving the dataset slug
+mechanically from index 0 would gate against the wrong baseline.
+
+**Q4_K_M behaved exactly as Stage 4 predicted.** It is the only preset that moved
+(+0.04 pp vs the sibling's +0.01 pp over its own BF16 tier, so ~4x more Q4-sensitive in
+delta terms), which is the channel-570 massive activation dominating K-quant block
+scales. Accepted because 1.33% is the same absolute number the sibling ships at Q4_K_M,
+its CI overlaps the reference tier's, and Q5_K_M one tier up is clean.
+
+**A measurement caveat worth carrying forward:** the count of hypotheses differing from
+the reference rises monotonically with quantization (2 / 10 / 31 / 56 / 94) even where
+WER does not move. Q5_K_M changes 56 transcripts and still scores 1.29% because the
+changes cancel. WER alone understates how much the output actually moves under
+quantization, so a WER tie between two presets is not an output-equivalence claim.
 
 ## Known Limitations
 
@@ -775,21 +1251,34 @@ is also the faster choice on every measurement in Stage 6.
 
 ## Notes
 
-- Single-variant family at intake time.
-- A sibling `ibm-granite/granite-speech-5.0-470m-turboctc-nc` exists (4.85 % vs 5.00 %
-  aggregate Open ASR WER, SentencePiece instead of byte-level BPE). It is
-  **noncommercially licensed** and out of scope, but this family key may later need
-  to carry two tokenizer types.
-- Publisher benchmarks are bar-chart PNGs only. The single numeric public figure is
-  5.00 % aggregate WER on the Open ASR leaderboard (blog post, results as of
-  2026-08-25) plus >12,600 RTFx on an H200 with batched inference. There is **no**
-  published LibriSpeech test-clean number, so the `porting-7-wer` gate anchors on the
-  measured Oracle reference baseline from `porting-2-oracle`, not on a publisher score.
-- Preflight Gate A: `dtype_consistency` PASS, `tokenizer_alignment` PASS,
-  `frontend_config` WARN (`declared.normalization=per_utterance` vs
-  `reference.normalization=none`) is a preflight artifact, since
-  `preprocessor_config.json` has no `normalize` key and the normalization is applied
-  in extractor code. `capabilities` WARN is the standard "no GGUF yet" skip.
+- Two-variant family as of 2026-09-11. The `-nc` sibling that the Apache variant's
+  intake recorded as out of scope was brought in scope by CJ; the family key now does
+  carry two tokenizer types, exactly as that note anticipated.
+- Publisher benchmarks are bar-chart PNGs only for both variants. The numeric public
+  figures are 5.00 % aggregate Open ASR WER for the Apache variant and 4.85 % for the
+  `-nc` variant (blog post, results as of 2026-08-25), plus >12,600 RTFx on an H200
+  with batched inference (reported for the pair, not per-variant). There is **no**
+  published LibriSpeech test-clean number for either, so the `porting-7-wer` gate
+  anchors on each variant's own measured Oracle reference baseline from
+  `porting-2-oracle`, not on a publisher score. The blog also notes the `-nc` model is
+  "slightly more accurate on most test sets" with a bigger advantage on SPGI Speech
+  but a "noticeable disadvantage on the new chunked Earnings22 test" -- so the
+  4.85/5.00 ordering is not a prediction for test-clean, and the `-nc` variant must
+  not be gated against the Apache variant's measured numbers.
+- Nothing numerical carries across variants. The `-nc` weights are trained on a
+  different (larger) corpus, so tensor dumps, reference transcripts, tolerances and
+  WER must all be regenerated from the `-nc` checkpoint. Only the architecture
+  reasoning and the frontend contract carry over.
+- Preflight Gate A, **identical on both variants**: `dtype_consistency` PASS,
+  `tokenizer_alignment` PASS, `frontend_config` WARN
+  (`declared.normalization=per_utterance` vs `reference.normalization=none`) is a
+  preflight artifact, since `preprocessor_config.json` has no `normalize` key and the
+  normalization is applied in extractor code. `capabilities` WARN is the standard
+  "no GGUF yet" skip.
+- The intake schema's `tokenizer.type` enum cannot distinguish a SentencePiece-derived
+  BPE from a byte-level BPE; both variants declare `"bpe"`. The distinction lives in
+  this doc, in `sources.tokenizer_json`, and in the GGUF `tokenizer.ggml.model` KV,
+  which Preflight Gate B must compare per variant.
 - Highest-risk parts of this port, in order (all three came out clean at Stage 4,
   gated on `enc.block.{0,1}.post_conv` on both dump cases): the in-block stride-2
   subsampling with a pooled+trimmed residual; the exact frontend framing rule in the

@@ -426,6 +426,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     encoder = sub.add_parser("encoder", help="no-op (decode dumps all tensors)")
     add_common_args(encoder)
+    # Accepted and ignored. validate.py runs `encoder` and `decode` with the
+    # same manifest-declared reference.dump_args, so this subcommand has to
+    # tolerate --enc-blocks even though it dumps nothing.
+    encoder.add_argument("--enc-blocks", type=int, nargs="*", default=[],
+                         help=argparse.SUPPRESS)
     encoder.set_defaults(func=cmd_encoder)
 
     decode = sub.add_parser("decode", help="full encoder + CTC head dump + transcript")

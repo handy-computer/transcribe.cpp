@@ -80,8 +80,11 @@ from lib.gguf_common import (  # noqa: E402
     encode_for_gguf,
     gguf_writer,
     reference_dtype_for,
+    TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    TOKEN_TYPE_UNKNOWN,
+    TOKEN_TYPE_USER,
 )
 
 ARCH = "granite_speech5_ctc"
@@ -101,18 +104,73 @@ DTYPE_TIERS = {
 # ----- Tokenizer ------------------------------------------------------------
 
 
-def read_tokenizer(model_dir: Path) -> dict:
-    """tokenizer.json (GPT-2-style byte-level BPE, 16384 entries) -> GGUF arrays.
+SP_SPACE = "\u2581"  # SentencePiece word-boundary marker
 
-    The vocabulary is contiguous over [0, 16384) and the single added token
-    `<|blank|>` occupies id 0, where it doubles as the CTC blank and the
-    pad_token_id. No bos/eos/unk: a CTC model never encodes text.
+
+def _detect_decode_flavor(tok: dict) -> str:
+    """Return "gpt2" or "bpe" from tokenizer.json's own decoder spec.
+
+    The two shipped Granite Speech 5.0 TurboCTC checkpoints carry different
+    tokenizer FAMILIES behind identical config.json files:
+
+      granite-speech-5.0-470m-turboctc      GPT-2 byte-level BPE
+                                            decoder: ByteLevel
+      granite-speech-5.0-470m-turboctc-nc   SentencePiece-derived BPE
+                                            decoder: Sequence[Replace(U+2581 -> " "),
+                                                              ByteFallback, Fuse, Strip]
+
+    The decoder chain is the authoritative statement of how pieces reassemble
+    into text, so it — not a guess from the vocab — decides the GGUF
+    `tokenizer.ggml.model` value, which is what selects DecodeMode in
+    src/transcribe-tokenizer.cpp. Getting this wrong is silent: a SentencePiece
+    vocabulary decoded as "gpt2" emits mojibake on every U+2581, and the
+    transcript still looks like text.
+    """
+    def walk(node):
+        if not isinstance(node, dict):
+            return
+        yield node
+        for child in node.get("decoders") or []:
+            yield from walk(child)
+
+    saw_byte_level = False
+    saw_sp_replace = False
+    for node in walk(tok.get("decoder") or {}):
+        kind = node.get("type")
+        if kind == "ByteLevel":
+            saw_byte_level = True
+        if kind == "Replace":
+            pattern = node.get("pattern") or {}
+            if pattern.get("String") == SP_SPACE:
+                saw_sp_replace = True
+
+    if saw_byte_level and not saw_sp_replace:
+        return "gpt2"
+    if saw_sp_replace and not saw_byte_level:
+        return "bpe"
+    raise ValueError(
+        "cannot classify tokenizer.json decoder as byte-level or SentencePiece "
+        f"(ByteLevel={saw_byte_level}, U+2581 Replace={saw_sp_replace}); "
+        "refusing to guess, because the wrong choice fails silently"
+    )
+
+
+def read_tokenizer(model_dir: Path, pad_token: str | None) -> dict:
+    """tokenizer.json (16384 entries) -> GGUF arrays.
+
+    The vocabulary is contiguous over [0, 16384) and the CTC blank occupies
+    id 0, where it doubles as pad_token_id. Its PIECE differs per variant
+    (`<|blank|>` on the Apache-2.0 checkpoint, `<unk>` on the -nc one), so the
+    blank is located by the `pad_token` that tokenizer_config.json declares and
+    then cross-checked against config.pad_token_id by the caller. A CTC model
+    never encodes text, so there is no bos/eos to carry.
     """
     tok = json.loads((model_dir / "tokenizer.json").read_text())
     model = tok["model"]
     vocab = model["vocab"]
     merges = model.get("merges") or []
     added = tok.get("added_tokens") or []
+    flavor = _detect_decode_flavor(tok)
 
     vocab_size = max(vocab.values()) + 1
     for at in added:
@@ -124,7 +182,29 @@ def read_tokenizer(model_dir: Path) -> dict:
         tokens[idx] = piece
     for at in added:
         tokens[at["id"]] = at["content"]
-        types[at["id"]] = TOKEN_TYPE_CONTROL
+        if flavor == "gpt2":
+            # Byte-level checkpoint: the only added token is the blank.
+            types[at["id"]] = TOKEN_TYPE_CONTROL
+        elif at.get("special"):
+            # -nc: <unk> only. It is the blank/pad and the declared unk.
+            types[at["id"]] = TOKEN_TYPE_UNKNOWN
+        else:
+            # -nc: the 254 reserved <|tokN|> placeholders, declared
+            # special=false. USER, deliberately NOT CONTROL: the reference
+            # ParakeetTokenizer decodes them to their literal text (verified at
+            # Stage 2 — [the, <|tok0|>, dog] -> "the<|tok0|> dog"), so marking
+            # them CONTROL would assert a suppression the oracle does not have.
+            types[at["id"]] = TOKEN_TYPE_USER
+
+    if flavor == "bpe":
+        # SentencePiece byte fallback: <0x00>..<0xFF>. decode_sentencepiece in
+        # src/transcribe-tokenizer.cpp reassembles these from the piece text, so
+        # the type is descriptive rather than load-bearing — but it must be
+        # truthful for any future consumer.
+        for b in range(256):
+            idx = vocab.get(f"<0x{b:02X}>")
+            if idx is not None:
+                types[idx] = TOKEN_TYPE_BYTE
 
     missing = [i for i, t in enumerate(tokens) if t == ""]
     if missing:
@@ -143,18 +223,37 @@ def read_tokenizer(model_dir: Path) -> dict:
         else:
             norm_merges.append(m)
 
+    if not pad_token:
+        raise ValueError(
+            "tokenizer_config.json declares no pad_token; the CTC blank piece "
+            "cannot be located"
+        )
     blank_id = None
     for at in added:
-        if at["content"] == "<|blank|>":
+        if at["content"] == pad_token:
             blank_id = at["id"]
     if blank_id is None:
-        raise ValueError("tokenizer.json has no <|blank|> added token")
+        blank_id = vocab.get(pad_token)
+    if blank_id is None:
+        raise ValueError(
+            f"tokenizer.json has no token {pad_token!r} "
+            "(tokenizer_config.json:pad_token)"
+        )
+
+    unk_id = None
+    if flavor == "bpe":
+        unk_piece = model.get("unk_token")
+        if unk_piece is not None:
+            unk_id = vocab.get(unk_piece)
 
     return {
         "tokens": tokens,
         "types": types,
         "merges": norm_merges,
         "blank_id": blank_id,
+        "blank_piece": pad_token,
+        "unk_id": unk_id,
+        "flavor": flavor,
     }
 
 
@@ -420,6 +519,7 @@ def main(argv: list[str]) -> int:
     preproc = json.loads((model_dir / "preprocessor_config.json").read_text())
     processor_path = model_dir / "processor_config.json"
     processor = json.loads(processor_path.read_text()) if processor_path.exists() else {}
+    tok_config = json.loads((model_dir / "tokenizer_config.json").read_text())
 
     arch_declared = (config.get("architectures") or [None])[0]
     if arch_declared != "GraniteSpeech5ForCTC":
@@ -429,11 +529,11 @@ def main(argv: list[str]) -> int:
         )
 
     hp = read_hparams(config, preproc, processor)
-    tok = read_tokenizer(model_dir)
+    tok = read_tokenizer(model_dir, tok_config.get("pad_token"))
 
     if tok["blank_id"] != hp["blank_id"]:
         raise SystemExit(
-            f"blank id disagreement: tokenizer <|blank|>={tok['blank_id']} "
+            f"blank id disagreement: tokenizer {tok['blank_piece']}={tok['blank_id']} "
             f"but config.pad_token_id={hp['blank_id']}"
         )
     if len(tok["tokens"]) != hp["vocab_size"]:
@@ -451,8 +551,11 @@ def main(argv: list[str]) -> int:
           f"block-local context={hp['enc_context_size']}")
     print(f"  input_dim: {hp['enc_input_dim']} "
           f"(({hp['fe_num_mels']} mel + delta) x {hp['fe_stack_factor']})")
-    print(f"  CTC vocab: {hp['vocab_size']} (blank={hp['blank_id']}), "
+    print(f"  CTC vocab: {hp['vocab_size']} "
+          f"(blank={tok['blank_piece']}@{hp['blank_id']}), "
           f"{len(tok['merges'])} merges, tied head={hp['tie_word_embeddings']}")
+    print(f"  tokenizer flavor: {tok['flavor']} "
+          f"({'SentencePiece, U+2581 + byte fallback' if tok['flavor'] == 'bpe' else 'GPT-2 byte-level'})")
 
     outdir = Path(args.outdir or f"models/{variant}").expanduser().resolve()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -465,9 +568,36 @@ def main(argv: list[str]) -> int:
     writer = gguf_writer(str(out_path), ARCH)
 
     # ---- general.* ----
+    # The -nc checkpoint is NOT Apache-2.0. It is CC-BY-NC-SA-4.0: non-commercial
+    # with ShareAlike, which makes this GGUF a derivative that must carry the same
+    # terms. Deriving the identity from the variant rather than hard-coding it is
+    # a licensing correctness issue, not cosmetics - an -nc GGUF stamped
+    # "apache-2.0" misrepresents the terms to every downstream consumer that reads
+    # general.license.
+    is_nc = variant.endswith("-nc")
+    if is_nc:
+        display_name = "Granite Speech 5.0 470M TurboCTC NC"
+        license_id = "cc-by-nc-sa-4.0"
+        license_label = ("Creative Commons Attribution-NonCommercial-ShareAlike "
+                         "4.0 International")
+        license_url = "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+        license_note = (
+            " Non-commercial: this variant is licensed CC-BY-NC-SA-4.0 and is not a "
+            "drop-in replacement for the Apache-2.0 granite-speech-5.0-470m-turboctc "
+            "in commercial deployments."
+        )
+        extra_tags = ["non-commercial"]
+    else:
+        display_name = "Granite Speech 5.0 470M TurboCTC"
+        license_id = "apache-2.0"
+        license_label = "Apache License 2.0"
+        license_url = "https://www.apache.org/licenses/LICENSE-2.0"
+        license_note = ""
+        extra_tags = []
+
     add_general_identity(
         writer,
-        name="Granite Speech 5.0 470M TurboCTC",
+        name=display_name,
         basename="granite-speech-turboctc",
         version="5.0",
         size_label=size_label,
@@ -475,17 +605,17 @@ def main(argv: list[str]) -> int:
         languages=["en"],
         author="IBM",
         organization="ibm-granite",
-        license="apache-2.0",
-        license_name="Apache License 2.0",
-        license_link="https://www.apache.org/licenses/LICENSE-2.0",
+        license=license_id,
+        license_name=license_label,
+        license_link=license_url,
         repo_url=f"https://huggingface.co/{repo_id}",
         description=(
             "English encoder-CTC ASR. 16-block Granite Conformer encoder with "
             "block-local Shaw attention, 8x temporal subsampling and "
             "self-conditioned CTC over a 16384-entry BPE vocabulary; "
-            "non-autoregressive greedy decode."
+            "non-autoregressive greedy decode." + license_note
         ),
-        tags=["automatic-speech-recognition", "ctc", "conformer"],
+        tags=["automatic-speech-recognition", "ctc", "conformer"] + extra_tags,
     )
 
     # ---- stt.variant + capabilities ----
@@ -539,17 +669,26 @@ def main(argv: list[str]) -> int:
     writer.add_uint32("stt.frontend.stack_factor",     hp["fe_stack_factor"])
 
     # ---- tokenizer.ggml.* ----
-    writer.add_string("tokenizer.ggml.model", "gpt2")
-    # Byte-level BPE with case-insensitive contractions and \p{N}{1,3} digit
-    # runs — the same regex granite 4.x ships, hence the same flavor key.
-    writer.add_string("tokenizer.ggml.pre",   "granite")
+    # Per-variant: the two checkpoints ship different tokenizer FAMILIES behind
+    # byte-identical config.json files. `model` selects DecodeMode in
+    # src/transcribe-tokenizer.cpp, so it is load-bearing, not cosmetic.
+    writer.add_string("tokenizer.ggml.model", tok["flavor"])
+    if tok["flavor"] == "gpt2":
+        # Byte-level BPE with case-insensitive contractions and \p{N}{1,3} digit
+        # runs — the same regex granite 4.x ships, hence the same flavor key.
+        # `pre` drives encode() only, and only on the byte-level path; it is
+        # meaningless for the SentencePiece flavor, so it is not emitted there.
+        writer.add_string("tokenizer.ggml.pre",   "granite")
     writer.add_array("tokenizer.ggml.tokens",     tok["tokens"])
     writer.add_array("tokenizer.ggml.token_type", tok["types"])
     writer.add_array("tokenizer.ggml.merges",     tok["merges"])
-    # <|blank|> is both the CTC blank and pad_token_id. No bos/eos/unk: the
-    # model never encodes text.
+    # The blank piece is <|blank|> on the Apache-2.0 checkpoint and <unk> on the
+    # -nc one; either way it is both the CTC blank and pad_token_id. No bos/eos:
+    # the model never encodes text.
     writer.add_uint32("tokenizer.ggml.blank_token_id",   tok["blank_id"])
     writer.add_uint32("tokenizer.ggml.padding_token_id", tok["blank_id"])
+    if tok["unk_id"] is not None:
+        writer.add_uint32("tokenizer.ggml.unknown_token_id", tok["unk_id"])
 
     # ---- Frontend tensors ----
     emit_mel_filterbank_and_window(writer, hp)

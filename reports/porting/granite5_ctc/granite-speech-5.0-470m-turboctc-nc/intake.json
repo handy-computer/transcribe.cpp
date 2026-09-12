@@ -1,0 +1,269 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "granite5_ctc",
+  "hf_repo": "ibm-granite/granite-speech-5.0-470m-turboctc-nc",
+  "hf_revision": "0eb7b4fe726a294815dc45d342860465b5af68ef",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "BYTE-IDENTICAL to the Apache-2.0 sibling ibm-granite/granite-speech-5.0-470m-turboctc. model_type=granite_speech5_ctc, architectures=[GraniteSpeech5ForCTC], no auto_map, so AutoModelForCTC resolves to mainline transformers rather than the in-repo .py files."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found",
+      "detail": "Byte-identical to the Apache sibling. Flat legacy shape (sample_rate/n_fft/win_length/hop_length/n_mels/stack_factor/deltas/delta_win_length/logmel_floor_db) with an auto_map to the in-repo CtcConformerProcessor; processor_config.json is the live one on the mainline path."
+    },
+    "processor_config": {
+      "kind": "hf_file",
+      "path": "processor_config.json",
+      "status": "found",
+      "detail": "Byte-identical to the Apache sibling. GraniteSpeech5Processor + GraniteSpeech5FeatureExtractor; feature_size=320, num_mel_bins=80, n_fft=512, win_length=400, hop_length=160, delta_win_length=3, logmel_floor_db=8.0."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found",
+      "detail": "tokenizer_class=ParakeetTokenizer, processor_class=GraniteSpeech5Processor, backend=tokenizers. DIFFERS from the Apache sibling on exactly one key: pad_token is \"<unk>\" here and \"<|blank|>\" there. No bos/eos declared."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found",
+      "detail": "SentencePiece-derived BPE exported to the HF tokenizers format, 16384 entries. This is the ONLY substantive difference from the Apache sibling, which ships a GPT-2-style byte-level BPE. Normalizer: Sequence[Replace(\\r\\n -> \\n\\n), Precompiled(charsmap)]. pre_tokenizer: null. Decoder: Sequence[Replace(U+2581 -> ' '), ByteFallback, Fuse, Strip(' ', start=1)]. model.byte_fallback=true, unk_token=<unk>, 30161 merges (vs 16127 on the Apache sibling). Layout: id 0 = <unk> (also pad/CTC blank), ids 1..254 = 254 reserved placeholders <|tok0|>..<|tok253|>, ids 255..510 = byte fallback <0x00>..<0xFF>, ids 511..16383 = SentencePiece word pieces (12918 of the 16384 entries carry a leading U+2581)."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found",
+      "detail": "Byte-identical to the Apache sibling and equally vestigial for a CTC model: pad_token_id=0 plus output_* flags. generate() is a single forward + argmax, not a sampling loop."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "550 tensors; BF16=502, F32=32, I64=16; 472,928,256 BF16 params + 65,536 F32. The tensor-name set is EXACTLY equal to the Apache sibling's (set difference empty in both directions) and all names are encoder.* (no ctc_head.*, which is tied to encoder.out). model.safetensors is 946,180,704 bytes."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "transformers.models.granite_speech5 (GraniteSpeech5ForCTC, GraniteSpeech5Encoder, GraniteSpeech5FeatureExtractor, GraniteSpeech5Processor, ParakeetTokenizer)",
+      "status": "found",
+      "detail": "Mainline transformers >= 5.16.0 (5.17.0 verified locally in scripts/envs/granite5_ctc). AutoTokenizer.from_pretrained on this repo returns ParakeetTokenizer and round-trips text correctly; the CTC repeat-collapse in ParakeetTokenizer._decode is confirmed active on this variant (decode([id, id, ...]) collapses the duplicate). Identical model code path to the Apache sibling."
+    },
+    "in_repo_modeling_code": {
+      "kind": "reference_code",
+      "path": "configuration_ctc_conformer.py / modeling_ctc_conformer.py / granite_encoder.py / processing_ctc_conformer.py",
+      "status": "accepted_gap",
+      "detail": "All four files are byte-identical to the Apache sibling's copies and equally stale: they use the granite-speech 4.x tensor names (to_q/to_k/to_v, ff1/ff2, depth_conv, batch_norm) that cannot load this checkpoint. Prose documentation only; NOT the reference."
+    },
+    "model_card": {
+      "kind": "hf_file",
+      "path": "README.md",
+      "status": "found",
+      "detail": "Same architecture table as the Apache sibling. Deltas: license cc-by-nc-sa-4.0, training corpus ~75,000 h (adds GigaSpeech 10,000 h and SPGI Speech 4,900 h on top of the Apache model's ~60,000 h), no mlx-audio usage section. Benchmarks are bar-chart PNGs only; no numeric table."
+    },
+    "blog_post": {
+      "kind": "manual",
+      "path": "https://huggingface.co/blog/ibm-granite/granite-speech-5-0-470m-turboctc",
+      "status": "found",
+      "detail": "Only numeric public score: 4.85% aggregate WER on the Open ASR leaderboard for this -nc model (the Apache sibling scores 5.00%). Qualitative note: -nc is 'slightly more accurate on most test sets' with a 'more noticeable advantage on SPGI Speech' but a 'noticeable disadvantage on the new chunked Earnings22 test'. >12,600 RTFx on an H200 with batched inference (reported for the pair, not per-variant)."
+    },
+    "sibling_variant_intake": {
+      "kind": "manual",
+      "path": "reports/porting/granite5_ctc/granite-speech-5.0-470m-turboctc/intake.json",
+      "status": "found",
+      "detail": "Shipped Apache-2.0 sibling of this variant (Stages 1-8 complete). reference_framework, reference_rationale, architecture_pattern and the architecture/frontend risk set are carried forward from it verbatim; only the tokenizer-, licence- and training-data-related entries are new."
+    }
+  },
+  "variants": [
+    {
+      "name": "granite-speech-5.0-470m-turboctc-nc",
+      "memory_gb": 0.95,
+      "files": [
+        "model.safetensors"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-ctc"
+    ],
+    "key_fields": {
+      "architectures": [
+        "GraniteSpeech5ForCTC"
+      ],
+      "model_type": "granite_speech5_ctc",
+      "vocab_size": 16384,
+      "pad_token_id": 0,
+      "tie_word_embeddings": true,
+      "ctc_loss_reduction": "mean",
+      "ctc_zero_infinity": true,
+      "encoder.model_type": "granite_speech5_encoder",
+      "encoder.vocab_size": 16384,
+      "encoder.hidden_size": 1024,
+      "encoder.intermediate_size": 4096,
+      "encoder.num_hidden_layers": 16,
+      "encoder.num_attention_heads": 8,
+      "encoder.num_key_value_heads": 8,
+      "encoder.head_dim": 128,
+      "encoder.num_mel_bins": 80,
+      "encoder.hidden_act": "silu",
+      "encoder.max_position_embeddings": 512,
+      "encoder.context_size": 128,
+      "encoder.conv_kernel_size": 7,
+      "encoder.conv_expansion_factor": 2,
+      "encoder.subsample_layers": [
+        0,
+        1
+      ],
+      "encoder.attention_bias": true,
+      "encoder.attention_dropout": 0.0,
+      "encoder.activation_dropout": 0.0,
+      "derived.encoder_input_dim": 320,
+      "derived.attn_inner_dim": 1024,
+      "derived.conv_inner_dim": 2048,
+      "derived.rel_pos_table_rows": 1025,
+      "derived.total_time_downsample": 8,
+      "derived.output_frame_rate_hz": 12.5,
+      "derived.self_conditioning_after_block_index": 7,
+      "derived.param_count": 472993792
+    },
+    "varying_across_variants": [
+      "tokenizer.json (SentencePiece BPE with byte fallback here; GPT-2 byte-level BPE on the Apache sibling)",
+      "tokenizer_config.json:pad_token (<unk> here; <|blank|> on the Apache sibling)",
+      "license (cc-by-nc-sa-4.0 here; apache-2.0 on the Apache sibling)",
+      "training corpus size (~75,000 h here; ~60,000 h on the Apache sibling)"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "config",
+    "evidence": "config.dtype=bfloat16. safetensors header agrees and matches the Apache sibling exactly: 502 BF16 tensors (every weight and bias, including the BatchNorm affine terms), 32 F32 (the 16 BatchNorm running_mean/running_var pairs), 16 I64 (BatchNorm num_batches_tracked, inference-irrelevant).",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 502,
+        "F32": 32,
+        "I64": 16
+      }
+    },
+    "expected_f32_tensors": [
+      "encoder.layers.*.conv.norm.running_mean",
+      "encoder.layers.*.conv.norm.running_var",
+      "encoder.layers.*.conv.norm.weight",
+      "encoder.layers.*.conv.norm.bias"
+    ]
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 16384,
+    "special_tokens": {
+      "blank": 0,
+      "pad": 0,
+      "unk": 0
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "3735804bd7e9167ed5c02aafb832e9253bb586618bd7d51d85dc5a5ad9076f91"
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "translation_target_languages": [],
+    "translation_pairs": [],
+    "timestamps": [],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Open ASR leaderboard (aggregate, public test sets)",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.85,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/blog/ibm-granite/granite-speech-5-0-470m-turboctc",
+      "notes": "Aggregate across the 8 Open ASR test sets. The Apache-2.0 sibling scores 5.00% on the same aggregate. No per-set numbers are published in text form (the model card ships bar charts only). Informational context; the porting-7-wer gate anchors on the measured Oracle reference baseline."
+    },
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "Acceptance dataset for this port, same as the Apache sibling so the two variants are directly comparable. The publisher reports no numeric LibriSpeech test-clean score (bar-chart image only). LibriSpeech (960 h) is in the training mix for both variants, so it is an in-domain set for both; the added GigaSpeech/SPGI hours here do not change that."
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Same reference as the shipped Apache-2.0 sibling, and for the same reasons: mainline transformers >= 5.16.0 ships granite_speech5 as a first-class model (GraniteSpeech5CTCConfig, GraniteSpeech5Encoder, GraniteSpeech5ForCTC, GraniteSpeech5FeatureExtractor, GraniteSpeech5Processor, ParakeetTokenizer), the model card documents exactly that path, and config.json carries no auto_map so from_pretrained resolves to mainline. config.json, preprocessor_config.json, processor_config.json and generation_config.json are BYTE-IDENTICAL to the Apache sibling, and the 550 shipped tensor names are an exact set match, so the encoder reference is the same code on the same shapes. The in-repo trust_remote_code files are byte-identical to the sibling's and equally stale (granite-speech 4.x tensor names; cannot load this checkpoint). Verified locally on transformers 5.17.0: AutoTokenizer.from_pretrained returns ParakeetTokenizer for this repo and its _decode performs the CTC repeat-collapse, so the tokenizer half of the reference path is live too. mlx-audio supports the Apache sibling but does not document this -nc variant, and is a downstream reimplementation rather than a source of truth.",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "LICENCE: cc-by-nc-sa-4.0, not Apache-2.0. This is the reason the Apache sibling's intake declared this model out of scope, and the user has now explicitly brought it in scope. Two consequences that later stages must honour, neither of which is a technical gate: (a) ShareAlike -- a converted GGUF is a derivative work, so the quant matrix and every artifact derived from these weights must carry cc-by-nc-sa-4.0, not the repo's default terms, and the Stage 5 HF repo and Stage 8 card YAML must both say so; (b) NonCommercial -- this variant must never be presented as a drop-in replacement for the Apache sibling in commercial deployments. The two variants must stay separately named and separately licensed all the way to the model card.",
+    "TOKENIZER IS THE ONLY STRUCTURAL DELTA, and it is a different tokenizer FAMILY, not a different vocab. The Apache sibling is a GPT-2-style byte-level BPE (GGUF tokenizer.ggml.model=\"gpt2\", DecodeMode::Gpt2ByteUnicode). This variant is a SentencePiece-derived BPE: normalizer Sequence[Replace(\\r\\n -> \\n\\n), Precompiled(charsmap)], pre_tokenizer null, decoder Sequence[Replace(U+2581 -> ' '), ByteFallback, Fuse, Strip(' ', start=1)], model.byte_fallback=true, 30161 merges. It must convert to GGUF tokenizer.ggml.model=\"bpe\" so src/transcribe-tokenizer.cpp selects DecodeMode::SentencePiece. Emitting \"gpt2\" would silently produce mojibake on every U+2581, and tokenizer.ggml.pre=\"granite\" is meaningless on the SentencePiece path and must not be carried over.",
+    "The CTC blank is id 0 but its PIECE is \"<unk>\", not \"<|blank|>\". scripts/convert-granite5_ctc.py:151 raises ValueError(\"tokenizer.json has no <|blank|> added token\") on a literal string lookup, and line 436 cross-checks that id against config.pad_token_id. Both the lookup and the GGUF tokenizer.ggml.{blank,padding}_token_id emission must become variant-aware (accept the declared tokenizer_config.pad_token piece, or fall back to config.pad_token_id=0) or Stage 3 fails immediately. The numeric blank id is 0 on both variants, so nothing downstream of the converter changes.",
+    "ids 1..254 are 254 reserved placeholder pieces <|tok0|>..<|tok253|> with no training signal, declared in added_tokens with special=false. They are inside the 16384-way CTC head, so greedy argmax can in principle select one. Nothing in the reference suppresses them: ParakeetTokenizer decodes them to their literal text. The converter must decide their token_type deliberately (USER_DEFINED / CONTROL rather than NORMAL) and Stage 4 must confirm that the C++ decode of such an id matches the reference decode of the same id byte for byte -- the safe answer is to match the reference literally rather than to invent a suppression rule the oracle does not have.",
+    "ids 255..510 are the 256 SentencePiece byte-fallback pieces <0x00>..<0xFF>. src/transcribe-tokenizer.cpp's decode_sentencepiece already reassembles these (try_byte_fallback), so no new C++ is required, but this path is genuinely reachable here in a way it is not on the Apache sibling: an English-only model with byte fallback will emit byte pieces for any out-of-vocab glyph. The Fuse decoder step means consecutive byte pieces concatenate into one multi-byte UTF-8 codepoint; our decode already concatenates raw bytes, which is equivalent. Stage 4 must include at least one case that actually exercises a byte-fallback emission, or the path ships untested.",
+    "Leading-space handling differs between the two variants and will show up in raw_text, not full_text. 12918 of 16384 pieces carry a leading U+2581, so a SentencePiece decode of a transcript starts with an ASCII space; the reference strips exactly one via the decoder's Strip(' ', start=1). src/arch/granite5_ctc/decoder.cpp already trims via collapse_whitespace, so cc.full_text matches, but cc.raw_text is assigned BEFORE the collapse and will carry a leading space here while the Apache sibling's does not. Any Stage 2/4 text-parity harness that compares raw_text must account for this, and the decision (mirror the reference's single Strip into raw_text, or document the divergence) belongs to Stage 4, not to a tolerance widening.",
+    "The Precompiled normalizer charsmap is encode-side only. CTC inference never encodes text, so it has no effect on the port and must not be reimplemented; the converter should not try to carry the charsmap into the GGUF. This also means Tokenizer::encode() is legitimately unavailable for this variant (SentencePiece flavors return NOT_IMPLEMENTED), which is correct -- no prompt, no chat template, no forced-decoder-id surface exists on a CTC model.",
+    "The vocabularies are NOT interchangeable and share no ids: 'the' is 406 on the Apache sibling and 515 here. vocab_sha256 differs (3735804bd7e9167ed5c02aafb832e9253bb586618bd7d51d85dc5a5ad9076f91 here vs 3a2c2ef57ee23c9ecbe72f220b9c1e838783df49a159082c39f9ed91c32e7fde). Because config.json is byte-identical between the two repos, NOTHING in the config or the tensor shapes would catch a crossed checkpoint/tokenizer pairing -- a GGUF built from this checkpoint with the sibling's tokenizer would load cleanly and emit fluent-looking garbage. The GGUF must carry the vocab hash and Stage 3/4 must assert it; this is the single highest-severity silent-failure mode of this port.",
+    "Model weights are NOT the same as the Apache sibling despite identical shapes and names: this variant is trained on ~75,000 h (adds GigaSpeech 10,000 h and SPGI Speech 4,900 h) against the sibling's ~60,000 h. Tensor dumps, reference transcripts, tolerances and WER must all be regenerated from this checkpoint; nothing numerical may be reused from the sibling's oracle packet. Only the architecture reasoning and the frontend contract carry over.",
+    "Expected WER direction is published only as an aggregate: 4.85% here vs 5.00% for the sibling on the Open ASR aggregate, with a stated 'noticeable disadvantage on the new chunked Earnings22 test'. The acceptance dataset is LibriSpeech test-clean, for which no per-set number is published for either variant, so the Stage 7 gate must anchor on this variant's own measured Oracle reference baseline. Do not gate this variant against the sibling's measured numbers, and do not treat the 4.85/5.00 aggregate ordering as a prediction for test-clean.",
+    "Carried forward from the shipped Apache-2.0 sibling (identical config.json and identical tensor-name set, so every architecture and frontend risk below applies unchanged). New family, but heavy reuse is available. The block-local Shaw relative-position attention is the same scheme already implemented for granite 4.x in src/granite_conformer/shaw_attn.h (attention_dists = clamp(i-j, +/-context_size) + max_position_embeddings, right-pad the trailing block to context_size and -inf-mask the pad columns), and the macaron conformer block with BatchNorm conv norm is already in the shared src/conformer/conformer.{h,cpp} used by parakeet. Stage 4 should extend those rather than write a third conformer. Shape deltas vs granite 4.x: context_size 128 (was 200), conv_kernel_size 7 (was 15), head_dim 128 x 8 heads, attention_bias=true.",
+    "Time subsampling inside conformer blocks 0 and 1 (config.subsample_layers=[0,1]) is the structurally novel piece and has no counterpart in granite 4.x or parakeet. Each subsampling block runs ff1 and attention at the INPUT rate, then: conv module with the depthwise conv at stride 2; residual pooled by mean over non-overlapping pairs via unfold(1,2,2).mean(-1), dropping a trailing odd frame; hidden = pooled + conv_out[:, :pooled.shape[1]] (conv output trimmed, not the residual); then ff2 and norm_out at the halved rate. Getting the trim/pool order or the odd-frame drop wrong silently shifts every downstream frame.",
+    "Attention operates at three different frame rates across the stack. Block 0 attends at 50 Hz (post frame-stacking), block 1 at 25 Hz, blocks 2-15 at 12.5 Hz -- all with the same context_size=128 block. So the acoustic receptive field of one attention block is 2.56 s, 5.12 s, then 10.24 s. The per-layer rel_pos_emb tables are separate tensors, so nothing is shared across rates, but any C++ code that caches a block count or a pad mask must recompute it per layer, not once per utterance.",
+    "Padding-mask plumbing is load-bearing for batch parity, not just an optimization. The reference masks in four places: after input_linear; on the conv module's post-GLU activations (BEFORE the depthwise conv -- LayerNorm plus the pointwise bias turn a zeroed pad frame into a nonzero constant that the stride-2 conv would otherwise pull into the last valid frames); on the attention key columns per block; and the mask itself is halved after each subsampling block with AND semantics (a half-rate frame is valid iff BOTH source frames were valid). Single-utterance decoding is unaffected, but Stage 4 batch parity will drift without all four.",
+    "Self-conditioned CTC mid-injection: after block index 7 (num_hidden_layers // 2, 0-based, i.e. the 8th block), hidden += out_mid(softmax(out(hidden))). This is an INFERENCE-time path, not training-only -- unlike the granite-speech-4.1-nar variant where it was ambiguous. It routes the full 16384-wide CTC posterior back through out_mid [1024, 16384], so the softmax must be computed in a stable dtype; a BF16 softmax over 16384 logits is a plausible precision trap at Stage 4.",
+    "The CTC head is TIED to the encoder's self-conditioning head: config.tie_word_embeddings=true and _tied_weights_keys maps ctc_head.{weight,bias} -> encoder.out.{weight,bias}. The checkpoint therefore contains no ctc_head.* tensors. The converter must emit the [16384, 1024] matrix once and wire both consumers to it, or the GGUF will be ~34 MB heavier for nothing (or, worse, the loader will report a missing tensor).",
+    "BatchNorm1d (not LayerNorm) in the conv module, over 2048 channels, with running_mean/running_var stored F32 while weight/bias are stored BF16 -- and transformers sets _keep_in_fp32_modules_strict=[\"conv.norm\"], so the reference upcasts the whole BatchNorm module to F32 at load. The reference forward is therefore NOT pure BF16 at the conv norm. Fold BN into an affine scale+shift at convert time in F32 and emit the folded result, or reproduce the F32 island exactly; doing the fold in BF16 will drift.",
+    "The frontend is entirely new to this repo and shares nothing with granite 4.x (which was a plain 160-dim torchaudio melspec). Pipeline: torchaudio MelSpectrogram(sr=16000, n_fft=512, win_length=400, hop_length=160, n_mels=80) at library defaults (power=2.0, Hann periodic, center=True, pad_mode=reflect, f_min=0, f_max=8000, mel_scale=htk, norm=None) -> clamp_min(1e-10) -> log10 (base 10, NOT natural log) -> per-utterance dynamic floor max(logmel, global_max - 8.0) where global_max is over BOTH time and mel bins -> affine (x / 4) + 1 -> concat with torchaudio.functional.compute_deltas(win_length=3) along the channel axis (80 -> 160) -> transpose and reshape to stack 2 consecutive frames (160 -> 320). win_length=400 != n_fft=512, so the 400-sample Hann window is zero-padded to 512 inside the STFT; this is the single most common place to get an off-by-a-scale-factor.",
+    "frontend.normalization=per_utterance is exact, not approximate: src/transcribe-mel.cpp's existing \"per_utterance\" mode already implements log10(max(x, 1e-10)) -> global max over time AND mel bins -> clamp to max - 8.0 -> (x + 4) / 4, which is bit-for-bit the reference's torch.maximum(logmel, mx - 8.0).div_(4).add_(1). granite-speech-4.x uses the identical normalization (feature_extraction_granite_speech.py lines 119-121) and src/arch/granite/weights.cpp already hard-requires fe_normalize == \"per_utterance\". Note this is a dynamic-range floor plus a FIXED affine, not CMVN: Stage 3/4 must not substitute mean/variance normalization. Because the floor depends on an utterance-global maximum, the frontend is non-causal and cannot be computed chunk-independently -- a hard blocker for any future streaming mode, and the reason a \"global\" (fixed-max) variant exists for Voxtral Realtime.",
+    "Frame-count contract differs from BOTH the existing per_utterance implementation and granite 4.x, in the odd-frame case. Reference: mel_frames = num_samples // hop_length (floor); num_frames = 2 * ceil(mel_frames / 2); the WAVEFORM is right-padded with zeros to (num_frames - 1) * hop_length + 1 samples; the melspec is sliced to [..., :num_frames]. torchaudio center=True emits mel_frames + 1 frames, so for even mel_frames this drops exactly one trailing frame (matching src/transcribe-mel.cpp's per_utterance n_out = n_frames - 1), and for odd mel_frames it KEEPS the trailing center-pad frame and pads the waveform to fill the stacking pair. granite 4.x does the opposite (drops the odd frame), so its framing code must not be reused. The utterance-global max is taken AFTER the slice. VERIFIED at Stage 2 on samples/dots.wav (mel_frames=3533, odd): input_features is [1, 1767, 320] = ceil(3533/2) stacked frames. IMPORTANT correction to the earlier reading of this field: the trailing partial group is NOT masked. The feature extractor sets encoder_frame_counts = ceil(mel_frames / frame_stacking), which equals the emitted frame count, so attention_mask is all-True for the longest clip in a batch and the partial group is valid for every clip (observed valid=550/550 on jfk and 1767/1767 on dots). The mask does real work only across a batch of uneven lengths. C++ that masks the trailing group will produce the wrong output length.",
+    "torchaudio MelSpectrogram uses norm=None (unnormalized triangular filters) with mel_scale=htk. The intake schema's mel_filterbank_norm field conflates scale and normalization, so it is declared htk; the absence of Slaney area normalization must be carried explicitly into the converter, since a Slaney-normalized bank changes every mel bin by a per-bin constant.",
+    "Decode is greedy CTC over 16384 byte-level BPE pieces with the blank at id 0, which is also pad_token_id and the tokenizer's only added token (<|blank|>). Collapse repeats first, then drop blanks. The id space is 1:1 with the tokenizer (no offset, no special-token block), so a bare tokenizer decode of the surviving ids yields the transcript. The tokenizer_config declares tokenizer_class=ParakeetTokenizer but tokenizer.json is a GPT-2-style byte-level BPE with a ByteLevel decoder (add_prefix_space=true) -- the byte-level round-trip, not SentencePiece detokenization, is what produces spaces.",
+    "Mainline right-pads the trailing attention block to context_size and masks it, whereas the in-repo training-time code computed the tail at its true length. These are mathematically equivalent (the [:nr, :nr] sub-window of attention_dists carries identical clamped indices), so either is a valid C++ implementation, but tensor dumps taken from the two paths will differ on the padded rows. Stage 2 must dump from the mainline path only.",
+    "config.encoder_config.attention_bias=true does NOT mean biased q/k/v. GraniteSpeech5EncoderAttention explicitly overrides q_proj/k_proj/v_proj to bias=False and only o_proj carries a bias; the flag's real effect is via the inherited ParakeetEncoderFeedForward, where both FFN linears get a bias. The checkpoint confirms: no self_attn.{q,k,v}_proj.bias, but self_attn.o_proj.bias and feed_forward{1,2}.linear{1,2}.bias are all present.",
+    "The clamp in compute_attention_dists is inert at this configuration: relative distances inside a 128-frame block span [-127, 127] while the clamp is at +/-context_size=128, and the +max_position_embeddings=512 offset means only rows 385..639 of the 1025-row table are ever read. 385 rows per layer x 16 layers of dead weight (~1.5 M params). Harmless, but a converter that tries to shrink the table will break bit-parity with any future config where context_size != 128.",
+    "No streaming, no translation, no diarization, no language hint, and no timestamp surface. The runtime is a single forward pass returning one untimed string. Any transcribe.cpp API knob for language, prompt, temperature, beam size, context/memory, or timestamp granularity is unsupported or meaningless and must not be silently presented as implemented.",
+    "Word timestamps were requested at intake and withdrawn before shipment. CTC greedy alignment exposes only a peaky emitting frame, not a measured word span: the former implementation gave every word a fixed 80 ms end interval, including long words, and upstream neither advertises timestamps nor provides a reference alignment. The runtime therefore reports max_timestamp_kind=NONE and rejects segment, word, and token timestamp requests. Reinstatement requires a defensible word-end rule and an alignment oracle."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.type",
+      "reason": "The schema enum has no value that distinguishes a SentencePiece-derived BPE from a byte-level BPE; both canonicalize to \"bpe\", which is also what the Apache sibling declares. The distinction is load-bearing for this port (GGUF tokenizer.ggml.model must be \"bpe\" here and \"gpt2\" there). Accepted: recorded in sources.tokenizer_json, known_risks and the family doc rather than in this field. Preflight Gate B must compare the GGUF tokenizer.ggml.model KV per variant."
+    },
+    {
+      "field": "frontend.window / center / padding_mode / mel_filterbank_norm / dither",
+      "reason": "Not declared in preprocessor_config.json or processor_config.json (byte-identical to the Apache sibling). Values are the torchaudio.transforms.MelSpectrogram library defaults GraniteSpeech5FeatureExtractor relies on (Hann periodic, center=True, pad_mode=reflect, mel_scale=htk, norm=None, power=2.0, no dither). Already confirmed end to end at the sibling's Stage 2; the same feature extractor class runs here, so re-confirmation is a cheap regression check rather than open research."
+    },
+    {
+      "field": "frontend.win_length",
+      "reason": "win_length=400 is declared by the reference (processor_config.json) but the intake schema's frontend object has no win_length property. It differs from fft_size=512 and must be carried into the GGUF KVs and the family doc by hand, exactly as on the Apache sibling."
+    },
+    {
+      "field": "upstream_benchmarks[LibriSpeech test-clean].score",
+      "reason": "The publisher reports benchmarks only as bar-chart PNGs; no numeric per-dataset table exists in the card, the blog post, or any accessible leaderboard dataset repo. Accepted: the porting-7-wer gate anchors on this variant's own measured Oracle reference baseline, not a publisher number."
+    },
+    {
+      "field": "frontend.normalization (Preflight Gate A frontend_config WARN)",
+      "reason": "Gate A reports declared.normalization=per_utterance != reference.normalization=none, identically to the Apache sibling. Preflight artifact, not a disagreement: preprocessor_config.json has no normalize key so _canonical_normalize_for_compare(None) canonicalizes to \"none\", while the reference applies the normalization in GraniteSpeech5FeatureExtractor._extract_features in code. Accepted: per_utterance is correct and matches src/transcribe-mel.cpp's existing mode. Gate B compares the declaration against the GGUF KV, where it must read per_utterance."
+    }
+  ]
+}
