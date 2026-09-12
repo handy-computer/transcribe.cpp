@@ -31,6 +31,14 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
+## Model catalog
+
+[`catalog/`](catalog/) is the source of truth for model metadata, accuracy, and
+performance. Each release includes a queryable
+[`catalog.db`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db)
+and [`SHA-256 checksum`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db.sha256).
+Rebuild it locally with `uv run scripts/catalog/db.py --out catalog.db`.
+
 ## Build
 
 ```bash

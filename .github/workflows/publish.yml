@@ -11,9 +11,10 @@ name: publish
 #     the run before any expensive matrix work or immutable upload.
 #
 #   VALIDATE (Actions artifacts only — no registry touched): wheels
-#     (python-wheels.yml), cuda-windows (cuda-windows.yml), swift-build
-#     (xcframework -> artifact, NOT the Release), rust-verify (cargo publish
-#     --dry-run + packed-crate smoke). These run on BOTH a release tag and a
+#     (python-wheels.yml), cuda-windows (cuda-windows.yml), catalog-build
+#     (catalog.db + checksum), swift-build (xcframework -> artifact, NOT the
+#     Release), rust-verify (cargo publish --dry-run + packed-crate smoke).
+#     These run on BOTH a release tag and a
 #     workflow_dispatch rehearsal; Windows CUDA is release-required, not special.
 #
 #   PUBLISH (tags only — immutable uploads): create-release, publish-pypi,
@@ -109,9 +110,34 @@ jobs:
   # ===========================================================================
   # VALIDATE — build + verify only; produce Actions artifacts, touch no
   # registry. Runs on a tag AND a rehearsal. The publish phase below `needs:`
-  # the full set [release-preflight, wheels, cuda-windows, swift-build,
-  # rust-verify].
+  # the full set [release-preflight, catalog-build, wheels, cuda-windows,
+  # swift-build, rust-verify].
   # ===========================================================================
+  catalog-build:
+    # Build the portable catalog from its JSON source and stash the exact
+    # validated database for release-assets. Rehearsals retain it as an Actions
+    # artifact; tags also attach it to the GitHub Release.
+    needs: [release-preflight]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Validate and build catalog.db
+        run: |
+          set -euo pipefail
+          uv run catalog/_format.py --check catalog/*.json
+          uv run scripts/catalog/check.py
+          mkdir -p release-catalog
+          uv run scripts/catalog/db.py --out release-catalog/catalog.db
+          test "$(sqlite3 release-catalog/catalog.db 'PRAGMA integrity_check')" = "ok"
+          (cd release-catalog && sha256sum catalog.db > catalog.db.sha256)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: catalog-db
+          path: release-catalog/
+          if-no-files-found: error
+
   wheels:
     # Full build + validation matrix; the artifacts published below are the
     # exact files these workflows tested post-repair.
@@ -196,7 +222,7 @@ jobs:
     # release-required lane is unproven" rule the tag path enforces. A later
     # CUDA/Swift/TS failure must not force a version bump just to re-rehearse.
     if: github.event_name == 'workflow_dispatch'
-    needs: [release-preflight, wheels, cuda-windows, rust-rehearsal, swift-rehearsal, ts-rehearsal]
+    needs: [release-preflight, catalog-build, wheels, cuda-windows, rust-rehearsal, swift-rehearsal, ts-rehearsal]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
     environment: testpypi
@@ -380,7 +406,7 @@ jobs:
     # at workflow start. Keep it draft until the mandatory publishers have
     # succeeded and assets are verified (finalize-release).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    needs: [release-preflight, catalog-build, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write
@@ -403,7 +429,7 @@ jobs:
     # Also waits on create-release: no immutable registry upload starts unless the
     # GitHub Release object itself was created (else PyPI could land with no Release).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    needs: [create-release, release-preflight, catalog-build, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
     # Blacksmith for the same docker-container-action reason as testpypi.
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
@@ -436,7 +462,7 @@ jobs:
     # NO needs: and could burn the immutable crates.io version before anything
     # else built, or before the Release object even existed).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    needs: [create-release, release-preflight, catalog-build, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 40
     environment: crates-io
@@ -528,7 +554,7 @@ jobs:
     # tarball does NOT re-run prepublishOnly, so no build happens here — only the
     # upload. The `npm` environment carries the approval gate.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    needs: [create-release, release-preflight, catalog-build, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: npm
     steps:
@@ -554,9 +580,10 @@ jobs:
   release-assets:
     # cu12's primary distribution home (wheels as GitHub release assets, served
     # to pip through the PEP 503 index on Pages), the canonical native bundles,
-    # AND the Swift xcframework (built+validated in swift-build, uploaded here).
+    # the portable catalog database, AND the Swift xcframework (built+validated
+    # in swift-build, uploaded here).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    needs: [create-release, release-preflight, catalog-build, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
     # Blacksmith, not the hetzner self-hosted box: this job only downloads
     # artifacts and `gh release upload`s them, and the hetzner runner has no `gh`
     # on PATH (release v0.0.3 failed here with "gh: command not found"). The
@@ -586,6 +613,19 @@ jobs:
         with:
           name: swift-xcframework
           path: swift
+      - uses: actions/download-artifact@v8
+        with:
+          name: catalog-db
+          path: catalog
+      - name: Attach the catalog database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          (cd catalog && sha256sum --check catalog.db.sha256)
+          gh release upload "$tag" catalog/catalog.db catalog/catalog.db.sha256 \
+            --repo "$GITHUB_REPOSITORY" --clobber
       - name: Attach the cu12 wheels
         env:
           GH_TOKEN: ${{ github.token }}
@@ -653,6 +693,8 @@ jobs:
           }
 
           require_asset "TranscribeCpp.xcframework.zip"
+          require_asset "catalog.db"
+          require_asset "catalog.db.sha256"
           require_asset "transcribe-native-${ver}-linux-x86_64-cpu-vulkan.tar.gz"
           require_asset "transcribe-native-${ver}-linux-aarch64-cpu-vulkan.tar.gz"
           require_asset "transcribe-native-${ver}-macos-arm64-metal.tar.gz"

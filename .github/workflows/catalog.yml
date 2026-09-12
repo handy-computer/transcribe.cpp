@@ -1,0 +1,35 @@
+name: model-catalog
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "catalog/**"
+      - "scripts/catalog/**"
+      - ".github/workflows/catalog.yml"
+  push:
+    branches: [main]
+    paths:
+      - "catalog/**"
+      - "scripts/catalog/**"
+      - ".github/workflows/catalog.yml"
+
+concurrency:
+  group: model-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  catalog:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Canonical formatting
+        run: uv run catalog/_format.py --check catalog/*.json
+      - name: Schema and integrity
+        run: uv run scripts/catalog/check.py
+      - name: Rebuild portable database
+        run: |
+          uv run scripts/catalog/db.py --out "$RUNNER_TEMP/catalog.db"
+          sqlite3 "$RUNNER_TEMP/catalog.db" "PRAGMA integrity_check"
