@@ -509,6 +509,20 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             # strips these by default, so the validate dump must pass
             # --raw-tokens to keep them and match the reference exactly.
             cmd += ["--raw-tokens"]
+        if args.family in ("sensevoice", "funasr_nano"):
+            # Pin ITN off rather than inheriting the run-time default, which
+            # is per-family and can change (sensevoice already defaults to ITN
+            # *on* so an unconfigured caller gets readable text; funasr_nano
+            # follows upstream's `itn=False`). The reference dumpers always run
+            # `itn=False`, and ITN is not cosmetic on either side: sensevoice
+            # selects a different textnorm prefix *embedding* prepended to the
+            # encoder input, and funasr_nano changes the prompt token
+            # sequence. Inheriting the default would compare C++ ITN-on
+            # tensors against ITN-off reference tensors and fail the gate for
+            # a reason that has nothing to do with numerics. Explicit for both
+            # families so a future default flip cannot silently break the
+            # gate. Same pin, same reason, as scripts/wer/run.py.
+            cmd += ["--no-itn"]
         cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)

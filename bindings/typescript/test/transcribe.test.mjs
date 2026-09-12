@@ -93,8 +93,12 @@ modelTest("ITN changes SenseVoice text normalization", ITN_MODEL, async () => {
       const base = await s.run(jfk(), { language: "en", itn: "default" });
       const off = await s.run(jfk(), { language: "en", itn: "off" });
       const on = await s.run(jfk(), { language: "en", itn: "on" });
-      assert.deepEqual([base.text, base.rawText], [off.text, off.rawText]);
+      // "default" resolves to ON for sensevoice: the textnorm prefix is the
+      // family's only source of casing and punctuation, so the unconfigured
+      // transcript is the readable one. "off" recovers upstream spoken form.
+      assert.deepEqual([base.text, base.rawText], [on.text, on.rawText]);
       assert.notEqual(on.text, off.text);
+      assert.equal(off.text, off.text.toLowerCase());
       assert.match(off.rawText, /<\|woitn\|>/);
       assert.match(on.rawText, /<\|withitn\|>/);
     } finally {
