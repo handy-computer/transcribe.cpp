@@ -33,6 +33,42 @@ namespace transcribe::canary {
 
 void apply_family_invariants(transcribe_model & model);
 
+// Viterbi-align a transcript against frame-major CTC emissions. The returned
+// states index the blank-interleaved target sequence at each frame.
+bool viterbi_ctc_alignment(const std::vector<float> & emissions,
+                           int                        n_frames,
+                           int                        vocab_size,
+                           int                        blank_id,
+                           const std::vector<int> &   text_ids,
+                           std::vector<int> &         alignment);
+
+bool canary_aligner_input_too_long(int                       mel_n_frames,
+                                   const CanaryHParams &     hp,
+                                   transcribe_timestamp_kind requested_kind);
+
+std::vector<std::string> canary_preserve_special_tags(const Tokenizer &                tokenizer,
+                                                      const std::vector<int> &         generated_ids,
+                                                      const std::vector<std::string> & aligned_words);
+
+struct CanaryChunkSpan {
+    int start_sample = 0;
+    int n_samples    = 0;
+};
+
+struct CanaryTokenSeam {
+    int  previous_keep = 0;
+    int  current_skip  = 0;
+    bool matched       = false;
+};
+
+std::vector<CanaryChunkSpan> canary_long_form_chunks(int n_samples, int sample_rate);
+std::vector<CanaryChunkSpan> canary_long_form_chunks(const float * pcm, int n_samples, int sample_rate);
+
+CanaryTokenSeam canary_token_seam(const std::vector<int> & previous,
+                                  const std::vector<int> & current,
+                                  int                      previous_search,
+                                  int                      current_search);
+
 // ---------------------------------------------------------------------------
 // KV cache for the autoregressive decoder. Same shape as cohere.
 // ---------------------------------------------------------------------------

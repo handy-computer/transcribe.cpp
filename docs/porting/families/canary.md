@@ -140,7 +140,7 @@ uv run scripts/bench/run.py \
   - canary-1b-v2 / 1b-flash / 180m-flash: `[<source_lang>, <target_lang>, <task>, <pnc>, <toggle_timestamps>]` (5 slots, `task='asr'|'ast'`).
 - Output head: LM head over the concatenated SP vocabulary. Decoding is beam search by default for the original canary-1b (beam=5, length_penalty=1.0) and greedy by default for the flash variants (beam=1).
 - Tokenizer: concatenated SentencePiece — one SP model per language concatenated into a single vocabulary. canary-1b-v2 is 16,384 pieces; flash/180m-flash/1b vocab sizes are not stated on model cards (Stage 2 fills from .nemo).
-- Audio length contract: native ≤40 s direct inference. <1 s is symmetrically zero-padded to 1 s. >40 s is handled by an external chunked inference script with 1 s overlap (canary-1b-v2 chunk len defaults to 40 s; canary-1b-flash 10 s; canary-180m-flash 10 s). **Long-form / streaming is out of scope for the v1 port.**
+- Audio length contract: native ≤40 s direct inference. <1 s is symmetrically zero-padded to 1 s. Upstream handles >40 s with overlapping chunks. transcribe.cpp implements that path for canary-1b-v2 with low-energy boundaries inside a 30-40 s window, 1 s overlap, and subword-LCS stitching; streaming remains unsupported. The other variants retain the encoder positional-table input cap.
 
 ## Capabilities (from intake)
 
@@ -177,8 +177,8 @@ See per-variant `reports/porting/canary/<variant>/intake.json::known_risks`. Fam
 4. **NeMo FilterbankFeatures applies preemph=0.97 BEFORE windowing/STFT.** Standard NeMo ASR frontend trap. Per-feature normalization (per mel band, across time) — not per-utterance global stats.
 5. **Cross-attention from transformer decoder to encoder output.** Padding mask on the cross-attention keys must propagate from encoder input lengths after the factor-8 subsampling.
 6. **Decoding default differs by variant.** canary-1b: beam=5, length_penalty=1.0. flash variants: beam=1 greedy. Mismatch with upstream's measured-config beam will move WER.
-7. **Audio length contract.** Native ≤40 s; <1 s is zero-padded to 1 s; long-form needs an external chunker. Streaming is not native — out of scope for v1.
-8. **Timestamps are not native to the AED.** canary-1b-v2 / 1b-flash / 180m-flash advertise word + segment timestamps but produce them via a side CTC aligner inside the .nemo archive, not from the AED itself. Out of scope for v1.
+7. **Audio length contract.** Native ≤40 s; <1 s is zero-padded to 1 s. canary-1b-v2 long-form uses internal 30-40 s overlapping windows; the other variants still expose the encoder positional-table cap. Streaming is not native.
+8. **Timestamps are not native to the v2 AED.** canary-1b-v2 aligns the AED transcript with a side CTC Conformer stored in the `.nemo`. The aligner tokenizer IDs must remain identical to the AED tokenizer IDs. Flash timestamp-token decoding remains out of scope.
 9. **License divergence.** canary-1b is CC-BY-NC-4.0; the rest are CC-BY-4.0. Converter must surface license correctly in `general.license` so non-commercial restrictions on canary-1b ride along with the GGUF.
 10. **.nemo archive distribution.** No HF `config.json` / `tokenizer_config.json` / `generation_config.json` (except canary-1b-flash's encoder-only HF Transformers shim). Converter must mirror the parakeet pattern of unpacking the .nemo before extraction.
 
@@ -209,8 +209,9 @@ flagged in the row notes.
 | Translate | EN→de | `build/bin/transcribe-cli -m models/<variant>/<variant>-F32.gguf --language en --translate --target-language de samples/jfk.wav` | non-empty plausible German translation of JFK | PASS — verified on all four variants 2026-05-07 (`--target-language` wired through `params->target_language`; canary-1 uses explicit `<\|translate\|>` task token, canary2 infers from src!=tgt) |
 | Translate | EN↔es / EN↔fr | same as above with `--target-language es\|fr` | non-empty plausible translation in the requested language | ACCEPTED GAP — no es/fr reference samples shipped; runtime path identical to the de case |
 | Translate | X→EN for 24 langs (canary-1b-v2 only) | `build/bin/transcribe-cli -m models/canary-1b-v2/canary-1b-v2-F32.gguf --language <X> --translate --target-language en samples/<X>.wav` | non-empty plausible English translation | ACCEPTED GAP — multilingual sample set not shipped; runtime path identical to the EN→de case |
-| Segment timestamps | only canary-1b-v2 / 1b-flash / 180m-flash | n/a — not exposed by runtime in v1 | n/a | SKIP — not exposed by runtime (timestamps decoder path / `_timestamps_asr_model` aligner not ported in v1; intake known_risks notes timestamps are explicitly experimental upstream) |
-| Word timestamps | only canary-1b-v2 / 1b-flash / 180m-flash | same | n/a | SKIP — not exposed by runtime (same reason) |
+| Segment timestamps | canary-1b-v2 | `build/bin/transcribe-cli -m models/canary-1b-v2/canary-1b-v2-F32.gguf --timestamps segment samples/jfk.wav` | non-zero `segments:` rows matching NeMo within one 80 ms encoder frame | PASS — embedded CTC aligner matched NeMo on `samples/jfk.wav` 2026-07-23 |
+| Word timestamps | canary-1b-v2 | `build/bin/transcribe-cli -m models/canary-1b-v2/canary-1b-v2-F32.gguf --timestamps word samples/jfk.wav` | non-zero `words:` rows matching NeMo within one 80 ms encoder frame | PASS — 22 words matched NeMo within one frame; covered by the golden manifest and gated real-model API smoke 2026-07-23 |
+| Word/segment timestamps | canary-1b-flash / canary-180m-flash | n/a | n/a | SKIP — upstream AED timestamp-token path is not exposed by the runtime |
 | Streaming | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Voice activity detection | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Speaker diarization | n/a | not advertised by upstream | n/a | SKIP — not advertised |
@@ -222,7 +223,7 @@ flagged in the row notes.
 - Canary's FastConformer encoder shares the rel_pos relative-shift implementation that Parakeet already needs. The C++ encoder code can probably be re-used with parameter-only changes (n_layers, ffn_dim, etc.).
 - Use `samples/jfk.wav` for the English smoke test. German/Spanish/French sample clips and the wider 25-language multilingual set need to be sourced for canary-1b-v2 — pull from FLEURS or Common Voice during Stage 2 dumper setup.
 - canary-1b is CC-BY-NC-4.0. Do not bake "Apache-2.0" or default license metadata into its converter output; surface the non-commercial restriction in `general.license`.
-- canary-1b-v2 ships timestamps via a separate CTC aligner inside the .nemo archive (`_timestamps_asr_model`). The model card says these can be deleted to save memory; Stage 2 should decide whether to keep them in the converted GGUF or strip (default: strip — timestamps out of scope for v1).
+- canary-1b-v2 ships timestamps via a separate CTC aligner inside the `.nemo` archive (`timestamps_asr_model`, deliberately excluded from the AED `state_dict`). The converter embeds it in the same GGUF under `aligner.*`; older v2 GGUFs without those tensors remain text-only. The F32 aligner adds about 2.33 GiB before quantization.
 - **Stage 3 tensor-name decisions** (`scripts/convert-canary.py`):
   - Encoder block names mirror `src/arch/parakeet/weights.cpp` verbatim (FastConformer module class is shared); the converter is a pass-through with no transposes.
   - Decoder layer names use `dec.layer.{i}.{norm1, self_attn.{q,k,v,o}, norm2, cross_attn.{q,k,v,o}, norm3, ffn.{up,down}}` rather than NeMo's `first_sub_layer`/`second_sub_layer`/`third_sub_layer`. The latter is fine for source comprehension but unfriendly to a reader of the future Stage 4 `src/arch/canary/` code.

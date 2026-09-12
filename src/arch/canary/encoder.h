@@ -35,7 +35,22 @@ struct EncoderBuild {
     ggml_cgraph * graph = nullptr;
 };
 
+struct AlignerBuild {
+    ggml_tensor * mel_in     = nullptr;
+    ggml_tensor * pos_emb_in = nullptr;
+    ggml_tensor * logits     = nullptr;  // [vocab_size, T_enc]
+    ggml_cgraph * graph      = nullptr;
+};
+
 EncoderBuild build_encoder_graph(ggml_context *        compute_ctx,
+                                 const CanaryWeights & weights,
+                                 const CanaryHParams & hp,
+                                 int                   n_mel_frames,
+                                 ggml_type             kv_type      = GGML_TYPE_COUNT,
+                                 bool                  use_flash    = true,
+                                 const char *          backend_name = "");
+
+AlignerBuild build_aligner_graph(ggml_context *        compute_ctx,
                                  const CanaryWeights & weights,
                                  const CanaryHParams & hp,
                                  int                   n_mel_frames,
