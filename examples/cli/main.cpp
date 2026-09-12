@@ -1375,6 +1375,11 @@ int main(int argc, char ** argv) {
                                     (long long) (lim.max_kv_bytes >> 20));
                     }
                     std::printf("\n");
+                } else if (transcribe_model_supports(model, TRANSCRIBE_FEATURE_LONG_FORM)) {
+                    // Audio is unbounded because the family windows internally.
+                    // Decoder n_ctx may still be finite (it only bounds per-window
+                    // output tokens), so this check must precede the ~0 s branch.
+                    std::printf("  max audio:  unbounded (long audio chunked internally)\n");
                 } else if (lim.effective_n_ctx > 0) {
                     // Capped family whose context is too small to fit any audio
                     // plus a prompt (e.g. an aggressively low --n-ctx).
@@ -1382,8 +1387,6 @@ int main(int argc, char ** argv) {
                         "  max audio:  ~0 s (context %d tok too small for "
                         "audio + prompt)\n",
                         lim.effective_n_ctx);
-                } else if (transcribe_model_supports(model, TRANSCRIBE_FEATURE_LONG_FORM)) {
-                    std::printf("  max audio:  unbounded (long audio chunked internally)\n");
                 } else {
                     // No context cap and no chunker: the family encodes the
                     // whole clip in one pass (e.g. block-local attention,
