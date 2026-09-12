@@ -43,7 +43,8 @@ Naming:
 Current examples:
 
 - `transcribe_parakeet_smoke`
-- Cohere does not yet have a synthetic fixture smoke.
+- `transcribe_cohere_smoke`
+- `transcribe_granite5_ctc_smoke`
 
 ### 2. Real Model Structural Smoke
 
@@ -98,7 +99,8 @@ Naming:
 
 Current examples:
 
-- `transcribe_cohere_smoke`
+- `transcribe_cohere_e2e_smoke`
+- `transcribe_granite5_ctc_e2e_smoke`
 - `transcribe_decoder_smoke` for Parakeet
 
 ### 4. Numerical Validation Gate

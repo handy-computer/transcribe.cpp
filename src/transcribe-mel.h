@@ -126,6 +126,16 @@ class MelFrontend {
     // is handed to cblas_sgemm and is already multi-threaded on
     // Accelerate / OpenBLAS.
     //
+    // out_frames overrides how many leading frames the per_utterance /
+    // global normalize modes emit. 0 (default) keeps each mode's own
+    // rule, which drops the trailing center-pad frame. granite5_ctc
+    // needs 2*ceil(floor(n/hop)/2) frames, which equals n_frames-1 when
+    // floor(n/hop) is even and n_frames when it is odd, so the count is
+    // a per-utterance property and cannot live in MelConfig. The
+    // per-utterance max is taken over exactly the emitted frames, which
+    // is what the reference's `mel[..., :num_frames].amax()` does.
+    // Ignored by per_feature / none.
+    //
     // Returns:
     //   TRANSCRIBE_OK              normal success.
     //   TRANSCRIBE_ERR_INVALID_ARG pcm is null, or n_samples is too
@@ -137,7 +147,8 @@ class MelFrontend {
                               std::vector<float> & out_mel,
                               int &                out_n_mels,
                               int &                out_n_frames,
-                              int                  n_threads = 0) const;
+                              int                  n_threads  = 0,
+                              int                  out_frames = 0) const;
 
     // Number of mel bins (matches MelConfig::num_mels).
     int num_mels() const { return cfg_.num_mels; }

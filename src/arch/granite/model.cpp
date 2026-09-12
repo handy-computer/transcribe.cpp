@@ -856,9 +856,9 @@ transcribe_status run(transcribe_session *          ctx_base,
     // [input_dim, T_enc] (ne[0]=input_dim is innermost).
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(), 0, cc->mel_buf.size() * sizeof(float));
 
-    // Shaw attention_dists. Row-major over (c, r) with int32 indices.
-    std::vector<int32_t> dists = precompute_attention_dists(cm->hparams.enc_context_size, cm->hparams.enc_max_pos_emb);
-    ggml_backend_tensor_set(eb.attention_dists, dists.data(), 0, dists.size() * sizeof(int32_t));
+    // Shaw positional-bias rows, one int32 rel_pos_emb row per relative offset.
+    std::vector<int32_t> dists = precompute_pos_rows(cm->hparams.enc_context_size, cm->hparams.enc_max_pos_emb);
+    ggml_backend_tensor_set(eb.pos_rows, dists.data(), 0, dists.size() * sizeof(int32_t));
 
     // last_block_mask: [context_size, context_size, n_blocks_local].
     // All zeros except the last slice when t_enc is not a multiple of
@@ -1364,8 +1364,8 @@ transcribe_status encode_one(GraniteSession *           cc,
     }
 
     ggml_backend_tensor_set(eb.mel_in, mel_buf.data(), 0, mel_buf.size() * sizeof(float));
-    std::vector<int32_t> dists = precompute_attention_dists(hp.enc_context_size, hp.enc_max_pos_emb);
-    ggml_backend_tensor_set(eb.attention_dists, dists.data(), 0, dists.size() * sizeof(int32_t));
+    std::vector<int32_t> dists = precompute_pos_rows(hp.enc_context_size, hp.enc_max_pos_emb);
+    ggml_backend_tensor_set(eb.pos_rows, dists.data(), 0, dists.size() * sizeof(int32_t));
     {
         const int          ctx_size = hp.enc_context_size;
         const size_t       plane    = static_cast<size_t>(ctx_size) * ctx_size;

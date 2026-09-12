@@ -205,7 +205,7 @@ degradation beyond what the offline parakeet WER gate already covers.
 Reference is NeMo's `conformer_stream_step` per chunk on CPU/fp32
 (`scripts/wer/run_reference_parakeet_streaming_nemo.py`); cpp side is
 `build/bin/transcribe-cli --stream-chunk-ms 500 --stream-att-right R`
-on Metal. Test plan: [`docs/plans/nemotron-streaming-wer-plan.md`](../plans/nemotron-streaming-wer-plan.md).
+on Metal.
 Reproduce / refresh the table from score sidecars:
 
 ```bash

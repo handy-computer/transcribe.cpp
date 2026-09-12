@@ -4,6 +4,7 @@
 
 #include "shaw_attn.h"
 
+#include "conformer/conformer.h"
 #include "ggml.h"
 #include "transcribe-log.h"
 
@@ -36,7 +37,8 @@ ggml_tensor * shaw_block_attn(ggml_context *          ctx,
                               int                     context_size,
                               int                     num_blocks,
                               int                     T_enc,
-                              float                   layer_norm_eps) {
+                              float                   layer_norm_eps,
+                              ggml_tensor *           pos_rows) {
     const int64_t inner_dim = static_cast<int64_t>(n_heads) * head_dim;
     const int64_t T_pad     = static_cast<int64_t>(context_size) * num_blocks;
     const float   scale     = 1.0f / std::sqrt(static_cast<float>(head_dim));
@@ -92,26 +94,46 @@ ggml_tensor * shaw_block_attn(ggml_context *          ctx,
     k = reshape_qkv(k);
     v = reshape_qkv(v);
 
-    // Shaw positional bias. rel_pos_emb [head_dim, 2*max_pos_emb+1], dists
-    // [context_size, context_size] int32. Materialise the per-(c, r) lookup
-    // as [head_dim, context_size*context_size], then reshape to
-    // [head_dim, r=context_size, c=context_size].
-    ggml_tensor * dists_flat = ggml_reshape_1d(ctx, dists, static_cast<int64_t>(context_size) * context_size);
-    ggml_tensor * rel_lookup = ggml_get_rows(ctx, w.attn_rel_pos_emb, dists_flat);
-    rel_lookup               = ggml_reshape_3d(ctx, rel_lookup, head_dim, context_size, context_size);
-
-    // pos_attn[h, b, c, r] = sum_d q[h, b, c, d] * rel_lookup[c, r, d].
-    // Permute q to put c on ne[2] for batched mul_mat against
-    // rel_lookup; rel_lookup's ne[3]=1 broadcasts across num_blocks.
-    ggml_tensor * q_perm   = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
-    ggml_tensor * pos_attn = ggml_mul_mat(ctx, rel_lookup, q_perm);
-
     // QK^T: ggml_mul_mat(K, Q), both [head_dim, context_size, n_heads,
     // num_blocks] -> [k=context_size, q=context_size, n_heads, num_blocks].
     ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
 
-    // Align pos_attn's axis order to kq's before the add.
-    pos_attn = ggml_cont(ctx, ggml_permute(ctx, pos_attn, 0, 2, 1, 3));
+    // Shaw positional bias, in kq's axis order. See the header for why
+    // there are two forms.
+    ggml_tensor * pos_attn = nullptr;
+    if (pos_rows != nullptr) {
+        // Skew. rel_pos_emb rows for the 2*context_size - 1 distinct
+        // relative offsets, then one mul_mat against q:
+        //   bd[d, q, h, blk] = sum_i q[i, q, h, blk] * e_sub[i, d]
+        // rel_shift rotates that into out[k, q] = bd[k - q + ctx - 1, q],
+        // i.e. the bias for key k against query q. Output already matches
+        // kq's [k, q, n_heads, num_blocks_eff] layout, so no permute.
+        ggml_tensor * e_sub = ggml_get_rows(ctx, w.attn_rel_pos_emb, pos_rows);
+        pos_attn            = ggml_mul_mat(ctx, e_sub, q);
+        pos_attn            = transcribe::conformer::rel_shift(ctx, pos_attn);
+        // rel_shift keeps ne[0] = 2*ctx - 1; the trailing columns are the
+        // out-of-block offsets plus the zero column the trick injects.
+        // Contiguous-rows, which ggml_add accepts on CPU and Metal.
+        pos_attn = ggml_view_4d(ctx, pos_attn, context_size, context_size, n_heads, num_blocks_eff, pos_attn->nb[1],
+                                pos_attn->nb[2], pos_attn->nb[3], /*offset=*/0);
+    } else {
+        // Direct. rel_pos_emb [head_dim, 2*max_pos_emb+1], dists
+        // [context_size, context_size] int32. Materialise the per-(c, r)
+        // lookup as [head_dim, context_size*context_size], then reshape to
+        // [head_dim, r=context_size, c=context_size].
+        ggml_tensor * dists_flat = ggml_reshape_1d(ctx, dists, static_cast<int64_t>(context_size) * context_size);
+        ggml_tensor * rel_lookup = ggml_get_rows(ctx, w.attn_rel_pos_emb, dists_flat);
+        rel_lookup               = ggml_reshape_3d(ctx, rel_lookup, head_dim, context_size, context_size);
+
+        // pos_attn[h, b, c, r] = sum_d q[h, b, c, d] * rel_lookup[c, r, d].
+        // Permute q to put c on ne[2] for batched mul_mat against
+        // rel_lookup; rel_lookup's ne[3]=1 broadcasts across num_blocks.
+        ggml_tensor * q_perm = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
+        pos_attn             = ggml_mul_mat(ctx, rel_lookup, q_perm);
+
+        // Align pos_attn's axis order to kq's before the add.
+        pos_attn = ggml_cont(ctx, ggml_permute(ctx, pos_attn, 0, 2, 1, 3));
+    }
 
     // scores = (kq + pos_attn) * scale + pad_mask
     ggml_tensor * scores = ggml_add(ctx, kq, pos_attn);
