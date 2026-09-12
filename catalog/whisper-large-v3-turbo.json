@@ -1,0 +1,76 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "whisper-large-v3-turbo",
+  "family": "whisper",
+  "display_name": "Whisper large-v3-turbo",
+  "params": 808866560,
+  "architecture_pattern": "encoder-decoder-cross-attention",
+  "license": {
+    "spdx": "apache-2.0",
+    "display": "Apache-2.0"
+  },
+  "upstream_repo": "openai/whisper-large-v3-turbo",
+  "published_repo": "handy-computer/whisper-large-v3-turbo-gguf",
+  "languages": [
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca",
+    "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el", "ms",
+    "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la",
+    "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn",
+    "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw",
+    "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be",
+    "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn",
+    "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln", "ha",
+    "ba", "jw", "su", "yue"
+  ],
+  "language_tag_form": "bare-bcp47",
+  "language_aliases": {
+    "tl": "fil",
+    "no": "nb",
+    "jw": "jv"
+  },
+  "encoder_window_s": 30.0,
+  "long_form_strategy": "chunked-unbounded",
+  "max_audio_s": null,
+  "max_output_tokens": 448,
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":false},
+    "translate": {"supported":true,"targets":["en"],"verified":false,"note":"any supported source language to English text only"},
+    "lang_detect": {"supported":true,"verified":false},
+    "timestamps": {"supported":true,"granularities":["segment"],"verified":false,"note":"upstream exposes word-level via cross-attention alignment; this port ships segment"},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":false}
+  },
+  "downloads": [
+    {"quant":"F16","filename":"whisper-large-v3-turbo-F16.gguf","size_bytes":1625935520},
+    {"quant":"Q8_0","filename":"whisper-large-v3-turbo-Q8_0.gguf","size_bytes":886381760},
+    {"quant":"Q6_K","filename":"whisper-large-v3-turbo-Q6_K.gguf","size_bytes":692536928},
+    {"quant":"Q5_K_M","filename":"whisper-large-v3-turbo-Q5_K_M.gguf","size_bytes":619628128},
+    {"quant":"Q4_K_M","filename":"whisper-large-v3-turbo-Q4_K_M.gguf","size_bytes":536069728}
+  ],
+  "accuracy_benchmarks": [
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"F16","metric":"wer","err_pct":2.0,"ci95":[1.82,2.21],"n_utts":2620,"recipe":"librispeech-ts-segment","engine_sha":null,"measured_on":null,"errors":{"sub":761,"del":183,"ins":117},"empty_hyp":0,"utts_over_50pct":4},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q8_0","metric":"wer","err_pct":2.0,"ci95":[1.82,2.2],"n_utts":2620,"recipe":"librispeech-ts-segment","engine_sha":null,"measured_on":null,"errors":{"sub":765,"del":177,"ins":116},"empty_hyp":0,"utts_over_50pct":5},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q6_K","metric":"wer","err_pct":1.96,"ci95":[1.78,2.17],"n_utts":2620,"recipe":"librispeech-ts-segment","engine_sha":null,"measured_on":null,"errors":{"sub":762,"del":172,"ins":108},"empty_hyp":0,"utts_over_50pct":5},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q5_K_M","metric":"wer","err_pct":2.0,"ci95":[1.82,2.22],"n_utts":2620,"recipe":"librispeech-ts-segment","engine_sha":null,"measured_on":null,"errors":{"sub":765,"del":167,"ins":131},"empty_hyp":0,"utts_over_50pct":4},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":2.0,"ci95":[1.81,2.21],"n_utts":2620,"recipe":"librispeech-ts-segment","engine_sha":null,"measured_on":null,"errors":{"sub":777,"del":180,"ins":105},"empty_hyp":0,"utts_over_50pct":6}
+  ],
+  "speed_benchmarks": [
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":4915.7,"xrt_compute":2.238,"load_ms":348.9,"mel_ms":42.0,"encode_ms":4507.6,"decode_ms":366.2,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":10262.0,"xrt_compute":3.443,"load_ms":361.5,"mel_ms":42.6,"encode_ms":4503.0,"decode_ms":5716.4,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":4773.2,"xrt_compute":2.305,"load_ms":547.3,"mel_ms":39.4,"encode_ms":4365.9,"decode_ms":367.9,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":10160.7,"xrt_compute":3.477,"load_ms":555.3,"mel_ms":44.3,"encode_ms":4395.9,"decode_ms":5720.5,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":15744.4,"xrt_compute":0.699,"load_ms":419.9,"mel_ms":46.4,"encode_ms":14898.3,"decode_ms":799.7,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":32216.9,"xrt_compute":1.097,"load_ms":423.1,"mel_ms":54.5,"encode_ms":15063.5,"decode_ms":17098.9,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":19850.7,"xrt_compute":0.554,"load_ms":666.1,"mel_ms":49.1,"encode_ms":18807.3,"decode_ms":994.3,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":40179.2,"xrt_compute":0.879,"load_ms":661.3,"mel_ms":62.1,"encode_ms":18767.6,"decode_ms":21349.5,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":286.1,"xrt_compute":38.4,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":649.5,"xrt_compute":54.4,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":288.7,"xrt_compute":38.1,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":641.1,"xrt_compute":55.1,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":7600.0,"xrt_compute":1.4,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":15340.0,"xrt_compute":2.3,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":5890.0,"xrt_compute":1.9,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":11870.0,"xrt_compute":3.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"e0fa0f6","measured_on":null,"thermal_gated":null}
+  ]
+}

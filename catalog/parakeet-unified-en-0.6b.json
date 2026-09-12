@@ -1,0 +1,70 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "parakeet-unified-en-0.6b",
+  "family": "parakeet",
+  "display_name": "Parakeet Unified EN 0.6B",
+  "params": 618330880,
+  "architecture_pattern": "encoder-transducer",
+  "license": {
+    "spdx": "cc-by-4.0",
+    "display": "CC-BY-4.0"
+  },
+  "upstream_repo": "nvidia/parakeet-unified-en-0.6b",
+  "published_repo": "handy-computer/parakeet-unified-en-0.6b-gguf",
+  "languages": ["en"],
+  "language_tag_form": "bare-bcp47",
+  "encoder_window_s": null,
+  "long_form_strategy": "chunked-unbounded",
+  "max_audio_s": null,
+  "max_output_tokens": null,
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":true},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":true,"granularities":["token","word"],"verified":false},
+    "streaming": {
+      "supported": true,
+      "mode": "buffered",
+      "presets": [
+        {"name":"70-1-0","left_ms":5600,"chunk_ms":80,"right_ms":0,"lookahead_ms":80,"is_default":false},
+        {"name":"70-1-1","left_ms":5600,"chunk_ms":80,"right_ms":80,"lookahead_ms":160,"is_default":false},
+        {"name":"70-2-2","left_ms":5600,"chunk_ms":160,"right_ms":160,"lookahead_ms":320,"is_default":false},
+        {"name":"70-2-4","left_ms":5600,"chunk_ms":160,"right_ms":320,"lookahead_ms":480,"is_default":false},
+        {"name":"70-7-7","left_ms":5600,"chunk_ms":560,"right_ms":560,"lookahead_ms":1120,"is_default":false},
+        {"name":"70-13-13","left_ms":5600,"chunk_ms":1040,"right_ms":1040,"lookahead_ms":2080,"is_default":true}
+      ],
+      "verified": true,
+      "note": "byte-equal transcript vs NeMo speech_to_text_streaming_infer_rnnt.py at the default (70, 13, 13)"
+    },
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":false},
+    "punctuation": {"supported":true,"verified":true}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"parakeet-unified-en-0.6b-F32.gguf","size_bytes":2473323520},
+    {"quant":"F16","filename":"parakeet-unified-en-0.6b-F16.gguf","size_bytes":1239114240},
+    {"quant":"Q8_0","filename":"parakeet-unified-en-0.6b-Q8_0.gguf","size_bytes":731357568},
+    {"quant":"Q6_K","filename":"parakeet-unified-en-0.6b-Q6_K.gguf","size_bytes":602191232},
+    {"quant":"Q5_K_M","filename":"parakeet-unified-en-0.6b-Q5_K_M.gguf","size_bytes":540795264},
+    {"quant":"Q4_K_M","filename":"parakeet-unified-en-0.6b-Q4_K_M.gguf","size_bytes":477274496}
+  ],
+  "accuracy_benchmarks": [],
+  "speed_benchmarks": [
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":844.0,"xrt_compute":13.033,"load_ms":599.8,"mel_ms":20.0,"encode_ms":435.6,"decode_ms":388.5,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":3039.8,"xrt_compute":11.623,"load_ms":324.4,"mel_ms":65.0,"encode_ms":1168.0,"decode_ms":1806.7,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":834.9,"xrt_compute":13.175,"load_ms":677.6,"mel_ms":22.5,"encode_ms":419.3,"decode_ms":393.2,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":3026.6,"xrt_compute":11.674,"load_ms":393.1,"mel_ms":67.0,"encode_ms":1141.2,"decode_ms":1818.5,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":1179.3,"xrt_compute":9.328,"load_ms":834.4,"mel_ms":19.0,"encode_ms":767.2,"decode_ms":393.1,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":4660.2,"xrt_compute":7.582,"load_ms":817.6,"mel_ms":63.7,"encode_ms":2784.3,"decode_ms":1812.2,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":1346.4,"xrt_compute":8.17,"load_ms":1147.8,"mel_ms":20.4,"encode_ms":925.3,"decode_ms":400.8,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":5214.8,"xrt_compute":6.775,"load_ms":1022.9,"mel_ms":67.0,"encode_ms":3273.0,"decode_ms":1874.8,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":69.0,"xrt_compute":158.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":210.0,"xrt_compute":168.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":71.0,"xrt_compute":155.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":209.0,"xrt_compute":169.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":375.0,"xrt_compute":29.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":1270.0,"xrt_compute":28.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":318.0,"xrt_compute":35.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":1090.0,"xrt_compute":32.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"12f1076","measured_on":null,"thermal_gated":null}
+  ]
+}

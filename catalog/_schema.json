@@ -1,0 +1,427 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "transcribe-catalog-v1",
+  "title": "transcribe.cpp model catalog record",
+  "description": "",
+  "type": "object",
+  "required": [
+    "schema", "variant", "family", "display_name", "params", "license",
+    "upstream_repo", "published_repo", "languages", "long_form_strategy",
+    "capabilities", "downloads", "accuracy_benchmarks", "speed_benchmarks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "transcribe-catalog-v1"
+    },
+    "variant": {
+      "type": "string",
+      "description": "The model slug. Must equal the stem of scripts/hf_cards/<variant>.yaml and docs/models/<variant>.md.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "family": {
+      "type": "string",
+      "description": "Loader family (the GGUF's general.architecture)"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "params": {
+      "type": "integer",
+      "description": "Exact parameter count, summed from GGUF tensor shapes."
+    },
+    "architecture_pattern": {
+      "type": ["string","null"],
+      "description": "One of the patterns in docs/porting/0-porting.md. Groups models for readers."
+    },
+    "license": {
+      "type": "object",
+      "required": ["spdx","display"],
+      "properties": {
+        "spdx": {
+          "type": "string"
+        },
+        "display": {
+          "type": "string"
+        }
+      }
+    },
+    "upstream_repo": {
+      "type": "string",
+      "description": "The upstream model this port derives from. Which upstream commit was converted is a bring-up fact and lives in intake.json."
+    },
+    "published_repo": {
+      "type": ["string","null"],
+      "description": "Our GGUF repo. null until published."
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Languages this port transcribes, in the spellings it advertises."
+    },
+    "language_tag_form": {
+      "enum": ["bare-bcp47","locale","mixed"],
+      "description": "What the --language argument accepts. nemotron validates the hint against locales (ar-AR) while its card advertises bare codes, so a caller passing the advertised spelling is rejected with UNSUPPORTED_LANGUAGE. A consumer needs this before it can call the model at all."
+    },
+    "language_aliases": {
+      "type": "object",
+      "description": "{advertised spelling: canonical code}, for the languages this model names differently from everyone else (whisper says tl and no where the rest of the world says fil and nb). Lets a caller holding a canonical code find the tag this model wants.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "encoder_window_s": {
+      "type": ["number","null"],
+      "description": "Fixed encoder window, if the architecture has one (whisper 30 s)."
+    },
+    "long_form_strategy": {
+      "enum": ["chunked-unbounded","hard-cap","soft-window"],
+      "description": "Which bucket in docs/input-limits.md this family falls into."
+    },
+    "max_audio_s": {
+      "type": ["number","null"],
+      "description": "Usable ceiling, mirroring transcribe_capabilities::max_audio_ms. null = no practical limit."
+    },
+    "max_output_tokens": {
+      "type": ["integer","null"]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What this port supports. Every capability in the vocabulary is listed on every record, supported or not, so a reviewer sees the whole surface at a glance and every model renders into the same table rows. `supported` comes from the loader's own capability surface (transcribe_capabilities, read from the GGUF) rather than being hand-written -- hand-writing it is how moss-transcribe-diarize shipped as diarize:false. `verified` says whether we ran it and watched it work, and only applies when supported; the Stage 8 gate sets it and refuses sign-off while anything supported is unverified. Why something is unverified is a bring-up question and lives in the family doc's Capability Validation table. An unsupported capability carries no payload and no verified flag -- there is nothing to verify.",
+      "properties": {
+        "transcribe": {
+          "$ref": "#/$defs/capability",
+          "description": "Speech to text in the source language."
+        },
+        "translate": {
+          "$ref": "#/$defs/capability",
+          "description": "Speech in one language to text in another. The direction set IS the capability -- whisper does any-source to English only, canary translates between its 25 languages. Mirrors what the loader reads from stt.translation.target_languages / .pairs.",
+          "properties": {
+            "targets": {
+              "type": ["array","null"],
+              "items": {
+                "type": "string"
+              },
+              "description": "Targets reachable from any supported source. null when the model gates on explicit pairs."
+            },
+            "pairs": {
+              "type": ["array","null"],
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "The GGUF's own form, e.g. 'en>fr'."
+                  },
+                  {
+                    "type": "object",
+                    "required": ["from","to"],
+                    "properties": {
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "description": "Explicit source->target pairs, when the model accepts only a fixed set. Carried in whichever form stt.translation.pairs uses."
+            }
+          }
+        },
+        "lang_detect": {
+          "$ref": "#/$defs/capability",
+          "description": "Identifies the spoken language without a hint. A model without this needs a separate LID step in front of it.",
+          "properties": {
+            "over": {
+              "type": ["array","null"],
+              "items": {
+                "type": "string"
+              },
+              "description": "The set detection works over. null means the model's full language list."
+            }
+          }
+        },
+        "timestamps": {
+          "$ref": "#/$defs/capability",
+          "description": "Timestamp granularities this port emits, mirroring transcribe_capabilities::max_timestamp_kind. Not always what upstream offers -- whisper exposes word-level alignment upstream while this port ships segment.",
+          "properties": {
+            "granularities": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "enum": ["segment","word","token"]
+              }
+            }
+          }
+        },
+        "streaming": {
+          "$ref": "#/$defs/capability",
+          "description": "Incremental transcription over a live stream. The shipped latency presets ARE the capability: parakeet-unified publishes six whose accuracy spans 1.40% to 5.76% WER.",
+          "properties": {
+            "mode": {
+              "type": ["string","null"],
+              "description": "buffered | cache-aware | native."
+            },
+            "presets": {"type":["array","null"],"items":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},"left_ms":{"type":["number","null"]},"chunk_ms":{"type":["number","null"]},"right_ms":{"type":["number","null"]},"lookahead_ms":{"type":["number","null"],"description":"Audio that must be buffered before a chunk's tokens emit. The number a user feels."},"is_default":{"type":["boolean","null"]}}}}
+          }
+        },
+        "diarize": {
+          "$ref": "#/$defs/capability",
+          "description": "Speaker-attributed output. Note the scoring consequence: a diarizing model emits turn markup plain references do not contain, so its transcription accuracy must be scored under a dediarizing recipe.",
+          "properties": {
+            "max_speakers": {
+              "type": ["integer","null"]
+            },
+            "granularity": {
+              "type": ["string","null"],
+              "description": "turn | frame."
+            },
+            "markup": {
+              "type": ["string","null"],
+              "description": "Literal shape of the attribution, e.g. '[start][Sxx]text[end]'."
+            }
+          }
+        },
+        "batching": {
+          "$ref": "#/$defs/capability",
+          "description": "Explicit parallel run_batch() fast path, byte-identical to single-stream."
+        },
+        "punctuation": {
+          "$ref": "#/$defs/capability",
+          "description": "Emits punctuation. Reserved and deferred. Optional until the transcription-style work lands: absent means not yet determined, which is different from supported:false."
+        },
+        "casing": {
+          "$ref": "#/$defs/capability",
+          "description": "Emits mixed case. Reserved and deferred. Optional until the transcription-style work lands: absent means not yet determined, which is different from supported:false."
+        },
+        "itn": {
+          "$ref": "#/$defs/capability",
+          "description": "Inverse text normalisation -- '25' rather than 'twenty five'. Reserved and deferred. Optional until the transcription-style work lands: absent means not yet determined, which is different from supported:false."
+        }
+      },
+      "required": [
+        "transcribe", "translate", "lang_detect", "timestamps", "streaming",
+        "diarize", "batching"
+      ]
+    },
+    "downloads": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The GGUF files we publish.",
+      "items": {
+        "type": "object",
+        "required": ["quant","filename","size_bytes"],
+        "properties": {
+          "quant": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Cached from the Hub listing and verified against it, not authored."
+          },
+          "size_bytes": {
+            "type": ["integer","null"],
+            "minimum": 1,
+            "description": "Exact blob size. Prose units are a rendering concern -- the card's '845 MB' is 845 MiB mislabelled, and the sweep's 1 GB quant threshold keys off the real number."
+          }
+        }
+      }
+    },
+    "accuracy_benchmarks": {
+      "type": "array",
+      "description": "One row per measured cell. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark. Identity first, result second, provenance last, so the left of every row reads 'what ran and what did it score'. The artifact a row came from is reconstructible from the row itself, so no path is stored.",
+      "items": {
+        "type": "object",
+        "required": [
+          "dataset", "split", "language", "quant", "metric", "err_pct",
+          "ci95", "n_utts", "recipe", "engine_sha"
+        ],
+        "properties": {
+          "dataset": {
+            "type": "string",
+            "description": "Dataset id as scripts/wer/ingest.py knows it."
+          },
+          "split": {
+            "type": "string",
+            "description": "The full split measured. Named and reproducible; never an ad-hoc selection."
+          },
+          "language": {
+            "type": "string",
+            "description": "Canonical code, not the model's own spelling."
+          },
+          "quant": {
+            "type": "string",
+            "description": "MUST appear in downloads[]."
+          },
+          "metric": {
+            "enum": ["wer","cer","der","cpwer","accuracy"],
+            "description": "CER for zh/yue/ja/ko/th; der/cpwer for diarization; accuracy for LID."
+          },
+          "err_pct": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ci95": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": ["number","null"]
+            },
+            "description": "Bootstrap 95% interval, percent. A null pair when none was produced -- never 0.0."
+          },
+          "n_utts": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "recipe": {
+            "type": "string",
+            "description": "Key in catalog/_recipes.json. Rows under different recipes are not comparable."
+          },
+          "engine_sha": {
+            "type": ["string","null"],
+            "description": "transcribe.cpp commit that produced the hypotheses."
+          },
+          "measured_on": {
+            "type": ["string","null"],
+            "format": "date"
+          },
+          "errors": {
+            "type": "object",
+            "properties": {
+              "sub": {
+                "type": "integer"
+              },
+              "del": {
+                "type": "integer"
+              },
+              "ins": {
+                "type": "integer"
+              }
+            },
+            "description": "Error composition. Deletion-heavy means dropping audio; insertion-heavy means hallucinating."
+          },
+          "empty_hyp": {
+            "type": ["integer","null"],
+            "description": "Utterances that returned nothing. A generation failure, not a transcription error."
+          },
+          "utts_over_50pct": {
+            "type": ["integer","null"],
+            "description": "Catastrophic-tail count."
+          }
+        }
+      }
+    },
+    "speed_benchmarks": {
+      "type": "array",
+      "description": "One row per measured cell. The bench protocol -- machine coverage, backends, quants, sample durations, iteration and warmup counts, the thermal precondition -- belongs to porting-6-bench and is not restated per row.",
+      "items": {
+        "type": "object",
+        "required": [
+          "machine", "backend", "quant", "sample", "sample_duration_s",
+          "total_ms", "xrt_compute", "engine_sha"
+        ],
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "Canonical machine slug, as scripts/bench/run.py derives it from the CPU model string. One slug per physical machine is a hard gate, not a lookup table: reports/perf/amd-ryzen-7-4750u-pro is a stale hand-made directory for the same box that auto-detection names amd-ryzen-7-pro-4750u-with-radeon-graphics."
+          },
+          "backend": {
+            "enum": ["cpu","metal","vulkan","cuda"]
+          },
+          "quant": {
+            "type": "string",
+            "description": "MUST appear in downloads[]."
+          },
+          "sample": {
+            "type": "string",
+            "description": "Sample id. The set is OPEN: a long-audio sample is new rows, not a schema change."
+          },
+          "sample_duration_s": {
+            "type": "number",
+            "description": "Carried per cell so nothing downstream assumes a fixed sample set or has to look the duration up."
+          },
+          "total_ms": {
+            "type": "number",
+            "description": "mel + encode + decode, mean over iters after warmup."
+          },
+          "xrt_compute": {
+            "type": "number",
+            "description": "sample_duration_s / total. Stored rather than derived because it is the published figure and must not drift with rounding."
+          },
+          "load_ms": {
+            "type": ["number","null"]
+          },
+          "mel_ms": {
+            "type": ["number","null"],
+            "description": "The stage split (mel/encode/decode) is what makes a regression attributable. A single total tells you something got slower and nothing else."
+          },
+          "encode_ms": {
+            "type": ["number","null"]
+          },
+          "decode_ms": {
+            "type": ["number","null"]
+          },
+          "engine_sha": {
+            "type": ["string","null"],
+            "description": "A perf number without a build is not reproducible."
+          },
+          "measured_on": {
+            "type": ["string","null"],
+            "format": "date"
+          },
+          "thermal_gated": {
+            "type": ["boolean","null"],
+            "description": "Whether the machine's thermal precondition was met before this block. Not cosmetic: the same parakeet-unified CPU cells measure 8.17x realtime gated and 5.51x ungated, a 48% difference that dwarfs most code changes."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "required": ["supported"],
+      "description": "Shared envelope. `verified` is required when supported is true and omitted otherwise.",
+      "properties": {
+        "supported": {
+          "type": "boolean",
+          "description": "Whether this port has the capability."
+        },
+        "verified": {
+          "type": "boolean",
+          "description": "Whether we ran it and observed it working. Set by the Stage 8 gate."
+        },
+        "note": {
+          "type": "string",
+          "description": "Only where a consumer would otherwise be surprised -- a gap against what upstream advertises, or a caveat on how it behaves."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "supported": {
+                "const": true
+              }
+            },
+            "required": ["supported"]
+          },
+          "then": {
+            "required": ["verified"]
+          },
+          "else": {
+            "not": {
+              "required": ["verified"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
