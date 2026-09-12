@@ -307,6 +307,21 @@ ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
                              int            d0,
                              int            d1);
 
+// Batch-stable depthwise Conv2D via ggml_conv_2d_dw_direct, with the
+// F32 kernel promotion the direct op needs. Prefer this over
+// conv_2d_dw_f32 / conv_1d_dw_f32 when single-shot and batched runs must
+// be bit-identical, or when the depthwise conv is hot: the im2col forms
+// inflate the activation by the kernel width. See conformer.cpp.
+ggml_tensor * conv_2d_dw_direct_f32(ggml_context * ctx,
+                                    ggml_tensor *  kernel,
+                                    ggml_tensor *  data,
+                                    int            s0,
+                                    int            s1,
+                                    int            p0,
+                                    int            p1,
+                                    int            d0,
+                                    int            d1);
+
 // f32-friendly 1D depthwise conv. Same Metal reasoning.
 ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
                              ggml_tensor *  kernel,

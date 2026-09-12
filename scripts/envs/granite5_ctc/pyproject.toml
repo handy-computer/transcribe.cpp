@@ -1,0 +1,26 @@
+[project]
+name = "transcribe-granite5-ctc-env"
+version = "0.1.0"
+description = "Python env for IBM Granite Speech 5.0 TurboCTC reference dumps and conversion"
+requires-python = ">=3.11,<3.13"
+# transformers >= 5.16 is where `granite_speech5_ctc` / `granite_speech5_encoder`,
+# GraniteSpeech5ForCTC, GraniteSpeech5FeatureExtractor and GraniteSpeech5Processor
+# are registered (the checkpoint's config pins transformers_version=5.16.0.dev0).
+# No trust_remote_code: config.json has no auto_map, so AutoModelForCTC resolves
+# to these in-tree classes. The repo ALSO ships stale `ctc_conformer` remote code
+# using granite-speech-4.x tensor names; it cannot load this checkpoint.
+#
+# torchaudio is a hard requirement, not an optional extra:
+# GraniteSpeech5FeatureExtractor is decorated @requires(backends=("torch", "torchaudio"))
+# and builds its mel filterbank with torchaudio.transforms.MelSpectrogram.
+dependencies = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "numpy>=1.26",
+    "safetensors>=0.4",
+    "soundfile>=0.12",
+    "transformers>=5.16,<6",
+    "accelerate>=1.0",
+]

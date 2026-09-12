@@ -1,0 +1,31 @@
+{
+  "model": "models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf",
+  "backend": "cpu",
+  "language": null,
+  "texts": {
+    "samples/wer/test-clean/1089-134686-0000.wav": "he hoped there would be stew for dinner turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick peppered flour fattened sauce",
+    "samples/wer/test-clean/1089-134686-0001.wav": "stuff it into you his belly counseled him",
+    "samples/wer/test-clean/1089-134686-0002.wav": "after early nightfall the yellow lamps would light up here and there the squalid quarter of the brothels",
+    "samples/wer/test-clean/1089-134686-0003.wav": "hullo bertie any good in your mind",
+    "samples/wer/test-clean/1089-134686-0004.wav": "number 10 fresh nelllly is waiting on you goodnight husband",
+    "samples/wer/test-clean/1089-134686-0005.wav": "the music came nearer and he recalled the words the words of shelley is fragment upon the moon wandering companionless pale for weariness",
+    "samples/wer/test-clean/1089-134686-0006.wav": "the dull light fell more faintly upon the page whereon another equation began to unfold itself slowly and to spread abroad its widening tale",
+    "samples/wer/test-clean/1089-134686-0007.wav": "a cold lucid indifference reigned in his soul",
+    "samples/wer/test-clean/1089-134686-0008.wav": "the chaos in which his ardor extinguished itself was a cold indifferent knowledge of himself",
+    "samples/wer/test-clean/1089-134686-0009.wav": "at most by an alms given to a beggar whose blessing he fled from he might hope wearily to win for himself some measure of actual grace",
+    "samples/wer/test-clean/1089-134686-0010.wav": "well now ennis i declare you have a head and so has my stick",
+    "samples/wer/test-clean/1089-134686-0011.wav": "on saturday mornings when the sodality met in the chapel to recite the little office his place was a cushioned kneeling desk at the right of the altar from which he led his wing of boys through the responses",
+    "samples/wer/test-clean/1089-134686-0012.wav": "her eyes seemed to regard him with mild pity her holiness a strange light glowing faintly upon her frail flesh did not humiliate the sinner who approached her",
+    "samples/wer/test-clean/1089-134686-0013.wav": "if ever he was impelled to cast sin from him and to repent the impulse that moved him was the wish to be her knight",
+    "samples/wer/test-clean/1089-134686-0014.wav": "he tried to think how it could be",
+    "samples/wer/test-clean/1089-134686-0015.wav": "but the dusk deepening in the schoolroom covered over his thoughts the bell rang",
+    "samples/wer/test-clean/1089-134686-0016.wav": "then you can ask him questions on the catechism dedalus",
+    "samples/wer/test-clean/1089-134686-0017.wav": "stephen leaning back and drawing idly on his scribbler listened to the talk about him which heron checked from time to time by saying",
+    "samples/wer/test-clean/1089-134686-0018.wav": "it was strange too that he found an arid pleasure in following up to the end the rigid lines of the doctrines of the church and penetrating into obscure silences only to hear and feel the more deeply his own condemnation",
+    "samples/wer/test-clean/1089-134686-0019.wav": "the sentence of saint james which says that he who offends against one commandment becomes guilty of all had seemed to him 1st a swollen phrase until he had begun to grope in the darkness of his own state",
+    "samples/wer/test-clean/1089-134686-0020.wav": "if a man had stolen a pound in his youth and had used that pound to amass a huge fortune how much was he obliged to give back the pound he had stolen only or the pound together with the compound interest accruing upon it or all his huge fortune",
+    "samples/wer/test-clean/1089-134686-0021.wav": "if a layman in giving baptism pour the water before saying the words is the child baptized",
+    "samples/wer/test-clean/1089-134686-0022.wav": "how comes it that while the 1st beatitude promises the kingdom of heaven to the poor of heart the 2nd beatitude promises also to the meek that they shall possess the land",
+    "samples/wer/test-clean/1089-134686-0023.wav": "why was the sacrament of the eucharist instituted under the 2 species of bread and wine if jesus christ be present body and blood soul and divinity in the bread alone and in the wine alone"
+  }
+}

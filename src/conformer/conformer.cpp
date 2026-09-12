@@ -207,6 +207,35 @@ static ggml_tensor * dw_kernel_for_direct(ggml_context * ctx, ggml_tensor * kern
     return ggml_cast(ctx, kernel, GGML_TYPE_F32);
 }
 
+// Batch-stable depthwise Conv2D through the direct op.
+//
+// Two properties the im2col forms above do not have:
+//
+//   * Same path at EVERY batch size. conv_1d_dw_f32 switches algorithm on
+//     ne[2] (im2col + mul_mat at B == 1, the direct op at B > 1), so a
+//     batched utterance is not bit-identical to the same utterance run
+//     alone. Callers with a batch tensor-parity gate need one algorithm.
+//   * No KW-fold activation copy. im2col inflates the activation by the
+//     kernel width to feed a matmul whose K is that same width, which for
+//     a depthwise kernel is nearly all memory traffic and no arithmetic.
+//     Measured on granite5_ctc (M4, Metal, F32): encoder 114.7 ms ->
+//     101.4 ms, and the depthwise conv itself 13.3 ms -> ~0.
+//
+// The kernel is promoted to F32 for the same reason conv_1d_dw_f32's batch
+// path promotes it (see dw_kernel_for_direct); it is tiny, so the cast is
+// negligible.
+ggml_tensor * conv_2d_dw_direct_f32(ggml_context * ctx,
+                                    ggml_tensor *  kernel,  // [KW, KH, 1, C]
+                                    ggml_tensor *  data,    // [W, H, C, N]
+                                    int            s0,
+                                    int            s1,
+                                    int            p0,
+                                    int            p1,
+                                    int            d0,
+                                    int            d1) {
+    return ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, kernel), data, s0, s1, p0, p1, d0, d1);
+}
+
 // f32-friendly depthwise Conv1D (mirrors ggml_conv_1d_dw but
 // passes the kernel's real type to im2col). Same fix as above.
 ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,

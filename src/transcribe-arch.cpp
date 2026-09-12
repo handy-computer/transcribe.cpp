@@ -75,6 +75,10 @@ namespace granite_nar {
 extern const Arch arch;
 }
 
+namespace granite5_ctc {
+extern const Arch arch;
+}
+
 namespace medasr {
 extern const Arch arch;
 }
@@ -89,10 +93,10 @@ const Arch * find_arch(const char * name) {
     }
 
     static const Arch * const k_archs[] = {
-        &parakeet::arch,         &cohere::arch,      &canary::arch,     &qwen3_asr::arch, &voxtral::arch,
-        &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch,    &moonshine::arch, &moonshine_streaming::arch,
-        &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,     &granite::arch,   &granite_nar::arch,
-        &medasr::arch,           &moss::arch,        &sortformer::arch,
+        &parakeet::arch,         &cohere::arch,      &canary::arch,     &qwen3_asr::arch,    &voxtral::arch,
+        &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch,    &moonshine::arch,    &moonshine_streaming::arch,
+        &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,     &granite::arch,      &granite_nar::arch,
+        &medasr::arch,           &moss::arch,        &sortformer::arch, &granite5_ctc::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 

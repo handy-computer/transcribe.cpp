@@ -159,6 +159,56 @@ Allowed statuses: `PASS`, `SKIP - not exposed by runtime`, `ACCEPTED GAP - <reas
 | Speaker diarization | granite-speech-4.1-2b-plus | multi-speaker audio | n/a | `[Speaker N]:` tags preceding speaker turns in the text | SKIP - not exposed by runtime (user-deferred to later) |
 | Incremental decoding | granite-speech-4.1-2b-plus | prefix_text continuation | n/a | transcript continues from supplied prefix | SKIP - not exposed by runtime |
 
+### Shaw positional bias: skew path (shared with granite5_ctc)
+
+`granite::precompute_pos_rows` replaced `precompute_attention_dists`, and
+`shaw_block_attn` is called with the `pos_rows` argument. Instead of
+materializing the full `[head_dim, context_size, context_size]` lookup per
+layer (at `context_size=200`, `head_dim=128` that is 20 MB per layer) and
+feeding a batched GEMM with N = n_heads = 8, the encoder now gathers only
+the `2*context_size - 1` distinct relative offsets, does one fat GEMM
+against q, and rotates the result into key columns with
+`conformer::rel_shift`. See `granite_conformer/shaw_attn.h`.
+
+This is valid because every entry of the reference's
+`compute_attention_dists` is a function of `(query - key)` alone, clamped or
+not. The identity was verified host-side in numpy before any C++ changed.
+
+**Correction recorded while doing this.** The granite5_ctc port originally
+documented granite 4.x's Shaw index as having the OPPOSITE sign
+(`key - query`). That was wrong. granite 4.x writes
+`dists[c * ctx + r] = clamp(c - r)` with `c` the OUTER (query) index and `r`
+the inner (key) index; granite 5.0 writes `dists[q * ctx + k] = clamp(q - k)`.
+Renaming makes them the same code, and the arrays are bit-identical for any
+`(context_size, max_pos_emb)`. Both families now share one
+`precompute_pos_rows` formula.
+
+Verified numerically neutral on all four variants: `validate.py all` output
+is identical to the pre-change build on every tensor, to every printed digit
+(`granite-4.0-1b-speech` 15/15, `granite-speech-4.1-2b` 15/15,
+`granite-speech-4.1-2b-plus` 10/15, `granite-speech-4.1-2b-nar` 2/15 — the
+last two fail identically before and after; see below).
+
+### Pre-existing validate failures (NOT caused by the skew change)
+
+Both were confirmed by running `validate.py all` on the pre-change build and
+diffing: every failing tensor reports the same value before and after.
+
+- **`granite-speech-4.1-2b-plus`: 10/15.** Five decoder tensors fail
+  (`dec.token_emb`, `dec.audio_injected`, `dec.block.0.out`,
+  `dec.block.20.out`, `dec.out_before_head`). Every encoder tensor passes.
+  `dec.token_emb` is a pure embedding lookup, and its `first_diff` is at
+  element 20480 = row 10, so the prompt token ids diverge from the reference
+  at position 10 rather than any arithmetic drifting. Consistent with the
+  known `add_generation_prompt` handling on this variant. `dec.logits_raw`
+  and `dec.block.39.out` still pass, which is why the transcript is right.
+- **`granite-speech-4.1-2b-nar`: 2/15.** Nine ENCODER tensors fail, starting
+  at `enc.block.0.post_ff1` (6.065e-02) and growing to `enc.block.15.out`
+  (2.297e+01, mean 1.167e+00) and `enc.ctc_logits` (1.114e+01, mean
+  4.275e+00). Only `enc.mel.in` and `enc.input_linear.out` pass. The failure
+  begins before attention runs in block 0, so it is upstream of anything
+  Shaw-related. This one is large enough to warrant its own investigation.
+
 ## Notes
 
 - The IBM-published `ibm-granite/granite-4.0-1b-speech-GGUF` strips the speech encoder; our port produces fused-stack GGUFs (encoder + projector + LM in one file).

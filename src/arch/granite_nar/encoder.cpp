@@ -114,21 +114,29 @@ transcribe_status compute_mel_encoder_input(const transcribe::MelFrontend & mel,
 
 // Shaw bookkeeping (matches AR granite).
 
-std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_emb) {
-    std::vector<int32_t> dists(static_cast<size_t>(context_size) * context_size);
-    for (int c = 0; c < context_size; ++c) {
-        for (int r = 0; r < context_size; ++r) {
-            int d = c - r;
-            if (d < -context_size) {
-                d = -context_size;
-            }
-            if (d > context_size) {
-                d = context_size;
-            }
-            dists[static_cast<size_t>(c) * context_size + r] = static_cast<int32_t>(d + max_pos_emb);
+std::vector<int32_t> precompute_pos_rows(int context_size, int max_pos_emb) {
+    // One rel_pos_emb row per distinct relative offset, replacing the full
+    // [context_size, context_size] table. The table's value at
+    // (ne0 = key, ne1 = query) is clamp(query - key, +/- context_size) +
+    // max_pos_emb, which depends on (query - key) alone, so only the
+    // 2*context_size - 1 reachable offsets are needed.
+    //
+    // shaw_block_attn's skew path indexes this vector by
+    // d = key - query + context_size - 1 (the layout conformer::rel_shift
+    // rotates), so slot d must carry the offset context_size - 1 - d.
+    const int            n = 2 * context_size - 1;
+    std::vector<int32_t> rows(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        int d = context_size - 1 - i;
+        if (d < -context_size) {
+            d = -context_size;
         }
+        if (d > context_size) {
+            d = context_size;
+        }
+        rows[static_cast<size_t>(i)] = static_cast<int32_t>(d + max_pos_emb);
     }
-    return dists;
+    return rows;
 }
 
 std::vector<float> precompute_last_block_mask(int context_size, int t_enc_remainder) {
@@ -220,9 +228,9 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     named(eb.mel_in, "enc.mel_in");
     ggml_set_input(eb.mel_in);
 
-    eb.attention_dists = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, static_cast<int64_t>(ctx_size) * ctx_size);
-    named(eb.attention_dists, "enc.attention_dists");
-    ggml_set_input(eb.attention_dists);
+    eb.pos_rows = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 2 * static_cast<int64_t>(ctx_size) - 1);
+    named(eb.pos_rows, "enc.pos_rows");
+    ggml_set_input(eb.pos_rows);
 
     eb.last_block_mask = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, ctx_size, ctx_size, eb.n_blocks_local);
     named(eb.last_block_mask, "enc.last_block_mask");
@@ -277,8 +285,8 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
             b.norm_attn_w, b.norm_attn_b, b.attn_q_w, b.attn_kv_w, b.attn_rel_pos_emb, b.attn_out_w, b.attn_out_b,
         };
         ggml_tensor * attn_out = transcribe::granite_conformer::shaw_block_attn(
-            ctx, x, eb.zero_pad, eb.attention_dists, eb.last_block_mask, shaw_w, n_heads, head_dim, ctx_size,
-            eb.n_blocks_local, T_enc, kLayerNormEps);
+            ctx, x, eb.zero_pad, /*dists=*/nullptr, eb.last_block_mask, shaw_w, n_heads, head_dim, ctx_size,
+            eb.n_blocks_local, T_enc, kLayerNormEps, eb.pos_rows);
         if (attn_out == nullptr) {
             return eb;
         }

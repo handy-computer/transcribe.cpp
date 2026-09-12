@@ -346,7 +346,8 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                                        std::vector<float> & out_mel,
                                        int &                out_n_mels,
                                        int &                out_n_frames,
-                                       int                  n_threads) const {
+                                       int                  n_threads,
+                                       int                  out_frames) const {
     if (pcm == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -739,8 +740,11 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     // clamp to max - 8.0, then scale (x + 4) / 4. Drops the trailing
     // center-pad STFT frame (output has n_samples / hop_length frames).
     if (cfg_.normalize == "per_utterance") {
-        const int n_out = n_frames - 1;
-        if (n_out <= 0) {
+        // out_frames (when > 0) overrides the default drop-the-last-frame
+        // rule; see the header. The normalization max below is taken over
+        // exactly the emitted frames either way.
+        const int n_out = (out_frames > 0) ? out_frames : (n_frames - 1);
+        if (n_out <= 0 || n_out > n_frames) {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
 
@@ -779,8 +783,8 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     // (global_log_mel_max), making per-frame normalization causal/
     // streaming-safe. Drops the trailing center-pad frame.
     if (cfg_.normalize == "global") {
-        const int n_out = n_frames - 1;
-        if (n_out <= 0) {
+        const int n_out = (out_frames > 0) ? out_frames : (n_frames - 1);
+        if (n_out <= 0 || n_out > n_frames) {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
         const double floor_val = static_cast<double>(cfg_.global_log_mel_max) - 8.0;
