@@ -16,17 +16,6 @@ namespace transcribe::granite5_ctc {
 
 namespace {
 
-// Byte-level BPE word-boundary marker. GPT-2 byte encoding maps the
-// space character (0x20) to U+0120 "Ġ", which is C4 A0 in UTF-8, so a
-// raw piece starting with those two bytes opens a new word.
-//
-// This is the one place parakeet's CTC result builder does NOT carry
-// over: it splits on the SentencePiece marker U+2581 (E2 96 81), which
-// never appears in this vocabulary. Using it here would yield exactly
-// one word spanning the whole clip.
-constexpr const char k_bpe_space_marker[]  = "\xC4\xA0";
-constexpr int        k_bpe_space_marker_len = 2;
-
 int argmax_row(const float * row, int n) {
     int   best   = 0;
     float best_v = row[0];
@@ -130,25 +119,16 @@ void build_result(transcribe_session &          cc,
     cc.full_text.clear();
     cc.raw_text.clear();
 
-    const double frame_ms = ms_per_encoder_frame(hp);
-
-    auto clamp_ms = [&](int64_t v) {
-        if (clip_ms > 0 && v > clip_ms) {
-            return clip_ms;
-        }
-        return v;
-    };
-
     cc.tokens.reserve(tokens.size());
     for (const CtcToken & t : tokens) {
         transcribe_session::TokenEntry te;
-        te.id    = t.id;
-        te.p     = t.p;
-        // CTC alignments are peaky: a label is emitted on the single
-        // frame where it wins, so the token spans exactly that frame.
-        te.t0_ms = clamp_ms(static_cast<int64_t>(std::llround(frame_ms * static_cast<double>(t.frame))));
-        te.t1_ms = clamp_ms(static_cast<int64_t>(std::llround(frame_ms * static_cast<double>(t.frame + 1))));
-        te.text  = tok.decode(&te.id, 1);
+        te.id = t.id;
+        te.p  = t.p;
+        // No timestamps: t0_ms/t1_ms stay 0. The emitting frame is known
+        // (t.frame) but a token's true extent is not -- CTC is peaky, so
+        // the label occupies the single frame where it wins regardless of
+        // how long the sound lasted. See capabilities.cpp.
+        te.text = tok.decode(&te.id, 1);
         cc.tokens.push_back(std::move(te));
     }
 
@@ -158,64 +138,22 @@ void build_result(transcribe_session &          cc,
         return;
     }
 
+    // Exactly one segment per run, spanning the whole clip. No
+    // segmentation policy is defined for this family and no timestamps
+    // are published, so the segment is a container for the text rather
+    // than a timing claim; t0/t1 are the clip bounds, not emission times.
     transcribe_session::SegmentEntry seg;
-    seg.t0_ms       = cc.tokens.front().t0_ms;
-    seg.t1_ms       = cc.tokens.back().t1_ms;
+    seg.t0_ms       = 0;
+    seg.t1_ms       = clip_ms > 0 ? clip_ms : 0;
     seg.first_token = 0;
     seg.n_tokens    = static_cast<int>(cc.tokens.size());
     seg.first_word  = 0;
-
-    transcribe_session::WordEntry cur_word;
-    bool                          cur_word_open = false;
-
-    auto close_word = [&](int end_token_index) {
-        cur_word.t1_ms    = cc.tokens[static_cast<size_t>(end_token_index - 1)].t1_ms;
-        cur_word.n_tokens = end_token_index - cur_word.first_token;
-        cc.words.push_back(std::move(cur_word));
-        cur_word = transcribe_session::WordEntry{};
-    };
+    seg.n_words     = 0;
 
     for (size_t i = 0; i < cc.tokens.size(); ++i) {
-        const auto &      tk        = cc.tokens[i];
-        const std::string & raw_piece = tok.token(tk.id);
-        // The first token always opens a word: a byte-level BPE
-        // utterance carries no marker on its opening piece.
-        const bool starts_word =
-            (i == 0) || (raw_piece.size() >= static_cast<size_t>(k_bpe_space_marker_len) &&
-                         std::memcmp(raw_piece.data(), k_bpe_space_marker, k_bpe_space_marker_len) == 0);
-        if (starts_word) {
-            if (cur_word_open) {
-                close_word(static_cast<int>(i));
-            }
-            cur_word.t0_ms       = tk.t0_ms;
-            cur_word.first_token = static_cast<int>(i);
-            cur_word.seg_index   = 0;
-            cur_word_open        = true;
-        }
         cc.tokens[i].seg_index  = 0;
-        cc.tokens[i].word_index = static_cast<int>(cc.words.size());
+        cc.tokens[i].word_index = -1;  // no words published
     }
-    if (cur_word_open) {
-        close_word(static_cast<int>(cc.tokens.size()));
-    }
-
-    // Word text comes from a single decode over the word's ids so the
-    // ByteLevel decoder sees the whole span; the opener's leading space
-    // is then trimmed.
-    std::vector<int> id_buf;
-    for (auto & wd : cc.words) {
-        id_buf.clear();
-        id_buf.reserve(static_cast<size_t>(wd.n_tokens));
-        for (int j = 0; j < wd.n_tokens; ++j) {
-            id_buf.push_back(cc.tokens[static_cast<size_t>(wd.first_token + j)].id);
-        }
-        std::string text = tok.decode(id_buf.data(), wd.n_tokens);
-        if (!text.empty() && text.front() == ' ') {
-            text.erase(text.begin());
-        }
-        wd.text = std::move(text);
-    }
-    seg.n_words = static_cast<int>(cc.words.size());
 
     std::vector<int> all_ids;
     all_ids.reserve(cc.tokens.size());
@@ -230,7 +168,7 @@ void build_result(transcribe_session &          cc,
 
     cc.segments.push_back(std::move(seg));
     cc.has_result  = true;
-    cc.result_kind = TRANSCRIBE_TIMESTAMPS_WORD;
+    cc.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 }
 
 }  // namespace transcribe::granite5_ctc

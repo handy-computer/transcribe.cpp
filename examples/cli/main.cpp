@@ -1227,8 +1227,10 @@ int main(int argc, char ** argv) {
 
         // Surface the effective input-length limit so it's obvious how much
         // audio this session accepts (reflects --n-ctx). 0 means "no practical
-        // limit" — the family chunks internally or is unbounded. See
-        // docs/input-limits.md.
+        // limit", which covers two different families: one that chunks long
+        // audio internally (FEATURE_LONG_FORM) and one that is genuinely
+        // unbounded and encodes the clip in a single pass. Distinguish them
+        // rather than asserting the first. See docs/input-limits.md.
         {
             struct transcribe_session_limits lim;
             transcribe_session_limits_init(&lim);
@@ -1247,8 +1249,13 @@ int main(int argc, char ** argv) {
                         "  max audio:  ~0 s (context %d tok too small for "
                         "audio + prompt)\n",
                         lim.effective_n_ctx);
-                } else {
+                } else if (transcribe_model_supports(model, TRANSCRIBE_FEATURE_LONG_FORM)) {
                     std::printf("  max audio:  unbounded (long audio chunked internally)\n");
+                } else {
+                    // No context cap and no chunker: the family encodes the
+                    // whole clip in one pass (e.g. block-local attention,
+                    // where cost is linear in audio length).
+                    std::printf("  max audio:  unbounded (whole clip in one pass)\n");
                 }
             }
         }

@@ -685,6 +685,22 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     set_tests_properties(transcribe_parakeet_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
+    # Real-model granite5_ctc converter + loader gate.
+    add_executable(transcribe_granite5_ctc_real_smoke
+        granite5_ctc_real_smoke.cpp)
+
+    target_link_libraries(transcribe_granite5_ctc_real_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_granite5_ctc_real_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_granite5_ctc_real_smoke)
+
+    add_test(NAME transcribe_granite5_ctc_real_smoke
+        COMMAND transcribe_granite5_ctc_real_smoke)
+    set_tests_properties(transcribe_granite5_ctc_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
     # Real-model GigaAM workspace-retention regression.
     add_executable(transcribe_gigaam_workspace_release_smoke
         gigaam_workspace_release_smoke.cpp)

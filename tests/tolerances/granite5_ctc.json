@@ -77,7 +77,21 @@
     "       split, and all 2620 hypotheses are BYTE-IDENTICAL to the im2col",
     "       baseline. Batch text parity against the frozen golden and bit-exact",
     "       (0.0) batch tensor parity both still hold.",
-    "  No other entry moved; every other tensor stayed inside its budget."
+    "  No other entry moved; every other tensor stayed inside its budget.",
+    "",
+    "enc.ctc_logits max_abs sign-off (CJ, 2026-09-11). The decisive evidence is",
+    "the top-2 logit gap, not the drift magnitude: this is a CTC head, so only an",
+    "argmax flip can change output. Measured on the Stage 2 dumps, the minimum",
+    "top-2 gap is 1.744 (jfk, 137 frames) and 3.506 (dots, 441 frames), against a",
+    "0.227 budget. Drift would need to be 7.7x the budget (11.5x the observed",
+    "1.513e-01) before one frame could flip, and there are 0 argmax mismatches vs",
+    "the reference across all 578 frames. Relative drift is 0.24%/0.80% of p99_abs",
+    "for max, but mean/rms is 0.064%/0.063% -- flat between the two cases, i.e. the",
+    "rounding pattern moved and the accuracy level did not. max/mean is 8x on jfk",
+    "(2.2M values) and 28x on dots (7.2M values), which is the order-statistic",
+    "behaviour expected of a max over 3.2x more samples at equal mean. mean_abs",
+    "remains the entry with teeth at a 1.52x margin (8.26e-03 budget vs 5.44e-03",
+    "observed); a mask/index/off-by-one bug moves the mean, not just the tail."
   ],
   "enc.block.0.out": {
     "max_abs": 0.128,

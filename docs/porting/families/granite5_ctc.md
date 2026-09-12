@@ -700,10 +700,85 @@ downgraded without the user re-signing.
 | Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf --list tests/golden/batch/granite-speech-5.0-470m-turboctc.list --batch-sizes 2,4,8 --backend cpu --golden-in tests/golden/batch/granite-speech-5.0-470m-turboctc.cpu.json`<br>`uv run scripts/batch_tensor_parity.py --model <same> --wav samples/jfk.wav --batch 4 --backend cpu --dump-name dec.ctc_logits` | byte-identical hypotheses + CPU tensor parity | MUST PASS | PASS — text byte-equal vs serial at 2/4/8 over 24 mixed-length utterances (golden `tests/golden/batch/granite-speech-5.0-470m-turboctc.cpu.json`, frozen over the 24 utterances in `...turboctc.list`; `--samples-dir samples/wer/test-clean` globs all 2620 and does NOT reproduce the golden); same-length CPU tensor parity bit-exact (max_abs=0.0) at batch=4; full test-clean batch-8 WER equals batch-1 |
 | Language detection | auto-detect | not exercised | model is English-only; no detection branch and no language tokens in the 16384-entry vocab | OUT OF SCOPE — monolingual English model; would return in scope only if IBM ships a multilingual Granite 5.0 CTC variant | SKIP — not exposed by runtime |
 | Translate | `--target-language` | not exercised | no translation head, no prompt surface, no non-English training data | OUT OF SCOPE — English-only ASR; would return in scope only with an upstream AST-capable variant | SKIP — not exposed by runtime |
-| Segment timestamps | segment granularity | not exercised | a single whole-clip segment falls out of the word path, but no segmentation policy is defined for this family | OUT OF SCOPE — not advertised upstream and not requested at intake; the word-timestamp substrate makes it cheap to add later | ACCEPTED GAP — one whole-clip segment is emitted, but no segmentation policy is defined; unblocked by choosing a split rule (silence or max-duration) |
-| Word timestamps | word granularity | `build/bin/transcribe-cli -m models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf --timestamps word samples/jfk.wav` | per-word `t0_ms`/`t1_ms` derived host-side from the CTC emitting frame (80 ms granularity); non-zero `words:` count, monotonically non-decreasing, inside the clip bounds | MUST PASS | PASS — 22 words on jfk, monotonic, `t0<=t1`, all inside [0, 11.00 s], 80 ms granularity; multi-token words span >1 frame (`karma` = 0.32 s on dots) |
+| Segment timestamps | segment granularity | `build/bin/transcribe-cli -m <BF16> --timestamps segment samples/jfk.wav` | `TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS` | OUT OF SCOPE — no segmentation policy is defined for this family; would return in scope once a split rule (silence or max-duration) is chosen | SKIP — not exposed by runtime. `max_timestamp_kind` is `TRANSCRIBE_TIMESTAMPS_NONE`, so the request is rejected. One segment is still built internally to carry the text; it spans the clip bounds and makes no timing claim |
+| Word timestamps | word granularity | `build/bin/transcribe-cli -m <BF16> --timestamps word samples/jfk.wav` | `TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS` | OUT OF SCOPE — **re-signed by CJ 2026-09-12**, down from MUST PASS at intake. An implementation existed and passed the structural check, but its word END times were wrong (see below) and there is no reference alignment to validate against, so it was stripped rather than shipped. Returns in scope with a real word-end rule plus something to check it against | SKIP — not exposed by runtime; the word-building code was removed from `decoder.cpp` and `max_timestamp_kind` left at `TRANSCRIBE_TIMESTAMPS_NONE` |
 | Streaming | `--stream-chunk-ms` | not exercised | `capabilities.streaming: false`; and the `per_utterance` log-mel floor depends on an utterance-global maximum, so chunked decoding changes the feature values | OUT OF SCOPE — non-streaming model with a non-causal frontend; would return in scope only with a fixed-max ("global") frontend variant plus an upstream streaming recipe | SKIP — not exposed by runtime |
 | Speaker diarization | multi-speaker | not exercised | single-speaker CTC output, no speaker head | OUT OF SCOPE — no diarizer in the architecture | SKIP — not exposed by runtime |
+
+## Known Limitations
+
+Drawn from the intake capability flags and what the port actually surfaced.
+Nothing here is speculative; each item is either a declared upstream
+capability the model does not have, or a measured result from Stages 4-7.
+
+**English only.** Monolingual. The 16384-entry byte-level BPE vocab carries
+no language tokens and the graph has no language-conditioning branch, so
+`--language` reaches nothing and is inert. There is no language-detection
+path to expose. A multilingual Granite 5.0 CTC variant would change this;
+none is published.
+
+**No translation.** No AST head, no prompt surface, no non-English training
+data.
+
+**No streaming.** `capabilities.streaming` is false upstream, and the
+frontend makes it more than a missing feature: the `per_utterance` log-mel
+floor is computed from an utterance-global maximum, so chunked decoding
+changes the feature values themselves. Streaming needs a fixed-max
+("global") frontend variant plus an upstream streaming recipe, not just a
+chunking loop.
+
+**No diarization.** Single-speaker CTC output, no speaker head.
+
+**No timestamps of any granularity.** `max_timestamp_kind` is
+`TRANSCRIBE_TIMESTAMPS_NONE`, so `--timestamps segment|word|token` all return
+`TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS`. One segment is still constructed
+internally to carry the transcript text, but it spans the clip bounds and
+makes no timing claim, and token `t0_ms`/`t1_ms` are left at 0.
+
+This is a **withdrawal**, not an omission. Word timestamps were implemented,
+signed off as MUST PASS at intake, and passed the Stage 4 structural check
+(present, monotonic, in bounds). They were stripped at Stage 8 because the
+structural check was too weak to catch the actual defect: CTC is peaky, a
+token occupies exactly the one frame where it wins, and `close_word` took a
+word's end from its last token, so the end time was always `emitting frame +
+one frame`. Nearly every word reported exactly 80 ms of duration regardless
+of how long it took to say — `americans`, `impossible` and `backwards` all
+measured one frame, and only genuinely multi-token words differed (`dots`
+0.24 s, `10` 0.16 s). The onsets were sound; the durations were not.
+
+Two things made shipping it the wrong call. Upstream neither advertises nor
+emits timings, so there is no reference alignment to validate against, and a
+wrong duration is worse than no duration for any consumer that trusts it.
+Reinstating needs a real word-end rule (the next token's emitting frame, or
+the last frame before the next word's onset) and a ground truth to check it
+against. The same defect is worth checking for in parakeet's CTC variants,
+which ship timestamps today.
+
+**Batch (offline): PASS.** The family ships an explicit `run_batch()`
+parallel fast path, and it is WER-neutral in the strongest sense available:
+batch 8 is byte-identical to batch 1 on all 2620 test-clean utterances, and
+CPU tensor parity at batch 4 is bit-exact (max_abs 0.0). This is not a
+serial fallback. What Stage 6 measured is that the *throughput* win is small
+on GPU: per-utterance latency on Metal goes 97.3 ms at batch 1 to a best of
+94.2 ms at batch 2-4 and back to 97.7 ms at batch 32, because a single 11 s
+clip already saturates the device. Batching is worth more on CPU and for
+short clips.
+
+**Streaming row is omitted from this section's posture list** because the
+model does not stream natively; see the Capability Validation table, where
+it is `SKIP - not exposed by runtime` against an `OUT OF SCOPE` target.
+
+**Input length is unbounded, with one floor.** Block-local attention is
+`O(T * context_size)`, so memory is linear in audio length; nothing is
+rejected or truncated and `n_ctx` is ignored by design. The one hard floor
+is that a clip must survive both subsampling blocks with at least one frame
+remaining, returned as `TRANSCRIBE_ERR_INVALID_ARG`.
+
+**CPU BF16 matmul does not thread.** Encode is 8.9 s at 1 thread and 9.4 s
+at 8 on an M4 for 11 s of audio; the same graph on an F32 GGUF scales 6.9 s
+to 2.4 s. The graph parallelizes; the BF16 kernel is the bottleneck. Metal
+is unaffected. Users on CPU should prefer a quantized tier over BF16, which
+is also the faster choice on every measurement in Stage 6.
 
 ## Notes
 
@@ -732,17 +807,21 @@ downgraded without the user re-signing.
   the raw per-frame argmax, so decoding with a plain byte-level BPE tokenizer would
   emit every repeated frame. The C++ reproduces the groupby-then-drop-blank order,
   which is what keeps `[A, blank, A]` as two tokens and `[A, A]` as one.
-- **Word timestamps are in scope** (user-signed at intake) even though upstream does not
-  advertise them, so there is no reference timing to diff against. One encoder frame is
-  exactly 80 ms (`8 * 160 / 16000`), and the greedy collapse already yields the emitting
-  frame per surviving token, so parakeet's CTC convention carries over: `t0 = 80 ms *
-  step_at_emit`, `t1 = t0 + 80 ms`. What does *not* carry over is word-boundary
-  detection. `src/arch/parakeet/model.cpp` splits on the SentencePiece marker `▁`
-  (`E2 96 81`), but this tokenizer is byte-level BPE, where a word opens on a raw piece
-  beginning with `Ġ` (`C4 A0`) and the utterance's first word carries no marker at all;
-  reusing the SentencePiece predicate yields exactly one word spanning the whole clip.
-  That aggregation also lives inside `src/arch/parakeet/` rather than a shared helper, so
-  Stage 4 factors it out or reimplements it. CTC alignments are peaky, so the Stage 4
-  observable is structural (present, monotonic, in-bounds), not agreement with a forced
-  alignment; and `t1_ms` needs clamping to the clip duration, because the frontend
-  right-pads the waveform in the odd-`mel_frames` case.
+- **Word timestamps were withdrawn at Stage 8** (re-signed OUT OF SCOPE by CJ,
+  2026-09-12; MUST PASS at intake). The intake reasoning was sound as far as it went:
+  one encoder frame is exactly 80 ms (`8 * 160 / 16000`), the greedy collapse yields
+  the emitting frame per surviving token, and parakeet's CTC convention gives
+  `t0 = 80 ms * step_at_emit`. Word-boundary detection did not carry over —
+  `src/arch/parakeet/model.cpp` splits on the SentencePiece marker `▁` (`E2 96 81`)
+  while this tokenizer is byte-level BPE, where a word opens on a raw piece beginning
+  with `Ġ` (`C4 A0`) and the utterance's first word carries no marker — so Stage 4
+  reimplemented it. What the intake got wrong was `t1 = t0 + 80 ms`: that is not a
+  word end, it is the emitting frame plus one frame, so every single-token word
+  reported 80 ms of duration no matter its true length. The Stage 4 observable
+  (present, monotonic, in-bounds) could not catch that, because a uniformly-80 ms
+  answer satisfies all three. Removed from `decoder.cpp` and `capabilities.cpp`
+  rather than shipped; see Known Limitations for the reinstatement bar.
+
+  The lesson generalizes: a structural timestamp check passes on output that is
+  structurally perfect and semantically meaningless. Any future timestamp capability
+  in this repo needs an observable that would fail on constant-width words.
