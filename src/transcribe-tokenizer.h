@@ -20,6 +20,8 @@
 //   - encode(): UTF-8 text -> token ids ("gpt2" only; others return
 //     NOT_IMPLEMENTED). Runs the pretokenizer, byte-level encodes each
 //     pretoken, then greedily applies BPE merges in rank order.
+//   - canonicalize_bpe(): decode a SentencePiece BPE hypothesis, normalize
+//     its whitespace, and re-tokenize it with the loaded piece scores.
 
 #pragma once
 
@@ -182,6 +184,18 @@ class Tokenizer {
     //   TRANSCRIBE_ERR_GGUF            if "gpt2" is loaded without
     //                                  merges (the encoder needs them).
     transcribe_status encode(const std::string & text, std::vector<int32_t> & out_ids) const;
+
+    // Canonicalize an already-decoded SentencePiece BPE hypothesis. This is
+    // intentionally narrower than encode(): decoded model output has already
+    // passed through the model's SentencePiece normalizer, so only the
+    // whitespace normalization needed to reconstruct the escaped-space input
+    // is performed here. "unigram" and all non-BPE models return
+    // TRANSCRIBE_ERR_NOT_IMPLEMENTED.
+    transcribe_status canonicalize_bpe(const int * ids, int n, std::vector<int32_t> & out_ids) const;
+
+    // True when canonicalize_bpe() has the SentencePiece BPE model and score
+    // table it needs. Decode-only BPE tokenizers may legitimately omit scores.
+    bool has_bpe_canonicalizer() const { return model_ == "bpe" && scores_.size() == tokens_.size(); }
 
     // Identification + special token ids. -1 if the corresponding key
     // was absent from the GGUF.
