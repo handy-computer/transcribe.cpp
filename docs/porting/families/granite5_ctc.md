@@ -249,9 +249,9 @@ apart here unnoticed.
    colliding conceptually with `encoder.out`, which is a different tensor entirely.
 3. **`conv.pointwise_lin{1,2}` are `nn.Linear` here, not `Conv1d`** — 2-D
    `[out, in]`, no trailing kernel axis, unlike NeMo's conformer. They are the same
-   1x1 operator, so they keep the `conv.*` names, which routes them to the ConvPw
-   quant bucket (F16 at a BF16 reference, what the loader's `GET_CONV` wants). Stage 4
-   must not expect granite 4.x's 3-D `[1, in, out]` layout for these two slots.
+   1x1 operator, so they keep the `conv.*` names, but their 2-D layout routes them to
+   the Linear quant bucket. The loader correspondingly uses `GET_LIN`; Stage 4 must
+   not expect granite 4.x's 3-D `[1, in, out]` layout for these two slots.
 4. **`num_batches_tracked` is dropped** (16 I64 scalars, training-only counters).
 5. **The frontend buffers are baked from torchaudio, not librosa.** The reference
    front-end *is* `torchaudio.transforms.MelSpectrogram`, so
@@ -356,7 +356,7 @@ verbatim (the converter's fused `attn.kv` is what makes that possible),
 `conformer::macaron_ff_residual`, `conformer::fused_batch_norm`,
 `conformer::conv_2d_dw_direct_f32`, and `transcribe::MelFrontend`.
 
-### Four things that were not reusable
+### Three things that were not reusable
 
 1. **Frame-count override on the frontend.** The reference emits
    `2*ceil(mel_frames/2)` mel frames, which equals `n_frames-1` when
@@ -377,15 +377,6 @@ verbatim (the converter's fused `attn.kv` is what makes that possible),
    backend works), then `x = pooled + conv_out[:len(pooled)]`. The stride-2
    conv emits `ceil(T/2)` and the pooled residual `floor(T/2)`, so the conv
    output is trimmed down — never the reverse.
-4. **Word boundaries.** parakeet's CTC result builder splits on the
-   SentencePiece marker `▁` (`E2 96 81`), which does not exist in this
-   byte-level BPE vocabulary; a word opens on `Ġ` (`C4 A0`) instead, and
-   the first token of an utterance carries no marker at all. Reusing the
-   parakeet predicate yields one word spanning the whole clip. The
-   aggregation lives in `decoder.cpp` rather than being factored out of
-   `src/arch/parakeet/`, to keep a shipped family out of this port's blast
-   radius.
-
 ### Batch path
 
 `run_batch()` is a real parallel path: per-utterance frontends run on a

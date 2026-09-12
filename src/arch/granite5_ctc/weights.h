@@ -76,21 +76,21 @@ struct Granite5CtcHParams {
     int32_t blank_id = 0;
 
     // Frontend (torchaudio MelSpectrogram + deltas + frame stacking).
-    std::string fe_type;                    // "mel"
-    int32_t     fe_num_mels        = 0;     // 80
-    int32_t     fe_sample_rate     = 0;     // 16000
-    int32_t     fe_n_fft           = 0;     // 512
-    int32_t     fe_win_length      = 0;     // 400
-    int32_t     fe_hop_length      = 0;     // 160
-    std::string fe_window;                  // "hann_periodic"
-    std::string fe_normalize;               // "per_utterance"
-    std::string fe_pad_mode;                // "reflect"
-    std::string fe_mel_norm;                // "htk"
-    float       fe_dither          = 0.0f;  // 0.0
-    bool        fe_deltas          = true;
-    int32_t     fe_delta_win_length = 0;    // 3
-    float       fe_logmel_floor_db  = 0.0f; // 8.0
-    int32_t     fe_stack_factor     = 0;    // 2
+    std::string fe_type;                     // "mel"
+    int32_t     fe_num_mels    = 0;          // 80
+    int32_t     fe_sample_rate = 0;          // 16000
+    int32_t     fe_n_fft       = 0;          // 512
+    int32_t     fe_win_length  = 0;          // 400
+    int32_t     fe_hop_length  = 0;          // 160
+    std::string fe_window;                   // "hann_periodic"
+    std::string fe_normalize;                // "per_utterance"
+    std::string fe_pad_mode;                 // "reflect"
+    std::string fe_mel_norm;                 // "htk"
+    float       fe_dither           = 0.0f;  // 0.0
+    bool        fe_deltas           = true;
+    int32_t     fe_delta_win_length = 0;     // 3
+    float       fe_logmel_floor_db  = 0.0f;  // 8.0
+    int32_t     fe_stack_factor     = 0;     // 2
 };
 
 transcribe_status read_granite5_ctc_hparams(const gguf_context * gguf, Granite5CtcHParams & hp);
@@ -113,12 +113,12 @@ struct Granite5CtcEncTop {
 // FFN linears, not the attention projections).
 struct Granite5CtcEncBlock {
     // FF1 (first macaron half).
-    ggml_tensor * norm_ff1_w  = nullptr;  // [hidden]
-    ggml_tensor * norm_ff1_b  = nullptr;
-    ggml_tensor * ff1_lin1_w  = nullptr;  // [hidden, intermediate]
-    ggml_tensor * ff1_lin1_b  = nullptr;  // [intermediate]
-    ggml_tensor * ff1_lin2_w  = nullptr;  // [intermediate, hidden]
-    ggml_tensor * ff1_lin2_b  = nullptr;  // [hidden]
+    ggml_tensor * norm_ff1_w = nullptr;  // [hidden]
+    ggml_tensor * norm_ff1_b = nullptr;
+    ggml_tensor * ff1_lin1_w = nullptr;  // [hidden, intermediate]
+    ggml_tensor * ff1_lin1_b = nullptr;  // [intermediate]
+    ggml_tensor * ff1_lin2_w = nullptr;  // [intermediate, hidden]
+    ggml_tensor * ff1_lin2_b = nullptr;  // [hidden]
 
     // Block-local Shaw self-attention. attn.kv is the converter-side
     // concatenation of k_proj and v_proj (K rows first).
@@ -161,8 +161,8 @@ struct Granite5CtcEncBlock {
 };
 
 struct Granite5CtcWeights {
-    Granite5CtcEncTop                    enc_top;
-    std::vector<Granite5CtcEncBlock>     enc_blocks;
+    Granite5CtcEncTop                enc_top;
+    std::vector<Granite5CtcEncBlock> enc_blocks;
 
     // Baked frontend buffers (optional; absent on a hand-built GGUF).
     ggml_tensor * frontend_mel_filterbank = nullptr;  // [n_freq, n_mels]

@@ -113,8 +113,8 @@ transcribe_status compute_encoder_input(const transcribe::MelFrontend & mel,
     // frame). The per-utterance max is taken over the emitted frames only,
     // matching `mel[..., :num_frames].amax()`.
     std::vector<float> logmel;
-    int                n_mels     = 0;
-    int                n_frames   = 0;
+    int                n_mels   = 0;
+    int                n_frames = 0;
     if (const transcribe_status st = mel.compute(mel_pcm, static_cast<size_t>(mel_n), logmel, n_mels, n_frames,
                                                  n_threads, static_cast<int>(num_frames));
         st != TRANSCRIBE_OK) {
@@ -186,15 +186,15 @@ transcribe_status compute_encoder_input(const transcribe::MelFrontend & mel,
 // Shaw indices + pad mask.
 
 std::vector<int32_t> precompute_pos_rows(int context_size, int max_pos_emb) {
-    const int n = 2 * context_size - 1;
+    const int            n = 2 * context_size - 1;
     std::vector<int32_t> rows(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
         // rel_shift reads index d = key - query + context_size - 1, so the
         // relative offset (query - key) this slot must carry is
         // context_size - 1 - d.
-        int d = context_size - 1 - i;
-        d     = std::max(d, -context_size);
-        d     = std::min(d, context_size);
+        int d                        = context_size - 1 - i;
+        d                            = std::max(d, -context_size);
+        d                            = std::min(d, context_size);
         rows[static_cast<size_t>(i)] = static_cast<int32_t>(d + max_pos_emb);
     }
     return rows;
@@ -216,8 +216,8 @@ std::vector<float> precompute_pad_mask(int context_size, int t_len, const std::v
         // non-real key either way.
         const int real = real_lens.empty() ? t_len : std::min(real_lens[b], t_len);
         for (int blk = 0; blk < n_blocks; ++blk) {
-            const int    blk_start = blk * context_size;
-            const int    first_pad = std::max(0, std::min(context_size, real - blk_start));
+            const int blk_start = blk * context_size;
+            const int first_pad = std::max(0, std::min(context_size, real - blk_start));
             if (first_pad >= context_size) {
                 continue;  // every key in this block is real
             }
@@ -254,13 +254,13 @@ namespace {
 //
 // Unlike granite 4.x the two pointwise weights are 2-D nn.Linear here,
 // so they go straight into mul_mat with no reshape.
-ggml_tensor * conv_module(ggml_context *               ctx,
-                          ggml_tensor *                x,
-                          const Granite5CtcEncBlock &  b,
-                          int                          conv_kernel,
-                          int                          inner_dim,
-                          int                          stride,
-                          ggml_tensor *                frame_mask) {
+ggml_tensor * conv_module(ggml_context *              ctx,
+                          ggml_tensor *               x,
+                          const Granite5CtcEncBlock & b,
+                          int                         conv_kernel,
+                          int                         inner_dim,
+                          int                         stride,
+                          ggml_tensor *               frame_mask) {
     const int64_t d_model = x->ne[0];
     const int64_t T       = x->ne[1];
     const int64_t B       = x->ne[2];
@@ -273,7 +273,7 @@ ggml_tensor * conv_module(ggml_context *               ctx,
     // GLU over ne[0]: first half * sigmoid(second half). Matches
     // F.glu(dim=-1) on the reference's [B, T, 2*inner] layout.
     {
-        ggml_tensor * gate  = ggml_view_3d(ctx, x, inner_dim, T, B, x->nb[1], x->nb[2], /*offset=*/0);
+        ggml_tensor * gate = ggml_view_3d(ctx, x, inner_dim, T, B, x->nb[1], x->nb[2], /*offset=*/0);
         ggml_tensor * value =
             ggml_view_3d(ctx, x, inner_dim, T, B, x->nb[1], x->nb[2], inner_dim * ggml_element_size(x));
         x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
@@ -351,8 +351,8 @@ ggml_tensor * mean_pool_pairs(ggml_context * ctx, ggml_tensor * x) {
     const int64_t T      = x->ne[1];
     const int64_t B      = x->ne[2];
     const int64_t T_half = T / 2;
-    ggml_tensor * even = ggml_cont(ctx, ggml_view_3d(ctx, x, C, T_half, B, 2 * x->nb[1], x->nb[2], /*offset=*/0));
-    ggml_tensor * odd  = ggml_cont(ctx, ggml_view_3d(ctx, x, C, T_half, B, 2 * x->nb[1], x->nb[2], x->nb[1]));
+    ggml_tensor * even   = ggml_cont(ctx, ggml_view_3d(ctx, x, C, T_half, B, 2 * x->nb[1], x->nb[2], /*offset=*/0));
+    ggml_tensor * odd    = ggml_cont(ctx, ggml_view_3d(ctx, x, C, T_half, B, 2 * x->nb[1], x->nb[2], x->nb[1]));
     return ggml_scale(ctx, ggml_add(ctx, even, odd), 0.5f);
 }
 
@@ -413,7 +413,7 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
     // floor(len / 2) — the same rounding the residual pooling uses, so a
     // frame pooled from one real and one pad source lands outside the new
     // valid range instead of silently entering it.
-    std::vector<int> stage_lens = real_lens.empty() ? std::vector<int>{ T_enc } : real_lens;
+    std::vector<int>              stage_lens = real_lens.empty() ? std::vector<int>{ T_enc } : real_lens;
     std::vector<std::vector<int>> stage_real;
     {
         int t = T_enc;
@@ -448,7 +448,7 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
                 }
             }
         }
-        eb.t_out        = t;
+        eb.t_out         = t;
         eb.real_lens_out = stage_lens;
     }
 
@@ -586,9 +586,8 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
             ggml_tensor * mid_logits = linear(ctx, x, weights.enc_top.ctc_proj_w, weights.enc_top.ctc_proj_b);
             record("enc.ctc.mid_logits", mid_logits);
 
-            ggml_tensor * mid_soft = ggml_soft_max(ctx, mid_logits);
-            ggml_tensor * injection =
-                linear(ctx, mid_soft, weights.enc_top.ctc_bypass_w, weights.enc_top.ctc_bypass_b);
+            ggml_tensor * mid_soft  = ggml_soft_max(ctx, mid_logits);
+            ggml_tensor * injection = linear(ctx, mid_soft, weights.enc_top.ctc_bypass_w, weights.enc_top.ctc_bypass_b);
             record("enc.ctc.mid_injection", injection);
 
             x = ggml_add(ctx, x, injection);

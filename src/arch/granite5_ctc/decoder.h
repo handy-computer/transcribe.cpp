@@ -35,18 +35,14 @@ namespace transcribe::granite5_ctc {
 
 // One surviving CTC emission.
 struct CtcToken {
-    int   id       = 0;
-    float p        = 0.0f;  // softmax probability of the winning class
-    int   frame    = 0;     // encoder frame the label first appeared on
+    int   id    = 0;
+    float p     = 0.0f;  // softmax probability of the winning class
+    int   frame = 0;     // encoder frame the label first appeared on
 };
 
 // Greedy argmax + CTC collapse over [vocab, T] logits in row-major
 // [T, vocab] host order (i.e. ggml ne = [vocab, T] read contiguously).
-void ctc_greedy_collapse(const float *           logits,
-                         int                     t_len,
-                         int                     vocab,
-                         int                     blank_id,
-                         std::vector<CtcToken> & out_tokens);
+void ctc_greedy_collapse(const float * logits, int t_len, int vocab, int blank_id, std::vector<CtcToken> & out_tokens);
 
 // Milliseconds per encoder frame. Every subsampling block halves the
 // rate on top of the frontend's hop and frame stacking:

@@ -37,6 +37,7 @@ transcribe_status read_granite5_ctc_hparams(const gguf_context * gguf, Granite5C
         const char * key;
         int32_t *    slot;
     };
+
     const U32Field enc_fields[] = {
         { "stt.granite5_ctc.encoder.n_layers",         &hp.enc_n_layers         },
         { "stt.granite5_ctc.encoder.hidden",           &hp.enc_hidden           },
@@ -94,21 +95,20 @@ transcribe_status read_granite5_ctc_hparams(const gguf_context * gguf, Granite5C
         return st;
     }
     const U32Field fe_fields[] = {
-        { "stt.frontend.sample_rate",       &hp.fe_sample_rate      },
-        { "stt.frontend.num_mels",          &hp.fe_num_mels         },
-        { "stt.frontend.n_fft",             &hp.fe_n_fft            },
-        { "stt.frontend.win_length",        &hp.fe_win_length       },
-        { "stt.frontend.hop_length",        &hp.fe_hop_length       },
-        { "stt.frontend.delta_win_length",  &hp.fe_delta_win_length },
-        { "stt.frontend.stack_factor",      &hp.fe_stack_factor     },
+        { "stt.frontend.sample_rate",      &hp.fe_sample_rate      },
+        { "stt.frontend.num_mels",         &hp.fe_num_mels         },
+        { "stt.frontend.n_fft",            &hp.fe_n_fft            },
+        { "stt.frontend.win_length",       &hp.fe_win_length       },
+        { "stt.frontend.hop_length",       &hp.fe_hop_length       },
+        { "stt.frontend.delta_win_length", &hp.fe_delta_win_length },
+        { "stt.frontend.stack_factor",     &hp.fe_stack_factor     },
     };
     for (const auto & f : fe_fields) {
         if (auto st = read_required_u32_kv(gguf, f.key, kFamilyTag, *f.slot); st != TRANSCRIBE_OK) {
             return st;
         }
     }
-    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", kFamilyTag, hp.fe_window);
-        st != TRANSCRIBE_OK) {
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", kFamilyTag, hp.fe_window); st != TRANSCRIBE_OK) {
         return st;
     }
     if (auto st = read_required_string_kv(gguf, "stt.frontend.normalize", kFamilyTag, hp.fe_normalize);
@@ -184,8 +184,7 @@ transcribe_status read_granite5_ctc_hparams(const gguf_context * gguf, Granite5C
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_context_size <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite5_ctc: context_size must be positive, got %d",
-                hp.enc_context_size);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite5_ctc: context_size must be positive, got %d", hp.enc_context_size);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_self_cond_layer < 0 || hp.enc_self_cond_layer > hp.enc_n_layers) {
@@ -215,11 +214,11 @@ constexpr const char * kTag = kFamilyTag;
 
 #define GET_CONV(slot, name, ...)                                                                              \
     do {                                                                                                       \
-        ggml_tensor * _t = transcribe::weights::find_tensor(ctx_meta, (name), { TRANSCRIBE_QUANT_CONV_TYPES },  \
+        ggml_tensor * _t = transcribe::weights::find_tensor(ctx_meta, (name), { TRANSCRIBE_QUANT_CONV_TYPES }, \
                                                             { __VA_ARGS__ }, kTag);                            \
-        if (_t == nullptr)                                                                                      \
-            return TRANSCRIBE_ERR_GGUF;                                                                         \
-        (slot) = _t;                                                                                            \
+        if (_t == nullptr)                                                                                     \
+            return TRANSCRIBE_ERR_GGUF;                                                                        \
+        (slot) = _t;                                                                                           \
     } while (0)
 
 #define GET_LIN(slot, name, ...)                                                                                 \

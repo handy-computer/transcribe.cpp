@@ -51,10 +51,10 @@
     "languages": ["en"],
     "language_detection": false,
     "translation": false,
-    "timestamps": ["word"],
+    "timestamps": [],
     "streaming": false,
     "speaker_diarization": false,
-    "comment": "Monolingual English encoder-CTC. Word timestamps are in scope by intake sign-off even though upstream does not advertise them: one encoder frame is exactly 80 ms (8 * 160 / 16000) and the greedy collapse yields the emitting frame per surviving token. Upstream publishes benchmarks only as bar-chart images; the single numeric public figure is 5.00% aggregate Open ASR leaderboard WER. Stage 4 and Stage 7 gate against the measured Oracle reference baseline on LibriSpeech test-clean - see reports/wer/granite-speech-5.0-470m-turboctc-REF.test-clean.{jsonl,score.json}."
+    "comment": "Monolingual English encoder-CTC with no timestamp surface. CTC emission frames do not provide trustworthy word durations, and upstream publishes no alignment reference, so segment, word, and token timestamp requests are unsupported. Upstream publishes benchmarks only as bar-chart images; the single numeric public figure is 5.00% aggregate Open ASR leaderboard WER. Stage 4 and Stage 7 gate against the measured Oracle reference baseline on LibriSpeech test-clean - see reports/wer/granite-speech-5.0-470m-turboctc-REF.test-clean.{jsonl,score.json}."
   },
   "tolerance_file": "tests/tolerances/granite5_ctc.json",
   "transcript_compare": "normalized",

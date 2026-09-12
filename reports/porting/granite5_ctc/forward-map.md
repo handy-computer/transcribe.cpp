@@ -72,10 +72,10 @@ required (the Stage-4 mid-generation rule is scoped to KV-cache decoders).
 | Transcribe (explicit lang hint) | English-only; no language conditioning anywhere in the graph | `--language en` accepted and ignored | Transcribe (explicit lang hint) |
 | Transcribe (auto/no hint) | identical forward | identical output to the hinted run | Transcribe (auto/no hint) |
 | Batch (offline) | `processor(list_of_clips)` builds a padded batch + `attention_mask`; the mask halves after each subsampling block and masks pad key columns | `run_batch()` with per-utterance frame counts | Batch (offline) |
-| Word timestamps | not advertised; CTC frame alignment only | `t0 = 80ms * emit_frame`, `t1 = t0 + 80ms`, words split on the `Ġ` byte-level marker, `t1` clamped to clip duration | Word timestamps |
+| Word timestamps | not advertised; CTC emission peaks are not word durations | unsupported | Word timestamps |
 | Language detection | none | unsupported | Language detection |
 | Translate | none | unsupported | Translate |
-| Segment timestamps | none | one whole-clip segment | Segment timestamps |
+| Result segmentation | one decoded string | one untimed whole-clip text segment | Segment timestamps |
 | Streaming | non-streaming; the frontend is centered and the per-utterance log-mel floor is global | unsupported | Streaming |
 | Speaker diarization | none | unsupported | Speaker diarization |
 

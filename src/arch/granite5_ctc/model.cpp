@@ -99,7 +99,8 @@ transcribe_status fuse_batch_norm(Granite5CtcModel & m) {
     ggml_init_params params   = { ctx_size, nullptr, /*no_alloc=*/true };
     m.bn_fused_ctx            = ggml_init(params);
     if (m.bn_fused_ctx == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite5_ctc: BatchNorm-fusion context allocation failed — out of memory.");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite5_ctc: BatchNorm-fusion context allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -176,9 +177,9 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         cfg.pre_emphasis = 0.0f;
         cfg.f_min        = 0.0f;
         cfg.f_max        = static_cast<float>(m->hparams.fe_sample_rate) / 2.0f;
-        cfg.pad_mode     = m->hparams.fe_pad_mode;    // "reflect"
-        cfg.window_type  = m->hparams.fe_window;      // "hann_periodic"
-        cfg.normalize    = m->hparams.fe_normalize;   // "per_utterance"
+        cfg.pad_mode     = m->hparams.fe_pad_mode;   // "reflect"
+        cfg.window_type  = m->hparams.fe_window;     // "hann_periodic"
+        cfg.normalize    = m->hparams.fe_normalize;  // "per_utterance"
 
         using R               = transcribe::load_common::ReadF32Result;
         const size_t fb_elems = static_cast<size_t>(cfg.num_mels) * static_cast<size_t>(cfg.n_fft / 2 + 1);
@@ -326,7 +327,7 @@ transcribe_status run_encoder(Granite5CtcSession *     cc,
         if (!real_lens.empty()) {
             // Recover this stage's per-utterance lengths by replaying the
             // halving down to the stage's own t_len.
-            lens = real_lens;
+            lens  = real_lens;
             int t = T_max;
             while (t > stage.t_len) {
                 for (int & v : lens) {
@@ -399,10 +400,7 @@ int64_t clip_ms_for(const Granite5CtcHParams & hp, int n_samples) {
     return (hp.fe_sample_rate > 0) ? (static_cast<int64_t>(n_samples) * 1000 / hp.fe_sample_rate) : 0;
 }
 
-transcribe_status encode_and_decode(Granite5CtcSession * cc,
-                                    Granite5CtcModel *   cm,
-                                    const float *        pcm,
-                                    int                  n_samples) {
+transcribe_status encode_and_decode(Granite5CtcSession * cc, Granite5CtcModel * cm, const float * pcm, int n_samples) {
     const auto & hp = cm->hparams;
 
     const int64_t t_mel_start = ggml_time_us();
@@ -494,8 +492,8 @@ transcribe_status run_batch(transcribe_session *          session,
     std::vector<std::vector<float>> feats(static_cast<size_t>(n));
     std::vector<int>                lens(static_cast<size_t>(n), 0);
 
-    const int64_t t_mel_start = ggml_time_us();
-    const bool    all_ok      = transcribe::parallel_for_all(n, outer_threads, [&](int i) -> bool {
+    const int64_t t_mel_start  = ggml_time_us();
+    const bool    all_ok       = transcribe::parallel_for_all(n, outer_threads, [&](int i) -> bool {
         if (pcm[i] == nullptr || n_samples[i] <= 0) {
             return false;
         }
@@ -527,14 +525,13 @@ transcribe_status run_batch(transcribe_session *          session,
 
         EncoderBuild eb{};
         if (auto st = run_encoder(cc, cm, T_max, lens, eb); st == TRANSCRIBE_OK) {
-            const int    t_out    = static_cast<int>(eb.ctc_logits->ne[1]);
-            const int    vocab    = static_cast<int>(eb.ctc_logits->ne[0]);
+            const int    t_out     = static_cast<int>(eb.ctc_logits->ne[1]);
+            const int    vocab     = static_cast<int>(eb.ctc_logits->ne[0]);
             const size_t utt_elems = static_cast<size_t>(t_out) * vocab;
             // Full read then host-slice: non-zero-offset backend reads are
             // not reliable across every backend.
             cc->logits_buf.assign(utt_elems * static_cast<size_t>(n), 0.0f);
-            ggml_backend_tensor_get(eb.ctc_logits, cc->logits_buf.data(), 0,
-                                    cc->logits_buf.size() * sizeof(float));
+            ggml_backend_tensor_get(eb.ctc_logits, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
 
             return transcribe::decode_batch_slices(
                 cc, n, cc->logits_buf.data(), utt_elems, cc->t_encode_us, total_mel_us,

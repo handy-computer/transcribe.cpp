@@ -66,11 +66,7 @@ void collapse_whitespace(std::string & s) {
 
 }  // namespace
 
-void ctc_greedy_collapse(const float *           logits,
-                         int                     t_len,
-                         int                     vocab,
-                         int                     blank_id,
-                         std::vector<CtcToken> & out_tokens) {
+void ctc_greedy_collapse(const float * logits, int t_len, int vocab, int blank_id, std::vector<CtcToken> & out_tokens) {
     out_tokens.clear();
     if (logits == nullptr || t_len <= 0 || vocab <= 0) {
         return;
@@ -122,8 +118,8 @@ void build_result(transcribe_session &          cc,
     cc.tokens.reserve(tokens.size());
     for (const CtcToken & t : tokens) {
         transcribe_session::TokenEntry te;
-        te.id = t.id;
-        te.p  = t.p;
+        te.id   = t.id;
+        te.p    = t.p;
         // No timestamps: t0_ms/t1_ms stay 0. The emitting frame is known
         // (t.frame) but a token's true extent is not -- CTC is peaky, so
         // the label occupies the single frame where it wins regardless of
@@ -133,8 +129,8 @@ void build_result(transcribe_session &          cc,
     }
 
     if (cc.tokens.empty()) {
-        cc.has_result   = true;
-        cc.result_kind  = TRANSCRIBE_TIMESTAMPS_NONE;
+        cc.has_result  = true;
+        cc.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         return;
     }
 

@@ -127,8 +127,8 @@ std::vector<float> precompute_frame_mask(int t_len, const std::vector<int> & rea
 // One attention geometry. There is one of these per distinct sequence
 // length in the forward (3 on this variant: T0, T0/2, T0/4).
 struct AttnStage {
-    int           t_len      = 0;  // sequence length entering attention
-    int           n_blocks   = 0;  // ceil(t_len / context_size)
+    int           t_len      = 0;        // sequence length entering attention
+    int           n_blocks   = 0;        // ceil(t_len / context_size)
     ggml_tensor * pad_mask   = nullptr;  // [ctx, ctx, n_blocks * B] f32, graph input
     ggml_tensor * zero_pad   = nullptr;  // [hidden, t_pad - t_len, B] f32 zeros, or null
     // Only built when the batch has uneven lengths: [1, t_len, B] f32.
@@ -137,10 +137,10 @@ struct AttnStage {
 
 struct EncoderBuild {
     // Graph inputs (uploaded by the caller after allocation).
-    ggml_tensor * feats_in       = nullptr;  // [input_dim, T_enc]
-    ggml_tensor * pos_rows = nullptr;  // [2*ctx-1] i32, shared
+    ggml_tensor * feats_in = nullptr;    // [input_dim, T_enc]
+    ggml_tensor * pos_rows = nullptr;    // [2*ctx-1] i32, shared
 
-    std::vector<AttnStage> stages;   // one per distinct sequence length
+    std::vector<AttnStage> stages;       // one per distinct sequence length
     std::vector<int32_t>   block_stage;  // block index -> stages[] index
 
     // Graph outputs.

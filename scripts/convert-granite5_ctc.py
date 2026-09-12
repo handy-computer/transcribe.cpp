@@ -319,8 +319,8 @@ ENC_BLOCK_MAP = [
     # Conv module: pointwise -> GLU -> depthwise(stride 1 or 2) -> BN -> SiLU
     # -> pointwise. pointwise_lin{1,2} are nn.Linear here (2-D [out, in]),
     # not Conv1d, but they are the same 1x1 operator the conformer helper
-    # expects; keeping the conv.* names routes them to the ConvPw quant
-    # bucket (F16 at a BF16 reference, which the loader's GET_CONV wants).
+    # expects. The 2-D layout intentionally routes them to the Linear quant
+    # bucket, and the loader accepts them with GET_LIN.
     ("norm_conv.weight",             "norm_conv.weight"),
     ("norm_conv.bias",               "norm_conv.bias"),
     ("conv.pointwise_lin1.weight",   "conv.pointwise1.weight"),
@@ -494,10 +494,10 @@ def main(argv: list[str]) -> int:
     writer.add_bool("stt.capability.lang_detect", False)
     writer.add_bool("stt.capability.streaming", False)
     writer.add_bool("stt.capability.speaker_diarization", False)
-    # CTC frame alignment gives word timings for free; see the family doc's
-    # Capability Validation table (word timestamps are MUST PASS at Stage 4).
-    writer.add_bool("stt.capability.timestamps", True)
-    writer.add_bool("stt.capability.word_timestamps", True)
+    # Upstream exposes no timing alignment. CTC emission peaks are not word
+    # durations, so the runtime intentionally rejects every timestamp request.
+    writer.add_bool("stt.capability.timestamps", False)
+    writer.add_bool("stt.capability.word_timestamps", False)
 
     # ---- stt.granite5_ctc.* ----
     writer.add_uint32("stt.granite5_ctc.encoder.n_layers",        hp["enc_n_layers"])

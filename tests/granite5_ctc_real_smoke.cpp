@@ -171,8 +171,8 @@ int main() {
     // --- 4: family invariants -----------------------------------------
     transcribe_capabilities caps_buf;
     transcribe_capabilities_init(&caps_buf);
-    const bool                     caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps   = caps_ok ? &caps_buf : nullptr;
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->native_sample_rate == 16000);
@@ -220,7 +220,7 @@ int main() {
     {
         int n_tensors = 0;
         for (ggml_tensor * t = ggml_get_first_tensor(g5->ctx_meta); t != nullptr;
-             t              = ggml_get_next_tensor(g5->ctx_meta, t)) {
+             t               = ggml_get_next_tensor(g5->ctx_meta, t)) {
             ++n_tensors;
         }
         CHECK_EQ_INT(n_tensors, 520);
