@@ -622,8 +622,11 @@ def convert(variant_key: str, slug: str, out_path: Path, repo_id: str | None = N
         repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
     )
 
-    # ----- stt.variant + head_kind -----
+    # ----- stt.variant + capability surface + head_kind -----
     writer.add_string("stt.variant", profile["variant"])
+    writer.add_bool("stt.capability.translate", False)
+    writer.add_bool("stt.capability.lang_detect", False)
+    writer.add_bool("stt.capability.streaming", False)
     writer.add_string("stt.gigaam.head_kind", head_kind)
 
     # ----- tokenizer.ggml.* -----

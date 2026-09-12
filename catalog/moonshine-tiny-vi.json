@@ -1,0 +1,46 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "moonshine-tiny-vi",
+  "family": "moonshine",
+  "display_name": "moonshine-tiny-vi",
+  "params": 27092736,
+  "license": {
+    "spdx": "mit",
+    "display": "MIT"
+  },
+  "upstream_repo": "UsefulSensors/moonshine-tiny-vi",
+  "upstream_commit": "d4d20da",
+  "published_repo": "handy-computer/moonshine-tiny-vi-gguf",
+  "languages": ["vi"],
+  "long_form_strategy": "soft-window",
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":false}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"moonshine-tiny-vi-F32.gguf","size_bytes":109969088},
+    {"quant":"F16","filename":"moonshine-tiny-vi-F16.gguf","size_bytes":59244224},
+    {"quant":"Q8_0","filename":"moonshine-tiny-vi-Q8_0.gguf","size_bytes":35466944}
+  ],
+  "accuracy_benchmarks": [
+    {"dataset":"fleurs","split":"test","language":"vi","quant":"F32","metric":"wer","err_pct":13.16,"ci95":[12.42,13.96],"n_utts":857,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2793,"del":227,"ins":404},"empty_hyp":0,"utts_over_50pct":13},
+    {"dataset":"fleurs","split":"test","language":"vi","quant":"F16","metric":"wer","err_pct":13.17,"ci95":[12.44,13.97],"n_utts":857,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2793,"del":227,"ins":407},"empty_hyp":0,"utts_over_50pct":13},
+    {"dataset":"fleurs","split":"test","language":"vi","quant":"Q8_0","metric":"wer","err_pct":13.16,"ci95":[12.41,13.96],"n_utts":857,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2791,"del":230,"ins":404},"empty_hyp":0,"utts_over_50pct":12},
+    {"dataset":"fleurs","split":"test","language":"vi","quant":"Q8_0","metric":"wer","err_pct":13.37,"ci95":[12.57,14.23],"n_utts":857,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2801,"del":279,"ins":400},"empty_hyp":1,"utts_over_50pct":13}
+  ],
+  "speed_benchmarks": [
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":97.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":210.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":74.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":180.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":23.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":68.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":35.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":77.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null}
+  ]
+}

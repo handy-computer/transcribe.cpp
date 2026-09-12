@@ -1462,8 +1462,8 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
 
     # ----- stt.variant + capability KV -----
     writer.add_string("stt.variant", profile["variant"])
-    if profile["lang_detect"]:
-        writer.add_bool("stt.capability.lang_detect", True)
+    writer.add_bool("stt.capability.translate", False)
+    writer.add_bool("stt.capability.lang_detect", profile["lang_detect"])
 
     # Streaming capability. Derived from the encoder attention geometry so
     # the header bool can never disagree with what the C++ loader computes:

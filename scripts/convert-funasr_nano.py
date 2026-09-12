@@ -611,8 +611,11 @@ def convert(model_dir: Path, out_path: Path, variant: str, display_name: str, re
         ),
     )
 
-    # ----- stt.variant -----
+    # ----- stt.variant + capability surface -----
     writer.add_string("stt.variant", variant)
+    writer.add_bool("stt.capability.translate", False)
+    writer.add_bool("stt.capability.lang_detect", False)
+    writer.add_bool("stt.capability.streaming", False)
 
     # ----- tokenizer.ggml.* -----
     # Qwen3 byte-level BPE — llama.cpp tags this as "gpt2".

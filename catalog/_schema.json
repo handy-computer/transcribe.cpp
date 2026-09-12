@@ -6,8 +6,9 @@
   "type": "object",
   "required": [
     "schema", "variant", "family", "display_name", "params", "license",
-    "upstream_repo", "published_repo", "languages", "long_form_strategy",
-    "capabilities", "downloads", "accuracy_benchmarks", "speed_benchmarks"
+    "upstream_repo", "upstream_commit", "published_repo", "languages",
+    "long_form_strategy", "capabilities", "downloads", "accuracy_benchmarks",
+    "speed_benchmarks"
   ],
   "properties": {
     "schema": {
@@ -47,7 +48,11 @@
     },
     "upstream_repo": {
       "type": "string",
-      "description": "The upstream model this port derives from. Which upstream commit was converted is a bring-up fact and lives in intake.json."
+      "description": "The upstream model this port derives from."
+    },
+    "upstream_commit": {
+      "type": "string",
+      "description": "The upstream revision used to produce the published GGUFs."
     },
     "published_repo": {
       "type": ["string","null"],
@@ -172,7 +177,7 @@
         },
         "diarize": {
           "$ref": "#/$defs/capability",
-          "description": "Speaker-attributed output. Note the scoring consequence: a diarizing model emits turn markup plain references do not contain, so its transcription accuracy must be scored under a dediarizing recipe.",
+          "description": "Speaker-attributed output. A diarizing model emits turn markup plain references do not contain, so transcription scoring must remove that markup.",
           "properties": {
             "max_speakers": {
               "type": ["integer","null"]
@@ -234,12 +239,12 @@
     },
     "accuracy_benchmarks": {
       "type": "array",
-      "description": "One row per measured cell. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark. Identity first, result second, provenance last, so the left of every row reads 'what ran and what did it score'. The artifact a row came from is reconstructible from the row itself, so no path is stored.",
+      "description": "One row per measured cell. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark. Identity first and result second, so every row reads 'what ran and what did it score'.",
       "items": {
         "type": "object",
         "required": [
           "dataset", "split", "language", "quant", "metric", "err_pct",
-          "ci95", "n_utts", "recipe", "engine_sha"
+          "ci95", "n_utts", "batch_size", "timestamps", "engine_sha"
         ],
         "properties": {
           "dataset": {
@@ -279,9 +284,14 @@
             "type": "integer",
             "minimum": 1
           },
-          "recipe": {
-            "type": "string",
-            "description": "Key in catalog/_recipes.json. Rows under different recipes are not comparable."
+          "batch_size": {
+            "type": ["integer","null"],
+            "minimum": 1,
+            "description": "Decode batch size. null when the surviving publication does not record it."
+          },
+          "timestamps": {
+            "enum": ["none","segment","word","token",null],
+            "description": "Timestamp mode used while decoding. null when the surviving publication does not record it."
           },
           "engine_sha": {
             "type": ["string","null"],
@@ -347,8 +357,8 @@
             "description": "Carried per cell so nothing downstream assumes a fixed sample set or has to look the duration up."
           },
           "total_ms": {
-            "type": "number",
-            "description": "mel + encode + decode, mean over iters after warmup."
+            "type": ["number","null"],
+            "description": "mel + encode + decode, mean over iters after warmup. null for legacy rows where only rounded xRT survives."
           },
           "xrt_compute": {
             "type": "number",

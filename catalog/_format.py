@@ -15,6 +15,7 @@ record, so they are applied ONLY to the record's own sections -- never inside
 _schema.json, where the same words are subschema keys.
 
     uv run catalog/_format.py catalog/*.json
+    uv run catalog/_format.py --check catalog/*.json
 """
 import json, pathlib, sys
 
@@ -72,6 +73,17 @@ def fmt(o, ind=0, *, row=False, row_object=False, top=False):
     return compact(o)
 
 
-for p in map(pathlib.Path, sys.argv[1:]):
-    p.write_text(fmt(json.loads(p.read_text()), top=True) + "\n")
-    print(f"{p}  {len(p.read_text().splitlines()):>4} lines")
+check = "--check" in sys.argv[1:]
+paths = [pathlib.Path(arg) for arg in sys.argv[1:] if arg != "--check"]
+bad = 0
+for p in paths:
+    current = p.read_text()
+    rendered = fmt(json.loads(current), top=True) + "\n"
+    if check:
+        if current != rendered:
+            bad += 1
+            print(f"needs formatting: {p}", file=sys.stderr)
+    else:
+        p.write_text(rendered)
+        print(f"{p}  {len(rendered.splitlines()):>4} lines")
+sys.exit(1 if bad else 0)
