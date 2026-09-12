@@ -30,12 +30,9 @@ tags:
   - ctc
 
 summary: |
-  Offline English speech-to-text. A 470M-parameter Granite Conformer encoder
-  with a self-conditioned CTC head — no autoregressive decoder, so decoding is
-  a single argmax pass. Takes a 16 kHz mono WAV and produces a transcript. Not
-  a streaming model; English only; does not translate. Block-local attention
-  makes cost linear in audio length: measured on an M4, realtime factor is flat
-  from 11 s out to 5 minutes of audio.
+  Offline English speech-to-text. A 470M parameter Granite Conformer encoder
+  with a self-conditioned CTC head.
+  Takes a 16 kHz mono WAV and produces a transcript. Not a streaming model. English only.
 
 default_quant_index: 2  # Q8_0
 
@@ -64,12 +61,7 @@ wer:
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances),
     greedy CTC decoding, no external LM. Measured reference baseline
-    (transformers, F32, CPU): 1.33%. IBM publishes no LibriSpeech test-clean
-    figure for this model (the model card ships bar charts only), so the
-    baseline here is our own reference run, not an upstream number. On this
-    split the whole quant matrix spans 7 word errors out of ~53k words and
-    every tier falls inside the reference 95% CI of [1.20, 1.47]. Not checked
-    on noisy or accented audio.
+    (transformers 5.17.0, F32, CPU): 1.33%, 95% CI [1.20, 1.47].
 
 quants:
   - name: BF16
