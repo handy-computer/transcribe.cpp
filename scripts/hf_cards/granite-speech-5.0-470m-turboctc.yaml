@@ -49,6 +49,9 @@ capabilities:
 # Speedup-over-realtime (×RT) per rig/backend, hand-authored from the bench;
 # published raw as rtf_<machine> in the metadata block.
 perf:
+  m4-max:
+    cpu: 49
+    metal: 353
   m4:
     cpu: 29
     metal: 130

@@ -3,15 +3,15 @@
 Status, per variant:
 
 - `granite-speech-5.0-470m-turboctc` (Apache-2.0): shipped (Stages 1-8; private
-  HF repo only, public flip deferred). Stage 6 bench currently covers the
-  `apple-m4` rig only; the publication rigs (Apple M4 Max, AMD Ryzen 7 PRO
-  4750U) are still pending.
-- `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0): **Stages 1-7 complete**,
-  except that Stage 6 is `INCOMPLETE — both publication rigs pending` (benched on a
-  base Apple M4 only; CJ signed off 2026-09-12 on carrying that forward). Gates A and B
-  green, `validate.py all` green, Stage 7 ref-dtype WER gate PASS (1.29% vs 1.29%
-  reference), all five quants accepted, matrix published private. Stage 8 not started;
-  it must either close the rig gap or carry an explicit user sign-off for the card.
+  HF repo only, public flip deferred). Stage 6 covers Apple M4 and Apple M4 Max;
+  the AMD Ryzen 7 PRO 4750U publication benchmark is still pending.
+- `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0): **Stages 1-7 complete**.
+  Stage 6 covers Apple M4 and Apple M4 Max; the AMD Ryzen 7 PRO 4750U publication
+  benchmark is still pending. Gates A and B are green, `validate.py all` is
+  green, the Stage 7 ref-dtype WER gate passes (1.29% vs 1.29% reference), all
+  five quants are accepted, and the matrix is published privately. Stage 8 has
+  not started; it must either close the remaining rig gap or carry an explicit
+  user sign-off for the card.
 
 Everything below that is not explicitly marked per-variant was established for
 the Apache-2.0 variant and applies unchanged to the `-nc` variant: `config.json`,
@@ -968,7 +968,7 @@ Matrix published to the private `handy-computer/granite-speech-5.0-470m-turboctc
 
 ## Benchmarks (Stage 6)
 
-Reproduction (apple-m4, `build/`):
+Reproduction (`build/`):
 
 ```
 uv run scripts/bench/run.py --models granite-speech-5.0-470m-turboctc \
@@ -976,10 +976,27 @@ uv run scripts/bench/run.py --models granite-speech-5.0-470m-turboctc \
   --iters 3 --warmup 1 --name granite-speech-5.0-470m-turboctc-publication
 ```
 
-Publication scope, iters 3 / warmup 1. Vulkan is filtered out on this
-machine (no `build-vulkan/`), so the driver's fallthrough reaches the
-Metal-only binary and reports `model load: backend error` per cell; it
-writes no report and does not affect sign-off.
+Publication scope, iters 3 / warmup 1. The Apple M4 Max table intentionally
+reports the native Metal and CPU paths only; Vulkan through MoltenVK is omitted.
+
+### Apple M4 Max
+
+macOS 26.6.2, transcribe.cpp `54b241e`.
+
+| backend | quant | sample | encode ms | wall ms | RTF |
+|---------|-------|--------|-----------|---------|-----|
+| Metal | q8_0 | jfk (11.0 s) | 32.0 | 37.5 | 293.1x |
+| Metal | q8_0 | dots (35.3 s) | 68.4 | 85.6 | 412.8x |
+| Metal | q4_k_m | jfk | 33.4 | 38.9 | 282.9x |
+| Metal | q4_k_m | dots | 70.8 | 87.9 | 402.0x |
+| CPU | q8_0 | jfk | 226.1 | 231.6 | 47.5x |
+| CPU | q8_0 | dots | 685.4 | 702.7 | 50.3x |
+| CPU | q4_k_m | jfk | 227.4 | 232.6 | 47.3x |
+| CPU | q4_k_m | dots | 672.1 | 689.2 | 51.3x |
+
+### Apple M4
+
+macOS 26.5.1, transcribe.cpp `f2d5e31`.
 
 | backend | quant | sample | encode ms | wall ms | RTF |
 |---------|-------|--------|-----------|---------|-----|
@@ -992,11 +1009,12 @@ writes no report and does not affect sign-off.
 | CPU | q4_k_m | jfk | 417.6 | 423.2 | 26.0x |
 | CPU | q4_k_m | dots | 1254.9 | 1272.2 | 27.8x |
 
-**Q8_0 is faster than Q4_K_M on both backends**, by 3% on Metal and 7-9% on
-CPU, despite being 1.8x the file size. K-quant unpacking costs more than the
-bandwidth it saves at this model size. Q8_0 is the better default
-recommendation for this family on both accuracy (Stage 5: 1.33% vs 1.34%) and
-speed; Q4_K_M earns its place only where the 279 MB footprint matters.
+On Apple M4, **Q8_0 is faster than Q4_K_M on both backends**, by 3% on
+Metal and 7-9% on CPU, despite being 1.8x the file size. On Apple M4 Max the
+quant tiers are effectively tied: Q8_0 is 2-4% faster on Metal, while CPU is
+within 2% and changes ordering by sample. Q8_0 remains the better default on
+accuracy (Stage 5: 1.33% vs 1.34%); Q4_K_M earns its place where the 279 MB
+footprint matters.
 
 ### Long audio (widening, non-gating)
 
@@ -1034,15 +1052,32 @@ means the feature buys throughput only on CPU or for shorter clips.
 
 ### `granite-speech-5.0-470m-turboctc-nc` (Stage 6)
 
-**Status: INCOMPLETE — both publication rigs pending.** Carried forward deliberately:
-**CJ signed off 2026-09-12 on advancing to Stage 7 with this gap open**, on the grounds
-that Stage 7 is WER and therefore rig-independent. The rig coverage becomes a Stage 8
-decision, at the point where the model card actually needs the numbers. This is NOT a
-sign-off that apple-m4 numbers may be published. Neither required rig was
-reachable. This session ran on a base **Apple M4** (16 GB), which is neither the
-Apple M4 Max nor the AMD Ryzen 7 PRO 4750U, so per the Stage 6 rules these numbers are
-iteration data and do not substitute for either rig. The Apache sibling is in the same
-state, so the two remain directly comparable; the family carries this gap into Stage 8.
+**Status: INCOMPLETE — AMD Ryzen 7 PRO 4750U publication rig pending.** The
+Apple M4 Max requirement was closed on 2026-09-12. The earlier user sign-off to
+advance with the rig gap remains applicable to the one outstanding AMD rig.
+
+#### Apple M4 Max
+
+macOS 26.6.2, transcribe.cpp `144ccad`; iters 3, warmup 1. Vulkan through
+MoltenVK is intentionally omitted from publication on this machine.
+
+| backend | preset | sample | encode ms | wall ms | RTF |
+|---------|--------|--------|-----------|---------|-----|
+| Metal | Q8_0 | jfk (11.0 s) | 31.6 | 37.0 | 297.3x |
+| Metal | Q8_0 | dots (35.3 s) | 67.8 | 85.3 | 414.4x |
+| Metal | Q4_K_M | jfk | 32.6 | 38.1 | 288.7x |
+| Metal | Q4_K_M | dots | 70.2 | 87.2 | 405.1x |
+| CPU | Q8_0 | jfk | 227.4 | 232.6 | 47.3x |
+| CPU | Q8_0 | dots | 679.5 | 696.4 | 50.7x |
+| CPU | Q4_K_M | jfk | 227.8 | 233.0 | 47.2x |
+| CPU | Q4_K_M | dots | 670.6 | 686.7 | 51.5x |
+
+Reports:
+`reports/perf/apple-m4-max/granite-speech-5-0-470m-turboctc-nc-publication_granite-speech-5.0-470m-turboctc-nc_{metal,cpu}.json`.
+All eight cells produced the expected transcript, with matching transcript
+hashes across backends and quants.
+
+#### Apple M4 (iteration data)
 
 Publication scope on `apple-m4`, `--name granite-speech-5-0-470m-turboctc-nc-publication`,
 q8_0/q4_k_m x jfk/dots, iters 3, warmup 1. Vulkan cells do not exist on macOS and were

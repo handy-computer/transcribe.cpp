@@ -11,15 +11,18 @@ a transcript. It is not a streaming model, does not translate, and is
 English-only — the 16384-entry vocabulary carries no language tokens, so
 `--language` reaches nothing.
 
-Two properties make it unusual among the ported encoders:
+Three properties make it unusual among the ported encoders:
 
 - **Decoding is a single argmax pass.** There is no beam search and no
-  autoregressive loop. On the benchmarks below, decode is 3-4% of wall time and
-  encode is the rest.
+  autoregressive loop. Across the benchmarks below, encoder work dominates
+  wall time.
 - **Cost is linear in audio length.** Attention is block-local (128-frame
   blocks with Shaw relative positions) rather than global, so there is no
   quadratic term. Measured on an M4, realtime factor is flat from 11 seconds
   out to 5 minutes of audio; see Performance below for the numbers.
+- **The benchmark transcripts are lowercase and unpunctuated.** Both `jfk` and
+  `dots` have no restored casing or punctuation; `dots` does render the number
+  in `10 years` as digits.
 
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc)
 for training data, intended use, and upstream evaluation methodology.
@@ -66,6 +69,17 @@ build/bin/transcribe-cli \
 Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
 speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
 (2 decimal places).
+
+### Apple M4 Max
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  | 37.5 ms (293×) | 38.9 ms (283×) |
+| Metal   | dots (35.3s) | 85.6 ms (413×) | 87.9 ms (402×) |
+| CPU     | jfk (11.0s)  |  232 ms (48×)  |  233 ms (47×)  |
+| CPU     | dots (35.3s) |  703 ms (50×)  |  689 ms (51×)  |
+
+macOS 26.6.2, transcribe.cpp `54b241e`.
 
 ### Apple M4
 
