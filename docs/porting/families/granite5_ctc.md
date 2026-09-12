@@ -3,15 +3,14 @@
 Status, per variant:
 
 - `granite-speech-5.0-470m-turboctc` (Apache-2.0): shipped (Stages 1-8; private
-  HF repo only, public flip deferred). Stage 6 covers Apple M4 and Apple M4 Max;
-  the AMD Ryzen 7 PRO 4750U publication benchmark is still pending.
-- `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0): **Stages 1-7 complete**.
-  Stage 6 covers Apple M4 and Apple M4 Max; the AMD Ryzen 7 PRO 4750U publication
-  benchmark is still pending. Gates A and B are green, `validate.py all` is
-  green, the Stage 7 ref-dtype WER gate passes (1.29% vs 1.29% reference), all
-  five quants are accepted, and the matrix is published privately. Stage 8 has
-  not started; it must either close the remaining rig gap or carry an explicit
-  user sign-off for the card.
+  HF repo only, public flip deferred). Stage 6 covers both required publication
+  rigs (Apple M4 Max and AMD Ryzen 7 PRO 4750U), plus Apple M4 iteration data.
+- `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0): **Stages 1-7 complete**,
+  including Stage 6 on both required publication rigs (Apple M4 Max and AMD
+  Ryzen 7 PRO 4750U), plus Apple M4 iteration data. Gates A and B are green,
+  `validate.py all` is green, the Stage 7 ref-dtype WER gate passes (1.29% vs
+  1.29% reference), all five quants are accepted, and the matrix is published
+  privately. Stage 8 has not started.
 
 Everything below that is not explicitly marked per-variant was established for
 the Apache-2.0 variant and applies unchanged to the `-nc` variant: `config.json`,
@@ -994,6 +993,26 @@ macOS 26.6.2, transcribe.cpp `54b241e`.
 | CPU | q4_k_m | jfk | 227.4 | 232.6 | 47.3x |
 | CPU | q4_k_m | dots | 672.1 | 689.2 | 51.3x |
 
+### AMD Ryzen 7 PRO 4750U
+
+Fedora 43, transcribe.cpp `3a5ed01`; Vulkan device `AMD Radeon Graphics (RADV RENOIR)`.
+
+| backend | quant | sample | encode ms | wall ms | RTF |
+|---------|-------|--------|-----------|---------|-----|
+| Vulkan | q8_0 | jfk (11.0 s) | 571.9 | 652.1 | 16.9x |
+| Vulkan | q8_0 | dots (35.3 s) | 1235.4 | 1475.0 | 24.0x |
+| Vulkan | q4_k_m | jfk | 580.9 | 647.3 | 17.0x |
+| Vulkan | q4_k_m | dots | 1275.8 | 1513.3 | 23.3x |
+| CPU | q8_0 | jfk | 665.7 | 695.9 | 15.8x |
+| CPU | q8_0 | dots | 2193.0 | 2277.6 | 15.5x |
+| CPU | q4_k_m | jfk | 635.5 | 663.3 | 16.6x |
+| CPU | q4_k_m | dots | 2168.3 | 2252.6 | 15.7x |
+
+Reports:
+`reports/perf/amd-ryzen-7-pro-4750u-with-radeon-graphics/granite-speech-5-0-470m-turboctc-publication_granite-speech-5.0-470m-turboctc_{vulkan,cpu}.json`.
+All eight cells produced the expected transcript, with matching transcript
+hashes across backends and quants.
+
 ### Apple M4
 
 macOS 26.5.1, transcribe.cpp `f2d5e31`.
@@ -1052,9 +1071,8 @@ means the feature buys throughput only on CPU or for shorter clips.
 
 ### `granite-speech-5.0-470m-turboctc-nc` (Stage 6)
 
-**Status: INCOMPLETE — AMD Ryzen 7 PRO 4750U publication rig pending.** The
-Apple M4 Max requirement was closed on 2026-09-12. The earlier user sign-off to
-advance with the rig gap remains applicable to the one outstanding AMD rig.
+**Status: COMPLETE — both publication rigs covered.** Apple M4 Max and AMD
+Ryzen 7 PRO 4750U both have the full q8_0/q4_k_m x jfk/dots publication matrix.
 
 #### Apple M4 Max
 
@@ -1076,6 +1094,29 @@ Reports:
 `reports/perf/apple-m4-max/granite-speech-5-0-470m-turboctc-nc-publication_granite-speech-5.0-470m-turboctc-nc_{metal,cpu}.json`.
 All eight cells produced the expected transcript, with matching transcript
 hashes across backends and quants.
+
+#### AMD Ryzen 7 PRO 4750U
+
+Fedora 43, transcribe.cpp `3a5ed01`; Vulkan device `AMD Radeon Graphics (RADV RENOIR)`;
+iters 3, warmup 1.
+
+| backend | preset | sample | encode ms | wall ms | RTF |
+|---------|--------|--------|-----------|---------|-----|
+| Vulkan | Q8_0 | jfk (11.0 s) | 566.8 | 630.5 | 17.4x |
+| Vulkan | Q8_0 | dots (35.3 s) | 1253.0 | 1494.8 | 23.6x |
+| Vulkan | Q4_K_M | jfk | 579.2 | 646.6 | 17.0x |
+| Vulkan | Q4_K_M | dots | 1277.3 | 1515.3 | 23.3x |
+| CPU | Q8_0 | jfk | 671.8 | 701.5 | 15.7x |
+| CPU | Q8_0 | dots | 2182.6 | 2266.9 | 15.6x |
+| CPU | Q4_K_M | jfk | 630.5 | 653.9 | 16.8x |
+| CPU | Q4_K_M | dots | 2179.8 | 2263.2 | 15.6x |
+
+Reports:
+`reports/perf/amd-ryzen-7-pro-4750u-with-radeon-graphics/granite-speech-5-0-470m-turboctc-nc-publication_granite-speech-5.0-470m-turboctc-nc_{vulkan,cpu}.json`.
+All eight cells produced the expected transcript, with matching transcript
+hashes across backends and quants. All required schema fields are present in
+both Ryzen reports. The optional top-level `git_dirty` field is absent, matching
+the pre-existing harness gap already recorded for the Apple M4 reports.
 
 #### Apple M4 (iteration data)
 

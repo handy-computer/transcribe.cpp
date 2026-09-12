@@ -81,6 +81,17 @@ speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
 
 macOS 26.6.2, transcribe.cpp `54b241e`.
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  652 ms (17×) |  647 ms (17×) |
+| Vulkan  | dots (35.3s) | 1.48 s (24×)  | 1.51 s (23×)  |
+| CPU     | jfk (11.0s)  |  696 ms (16×) |  663 ms (17×) |
+| CPU     | dots (35.3s) | 2.28 s (16×)  | 2.25 s (16×)  |
+
+Fedora 43, transcribe.cpp `3a5ed01`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+
 ### Apple M4
 
 | Backend | Sample            |          Q8_0 |        Q4_K_M |
