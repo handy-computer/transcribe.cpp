@@ -10,6 +10,8 @@ self-conditioned CTC head.
 > GGUFs carry the same terms. For commercial use take the Apache-2.0 sibling,
 > [`granite-speech-5.0-470m-turboctc`](granite-speech-5.0-470m-turboctc.md).
 
+## What it's for
+
 Offline English speech-to-text. Takes a 16 kHz mono WAV and produces a
 transcript. Not a streaming model. English only, and it does not translate.
 
@@ -90,7 +92,72 @@ pick Q4_K_M for footprint rather than speed. Cost is linear in audio length, so
 realtime factor holds up on long files. Batching is supported and gives
 identical output, but buys almost nothing here.
 
-## Details
+## Numerical Validation
 
-Conversion, validation and benchmark procedure for this family live in
-[docs/porting/families/granite5_ctc.md](../porting/families/granite5_ctc.md).
+transcribe.cpp is validated tensor-by-tensor against Hugging Face transformers
+on `samples/jfk.wav` and `samples/dots.wav`. All 35 checkpointed tensors fall
+within variant tolerance, and the final transcript matches the reference
+verbatim. Last validated at commit
+[`f1d0e10`](https://github.com/handy-computer/transcribe.cpp/tree/f1d0e10).
+
+| Field | Value |
+| --- | --- |
+| Reference | transformers 5.17.0, `ibm-granite/granite-speech-5.0-470m-turboctc-nc` |
+| Dump script | `scripts/dump_reference_granite5_ctc_transformers.py` |
+| Manifest | `tests/golden/granite5_ctc/granite-speech-5.0-470m-turboctc-nc.manifest.json` |
+| Tolerances | `tests/tolerances/granite5_ctc-nc.json` |
+| Command | `uv run scripts/validate.py all --family granite5_ctc --variant granite-speech-5.0-470m-turboctc-nc` |
+
+Selected tensors (the `dots` case, 441 output frames):
+
+| Tensor | Max abs diff | Mean abs diff | Notes |
+| --- | ---: | ---: | --- |
+| `mel.in`               | `8.821e-06` | `1.007e-07` | Production C++ frontend, no injection |
+| `enc.input_linear.out` | `1.851e-02` | `1.080e-03` | 0.18% of RMS |
+| `enc.block.7.out`      | `8.640e-03` | `9.496e-04` | Before the self-conditioning injection |
+| `enc.ctc.mid_logits`   | `4.356e-02` | `3.568e-03` | Mid-layer CTC head |
+| `enc.block.15.out`     | `2.187e-01` | `1.625e-03` | Max is one frame of 441; mean is 0.25% of RMS |
+| `enc.ctc_logits`       | `7.307e-01` | `6.497e-03` | 0.09% of RMS |
+
+Drift is BF16 matmul accumulation, amplified by a massive-activation channel in
+encoder blocks 10-13 that sits ~20x above the rest of its tensor. It is
+concentrated on single frames rather than spread out, and it does not reach the
+output: zero argmax differences against the reference on either sample, and
+2618 of 2620 LibriSpeech test-clean hypotheses byte-identical to the reference
+run. Running the reference itself in BF16 puts PyTorch further from its own F32
+than transcribe.cpp is.
+
+## Reproduction
+
+### Convert
+
+```bash
+uv run --project scripts/envs/granite5_ctc \
+  scripts/convert-granite5_ctc.py ibm-granite/granite-speech-5.0-470m-turboctc-nc \
+  --repo-id ibm-granite/granite-speech-5.0-470m-turboctc-nc \
+  --revision 0eb7b4fe726a294815dc45d342860465b5af68ef
+```
+
+### Quantize
+
+```bash
+uv run scripts/quantize-all.py \
+  models/granite-speech-5.0-470m-turboctc-nc/granite-speech-5.0-470m-turboctc-nc-BF16.gguf
+```
+
+### Validate
+
+```bash
+uv run scripts/validate.py all --family granite5_ctc \
+  --variant granite-speech-5.0-470m-turboctc-nc
+```
+
+### Run real-model tests
+
+```bash
+cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
+cmake --build build
+
+TRANSCRIBE_GRANITE5_CTC_GGUF=models/granite-speech-5.0-470m-turboctc-nc/granite-speech-5.0-470m-turboctc-nc-BF16.gguf \
+  ctest --test-dir build --output-on-failure -R granite5_ctc
+```
