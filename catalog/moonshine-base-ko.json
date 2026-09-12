@@ -1,0 +1,46 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "moonshine-base-ko",
+  "family": "moonshine",
+  "display_name": "moonshine-base-ko",
+  "params": 61513920,
+  "license": {
+    "spdx": "mit",
+    "display": "MIT"
+  },
+  "upstream_repo": "UsefulSensors/moonshine-base-ko",
+  "upstream_commit": "fff6035",
+  "published_repo": "handy-computer/moonshine-base-ko-gguf",
+  "languages": ["ko"],
+  "long_form_strategy": "soft-window",
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":false}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"moonshine-base-ko-F32.gguf","size_bytes":247657088},
+    {"quant":"F16","filename":"moonshine-base-ko-F16.gguf","size_bytes":131789440},
+    {"quant":"Q8_0","filename":"moonshine-base-ko-Q8_0.gguf","size_bytes":77476480}
+  ],
+  "accuracy_benchmarks": [
+    {"dataset":"fleurs","split":"test","language":"ko","quant":"F32","metric":"cer","err_pct":8.0,"ci95":[6.76,9.28],"n_utts":382,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":700,"del":620,"ins":95},"empty_hyp":0,"utts_over_50pct":4},
+    {"dataset":"fleurs","split":"test","language":"ko","quant":"F16","metric":"cer","err_pct":8.0,"ci95":[6.76,9.28],"n_utts":382,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":700,"del":620,"ins":95},"empty_hyp":0,"utts_over_50pct":4},
+    {"dataset":"fleurs","split":"test","language":"ko","quant":"Q8_0","metric":"cer","err_pct":8.13,"ci95":[6.88,9.51],"n_utts":382,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":703,"del":646,"ins":88},"empty_hyp":0,"utts_over_50pct":5},
+    {"dataset":"fleurs","split":"test","language":"ko","quant":"Q8_0","metric":"cer","err_pct":8.12,"ci95":[6.89,9.5],"n_utts":382,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":701,"del":646,"ins":88},"empty_hyp":0,"utts_over_50pct":5}
+  ],
+  "speed_benchmarks": [
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":49.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":112.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":44.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":115.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":11.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":33.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":19.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":50.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null}
+  ]
+}

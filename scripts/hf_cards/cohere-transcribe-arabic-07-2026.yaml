@@ -1,0 +1,99 @@
+# Spec for the HF README of handy-computer/cohere-transcribe-arabic-07-2026-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: CohereLabs/cohere-transcribe-arabic-07-2026
+target_repo: handy-computer/cohere-transcribe-arabic-07-2026-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-arabic-07-2026.md
+
+upstream_commit: 0a8193c
+pin_date: 2026-07-07
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: Transformers
+  commit: d89ecb7
+  date: 2026-07-07
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - ar
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - cohere
+  - conformer
+  - encoder-decoder
+  - arabic
+
+summary: |
+  Offline Arabic speech-to-text, including dialectal Arabic and
+  Arabic-English code-switching, with English as a secondary language. An
+  Arabic-focused adaptation of the Cohere Transcribe 03-2026 architecture:
+  a Conformer encoder with a Transformer encoder-decoder head
+  (cross-attention, tied token embedding). Takes a 16 kHz mono WAV and a
+  language flag (`-l ar` or `-l en`) and produces a transcript. Decoding
+  is autoregressive.
+
+default_quant_index: 2  # Q8_0
+
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: none  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend. Measured on
+# cohere-transcribe-03-2026 (identical architecture and tensor shapes;
+# only weight values differ), see docs/models.
+perf:
+  m4-max:
+    metal: 73
+    cpu: 9
+  ryzen-4750u:
+    vulkan: 8
+    cpu: 3
+
+wer:
+  metadata_key: fleurs_ar_test
+  source: FLEURS Arabic test
+  notes: |
+    WER measured on the full FLEURS Arabic (`ar_eg`) test split (428
+    utterances) with greedy decoding and no external LM, scored with the
+    Whisper BasicTextNormalizer. BF16 reference baseline, measured with
+    native Transformers on the same manifest: 11.00%; the BF16 port scores
+    11.02%, and every quant falls inside the reference's 95% confidence
+    interval. FLEURS Arabic is Egyptian-dialect speech; upstream numbers
+    published on other Arabic test sets are not directly comparable.
+
+quants:
+  - name: BF16
+    filename: cohere-transcribe-arabic-07-2026-BF16.gguf
+    size: 4.10 GB
+    wer: 11.02%
+  - name: F16
+    filename: cohere-transcribe-arabic-07-2026-F16.gguf
+    size: 4.11 GB
+    wer: 11.00%
+  - name: Q8_0
+    filename: cohere-transcribe-arabic-07-2026-Q8_0.gguf
+    size: 2.41 GB
+    wer: 11.06%
+  - name: Q6_K
+    filename: cohere-transcribe-arabic-07-2026-Q6_K.gguf
+    size: 1.97 GB
+    wer: 11.07%
+  - name: Q5_K_M
+    filename: cohere-transcribe-arabic-07-2026-Q5_K_M.gguf
+    size: 1.77 GB
+    wer: 10.95%
+  - name: Q4_K_M
+    filename: cohere-transcribe-arabic-07-2026-Q4_K_M.gguf
+    size: 1.56 GB
+    wer: 11.18%

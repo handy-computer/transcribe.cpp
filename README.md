@@ -16,7 +16,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Moonshine | `moonshine-tiny`, `moonshine-base` | [docs/models/moonshine.md](docs/models/moonshine.md) |
 | Moonshine Streaming | `moonshine-streaming-{tiny,small,medium}` | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
 | Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
-| Cohere Transcribe | `cohere-transcribe-03-2026` | [docs/models/cohere-transcribe-03-2026.md](docs/models/cohere-transcribe-03-2026.md) |
+| Cohere Transcribe | `cohere-transcribe-03-2026` (14 languages), `cohere-transcribe-arabic-07-2026` (Arabic dialects + code-switching) | [docs/models/cohere.md](docs/models/cohere.md) |
 | SenseVoice | `sensevoice-small` | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
 | FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
 | Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
@@ -31,6 +31,14 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Sortformer | `diar_streaming_sortformer_4spk-v2.1` (streaming speaker diarizer, up to 4 speakers; no transcription) | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
+
+## Model catalog
+
+[`catalog/`](catalog/) is the source of truth for model metadata, accuracy, and
+performance. Each release includes a queryable
+[`catalog.db`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db)
+and [`SHA-256 checksum`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db.sha256).
+Rebuild it locally with `uv run scripts/catalog/db.py --out catalog.db`.
 
 ## Build
 

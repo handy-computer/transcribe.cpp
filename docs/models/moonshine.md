@@ -82,6 +82,27 @@ Pre-built GGUFs for every variant and quant are hosted under
 each per-variant repo's `README.md` has direct download links and the
 full F32 / F16 / Q8_0 measurement table.
 
+## Performance
+
+The language-specific checkpoints have exactly the same architecture and tensor
+shapes as their corresponding English checkpoint; only the trained weight
+values differ. They therefore inherit the English checkpoint's per-quant speed
+measurements rather than claiming separate benchmark runs:
+
+- every `moonshine-tiny-{ar,ja,ko,uk,vi,zh}` row is measured on
+  `moonshine-tiny`;
+- every `moonshine-base-{ar,ja,ko,uk,vi,zh}` row is measured on
+  `moonshine-base`.
+
+These are the published Q8_0 averages; the per-sample latency and xRT tables are
+in [moonshine-tiny.md](moonshine-tiny.md#performance) and
+[moonshine-base.md](moonshine-base.md#performance).
+
+| Size | Apple M4 Max Metal | Apple M4 Max CPU | Ryzen 4750U Vulkan | Ryzen 4750U CPU |
+| --- | ---: | ---: | ---: | ---: |
+| tiny and tiny language fine-tunes | 127x | 153.5x | 56x | 45.5x |
+| base and base language fine-tunes | 79.5x | 80.5x | 34.5x | 22x |
+
 ## Input limits
 
 Moonshine has no input-length limit, but its decoder is capped at a short output
