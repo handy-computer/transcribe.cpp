@@ -119,7 +119,7 @@ transcribe.cpp is validated tensor-by-tensor against Hugging Face transformers
 on `samples/jfk.wav` and `samples/dots.wav`. All 35 checkpointed tensors fall
 within family tolerance, and the final transcript matches the reference
 verbatim. Last validated at commit
-[`f2d5e31`](https://github.com/handy-computer/transcribe.cpp/tree/f2d5e31).
+[`b9427cf`](https://github.com/handy-computer/transcribe.cpp/tree/b9427cf).
 
 | Field | Value |
 | --- | --- |

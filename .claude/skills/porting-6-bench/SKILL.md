@@ -1,6 +1,6 @@
 ---
 name: porting-6-bench
-description: Runs the publication performance benchmark for a ported model variant and scripts the hypothesis → change → bench → accept-or-revert loop. Use after porting-5-quants has produced the full shipped quant matrix. Input: full quant matrix at models/<variant>/, reference machine matrix. Output: reports/perf/<machine>/<name>_<variant>_<backend>.json per bench run, scoped to the cells that ship in docs/models/<variant>.md. Every accepted performance iteration is followed by a validate.py all gate so a perf change cannot land while breaking ref-dtype numerics.
+description: Runs the publication performance benchmark for a ported model variant and scripts the hypothesis → change → bench → accept-or-revert loop. Use after porting-5-quants has produced the full shipped quant matrix. Input: full quant matrix at models/<variant>/, and the two publication rigs (Apple M4 Max, AMD Ryzen 7 PRO 4750U) that every shipped model card carries. Output: reports/perf/<machine>/<name>_<variant>_<backend>.json per bench run on EACH rig, scoped to the cells that ship in docs/models/<variant>.md. Every accepted performance iteration is followed by a validate.py all gate so a perf change cannot land while breaking ref-dtype numerics.
 ---
 
 # porting-6-bench
@@ -25,6 +25,38 @@ requirement.
 
 Default build directory is `build/`. New ports should not introduce
 additional build directories.
+
+## Reference machine matrix (REQUIRED: both rigs)
+
+Stage 6 is **not** complete on one machine. Every shipped model card in
+`docs/models/` carries two rig sections, and they are the two rigs Stage 8
+checks for:
+
+| Rig | Card heading | Backends | `perf:` key in the HF yaml | Metadata key |
+|---|---|---|---|---|
+| Apple M4 Max (macOS) | `### Apple M4 Max` | `metal`, `cpu` | `m4-max` | `rtf_m4_max` |
+| AMD Ryzen 7 PRO 4750U (Fedora, Vega 8 / RADV RENOIR) | `### AMD Ryzen 7 PRO 4750U` | `vulkan`, `cpu` | `ryzen-4750u` | `rtf_ryzen_4750u` |
+
+Rules:
+
+- **Both rigs are required for sign-off.** A single-rig bench is an
+  incomplete Stage 6, not a complete one. Say so explicitly in the Step 7
+  report rather than letting the missing rig pass unremarked.
+- The bench must run **on** the rig. `scripts/bench/run.py` derives
+  `<machine>` from the CPU brand string, so the reports land under that
+  rig's own `reports/perf/<slug>/`. Vulkan cells only exist on the Ryzen
+  box; Metal cells only exist on the Mac.
+- `reports/` is gitignored (`.gitignore:66`), so the per-rig JSON never
+  travels with the repo. The durable artifact is the **rendered table in
+  `docs/models/<variant>.md`** plus the `perf:` block in
+  `scripts/hf_cards/<variant>.yaml`. Transcribe the numbers into both.
+- A dev box that is neither rig (for example a base `apple-m4`) is
+  iteration data. It may be added as an extra card section, but it does
+  **not** substitute for either required rig.
+- If a rig is unreachable, Stage 6 stops at `INCOMPLETE — <rig> pending`
+  and the variant carries that state into Stage 8. Only the user may sign
+  off shipping with a rig missing, and the card must then say which rig
+  the numbers come from.
 
 ## Standardized bench schema
 
@@ -77,8 +109,11 @@ matrix that ends up rendered in `docs/models/<variant>.md`:
   build, CPU everywhere)
 - Iters: `3`, Warmup: `1`
 - `--name <variant>-publication`
+- Rigs: **both** of Apple M4 Max and AMD Ryzen 7 PRO 4750U (see
+  Reference machine matrix above). Run the identical command on each.
 
-Confirm publication scope with the user. Narrowed or widened sweeps are
+Confirm publication scope with the user, including which rigs are
+reachable this session. Narrowed or widened sweeps are
 allowed for iteration, but sign-off is decided on publication scope.
 
 ### Step 4: Baseline capture (execute)
@@ -193,7 +228,9 @@ Repeat until the user is satisfied.
 ### Step 7: Sign-off
 
 Report:
-- Baseline reports and machine matrix covered.
+- Baseline reports and machine matrix covered. Name **each of the two
+  required rigs** and its state: covered, or `INCOMPLETE — pending`. Do
+  not report Stage 6 as complete while either rig is missing.
 - Any schema gaps observed.
 - Total iterations run, net timing improvement, and that every accepted
   iteration passed `validate.py all`.
@@ -203,9 +240,13 @@ committed at the user's discretion.
 
 ## Postconditions
 
-- At least one bench report covering every **publication-scope** cell
-  (`q8_0`/`q4_k_m` × `jfk`/`dots` × machine-supported backends, iters 3,
-  warmup 1) under `reports/perf/<machine>/`. The final on-doc run
+- **Both required rigs benched** (Apple M4 Max and AMD Ryzen 7 PRO
+  4750U), each with a bench report covering every **publication-scope**
+  cell (`q8_0`/`q4_k_m` × `jfk`/`dots` × that rig's backends, iters 3,
+  warmup 1) under that rig's `reports/perf/<machine>/`, and each rig's
+  numbers transcribed into `docs/models/<variant>.md` and the `perf:`
+  block of `scripts/hf_cards/<variant>.yaml`. A missing rig is an
+  explicit, user-signed exception, never a silent default. The final on-doc run
   uses `--name <variant>-publication` so the reproduction command in
   `docs/models/<variant>.md` matches a real artifact.
 - Schema completeness reported to the user; any gap is a known bench-

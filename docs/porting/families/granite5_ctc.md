@@ -1,6 +1,8 @@
 # Granite Speech 5.0 CTC (TurboCTC)
 
-Status: bring-up
+Status: shipped (Stages 1-8; private HF repo only, public flip deferred).
+Stage 6 bench currently covers the `apple-m4` rig only; the publication
+rigs (Apple M4 Max, AMD Ryzen 7 PRO 4750U) are still pending.
 
 ## Identity
 

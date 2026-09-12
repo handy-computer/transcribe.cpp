@@ -12,7 +12,7 @@ pin_date: 2026-09-12
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: transformers
-  commit: f2d5e31
+  commit: b9427cf
   date: 2026-09-12
 
 license: apache-2.0
@@ -45,9 +45,6 @@ capabilities:
   translate: false
   lang_detect: false
   timestamps: none  # none | segment | word | token
-  # A word-timestamp path exists but is not advertised: end times are
-  # emitting-frame + 80 ms, not true word ends, so nearly every word reports
-  # one frame of duration. Onsets are sound. Revisit once t1 is a real end.
 
 # Speedup-over-realtime (×RT) per rig/backend, hand-authored from the bench;
 # published raw as rtf_<machine> in the metadata block.

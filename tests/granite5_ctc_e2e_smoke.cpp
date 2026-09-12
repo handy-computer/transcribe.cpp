@@ -34,18 +34,18 @@ int g_failures = 0;
         }                                                                        \
     } while (0)
 
-#define CHECK_EQ(actual, expected)                                                                              \
-    do {                                                                                                        \
-        const long long _a = static_cast<long long>(actual);                                                    \
-        const long long _e = static_cast<long long>(expected);                                                  \
-        if (_a != _e) {                                                                                         \
+#define CHECK_EQ(actual, expected)                                                                               \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
             std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
-            ++g_failures;                                                                                       \
-        }                                                                                                       \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -59,7 +59,7 @@ int edit_distance(const std::string & a, const std::string & b) {
         curr[0] = static_cast<int>(i);
         for (size_t j = 1; j <= b.size(); ++j) {
             const int cost = a[i - 1] == b[j - 1] ? 0 : 1;
-            curr[j] = std::min({ prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost });
+            curr[j]        = std::min({ prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost });
         }
         prev.swap(curr);
     }
@@ -78,20 +78,21 @@ int main() {
         return 77;
     }
 
-    const char * audio_env = std::getenv("TRANSCRIBE_TEST_AUDIO");
-    const std::string audio_path =
-        audio_env != nullptr && audio_env[0] != '\0' ? audio_env : std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
+    const char *      audio_env  = std::getenv("TRANSCRIBE_TEST_AUDIO");
+    const std::string audio_path = audio_env != nullptr && audio_env[0] != '\0' ?
+                                       audio_env :
+                                       std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
     if (!file_exists(audio_path)) {
         std::fprintf(stderr, "granite5_ctc_e2e_smoke: audio not found: %s\n", audio_path.c_str());
         return EXIT_FAILURE;
     }
 
-    const auto start = std::chrono::steady_clock::now();
+    const auto                   start = std::chrono::steady_clock::now();
     transcribe_model_load_params load_params;
     transcribe_model_load_params_init(&load_params);
     load_params.backend      = TRANSCRIBE_BACKEND_CPU;
     transcribe_model * model = nullptr;
-    transcribe_status st     = transcribe_model_load_file(model_env, &load_params, &model);
+    transcribe_status  st    = transcribe_model_load_file(model_env, &load_params, &model);
     if (st != TRANSCRIBE_OK || model == nullptr) {
         std::fprintf(stderr, "FAIL load: %s\n", transcribe_status_string(st));
         return EXIT_FAILURE;
@@ -105,7 +106,7 @@ int main() {
     CHECK_EQ(caps.max_timestamp_kind, TRANSCRIBE_TIMESTAMPS_NONE);
 
     std::vector<float> pcm;
-    std::string wav_error;
+    std::string        wav_error;
     if (!transcribe_cli::load_wav_mono_16k(audio_path, pcm, wav_error)) {
         std::fprintf(stderr, "FAIL audio load: %s\n", wav_error.c_str());
         transcribe_model_free(model);
@@ -115,7 +116,7 @@ int main() {
     transcribe_session_params session_params;
     transcribe_session_params_init(&session_params);
     transcribe_session * session = nullptr;
-    st = transcribe_session_init(model, &session_params, &session);
+    st                           = transcribe_session_init(model, &session_params, &session);
     if (st != TRANSCRIBE_OK || session == nullptr) {
         std::fprintf(stderr, "FAIL session init: %s\n", transcribe_status_string(st));
         transcribe_model_free(model);
@@ -132,8 +133,8 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    const std::string actual = transcribe_full_text(session);
-    const int distance = edit_distance(actual, kReference);
+    const std::string actual   = transcribe_full_text(session);
+    const int         distance = edit_distance(actual, kReference);
     std::fprintf(stderr, "granite5_ctc_e2e_smoke: text=\"%s\" edit_distance=%d\n", actual.c_str(), distance);
     CHECK(!actual.empty());
     CHECK(distance <= 2);
@@ -157,8 +158,7 @@ int main() {
     CHECK(timings.mel_ms > 0.0f);
     CHECK(timings.encode_ms > 0.0f);
     CHECK(timings.decode_ms > 0.0f);
-    const double wall_ms =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    const double wall_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     CHECK(wall_ms < 120000.0);
 
     transcribe_run_params rejected_params;

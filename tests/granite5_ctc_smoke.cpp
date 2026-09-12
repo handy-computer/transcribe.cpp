@@ -33,18 +33,18 @@ int g_failures = 0;
         }                                                                        \
     } while (0)
 
-#define CHECK_EQ(actual, expected)                                                                              \
-    do {                                                                                                        \
-        const long long _a = static_cast<long long>(actual);                                                    \
-        const long long _e = static_cast<long long>(expected);                                                  \
-        if (_a != _e) {                                                                                         \
+#define CHECK_EQ(actual, expected)                                                                               \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
             std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
-            ++g_failures;                                                                                       \
-        }                                                                                                       \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -63,9 +63,9 @@ int main() {
 
     transcribe_model_load_params load_params;
     transcribe_model_load_params_init(&load_params);
-    load_params.backend      = TRANSCRIBE_BACKEND_CPU;
-    transcribe_model * model = nullptr;
-    const transcribe_status st = transcribe_model_load_file(fixture.c_str(), &load_params, &model);
+    load_params.backend           = TRANSCRIBE_BACKEND_CPU;
+    transcribe_model *      model = nullptr;
+    const transcribe_status st    = transcribe_model_load_file(fixture.c_str(), &load_params, &model);
     if (st != TRANSCRIBE_OK || model == nullptr) {
         std::fprintf(stderr, "FAIL load: %s\n", transcribe_status_string(st));
         return EXIT_FAILURE;

@@ -20,8 +20,9 @@ is out of scope.
 - `reports/convert/<variant>-<REFDTYPE>.json` (SHA of the reference GGUF).
 - `reports/wer/<variant>-<PRESET>.<dataset>.score.json` for every shipped
   preset.
-- `reports/perf/<machine>/*_<variant>_<backend>.json` for at least one
-  reference machine.
+- `reports/perf/<machine>/*_<variant>_<backend>.json` for **both**
+  publication rigs (Apple M4 Max and AMD Ryzen 7 PRO 4750U), each run
+  on that rig. See the Reference machine matrix in `porting-6-bench`.
 
 ## Workflow
 
@@ -50,7 +51,8 @@ fabricate inputs.
 | Forward map | `reports/porting/<family>/forward-map.md` | Stage 4 |
 | Converter report | `reports/convert/<variant>-<REFDTYPE>.json` | Stage 3 |
 | Quants | `models/<variant>/<variant>-*.gguf` | Stage 5 |
-| Bench reports | `reports/perf/<machine>/*_<variant>_<backend>.json` | Stage 6 |
+| Bench reports, rig 1 | `### Apple M4 Max` section in `docs/models/<variant>.md` | Stage 6 |
+| Bench reports, rig 2 | `### AMD Ryzen 7 PRO 4750U` section in `docs/models/<variant>.md` | Stage 6 |
 | WER score JSONs | `reports/wer/<variant>-*.<dataset>.score.json` | Stage 7 |
 | WER summary | `reports/wer/<variant>.<dataset>.summary.md` | Stage 7 |
 
@@ -68,13 +70,30 @@ do
 done
 ls models/<variant>/<variant>-*.gguf >/dev/null 2>&1 \
   && echo "OK quants" || echo "MISSING quants"
-ls reports/perf/*/*<variant>*.json >/dev/null 2>&1 \
-  && echo "OK bench" || echo "MISSING bench"
+# Bench: reports/ is gitignored and each rig keeps its own JSON locally, so
+# the checkable artifact is the rendered rig section in the model card.
+# BOTH rigs are required. A base apple-m4 (or any other dev box) does not
+# substitute for either.
+for rig in "Apple M4 Max" "AMD Ryzen 7 PRO 4750U"; do
+  grep -q "^### $rig" docs/models/<variant>.md \
+    && echo "OK bench-rig: $rig" || echo "MISSING bench-rig: $rig"
+done
+grep -q "^  m4-max:" scripts/hf_cards/<variant>.yaml \
+  && echo "OK perf yaml m4-max" || echo "MISSING perf yaml m4-max"
+grep -q "^  ryzen-4750u:" scripts/hf_cards/<variant>.yaml \
+  && echo "OK perf yaml ryzen-4750u" || echo "MISSING perf yaml ryzen-4750u"
 ls reports/wer/<variant>-*.<dataset>.score.json >/dev/null 2>&1 \
   && echo "OK wer-scores" || echo "MISSING wer-scores"
 ```
 
 Any `MISSING` halts Stage 8.
+
+A `MISSING bench-rig` is the one row that is easy to wave through, because
+a model card with one rig table *looks* finished. It is not: publication
+scope is two rigs (`porting-6-bench`, Reference machine matrix). Send the
+user back to Stage 6 on the missing rig. The only way past it is the user
+explicitly signing off on shipping with one rig, in which case the card
+must name the rig the numbers were measured on.
 
 ### Step 2: Family doc (execute + ask-point)
 
@@ -125,7 +144,10 @@ Two acceptable approaches:
    facts directly from artifacts — quants from
    `models/<variant>/`, WER and the measured reference baseline from
    `reports/wer/<variant>-*.score.json`, bench from
-   `reports/perf/<machine>/`, and the acceptance dataset from
+   `reports/perf/<machine>/` on **both** rigs (one `###` section each,
+   `Apple M4 Max` with metal/cpu and `AMD Ryzen 7 PRO 4750U` with
+   vulkan/cpu, each footnoted with its OS and the transcribe.cpp sha),
+   and the acceptance dataset from
    `intake.upstream_benchmarks[0]`. Ask for `target_hf_repo` since it
    cannot be inferred.
 2. **Render from the existing template** if the template already covers
@@ -210,7 +232,8 @@ action, not part of this stage.
 - Pre-flight checklist (Step 1) was green before any drafting.
 - `docs/porting/families/<family>.md` filled and reviewed.
 - `docs/models/<variant>.md` authored with a populated download / WER /
-  bench table.
+  bench table, the bench carrying **both** rig sections (Apple M4 Max,
+  AMD Ryzen 7 PRO 4750U) unless the user signed off on fewer.
 - `scripts/hf_cards/<variant>.yaml` committed-ready.
 - `models/<variant>/README.md` rendered.
 - Docs/README pushed to the private HF repo; public flip deferred.
