@@ -58,10 +58,8 @@ struct GraniteNarModel final : public transcribe_model {
 struct GraniteNarSession final : public transcribe_session {
     // Encoder output buffered between encode and projector/LM.
     std::vector<float> mel_buf;
-    std::vector<float> enc_cat_host;         // [T_enc, num_encoder_layers * enc_hidden]
-    std::vector<float> ctc_logits_host;      // [T_enc, output_dim]
-    std::vector<float> ctc_bpe_logits_host;  // [N_valid, bpe_output_dim] flat
-    std::vector<float> proj_out_host;        // [n_audio_tokens, llm_dim]
+    std::vector<float> enc_cat_host;   // [T_enc, num_encoder_layers * enc_hidden]
+    std::vector<float> proj_out_host;  // [n_audio_tokens, llm_dim]
     int32_t            t_enc          = 0;
     int32_t            n_audio_tokens = 0;
 

@@ -10,9 +10,9 @@
 //     forward pass — no KV cache, is_causal=False)
 //
 // The forward composes in one run() call as:
-//   PCM -> mel -> 2-frame stack -> encoder graph (emit cat_out,
-//     ctc_logits, ctc_bpe_logits) -> host CTC pool + greedy decode of
-//     the BPE head -> initial hypothesis -> add_insertion_slots ->
+//   PCM -> mel -> 2-frame stack -> encoder graph (emit cat_out and
+//     ctc importance) -> bounded BPE-CTC projection + greedy decode ->
+//     initial hypothesis -> add_insertion_slots ->
 //     text_ids -> decoder forward graph (with projector audio embeds
 //     concatenated to the front of inputs_embeds) -> text_logits ->
 //     argmax + collapse + drop EOS -> final transcript.
@@ -391,6 +391,118 @@ void apply_thread_count(ggml_backend_sched_t sched, int n_threads) {
     transcribe::configure_sched_n_threads(sched, n_threads);
 }
 
+// Keep the 100k-wide BPE projection bounded. At five minutes, projecting all
+// T_enc frames at once would materialize a 5.7 GiB F32 tensor. Pooling four
+// encoder states before the linear projection is mathematically equivalent to
+// pooling their logits, cuts the projection work by 4x, and lets each bounded
+// chunk return only token IDs to the host.
+constexpr int kBpeCtcWindowsPerChunk = 512;
+
+transcribe_status compute_bpe_ctc_initial_hypothesis(ggml_backend_sched_t       sched,
+                                                     const GraniteNarWeights &  weights,
+                                                     const GraniteNarHParams &  hp,
+                                                     const std::vector<float> & enc_cat,
+                                                     int64_t                    cat_h,
+                                                     int                        T_enc,
+                                                     int64_t                    final_offset,
+                                                     const std::vector<float> & non_blank,
+                                                     std::vector<int32_t> &     out_token_ids,
+                                                     int64_t &                  compute_us) {
+    out_token_ids.clear();
+    compute_us            = 0;
+    const int pool_window = hp.enc_bpe_pool_window;
+    if (sched == nullptr || T_enc <= 0 || pool_window <= 0 || hp.enc_hidden <= 0 || final_offset < 0 ||
+        final_offset + hp.enc_hidden > cat_h || enc_cat.size() < static_cast<size_t>(cat_h) * T_enc ||
+        non_blank.size() < static_cast<size_t>(T_enc)) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const int n_windows     = (T_enc + pool_window - 1) / pool_window;
+    const int chunk_windows = std::min(kBpeCtcWindowsPerChunk, n_windows);
+
+    ggml_init_params ip{};
+    ip.mem_size            = 1024 * 1024;
+    ip.mem_buffer          = nullptr;
+    ip.no_alloc            = true;
+    ggml_context * bpe_ctx = ggml_init(ip);
+    if (bpe_ctx == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar BPE CTC: context allocation failed");
+        return TRANSCRIBE_ERR_OOM;
+    }
+
+    BpeCtcBuild bb = build_bpe_ctc_graph(bpe_ctx, weights, hp, chunk_windows);
+    if (bb.graph == nullptr || bb.hidden_in == nullptr || bb.token_ids == nullptr) {
+        ggml_free(bpe_ctx);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    ggml_backend_sched_reset(sched);
+    if (!ggml_backend_sched_alloc_graph(sched, bb.graph)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar BPE CTC: graph allocation failed -- out of memory");
+        ggml_free(bpe_ctx);
+        return TRANSCRIBE_ERR_OOM;
+    }
+
+    const int            hidden = hp.enc_hidden;
+    std::vector<float>   hidden_chunk(static_cast<size_t>(hidden) * bb.n_windows, 0.0f);
+    std::vector<int32_t> chunk_ids(bb.n_windows, hp.enc_bpe_blank_id);
+    std::vector<uint8_t> valid(bb.n_windows, 0);
+
+    int prev = -1;
+    out_token_ids.reserve(n_windows);
+    for (int w0 = 0; w0 < n_windows; w0 += chunk_windows) {
+        std::fill(hidden_chunk.begin(), hidden_chunk.end(), 0.0f);
+        std::fill(valid.begin(), valid.end(), 0);
+
+        const int actual_windows = std::min(chunk_windows, n_windows - w0);
+        for (int w = 0; w < actual_windows; ++w) {
+            const int global_window = w0 + w;
+            const int t0            = global_window * pool_window;
+            const int t1            = std::min(t0 + pool_window, T_enc);
+            float     total         = 0.0f;
+            for (int t = t0; t < t1; ++t) {
+                total += non_blank[static_cast<size_t>(t)];
+            }
+            if (total <= 1e-9f) {
+                continue;
+            }
+            valid[static_cast<size_t>(w)] = 1;
+            float * dst                   = hidden_chunk.data() + static_cast<size_t>(w) * hidden;
+            for (int t = t0; t < t1; ++t) {
+                const float   wt  = non_blank[static_cast<size_t>(t)] / total;
+                const float * src = enc_cat.data() + static_cast<size_t>(t) * cat_h + final_offset;
+                for (int h = 0; h < hidden; ++h) {
+                    dst[h] += wt * src[h];
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(bb.hidden_in, hidden_chunk.data(), 0, hidden_chunk.size() * sizeof(float));
+
+        const int64_t     t_compute_start = ggml_time_us();
+        const ggml_status gs              = ggml_backend_sched_graph_compute(sched, bb.graph);
+        compute_us += ggml_time_us() - t_compute_start;
+        if (gs != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar BPE CTC: compute failed (%d)", static_cast<int>(gs));
+            ggml_free(bpe_ctx);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_tensor_get(bb.token_ids, chunk_ids.data(), 0, chunk_ids.size() * sizeof(int32_t));
+
+        for (int w = 0; w < actual_windows; ++w) {
+            const int argmax = valid[static_cast<size_t>(w)] ? chunk_ids[static_cast<size_t>(w)] : hp.enc_bpe_blank_id;
+            if (argmax != hp.enc_bpe_blank_id && argmax != prev) {
+                const int shift = (hp.enc_bpe_blank_id == 0) ? 1 : 0;
+                out_token_ids.push_back(argmax - shift);
+            }
+            prev = argmax;
+        }
+    }
+
+    ggml_free(bpe_ctx);
+    return TRANSCRIBE_OK;
+}
+
 }  // namespace
 
 transcribe_status run(transcribe_session *          ctx_base,
@@ -530,18 +642,6 @@ transcribe_status run(transcribe_session *          ctx_base,
     cc->enc_cat_host.resize(static_cast<size_t>(cat_h) * cat_T);
     ggml_backend_tensor_get(eb.cat_out, cc->enc_cat_host.data(), 0, cc->enc_cat_host.size() * sizeof(float));
 
-    const int n_ctc_vocab = static_cast<int>(eb.ctc_logits->ne[0]);
-    cc->ctc_logits_host.resize(static_cast<size_t>(n_ctc_vocab) * cat_T);
-    ggml_backend_tensor_get(eb.ctc_logits, cc->ctc_logits_host.data(), 0, cc->ctc_logits_host.size() * sizeof(float));
-
-    int n_bpe_vocab = 0;
-    if (eb.ctc_bpe_logits != nullptr) {
-        n_bpe_vocab = static_cast<int>(eb.ctc_bpe_logits->ne[0]);
-        cc->ctc_bpe_logits_host.resize(static_cast<size_t>(n_bpe_vocab) * cat_T);
-        ggml_backend_tensor_get(eb.ctc_bpe_logits, cc->ctc_bpe_logits_host.data(), 0,
-                                cc->ctc_bpe_logits_host.size() * sizeof(float));
-    }
-
     std::vector<float> mid_non_blank;
     if (eb.mid_blank_probs != nullptr) {
         std::vector<float> mid_blank(t_enc);
@@ -552,21 +652,19 @@ transcribe_status run(transcribe_session *          ctx_base,
         }
     }
 
-    // ggml stores ne[0]=F as the innermost (fastest-varying) axis. For
-    // a tensor with ne=[F, T_enc], the host buffer layout in memory is
-    //   buf[t * F + f] = element at ggml indices (f, t)
-    // which is the SAME as `[T_enc, F]` numpy row-major (T outer, F
-    // inner). No transpose needed: the host-side BPE pool reads
-    //   ctc_bpe_logits_host[t * V + v]
-    // and gets the v-th logit at frame t correctly.
-    (void) n_ctc_vocab;
-
-    // Initial BPE hypothesis.
+    // Initial BPE hypothesis. cat_out is host-row-major [T_enc, cat_h];
+    // final_capture_offset identifies the final 1024-wide encoder state used
+    // by the BPE head inside each row.
     std::vector<int32_t> hyp_ids;
-    if (n_bpe_vocab > 0 && !mid_non_blank.empty()) {
-        compute_bpe_ctc_initial_hypothesis(mid_non_blank, cc->ctc_bpe_logits_host, n_bpe_vocab, t_enc,
-                                           cm->hparams.enc_bpe_pool_window,
-                                           /*blank_id=*/cm->hparams.enc_bpe_blank_id, hyp_ids);
+    int64_t              bpe_compute_us = 0;
+    if (!mid_non_blank.empty()) {
+        const transcribe_status bst =
+            compute_bpe_ctc_initial_hypothesis(cc->sched, cm->weights, cm->hparams, cc->enc_cat_host, cat_h, t_enc,
+                                               eb.final_capture_offset, mid_non_blank, hyp_ids, bpe_compute_us);
+        if (bst != TRANSCRIBE_OK) {
+            return bst;
+        }
+        cc->t_encode_us += bpe_compute_us;
     }
     if (hyp_ids.empty()) {
         // No tokens — emit empty transcript and return.

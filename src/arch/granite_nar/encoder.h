@@ -5,12 +5,13 @@
 // AR granite encoder (block-local Shaw self-attention, conv_expansion=2
 // GLU, mid-layer self-conditioned CTC bypass) plus two NAR-only additions:
 //
-//   1. A BPE CTC head (1024 → 100352) over a posterior-weighted
+//   1. A BPE CTC head (1024 -> 100352) over a posterior-weighted
 //      window=4 pool of valid frames. We expose the bypass-step char-CTC
-//      mid_logits (1024 → 348) as `enc.ctc_logits` — the exact tensor
+//      mid_logits (1024 -> 348) as `enc.ctc_logits` -- the exact tensor
 //      the reference model computes at self_conditioning_layer for the
-//      self-conditioning residual. The pooled BPE head is computed
-//      host-side at run time.
+//      self-conditioning residual. The very wide BPE head runs in bounded
+//      chunks after the encoder so frame-level vocabulary logits are never
+//      retained for the full utterance.
 //   2. All-hidden-states capture: the projector consumes 4 encoder
 //      hidden states (post-LN, pre-bypass at the chosen layer
 //      boundaries; indices [4, 8, 12, -1] 1-indexed → layer outputs
@@ -57,9 +58,7 @@ struct EncoderBuild {
     ggml_tensor * cat_out         = nullptr;  // [num_enc_layers * hidden, T_enc]
                                               //  the projector input
     ggml_tensor * ctc_logits      = nullptr;  // [enc_out_dim=348, T_enc]
-    ggml_tensor * ctc_bpe_logits  = nullptr;  // [bpe_output_dim, T_enc]
-                                              //  raw frame-level (no pool)
-    ggml_tensor * mid_blank_probs = nullptr;  // [T_enc] — softmax(mid_ctc)[blank].
+    ggml_tensor * mid_blank_probs = nullptr;  // [T_enc] -- softmax(mid_ctc)[blank].
                                               //  Used host-side as the BPE pool's
                                               //  importance weight (importance =
                                               //  1 - blank_prob_mid).
@@ -82,8 +81,9 @@ struct EncoderBuild {
         ggml_tensor * block_0_post_ff2  = nullptr;
     } dumps;
 
-    int n_blocks_local = 0;
-    int last_block_rem = 0;
+    int     n_blocks_local       = 0;
+    int     last_block_rem       = 0;
+    int64_t final_capture_offset = -1;  // channel offset in cat_out
 };
 
 EncoderBuild build_encoder_graph(ggml_context *            ctx,
@@ -96,39 +96,22 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
 std::vector<int32_t> precompute_pos_rows(int context_size, int max_pos_emb);
 std::vector<float>   precompute_last_block_mask(int context_size, int t_enc_remainder);
 
-// Host-side BPE CTC pool + greedy decode.
-//
-// Input:
-//   importance_non_blank  [T_enc] host row of (1 - blank_prob) values used
-//                         as per-frame pool weights. Must come from the
-//                         *middle* (self-conditioning) CTC head's softmax,
-//                         not the final head — see modeling_ctc.py.
-//   ctc_bpe      [T_enc, n_bpe_vocab] host-row-major (frame-level BPE
-//                logits). n_bpe_vocab is bpe_output_dim: 100353
-//                (vocab_size + 1) for the old scheme, 100352 (vocab_size)
-//                for the new scheme.
-//   pool_window  4 in this family
-//   blank_id     selects the decode scheme (see weights.h enc_bpe_blank_id):
-//                  - 0   (old): channel 0 is a synthetic blank, channels
-//                        1..N hold LLM ids; emitted id = argmax - 1.
-//                  - 100257 (new, BOS): channels ARE the LLM ids directly,
-//                        blank is the BOS id; emitted id = argmax (no shift).
-// Output:
-//   token_ids    initial-hypothesis BPE token ids after greedy + collapse +
-//                blank removal. Used as the text portion of the NLE LLM
-//                forward (each token gets an eos slot inserted around it).
-//
-// Reference: NLE NARDecoder.compute_text_ctc_preds. Per-frame non-blank
-// frames are bucketed into windows of pool_window, the BPE logits over each
-// window are weighted by the (softmaxed) CTC non-blank posterior, then a
-// greedy argmax + collapse-repeats + drop-blanks yields the hypothesis. See
-// the implementation in encoder.cpp.
-void compute_bpe_ctc_initial_hypothesis(const std::vector<float> & importance_non_blank,
-                                        const std::vector<float> & ctc_bpe_logits,
-                                        int                        n_bpe_vocab,
-                                        int                        T_enc,
-                                        int                        pool_window,
-                                        int                        blank_id,
-                                        std::vector<int32_t> &     out_token_ids);
+// Bounded BPE-CTC projection. The caller supplies posterior-weighted encoder
+// states, one per pooling window. Linearity makes projecting a weighted hidden
+// state equivalent to weighting the projected frame logits. The graph returns
+// one vocabulary argmax per window, avoiding a full-utterance [vocab, T_enc]
+// tensor.
+struct BpeCtcBuild {
+    ggml_tensor * hidden_in = nullptr;  // [enc_hidden, n_windows]
+    ggml_tensor * token_ids = nullptr;  // [n_windows] i32
+    ggml_cgraph * graph     = nullptr;
+
+    int n_windows = 0;
+};
+
+BpeCtcBuild build_bpe_ctc_graph(ggml_context *            ctx,
+                                const GraniteNarWeights & weights,
+                                const GraniteNarHParams & hp,
+                                int                       n_windows);
 
 }  // namespace transcribe::granite_nar
