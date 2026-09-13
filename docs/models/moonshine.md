@@ -49,10 +49,12 @@ to Q8_0 storage and would be near-duplicates.
 
 ### English
 
-| Variant | Params | Q8_0 size | WER (LibriSpeech test-clean) | Doc |
-| --- | ---: | ---: | ---: | --- |
-| `moonshine-tiny` |  27M | 34 MB | 4.60% | [moonshine-tiny.md](moonshine-tiny.md) |
-| `moonshine-base` |  61M | 74 MB | 3.26% | [moonshine-base.md](moonshine-base.md) |
+<!-- catalog:family variants=moonshine-tiny,moonshine-base -->
+| Variant          | Params | Languages | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `moonshine-tiny` |    27M | en        |     35 MB | LibriSpeech test-clean (WER) | 4.60% | -            | [moonshine-tiny.md](moonshine-tiny.md) |
+| `moonshine-base` |    62M | en        |     77 MB | LibriSpeech test-clean (WER) | 3.26% | -            | [moonshine-base.md](moonshine-base.md) |
+<!-- /catalog -->
 
 ### Language-specific (Useful Sensors fine-tunes)
 
@@ -62,20 +64,22 @@ because Useful Sensors does not publish per-language WER/CER for these
 variants. See each repo's `README.md` on Hugging Face for the full
 F32 / F16 / Q8_0 table and the reference baseline.
 
-| Variant | Lang | Params | Q8_0 size | Metric (FLEURS test) | Q8_0 | Repo |
-| --- | --- | ---: | ---: | --- | ---: | --- |
-| `moonshine-tiny-vi` | Vietnamese (vi) | 27M | 34 MB | WER | 13.16% | [handy-computer/moonshine-tiny-vi-gguf](https://huggingface.co/handy-computer/moonshine-tiny-vi-gguf) |
-| `moonshine-tiny-uk` | Ukrainian (uk)  | 27M | 34 MB | WER | 18.89% | [handy-computer/moonshine-tiny-uk-gguf](https://huggingface.co/handy-computer/moonshine-tiny-uk-gguf) |
-| `moonshine-tiny-zh` | Mandarin (zh)   | 27M | 34 MB | CER | 13.78% | [handy-computer/moonshine-tiny-zh-gguf](https://huggingface.co/handy-computer/moonshine-tiny-zh-gguf) |
-| `moonshine-tiny-ko` | Korean (ko)     | 27M | 34 MB | CER |  8.98% | [handy-computer/moonshine-tiny-ko-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ko-gguf) |
-| `moonshine-tiny-ar` | Arabic (ar)     | 27M | 34 MB | WER | 26.79% | [handy-computer/moonshine-tiny-ar-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ar-gguf) |
-| `moonshine-tiny-ja` | Japanese (ja)   | 27M | 34 MB | CER | 13.36% | [handy-computer/moonshine-tiny-ja-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ja-gguf) |
-| `moonshine-base-vi` | Vietnamese (vi) | 61M | 74 MB | WER |  9.79% | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
-| `moonshine-base-uk` | Ukrainian (uk)  | 61M | 74 MB | WER | 14.39% | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
-| `moonshine-base-zh` | Mandarin (zh)   | 61M | 74 MB | CER | 17.00% | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
-| `moonshine-base-ko` | Korean (ko)     | 61M | 74 MB | CER |  8.13% | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
-| `moonshine-base-ar` | Arabic (ar)     | 61M | 74 MB | WER | 24.50% | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
-| `moonshine-base-ja` | Japanese (ja)   | 61M | 74 MB | CER | 10.53% | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
+<!-- catalog:family variants=moonshine-tiny-vi,moonshine-tiny-uk,moonshine-tiny-zh,moonshine-tiny-ko,moonshine-tiny-ar,moonshine-tiny-ja,moonshine-base-vi,moonshine-base-uk,moonshine-base-zh,moonshine-base-ko,moonshine-base-ar,moonshine-base-ja -->
+| Variant             | Params | Languages | Q8_0 size | Benchmark       |   Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `moonshine-tiny-vi` |    27M | vi        |     35 MB | FLEURS vi (WER) | 13.16% | -            | [handy-computer/moonshine-tiny-vi-gguf](https://huggingface.co/handy-computer/moonshine-tiny-vi-gguf) |
+| `moonshine-tiny-uk` |    27M | uk        |     35 MB | FLEURS uk (WER) | 18.89% | -            | [handy-computer/moonshine-tiny-uk-gguf](https://huggingface.co/handy-computer/moonshine-tiny-uk-gguf) |
+| `moonshine-tiny-zh` |    27M | zh        |     35 MB | FLEURS zh (CER) | 13.78% | -            | [handy-computer/moonshine-tiny-zh-gguf](https://huggingface.co/handy-computer/moonshine-tiny-zh-gguf) |
+| `moonshine-tiny-ko` |    27M | ko        |     35 MB | FLEURS ko (CER) |  8.98% | -            | [handy-computer/moonshine-tiny-ko-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ko-gguf) |
+| `moonshine-tiny-ar` |    27M | ar        |     35 MB | FLEURS ar (WER) | 26.79% | -            | [handy-computer/moonshine-tiny-ar-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ar-gguf) |
+| `moonshine-tiny-ja` |    27M | ja        |     35 MB | FLEURS ja (CER) | 13.36% | -            | [handy-computer/moonshine-tiny-ja-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ja-gguf) |
+| `moonshine-base-vi` |    62M | vi        |     77 MB | FLEURS vi (WER) |  9.79% | -            | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
+| `moonshine-base-uk` |    62M | uk        |     77 MB | FLEURS uk (WER) | 14.39% | -            | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
+| `moonshine-base-zh` |    62M | zh        |     77 MB | FLEURS zh (CER) | 17.00% | -            | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
+| `moonshine-base-ko` |    62M | ko        |     77 MB | FLEURS ko (CER) |  8.13% | -            | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
+| `moonshine-base-ar` |    62M | ar        |     77 MB | FLEURS ar (WER) | 24.50% | -            | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
+| `moonshine-base-ja` |    62M | ja        |     77 MB | FLEURS ja (CER) | 10.53% | -            | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

@@ -43,6 +43,14 @@ NVIDIA's self-reported number on the same split is 1.69%, so the F32 and Q8_0
 ports match the upstream reference within rounding.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 4.11% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

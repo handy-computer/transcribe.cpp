@@ -53,6 +53,21 @@ tensor-level numerical parity is established by the Voxtral Mini 3B sibling
 (identical architecture).
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 3.29% |
+| en       | WER    | 3.55% |
+| es       | WER    | 2.86% |
+| fr       | WER    | 3.86% |
+| hi       | WER    | 7.40% |
+| it       | WER    | 2.69% |
+| nl       | WER    | 5.12% |
+| pt       | WER    | 3.74% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

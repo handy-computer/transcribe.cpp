@@ -68,20 +68,45 @@ stays unbounded for the same reason. See the
 WER measured on FLEURS test en (647 utterances), greedy RNN-T, --language en-US, whisper-normalizer scoring; the per-quant column is FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports 7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32 3.04 / F16 3.03 / Q8_0 3.06 / Q6_K 3.07 / Q5_K_M 3.10 / Q4_K_M 3.28, against a 3.03% NeMo reference.
 <!-- /catalog -->
 
-| Preset | FLEURS test en (n=647) | LibriSpeech test-clean (n=2620) |
-| --- | ---: | ---: |
-| Reference (NeMo) | 7.99 | 3.03 |
-| F32    | 7.97 | 3.04 |
-| F16    | 7.97 | 3.03 |
-| Q8_0   | 7.88 | 3.06 |
-| Q6_K   | 8.02 | 3.07 |
-| Q5_K_M | 8.15 | 3.10 |
-| Q4_K_M | 8.49 | 3.28 |
+<!-- catalog:accuracy -->
+**FLEURS test**
 
-The F32 reference dtype meets the measured-Oracle gate on both datasets.
-F16/Q8_0/Q6_K/Q5_K_M land inside the reference 95% CI; Q4_K_M carries the
-largest quantization loss (+0.50 on FLEURS, +0.25 on LibriSpeech) but is
-accepted for shipping.
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| ar       | WER    | 15.93% |
+| bg       | WER    | 22.02% |
+| cs       | WER    | 23.00% |
+| da       | WER    | 28.51% |
+| de       | WER    | 10.33% |
+| es       | WER    |  6.30% |
+| et       | WER    | 31.84% |
+| fi       | WER    | 21.91% |
+| fr       | WER    | 10.78% |
+| hi       | WER    |  8.61% |
+| hr       | WER    | 26.21% |
+| hu       | WER    | 32.12% |
+| it       | WER    |  5.78% |
+| ja       | CER    | 13.52% |
+| ko       | CER    |  8.89% |
+| nb       | WER    | 19.24% |
+| nl       | WER    | 13.61% |
+| pl       | WER    | 17.54% |
+| pt       | WER    |  8.52% |
+| ro       | WER    | 28.28% |
+| ru       | WER    | 12.61% |
+| sk       | WER    | 23.25% |
+| sv       | WER    | 24.32% |
+| tr       | WER    | 15.40% |
+| uk       | WER    | 14.88% |
+| vi       | WER    | 13.96% |
+| zh       | CER    | 18.87% |
+
+**LibriSpeech test-clean**
+
+| Language | Metric |   F32 |   F16 |  Q8_0 |  Q6_K | Q5_K_M | Q4_K_M |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| en       | WER    | 3.04% | 3.04% | 3.05% | 3.08% |  3.10% |  3.30% |
+<!-- /catalog -->
 
 ## Quick Start
 

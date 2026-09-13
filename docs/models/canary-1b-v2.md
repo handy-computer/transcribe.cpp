@@ -62,6 +62,38 @@ our F32 port comes in slightly under the upstream-reported number
 (Δ −0.26pp) and is likely down to scoring differences.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| bg       | WER    |  9.22% |
+| cs       | WER    |  8.56% |
+| da       | WER    | 11.34% |
+| de       | WER    |  4.46% |
+| el       | WER    | 26.02% |
+| en       | WER    |  4.47% |
+| es       | WER    |  3.10% |
+| et       | WER    | 12.72% |
+| fi       | WER    |  8.86% |
+| fr       | WER    |  5.09% |
+| hr       | WER    |  8.40% |
+| hu       | WER    | 13.06% |
+| it       | WER    |  3.10% |
+| lt       | WER    | 13.45% |
+| lv       | WER    | 10.41% |
+| mt       | WER    | 19.75% |
+| nl       | WER    |  6.28% |
+| pl       | WER    |  6.88% |
+| pt       | WER    |  4.50% |
+| ro       | WER    |  6.87% |
+| ru       | WER    |  7.83% |
+| sk       | WER    |  6.84% |
+| sl       | WER    | 12.76% |
+| sv       | WER    |  9.74% |
+| uk       | WER    | 10.58% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

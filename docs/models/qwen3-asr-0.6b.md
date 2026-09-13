@@ -49,6 +49,43 @@ but real regression driven by the tied token-embedding / head. Reproduce
 with `scripts/wer/run.py` + `scripts/wer/score.py`.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| ar       | WER    | 24.51% |
+| cs       | WER    | 44.50% |
+| da       | WER    | 36.07% |
+| de       | WER    |  6.80% |
+| el       | WER    | 49.12% |
+| en       | WER    |  4.23% |
+| es       | WER    |  4.88% |
+| fa       | WER    | 50.30% |
+| fi       | WER    | 46.49% |
+| fil      | WER    | 35.43% |
+| fr       | WER    |  7.76% |
+| hi       | WER    | 12.68% |
+| hu       | WER    | 56.24% |
+| id       | WER    |  8.49% |
+| it       | WER    |  5.19% |
+| ja       | CER    |  8.61% |
+| ko       | CER    |  5.82% |
+| mk       | WER    | 35.09% |
+| ms       | WER    | 17.18% |
+| nl       | WER    | 13.90% |
+| pl       | WER    | 25.06% |
+| pt       | WER    |  6.57% |
+| ro       | WER    | 40.65% |
+| ru       | WER    | 10.30% |
+| sv       | WER    | 35.72% |
+| th       | CER    |  8.81% |
+| tr       | WER    | 16.74% |
+| vi       | WER    |  9.32% |
+| yue      | CER    |  7.91% |
+| zh       | CER    |  7.57% |
+<!-- /catalog -->
+
 **FLEURS-zh** (945 utterances) CER: 7.6% on the upstream `qwen_asr`
 reference, 7.64% on the Q8_0 port (95% CI [6.74%, 8.51%]); within
 bootstrap noise. Reproduce with

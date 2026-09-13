@@ -49,6 +49,17 @@ likely this is due to differences in how we score WER, based on the
 results we have from canary-180m-flash.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 6.45% |
+| en       | WER    | 4.44% |
+| es       | WER    | 6.06% |
+| fr       | WER    | 7.44% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

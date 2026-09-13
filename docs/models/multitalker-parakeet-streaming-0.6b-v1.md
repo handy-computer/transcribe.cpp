@@ -74,6 +74,14 @@ build/bin/transcribe-cli --diarize \
 ```
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 6.52% |
+<!-- /catalog -->
+
 ### Bundle dtypes
 
 The tier names the ASR half's dtype; the embedded Sortformer diarizer is F32

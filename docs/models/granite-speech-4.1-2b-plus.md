@@ -67,6 +67,18 @@ clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the
 prompt correctly; this note only matters if you reproduce the reference.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| de       | WER    |  8.06% |
+| en       | WER    |  4.46% |
+| es       | WER    |  6.53% |
+| fr       | WER    |  8.82% |
+| pt       | WER    | 10.61% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

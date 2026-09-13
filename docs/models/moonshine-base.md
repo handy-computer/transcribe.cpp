@@ -51,6 +51,14 @@ acceptance gate. Q8_0 lands at 3.26%, slightly under F32 — that delta
 sits inside the 95% bootstrap CI and is noise, not a real improvement.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 12.25% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

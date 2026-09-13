@@ -40,6 +40,14 @@ pinned 2026-05-10.
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT/RNN-T transducer decoding and no external LM. F32 reference baseline: 1.87%. NVIDIA's self-reported number on the same split is 1.82%.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 4.68% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

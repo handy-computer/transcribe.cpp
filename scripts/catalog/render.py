@@ -15,9 +15,11 @@ files, this rewrites only the regions a doc explicitly delegates:
     ...
     <!-- /catalog -->
 
-Blocks: `downloads`, `perf machine=<slug>`, `intro` (upstream link plus the
-card spec's `summary`), and `prose field=wer.notes` (any `|` text field of
-the spec, dotted path). Everything outside a marker pair is untouched. The variant is the file stem
+Blocks: `downloads`, `perf machine=<slug>`, `accuracy` (one table per
+dataset split beyond the headline), `intro` (upstream link plus the card
+spec's `summary`), `prose field=wer.notes` (any `|` text field of the spec,
+dotted path), and `family variants=a,b,c` (a roll-up row per variant, for
+family pages). Everything outside a marker pair is untouched. The variant is the file stem
 unless the marker overrides it with `variant=`, so family docs can pull a
 table for a model they are not named after.
 
@@ -192,8 +194,87 @@ def block_prose(record: dict, attrs: dict[str, str]) -> list[str]:
     return prose_lines(value, f"spec field {field!r}")
 
 
+def block_accuracy(record: dict, attrs: dict[str, str]) -> list[str]:
+    """One table per dataset split: language rows, quant columns.
+
+    The headline cell (dataset, split, language) is already the download
+    table's last column, so it is left out unless `all=true`; the rest of its
+    split still renders. `datasets=fleurs:test,librispeech:test-clean` narrows
+    to named splits.
+    """
+    headline = common.headline(record) or {}
+    wanted = None
+    if attrs.get("datasets"):
+        wanted = {tuple(item.split(":", 1)) for item in attrs["datasets"].split(",")}
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in record.get("accuracy_benchmarks", []):
+        key = (row["dataset"], row["split"])
+        if wanted is not None and key not in wanted:
+            continue
+        if wanted is None and not as_bool(attrs.get("all"), False) \
+                and (*key, row["language"]) == (headline.get("dataset"), headline.get("split"),
+                                               headline.get("language")):
+            continue
+        groups.setdefault(key, []).append(row)
+    if not groups:
+        raise RenderError("no accuracy rows beyond the headline benchmark")
+
+    quant_rank = {item["quant"]: i for i, item in enumerate(record.get("downloads", []))}
+    out: list[str] = []
+    for (dataset, split), rows in sorted(groups.items()):
+        quants = sorted({row["quant"] for row in rows}, key=lambda q: (quant_rank.get(q, 99), q))
+        cells: dict[tuple[str, str], dict] = {}
+        for row in rows:
+            # Several recipes of one cell can coexist (batch size, timestamps);
+            # the profile recipe wins, else the first listed.
+            key = (row["language"], row["quant"])
+            if key not in cells or row.get("engine_sha") and not cells[key].get("engine_sha"):
+                cells[key] = row
+        body = []
+        for language in sorted({row["language"] for row in rows}):
+            metric = next(cells[(language, q)]["metric"] for q in quants if (language, q) in cells)
+            body.append([language, metric.upper()]
+                        + [common.fmt_err(cells.get((language, q))) for q in quants])
+        if out:
+            out.append("")
+        label = f"FLEURS {split}" if dataset == "fleurs" else common.dataset_label(dataset, split, "")
+        out.extend([f"**{label}**", ""])
+        out.extend(common.render_table(["Language", "Metric"] + quants,
+                                       ["l", "l"] + ["r"] * len(quants), body))
+    return out
+
+
+def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
+    """A family roll-up: one row per variant, headline number at one quant."""
+    names = [name for name in attrs.get("variants", "").split(",") if name]
+    if not names:
+        raise RenderError("family block needs variants=")
+    quant = attrs.get("quant", "Q8_0")
+    body = []
+    for name in names:
+        record = records.get(name)
+        if record is None:
+            raise RenderError(f"no catalog record for {name!r}")
+        download = next((d for d in record.get("downloads", []) if d["quant"] == quant), None)
+        headline = common.headline(record) or {}
+        doc = common.DOCS_DIR / f"{name}.md"
+        link = (f"[{name}.md]({name}.md)" if doc.exists()
+                else f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})")
+        body.append([
+            f"`{name}`", common.fmt_params(record["params"]), common.languages_summary(record),
+            common.fmt_size(download["size_bytes"]) if download else "-",
+            (f"{common.headline_label(record)} ({headline['metric'].upper()})"
+             if headline else "-"),
+            common.fmt_err(common.headline_rows(record).get(quant)),
+            common.capabilities_summary(record), link])
+    return common.render_table(
+        ["Variant", "Params", "Languages", f"{quant} size", "Benchmark", quant,
+         "Capabilities", "Doc"],
+        ["l", "r", "l", "r", "l", "r", "l", "l"], body, max_pad=34)
+
+
 BLOCKS = {"downloads": block_downloads, "perf": block_perf,
-          "intro": block_intro, "prose": block_prose}
+          "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy}
 
 
 # --------------------------------------------------------------------------
@@ -220,11 +301,14 @@ def rewrite(path: pathlib.Path, records: dict[str, dict]) -> tuple[str, list[str
         attrs = parse_attrs(raw)
         variant = attrs.get("variant", path.stem)
         try:
-            if name not in BLOCKS:
+            if name == "family":
+                rendered = block_family(records, attrs)
+            elif name not in BLOCKS:
                 raise RenderError(f"unknown block type {name!r}")
-            if variant not in records:
+            elif variant not in records:
                 raise RenderError(f"no catalog record for {variant!r}")
-            rendered = BLOCKS[name](records[variant], attrs)
+            else:
+                rendered = BLOCKS[name](records[variant], attrs)
         except RenderError as exc:
             errors.append(f"{path.name}:{index + 1}: catalog:{name} {variant}: {exc}")
             out.extend(lines[index + 1:close])  # leave the region alone

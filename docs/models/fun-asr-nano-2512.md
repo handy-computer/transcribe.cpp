@@ -65,6 +65,16 @@ Chinese (AISHELL-1, WenetSpeech) and Japanese (CommonVoice JA) are
 the recommended complementary checks.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 5.49% |
+| ja       | CER    | 8.50% |
+| zh       | CER    | 8.59% |
+<!-- /catalog -->
+
 LibriSpeech is an English benchmark; Fun-ASR-Nano's strongest case is
 Mandarin. **FLEURS-zh** (945 utterances) CER: 8.61% on our FunASR 1.3.1
 reference run, 8.59% on the Q8_0 port (95% CI [7.70%, 9.43%]); within

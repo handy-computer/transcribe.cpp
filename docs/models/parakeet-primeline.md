@@ -63,6 +63,43 @@ produces the same spellings on the same utterances. FLEURS references use
 gives 4.92% for the reference and 4.94% for F32.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| bg       | WER    | 16.33% |
+| cs       | WER    | 15.05% |
+| da       | WER    | 20.52% |
+| el       | WER    | 34.76% |
+| en       | WER    |  4.82% |
+| es       | WER    |  3.85% |
+| et       | WER    | 17.17% |
+| fi       | WER    | 13.39% |
+| fr       | WER    |  6.35% |
+| hr       | WER    | 13.68% |
+| hu       | WER    | 17.52% |
+| it       | WER    |  3.17% |
+| lt       | WER    | 23.08% |
+| lv       | WER    | 28.83% |
+| mt       | WER    | 24.74% |
+| nl       | WER    |  8.49% |
+| pl       | WER    |  8.19% |
+| pt       | WER    |  5.17% |
+| ro       | WER    | 13.80% |
+| ru       | WER    |  7.81% |
+| sk       | WER    | 12.36% |
+| sl       | WER    | 51.07% |
+| sv       | WER    | 16.42% |
+| uk       | WER    |  8.11% |
+
+**LibriSpeech test-clean**
+
+| Language | Metric |   F32 |   F16 |  Q8_0 |  Q6_K | Q5_K_M | Q4_K_M |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| en       | WER    | 2.20% | 2.19% | 2.20% | 2.19% |  2.20% |  2.26% |
+<!-- /catalog -->
+
 primeLine's published 2.95% average is over Tuda-De, Multilingual
 LibriSpeech, and Common Voice 19.0. Those corpora are not in this repo's
 WER pipeline and the number is not comparable to the table above.

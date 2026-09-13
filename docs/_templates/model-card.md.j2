@@ -77,16 +77,14 @@ full contract and the per-family bucket table.
 
 ## Download
 
-| Quantization | Download | Size | WER ({{ dataset_display }}) |
-| --- | --- | ---: | ---: |
-{% for p in presets -%}
-| {{ p.name }} | [{{ p.filename }}](https://huggingface.co/{{ target_hf_repo }}/resolve/main/{{ p.filename }}) | {{ p.size }} | {{ "%.2f"|format(p.wer_pct) }}% |
-{% endfor %}
+<!-- catalog:downloads -->
+<!-- /catalog -->
 
-WER measured on the full {{ dataset_display }} split ({{ dataset_n }} utterances).
-{%- if upstream_wer_pct is not none %}
-Publisher's self-reported number on the same split is {{ "%.2f"|format(upstream_wer_pct) }}%.
-{%- endif %}
+<!-- catalog:prose field=wer.notes -->
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+<!-- /catalog -->
 
 ## Quick Start
 

@@ -41,6 +41,14 @@ long recordings for best results. See the
 WER measured on the full LibriSpeech test-clean split (2,620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline (HuggingFace transformers, Mac MPS): 17.88%; transcribe.cpp F32 matches exactly. Absolute WER is higher than general-purpose ASR (e.g. Whisper-base ~5%) because the model is fine-tuned for medical dictation — on the publisher's internal RAD-DICT / GENERAL-DICT / FM-DICT datasets the model scores 6.6%–9.3%, but those datasets are not publicly reproducible. Q8_0 is the recommended default (smallest preset with no statistically detectable WER degradation); Q4_K_M shows a real +0.26 pp degradation and is shipped for completeness but not recommended — prefer Q5_K_M if you need smaller than Q8_0.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 37.48% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

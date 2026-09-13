@@ -45,6 +45,38 @@ greedy transducer decoding and no external LM. F32 reference baseline: 1.95%.
 NVIDIA's self-reported number on the same split is 1.93%.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| bg       | WER    | 12.81% |
+| cs       | WER    | 12.31% |
+| da       | WER    | 18.64% |
+| de       | WER    |  5.24% |
+| el       | WER    | 35.33% |
+| en       | WER    |  4.83% |
+| es       | WER    |  3.65% |
+| et       | WER    | 17.96% |
+| fi       | WER    | 13.30% |
+| fr       | WER    |  5.30% |
+| hr       | WER    | 12.59% |
+| hu       | WER    | 16.06% |
+| it       | WER    |  3.02% |
+| lt       | WER    | 22.20% |
+| lv       | WER    | 23.77% |
+| mt       | WER    | 20.63% |
+| nl       | WER    |  7.66% |
+| pl       | WER    |  7.37% |
+| pt       | WER    |  4.96% |
+| ro       | WER    | 12.62% |
+| ru       | WER    |  6.54% |
+| sk       | WER    | 10.19% |
+| sl       | WER    | 24.30% |
+| sv       | WER    | 15.25% |
+| uk       | WER    |  6.84% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

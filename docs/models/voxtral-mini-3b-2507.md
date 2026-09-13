@@ -55,6 +55,21 @@ the family's tensor-level numerical gate — 43 checkpointed tensors within
 tolerance, transcript byte-exact.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 4.71% |
+| en       | WER    | 3.89% |
+| es       | WER    | 3.52% |
+| fr       | WER    | 4.51% |
+| hi       | WER    | 8.93% |
+| it       | WER    | 2.56% |
+| nl       | WER    | 6.57% |
+| pt       | WER    | 3.84% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

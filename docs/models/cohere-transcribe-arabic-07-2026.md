@@ -56,6 +56,20 @@ interval. FLEURS Arabic is Egyptian-dialect speech; upstream numbers
 published on other Arabic test sets are not directly comparable.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 | Q5_K_M |
+| --- | --- | ---: | ---: |
+| en       | WER    | 4.88% |  4.88% |
+
+**LibriSpeech test-clean**
+
+| Language | Metric |  BF16 |   F16 |  Q8_0 |  Q6_K | Q5_K_M | Q4_K_M |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| en       | WER    | 1.33% | 1.33% | 1.34% | 1.34% |  1.34% |  1.34% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

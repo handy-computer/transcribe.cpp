@@ -48,6 +48,14 @@ and well within the ±1.00 pp Stage 7 acceptance gate. Q8_0 drift is
 +0.02 pp vs F32 — within bootstrap CI noise.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 14.13% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

@@ -53,6 +53,19 @@ Leaderboard number exactly. Text normalizer: Whisper
 `EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 7.29% |
+| en       | WER    | 4.66% |
+| es       | WER    | 5.91% |
+| fr       | WER    | 8.44% |
+| ja       | CER    | 6.44% |
+| pt       | WER    | 9.60% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

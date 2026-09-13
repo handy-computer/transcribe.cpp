@@ -50,6 +50,43 @@ regresses only ~0.2 WER points. Reproduce with `scripts/wer/run.py` +
 `scripts/wer/score.py`.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| ar       | WER    | 14.91% |
+| cs       | WER    | 22.97% |
+| da       | WER    | 21.23% |
+| de       | WER    |  4.25% |
+| el       | WER    | 29.22% |
+| en       | WER    |  3.23% |
+| es       | WER    |  3.31% |
+| fa       | WER    | 28.29% |
+| fi       | WER    | 25.48% |
+| fil      | WER    | 24.29% |
+| fr       | WER    |  4.52% |
+| hi       | WER    |  7.84% |
+| hu       | WER    | 32.84% |
+| id       | WER    |  5.37% |
+| it       | WER    |  2.68% |
+| ja       | CER    |  5.29% |
+| ko       | CER    |  4.60% |
+| mk       | WER    | 18.22% |
+| ms       | WER    | 10.42% |
+| nl       | WER    |  7.43% |
+| pl       | WER    | 12.50% |
+| pt       | WER    |  4.37% |
+| ro       | WER    | 20.46% |
+| ru       | WER    |  6.25% |
+| sv       | WER    | 19.68% |
+| th       | CER    |  6.89% |
+| tr       | WER    |  9.46% |
+| vi       | WER    |  6.15% |
+| yue      | CER    |  6.13% |
+| zh       | CER    |  7.14% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

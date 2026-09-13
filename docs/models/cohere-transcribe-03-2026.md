@@ -54,6 +54,27 @@ use the Whisper EnglishTextNormalizer, so the comparison is apples-to-apples
 and our port matches the upstream reference within rounding.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| ar       | WER    | 13.60% |
+| de       | WER    |  5.06% |
+| el       | WER    |  8.96% |
+| en       | WER    |  5.08% |
+| es       | WER    |  3.97% |
+| fr       | WER    |  5.23% |
+| it       | WER    |  3.24% |
+| ja       | CER    |  5.13% |
+| ko       | CER    |  6.57% |
+| nl       | WER    |  7.16% |
+| pl       | WER    |  6.15% |
+| pt       | WER    |  5.18% |
+| vi       | WER    |  7.39% |
+| zh       | CER    | 11.18% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

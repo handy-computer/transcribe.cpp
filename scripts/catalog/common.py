@@ -142,6 +142,39 @@ def perf_rows(record: dict, machine: str) -> dict[tuple[str, str, str], dict]:
 
 
 # --------------------------------------------------------------------------
+# summaries
+
+
+def fmt_params(params: int) -> str:
+    if params >= 10**9:
+        return f"{params / 10**9:.1f}B".replace(".0B", "B")
+    return f"{round(params / 10**6):.0f}M"
+
+
+def languages_summary(record: dict) -> str:
+    """`en`, `en, de, fr`, or a count, plus a note when the model auto-detects."""
+    langs = [str(lang) for lang in record.get("languages", [])]
+    text = ", ".join(langs) if len(langs) <= 4 else f"{len(langs)} languages"
+    if record.get("capabilities", {}).get("lang_detect", {}).get("supported"):
+        text += " + auto-detect"
+    return text or "-"
+
+
+def capabilities_summary(record: dict) -> str:
+    """The extras beyond plain transcription, as a short comma list."""
+    caps = record.get("capabilities", {})
+    out = []
+    for name, label in (("translate", "translate"), ("streaming", "streaming"),
+                        ("diarize", "diarize")):
+        if caps.get(name, {}).get("supported"):
+            out.append(label)
+    grans = caps.get("timestamps", {}).get("granularities") or []
+    if grans:
+        out.append(f"{grans[0]} timestamps")
+    return ", ".join(out) or "-"
+
+
+# --------------------------------------------------------------------------
 # downloads
 
 

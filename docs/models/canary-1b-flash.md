@@ -49,6 +49,17 @@ with greedy decoding and no external LM. F32 reference baseline: 1.62%.
 NVIDIA's self-reported number on the upstream model card is 1.48%.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 6.13% |
+| en       | WER    | 4.75% |
+| es       | WER    | 6.73% |
+| fr       | WER    | 7.22% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

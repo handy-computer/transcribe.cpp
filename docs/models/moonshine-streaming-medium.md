@@ -48,6 +48,14 @@ numerical drift. Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped
 for this variant.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 7.87% |
+<!-- /catalog -->
+
 **One utterance the model cannot end.** A single LibriSpeech test-clean clip —
 `7176-92135-0020` (7.2 s; reference *"DOUBLE NINE TWO THREE ELSINORE DOUBLE NINE
 YES HALLO IS THAT YOU HORATIO HAMLET SPEAKING"*) — drives the **medium** model

@@ -169,8 +169,6 @@ tags:
 summary: |
   <reviewed editorial summary>
 
-default_quant_index: <index into catalog downloads[] of the quant the usage snippet names>
-
 wer:
   notes: |
     <how the headline number was measured; anything a reader needs to compare it>
@@ -199,7 +197,8 @@ human review:
 - `docs/models/<variant>.md`
 - `models/<variant>/README.md`
 
-Flag likely over-promising sections (`one_liner`, `capabilities_prose`,
+Flag likely over-promising sections (the spec's `summary` and `wer.notes`, which
+render into both the HF README and the model page; `capabilities_prose`,
 Known Limitations) and wait for explicit sign-off before Step 7.
 
 ### Step 7: Sign-off
@@ -240,22 +239,23 @@ uv run scripts/hf_cards/check_release.py <variant>
 
 ```bash
 uv run --project scripts/envs/moonshine scripts/audit_gguf_metadata.py models/<variant>
-uv run scripts/catalog/sync_capabilities.py --check --local-only
+uv run scripts/catalog/sync_capabilities.py --check --models <variant>
 ```
 
 `audit_gguf_metadata.py` exits non-zero on any metadata issue and was written
-to gate exactly this. `sync_capabilities.py --check` exits non-zero when the
-record disagrees with the file: a capability KV that disagrees with the
-record means the file and its own model card are about to contradict each
-other on the Hub.
+to gate exactly this. `sync_capabilities.py --check --models <variant>` reads
+every published quant and exits non-zero if any file is unreadable, lacks a
+capability KV, disagrees with another quant, or disagrees with the record: a
+file and its own model card must not contradict each other on the Hub.
 
 **Absence is not falsity.** `read_capability_bool()` returns OK and leaves the
 field untouched when a key is missing, so a missing KV silently inherits the
 family default. `granite/capabilities.cpp` sets `supports_translate = true` on
 purpose so each variant's GGUF can lower it; `granite-speech-4.1-2b-plus`
 spelled that key `stt.capability.translation`, the lowering never happened,
-and a model that does not translate advertised that it does. Every converter
-declares every capability explicitly rather than relying on a default.
+and a model that does not translate advertised that it does. The shared writer
+factory in `scripts/lib/gguf_common.py` now writes `false` for any capability
+KV a converter leaves unset, so every fresh export states all four.
 
 If `sync_capabilities.py` disagrees with what the model actually does, the
 GGUF is wrong and the fix is a converter change plus a re-export. Do not

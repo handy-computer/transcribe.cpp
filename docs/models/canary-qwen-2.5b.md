@@ -62,6 +62,14 @@ substitutions). Reproduce with `scripts/wer/run.py` +
 `scripts/wer/score.py`.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 3.58% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

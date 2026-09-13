@@ -52,6 +52,14 @@ pinned 2026-05-11.
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding. F32 reference baseline: 2.31%. NVIDIA's self-reported number on the same split at att_context_size=[70, 13] (1.12s chunk, w/o PnC) is 2.32%.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 6.43% |
+<!-- /catalog -->
+
 ## Streaming WER
 
 In cache-aware streaming mode the encoder runs incrementally over fixed

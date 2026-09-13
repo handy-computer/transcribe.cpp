@@ -53,19 +53,21 @@ WER is on LibriSpeech test-clean for the **Q8_0** preset, measured by
 transcribe.cpp's WER pipeline. See each per-variant doc for the full
 quant matrix and the comparison to NVIDIA's self-reported numbers.
 
-| Variant | Decoder | Params | Q8_0 size | WER (Q8_0) | Languages | Doc |
-| --- | --- | ---: | ---: | ---: | --- | --- |
-| `parakeet-tdt-0.6b-v2`     | TDT       | 0.6B | 730 MB  | 1.69% | English | [parakeet-tdt-0.6b-v2.md](parakeet-tdt-0.6b-v2.md) |
-| `parakeet-tdt-0.6b-v3`     | TDT       | 0.6B | 740 MB  | 1.94% | 25 European | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
-| `parakeet-primeline`       | TDT       | 0.6B | 740 MB  | 6.00%* | 25 European, German-tuned | [parakeet-primeline.md](parakeet-primeline.md) |
-| `parakeet-tdt-1.1b`        | TDT       | 1.1B | 1.27 GB | 1.38% | English | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |
-| `parakeet-tdt_ctc-110m`    | TDT+CTC   | 110M | 135 MB  | 2.43% | English | [parakeet-tdt_ctc-110m.md](parakeet-tdt_ctc-110m.md) |
-| `parakeet-tdt_ctc-1.1b`    | TDT+CTC   | 1.1B | 1.27 GB | 1.87% | English | [parakeet-tdt_ctc-1.1b.md](parakeet-tdt_ctc-1.1b.md) |
-| `parakeet-rnnt-0.6b`       | RNN-T     | 0.6B | 730 MB  | 1.62% | English | [parakeet-rnnt-0.6b.md](parakeet-rnnt-0.6b.md) |
-| `parakeet-rnnt-1.1b`       | RNN-T     | 1.1B | 1.27 GB | 1.46% | English | [parakeet-rnnt-1.1b.md](parakeet-rnnt-1.1b.md) |
-| `parakeet-ctc-0.6b`        | CTC       | 0.6B | 722 MB  | 1.87% | English | [parakeet-ctc-0.6b.md](parakeet-ctc-0.6b.md) |
-| `parakeet-ctc-1.1b`        | CTC       | 1.1B | 1.26 GB | 1.85% | English | [parakeet-ctc-1.1b.md](parakeet-ctc-1.1b.md) |
-| `parakeet-unified-en-0.6b` | RNN-T     | 0.6B | 731 MB  | 1.60% | English | [parakeet-unified-en-0.6b.md](parakeet-unified-en-0.6b.md) |
+<!-- catalog:family variants=parakeet-tdt-0.6b-v2,parakeet-tdt-0.6b-v3,parakeet-primeline,parakeet-tdt-1.1b,parakeet-tdt_ctc-110m,parakeet-tdt_ctc-1.1b,parakeet-rnnt-0.6b,parakeet-rnnt-1.1b,parakeet-ctc-0.6b,parakeet-ctc-1.1b,parakeet-unified-en-0.6b -->
+| Variant                    | Params | Languages                  | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities                | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `parakeet-tdt-0.6b-v2`     |   618M | en                         |    730 MB | LibriSpeech test-clean (WER) | 1.69% | token timestamps            | [parakeet-tdt-0.6b-v2.md](parakeet-tdt-0.6b-v2.md) |
+| `parakeet-tdt-0.6b-v3`     |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.94% | token timestamps            | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
+| `parakeet-primeline`       |   627M | 25 languages + auto-detect |    740 MB | FLEURS de (WER)              | 6.00% | token timestamps            | [parakeet-primeline.md](parakeet-primeline.md) |
+| `parakeet-tdt-1.1b`        |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.38% | token timestamps            | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |
+| `parakeet-tdt_ctc-110m`    |   114M | en                         |    135 MB | LibriSpeech test-clean (WER) | 2.43% | token timestamps            | [parakeet-tdt_ctc-110m.md](parakeet-tdt_ctc-110m.md) |
+| `parakeet-tdt_ctc-1.1b`    |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.87% | token timestamps            | [parakeet-tdt_ctc-1.1b.md](parakeet-tdt_ctc-1.1b.md) |
+| `parakeet-rnnt-0.6b`       |   617M | en                         |    730 MB | LibriSpeech test-clean (WER) | 1.62% | token timestamps            | [parakeet-rnnt-0.6b.md](parakeet-rnnt-0.6b.md) |
+| `parakeet-rnnt-1.1b`       |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.46% | token timestamps            | [parakeet-rnnt-1.1b.md](parakeet-rnnt-1.1b.md) |
+| `parakeet-ctc-0.6b`        |   609M | en                         |    722 MB | LibriSpeech test-clean (WER) | 1.87% | token timestamps            | [parakeet-ctc-0.6b.md](parakeet-ctc-0.6b.md) |
+| `parakeet-ctc-1.1b`        |   1.1B | en                         |   1.26 GB | LibriSpeech test-clean (WER) | 1.85% | token timestamps            | [parakeet-ctc-1.1b.md](parakeet-ctc-1.1b.md) |
+| `parakeet-unified-en-0.6b` |   618M | en                         |    731 MB | LibriSpeech test-clean (WER) | 1.60% | streaming, token timestamps | [parakeet-unified-en-0.6b.md](parakeet-unified-en-0.6b.md) |
+<!-- /catalog -->
 
 \* `parakeet-primeline` is scored on FLEURS German (862 utterances),
 not LibriSpeech test-clean, so its number is not comparable to the rest

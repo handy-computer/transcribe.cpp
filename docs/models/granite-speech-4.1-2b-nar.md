@@ -56,6 +56,18 @@ Q6_K all match BF16's 1.29%; Q5_K_M dips slightly to 1.25% (within
 overlapping CIs).
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 6.07% |
+| en       | WER    | 5.33% |
+| es       | WER    | 4.08% |
+| fr       | WER    | 6.76% |
+| pt       | WER    | 5.57% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

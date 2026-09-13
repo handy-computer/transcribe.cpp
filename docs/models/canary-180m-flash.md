@@ -56,6 +56,17 @@ reference framework at the noise floor. NVIDIA's self-reported number
 on the upstream model card is 1.87%.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 7.33% |
+| en       | WER    | 5.98% |
+| es       | WER    | 6.54% |
+| fr       | WER    | 8.53% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

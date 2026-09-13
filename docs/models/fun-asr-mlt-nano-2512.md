@@ -79,6 +79,44 @@ not English accuracy. For the other 30 languages, run your own
 representative manifest.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |    Q8_0 |
+| --- | --- | ---: |
+| ar       | WER    |  25.79% |
+| bg       | WER    |  84.98% |
+| cs       | WER    |  53.56% |
+| da       | WER    |  69.93% |
+| el       | WER    | 103.55% |
+| en       | WER    |   4.90% |
+| et       | WER    |  64.22% |
+| fi       | WER    |  68.16% |
+| fil      | WER    |  15.62% |
+| ga       | WER    | 100.08% |
+| hi       | WER    |  43.96% |
+| hr       | WER    |  61.07% |
+| hu       | WER    | 113.21% |
+| id       | WER    |   7.52% |
+| ja       | CER    |   2.32% |
+| ko       | CER    |   5.20% |
+| lt       | WER    |  78.42% |
+| lv       | WER    |  56.71% |
+| ms       | WER    |   9.92% |
+| mt       | WER    |  91.71% |
+| nl       | WER    |  42.97% |
+| pl       | WER    |  59.34% |
+| pt       | WER    |  28.24% |
+| ro       | WER    |  74.39% |
+| sk       | WER    |  64.01% |
+| sl       | WER    |  75.22% |
+| sv       | WER    |  75.36% |
+| th       | CER    |   7.99% |
+| vi       | WER    |   8.32% |
+| yue      | CER    |  12.72% |
+| zh       | CER    |   8.64% |
+<!-- /catalog -->
+
 LibriSpeech is English only and is not the strength of this model. For
 the other 30 languages, run your own representative manifest. CommonVoice
 splits per language are a reasonable starting point.

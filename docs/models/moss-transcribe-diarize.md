@@ -75,6 +75,15 @@ Q5_K_M or higher if those tail failures matter. Reproduce with
 `full_text` applies equivalent marker removal.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 5.13% |
+| zh       | CER    | 9.23% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

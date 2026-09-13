@@ -37,6 +37,57 @@ on 2026-04-26.
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 2.83%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |    Q8_0 |
+| --- | --- | ---: |
+| af       | WER    |  38.45% |
+| am       | WER    | 140.81% |
+| ar       | WER    |  17.06% |
+| as       | WER    | 104.58% |
+| az       | WER    |  24.13% |
+| be       | WER    |  46.96% |
+| bg       | WER    |  15.81% |
+| bn       | WER    | 103.42% |
+| bs       | WER    |  17.02% |
+| ca       | WER    |   5.56% |
+| cs       | WER    |  14.42% |
+| cy       | WER    |  30.55% |
+| da       | WER    |  14.92% |
+| de       | WER    |   4.53% |
+| el       | WER    |  13.51% |
+| en       | WER    |   4.21% |
+| es       | WER    |   3.30% |
+| et       | WER    |  23.25% |
+| fa       | WER    |  34.25% |
+| fi       | WER    |   9.58% |
+| fil      | WER    |  13.17% |
+| fr       | WER    |   5.81% |
+| gl       | WER    |  16.57% |
+| gu       | WER    | 103.37% |
+| ha       | WER    |  92.22% |
+| he       | WER    |  27.78% |
+| hi       | WER    |  23.27% |
+| hr       | WER    |  14.18% |
+| hu       | WER    |  17.84% |
+| hy       | WER    |  46.93% |
+| id       | WER    |   7.43% |
+| is       | WER    |  39.59% |
+| it       | WER    |   3.59% |
+| ja       | CER    |   5.56% |
+| ka       | WER    | 115.24% |
+| kk       | WER    |  40.13% |
+| km       | CER    | 150.84% |
+| kn       | WER    |  47.64% |
+| ko       | CER    |   4.99% |
+| lb       | WER    |  92.83% |
+| ln       | WER    |  79.40% |
+| lo       | CER    | 101.65% |
+| lt       | WER    |  30.37% |
+| lv       | WER    |  24.49% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

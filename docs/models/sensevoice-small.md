@@ -68,6 +68,18 @@ benchmark; SenseVoice's strongest case is Mandarin, and AISHELL-1 (CER)
 is the recommended complementary check.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| en       | WER    |  7.14% |
+| ja       | CER    |  7.63% |
+| ko       | CER    |  8.27% |
+| yue      | CER    | 37.44% |
+| zh       | CER    | 10.12% |
+<!-- /catalog -->
+
 LibriSpeech is an English benchmark; SenseVoice's strongest case is
 Mandarin. **FLEURS-zh** (945 utterances) CER: 10.20% on our FunASR 1.3.1
 reference run, 10.11% on the Q8_0 port (95% CI [9.18%, 11.02%]); within

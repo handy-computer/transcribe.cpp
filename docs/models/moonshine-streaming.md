@@ -50,11 +50,13 @@ upstream-reported numbers is a scoring / text-normalization difference,
 not a numerical drift in the port. The K-tier presets (Q6_K / Q5_K_M /
 Q4_K_M) are not currently shipped for this family.
 
-| Variant | Params | Q8_0 size | WER (Q8_0) | Doc |
-| --- | ---: | ---: | ---: | --- |
-| `moonshine-streaming-tiny`   |  34M |  48 MB | 4.52% | [moonshine-streaming-tiny.md](moonshine-streaming-tiny.md) |
-| `moonshine-streaming-small`  | 123M | 189 MB | 2.54% | [moonshine-streaming-small.md](moonshine-streaming-small.md) |
-| `moonshine-streaming-medium` | 245M | 282 MB | 2.16% | [moonshine-streaming-medium.md](moonshine-streaming-medium.md) |
+<!-- catalog:family variants=moonshine-streaming-tiny,moonshine-streaming-small,moonshine-streaming-medium -->
+| Variant                      | Params | Languages | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `moonshine-streaming-tiny`   |    44M | en        |     50 MB | LibriSpeech test-clean (WER) | 4.52% | streaming    | [moonshine-streaming-tiny.md](moonshine-streaming-tiny.md) |
+| `moonshine-streaming-small`  |   140M | en        |    199 MB | LibriSpeech test-clean (WER) | 2.54% | streaming    | [moonshine-streaming-small.md](moonshine-streaming-small.md) |
+| `moonshine-streaming-medium` |   266M | en        |    296 MB | LibriSpeech test-clean (WER) | 2.16% | streaming    | [moonshine-streaming-medium.md](moonshine-streaming-medium.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

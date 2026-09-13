@@ -55,6 +55,19 @@ well within bootstrap CI overlap. Text normalizer: Whisper
 `EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 6.25% |
+| en       | WER    | 4.14% |
+| es       | WER    | 5.48% |
+| fr       | WER    | 7.61% |
+| ja       | CER    | 6.30% |
+| pt       | WER    | 9.80% |
+<!-- /catalog -->
+
 ## Quick Start
 
 ```bash

@@ -28,10 +28,12 @@ pipeline; each variant is evaluated on the dataset that matches its
 focus. See each per-variant doc for the full quant matrix and
 methodology.
 
-| Variant | Params | Q8_0 size | WER (Q8_0) | Eval set | Languages | Doc |
-| --- | ---: | ---: | ---: | --- | --- | --- |
-| `cohere-transcribe-03-2026`        | 2.0B | 2.41 GB | 1.27%  | LibriSpeech test-clean | 14 languages | [cohere-transcribe-03-2026.md](cohere-transcribe-03-2026.md) |
-| `cohere-transcribe-arabic-07-2026` | 2.0B | 2.41 GB | 11.06% | FLEURS Arabic test     | ar, en       | [cohere-transcribe-arabic-07-2026.md](cohere-transcribe-arabic-07-2026.md) |
+<!-- catalog:family variants=cohere-transcribe-03-2026,cohere-transcribe-arabic-07-2026 -->
+| Variant                            | Params | Languages    | Q8_0 size | Benchmark                    |   Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `cohere-transcribe-03-2026`        |     2B | 14 languages |   2.41 GB | LibriSpeech test-clean (WER) |  1.27% | -            | [cohere-transcribe-03-2026.md](cohere-transcribe-03-2026.md) |
+| `cohere-transcribe-arabic-07-2026` |     2B | en, ar       |   2.41 GB | FLEURS ar (WER)              | 11.06% | -            | [cohere-transcribe-arabic-07-2026.md](cohere-transcribe-arabic-07-2026.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

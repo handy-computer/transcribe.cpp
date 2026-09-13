@@ -46,6 +46,14 @@ it is not a numerical drift in the port. Q6_K / Q5_K_M / Q4_K_M GGUFs
 are not currently shipped for this variant.
 <!-- /catalog -->
 
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 8.55% |
+<!-- /catalog -->
+
 Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped for this variant.
 
 ## Quick Start
