@@ -27,12 +27,12 @@ pinned 2026-08-16.
 <!-- catalog:downloads label="FLEURS de test" units=dec -->
 | Quantization | Download |    Size | WER (FLEURS de test) |
 | --- | --- | ---: | ---: |
-| F32          | [parakeet-primeline-F32.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F32.gguf) | 2.51 GB | - |
-| F16          | [parakeet-primeline-F16.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F16.gguf) | 1.26 GB | - |
-| Q8_0         | [parakeet-primeline-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q8_0.gguf) |  740 MB | 5.98% |
-| Q6_K         | [parakeet-primeline-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q6_K.gguf) |  610 MB | - |
-| Q5_K_M       | [parakeet-primeline-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q5_K_M.gguf) |  549 MB | - |
-| Q4_K_M       | [parakeet-primeline-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q4_K_M.gguf) |  485 MB | - |
+| F32          | [parakeet-primeline-F32.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F32.gguf) | 2.51 GB | 6.00% |
+| F16          | [parakeet-primeline-F16.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F16.gguf) | 1.26 GB | 6.00% |
+| Q8_0         | [parakeet-primeline-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q8_0.gguf) |  740 MB | 6.00% |
+| Q6_K         | [parakeet-primeline-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q6_K.gguf) |  610 MB | 5.96% |
+| Q5_K_M       | [parakeet-primeline-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q5_K_M.gguf) |  549 MB | 5.99% |
+| Q4_K_M       | [parakeet-primeline-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q4_K_M.gguf) |  485 MB | 5.98% |
 <!-- /catalog -->
 
 WER is measured on the full FLEURS German test split (862 utterances)

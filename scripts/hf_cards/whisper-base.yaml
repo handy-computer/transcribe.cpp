@@ -1,8 +1,11 @@
 # Spec for the HF README of handy-computer/whisper-base-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
+hf_repo: openai/whisper-base
+target_repo: handy-computer/whisper-base-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-base.md
 
+upstream_commit: e37978b
 pin_date: 2026-04-25
 
 validation:
@@ -10,7 +13,14 @@ validation:
   commit: 5.6.1
   date: 2026-04-26
 
+license: apache-2.0
+license_display: Apache-2.0
 pipeline_tag: automatic-speech-recognition
+catalog_sync:
+  # These published presentation choices are intentionally hand-maintained.
+  preserve:
+    - languages
+
 languages:
   - "en"
   - "zh"
@@ -124,6 +134,50 @@ summary: |
 
 default_quant_index: 2
 
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: true
+  lang_detect: true
+  timestamps: segment  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    metal: 209.4
+    cpu: 36.6
+  ryzen-4750u:
+    vulkan: 34.8
+    cpu: 11.9
+
 wer:
+  source: LibriSpeech test-clean
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 5.009%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
+
+quants:
+  - name: F32
+    filename: whisper-base-F32.gguf
+    size: 292 MB
+    wer: 5.11%
+  - name: F16
+    filename: whisper-base-F16.gguf
+    size: 151 MB
+    wer: 5.10%
+  - name: Q8_0
+    filename: whisper-base-Q8_0.gguf
+    size: 85 MB
+    wer: 5.12%
+  - name: Q6_K
+    filename: whisper-base-Q6_K.gguf
+    size: 68 MB
+    wer: 5.11%
+  - name: Q5_K_M
+    filename: whisper-base-Q5_K_M.gguf
+    size: 64 MB
+    wer: 5.19%
+  - name: Q4_K_M
+    filename: whisper-base-Q4_K_M.gguf
+    size: 59 MB
+    wer: 5.36%

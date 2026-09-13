@@ -34,12 +34,12 @@ pinned 2026-05-12.
 <!-- catalog:downloads units=dec -->
 | Quantization | Download |   Size | WER (FLEURS ru) |
 | --- | --- | ---: | ---: |
-| F32          | [gigaam-v3-ctc-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-F32.gguf) | 883 MB | - |
-| F16          | [gigaam-v3-ctc-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-F16.gguf) | 449 MB | - |
-| Q8_0         | [gigaam-v3-ctc-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q8_0.gguf) | 272 MB | 8.42% |
-| Q6_K         | [gigaam-v3-ctc-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q6_K.gguf) | 226 MB | - |
-| Q5_K_M       | [gigaam-v3-ctc-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q5_K_M.gguf) | 205 MB | - |
-| Q4_K_M       | [gigaam-v3-ctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q4_K_M.gguf) | 182 MB | - |
+| F32          | [gigaam-v3-ctc-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-F32.gguf) | 883 MB | 8.42% |
+| F16          | [gigaam-v3-ctc-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-F16.gguf) | 449 MB | 8.42% |
+| Q8_0         | [gigaam-v3-ctc-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q8_0.gguf) | 272 MB | 8.40% |
+| Q6_K         | [gigaam-v3-ctc-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q6_K.gguf) | 226 MB | 8.38% |
+| Q5_K_M       | [gigaam-v3-ctc-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q5_K_M.gguf) | 205 MB | 8.29% |
+| Q4_K_M       | [gigaam-v3-ctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-Q4_K_M.gguf) | 182 MB | 8.42% |
 <!-- /catalog -->
 
 WER is measured on the full FLEURS ru test split (775 utterances) with

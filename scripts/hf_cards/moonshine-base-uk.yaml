@@ -1,8 +1,11 @@
 # Spec for the HF README of handy-computer/moonshine-base-uk-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
+hf_repo: UsefulSensors/moonshine-base-uk
+target_repo: handy-computer/moonshine-base-uk-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine.md
 
+upstream_commit: a52b2e9
 pin_date: 2026-05-12
 
 validation:
@@ -10,7 +13,11 @@ validation:
   commit: 90bf720
   date: 2026-05-12
 
+license: mit
+license_display: MIT
 pipeline_tag: automatic-speech-recognition
+languages:
+  - uk
 tags:
   - gguf
   - transcribe.cpp
@@ -30,6 +37,22 @@ summary: |
 default_quant_index: 2  # Q8_0
 
 metric: WER
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: none  # none | segment | word | token
+
+# Perf inherited from moonshine-base (identical architecture; per-
+# language RTF not separately benched).
+perf:
+  m4-max:
+    metal: 79.5
+    cpu: 80.5
+  ryzen-4750u:
+    vulkan: 34.5
+    cpu: 22
 
 wer:
   metadata_key: fleurs_uk
@@ -45,3 +68,17 @@ wer:
     same manifest: **14.51% WER**. The C++ F32/F16 numbers
     above match the reference within bootstrap-CI noise; Q8_0 introduces
     a small additional drift from F16 (typically within 0.1pp).
+
+quants:
+  - name: F32
+    filename: moonshine-base-uk-F32.gguf
+    size: 248 MB
+    wer: 14.49%
+  - name: F16
+    filename: moonshine-base-uk-F16.gguf
+    size: 132 MB
+    wer: 14.49%
+  - name: Q8_0
+    filename: moonshine-base-uk-Q8_0.gguf
+    size: 77 MB
+    wer: 14.39%

@@ -34,12 +34,12 @@ pinned 2026-05-12.
 <!-- catalog:downloads units=dec -->
 | Quantization | Download |   Size | WER (FLEURS ru) |
 | --- | --- | ---: | ---: |
-| F32          | [gigaam-v3-rnnt-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-F32.gguf) | 888 MB | - |
-| F16          | [gigaam-v3-rnnt-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-F16.gguf) | 451 MB | - |
-| Q8_0         | [gigaam-v3-rnnt-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q8_0.gguf) | 273 MB | 8.07% |
-| Q6_K         | [gigaam-v3-rnnt-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q6_K.gguf) | 227 MB | - |
-| Q5_K_M       | [gigaam-v3-rnnt-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q5_K_M.gguf) | 206 MB | - |
-| Q4_K_M       | [gigaam-v3-rnnt-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q4_K_M.gguf) | 183 MB | - |
+| F32          | [gigaam-v3-rnnt-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-F32.gguf) | 888 MB | 8.08% |
+| F16          | [gigaam-v3-rnnt-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-F16.gguf) | 451 MB | 8.08% |
+| Q8_0         | [gigaam-v3-rnnt-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q8_0.gguf) | 273 MB | 8.08% |
+| Q6_K         | [gigaam-v3-rnnt-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q6_K.gguf) | 227 MB | 8.07% |
+| Q5_K_M       | [gigaam-v3-rnnt-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q5_K_M.gguf) | 206 MB | 8.12% |
+| Q4_K_M       | [gigaam-v3-rnnt-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q4_K_M.gguf) | 183 MB | 8.12% |
 <!-- /catalog -->
 
 WER is measured on the full FLEURS ru test split (775 utterances) with

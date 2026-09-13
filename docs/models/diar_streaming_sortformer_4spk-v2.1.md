@@ -24,11 +24,13 @@ pinned 2026-07-19.
 
 ## Download
 
+<!-- catalog:downloads units=dec -->
 | Quantization | Download |   Size | DER (AMI IHM test) |
 | --- | --- | ---: | ---: |
 | F32          | [diar_streaming_sortformer_4spk-v2.1-F32.gguf](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf/resolve/main/diar_streaming_sortformer_4spk-v2.1-F32.gguf) | 471 MB | 14.59% |
 | F16          | [diar_streaming_sortformer_4spk-v2.1-F16.gguf](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf/resolve/main/diar_streaming_sortformer_4spk-v2.1-F16.gguf) | 237 MB | 14.23% |
 | Q8_0         | [diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf/resolve/main/diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf) | 139 MB | 14.73% |
+<!-- /catalog -->
 
 DER is measured on the full AMI IHM test set (16 meetings, ~9 h) against
 forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,

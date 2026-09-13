@@ -9,14 +9,9 @@
 # ///
 """Generate the HuggingFace README.md for a transcribe.cpp GGUF repo.
 
-The spec is assembled from two sources. Everything measurable -- the upstream
-and published repos, the pinned commit, licence, languages, the quant table
-with its file sizes and headline error rates, the capability flags and the
-per-rig speedups -- is DERIVED from the variant's catalog/<variant>.json
-record. The YAML alongside this script carries only what a human writes: the
-summary, tags, pipeline tag, validation pin, and prose notes. A key present in
-the YAML still wins, so a card can narrow a derived value deliberately
-(Breeze-ASR-25 advertises 2 of the 99 languages its tokenizer inherits).
+The committed YAML is the complete, standalone upload specification. Use
+scripts/catalog/sync_hf_cards.py to populate its mechanical fields from the
+catalog; this renderer does not read catalog JSON at generation time.
 
 Fetches the upstream model card at the pinned commit and renders
 template.md.j2.
@@ -43,18 +38,11 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 HERE = Path(__file__).parent
 REPO_ROOT = HERE.parent.parent
 
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "catalog"))
-import cards  # noqa: E402
 
 def load_spec(path: Path) -> dict:
-    """The editorial YAML merged onto everything derived from the catalog."""
-    editorial = yaml.safe_load(path.read_text()) or {}
-    record = cards.common.load_record(editorial.get("variant", path.stem))
-    spec = cards.merge(cards.derive_spec(record, editorial), editorial)
-    spec["quants"] = cards.merge_quants(spec["quants"], editorial.get("quant_overrides", {}))
-    for key in ("variant", "size", "quant_overrides"):
-        spec.pop(key, None)
-    return spec
+    """Load a complete, standalone card specification."""
+    with path.open() as f:
+        return yaml.safe_load(f)
 
 
 def build_transcribe_cpp_block(spec: dict) -> str:

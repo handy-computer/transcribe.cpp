@@ -4,6 +4,7 @@
   "title": "transcribe.cpp model catalog record",
   "description": "",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "schema", "variant", "family", "display_name", "params", "license",
     "upstream_repo", "upstream_commit", "published_repo", "languages",
@@ -36,6 +37,7 @@
     },
     "license": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["spdx","display"],
       "properties": {
         "spdx": {
@@ -230,7 +232,7 @@
               "type": ["string","null"],
               "description": "buffered | cache-aware | native."
             },
-            "presets": {"type":["array","null"],"items":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},"left_ms":{"type":["number","null"]},"chunk_ms":{"type":["number","null"]},"right_ms":{"type":["number","null"]},"lookahead_ms":{"type":["number","null"],"description":"Audio that must be buffered before a chunk's tokens emit. The number a user feels."},"is_default":{"type":["boolean","null"]}}}}
+            "presets": {"type":["array","null"],"items":{"type":"object","required":["name"],"additionalProperties":false,"properties":{"name":{"type":"string"},"left_ms":{"type":["number","null"]},"chunk_ms":{"type":["number","null"]},"right_ms":{"type":["number","null"]},"lookahead_ms":{"type":["number","null"],"description":"Audio that must be buffered before a chunk's tokens emit. The number a user feels."},"is_default":{"type":["boolean","null"]}}}}
           }
         },
         "diarize": {
@@ -278,6 +280,7 @@
       "description": "The GGUF files we publish.",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": ["quant","filename","size_bytes"],
         "properties": {
           "quant": {
@@ -300,6 +303,7 @@
       "description": "Published measurements only. New rows match a cell selected by catalog/_benchmark_profiles.json exactly; legacy-published rows may satisfy the same dataset/language/quant/metric under their honestly recorded historical recipe. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark.",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "dataset", "split", "language", "quant", "metric", "err_pct",
           "ci95", "n_utts", "batch_size", "timestamps", "engine_sha"
@@ -373,6 +377,7 @@
           },
           "errors": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "sub": {
                 "type": "integer"
@@ -429,6 +434,7 @@
       "description": "Published measurements only, one row per quant/sample/machine/backend cell selected by catalog/_benchmark_profiles.json. The profile also owns iteration and warmup counts and thermal preconditions; rows carry the measured identity and result.",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "machine", "backend", "quant", "sample", "sample_duration_s",
           "total_ms", "xrt_compute", "engine_sha"

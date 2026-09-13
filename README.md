@@ -55,12 +55,16 @@ only what sits between the pair:
 ```
 
 The Hugging Face card specs under [`scripts/hf_cards/`](scripts/hf_cards/)
-work the same way: they carry only editorial copy (summary, tags, validation
-pin) and `generate.py` derives the repos, licence, languages, quant table and
-per-rig speedups from the record. CI fails if either drifts.
+are complete, committed inputs to `generate.py`. To create or deliberately
+refresh their mechanical fields (repos, licence, languages, capabilities,
+quant table, and per-rig speedups) from the catalog, use
+`scripts/catalog/sync_hf_cards.py`; editorial copy stays in the YAML. Exceptional
+hand-maintained fields can be listed under `catalog_sync.preserve`.
 
 ```bash
-uv run scripts/catalog/check.py     # schema, integrity, pairing, card specs
+uv run scripts/catalog/check.py     # schema, integrity, pairing
+uv run scripts/catalog/sync_hf_cards.py --check
+uv run scripts/catalog/sync_hf_cards.py --check-consistency
 uv run scripts/catalog/render.py    # rewrite the marked doc regions
 uv run scripts/catalog/render.py --check
 ```

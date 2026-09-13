@@ -1,14 +1,13 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["jsonschema", "pyyaml"]
+# dependencies = ["jsonschema"]
 # ///
 """Validate the durable catalog JSON records.
 
 Checks the JSON schema, cross-row integrity the schema cannot express (a
 benchmark row referencing a quant the variant does not publish), that every
-record is paired with the card spec and doc the schema says it owns, and that
-no card spec re-states a value the catalog already derives.
+record is paired with the card spec and doc the schema says it owns.
 
     uv run scripts/catalog/check.py
     uv run scripts/catalog/check.py --publication-profile
@@ -23,12 +22,10 @@ import json
 import pathlib
 import sys
 
-import yaml
 from jsonschema import Draft202012Validator
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "catalog"))
-import cards  # noqa: E402
 import profiles  # noqa: E402
 
 
@@ -68,45 +65,34 @@ def integrity_pass(records: dict) -> int:
     return bad
 
 
-
 def pairing_pass(records: dict) -> int:
-    """Every record owns a card spec; a doc is expected unless waived.
+    """Catalog records and card specs pair exactly; docs may be shared.
 
     A dozen variants are documented inside a family page rather than a page of
     their own (the Moonshine language fine-tunes), so a missing doc is a note
-    rather than a failure -- but a missing card spec means nothing can be
-    published for that variant at all.
+    rather than a failure. The card specs under scripts/hf_cards/ are now
+    committed standalone inputs, so pairing is bidirectional: an orphan spec
+    no longer renders a card nobody can trace to a record, and a record with
+    no spec cannot produce an uploadable card at all.
     """
-    bad, undocumented = 0, []
-    for name in records:
-        if not (REPO / "scripts" / "hf_cards" / f"{name}.yaml").exists():
-            bad += 1
-            print(f"  FAIL {name}: no scripts/hf_cards/{name}.yaml")
-        if not (REPO / "docs" / "models" / f"{name}.md").exists():
-            undocumented.append(name)
-    print(f"pairing    {len(records) - bad}/{len(records)} have a card spec; "
+    card_names = {path.stem for path in (REPO / "scripts" / "hf_cards").glob("*.yaml")}
+    record_names = set(records)
+    missing_cards = sorted(record_names - card_names)
+    missing_records = sorted(card_names - record_names)
+    undocumented = sorted(
+        name for name in record_names
+        if not (REPO / "docs" / "models" / f"{name}.md").exists()
+    )
+    for name in missing_cards:
+        print(f"  FAIL {name}: no scripts/hf_cards/{name}.yaml")
+    for name in missing_records:
+        print(f"  FAIL scripts/hf_cards/{name}.yaml: no catalog/{name}.json")
+    paired = len(record_names & card_names)
+    print(f"pairing    {paired}/{len(record_names | card_names)} catalog/card pairs; "
           f"{len(records) - len(undocumented)}/{len(records)} have their own doc")
     if undocumented:
         print(f"           documented elsewhere: {', '.join(undocumented)}")
-    return bad
-
-
-def derivable_pass(records: dict) -> int:
-    """A card spec must not re-state what the catalog already derives."""
-    stale = 0
-    for name, record in records.items():
-        path = REPO / "scripts" / "hf_cards" / f"{name}.yaml"
-        if not path.exists():
-            continue
-        editorial = yaml.safe_load(path.read_text()) or {}
-        derived = cards.derive_spec(record, editorial)
-        for key, value in derived.items():
-            if key in editorial and editorial[key] == value:
-                stale += 1
-                print(f"  FAIL {name}: {path.name} re-states {key}, which the "
-                      f"catalog already derives identically")
-    print(f"card specs {len(records) - stale}/{len(records)} carry no derived duplicates")
-    return stale
+    return len(missing_cards) + len(missing_records)
 
 
 def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> int:
@@ -120,6 +106,9 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
     problems = 0
     totals = collections.Counter()
     for name, record in records.items():
+        # An ASR publication profile does not apply to standalone diarizers.
+        if not record.get("capabilities", {}).get("transcribe", {}).get("supported"):
+            continue
         accuracy_raw = profiles.expected_accuracy(record, profile)
         speed_raw = profiles.expected_speed(record, profile)
         accuracy = profiles.apply_exceptions(record, "accuracy", accuracy_raw)
@@ -165,7 +154,13 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
             else:
                 target_key = None
             if target_key is None:
-                accuracy_extra.add(key)
+                if legacy:
+                    # Preserve pre-profile rows that were already published,
+                    # even when their quant was not selected by today's
+                    # publication matrix. They are archive data, not drift.
+                    totals["accuracy_archived"] += 1
+                else:
+                    accuracy_extra.add(key)
                 continue
             accuracy_covered.add(target_key)
             target = expected_by_key[target_key]
@@ -213,7 +208,7 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
 
     print(f"publication {resolved_id}: accuracy {totals['accuracy_required']} required, "
           f"{totals['accuracy_missing']} missing, {totals['accuracy_invalid']} invalid, "
-          f"{totals['accuracy_extra']} extra; speed "
+          f"{totals['accuracy_extra']} extra, {totals['accuracy_archived']} archived legacy; speed "
           f"{totals['speed_required']} required, {totals['speed_missing']} missing, "
           f"{totals['speed_invalid']} invalid, {totals['speed_extra']} extra")
     if problems and not enforce:
@@ -278,8 +273,7 @@ def main() -> int:
     enforce_publication = args.publication_profile is not None
     selected_profile = args.publication_profile or None
     bad = (schema_pass(records, schema) + integrity_pass(records)
-           + pairing_pass(records) + derivable_pass(records)
-           + provenance_pass(records)
+           + pairing_pass(records) + provenance_pass(records)
            + publication_pass(records, selected_profile, enforce_publication))
     return 1 if bad else 0
 

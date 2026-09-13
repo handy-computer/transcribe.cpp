@@ -1,8 +1,8 @@
-"""Derive an HF card spec from a catalog record.
+"""Derive mechanical Hugging Face card fields from a catalog record.
 
-Split out of scripts/hf_cards/generate.py so the catalog checks can verify a
-card spec without pulling in jinja2 and huggingface-hub. Pure stdlib: it takes
-and returns plain dicts, and knows nothing about YAML or templates.
+Used by sync_hf_cards.py to populate the committed, standalone YAML specs.
+Pure stdlib: it takes and returns plain dicts, and knows nothing about YAML or
+templates.
 """
 from __future__ import annotations
 
@@ -84,19 +84,3 @@ def derive_spec(record: dict, editorial: dict) -> dict:
     if label:
         spec["wer"] = {"source": label}
     return spec
-
-
-def merge(base: dict, over: dict) -> dict:
-    """Editorial values win. Nested dicts merge; lists replace wholesale."""
-    out = dict(base)
-    for key, value in over.items():
-        if isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = merge(out[key], value)
-        else:
-            out[key] = value
-    return out
-
-
-def merge_quants(derived: list[dict], overrides: dict) -> list[dict]:
-    """Per-quant editorial extras (a second metric column), keyed by quant."""
-    return [merge(q, overrides.get(q["name"], {})) for q in derived]

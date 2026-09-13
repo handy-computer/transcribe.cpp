@@ -273,10 +273,18 @@ If `sync_capabilities.py` disagrees with what the model actually does, the
 GGUF is wrong and the fix is a converter change plus a re-export. Do not
 paper over it with an override in the card spec.
 
-The HF card spec under `scripts/hf_cards/` carries editorial copy only:
-summary, tags, pipeline tag, validation pin, prose notes. Repos, commit,
-licence, languages, quant table, capability flags and per-rig speedups are all
-derived from the catalog record. `check.py` fails if a spec re-states one.
+The HF card spec under `scripts/hf_cards/` is a complete, committed input to
+`generate.py`. Start with the editorial copy (summary, tags, pipeline tag,
+validation pin and prose notes), then populate repos, commit, licence,
+languages, quant table, capability flags and per-rig speedups from the catalog:
+
+```bash
+uv run scripts/catalog/sync_hf_cards.py --write --models <variant>
+```
+
+Existing values are preserved unless `--refresh` is passed deliberately.
+List exceptional hand-maintained fields under `catalog_sync.preserve` so a
+refresh does not replace them.
 
 ## Postconditions
 

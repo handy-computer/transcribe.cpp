@@ -7,8 +7,11 @@
 # into every preset; the YAML below mirrors that distinction so the HF
 # card surfaces the constraint to anyone clicking through to download.
 
+hf_repo: nvidia/canary-1b
+target_repo: handy-computer/canary-1b-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/canary-1b.md
 
+upstream_commit: 1698acf
 pin_date: 2026-05-08
 
 validation:
@@ -16,7 +19,14 @@ validation:
   commit: db53eda
   date: 2026-05-08
 
+license: cc-by-nc-4.0
+license_display: CC-BY-NC-4.0
 pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - de
+  - es
+  - fr
 tags:
   - gguf
   - transcribe.cpp
@@ -40,10 +50,53 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: true
+  lang_detect: false
+  timestamps: none  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    cpu: 19.4
+    metal: 43.1
+  ryzen-4750u:
+    cpu: 5.6
+    vulkan: 9
 wer:
+  source: LibriSpeech test-clean
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances)
     with greedy decoding and no external LM. F32 reference baseline: 1.55%.
     NVIDIA's self-reported number on the upstream model card is 1.48%;
     likely this is due to differences in how we score WER, based on the
     results we have from canary-180m-flash.
+
+quants:
+  - name: F32
+    filename: canary-1b-F32.gguf
+    size: 4.09 GB
+    wer: 1.55%
+  - name: F16
+    filename: canary-1b-F16.gguf
+    size: 2.05 GB
+    wer: 1.55%
+  - name: Q8_0
+    filename: canary-1b-Q8_0.gguf
+    size: 1.16 GB
+    wer: 1.55%
+  - name: Q6_K
+    filename: canary-1b-Q6_K.gguf
+    size: 934 MB
+    wer: 1.57%
+  - name: Q5_K_M
+    filename: canary-1b-Q5_K_M.gguf
+    size: 838 MB
+    wer: 1.57%
+  - name: Q4_K_M
+    filename: canary-1b-Q4_K_M.gguf
+    size: 730 MB
+    wer: 1.55%

@@ -1,8 +1,11 @@
 # Spec for the HF README of handy-computer/moonshine-streaming-tiny-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
+hf_repo: UsefulSensors/moonshine-streaming-tiny
+target_repo: handy-computer/moonshine-streaming-tiny-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine-streaming-tiny.md
 
+upstream_commit: f8e9dfd
 pin_date: 2026-05-06
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -12,7 +15,11 @@ validation:
   commit: 0d312ce
   date: 2026-05-06
 
+license: mit
+license_display: MIT
 pipeline_tag: automatic-speech-recognition
+languages:
+  - en
 tags:
   - gguf
   - transcribe.cpp
@@ -32,7 +39,24 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: true
+  translate: false
+  lang_detect: false
+  timestamps: none  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    cpu: 210.8
+    metal: 159
+  ryzen-4750u:
+    cpu: 54.4
+    vulkan: 59.2
 wer:
+  source: LibriSpeech test-clean
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances)
     with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
@@ -43,3 +67,17 @@ wer:
     table; the +0.04pp residual is a scoring / text-normalization difference vs
     that methodology, not a numerical drift in the port. Q6_K / Q5_K_M / Q4_K_M
     GGUFs are not currently shipped for this variant.
+
+quants:
+  - name: F32
+    filename: moonshine-streaming-tiny-F32.gguf
+    size: 178 MB
+    wer: 4.53%
+  - name: F16
+    filename: moonshine-streaming-tiny-F16.gguf
+    size: 90 MB
+    wer: 4.53%
+  - name: Q8_0
+    filename: moonshine-streaming-tiny-Q8_0.gguf
+    size: 50 MB
+    wer: 4.52%

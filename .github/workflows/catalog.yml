@@ -31,18 +31,19 @@ jobs:
       - uses: astral-sh/setup-uv@v8.2.0
       - name: Canonical formatting
         run: uv run catalog/_format.py --check catalog/*.json
-      - name: Schema, integrity, pairing and card specs
+      - name: Schema, integrity and pairing
         run: uv run scripts/catalog/check.py
-      - name: Published tables match the catalog
-        run: uv run scripts/catalog/render.py --check
-      - name: Catalog HF card specs render
+      - name: HF card specs are complete and consistent
         run: |
-          for record in catalog/*.json; do
-            variant="$(basename "$record" .json)"
-            case "$variant" in _*) continue ;; esac
-            spec="scripts/hf_cards/$variant.yaml"
+          uv run scripts/catalog/sync_hf_cards.py --check
+          uv run scripts/catalog/sync_hf_cards.py --check-consistency
+      - name: HF card specs render
+        run: |
+          for spec in scripts/hf_cards/*.yaml; do
             uv run scripts/hf_cards/generate.py "$spec" --skip-upstream --stdout > /dev/null
           done
+      - name: Published tables match the catalog
+        run: uv run scripts/catalog/render.py --check
       - name: Rebuild portable database
         run: |
           uv run scripts/catalog/db.py --out "$RUNNER_TEMP/catalog.db"
