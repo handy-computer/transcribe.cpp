@@ -97,9 +97,10 @@ final class TranscribeTests: XCTestCase {
         let defaultResult = try run(.default)
         let disabled = try run(.off)
         let enabled = try run(.on)
-        XCTAssertEqual(defaultResult.text, disabled.text)
-        XCTAssertEqual(defaultResult.rawText, disabled.rawText)
+        XCTAssertEqual(defaultResult.text, enabled.text)
+        XCTAssertEqual(defaultResult.rawText, enabled.rawText)
         XCTAssertNotEqual(enabled.text, disabled.text)
+        XCTAssertEqual(disabled.text, disabled.text.lowercased())
         XCTAssertTrue(disabled.rawText.contains("<|woitn|>"))
         XCTAssertTrue(enabled.rawText.contains("<|withitn|>"))
     }

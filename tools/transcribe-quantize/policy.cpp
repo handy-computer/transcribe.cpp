@@ -47,7 +47,7 @@ bool iequals(const char * a, const char * b) {
 // *which* family and *why* — revisit when 3+ families share the same
 // override pattern.
 
-Bucket classify_tensor(const std::string & name) {
+Bucket classify_tensor(const std::string & name, int64_t ne0) {
     // --- Decoder token embeddings ---
     // Cohere and Qwen3-ASR tie the input embedding to the LM head. Under
     // _M presets it bumps to Q6_K — without this, WER regresses
@@ -175,20 +175,22 @@ Bucket classify_tensor(const std::string & name) {
     if (name == "dec.time_embed.inv_freq") {
         return Bucket::Norm;
     }
-    // Conformer-block 1×1 pointwise convs — split out from Conv so
-    // they can run at F16 on the im2col+matmul path. Matches
-    // "enc.blocks.<N>.conv.pointwise1.weight" and ".pointwise2.weight"
-    // but intentionally NOT any pre-encode convs (different names like
-    // enc.pre_encode.conv.0.weight). granite_nar uses the underscore
-    // form `conv_pointwise{1,2}` (single-token names without a `.conv.`
-    // separator) — route those to ConvPw as well.
-    if ((ends_with(name, ".conv.pointwise1.weight") || ends_with(name, ".conv.pointwise2.weight")) &&
+    // Conformer-block 1×1 pointwise convs. Matches
+    // "enc.blocks.<N>.conv.pointwise{1,2}.weight" and granite_nar's
+    // underscore form `conv_pointwise{1,2}`, but intentionally NOT any
+    // pre-encode convs (different names like enc.pre_encode.conv.0.weight).
+    //
+    // These are nn.Linear in every reference implementation; the only
+    // question is how the converter stored them. A leading kernel axis
+    // ([1, in, out], ne0 == 1) cannot be block-quantized at all — no
+    // quant has a 1-element row — so that layout is pinned at F16 and
+    // reshaped to 2-D at graph build. A tensor already stored [in, out]
+    // is an ordinary mul_mat operand and belongs in Linear; pinning it
+    // costs real bytes (granite5_ctc: 201 MB, half of its Q4_K_M file).
+    if ((ends_with(name, ".conv.pointwise1.weight") || ends_with(name, ".conv.pointwise2.weight") ||
+         ends_with(name, ".conv_pointwise1.weight") || ends_with(name, ".conv_pointwise2.weight")) &&
         contains(name, "enc.blocks.")) {
-        return Bucket::ConvPw;
-    }
-    if ((ends_with(name, ".conv_pointwise1.weight") || ends_with(name, ".conv_pointwise2.weight")) &&
-        contains(name, "enc.blocks.")) {
-        return Bucket::ConvPw;
+        return ne0 == 1 || ne0 < 0 ? Bucket::ConvPw : Bucket::Linear;
     }
     // Conv kernels: enc.pre_encode.conv.{0,2,3,5,6}.weight and
     // enc.blocks.{i}.conv.depthwise.weight.
@@ -229,9 +231,11 @@ Bucket classify_tensor(const std::string & name) {
 //
 // For the legacy blockwise quants (Q4_0/1, Q5_0/1): attn_out stays at
 // linear_main (these presets are uniform accuracy/size tradeoffs, not
-// llama.cpp's mixed recipes). ConvPw stays at F16 because 1×1 pointwise
-// convs benefit from f16 matmul shaders and the file-size cost is
-// ~2 MB across all of them.
+// llama.cpp's mixed recipes). ConvPw stays at F16 in every preset
+// because that bucket now holds only the [1, in, out] Conv1d layout,
+// whose 1-element rows no quant can encode (see classify_tensor).
+// Pointwise weights stored 2-D are classified Linear and follow the
+// preset's linear columns.
 //
 // file_type values mirror LlamaFileType / GGML_FTYPE (see
 // refs/ggml-org/llama.cpp/include/llama.h).
@@ -295,8 +299,12 @@ const Preset * preset_table(size_t & n_out) {
     return kPresets;
 }
 
+Bucket classify_tensor(const std::string & name) {
+    return classify_tensor(name, /*ne0=*/-1);
+}
+
 ggml_type resolve_target_type(const Preset & preset, const std::string & name, int64_t ne0) {
-    const Bucket b = classify_tensor(name);
+    const Bucket b = classify_tensor(name, ne0);
     switch (b) {
         case Bucket::Norm:
             return preset.norm;

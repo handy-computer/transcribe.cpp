@@ -489,16 +489,30 @@ transcribe_status run(transcribe_session *          session,
     const int32_t event_emo[2] = { 1, 2 };  // literal indices in the embed table
 
     // ITN slot. Generic transcribe_run_params::itn routes here. DEFAULT maps
-    // to the shipped behavior (use_itn=false; matches the family's
-    // `itn=False` Python default). OFF / ON override explicitly. The
-    // dispatcher's advisory WARN only fires when transcribe_model_supports(
+    // to ITN ON — a deliberate divergence from upstream's `itn=False` Python
+    // default. SenseVoice has no separate PNC toggle, so the textnorm prefix
+    // is the only control that yields casing and punctuation; with it off the
+    // out-of-the-box transcript is lowercase and unpunctuated. OFF recovers
+    // the upstream spoken-form output verbatim.
+    //
+    // ITN changes the CTC decode, not just the rendering, so it moves accuracy:
+    // +0.110pp WER on LibriSpeech test-clean at F32, but -2.03pp CER on
+    // FLEURS-zh (the zh reference is digit-normalized, so ITN-on matches its
+    // convention). The English cost is upstream's, not ours: the FunASR 1.3.1
+    // reference shows +0.147pp on the same data and corrupts the same words
+    // byte-for-byte. The published tables are
+    // unaffected because scripts/wer/run.py and scripts/validate.py both pin
+    // `--no-itn`, so they keep measuring the same text the ITN-off reference
+    // produces. See docs/tools/wer.md ("Methodology (pinned recipe)").
+    //
+    // The dispatcher's advisory WARN only fires when transcribe_model_supports(
     // model, TRANSCRIBE_FEATURE_ITN) is false; SenseVoice sets
     // TRANSCRIBE_FEATURE_ITN so the probe returns true and no WARN fires here.
-    bool use_itn = false;
+    bool use_itn = true;
     if (params != nullptr) {
         switch (params->itn) {
             case TRANSCRIBE_ITN_MODE_DEFAULT:
-                use_itn = false;
+                use_itn = true;
                 break;
             case TRANSCRIBE_ITN_MODE_OFF:
                 use_itn = false;
@@ -709,11 +723,13 @@ static transcribe_status run_batch_encode(
     const char *  lang         = (params != nullptr) ? params->language : nullptr;
     const int32_t lid_idx      = resolve_lid_idx(hp, lang);
     const int32_t event_emo[2] = { 1, 2 };
-    bool          use_itn      = false;
+    // DEFAULT = ITN on; see the serial path above for the rationale. Kept
+    // byte-identical to that switch so batch and serial never diverge.
+    bool          use_itn      = true;
     if (params != nullptr) {
         switch (params->itn) {
             case TRANSCRIBE_ITN_MODE_DEFAULT:
-                use_itn = false;
+                use_itn = true;
                 break;
             case TRANSCRIBE_ITN_MODE_OFF:
                 use_itn = false;

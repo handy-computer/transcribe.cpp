@@ -75,6 +75,8 @@ NORM = [
     "enc.layers.0.ln_pre.weight",           # qwen3 encoder ln_pre
     "enc.blocks.0.self_attn.pos_bias_u",    # conformer rel-pos bias u
     "enc.blocks.0.self_attn.pos_bias_v",    # conformer rel-pos bias v
+    "enc.blocks.3.conv.bn.running_mean",    # granite5_ctc BN running stat
+    "enc.blocks.3.conv.bn.running_var",     # granite5_ctc BN running stat
     "tf.blocks.0.norm_1.weight",            # sortformer transformer post-LN (norm_ prefix)
     "tf.blocks.0.attn.q.bias",              # sortformer transformer attn bias (.bias)
     "diar.spk_head.bias",                   # sortformer diarization head bias (.bias)
@@ -88,6 +90,15 @@ NORM = [
 # Conv bucket: 2D / depthwise / 1x1 pointwise conv kernels. The loader has no
 # BF16 conv kernel, so at BF16 reference these downcast to F16; at F32/F16
 # reference they keep the reference dtype.
+#
+# NOTE on pointwise: policy.cpp::classify_tensor decides the pointwise bucket
+# from the stored shape, not the name — [1, in, out] (ne0 == 1) is ConvPw/F16
+# because no block quant has a 1-element row, while a 2-D [in, out] pointwise
+# is an ordinary mul_mat operand and lands in Linear. reference_dtype_for has
+# no shape argument, so it keeps the name-based Conv answer for BOTH layouts.
+# That stays correct for the reference tiers: F16 is a legal storage dtype for
+# a Linear too, and the loader's linear allowlist accepts it. The split only
+# matters to the Stage-5 quantizer, which does see the shape.
 CONV = [
     "enc.blocks.3.conv.pointwise1.weight",  # conformer 1x1 pointwise
     "enc.blocks.3.conv.pointwise2.weight",  # conformer 1x1 pointwise
@@ -107,6 +118,16 @@ LINEAR = [
     "tf.blocks.0.ff.in.weight",             # sortformer transformer FFN matrix
     "diar.encoder_proj.weight",             # sortformer 512->192 projection
     "diar.spk_head.weight",                 # sortformer diarization head (4 sigmoid outputs)
+    # granite/granite5_ctc Shaw relative-position table, [head_dim, 2*max+1].
+    # NOT a near-miss for the ".pos_emb.weight" Norm rule above: the separator
+    # before "pos_emb" is an underscore ("rel_pos_emb"), not a dot, so both
+    # policy.cpp and reference_dtype_for leave it in Linear. The loader reads
+    # it with GET_LIN and it is a mul_mat operand, so that is correct — pinned
+    # here so a future broadening of the pos_emb rule to a bare "pos_emb"
+    # substring trips this test instead of silently changing two families.
+    "enc.blocks.3.attn.rel_pos_emb.weight",
+    "enc.blocks.3.attn.kv.weight",          # granite5_ctc fused K|V projection
+    "enc.ctc_proj.weight",                  # granite5_ctc tied CTC head
 ]
 
 # KNOWN DRIFT — policy.cpp::classify_tensor places these in the Norm (F32) or
@@ -150,7 +171,7 @@ KNOWN_DRIFT = [
     "tp_encoders.tp_norm.weight",           # Norm (sensevoice tp LN)
     "enc.embedder.comp.log_k",              # Norm (moonshine-streaming asinh scalar)
     "dec.time_embed.inv_freq",              # Norm (voxtral-realtime time-embed table)
-    "enc.blocks.3.conv_pointwise1.weight",  # ConvPw (granite_nar underscore form)
+    "enc.blocks.3.conv_pointwise1.weight",  # ConvPw/Linear by shape (granite_nar underscore form)
     "enc.blocks.3.conv_depthwise.weight",   # Conv (granite_nar underscore form)
     "enc.blocks.3.attn.fsmn.weight",        # Conv (sensevoice FSMN depthwise)
 ]

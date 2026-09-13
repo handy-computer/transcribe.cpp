@@ -22,7 +22,12 @@ def test_itn_changes_sensevoice_text_normalization(itn_model_path, audio_pcm):
         disabled = session.run(audio_pcm, language="en", itn="off")
         enabled = session.run(audio_pcm, language="en", itn="on")
 
-    assert (default.text, default.raw_text) == (disabled.text, disabled.raw_text)
+    # DEFAULT resolves to ON for sensevoice: the textnorm prefix is the
+    # family's only source of casing and punctuation, so the out-of-the-box
+    # transcript is the readable one. --no-itn / itn="off" recovers upstream's
+    # spoken-form output.
+    assert (default.text, default.raw_text) == (enabled.text, enabled.raw_text)
     assert enabled.text != disabled.text
+    assert disabled.text == disabled.text.lower()
     assert "<|woitn|>" in disabled.raw_text
     assert "<|withitn|>" in enabled.raw_text

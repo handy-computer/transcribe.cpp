@@ -102,17 +102,15 @@ struct BlockView {
 };
 
 // Per-family conv dispatch policy. direct_pw is shared (detect_direct_pw is
-// the same for every family today); direct_dw splits between the block site
-// (direct_dw_in_block: the conformer block's 1-D depthwise after GLU) and the
-// pre_encode site (direct_dw_in_pre_encode: the stride-2 2-D depthwise), since
-// the two have different shapes and per-family backend choices. Defaults are
-// conservative: direct_pw true (pointwise is direct mul_mat everywhere), both
-// direct_dw_* false (im2col), which is safe on Metal where the direct 2-D
-// depthwise kernel is not implemented for all shapes.
+// the same for every family today). The pre-encode conv0 and depthwise sites
+// have separate direct-op controls because their shapes and backend tradeoffs
+// differ from the block convolutions. Defaults keep the established im2col
+// paths except for direct_pw; families opt into direct pre-encode ops.
 struct ConvPolicy {
-    bool direct_pw               = true;
-    bool direct_dw_in_block      = false;
-    bool direct_dw_in_pre_encode = false;
+    bool direct_pw                  = true;
+    bool direct_conv0_in_pre_encode = false;
+    bool direct_dw_in_block         = false;
+    bool direct_dw_in_pre_encode    = false;
 
     // Causal pre_encode convolutions. NeMo's cache-aware streaming swaps
     // every Conv2d in ConvSubsampling for CausalConv2D, padding
@@ -306,6 +304,21 @@ ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
                              int            p1,
                              int            d0,
                              int            d1);
+
+// Batch-stable depthwise Conv2D via ggml_conv_2d_dw_direct, with the
+// F32 kernel promotion the direct op needs. Prefer this over
+// conv_2d_dw_f32 / conv_1d_dw_f32 when single-shot and batched runs must
+// be bit-identical, or when the depthwise conv is hot: the im2col forms
+// inflate the activation by the kernel width. See conformer.cpp.
+ggml_tensor * conv_2d_dw_direct_f32(ggml_context * ctx,
+                                    ggml_tensor *  kernel,
+                                    ggml_tensor *  data,
+                                    int            s0,
+                                    int            s1,
+                                    int            p0,
+                                    int            p1,
+                                    int            d0,
+                                    int            d1);
 
 // f32-friendly 1D depthwise conv. Same Metal reasoning.
 ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,

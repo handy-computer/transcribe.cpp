@@ -34,6 +34,19 @@ enum class Bucket {
 // Map a canonical tensor name to its bucket. Substring-based; family-
 // specific overrides (e.g. the Cohere tied embedding) live here at the
 // top of the function, clearly marked.
+//
+// `ne0` disambiguates the one bucket that cannot be decided from the
+// name alone: conformer pointwise weights. Every family names them
+// "...pointwise{1,2}.weight", but they are stored two different ways.
+// granite 4.x keeps the PyTorch Conv1d layout [1, in, out] (ne0 == 1),
+// which no block quant can represent, so those stay ConvPw/F16.
+// granite5_ctc stores the mathematically identical nn.Linear as
+// [in, out] (ne0 == in_features) and runs it through ggml_mul_mat, so
+// it is a Linear and quantizes like one. Pass ne0 < 0 when the shape is
+// unknown; that keeps the conservative ConvPw answer.
+Bucket classify_tensor(const std::string & name, int64_t ne0);
+
+// Name-only overload: equivalent to classify_tensor(name, -1).
 Bucket classify_tensor(const std::string & name);
 
 // A single preset. Each field is the target ggml_type for one bucket

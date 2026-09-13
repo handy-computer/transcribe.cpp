@@ -1,0 +1,267 @@
+{
+  "_comment": [
+    "granite5_ctc / granite-speech-5.0-470m-turboctc-nc tolerances. Stage 4 FINALIZED.",
+    "",
+    "Per-variant file, NOT tests/tolerances/granite5_ctc.json (finalized for the Apache-2.0",
+    "sibling). Same architecture and same C++ code, different weights; they drift very",
+    "differently and must not share a budget. The golden manifest points here.",
+    "",
+    "Correctness regime (every number below measured in exactly this one):",
+    "  GGUF:      granite-speech-5.0-470m-turboctc-nc-BF16.gguf, the reference tier - BF16",
+    "             weights, F32 norms/biases/BN stats, F16 conv kernels.",
+    "  KV cache:  none. encoder-ctc is one forward pass; --kv-type reaches no graph.",
+    "  Frontend:  the production C++ path (MelFrontend per_utterance + host deltas +",
+    "             2-frame stacking). No reference-mel injection. `mel.in` is a real",
+    "             frontend-parity gate, not a pinned read, and it passes at the Stage 2",
+    "             magnitude budget with no widening (observed 1.8e-05 vs budget 1.5e-04).",
+    "  Backend:   CPU, --threads 1 (scripts/validate.py defaults).",
+    "  Reference: transformers 5.17.0 GraniteSpeech5ForCTC at F32, eager attention,",
+    "             torch-threads 1.",
+    "  Cases:     jfk (1100 mel frames, even) and dots (3533, odd); each entry is the max",
+    "             over both.",
+    "",
+    "Coverage: ALL 16 encoder blocks are dumped and gated here (34 distinct tensors), not",
+    "the 6-block default the Apache sibling used. The extra blocks were added during Stage 4",
+    "because they are what localized the mechanism below. They are cheap; they stay.",
+    "",
+    "Recipe: finalized = max(1.5 x observed_cpp_drift, magnitude_budget, 1e-6), with",
+    "magnitude_budget the Stage 2 rule (1e-4 x p99_abs for max, 1e-5 x rms for mean).",
+    "",
+    "=== DRIFT MECHANISM =========================================================",
+    "",
+    "Baseline: ggml's BF16 matmul rounds the F32 activation to BF16 before the dot product,",
+    "so the C++ computes BF16 x BF16 against an F32 x F32 reference. The BF16 and F32 GGUFs",
+    "built from this checkpoint hold numerically identical weights, so this is arithmetic,",
+    "not weight rounding.",
+    "",
+    "Amplifier: a MASSIVE-ACTIVATION CHANNEL. Encoder blocks 10-13 carry one outlier channel",
+    "(570 on this checkpoint) at |value| 190-481 while the rest of the same tensor sits at",
+    "20-28. That single channel carries 34-73% of all squared error in those tensors. It is",
+    "created inside block 10 (block 9's peak is 28.7) and is squashed again by the final",
+    "LayerNorm, surviving in enc.out as a single-frame spike: on dots the worst frame is 1 of",
+    "441 at 0.219, with the next-worst at 0.044.",
+    "",
+    "The Apache sibling has the same kind of channel (612) at a SIMILAR magnitude, yet drifts",
+    "10-35x less at blocks 10-13. Magnitude does NOT explain the gap - apache block 12 has a",
+    "LARGER peak (248.8 vs 229.9) and 23x LESS drift. The difference is how conditioned each",
+    "checkpoint's accumulation is on that channel, which is a property of the weights.",
+    "",
+    "=== WHY THIS IS ARITHMETIC AND NOT A BUG (evidence, not assertion) ===========",
+    "",
+    "0. BF16 REFERENCE CONTROL (the strongest check; added after CJ asked whether any of",
+    "   this points at our own inference being wrong). The reference was re-run at",
+    "   --dtype bf16 so torch-BF16-vs-torch-F32 can be compared against ours-vs-torch-F32",
+    "   on identical tensors. OUR BF16 IS CLOSER TO THE F32 REFERENCE THAN PYTORCH'S OWN",
+    "   BF16 IS, at every gated tensor, on BOTH checkpoints (ratio 0.3-0.6x):",
+    "       tensor             torch BF16    ours      torch BF16   ours     (nc | apache)",
+    "       enc.block.10.out   8.895e+00  5.555e+00 | 4.703e+00  5.321e-01",
+    "       enc.block.11.out   9.889e+00  5.065e+00 | 1.089e+00  1.427e-01",
+    "       enc.block.12.out   2.101e+01  7.347e+00 | 1.874e+00  3.164e-01",
+    "       enc.block.13.out   8.279e+00  3.039e+00 | 8.634e-01  9.188e-02",
+    "       enc.out            6.746e-01  2.187e-01 | 5.390e-02  2.190e-02",
+    "   We are not amplifying BF16 error; we absorb less of it than the reference does.",
+    "   This also independently confirms the nc-vs-apache asymmetry that magnitude could",
+    "   not explain: torch itself puts nc at 9.1x / 11.2x / 9.6x / 12.5x the apache drift",
+    "   at blocks 11/12/13 and enc.out (we see 35.5x / 23.2x / 33.1x / 10.0x - same",
+    "   direction and order). The asymmetry is a property of the -nc checkpoint under BF16",
+    "   arithmetic, reproduced by a second implementation, not something our code creates.",
+    "   Our nc/apache SPREAD is wider than torch's at blocks 11-13 only because we are",
+    "   unusually accurate on apache there (7-9x better than torch) while 1.6-2.9x better",
+    "   on nc; in absolute terms we are below torch's error in every cell.",
+    "   Scope: CPU thread-1 regime, dots. Does not cover Metal or the quantized tiers.",
+    "",
+    "1. F32 CONTROL. The same C++ graph on an F32 GGUF of the SAME checkpoint, same CPU",
+    "   thread-1 regime, drops drift by 100-2500x against the same F32 reference:",
+    "     enc.block.10.out  5.555e+00 -> 4.160e-02   (133x)",
+    "     enc.block.12.out  7.347e+00 -> 6.665e-02   (110x)",
+    "     enc.out           2.187e-01 -> 2.039e-04  (1073x)",
+    "   A graph, masking, indexing or shape bug does not disappear when the storage dtype",
+    "   changes. This is the decisive check; it rules out the code.",
+    "2. Blocks 0-9 drift within 0.66-1.10x of the Apache sibling - identical behavior. Only",
+    "   the outlier-channel blocks diverge.",
+    "3. CTC output depends only on the per-frame argmax over 16384 logits. Argmax agreement",
+    "   with the reference is 441/441 on dots and 137/137 on jfk.",
+    "4. Safety margin (reference top-2 logit gap minus twice that frame's logit drift) is",
+    "   positive on every frame of both cases. Minimum 0.804 logits at a frame whose drift",
+    "   is 0.024 - a 34x margin. Tight-gap frames and high-drift frames are disjoint: the",
+    "   largest-drift frame (14 on dots, drift 0.731) sits on a 4.97-logit gap.",
+    "5. Full LibriSpeech test-clean: C++ BF16 batch 1 = 1.29% WER vs the Stage 2 Oracle",
+    "   reference 1.29% (gate <= REF + 0.01pp). Error composition 519/82/82 against the",
+    "   reference's 519/83/82.",
+    "6. Only 2 of 2620 hypotheses differ from the reference at all, and on one the C++ is",
+    "   the better transcription.",
+    "7. Batch 8 is byte-identical to batch 1 across all 2620 hypotheses.",
+    "",
+    "=== READING THE WIDENING FACTORS ============================================",
+    "",
+    "The factors below are large, and larger than the Apache sibling needed. Read them with",
+    "care: the denominator is 1e-4 x p99_abs, and p99_abs describes the 99% of elements that",
+    "are SMALL while the error lives on the one channel that is not. Against the element's",
+    "own magnitude the same drift is 1.7-4.0%. The p99-relative view is the misleading one",
+    "for a tensor with a 50x outlier channel; it is kept only because the tolerance framework",
+    "compares absolute values.",
+    "",
+    "Production variants - quantized GGUFs, GPU backends - drift differently. Those",
+    "measurements belong in Stage 6/7 reports, NOT in this file.",
+    "",
+    "Entries above the Stage 2 magnitude budget: 33 of 34.",
+    "Largest widening factors (tensor, factor vs magnitude budget, observed max drift):",
+    "  enc.block.12.out           11726.6x   observed 7.347e+00  (p99_abs 9.398)",
+    "  enc.block.10.out            8168.9x   observed 5.555e+00  (p99_abs 10.2)",
+    "  enc.block.11.out            7714.0x   observed 5.065e+00  (p99_abs 9.85)",
+    "  enc.block.13.out            5616.6x   observed 3.039e+00  (p99_abs 8.115)",
+    "  enc.block.15.out            1909.0x   observed 2.187e-01  (p99_abs 1.718)",
+    "  enc.out                     1909.0x   observed 2.187e-01  (p99_abs 1.718)",
+    "  enc.block.7.out             1051.0x   observed 1.125e-01  (p99_abs 1.606)",
+    "  enc.block.14.out             786.4x   observed 3.742e-01  (p99_abs 7.138)",
+    "  enc.ctc_logits               637.2x   observed 7.307e-01  (p99_abs 17.2)",
+    "  enc.block.6.out              383.6x   observed 1.922e-01  (p99_abs 7.515)",
+    "  enc.ctc.mid_logits           331.5x   observed 3.666e-01  (p99_abs 16.59)",
+    "  enc.block.4.out              315.5x   observed 1.956e-01  (p99_abs 9.301)",
+    "",
+    "Entries NOT widened (observed drift within the Stage 2 magnitude budget):",
+    "  mel.in",
+    "",
+    "STAGE 5 WATCH ITEM: the channel-570 outlier (|value| up to 481, ~20x the rest of",
+    "its tensor) is exactly what K-quant block scales handle worst, since it dominates",
+    "the scale of whatever block it lands in. Treat Q4_K_M / Q5_K_M WER on this variant",
+    "as a real risk rather than a formality; the Apache sibling's quant results do not",
+    "transfer."
+  ],
+  "enc.block.0.out": {
+    "max_abs": 0.1535,
+    "mean_abs": 0.01191
+  },
+  "enc.block.0.post_attn": {
+    "max_abs": 0.08937,
+    "mean_abs": 0.009655
+  },
+  "enc.block.0.post_conv": {
+    "max_abs": 0.1277,
+    "mean_abs": 0.01484
+  },
+  "enc.block.0.post_ff1": {
+    "max_abs": 0.06474,
+    "mean_abs": 0.007222
+  },
+  "enc.block.0.post_ff2": {
+    "max_abs": 0.1879,
+    "mean_abs": 0.01669
+  },
+  "enc.block.1.out": {
+    "max_abs": 0.1422,
+    "mean_abs": 0.01166
+  },
+  "enc.block.1.post_attn": {
+    "max_abs": 0.2116,
+    "mean_abs": 0.0157
+  },
+  "enc.block.1.post_conv": {
+    "max_abs": 0.1635,
+    "mean_abs": 0.01825
+  },
+  "enc.block.1.post_ff1": {
+    "max_abs": 0.21,
+    "mean_abs": 0.01434
+  },
+  "enc.block.1.post_ff2": {
+    "max_abs": 0.1568,
+    "mean_abs": 0.02026
+  },
+  "enc.block.10.out": {
+    "max_abs": 8.333,
+    "mean_abs": 0.006908
+  },
+  "enc.block.11.out": {
+    "max_abs": 7.598,
+    "mean_abs": 0.006351
+  },
+  "enc.block.12.out": {
+    "max_abs": 11.02,
+    "mean_abs": 0.006289
+  },
+  "enc.block.13.out": {
+    "max_abs": 4.558,
+    "mean_abs": 0.005426
+  },
+  "enc.block.14.out": {
+    "max_abs": 0.5613,
+    "mean_abs": 0.005642
+  },
+  "enc.block.15.out": {
+    "max_abs": 0.328,
+    "mean_abs": 0.002437
+  },
+  "enc.block.2.out": {
+    "max_abs": 0.2679,
+    "mean_abs": 0.009288
+  },
+  "enc.block.2.post_attn": {
+    "max_abs": 0.2176,
+    "mean_abs": 0.01411
+  },
+  "enc.block.2.post_conv": {
+    "max_abs": 0.2161,
+    "mean_abs": 0.01687
+  },
+  "enc.block.2.post_ff1": {
+    "max_abs": 0.1791,
+    "mean_abs": 0.01348
+  },
+  "enc.block.2.post_ff2": {
+    "max_abs": 0.2752,
+    "mean_abs": 0.01886
+  },
+  "enc.block.3.out": {
+    "max_abs": 0.2854,
+    "mean_abs": 0.007856
+  },
+  "enc.block.4.out": {
+    "max_abs": 0.2934,
+    "mean_abs": 0.006101
+  },
+  "enc.block.5.out": {
+    "max_abs": 0.218,
+    "mean_abs": 0.004517
+  },
+  "enc.block.6.out": {
+    "max_abs": 0.2883,
+    "mean_abs": 0.003631
+  },
+  "enc.block.7.out": {
+    "max_abs": 0.1688,
+    "mean_abs": 0.001718
+  },
+  "enc.block.8.out": {
+    "max_abs": 0.2896,
+    "mean_abs": 0.008644
+  },
+  "enc.block.9.out": {
+    "max_abs": 0.2501,
+    "mean_abs": 0.007598
+  },
+  "enc.ctc.mid_injection": {
+    "max_abs": 0.02478,
+    "mean_abs": 0.0001444
+  },
+  "enc.ctc.mid_logits": {
+    "max_abs": 0.5498,
+    "mean_abs": 0.008068
+  },
+  "enc.ctc_logits": {
+    "max_abs": 1.096,
+    "mean_abs": 0.009745
+  },
+  "enc.input_linear.out": {
+    "max_abs": 0.02776,
+    "mean_abs": 0.00162
+  },
+  "enc.out": {
+    "max_abs": 0.328,
+    "mean_abs": 0.002437
+  },
+  "mel.in": {
+    "max_abs": 0.0001482,
+    "mean_abs": 5.441e-06
+  }
+}

@@ -128,9 +128,10 @@ fn itn_changes_sensevoice_text_normalization() {
     let enabled = run(&mut session, Itn::On);
     assert_eq!(
         (default.text, default.raw_text),
-        (disabled.text.clone(), disabled.raw_text.clone())
+        (enabled.text.clone(), enabled.raw_text.clone())
     );
     assert_ne!(enabled.text, disabled.text);
+    assert_eq!(disabled.text, disabled.text.to_lowercase());
     assert!(disabled.raw_text.contains("<|woitn|>"));
     assert!(enabled.raw_text.contains("<|withitn|>"));
 }

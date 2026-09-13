@@ -1,0 +1,96 @@
+# Spec for the HF README of handy-computer/granite-speech-5.0-470m-turboctc-nc-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+#
+# NON-COMMERCIAL. Upstream is CC-BY-NC-SA-4.0, so these GGUFs are derivatives
+# under the same terms (ShareAlike). Do not copy the Apache-2.0 sibling's
+# license fields into this file.
+
+hf_repo: ibm-granite/granite-speech-5.0-470m-turboctc-nc
+target_repo: handy-computer/granite-speech-5.0-470m-turboctc-nc-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/granite-speech-5.0-470m-turboctc-nc.md
+
+upstream_commit: 0eb7b4f
+pin_date: 2026-09-12
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: transformers
+  commit: f1d0e10
+  date: 2026-09-12
+
+license: cc-by-nc-sa-4.0
+license_display: CC-BY-NC-SA-4.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - granite
+  - conformer
+  - ctc
+  - non-commercial
+
+summary: |
+  Offline English speech-to-text, research and non-commercial use only. A 470M
+  parameter Granite Conformer encoder with a self-conditioned CTC head.
+  Takes a 16 kHz mono WAV and produces a transcript. Not a streaming model. English only.
+
+default_quant_index: 2  # Q8_0
+
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: none  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, hand-authored from the bench as
+# the mean of the four publication cells (q8_0/q4_k_m × jfk/dots); published raw
+# as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    cpu: 49
+    metal: 351
+  m4:
+    cpu: 28.5
+    metal: 119
+  ryzen-4750u:
+    cpu: 15.9
+    vulkan: 20.3
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances),
+    greedy CTC decoding, no external LM. Measured reference baseline
+    (transformers 5.17.0, F32, CPU): 1.29%, 95% CI [1.15, 1.42].
+
+quants:
+  - name: BF16
+    filename: granite-speech-5.0-470m-turboctc-nc-BF16.gguf
+    size: 948 MB
+    wer: 1.29%
+  - name: F16
+    filename: granite-speech-5.0-470m-turboctc-nc-F16.gguf
+    size: 949 MB
+    wer: 1.29%
+  - name: Q8_0
+    filename: granite-speech-5.0-470m-turboctc-nc-Q8_0.gguf
+    size: 506 MB
+    wer: 1.30%
+  - name: Q6_K
+    filename: granite-speech-5.0-470m-turboctc-nc-Q6_K.gguf
+    size: 392 MB
+    wer: 1.28%
+  - name: Q5_K_M
+    filename: granite-speech-5.0-470m-turboctc-nc-Q5_K_M.gguf
+    size: 336 MB
+    wer: 1.29%
+  - name: Q4_K_M
+    filename: granite-speech-5.0-470m-turboctc-nc-Q4_K_M.gguf
+    size: 279 MB
+    wer: 1.33%

@@ -49,7 +49,7 @@ transcribe_status compute_mel_encoder_input(const transcribe::MelFrontend & mel,
 struct EncoderBuild {
     // Graph inputs (caller uploads at compute time).
     ggml_tensor * mel_in          = nullptr;  // [input_dim, T_enc]
-    ggml_tensor * attention_dists = nullptr;  // [ctx*ctx] i32
+    ggml_tensor * pos_rows        = nullptr;  // [2*ctx-1] i32
     ggml_tensor * last_block_mask = nullptr;  // [ctx, ctx, n_blocks_local]
     ggml_tensor * zero_pad        = nullptr;  // optional [hidden, T_pad-T_enc]
 
@@ -93,7 +93,7 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
                                  bool                      use_flash);
 
 // Shaw bookkeeping helpers (identical to AR granite).
-std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_emb);
+std::vector<int32_t> precompute_pos_rows(int context_size, int max_pos_emb);
 std::vector<float>   precompute_last_block_mask(int context_size, int t_enc_remainder);
 
 // Host-side BPE CTC pool + greedy decode.

@@ -433,6 +433,7 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_cache_aware.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_buffered.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_granite5_ctc_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf)
 
 find_program(TRANSCRIBE_UV uv)
@@ -655,6 +656,31 @@ if(TRANSCRIBE_UV)
 endif()
 
 # -----------------------------------------------------------------------------
+# Granite Speech 5.0 TurboCTC weight ingest smoke
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_granite5_ctc_smoke
+        granite5_ctc_smoke.cpp)
+
+    target_link_libraries(transcribe_granite5_ctc_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_granite5_ctc_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    target_compile_definitions(transcribe_granite5_ctc_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_granite5_ctc_smoke)
+    add_dependencies(transcribe_granite5_ctc_smoke fixtures)
+
+    add_test(NAME transcribe_granite5_ctc_smoke
+        COMMAND transcribe_granite5_ctc_smoke)
+    set_tests_properties(transcribe_granite5_ctc_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Real-model gated test (developer-local, never CI)
 # -----------------------------------------------------------------------------
 #
@@ -683,6 +709,39 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_test(NAME transcribe_parakeet_real_smoke
         COMMAND transcribe_parakeet_real_smoke)
     set_tests_properties(transcribe_parakeet_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # Real-model granite5_ctc converter + loader gate.
+    add_executable(transcribe_granite5_ctc_real_smoke
+        granite5_ctc_real_smoke.cpp)
+
+    target_link_libraries(transcribe_granite5_ctc_real_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_granite5_ctc_real_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_granite5_ctc_real_smoke)
+
+    add_test(NAME transcribe_granite5_ctc_real_smoke
+        COMMAND transcribe_granite5_ctc_real_smoke)
+    set_tests_properties(transcribe_granite5_ctc_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # Public-ABI transcript and no-timestamps contract gate.
+    add_executable(transcribe_granite5_ctc_e2e_smoke
+        granite5_ctc_e2e_smoke.cpp)
+
+    target_link_libraries(transcribe_granite5_ctc_e2e_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_granite5_ctc_e2e_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_granite5_ctc_e2e_smoke)
+
+    add_test(NAME transcribe_granite5_ctc_e2e_smoke
+        COMMAND transcribe_granite5_ctc_e2e_smoke)
+    set_tests_properties(transcribe_granite5_ctc_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
     # Real-model GigaAM workspace-retention regression.

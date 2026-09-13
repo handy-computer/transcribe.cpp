@@ -623,6 +623,152 @@ def _parakeet_tensors(causal_pre_encode: bool = False) -> list[Tensor]:
 
 
 # ---------------------------------------------------------------------------
+# Toy Granite Speech 5.0 TurboCTC hparams + tensor catalog
+# ---------------------------------------------------------------------------
+
+GRANITE5_CTC_HP = {
+    "enc_n_layers":         2,
+    "enc_hidden":           8,
+    "enc_n_heads":          2,
+    "enc_head_dim":         4,
+    "enc_intermediate":     16,
+    "enc_input_dim":        8,
+    "enc_output_dim":       16,
+    "enc_conv_kernel_size": 3,
+    "enc_conv_expansion":   2,
+    "enc_context_size":     4,
+    "enc_max_pos_emb":      8,
+    "enc_self_cond_layer":  1,
+    "enc_subsample_layers": [0],
+    "blank_id":             15,
+    "fe_type":              "mel",
+    "fe_sample_rate":       16000,
+    "fe_num_mels":          2,
+    "fe_n_fft":             16,
+    "fe_win_length":        8,
+    "fe_hop_length":        4,
+    "fe_window":            "hann_periodic",
+    "fe_normalize":         "per_utterance",
+    "fe_pad_mode":          "reflect",
+    "fe_mel_norm":          "htk",
+    "fe_dither":            0.0,
+    "fe_logmel_floor_db":   8.0,
+    "fe_deltas":            True,
+    "fe_delta_win_length":  3,
+    "fe_stack_factor":      2,
+}
+
+
+def _granite5_ctc_hparams_kv() -> list[bytes]:
+    hp = GRANITE5_CTC_HP
+    return [
+        _pack_kv_uint32("stt.granite5_ctc.encoder.n_layers",         hp["enc_n_layers"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.hidden",           hp["enc_hidden"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.n_heads",          hp["enc_n_heads"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.head_dim",         hp["enc_head_dim"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.intermediate",     hp["enc_intermediate"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.input_dim",        hp["enc_input_dim"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.output_dim",       hp["enc_output_dim"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.conv_kernel_size", hp["enc_conv_kernel_size"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.conv_expansion",   hp["enc_conv_expansion"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.context_size",     hp["enc_context_size"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.max_pos_emb",      hp["enc_max_pos_emb"]),
+        _pack_kv_uint32("stt.granite5_ctc.encoder.self_cond_layer",  hp["enc_self_cond_layer"]),
+        _pack_kv_array_int32("stt.granite5_ctc.encoder.subsample_layers", hp["enc_subsample_layers"]),
+        _pack_kv_uint32("stt.granite5_ctc.blank_id", hp["blank_id"]),
+        _pack_kv_string("stt.frontend.type", hp["fe_type"]),
+        _pack_kv_uint32("stt.frontend.sample_rate", hp["fe_sample_rate"]),
+        _pack_kv_uint32("stt.frontend.num_mels", hp["fe_num_mels"]),
+        _pack_kv_uint32("stt.frontend.n_fft", hp["fe_n_fft"]),
+        _pack_kv_uint32("stt.frontend.win_length", hp["fe_win_length"]),
+        _pack_kv_uint32("stt.frontend.hop_length", hp["fe_hop_length"]),
+        _pack_kv_string("stt.frontend.window", hp["fe_window"]),
+        _pack_kv_string("stt.frontend.normalize", hp["fe_normalize"]),
+        _pack_kv_string("stt.frontend.pad_mode", hp["fe_pad_mode"]),
+        _pack_kv_string("stt.frontend.mel_norm", hp["fe_mel_norm"]),
+        _pack_kv_float32("stt.frontend.dither", hp["fe_dither"]),
+        _pack_kv_float32("stt.frontend.logmel_floor_db", hp["fe_logmel_floor_db"]),
+        _pack_kv_bool("stt.frontend.deltas", hp["fe_deltas"]),
+        _pack_kv_uint32("stt.frontend.delta_win_length", hp["fe_delta_win_length"]),
+        _pack_kv_uint32("stt.frontend.stack_factor", hp["fe_stack_factor"]),
+    ]
+
+
+def _granite5_ctc_tensor_descriptors() -> list[tuple[str, list[int]]]:
+    hp = GRANITE5_CTC_HP
+    hidden = hp["enc_hidden"]
+    enc_in = hp["enc_input_dim"]
+    enc_out = hp["enc_output_dim"]
+    inner = hp["enc_n_heads"] * hp["enc_head_dim"]
+    ffn = hp["enc_intermediate"]
+    conv_inner = hidden * hp["enc_conv_expansion"]
+    conv_up_out = 2 * conv_inner
+    conv_k = hp["enc_conv_kernel_size"]
+    rel_pos_len = 2 * hp["enc_max_pos_emb"] + 1
+
+    out: list[tuple[str, list[int]]] = [
+        ("enc.input_linear.weight", [enc_in, hidden]),
+        ("enc.input_linear.bias", [hidden]),
+        ("enc.ctc_proj.weight", [hidden, enc_out]),
+        ("enc.ctc_proj.bias", [enc_out]),
+        ("enc.ctc_bypass.weight", [enc_out, hidden]),
+        ("enc.ctc_bypass.bias", [hidden]),
+    ]
+    for i in range(hp["enc_n_layers"]):
+        p = f"enc.blocks.{i}"
+        out += [
+            (f"{p}.norm_ff1.weight", [hidden]),
+            (f"{p}.norm_ff1.bias", [hidden]),
+            (f"{p}.ff1.linear1.weight", [hidden, ffn]),
+            (f"{p}.ff1.linear1.bias", [ffn]),
+            (f"{p}.ff1.linear2.weight", [ffn, hidden]),
+            (f"{p}.ff1.linear2.bias", [hidden]),
+            (f"{p}.norm_attn.weight", [hidden]),
+            (f"{p}.norm_attn.bias", [hidden]),
+            (f"{p}.attn.q.weight", [hidden, inner]),
+            (f"{p}.attn.kv.weight", [hidden, 2 * inner]),
+            (f"{p}.attn.out.weight", [inner, hidden]),
+            (f"{p}.attn.out.bias", [hidden]),
+            (f"{p}.attn.rel_pos_emb.weight", [hp["enc_head_dim"], rel_pos_len]),
+            (f"{p}.norm_conv.weight", [hidden]),
+            (f"{p}.norm_conv.bias", [hidden]),
+            (f"{p}.conv.pointwise1.weight", [hidden, conv_up_out]),
+            (f"{p}.conv.pointwise1.bias", [conv_up_out]),
+            (f"{p}.conv.depthwise.weight", [conv_k, 1, conv_inner]),
+            (f"{p}.conv.bn.weight", [conv_inner]),
+            (f"{p}.conv.bn.bias", [conv_inner]),
+            (f"{p}.conv.bn.running_mean", [conv_inner]),
+            (f"{p}.conv.bn.running_var", [conv_inner]),
+            (f"{p}.conv.pointwise2.weight", [conv_inner, hidden]),
+            (f"{p}.conv.pointwise2.bias", [hidden]),
+            (f"{p}.norm_ff2.weight", [hidden]),
+            (f"{p}.norm_ff2.bias", [hidden]),
+            (f"{p}.ff2.linear1.weight", [hidden, ffn]),
+            (f"{p}.ff2.linear1.bias", [ffn]),
+            (f"{p}.ff2.linear2.weight", [ffn, hidden]),
+            (f"{p}.ff2.linear2.bias", [hidden]),
+            (f"{p}.norm_out.weight", [hidden]),
+            (f"{p}.norm_out.bias", [hidden]),
+        ]
+    n_freq = hp["fe_n_fft"] // 2 + 1
+    out += [
+        ("frontend.mel_filterbank", [n_freq, hp["fe_num_mels"]]),
+        ("frontend.window", [hp["fe_win_length"]]),
+    ]
+    return out
+
+
+def _granite5_ctc_tensors() -> list[Tensor]:
+    tensors: list[Tensor] = []
+    for idx, (name, ne) in enumerate(_granite5_ctc_tensor_descriptors()):
+        n_elem = 1
+        for dim in ne:
+            n_elem *= dim
+        tensors.append(Tensor(name, ne, GGML_TYPE_F32, _f32_seq(n_elem, idx)))
+    return tensors
+
+
+# ---------------------------------------------------------------------------
 # Toy cohere hparams + tensor catalog
 # ---------------------------------------------------------------------------
 #
@@ -1522,6 +1668,33 @@ def emit_fixtures(out_dir: Path) -> None:
                 *parakeet_hparams_kv,
             ],
             parakeet_tensors,
+        ),
+    )
+
+    # Granite Speech 5.0 TurboCTC minimal fixture. The tokenizer is
+    # decode-only for this CTC family, so an empty merge table is legal.
+    granite5_ctc_tokenizer_kv = [
+        _pack_kv_string("tokenizer.ggml.model", "gpt2"),
+        _pack_kv_string("tokenizer.ggml.pre", "granite"),
+        _pack_kv_array_string("tokenizer.ggml.tokens", TOY_VOCAB),
+        _pack_kv_array_int32("tokenizer.ggml.token_type", TOY_TOKEN_TYPES),
+        _pack_kv_uint32("tokenizer.ggml.blank_token_id", 15),
+        _pack_kv_uint32("tokenizer.ggml.padding_token_id", 15),
+    ]
+    _write(
+        out_dir / "arch_granite5_ctc_minimal.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "granite_speech5_ctc"),
+                _pack_kv_string("stt.variant", "granite5-ctc-toy"),
+                _pack_kv_bool("stt.capability.timestamps", False),
+                _pack_kv_bool("stt.capability.word_timestamps", False),
+                _pack_kv_array_string("general.languages", ["en"]),
+                *granite5_ctc_tokenizer_kv,
+                *_granite5_ctc_hparams_kv(),
+            ],
+            _granite5_ctc_tensors(),
         ),
     )
 
