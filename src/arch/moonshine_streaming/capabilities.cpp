@@ -28,11 +28,10 @@ void apply_family_invariants(transcribe_model & model) {
     // commits the last partial transcript).
     caps.supports_streaming = true;
 
-    // Streaming latency characteristics (≈240 ms cumulative encoder
-    // right-context, natural 20 ms emit unit, family-recommended 80 ms
-    // feed cadence) are documented in the family doc rather than
-    // advertised as flat caps fields — the model has no inference-time
-    // latency knob, and supports_streaming above is the generic gate.
+    // Streaming latency characteristics (approximately 240 ms cumulative
+    // encoder right-context, natural 20 ms emit unit, family-recommended 80 ms
+    // feed cadence) are documented in the family doc. The learned adapter
+    // position table separately imposes the max_audio_ms hard limit.
 
     // Cancellation is wired at the per-run + per-feed level. No PNC/ITN
     // runtime toggle. Whisper-style fallback / long-form / prompt

@@ -11,9 +11,7 @@
 // transcribe_was_truncated() set) in BOTH paths, while a short clip that
 // finishes under the budget stays OK and the whole-batch call still returns OK.
 //
-// This is the causal_lm counterpart to moonshine_streaming_batch_truncation
-// (which exercises the encoder-decoder batch loop in transcribe-batch-util.cpp).
-// It specifically guards the shared src/causal_lm batched step loop's per-row
+// This specifically guards the shared src/causal_lm batched step loop's per-row
 // truncation detection: that loop marks every stopped row `finished`
 // regardless of WHY it stopped, so truncation must be inferred from the last
 // sampled token (!= eos), not from `!finished`. A regression there makes a

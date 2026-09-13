@@ -119,11 +119,7 @@ struct MoonshineStreamingModel final : public transcribe_model {
 };
 
 struct MoonshineStreamingSession final : public transcribe_session {
-    // Host-side mirror of the post-adapter encoder hidden. The adapter
-    // pos_emb add (and proj when present) is applied once per session;
-    // this host buffer feeds the cross_kv precompute graph.
-    std::vector<float> adapter_host;
-    int                enc_T = 0;  // T_enc
+    int enc_T = 0;  // T_enc
 
     MoonshineStreamingKvCache kv_cache;
 
@@ -133,8 +129,6 @@ struct MoonshineStreamingSession final : public transcribe_session {
     // ---- incremental streaming state ----
     //
     // Each feed extends host-side committed buffers in lockstep:
-    //   stream_adapter_committed  - post-adapter encoder hidden
-    //                               [dec_d_model, T_emitted].
     //   stream_cross_k/v_committed - per decoder layer, [dec_d_model,
     //                               T_emitted]; uploaded into the persistent
     //                               kv_cache on each partial decode (per-feed,
@@ -157,7 +151,6 @@ struct MoonshineStreamingSession final : public transcribe_session {
     // per-utterance audio + encoder scratch.
     std::vector<float>               stream_pcm_buffer;
     int64_t                          stream_pcm_start_sample = 0;
-    std::vector<float>               stream_adapter_committed;
     std::vector<std::vector<float>>  stream_cross_k_committed;
     std::vector<std::vector<float>>  stream_cross_v_committed;
     int32_t                          stream_T_emitted      = 0;

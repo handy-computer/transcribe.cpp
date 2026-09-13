@@ -2497,10 +2497,10 @@ extern "C" transcribe_status transcribe_session_get_limits(const struct transcri
         }
 
         // max_kv_bytes: worst-case single-utterance KV allocation at the
-        // effective ceiling, exact for the session's kv_type. The families
-        // resolve AUTO (and F16) to f16 for the KV cache and use f32 only for
-        // an explicit F32 request, so the byte size is 4/elem for F32 and
-        // 2/elem otherwise. This is the ceiling for one utterance, not the
+        // effective ceiling, exact for the session's resolved kv_type. Most
+        // families leave AUTO as the F16 default; a family that defaults to
+        // F32 stores that resolved choice on the session during init.
+        // This is the ceiling for one utterance, not the
         // per-run allocation (the cache grows to fit input); transcribe_run_batch
         // allocates roughly batch_size x this.
         const int64_t kv_bytes_per_elem = (session->kv_type == TRANSCRIBE_KV_TYPE_F32) ? 4 : 2;

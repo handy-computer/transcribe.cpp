@@ -14,6 +14,11 @@ multilingual capability, and does not emit timestamps.
 See Useful Sensors' [model card](https://huggingface.co/UsefulSensors/moonshine-streaming-tiny)
 for training data, intended use, and upstream evaluation methodology.
 
+The learned adapter position table has 4096 rows at one row per 20 ms encoder
+frame, giving an exact **81.92-second** input limit. Longer one-shot, batch, or
+streaming input returns `TRANSCRIBE_ERR_INPUT_TOO_LONG`; split longer recordings
+into utterances before transcription.
+
 Licensed MIT. Ported from upstream commit
 [`f8e9dfd`](https://huggingface.co/UsefulSensors/moonshine-streaming-tiny/commit/f8e9dfd8c562c257c151a907b7b7f2fe8ff8511a),
 pinned 2026-05-06.

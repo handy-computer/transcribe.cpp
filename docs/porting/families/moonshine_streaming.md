@@ -266,8 +266,9 @@ Highlights:
 7. `tie_word_embeddings=false` — converter must NOT tie, GGUF must carry
    an explicit `lm_head` tensor.
 8. `pad_token_id=0` (vs moonshine's 2). Tokenizer `vocab_sha256` differs.
-9. `max_position_embeddings=4096` (vs moonshine's 194). Decoder KV cache
-   sizing must accommodate the longer max length.
+9. `max_position_embeddings=4096` (vs moonshine's 194) sizes both the decoder
+   positions and the learned adapter position table. At one adapter row per
+   20 ms encoder frame, the table imposes a hard 81.92-second audio limit.
 
 ## Capability Validation
 
@@ -332,8 +333,7 @@ projection would.
    in encoder-frame units (with `frontend_pad = 4` enc frames of
    conv-stack history beyond the L_total mask context), encode, then
    on the emit slice `[T_emitted, stable_T)`:
-   - apply the adapter with absolute pos_ids → append to
-     `stream_adapter_committed`;
+   - apply the adapter with absolute pos_ids;
    - run the cross-KV projection graph → append per-layer K and V to
      `stream_cross_k_committed[il]` / `stream_cross_v_committed[il]`.
 4. `T_emitted = stable_T`. Bump `audio_committed_ms` to match.
