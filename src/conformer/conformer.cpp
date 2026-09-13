@@ -969,6 +969,48 @@ ggml_tensor * name_prefixed(ggml_tensor * t, const char * prefix, const char * s
     return t;
 }
 
+// Retain the regular im2col depthwise kernel while bounding its expanded
+// output-time axis. Each slice includes its complete source receptive field.
+ggml_tensor * regular_dw_2d_time_chunked(ggml_context * ctx,
+                                         ggml_tensor *  kernel,
+                                         ggml_tensor *  data,
+                                         int64_t        time_chunk) {
+    constexpr int64_t kStride = 2;
+
+    const int64_t extent   = kernel->ne[1];
+    const int64_t pad      = (extent - 1) / 2;
+    const int64_t time_out = (data->ne[1] + 2 * pad - extent) / kStride + 1;
+    if (time_out <= time_chunk) {
+        return conv_2d_dw_f32(ctx, kernel, data, kStride, kStride, pad, pad, /*d0=*/1, /*d1=*/1);
+    }
+
+    std::vector<ggml_tensor *> chunks;
+    chunks.reserve(static_cast<size_t>((time_out + time_chunk - 1) / time_chunk));
+    for (int64_t out0 = 0; out0 < time_out; out0 += time_chunk) {
+        const int64_t n_out   = std::min<int64_t>(time_chunk, time_out - out0);
+        const int64_t src0    = out0 * kStride - pad;
+        const int64_t src1    = src0 + (n_out - 1) * kStride + extent;
+        const int64_t view0   = std::max<int64_t>(0, src0);
+        const int64_t view1   = std::min<int64_t>(data->ne[1], src1);
+        const int64_t pad_top = view0 - src0;
+        const int64_t pad_bot = src1 - view1;
+        ggml_tensor * input = ggml_view_4d(ctx, data, data->ne[0], view1 - view0, data->ne[2], data->ne[3], data->nb[1],
+                                           data->nb[2], data->nb[3], view0 * data->nb[1]);
+        input               = ggml_pad_ext(ctx, input, 0, 0, pad_top, pad_bot, 0, 0, 0, 0);
+        chunks.push_back(conv_2d_dw_f32(ctx, kernel, input, kStride, kStride, pad, /*p1=*/0, /*d0=*/1, /*d1=*/1));
+    }
+
+    while (chunks.size() > 1) {
+        std::vector<ggml_tensor *> next;
+        next.reserve((chunks.size() + 1) / 2);
+        for (size_t i = 0; i < chunks.size(); i += 2) {
+            next.push_back(i + 1 < chunks.size() ? ggml_concat(ctx, chunks[i], chunks[i + 1], /*dim=*/1) : chunks[i]);
+        }
+        chunks.swap(next);
+    }
+    return chunks.front();
+}
+
 // Causal depthwise subsampling pads [kernel-1, stride-1] on both spatial
 // axes. Slice the output-time axis so only a bounded padded view is live.
 ggml_tensor * causal_dw_2d_time_chunked(ggml_context * ctx, ggml_tensor * kernel, ggml_tensor * data) {
@@ -1060,12 +1102,13 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     // on both spatial axes before the conv (p=0). Offline variants take the
     // op-side (k-1)/2 symmetric padding instead.
     const bool causal_pe           = policy.causal_pre_encode;
+    const bool inplace_pe          = causal_pe || policy.inplace_pre_encode;
     const int  pe_p_op             = causal_pe ? 0 : 1;
-    auto       add_pre_encode_bias = [ctx, causal_pe](ggml_tensor * value, ggml_tensor * bias) {
-        return causal_pe ? add_conv_bias_inplace(ctx, value, bias) : add_conv_bias(ctx, value, bias);
+    auto       add_pre_encode_bias = [ctx, inplace_pe](ggml_tensor * value, ggml_tensor * bias) {
+        return inplace_pe ? add_conv_bias_inplace(ctx, value, bias) : add_conv_bias(ctx, value, bias);
     };
-    auto pre_encode_relu = [ctx, causal_pe](ggml_tensor * value) {
-        return causal_pe ? ggml_relu_inplace(ctx, value) : ggml_relu(ctx, value);
+    auto pre_encode_relu = [ctx, inplace_pe](ggml_tensor * value) {
+        return inplace_pe ? ggml_relu_inplace(ctx, value) : ggml_relu(ctx, value);
     };
     auto pad_causal = [&](ggml_tensor * t) {
         if (!causal_pe) {
@@ -1123,6 +1166,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                        /*s0=*/2, /*s1=*/2,
                                        /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                                        /*d0=*/1, /*d1=*/1);
+        } else if (!causal_pe && policy.pre_encode_dw_time_chunk > 0) {
+            x = regular_dw_2d_time_chunked(ctx, pe.conv2_w, x, policy.pre_encode_dw_time_chunk);
         } else {
             x = conv_2d_dw_f32(ctx, pe.conv2_w, x,
                                /*s0=*/2, /*s1=*/2,
@@ -1154,6 +1199,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                        /*s0=*/2, /*s1=*/2,
                                        /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                                        /*d0=*/1, /*d1=*/1);
+        } else if (!causal_pe && policy.pre_encode_dw_time_chunk > 0) {
+            x = regular_dw_2d_time_chunked(ctx, pe.conv5_w, x, policy.pre_encode_dw_time_chunk);
         } else {
             x = conv_2d_dw_f32(ctx, pe.conv5_w, x,
                                /*s0=*/2, /*s1=*/2,

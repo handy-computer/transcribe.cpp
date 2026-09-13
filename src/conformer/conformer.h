@@ -112,6 +112,11 @@ struct ConvPolicy {
     bool direct_dw_in_block         = false;
     bool direct_dw_in_pre_encode    = false;
 
+    // Optional memory controls for the three-stage subsampler. A positive
+    // chunk size bounds regular depthwise im2col along output time.
+    bool inplace_pre_encode       = false;
+    int  pre_encode_dw_time_chunk = 0;
+
     // Causal pre_encode convolutions. NeMo's cache-aware streaming swaps
     // every Conv2d in ConvSubsampling for CausalConv2D, padding
     // (left=k-1, right=stride-1) on both spatial axes — for k=3/s=2 that
