@@ -20,11 +20,13 @@ pinned 2026-05-06.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+| Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32  | [moonshine-streaming-tiny-F32.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-F32.gguf)   | 169 MB | 4.53% |
-| F16  | [moonshine-streaming-tiny-F16.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-F16.gguf)   |  85 MB | 4.53% |
-| Q8_0 | [moonshine-streaming-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-Q8_0.gguf) |  48 MB | 4.52% |
+| F32          | [moonshine-streaming-tiny-F32.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-F32.gguf) | 178 MB | 4.53% |
+| F16          | [moonshine-streaming-tiny-F16.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-F16.gguf) |  90 MB | 4.53% |
+| Q8_0         | [moonshine-streaming-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-Q8_0.gguf) |  50 MB | 4.52% |
+<!-- /catalog -->
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference

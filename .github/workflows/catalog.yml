@@ -6,12 +6,16 @@ on:
     paths:
       - "catalog/**"
       - "scripts/catalog/**"
+      - "scripts/hf_cards/**"
+      - "docs/models/**"
       - ".github/workflows/catalog.yml"
   push:
     branches: [main]
     paths:
       - "catalog/**"
       - "scripts/catalog/**"
+      - "scripts/hf_cards/**"
+      - "docs/models/**"
       - ".github/workflows/catalog.yml"
 
 concurrency:
@@ -27,8 +31,18 @@ jobs:
       - uses: astral-sh/setup-uv@v8.2.0
       - name: Canonical formatting
         run: uv run catalog/_format.py --check catalog/*.json
-      - name: Schema and integrity
+      - name: Schema, integrity, pairing and card specs
         run: uv run scripts/catalog/check.py
+      - name: Published tables match the catalog
+        run: uv run scripts/catalog/render.py --check
+      - name: Catalog HF card specs render
+        run: |
+          for record in catalog/*.json; do
+            variant="$(basename "$record" .json)"
+            case "$variant" in _*) continue ;; esac
+            spec="scripts/hf_cards/$variant.yaml"
+            uv run scripts/hf_cards/generate.py "$spec" --skip-upstream --stdout > /dev/null
+          done
       - name: Rebuild portable database
         run: |
           uv run scripts/catalog/db.py --out "$RUNNER_TEMP/catalog.db"

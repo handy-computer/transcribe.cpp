@@ -168,6 +168,27 @@ def resolve_dataset(repo: Path, spec: str) -> tuple[Path, str | None]:
     return manifest, default_lang
 
 
+def engine_sha() -> str | None:
+    """Short SHA of the checkout that built transcribe-cli, if it is a repo.
+
+    TRANSCRIBE_ENGINE_SHA overrides the lookup, for a runner that has the
+    binary but not the checkout: a Modal container is handed a source tree
+    with no .git, so `git rev-parse` there finds nothing and every remote
+    sweep would land an unattributable row. The dispatcher passes the sha of
+    the tree it built from instead.
+    """
+    override = os.environ.get("TRANSCRIBE_ENGINE_SHA", "").strip()
+    if override:
+        return override
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             cwd=Path(__file__).resolve().parents[2])
+        return out.stdout.strip() or None if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def main() -> int:
     repo = find_repo_root(Path(__file__).parent)
 
@@ -202,7 +223,7 @@ def main() -> int:
                         "batched encoder pads to the group max). Output is "
                         "keyed by file, so id mapping is preserved.")
     p.add_argument("--backend",
-                   choices=("auto", "cpu", "cpu_accel", "metal", "vulkan"),
+                   choices=("auto", "cpu", "cpu_accel", "metal", "vulkan", "cuda"),
                    default=None,
                    help="Compute backend (default: transcribe-cli default)")
     p.add_argument("--kv-type",
@@ -217,6 +238,9 @@ def main() -> int:
     p.add_argument("--diarize", action="store_true",
                    help="Request diarization and retain timed speaker "
                         "intervals for scripts/wer/der.py")
+    p.add_argument("--publication-profile", default="",
+                   help="publication profile that selected this run; normally "
+                        "set by the profile-aware local or Modal dispatcher")
     p.add_argument("--stream-chunk-ms", type=int, default=0,
                    help="When > 0, drive each utterance through the "
                         "streaming API in N-ms chunks. Requires a model "
@@ -433,6 +457,11 @@ def main() -> int:
                     "backend": args.backend or "default",
                     "kv_type": args.kv_type or "default",
                     "decode": "greedy+default-fallback",
+                    # The build that produced the hypotheses. A score with no
+                    # engine behind it cannot be reproduced or superseded, and
+                    # the catalog refuses to publish one.
+                    "engine_sha": engine_sha(),
+                    "publication_profile": args.publication_profile or None,
                 }
                 fout.write(json.dumps(result) + "\n")
                 fout.flush()

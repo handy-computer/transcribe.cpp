@@ -24,14 +24,16 @@ pinned 2026-05-10.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [parakeet-tdt_ctc-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F32.gguf) | 4.28 GB |                        1.87% |
-| F16    | [parakeet-tdt_ctc-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F16.gguf) | 2.15 GB |                        1.87% |
-| Q8_0   | [parakeet-tdt_ctc-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q8_0.gguf) | 1.27 GB |                        1.87% |
-| Q6_K   | [parakeet-tdt_ctc-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q6_K.gguf) | 1.04 GB |                        1.87% |
-| Q5_K_M | [parakeet-tdt_ctc-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf) |  936 MB |                        1.87% |
-| Q4_K_M | [parakeet-tdt_ctc-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf) |  825 MB |                        1.91% |
+| F32          | [parakeet-tdt_ctc-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F32.gguf) | 4.28 GB | 1.87% |
+| F16          | [parakeet-tdt_ctc-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F16.gguf) | 2.15 GB | 1.87% |
+| Q8_0         | [parakeet-tdt_ctc-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q8_0.gguf) | 1.27 GB | 1.87% |
+| Q6_K         | [parakeet-tdt_ctc-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q6_K.gguf) | 1.04 GB | 1.87% |
+| Q5_K_M       | [parakeet-tdt_ctc-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf) |  936 MB | 1.87% |
+| Q4_K_M       | [parakeet-tdt_ctc-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf) |  825 MB | 1.91% |
+<!-- /catalog -->
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT decoding and no external LM. F32 reference baseline: 1.87%. NVIDIA's self-reported number on the same split is 1.82% (from the [HF model card](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b)).
 

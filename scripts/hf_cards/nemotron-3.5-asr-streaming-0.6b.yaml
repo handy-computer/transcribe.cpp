@@ -1,11 +1,8 @@
 # Spec for the HF README of handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
-hf_repo: nvidia/nemotron-3.5-asr-streaming-0.6b
-target_repo: handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/nemotron-3.5-asr-streaming-0.6b.md
 
-upstream_commit: 24b151a
 pin_date: 2026-06-08
 
 # Validation pin for the most recent upload. Updated on each release;
@@ -15,13 +12,8 @@ validation:
   commit: 909e94e
   date: 2026-06-08
 
-# Upstream is OpenMDW-1.1, not a standard SPDX id, so the HF `license`
-# field gets `other` and `license_name` / `license_link` carry the actual
-# identifier + URL. `license_display` is the human-facing form.
-license: other
 license_name: openmdw-1.1
 license_link: https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b
-license_display: OpenMDW-1.1
 pipeline_tag: automatic-speech-recognition
 languages:
   - en
@@ -69,23 +61,6 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
-# Capability flags for the transcribe_cpp metadata block.
-capabilities:
-  streaming: true
-  translate: false
-  lang_detect: true
-  timestamps: token  # none | segment | word | token
-
-# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
-# raw as rtf_<machine> in the metadata block.
-perf:
-  m4-max:
-    metal: 98
-    cpu: 29
-  ryzen-4750u:
-    vulkan: 14.5
-    cpu: 7.5
-
 wer:
   metadata_key: fleurs_en
   source: FLEURS test en (en-US), offline att_context_size=[56, 13]
@@ -98,29 +73,3 @@ wer:
     q6_k: 3.07
     q5_k_m: 3.10
     q4_k_m: 3.28
-
-quants:
-  - name: F32
-    filename: nemotron-3.5-asr-streaming-0.6b-F32.gguf
-    size: 2.38 GB
-    wer: 7.97%
-  - name: F16
-    filename: nemotron-3.5-asr-streaming-0.6b-F16.gguf
-    size: 1.19 GB
-    wer: 7.97%
-  - name: Q8_0
-    filename: nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf
-    size: 716 MB
-    wer: 7.88%
-  - name: Q6_K
-    filename: nemotron-3.5-asr-streaming-0.6b-Q6_K.gguf
-    size: 593 MB
-    wer: 8.02%
-  - name: Q5_K_M
-    filename: nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf
-    size: 534 MB
-    wer: 8.15%
-  - name: Q4_K_M
-    filename: nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf
-    size: 473 MB
-    wer: 8.49%

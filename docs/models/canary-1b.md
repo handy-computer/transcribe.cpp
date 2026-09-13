@@ -27,14 +27,16 @@ pinned 2026-05-08.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [canary-1b-F32.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F32.gguf)       | 3.8 GB | 1.55% |
-| F16    | [canary-1b-F16.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F16.gguf)       | 1.9 GB | 1.55% |
-| Q8_0   | [canary-1b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q8_0.gguf)     | 1.1 GB | 1.55% |
-| Q6_K   | [canary-1b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q6_K.gguf)     | 891 MB | 1.57% |
-| Q5_K_M | [canary-1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q5_K_M.gguf) | 799 MB | 1.57% |
-| Q4_K_M | [canary-1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q4_K_M.gguf) | 696 MB | 1.55% |
+| F32          | [canary-1b-F32.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F32.gguf) | 4.09 GB | 1.55% |
+| F16          | [canary-1b-F16.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F16.gguf) | 2.05 GB | 1.55% |
+| Q8_0         | [canary-1b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q8_0.gguf) | 1.16 GB | 1.55% |
+| Q6_K         | [canary-1b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q6_K.gguf) |  934 MB | 1.57% |
+| Q5_K_M       | [canary-1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q5_K_M.gguf) |  838 MB | 1.57% |
+| Q4_K_M       | [canary-1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q4_K_M.gguf) |  730 MB | 1.55% |
+<!-- /catalog -->
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.55%.

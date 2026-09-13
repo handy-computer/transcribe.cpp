@@ -24,14 +24,16 @@ pinned 2026-05-10.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [parakeet-rnnt-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-F32.gguf) | 4.28 GB |                        1.45% |
-| F16    | [parakeet-rnnt-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-F16.gguf) | 2.15 GB |                        1.45% |
-| Q8_0   | [parakeet-rnnt-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q8_0.gguf) | 1.27 GB |                        1.46% |
-| Q6_K   | [parakeet-rnnt-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q6_K.gguf) | 1.04 GB |                        1.43% |
-| Q5_K_M | [parakeet-rnnt-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q5_K_M.gguf) |  936 MB |                        1.43% |
-| Q4_K_M | [parakeet-rnnt-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q4_K_M.gguf) |  825 MB |                        1.41% |
+| F32          | [parakeet-rnnt-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-F32.gguf) | 4.28 GB | 1.45% |
+| F16          | [parakeet-rnnt-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-F16.gguf) | 2.15 GB | 1.45% |
+| Q8_0         | [parakeet-rnnt-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q8_0.gguf) | 1.27 GB | 1.46% |
+| Q6_K         | [parakeet-rnnt-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q6_K.gguf) | 1.04 GB | 1.43% |
+| Q5_K_M       | [parakeet-rnnt-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q5_K_M.gguf) |  936 MB | 1.43% |
+| Q4_K_M       | [parakeet-rnnt-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-1.1b-gguf/resolve/main/parakeet-rnnt-1.1b-Q4_K_M.gguf) |  825 MB | 1.41% |
+<!-- /catalog -->
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding and no external LM. F32 reference baseline: 1.45%. NVIDIA's self-reported number on the same split is 1.46% (from the [HF model card](https://huggingface.co/nvidia/parakeet-rnnt-1.1b)).
 

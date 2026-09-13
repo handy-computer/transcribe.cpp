@@ -1,0 +1,67 @@
+{
+  "default": "asr-publication-v1",
+  "profiles": {
+    "asr-publication-v1": {
+      "description": "The complete benchmark set published for transcription models.",
+      "accuracy": [
+        {
+          "dataset": "librispeech",
+          "split": "test-clean",
+          "languages": "english-if-supported",
+          "quants": "all-downloads",
+          "batch_size": 1,
+          "sort_by_length": true,
+          "timestamps": "none",
+          "gpu": "L4",
+          "backend": "cuda"
+        },
+        {
+          "dataset": "fleurs",
+          "split": "test",
+          "languages": "supported-intersect-fleurs",
+          "quants": ["Q8_0"],
+          "batch_size": 8,
+          "sort_by_length": true,
+          "timestamps": "none",
+          "gpu": "L4",
+          "backend": "cuda"
+        }
+      ],
+      "speed": {
+        "quants": ["Q8_0","Q4_K_M"],
+        "samples": ["jfk","dots"],
+        "iterations": 3,
+        "warmup": 1,
+        "model_overrides": {
+          "gigaam-v3-ctc": {
+            "samples": ["ru"],
+            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
+          },
+          "gigaam-v3-e2e-ctc": {
+            "samples": ["ru"],
+            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
+          },
+          "gigaam-v3-e2e-rnnt": {
+            "samples": ["ru"],
+            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
+          },
+          "gigaam-v3-rnnt": {
+            "samples": ["ru"],
+            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
+          }
+        },
+        "targets": [
+          {
+            "machine": "m4-max",
+            "backends": ["cpu","metal"]
+          },
+          {
+            "machine": "ryzen-4750u",
+            "backends": ["cpu","vulkan"],
+            "cooldown_tctl_c": 55.0
+          }
+        ]
+      }
+    }
+  }
+}

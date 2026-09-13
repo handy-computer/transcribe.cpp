@@ -140,12 +140,7 @@ Wall-clock latency, mean over iterations after warmup. Speedup over realtime in 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models {{ variant }} \
-  --quants q8_0,q4_k_m \
-  --samples jfk \
-  --iters 3 --warmup 1 \
-  --name {{ variant }}-publication
+uv run scripts/bench/run.py --profile --models {{ variant }}
 ```
 {% else %}
 Performance numbers are pending. Run `uv run scripts/bench/run.py --models {{ variant }}` to generate them.

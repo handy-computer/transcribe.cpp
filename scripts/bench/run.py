@@ -17,7 +17,8 @@ family (0.6B vs 1.7B) are never collapsed.
 
 Usage:
     uv run scripts/bench/run.py                                      # all variants
-    uv run scripts/bench/run.py --models Qwen3-ASR-0.6B
+    uv run scripts/bench/run.py --profile --models Qwen3-ASR-0.6B  # publication matrix
+    uv run scripts/bench/run.py --models Qwen3-ASR-0.6B            # experiment
     uv run scripts/bench/run.py --models Qwen/Qwen3-ASR-0.6B         # HF slug form
     uv run scripts/bench/run.py --models Qwen3-ASR-0.6B,Qwen3-ASR-1.7B
     uv run scripts/bench/run.py --models parakeet-tdt-0.6b-v3 --quants f16
@@ -102,6 +103,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+CATALOG_DIR = Path(__file__).resolve().parents[1] / "catalog"
+if str(CATALOG_DIR) not in sys.path:
+    sys.path.insert(0, str(CATALOG_DIR))
+import common as catalog_common  # noqa: E402
+import profiles as benchmark_profiles  # noqa: E402
 
 
 DEFAULT_QUANTS = ["f16", "q8_0", "q4_k_m"]
@@ -657,16 +664,29 @@ def parse_args() -> argparse.Namespace:
                         "'Qwen3-ASR-0.6B', HF form like 'Qwen/Qwen3-ASR-0.6B', "
                         "or paths to .gguf files); default: all variants "
                         "under models/")
-    p.add_argument("--quants", type=str, default=",".join(DEFAULT_QUANTS))
-    p.add_argument("--samples", type=str, default=",".join(DEFAULT_SAMPLES))
-    p.add_argument("--iters", type=int, default=2)
-    p.add_argument("--warmup", type=int, default=1)
+    p.add_argument("--quants", type=str, default=None,
+                   help="comma-separated quants (default: f16,q8_0,q4_k_m). "
+                        "Not used with --profile.")
+    p.add_argument("--samples", type=str, default=None,
+                   help="comma-separated samples (default: jfk,dots). "
+                        "Not used with --profile.")
+    p.add_argument("--iters", type=int, default=None)
+    p.add_argument("--warmup", type=int, default=None)
     p.add_argument("--backends", type=str, default=None,
                    help="comma-separated list: metal,cpu,vulkan or 'all' "
                         "(default: auto-detect)")
     p.add_argument("--name", type=str, default=None,
                    help="stable label for named baselines "
                         "(replaces timestamp in output filename)")
+    p.add_argument("--publication", action="store_true",
+                   help="mark a manually specified matrix as publishable. "
+                        "Prefer --profile, which derives and validates the "
+                        "whole publication protocol.")
+    p.add_argument("--profile", nargs="?", const="",
+                   help="run a catalog publication profile; optionally name "
+                        "it (default: catalog/_benchmark_profiles.json default). "
+                        "The profile supplies quants, samples, target backends, "
+                        "iteration counts, and cooldown policy.")
     p.add_argument("--bench-bin", type=Path, default=None,
                    help="legacy override for the bench binary "
                         "(only valid when exactly one backend is selected)")
@@ -674,7 +694,7 @@ def parse_args() -> argparse.Namespace:
                    help="output root (default: reports/perf)")
     p.add_argument("--dry-run", action="store_true",
                    help="print selected backends + matrix without running")
-    p.add_argument("--cooldown-tctl-c", type=float, default=0.0,
+    p.add_argument("--cooldown-tctl-c", type=float, default=None,
                    help="if >0, wait between cells for k10temp Tctl to drop "
                         "below this value (°C) to avoid thermal bias; "
                         "publication benches use 55")
@@ -693,9 +713,30 @@ def _run_one_backend(backend: BackendSpec,
                      git_sha: str) -> int:
     """Run the full variant matrix against a single backend. Returns exit code."""
     exit_code = 0
-    name_slug = slugify(args.name) if args.name else None
 
     for variant, group in by_variant.items():
+        # Profile runs contain only cells assigned to this machine/backend,
+        # including model-specific reviewed exceptions.
+        if args.profile is not None:
+            record = args._catalog_records[variant]
+            expected = benchmark_profiles.apply_exceptions(
+                record, "speed",
+                benchmark_profiles.expected_speed(record, args._profile_data))
+            expected_keys = {
+                (cell["machine"], cell["backend"], cell["quant"].lower(), cell["sample"])
+                for cell in expected
+            }
+            machine_slug = benchmark_profiles.canonical_machine(machine["slug"])
+            group = [cell for cell in group
+                     if (machine_slug, backend.name, cell.quant.lower(), cell.sample)
+                     in expected_keys]
+            if not group:
+                continue
+
+        # A publication run names itself after the variant unless told
+        # otherwise, so the file on disk says what it is.
+        run_name = args.name or (f"{variant}-publication" if args.publication else None)
+        name_slug = slugify(run_name) if run_name else None
         runs: list[dict] = []
         for cell in group:
             print(f"[{backend.name}][{variant}] {cell.quant} \u00d7 {cell.sample} ...",
@@ -723,7 +764,11 @@ def _run_one_backend(backend: BackendSpec,
         aggregate = {
             "schema": "transcribe-bench-driver-v1",
             "timestamp": timestamp,
-            "name": args.name or "",
+            "name": run_name or "",
+            # Eligibility for the catalog is a property the run declares, not
+            # something an importer infers from the filename later.
+            "publication": bool(args.publication),
+            "publication_profile": args._profile_id,
             "machine": machine,
             "git_sha": git_sha,
             "variant": variant,
@@ -753,15 +798,67 @@ def main() -> int:
     timestamp = now_utc_iso()
     slug_ts = timestamp_for_filename(timestamp)
 
-    quants = [q.strip() for q in args.quants.split(",") if q.strip()]
-    sample_stems = [s.strip() for s in args.samples.split(",") if s.strip()]
     model_tokens: list[str] | None = None
     if args.models:
         model_tokens = [t.strip() for t in args.models.split(",") if t.strip()]
 
+    args._profile_id = None
+    args._profile_data = None
+    args._catalog_records = {}
+    if args.profile is not None:
+        conflicting = [name for name, value in (
+            ("--quants", args.quants), ("--samples", args.samples),
+            ("--backends", args.backends), ("--iters", args.iters),
+            ("--warmup", args.warmup), ("--cooldown-tctl-c", args.cooldown_tctl_c),
+            ("--name", args.name)) if value is not None]
+        if conflicting:
+            print(f"error: --profile supplies {', '.join(conflicting)}; do not override it",
+                  file=sys.stderr)
+            return 2
+        try:
+            args._profile_id, args._profile_data = benchmark_profiles.load_profile(
+                args.profile or None)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        args._catalog_records = catalog_common.load_records()
+        target = benchmark_profiles.target_for_machine(
+            args._profile_data, machine["slug"])
+        if target is None:
+            print(f"error: machine {machine['slug']!r} is not a target in "
+                  f"profile {args._profile_id}", file=sys.stderr)
+            return 2
+        speed = args._profile_data["speed"]
+        quants = sorted({item["quant"] for record in args._catalog_records.values()
+                         for item in record.get("downloads", [])})
+        sample_stems = list(speed["samples"])
+        args.backends = ",".join(target["backends"])
+        args.iters = int(speed["iterations"])
+        args.warmup = int(speed["warmup"])
+        args.cooldown_tctl_c = float(target.get("cooldown_tctl_c", 0.0))
+        args.publication = True
+    else:
+        quants = [q.strip() for q in (args.quants or ",".join(DEFAULT_QUANTS)).split(",")
+                  if q.strip()]
+        sample_stems = [s.strip() for s in (args.samples or ",".join(DEFAULT_SAMPLES)).split(",")
+                        if s.strip()]
+        args.iters = 2 if args.iters is None else args.iters
+        args.warmup = 1 if args.warmup is None else args.warmup
+        args.cooldown_tctl_c = 0.0 if args.cooldown_tctl_c is None else args.cooldown_tctl_c
+
     backends = resolve_backends(repo, args.backends, args.bench_bin)
 
     cells = discover_matrix(repo, model_tokens, quants, sample_stems)
+    if args.profile is not None:
+        # A local models directory may contain unpublished experiments. A
+        # profile runs only files named by catalog downloads.
+        allowed = {
+            (variant, item["quant"].lower())
+            for variant, record in args._catalog_records.items()
+            for item in record.get("downloads", [])
+        }
+        cells = [cell for cell in cells
+                 if (cell.variant, cell.quant.lower()) in allowed]
     by_variant = group_by_variant(cells)
 
     if args.dry_run:

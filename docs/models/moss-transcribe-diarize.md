@@ -37,14 +37,16 @@ into shorter pieces.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [MOSS-Transcribe-Diarize-BF16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-BF16.gguf)     | 1.83 GB | 2.08% |
-| F16    | [MOSS-Transcribe-Diarize-F16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-F16.gguf)       | 1.83 GB | 2.07% |
-| Q8_0   | [MOSS-Transcribe-Diarize-Q8_0.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q8_0.gguf)     | 987 MB  | 1.93% |
-| Q6_K   | [MOSS-Transcribe-Diarize-Q6_K.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q6_K.gguf)     | 768 MB  | 1.96% |
-| Q5_K_M | [MOSS-Transcribe-Diarize-Q5_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q5_K_M.gguf) | 700 MB  | 1.99% |
-| Q4_K_M | [MOSS-Transcribe-Diarize-Q4_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q4_K_M.gguf) | 617 MB  | 2.59% |
+| BF16         | [MOSS-Transcribe-Diarize-BF16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-BF16.gguf) | 1.83 GB | 2.08% |
+| F16          | [MOSS-Transcribe-Diarize-F16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-F16.gguf) | 1.83 GB | 2.07% |
+| Q8_0         | [MOSS-Transcribe-Diarize-Q8_0.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q8_0.gguf) |  987 MB | 1.93% |
+| Q6_K         | [MOSS-Transcribe-Diarize-Q6_K.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q6_K.gguf) |  768 MB | 1.96% |
+| Q5_K_M       | [MOSS-Transcribe-Diarize-Q5_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q5_K_M.gguf) |  700 MB | 1.99% |
+| Q4_K_M       | [MOSS-Transcribe-Diarize-Q4_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q4_K_M.gguf) |  617 MB | 2.59% |
+<!-- /catalog -->
 
 These WER values describe this dataset only, not a general quality ranking. A
 quant that scores slightly better here is not necessarily better in real-world

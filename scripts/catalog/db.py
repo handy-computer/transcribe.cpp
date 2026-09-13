@@ -22,12 +22,14 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
+import profiles
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_DB = REPO / "reports" / "wer" / "wer.db"
 ORIGINAL_DB = REPO / "reports" / "wer" / "wer.db.original"
 
 SCHEMA = """
-PRAGMA user_version = 8;
+PRAGMA user_version = 10;
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE models(
@@ -46,7 +48,14 @@ CREATE TABLE models(
     encoder_window_s REAL,
     long_form_strategy TEXT NOT NULL,
     max_audio_s REAL,
-    max_output_tokens INTEGER
+    max_output_tokens INTEGER,
+    -- Which results row-set this model publishes as its headline number. A
+    -- model carries several runs of one dataset that differ only in batch
+    -- size or timestamp mode, so the pointer names the whole identity.
+    headline_dataset TEXT,
+    headline_metric TEXT,
+    headline_batch_size INTEGER,
+    headline_timestamps TEXT
 );
 
 CREATE TABLE languages(
@@ -106,6 +115,7 @@ CREATE TABLE results(
     batch_size INTEGER,
     timestamps TEXT,
     engine_sha TEXT,
+    measurement_provenance TEXT,
     measured_on TEXT,
     substitutions INTEGER,
     deletions INTEGER,
@@ -136,6 +146,7 @@ CREATE TABLE perf(
     encode_ms REAL,
     decode_ms REAL,
     engine_sha TEXT,
+    measurement_provenance TEXT,
     measured_on TEXT,
     thermal_gated INTEGER,
     PRIMARY KEY(model, rig, backend, quant, sample)
@@ -148,15 +159,28 @@ SELECT model AS variant, quant, filename, size_bytes FROM quants;
 CREATE VIEW accuracy AS
 SELECT r.model AS variant, d.source AS dataset, d.split, d.lang AS language,
        r.quant, r.metric, r.err_pct, r.ci_lo, r.ci_hi, r.n_utts,
-       r.batch_size, r.timestamps, r.engine_sha, r.measured_on,
+       r.batch_size, r.timestamps, r.engine_sha, r.measurement_provenance,
+       r.measured_on,
        r.substitutions, r.deletions, r.insertions, r.empty_hyp,
        r.utts_over_50pct
 FROM results r JOIN datasets d ON d.dataset = r.dataset;
+-- The per-quant column a model card and its doc print.
+CREATE VIEW headline AS
+SELECT r.model AS variant, d.source AS dataset, d.split, d.lang AS language,
+       r.quant, r.metric, r.err_pct, r.ci_lo, r.ci_hi, r.n_utts
+FROM results r
+JOIN models m ON m.model = r.model
+JOIN datasets d ON d.dataset = r.dataset
+WHERE r.dataset = m.headline_dataset
+  AND r.metric = m.headline_metric
+  AND (m.headline_batch_size IS NULL OR r.batch_size = m.headline_batch_size)
+  AND (m.headline_timestamps IS NULL OR r.timestamps = m.headline_timestamps);
+
 CREATE VIEW speed AS
 SELECT model AS variant, rig AS machine, backend, quant, sample,
        sample_s AS sample_duration_s, total_ms, xrt AS xrt_compute,
-       load_ms, mel_ms, encode_ms, decode_ms, engine_sha, measured_on,
-       thermal_gated
+       load_ms, mel_ms, encode_ms, decode_ms, engine_sha,
+       measurement_provenance, measured_on, thermal_gated
 FROM perf;
 """
 
@@ -213,13 +237,16 @@ def build(directory: pathlib.Path, out: pathlib.Path) -> dict[str, int]:
         for record in records:
             model = record["variant"]
             license_info = record["license"]
-            con.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            headline = record.get("headline_benchmark") or {}
+            con.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
                 model, record["family"], record["display_name"], record["params"],
                 record["params"] / 1e6, record.get("architecture_pattern"),
                 license_info["spdx"], license_info["display"], record["upstream_repo"],
                 record["upstream_commit"], record.get("published_repo"), record.get("language_tag_form"),
                 record.get("encoder_window_s"), record["long_form_strategy"],
-                record.get("max_audio_s"), record.get("max_output_tokens")))
+                record.get("max_audio_s"), record.get("max_output_tokens"),
+                dataset_id(headline) if headline else None, headline.get("metric"),
+                headline.get("batch_size"), headline.get("timestamps")))
             con.executemany("INSERT INTO model_languages VALUES (?,?)", [
                 (model, str(lang)) for lang in record.get("languages", [])])
             con.executemany("INSERT INTO language_aliases VALUES (?,?,?)", [
@@ -235,29 +262,34 @@ def build(directory: pathlib.Path, out: pathlib.Path) -> dict[str, int]:
                  item["size_bytes"] / 1e9) for item in record.get("downloads", [])])
             con.executemany(
                 "INSERT INTO results(dataset,model,quant,metric,err_pct,ci_lo,ci_hi,n_utts,"
-                "batch_size,timestamps,engine_sha,measured_on,substitutions,deletions,insertions,"
-                "empty_hyp,utts_over_50pct) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "batch_size,timestamps,engine_sha,measurement_provenance,measured_on,"
+                "substitutions,deletions,insertions,empty_hyp,utts_over_50pct) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (dataset_id(row), model, row["quant"], row["metric"], row["err_pct"],
                      (row.get("ci95") or [None, None])[0],
                      (row.get("ci95") or [None, None])[1], row["n_utts"],
                      row.get("batch_size"), row.get("timestamps"), row.get("engine_sha"),
-                     row.get("measured_on"), (row.get("errors") or {}).get("sub"),
+                     row.get("measurement_provenance"), row.get("measured_on"),
+                     (row.get("errors") or {}).get("sub"),
                      (row.get("errors") or {}).get("del"),
                      (row.get("errors") or {}).get("ins"), row.get("empty_hyp"),
                      row.get("utts_over_50pct"))
                     for row in record.get("accuracy_benchmarks", [])])
             con.executemany(
-                "INSERT INTO perf VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO perf VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (model, row["machine"], row["backend"], row["quant"], row["sample"],
                      row["sample_duration_s"], row.get("total_ms"), row["xrt_compute"],
                      row.get("load_ms"), row.get("mel_ms"), row.get("encode_ms"),
-                     row.get("decode_ms"), row.get("engine_sha"), row.get("measured_on"),
+                     row.get("decode_ms"), row.get("engine_sha"),
+                     row.get("measurement_provenance"), row.get("measured_on"),
                      None if row.get("thermal_gated") is None else int(row["thermal_gated"]))
                     for row in record.get("speed_benchmarks", [])])
 
+        profile_id, _ = profiles.load_profile()
         con.executemany("INSERT INTO meta VALUES (?,?)", [
             ("generated", datetime.now(timezone.utc).isoformat(timespec="seconds")),
             ("source", "catalog/*.json"),
+            ("benchmark_profile", profile_id),
             ("rebuild", "uv run scripts/catalog/db.py (drops and recreates; never hand-edit)"),
             ("dataset_scope", "all catalog accuracy rows"),
         ])

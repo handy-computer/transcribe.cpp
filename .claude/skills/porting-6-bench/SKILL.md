@@ -70,16 +70,18 @@ capturing baseline.
 **Publication scope (default, required for sign-off).** This is the
 matrix that ends up rendered in `docs/models/<variant>.md`:
 
-- Quants: `q8_0,q4_k_m` (the two columns the per-model perf table ships)
-- Samples: `jfk,dots` (short + medium-length sample)
-- Backends: `metal,cpu,vulkan` — `run.py` filters to whatever this machine
-  actually supports (Metal on macOS, Vulkan on Linux with the Vulkan
-  build, CPU everywhere)
-- Iters: `3`, Warmup: `1`
-- `--name <variant>-publication`
+The checked-in profile `asr-publication-v1` is the source of truth. It measures
+the publication quants Q8_0 and Q4_K_M when downloaded, on both `jfk` and
+`dots`, with three iterations after one warmup, using the backends assigned to
+the detected publication machine (M4 Max CPU/Metal or Ryzen 4750U CPU/Vulkan).
+Every selected quant/sample/target cell is required. The Russian-only GigaAM
+variants currently override the defaults with their published short `ru`
+fixture; add a long Russian fixture to those overrides when one is available.
+Add every future mandatory sample to the profile rather than restating the
+matrix as command-line flags.
 
-Confirm publication scope with the user. Narrowed or widened sweeps are
-allowed for iteration, but sign-off is decided on publication scope.
+Narrowed or widened sweeps are allowed for iteration, but sign-off is decided
+by the profile.
 
 ### Step 4: Baseline capture (execute)
 
@@ -90,12 +92,8 @@ pollute timings.
 Publication-scope baseline (default):
 
 ```bash
-uv run scripts/bench/run.py \
+uv run scripts/bench/run.py --profile \
   --models <variant> \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
   --name <variant>-publication-baseline-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
@@ -201,13 +199,44 @@ Report:
 **Do not commit.** Bench reports under `reports/perf/` may or may not be
 committed at the user's discretion.
 
+## Catalog (mandatory exit step)
+
+`reports/` is gitignored, so a bench report exists only on the machine that
+produced it. The stage is not finished until the numbers are in the catalog.
+
+1. Run the profile-selected publishable measurement, not a hand-written matrix:
+
+   ```bash
+   uv run scripts/bench/run.py --profile --models <variant>
+   ```
+
+   `--profile` stamps both `publication: true` and the profile id in the
+   report. Hypothesis-loop runs (the optimization iterations above) MUST NOT
+   carry it: on CPU they differ from the shipped figure by tens of percent,
+   and the whole point is that they never reach a doc.
+
+2. Fold them in and regenerate the tables:
+
+   ```bash
+   uv run scripts/catalog/ingest_perf.py
+   uv run scripts/catalog/render.py
+   uv run scripts/catalog/check.py --publication-profile --models <variant>
+   ```
+
+   `ingest_perf.py` ingests publication runs only. It refuses a row whose xRT
+   would move more than 5% against what the doc already published, because
+   that is a different build rather than a better reading of the same one;
+   re-bench at the current sha instead of passing `--force`.
+
+3. `check.py` must report every speed row for this variant as measured and
+   sourced. A row carrying a bare xRT with no `engine_sha` is not publishable.
+
 ## Postconditions
 
-- At least one bench report covering every **publication-scope** cell
-  (`q8_0`/`q4_k_m` × `jfk`/`dots` × machine-supported backends, iters 3,
-  warmup 1) under `reports/perf/<machine>/`. The final on-doc run
-  uses `--name <variant>-publication` so the reproduction command in
-  `docs/models/<variant>.md` matches a real artifact.
+- A sourced speed measurement for Q8_0 and Q4_K_M when downloaded, on both
+  `jfk` and `dots`, for every profile machine/backend target. Legacy xRT-only
+  rows may satisfy a cell but are explicitly marked and should be replaced
+  during the long-form/memory sweep.
 - Schema completeness reported to the user; any gap is a known bench-
   harness task, not a porting task.
 - Optimization iteration loop scripted end-to-end (user drives

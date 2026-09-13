@@ -28,14 +28,16 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [cohere-transcribe-03-2026-BF16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-BF16.gguf)     | 4.10 GB | 1.26% |
-| F16    | [cohere-transcribe-03-2026-F16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-F16.gguf)       | 4.11 GB | 1.26% |
-| Q8_0   | [cohere-transcribe-03-2026-Q8_0.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q8_0.gguf)     | 2.41 GB | 1.27% |
-| Q6_K   | [cohere-transcribe-03-2026-Q6_K.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q6_K.gguf)     | 1.97 GB | 1.27% |
-| Q5_K_M | [cohere-transcribe-03-2026-Q5_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q5_K_M.gguf) | 1.76 GB | 1.25% |
-| Q4_K_M | [cohere-transcribe-03-2026-Q4_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q4_K_M.gguf) | 1.55 GB | 1.25% |
+| BF16         | [cohere-transcribe-03-2026-BF16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-BF16.gguf) | 4.11 GB | 1.26% |
+| F16          | [cohere-transcribe-03-2026-F16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-F16.gguf) | 4.11 GB | 1.26% |
+| Q8_0         | [cohere-transcribe-03-2026-Q8_0.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q8_0.gguf) | 2.41 GB | 1.27% |
+| Q6_K         | [cohere-transcribe-03-2026-Q6_K.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q6_K.gguf) | 1.97 GB | 1.27% |
+| Q5_K_M       | [cohere-transcribe-03-2026-Q5_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q5_K_M.gguf) | 1.77 GB | 1.25% |
+| Q4_K_M       | [cohere-transcribe-03-2026-Q4_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q4_K_M.gguf) | 1.56 GB | 1.24% |
+<!-- /catalog -->
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. BF16 reference baseline: 1.26%.

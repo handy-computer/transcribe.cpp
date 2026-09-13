@@ -20,14 +20,13 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | SenseVoice | `sensevoice-small` | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
 | FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
 | Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
-| Nemotron 3.5 ASR Streaming | `nemotron-3.5-asr-streaming-0.6b` (multilingual, 40 locales) | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
-| Multitalker Parakeet Streaming | `multitalker-parakeet-streaming-0.6b-v1` (single-speaker ASR path only) | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
+| Nemotron 3.5 ASR Streaming | `nemotron-3.5-asr-streaming-0.6b` (multilingual, 32 transcription locales) | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
+| Multitalker Parakeet Streaming | `multitalker-parakeet-streaming-0.6b-v1` (bundles an embedded Sortformer diarizer; speaker-attributed ASR with `--diarize`) | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
 | Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b{,-plus,-nar}` | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
 | Voxtral | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` (audio-LLM; transcription + translation) | [docs/models/voxtral.md](docs/models/voxtral.md) |
 | Voxtral Realtime | `voxtral-mini-4b-realtime-2602` (streaming audio-LLM) | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |
 | MedASR | `medasr` (Conformer + CTC, English medical-dictation, gated) | [docs/models/medasr.md](docs/models/medasr.md) |
 | MOSS Transcribe-Diarize | `moss-transcribe-diarize` (audio-LLM; English + Chinese ASR with inline speaker diarization) | [docs/models/moss-transcribe-diarize.md](docs/models/moss-transcribe-diarize.md) |
-| Sortformer | `diar_streaming_sortformer_4spk-v2.1` (streaming speaker diarizer, up to 4 speakers; no transcription) | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
@@ -38,6 +37,33 @@ performance. Each release includes a queryable
 [`catalog.db`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db)
 and [`SHA-256 checksum`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db.sha256).
 Rebuild it locally with `uv run scripts/catalog/db.py --out catalog.db`.
+The exact accuracy and published speed matrices and standard benchmark recipes
+required for publication live in
+[`catalog/_benchmark_profiles.json`](catalog/_benchmark_profiles.json). Run
+`uv run scripts/catalog/check.py --publication-profile` to enforce it; the
+ordinary catalog check reports the migration backlog without failing.
+
+Published tables are generated from it rather than hand-written. A model doc
+delegates a region with a marker, and `scripts/catalog/render.py` rewrites
+only what sits between the pair:
+
+```markdown
+<!-- catalog:downloads -->
+| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+...
+<!-- /catalog -->
+```
+
+The Hugging Face card specs under [`scripts/hf_cards/`](scripts/hf_cards/)
+work the same way: they carry only editorial copy (summary, tags, validation
+pin) and `generate.py` derives the repos, licence, languages, quant table and
+per-rig speedups from the record. CI fails if either drifts.
+
+```bash
+uv run scripts/catalog/check.py     # schema, integrity, pairing, card specs
+uv run scripts/catalog/render.py    # rewrite the marked doc regions
+uv run scripts/catalog/render.py --check
+```
 
 ## Build
 

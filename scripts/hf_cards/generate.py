@@ -9,8 +9,17 @@
 # ///
 """Generate the HuggingFace README.md for a transcribe.cpp GGUF repo.
 
-Reads a YAML spec (see parakeet-tdt-0.6b-v2.yaml for an example), fetches the
-upstream model card at the pinned commit, and renders template.md.j2.
+The spec is assembled from two sources. Everything measurable -- the upstream
+and published repos, the pinned commit, licence, languages, the quant table
+with its file sizes and headline error rates, the capability flags and the
+per-rig speedups -- is DERIVED from the variant's catalog/<variant>.json
+record. The YAML alongside this script carries only what a human writes: the
+summary, tags, pipeline tag, validation pin, and prose notes. A key present in
+the YAML still wins, so a card can narrow a derived value deliberately
+(Breeze-ASR-25 advertises 2 of the 99 languages its tokenizer inherits).
+
+Fetches the upstream model card at the pinned commit and renders
+template.md.j2.
 
 Default output is models/<spec-stem>/README.md alongside the GGUFs, so
 `hf upload <repo> models/<spec-stem> .` picks it up in the same call.
@@ -34,10 +43,18 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 HERE = Path(__file__).parent
 REPO_ROOT = HERE.parent.parent
 
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "catalog"))
+import cards  # noqa: E402
 
 def load_spec(path: Path) -> dict:
-    with path.open() as f:
-        return yaml.safe_load(f)
+    """The editorial YAML merged onto everything derived from the catalog."""
+    editorial = yaml.safe_load(path.read_text()) or {}
+    record = cards.common.load_record(editorial.get("variant", path.stem))
+    spec = cards.merge(cards.derive_spec(record, editorial), editorial)
+    spec["quants"] = cards.merge_quants(spec["quants"], editorial.get("quant_overrides", {}))
+    for key in ("variant", "size", "quant_overrides"):
+        spec.pop(key, None)
+    return spec
 
 
 def build_transcribe_cpp_block(spec: dict) -> str:
@@ -54,9 +71,12 @@ def build_transcribe_cpp_block(spec: dict) -> str:
     dataset_key = wer.get("metadata_key", "librispeech_test_clean")
     block: dict = {}
     # Headline dataset: per-quant WER taken from the `quants:` column.
-    block[f"wer_{dataset_key}"] = {
-        q["name"].lower(): float(str(q["wer"]).rstrip("%")) for q in spec["quants"]
+    headline = {
+        q["name"].lower(): float(str(q["wer"]).rstrip("%"))
+        for q in spec["quants"] if q.get("wer") is not None
     }
+    if headline:
+        block[f"wer_{dataset_key}"] = headline
     # Any additional per-quant WER maps listed inline under `wer:` (keyed by
     # dataset name, e.g. `librispeech_test_clean:`) are emitted as their own
     # `wer_<dataset>` blocks. Only dict values count as datasets; scalar keys

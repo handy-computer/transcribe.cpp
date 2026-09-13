@@ -46,6 +46,38 @@
         }
       }
     },
+    "identity": {
+      "type": "object",
+      "description": "The general.* GGUF identity block, for the parts no other catalog field can supply. organization and repo_url come from upstream_repo, license from license.spdx, size_label from params; general.languages stays whatever the file already carries, which may legitimately narrow this record's languages (nemotron advertises 32 of its 40 locales). scripts/catalog/sync_capabilities.py --repair writes these into a published GGUF that predates add_general_identity() in scripts/lib/gguf_common.py.",
+      "required": ["name","basename","author"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "general.name -- the friendly display name, e.g. \"Granite Speech 4.1 2B Plus\"."
+        },
+        "basename": {
+          "type": "string",
+          "description": "general.basename -- the family slug, e.g. \"granite-speech\"."
+        },
+        "size_label": {
+          "type": "string",
+          "description": "general.size_label. Carried, not computed from params: most converters bucket the parameter count but the parakeet profiles hardcode a marketing label (\"0.6B\" for a 638M-parameter nemotron)."
+        },
+        "author": {
+          "type": "string",
+          "description": "general.author -- the creating lab, e.g. \"IBM\"."
+        },
+        "license_name": {
+          "type": "string",
+          "description": "general.license.name. Distinct from license.display, which is the human label the docs print."
+        },
+        "license_link": {
+          "type": "string",
+          "description": "general.license.link -- URL of the full licence text."
+        }
+      }
+    },
     "upstream_repo": {
       "type": "string",
       "description": "The upstream model this port derives from."
@@ -75,6 +107,32 @@
       "description": "{advertised spelling: canonical code}, for the languages this model names differently from everyone else (whisper says tl and no where the rest of the world says fil and nb). Lets a caller holding a canonical code find the tag this model wants.",
       "additionalProperties": {
         "type": "string"
+      }
+    },
+    "benchmark_exceptions": {
+      "type": "array",
+      "description": "Narrow, reviewed exclusions from the repository publication profile. An exception removes only cells matched explicitly here; a free-form statement cannot satisfy a publication gate.",
+      "items": {
+        "type": "object",
+        "required": ["kind","match","reason"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": ["accuracy","speed"]
+          },
+          "match": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Cell fields to match. '*' is an explicit wildcard. Accuracy fields are dataset/split/language/quant; speed fields are machine/backend/quant/sample."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10
+          }
+        }
       }
     },
     "encoder_window_s": {
@@ -239,7 +297,7 @@
     },
     "accuracy_benchmarks": {
       "type": "array",
-      "description": "One row per measured cell. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark. Identity first and result second, so every row reads 'what ran and what did it score'.",
+      "description": "Published measurements only. New rows match a cell selected by catalog/_benchmark_profiles.json exactly; legacy-published rows may satisfy the same dataset/language/quant/metric under their honestly recorded historical recipe. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark.",
       "items": {
         "type": "object",
         "required": [
@@ -257,7 +315,15 @@
           },
           "language": {
             "type": "string",
-            "description": "Canonical code, not the model's own spelling."
+            "description": "Canonical dataset code, not necessarily the model's own spelling."
+          },
+          "language_hint": {
+            "type": ["string","null"],
+            "description": "Actual language spelling passed to the runtime. This differs from language for locale-conditioned models and aliases such as tl/fil."
+          },
+          "backend": {
+            "enum": ["cpu","metal","vulkan","cuda",null],
+            "description": "Backend that generated the hypotheses."
           },
           "quant": {
             "type": "string",
@@ -265,7 +331,7 @@
           },
           "metric": {
             "enum": ["wer","cer","der","cpwer","accuracy"],
-            "description": "CER for zh/yue/ja/ko/th; der/cpwer for diarization; accuracy for LID."
+            "description": "CER for zh/yue/ja/ko/th/km/lo/my; der/cpwer for diarization; accuracy for LID."
           },
           "err_pct": {
             "type": "number",
@@ -297,6 +363,10 @@
             "type": ["string","null"],
             "description": "transcribe.cpp commit that produced the hypotheses."
           },
+          "measurement_provenance": {
+            "enum": ["legacy-published"],
+            "description": "Present only for a pre-profile result migrated from a published table whose original engine SHA is unavailable. This is an explicit provenance limitation, never a guessed commit."
+          },
           "measured_on": {
             "type": ["string","null"],
             "format": "date"
@@ -327,9 +397,36 @@
         }
       }
     },
+    "headline_benchmark": {
+      "type": ["object","null"],
+      "description": "Which accuracy row-set the variant PUBLISHES as its headline number -- the WER/CER/DER column of docs/models/<variant>.md and of the HF card. A renderer selects matching accuracy_benchmarks rows, one per quant. batch_size or timestamps may be null as an explicit wildcard for a legacy published table whose quants used mixed or incompletely recorded recipes. null for the whole object means the variant publishes no headline column.",
+      "required": ["dataset","split","language","metric","batch_size","timestamps"],
+      "additionalProperties": false,
+      "properties": {
+        "dataset": {
+          "type": "string"
+        },
+        "split": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "metric": {
+          "enum": ["wer","cer","der","cpwer","accuracy"]
+        },
+        "batch_size": {
+          "type": ["integer","null"],
+          "minimum": 1
+        },
+        "timestamps": {
+          "enum": ["none","segment","word","token",null]
+        }
+      }
+    },
     "speed_benchmarks": {
       "type": "array",
-      "description": "One row per measured cell. The bench protocol -- machine coverage, backends, quants, sample durations, iteration and warmup counts, the thermal precondition -- belongs to porting-6-bench and is not restated per row.",
+      "description": "Published measurements only, one row per quant/sample/machine/backend cell selected by catalog/_benchmark_profiles.json. The profile also owns iteration and warmup counts and thermal preconditions; rows carry the measured identity and result.",
       "items": {
         "type": "object",
         "required": [
@@ -364,6 +461,14 @@
             "type": "number",
             "description": "sample_duration_s / total. Stored rather than derived because it is the published figure and must not drift with rounding."
           },
+          "wall_ms": {
+            "type": ["number","null"],
+            "description": "End-to-end wall time for the same run, mean over iters after warmup. Differs from total_ms by whatever the family spends outside mel/encode/decode: negligible for 60 of 64 benched variants (median wall/total 1.002) but 1.10x-1.46x on the granite audio-LLMs, whose published tables quote wall. Carried so a doc can publish either without the catalog having to pick."
+          },
+          "xrt_wall": {
+            "type": ["number","null"],
+            "description": "sample_duration_s / wall. Stored, not derived, for the same reason as xrt_compute."
+          },
           "load_ms": {
             "type": ["number","null"]
           },
@@ -380,6 +485,10 @@
           "engine_sha": {
             "type": ["string","null"],
             "description": "A perf number without a build is not reproducible."
+          },
+          "measurement_provenance": {
+            "enum": ["legacy-published"],
+            "description": "Present only for a pre-profile result migrated from a published table whose original engine SHA is unavailable. The stored xRT remains publishable, but detailed timing/provenance awaits re-benchmarking."
           },
           "measured_on": {
             "type": ["string","null"],

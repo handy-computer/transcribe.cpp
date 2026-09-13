@@ -45,6 +45,32 @@ The recipe is **stamped into the hyp JSONL `batch_header`** (`recipe` field)
 by `run.py`, so every artifact is self-describing and a methodology drift
 shows up in the file rather than silently shifting the number.
 
+## Publication profile
+
+[`catalog/_benchmark_profiles.json`](../../catalog/_benchmark_profiles.json)
+is the executable publication contract. For accuracy it requires LibriSpeech
+test-clean at every downloaded quant for English-capable models, plus FLEURS
+test Q8_0 for every supported language represented by FLEURS. Run missing
+cells on Modal without restating datasets, quants, batching, language prompts,
+or GPU as flags:
+
+```bash
+modal run scripts/wer/remote/modal_sweep.py::publication_sweep \
+  --models <variant>                 # add --plan-only to inspect the expansion
+```
+
+Score the JSONLs named by the sweep, then ingest and enforce the model's exact
+published set:
+
+```bash
+uv run scripts/catalog/ingest_accuracy.py --models <variant>
+uv run scripts/catalog/check.py --publication-profile --models <variant>
+```
+
+Arbitrary `run.py` and `modal_sweep.py::sweep` invocations remain useful for
+experiments, but only profile-stamped full-split reports can be ingested as
+published accuracy.
+
 **What does and doesn't move WER (measured on whisper-medium F16):**
 
 - **Timestamps move it ~0.2pp.** `segment` → 2.63%, `none` → 2.81%. This is

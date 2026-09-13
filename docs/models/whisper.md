@@ -38,7 +38,8 @@ see the family doc at
 
 WER is on LibriSpeech test-clean for the **Q8_0** preset (the default
 recommended quant), measured by transcribe.cpp's WER pipeline with
-segment timestamps enabled. See each per-variant doc for the full quant
+timestamps off (`scripts/wer/run.py --timestamps none`, the WER harness
+default). See each per-variant doc for the full quant
 matrix (F32/F16/Q8_0/Q6_K/Q5_K_M/Q4_K_M) and a discussion of how our
 numbers compare to OpenAI's self-reported figures. Numbers come from single Metal-backed runs; Metal's non-deterministic parallel reductions add ~0.1pp run-to-run variance on the noise floor.
 

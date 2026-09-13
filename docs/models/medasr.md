@@ -22,14 +22,16 @@ long recordings for best results. See the
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+| Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [medasr-F32.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F32.gguf)       | 417 MB | 17.88% |
-| F16    | [medasr-F16.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F16.gguf)       | 202 MB | 17.88% |
-| Q8_0   | [medasr-Q8_0.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q8_0.gguf)     | 122 MB | 17.86% |
-| Q6_K   | [medasr-Q6_K.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q6_K.gguf)     | 101 MB | 17.93% |
-| Q5_K_M | [medasr-Q5_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q5_K_M.gguf) |  90 MB | 17.91% |
-| Q4_K_M | [medasr-Q4_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q4_K_M.gguf) |  79 MB | 18.14% |
+| F32          | [medasr-F32.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F32.gguf) | 421 MB | 17.88% |
+| F16          | [medasr-F16.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F16.gguf) | 211 MB | 17.88% |
+| Q8_0         | [medasr-Q8_0.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q8_0.gguf) | 128 MB | 17.86% |
+| Q6_K         | [medasr-Q6_K.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q6_K.gguf) | 106 MB | 17.93% |
+| Q5_K_M       | [medasr-Q5_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q5_K_M.gguf) |  94 MB | 17.91% |
+| Q4_K_M       | [medasr-Q4_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q4_K_M.gguf) |  83 MB | 18.14% |
+<!-- /catalog -->
 
 **Recommended default: Q8_0.** Smallest preset with no statistically detectable WER degradation versus F32 (122 MB; +0.00 pp within bootstrap CI). Q4_K_M shows a real +0.26 pp degradation on LibriSpeech and is shipped for completeness but **not recommended** — prefer Q5_K_M if you need smaller than Q8_0.
 

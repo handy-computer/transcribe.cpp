@@ -93,6 +93,12 @@ from reference_specs import resolve_reference
 from subprocess_io import run_subprocess_capturing_stderr
 from workdir import prepare_work
 
+_CATALOG_HELPERS = pathlib.Path(REPO) / "scripts" / "catalog"
+if _CATALOG_HELPERS.is_dir() and str(_CATALOG_HELPERS) not in sys.path:
+    sys.path.insert(0, str(_CATALOG_HELPERS))
+import common as catalog_common
+import profiles as benchmark_profiles
+
 
 # SRC_FP keys the build cache (C++ binary). HYP_FP keys the hyp cache and
 # folds SRC_FP in so a binary change invalidates hyps too. Splitting them
@@ -388,6 +394,27 @@ def list_ggufs(repos: list[str]) -> list[tuple[str, list[str]]]:
 # streams to Modal logs.
 # ---------------------------------------------------------------------------
 
+def _local_engine_sha() -> str:
+    """Short SHA of the dispatching checkout, or "" when the engine is dirty.
+
+    Refuses to name a commit the binary does not correspond to: if src/ or
+    CMakeLists.txt carry uncommitted edits the build is not that commit, and
+    no claim beats a wrong one.
+    """
+    import subprocess
+    root = pathlib.Path(__file__).resolve().parents[3]
+    try:
+        dirty = subprocess.run(["git", "status", "--porcelain", "src", "CMakeLists.txt"],
+                               capture_output=True, text=True, timeout=5, cwd=root)
+        if dirty.returncode != 0 or dirty.stdout.strip():
+            return ""
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5, cwd=root)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _run_wer_impl(
     model_repo: str,
     model_file: str,
@@ -398,6 +425,9 @@ def _run_wer_impl(
     sort_by_length: bool = True,
     timestamps: str = "none",
     language: str = "",
+    engine_sha: str = "",
+    publication_profile: str = "",
+    backend: str = "",
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
     dataset_status: dict | None = None,
@@ -419,7 +449,8 @@ def _run_wer_impl(
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = hyp_cache_paths(
         HYP_FP, model_file, dataset_spec, n_utts, batch_size, sort_by_length,
-        timestamps, language, stream_chunk_ms, stream_att_right)
+        timestamps, language, stream_chunk_ms, stream_att_right,
+        publication_profile, backend)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         _log_prepared_dataset("wer", dataset_status)
@@ -459,6 +490,11 @@ def _run_wer_impl(
 
     # Force per-line stdout flushing so progress streams live to Modal logs.
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    # The container gets a source tree with no .git, so run.py's own
+    # `git rev-parse` finds nothing and every remote row would land
+    # unattributable. Hand it the sha of the tree this sweep built from.
+    if engine_sha:
+        env["TRANSCRIBE_ENGINE_SHA"] = engine_sha
     cmd = [
         "uv", "run", "scripts/wer/run.py",
         "--cli", cli_path,
@@ -474,6 +510,10 @@ def _run_wer_impl(
         cmd += ["--timestamps", timestamps]
     if language:
         cmd += ["--language", language]
+    if publication_profile:
+        cmd += ["--publication-profile", publication_profile]
+    if backend:
+        cmd += ["--backend", backend]
     if stream_chunk_ms and stream_chunk_ms > 0:
         cmd += ["--stream-chunk-ms", str(stream_chunk_ms)]
         if stream_att_right >= 0:
@@ -577,6 +617,9 @@ def _register_runner(gpu_id: str):
         stream_chunk_ms: int = 0,
         stream_att_right: int = -1,
         dataset_status: dict | None = None,
+        engine_sha: str = "",
+        publication_profile: str = "",
+        backend: str = "",
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -586,7 +629,8 @@ def _register_runner(gpu_id: str):
             model_repo, model_file, dataset_spec, n_utts,
             build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
-            timestamps=timestamps, language=language,
+            timestamps=timestamps, language=language, engine_sha=engine_sha,
+            publication_profile=publication_profile, backend=backend,
             stream_chunk_ms=stream_chunk_ms,
             stream_att_right=stream_att_right,
             dataset_status=dataset_status,
@@ -830,6 +874,8 @@ def sweep(
     language: str = "",
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
+    publication_profile: str = "",
+    backend: str = "",
 ) -> None:
     """Fan WER across one or more models on one GPU class.
 
@@ -914,7 +960,8 @@ def sweep(
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
                              c["bs"], sort_by_length, build_dir, timestamps,
                              language, stream_chunk_ms, stream_att_right,
-                             dataset_status))
+                             dataset_status, _local_engine_sha(),
+                             publication_profile, backend))
             for c in cells]
 
     rows, failures = [], []
@@ -961,6 +1008,99 @@ def sweep(
         print(f"\nskipped: {len(skipped)} entries (listed at config time above)")
     print(f"\nscore locally:  for f in reports/wer/*.{dataset_id(dataset)}.jsonl; "
           f"do uv run scripts/wer/score.py \"$f\"; done")
+
+
+@app.local_entrypoint()
+def publication_sweep(
+    models: str,
+    profile: str = "",
+    missing_only: bool = True,
+    clean: bool = False,
+    plan_only: bool = False,
+) -> None:
+    """Run the accuracy matrix selected by a catalog publication profile.
+
+    Unlike the low-level sweep entrypoint, datasets, quants, batch sizes,
+    timestamps, language prompts, and GPU are derived from one checked-in
+    policy. Cells are grouped where possible and delegated to sweep(), which
+    remains the sole remote execution implementation.
+    """
+    profile_id, profile_data = benchmark_profiles.load_profile(profile or None)
+    records = catalog_common.load_records()
+    selected = [item.strip() for item in models.split(",") if item.strip()]
+    unknown = [item for item in selected if item not in records]
+    if unknown:
+        raise SystemExit(f"no catalog record for: {', '.join(unknown)}")
+    if not selected:
+        raise SystemExit("--models is required (comma-separated catalog variants)")
+
+    # First collect all required quants for one model/dataset invocation.
+    invocations: dict[tuple, set[str]] = {}
+    for variant in selected:
+        record = records[variant]
+        expected = benchmark_profiles.apply_exceptions(
+            record, "accuracy",
+            benchmark_profiles.expected_accuracy(record, profile_data))
+        valid = {
+            benchmark_profiles.cell_key(row, "accuracy")
+            for row in record.get("accuracy_benchmarks", [])
+            if row.get("engine_sha")
+        }
+        legacy = {
+            benchmark_profiles.accuracy_core_key(row)
+            for row in record.get("accuracy_benchmarks", [])
+            if row.get("measurement_provenance") == "legacy-published"
+        }
+        for cell in expected:
+            if missing_only and (
+                    benchmark_profiles.cell_key(cell, "accuracy") in valid
+                    or benchmark_profiles.accuracy_core_key(cell) in legacy):
+                continue
+            key = (
+                variant,
+                benchmark_profiles.dataset_spec(cell),
+                cell["runtime_language"],
+                cell["batch_size"],
+                cell["sort_by_length"],
+                cell["timestamps"],
+                cell["gpu"],
+                cell["backend"],
+            )
+            invocations.setdefault(key, set()).add(cell["quant"])
+
+    # Then combine models whose complete invocation recipe and missing quant
+    # set are identical. FLEURS commonly collapses dozens of model cells into
+    # one Modal sweep per language.
+    grouped: dict[tuple, list[str]] = {}
+    for key, quants in invocations.items():
+        variant, dataset, language, batch_size, sort, timestamps, gpu, backend = key
+        group_key = (dataset, language, batch_size, sort, timestamps, gpu, backend,
+                     tuple(sorted(quants)))
+        grouped.setdefault(group_key, []).append(variant)
+
+    print(f"publication profile {profile_id}: {len(invocations)} model/dataset "
+          f"invocation(s), grouped into {len(grouped)} Modal sweep(s)")
+    for index, (key, variants) in enumerate(sorted(grouped.items()), 1):
+        dataset, language, batch_size, sort, timestamps, gpu, backend, quants = key
+        print(f"  [{index}/{len(grouped)}] {dataset} language={language} "
+              f"batch={batch_size} gpu={gpu}/{backend} quants={','.join(quants)} "
+              f"models={','.join(sorted(variants))}")
+        if plan_only:
+            continue
+        sweep(
+            models=",".join(sorted(variants)),
+            dataset=dataset,
+            quants=",".join(quants),
+            gpu=gpu,
+            n_utts=-1,
+            clean=clean and index == 1,
+            batch_sizes=str(batch_size),
+            sort_by_length=sort,
+            timestamps=timestamps,
+            language=language,
+            publication_profile=profile_id,
+            backend=backend,
+        )
 
 
 @app.local_entrypoint()
@@ -1039,7 +1179,8 @@ def batch_sweep(
     # Launch all batch sizes in parallel (each its own container). Pass the
     # locally-computed build_dir so the runner reads exactly what build() wrote.
     futs = [(bs, runner.spawn(repo, model_file, dataset, n, bs, sort_by_length,
-                              build_dir, "none", language, 0, -1, dataset_status))
+                              build_dir, "none", language, 0, -1, dataset_status,
+                              _local_engine_sha(), "", ""))
             for bs in sizes]
 
     rows: list[tuple] = []

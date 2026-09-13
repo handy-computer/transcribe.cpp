@@ -32,14 +32,16 @@ exact per-session value. See the [input-length contract](../input-limits.md).
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [canary-qwen-2.5b-BF16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-BF16.gguf)     | 4.73 GB | 1.63% |
-| F16    | [canary-qwen-2.5b-F16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-F16.gguf)       | 4.73 GB | 1.63% |
-| Q8_0   | [canary-qwen-2.5b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q8_0.gguf)     | 2.61 GB | 1.63% |
-| Q6_K   | [canary-qwen-2.5b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q6_K.gguf)     | 2.06 GB | 1.63% |
-| Q5_K_M | [canary-qwen-2.5b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q5_K_M.gguf) | 1.85 GB | 1.63% |
-| Q4_K_M | [canary-qwen-2.5b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q4_K_M.gguf) | 1.62 GB | 1.63% |
+| BF16         | [canary-qwen-2.5b-BF16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-BF16.gguf) | 5.08 GB | 1.63% |
+| F16          | [canary-qwen-2.5b-F16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-F16.gguf) | 5.08 GB | 1.63% |
+| Q8_0         | [canary-qwen-2.5b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q8_0.gguf) | 2.80 GB | 1.63% |
+| Q6_K         | [canary-qwen-2.5b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q6_K.gguf) | 2.21 GB | 1.63% |
+| Q5_K_M       | [canary-qwen-2.5b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q5_K_M.gguf) | 1.98 GB | 1.63% |
+| Q4_K_M       | [canary-qwen-2.5b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q4_K_M.gguf) | 1.74 GB | 1.63% |
+<!-- /catalog -->
 
 WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
 with the Whisper-style English text normalizer and jiwer 3.x. The

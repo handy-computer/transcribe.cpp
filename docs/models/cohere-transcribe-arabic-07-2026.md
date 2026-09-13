@@ -29,14 +29,16 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 
 ## Download
 
-| Quantization | Download | Size | WER (FLEURS Arabic test) |
+<!-- catalog:downloads units=dec gb_dp=2 mb_only=false label="FLEURS Arabic test" -->
+| Quantization | Download |    Size | WER (FLEURS Arabic test) |
 | --- | --- | ---: | ---: |
-| BF16   | [cohere-transcribe-arabic-07-2026-BF16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-BF16.gguf)     | 4.10 GB | 11.02% |
-| F16    | [cohere-transcribe-arabic-07-2026-F16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-F16.gguf)       | 4.11 GB | 11.00% |
-| Q8_0   | [cohere-transcribe-arabic-07-2026-Q8_0.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q8_0.gguf)     | 2.41 GB | 11.06% |
-| Q6_K   | [cohere-transcribe-arabic-07-2026-Q6_K.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q6_K.gguf)     | 1.97 GB | 11.07% |
-| Q5_K_M | [cohere-transcribe-arabic-07-2026-Q5_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q5_K_M.gguf) | 1.77 GB | 10.95% |
-| Q4_K_M | [cohere-transcribe-arabic-07-2026-Q4_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q4_K_M.gguf) | 1.56 GB | 11.18% |
+| BF16         | [cohere-transcribe-arabic-07-2026-BF16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-BF16.gguf) | 4.11 GB | - |
+| F16          | [cohere-transcribe-arabic-07-2026-F16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-F16.gguf) | 4.11 GB | - |
+| Q8_0         | [cohere-transcribe-arabic-07-2026-Q8_0.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q8_0.gguf) | 2.41 GB | 11.06% |
+| Q6_K         | [cohere-transcribe-arabic-07-2026-Q6_K.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q6_K.gguf) | 1.97 GB | - |
+| Q5_K_M       | [cohere-transcribe-arabic-07-2026-Q5_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q5_K_M.gguf) | 1.77 GB | - |
+| Q4_K_M       | [cohere-transcribe-arabic-07-2026-Q4_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q4_K_M.gguf) | 1.56 GB | - |
+<!-- /catalog -->
 
 WER is measured on the full FLEURS Arabic (`ar_eg`) test split (428
 utterances) with greedy decoding and no external LM, scored with the Whisper

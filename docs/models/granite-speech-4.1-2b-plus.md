@@ -30,14 +30,16 @@ pinned 2026-05-17.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [granite-speech-4.1-2b-plus-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-BF16.gguf)     | 4.23 GB | 1.49% |
-| F16    | [granite-speech-4.1-2b-plus-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-F16.gguf)       | 4.23 GB | 1.48% |
-| Q8_0   | [granite-speech-4.1-2b-plus-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q8_0.gguf)     | 2.35 GB | 1.50% |
-| Q6_K   | [granite-speech-4.1-2b-plus-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q6_K.gguf)     | 1.86 GB | 1.46% |
-| Q5_K_M | [granite-speech-4.1-2b-plus-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q5_K_M.gguf) | 1.69 GB | 1.48% |
-| Q4_K_M | [granite-speech-4.1-2b-plus-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q4_K_M.gguf) | 1.49 GB | 1.56% |
+| BF16         | [granite-speech-4.1-2b-plus-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-BF16.gguf) | 4.23 GB | 1.49% |
+| F16          | [granite-speech-4.1-2b-plus-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-F16.gguf) | 4.23 GB | 1.48% |
+| Q8_0         | [granite-speech-4.1-2b-plus-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q8_0.gguf) | 2.35 GB | 1.50% |
+| Q6_K         | [granite-speech-4.1-2b-plus-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q6_K.gguf) | 1.86 GB | 1.46% |
+| Q5_K_M       | [granite-speech-4.1-2b-plus-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q5_K_M.gguf) | 1.69 GB | 1.48% |
+| Q4_K_M       | [granite-speech-4.1-2b-plus-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q4_K_M.gguf) | 1.49 GB | 1.56% |
+<!-- /catalog -->
 
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with
 greedy decoding and the model-card chat template (system prompt + leading-

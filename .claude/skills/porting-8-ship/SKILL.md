@@ -20,8 +20,10 @@ is out of scope.
 - `reports/convert/<variant>-<REFDTYPE>.json` (SHA of the reference GGUF).
 - `reports/wer/<variant>-<PRESET>.<dataset>.score.json` for every shipped
   preset.
-- `reports/perf/<machine>/*_<variant>_<backend>.json` for at least one
-  reference machine.
+- The catalog satisfies `asr-publication-v1` for this variant: complete
+  accuracy and every speed quant/sample/machine/backend cell selected by the
+  profile (currently Q8_0 and Q4_K_M on both `jfk` and `dots`, except an
+  explicit supported-language sample override such as GigaAM's `ru`).
 
 ## Workflow
 
@@ -53,6 +55,7 @@ fabricate inputs.
 | Bench reports | `reports/perf/<machine>/*_<variant>_<backend>.json` | Stage 6 |
 | WER score JSONs | `reports/wer/<variant>-*.<dataset>.score.json` | Stage 7 |
 | WER summary | `reports/wer/<variant>.<dataset>.summary.md` | Stage 7 |
+| Catalog publication profile | `catalog/_benchmark_profiles.json` + `catalog/<variant>.json` | Stages 6–7 |
 
 ```bash
 # Mechanical checklist runner
@@ -72,9 +75,12 @@ ls reports/perf/*/*<variant>*.json >/dev/null 2>&1 \
   && echo "OK bench" || echo "MISSING bench"
 ls reports/wer/<variant>-*.<dataset>.score.json >/dev/null 2>&1 \
   && echo "OK wer-scores" || echo "MISSING wer-scores"
+uv run scripts/catalog/check.py --publication-profile --models <variant>
 ```
 
-Any `MISSING` halts Stage 8.
+Any `MISSING` or publication-profile failure halts Stage 8. A
+`legacy-published` provenance marker is honest migration provenance and may
+satisfy the current gate; it is not permission to assign a guessed engine SHA.
 
 ### Step 2: Family doc (execute + ask-point)
 
@@ -122,12 +128,11 @@ Author `docs/models/<variant>.md`. The repo ships a Jinja template at
 Two acceptable approaches:
 
 1. **Copy from the closest existing model card** and edit by hand. Pull
-   facts directly from artifacts — quants from
-   `models/<variant>/`, WER and the measured reference baseline from
-   `reports/wer/<variant>-*.score.json`, bench from
-   `reports/perf/<machine>/`, and the acceptance dataset from
-   `intake.upstream_benchmarks[0]`. Ask for `target_hf_repo` since it
-   cannot be inferred.
+   facts directly from artifacts — published quants, accuracy, and speed from
+   `catalog/<variant>.json`; measured reference context from
+   `reports/wer/<variant>-*.score.json`; and the acceptance dataset from
+   `intake.upstream_benchmarks[0]`. `published_repo` is catalog data, not an
+   editorial value to ask for again.
 2. **Render from the existing template** if the template already covers
    everything the variant needs and the variant has no rendered card
    yet. Build the context dict in a short ad-hoc `uv run python -c`
@@ -139,26 +144,21 @@ Subsequent regenerations must respect human edits.
 
 ### Step 4: HF card YAML spec (execute)
 
-Write `scripts/hf_cards/<variant>.yaml`, mirroring
-`scripts/hf_cards/parakeet-tdt-0.6b-v2.yaml`:
+Write `scripts/hf_cards/<variant>.yaml`, mirroring a current nearby spec.
+It contains editorial and release state only; identity, repositories, upstream
+commit, license, language support, downloads, benchmark values, and capability
+flags are derived from `catalog/<variant>.json`:
 
 ```yaml
-hf_repo: <intake.hf_repo>
-target_repo: <user-provided e.g. handy-computer/<variant>-gguf>
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/<variant>.md
-
-upstream_commit: <intake.hf_revision short sha>
-pin_date: <today>
+pin_date: <ISO date when the upstream revision was pinned>
 
 validation:
   reference: <intake.reference_framework>
-  commit: <current repo HEAD short sha>
-  date: <today>
+  commit: <validated transcribe.cpp commit SHA>
+  date: <today in UTC>
 
-license: <from upstream model card>
-license_display: <human-facing form>
 pipeline_tag: automatic-speech-recognition
-languages: [<from intake.capabilities.languages>]
 tags:
   - gguf
   - transcribe.cpp
@@ -166,6 +166,15 @@ tags:
   - speech-to-text
   - <family>
   - <architecture-style>
+summary: |
+  <reviewed editorial summary>
+```
+
+Before rendering, verify that the validation pin is a real commit and its date
+is today's UTC ship date (while `pin_date` is not in the future):
+
+```bash
+uv run scripts/hf_cards/check_release.py <variant>
 ```
 
 ### Step 5: Render the HF README (execute)
@@ -205,9 +214,75 @@ Report:
 **Do not commit.** Keep the repo private; flipping it public is a future
 action, not part of this stage.
 
+## Catalog (mandatory exit step)
+
+**Never hand-write the `capabilities` block.** Hand-writing it is how
+moss-transcribe-diarize shipped as `diarize:false`, how the granite GGUFs came
+to carry `stt.capability.translation` where the loader reads
+`stt.capability.translate`, and how nemotron-3.5 shipped with no streaming KV
+at all. Read it back out of the file you are shipping:
+
+```bash
+uv run scripts/catalog/sync_capabilities.py
+uv run scripts/catalog/render.py
+uv run scripts/catalog/render.py --check
+uv run scripts/catalog/check.py --publication-profile --models <variant>
+uv run scripts/hf_cards/check_release.py <variant>
+```
+
+**Gate the upload, before `hf upload`, never after:**
+
+```bash
+uv run --project scripts/envs/moonshine scripts/audit_gguf_metadata.py models/<variant>
+uv run scripts/catalog/sync_capabilities.py --repair <variant> --dry-run
+```
+
+`audit_gguf_metadata.py` exits non-zero on any metadata issue and was written
+to gate exactly this. The `--repair --dry-run` pass must report `already
+correct` for every quant: a capability KV that disagrees with the record means
+the file and its own model card are about to contradict each other on the Hub.
+
+**Audit the file you are about to upload, and know where it came from.** Both
+tools read `models/<variant>/`, which for most variants is a symlink into
+external storage holding whatever was built there last. That mirror can be
+*older* than the Hub: a re-export or reconvert lands on the Hub and the local
+copy is never refreshed. Auditing it then reports the mirror's gaps as if they
+were the published file's, and repairing and uploading it republishes the older
+build under an unchanged filename -- reverting whatever the published file had
+gained. A stale `granite-speech-4.1-2b-nar` mirror here carried an older
+upstream snapshot (`enc.ctc_bpe` 100353 vs the published 100352, no
+`bpe_blank_id`) while looking like a perfectly ordinary repair target.
+
+`sync_capabilities.py --repair` now range-reads the published header and
+refuses any file whose tensor shapes, dtypes, or unrelated KVs differ from what
+is published; `--skip-published-check` overrides it, and is only correct when
+the local file is deliberately newer than the Hub. Nothing enforces this for a
+plain `hf upload`, so before re-uploading a variant you did not just convert,
+either re-download it from its published repo or confirm the divergence is
+intended.
+
+**Absence is not falsity.** `read_capability_bool()` returns OK and leaves the
+field untouched when a key is missing, so a missing KV silently inherits the
+family default. `granite/capabilities.cpp` sets `supports_translate = true` on
+purpose so each variant's GGUF can lower it; `granite-speech-4.1-2b-plus`
+spelled that key `stt.capability.translation`, the lowering never happened,
+and a model that does not translate advertised that it does. Declare every
+capability explicitly rather than relying on a default to be right.
+
+If `sync_capabilities.py` disagrees with what the model actually does, the
+GGUF is wrong and the fix is a converter change plus a re-export. Do not
+paper over it with an override in the card spec.
+
+The HF card spec under `scripts/hf_cards/` carries editorial copy only:
+summary, tags, pipeline tag, validation pin, prose notes. Repos, commit,
+licence, languages, quant table, capability flags and per-rig speedups are all
+derived from the catalog record. `check.py` fails if a spec re-states one.
+
 ## Postconditions
 
-- Pre-flight checklist (Step 1) was green before any drafting.
+- Pre-flight checklist and per-variant publication profile were green before
+  any drafting.
+- HF validation commit exists and `validation.date` equals the UTC ship date.
 - `docs/porting/families/<family>.md` filled and reviewed.
 - `docs/models/<variant>.md` authored with a populated download / WER /
   bench table.

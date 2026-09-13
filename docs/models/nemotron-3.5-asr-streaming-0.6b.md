@@ -53,14 +53,16 @@ stays unbounded for the same reason. See the
 
 ## Download
 
-| Quantization | Download | Size |
+<!-- catalog:downloads metric=false units=dec -->
+| Quantization | Download |    Size |
 | --- | --- | ---: |
-| F32    | [nemotron-3.5-asr-streaming-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-F32.gguf) | 2.38 GB |
-| F16    | [nemotron-3.5-asr-streaming-0.6b-F16.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-F16.gguf) | 1.19 GB |
-| Q8_0   | [nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf) | 716 MB |
-| Q6_K   | [nemotron-3.5-asr-streaming-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q6_K.gguf) | 593 MB |
-| Q5_K_M | [nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf) | 534 MB |
-| Q4_K_M | [nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf) | 473 MB |
+| F32          | [nemotron-3.5-asr-streaming-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-F32.gguf) | 2.55 GB |
+| F16          | [nemotron-3.5-asr-streaming-0.6b-F16.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-F16.gguf) | 1.28 GB |
+| Q8_0         | [nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf) |  751 MB |
+| Q6_K         | [nemotron-3.5-asr-streaming-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q6_K.gguf) |  621 MB |
+| Q5_K_M       | [nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf) |  560 MB |
+| Q4_K_M       | [nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf) |  496 MB |
+<!-- /catalog -->
 
 **Accuracy.** Word error rate at the offline `att_context_size=[56,13]`
 (1.12 s) setting, `--language en-US`, greedy RNN-T. C++ hypotheses were
@@ -194,9 +196,9 @@ on WER (Stage 7), not tensor tolerances.
 - The auxiliary CTC head present in the upstream checkpoint is dropped at
   conversion (the RNN-T head is the inference path); CTC-argmax timestamps
   are not available.
-- WER is gated on English only (FLEURS test en + LibriSpeech test-clean
-  against the NeMo Oracle). The other 39 locales are exercised
-  functionally but not WER-scored here. Published latency numbers cover
+- The measured-Oracle release gate uses English (FLEURS test en +
+  LibriSpeech test-clean). The publication catalog additionally carries a
+  Q8_0 FLEURS result for every supported language. Published latency numbers cover
   the offline `[56, 13]` path; the sub-1.12 s streaming settings are
   functionally validated (byte-equal at R=13) but not separately
   benchmarked.

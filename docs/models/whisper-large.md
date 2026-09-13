@@ -20,16 +20,18 @@ on 2026-04-26.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-large-F32.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-F32.gguf) | 5.75 GB | 2.72% |
-| F16    | [whisper-large-F16.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-F16.gguf) | 2.89 GB | 2.74% |
-| Q8_0   | [whisper-large-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q8_0.gguf) | 1.55 GB | 2.74% |
-| Q6_K   | [whisper-large-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q6_K.gguf) | 1.21 GB | 2.62% |
-| Q5_K_M | [whisper-large-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q5_K_M.gguf) | 1.08 GB | 2.70% |
-| Q4_K_M | [whisper-large-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q4_K_M.gguf) | 950 MB | 2.67% |
+| F32          | [whisper-large-F32.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-F32.gguf) | 6.18 GB | 2.72% |
+| F16          | [whisper-large-F16.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-F16.gguf) | 3.11 GB | 2.72% |
+| Q8_0         | [whisper-large-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q8_0.gguf) | 1.67 GB | 2.71% |
+| Q6_K         | [whisper-large-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q6_K.gguf) | 1.30 GB | 2.62% |
+| Q5_K_M       | [whisper-large-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q5_K_M.gguf) | 1.16 GB | 2.84% |
+| Q4_K_M       | [whisper-large-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-gguf/resolve/main/whisper-large-Q4_K_M.gguf) |  997 MB | 2.67% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with transcribe.cpp's default greedy decode and segment timestamps enabled — the same runs summarized in the [Whisper family table](whisper.md#all-variants). Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions add ~0.1pp of run-to-run variance on the noise floor, and quantization is otherwise generally WER-neutral. See the [WER methodology](../tools/wer.md) for the harness.
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with transcribe.cpp's default greedy decode and timestamps off (`scripts/wer/run.py --timestamps none`, the WER harness default) — the same runs summarized in the [Whisper family table](whisper.md#all-variants). Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions add ~0.1pp of run-to-run variance on the noise floor, and quantization is otherwise generally WER-neutral. See the [WER methodology](../tools/wer.md) for the harness.
 
 ## Quick Start
 

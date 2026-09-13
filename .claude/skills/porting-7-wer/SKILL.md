@@ -191,6 +191,40 @@ Report:
 artifacts, ignored by `.gitignore`. The summary tables and per-quant
 WER cells are what ships in-repo via Stage 8.
 
+## Catalog (mandatory exit step)
+
+A score is only comparable to another score measured the same way, so the
+decode recipe travels with the number. `scripts/wer/run.py` stamps it into the
+JSONL batch header (timestamps, batch size, language, backend, engine sha, and
+publication profile) and `scripts/wer/score.py` carries it into the
+`.score.json`.
+
+Run any missing publication cells from the checked-in profile rather than
+reconstructing the matrix with flags:
+
+```bash
+modal run scripts/wer/remote/modal_sweep.py::publication_sweep \
+  --models <variant>
+# Score the JSONLs named by the sweep output, then:
+uv run scripts/catalog/ingest_accuracy.py --models <variant>
+uv run scripts/catalog/check.py --publication-profile --models <variant>
+```
+
+Record the featured download-table column explicitly. A variant routinely carries several
+runs of one dataset differing only in batch size or timestamp mode, so
+`headline_benchmark` in `catalog/<variant>.json` names the whole identity
+tuple and the download table is rendered from it:
+
+```json
+"headline_benchmark": {"dataset": "librispeech", "split": "test-clean",
+                       "language": "en", "metric": "wer",
+                       "batch_size": 1, "timestamps": "none"}
+```
+
+Then `uv run scripts/catalog/render.py && uv run scripts/catalog/check.py`.
+Never hand-edit a WER into a doc or an HF card spec: both are rendered, and
+CI fails when they drift.
+
 ## Postconditions
 
 - `reports/wer/<variant>-<PRESET>.<dataset>.score.json` for every

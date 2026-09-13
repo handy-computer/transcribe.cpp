@@ -27,11 +27,13 @@ on 2026-05-05.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32  | [moonshine-base-F32.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-F32.gguf)   | 236 MB | 3.28% |
-| F16  | [moonshine-base-F16.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-F16.gguf)   | 126 MB | 3.28% |
-| Q8_0 | [moonshine-base-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-Q8_0.gguf) |  74 MB | 3.26% |
+| F32          | [moonshine-base-F32.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-F32.gguf) | 248 MB | 3.28% |
+| F16          | [moonshine-base-F16.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-F16.gguf) | 132 MB | 3.28% |
+| Q8_0         | [moonshine-base-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-Q8_0.gguf) |  77 MB | 3.26% |
+<!-- /catalog -->
 
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with
 the transcribe.cpp default decode (greedy, `num_beams=1`, `max_length=194` —

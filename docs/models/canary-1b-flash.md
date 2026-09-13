@@ -23,14 +23,16 @@ pinned 2026-05-08.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [canary-1b-flash-F32.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-F32.gguf)       | 3.3 GB | 1.62% |
-| F16    | [canary-1b-flash-F16.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-F16.gguf)       | 1.7 GB | 1.62% |
-| Q8_0   | [canary-1b-flash-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q8_0.gguf)     | 1.0 GB | 1.62% |
-| Q6_K   | [canary-1b-flash-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q6_K.gguf)     | 818 MB | 1.65% |
-| Q5_K_M | [canary-1b-flash-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q5_K_M.gguf) | 734 MB | 1.64% |
-| Q4_K_M | [canary-1b-flash-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q4_K_M.gguf) | 646 MB | 1.59% |
+| F32          | [canary-1b-flash-F32.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-F32.gguf) | 3.56 GB | 1.62% |
+| F16          | [canary-1b-flash-F16.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-F16.gguf) | 1.79 GB | 1.62% |
+| Q8_0         | [canary-1b-flash-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q8_0.gguf) | 1.05 GB | 1.62% |
+| Q6_K         | [canary-1b-flash-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q6_K.gguf) |  858 MB | 1.65% |
+| Q5_K_M       | [canary-1b-flash-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q5_K_M.gguf) |  770 MB | 1.64% |
+| Q4_K_M       | [canary-1b-flash-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q4_K_M.gguf) |  677 MB | 1.59% |
+<!-- /catalog -->
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.62%.

@@ -35,14 +35,16 @@ pinned 2026-05-11.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean, offline) |
+<!-- catalog:downloads units=dec gb_dp=2 mb_only=false label="LibriSpeech test-clean, offline" -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean, offline) |
 | --- | --- | ---: | ---: |
-| F32    | [nemotron-speech-streaming-en-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F32.gguf) | 2.30 GB | 2.31% |
-| F16    | [nemotron-speech-streaming-en-0.6b-F16.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F16.gguf) | 1.16 GB | 2.31% |
-| Q8_0   | [nemotron-speech-streaming-en-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q8_0.gguf) |  696 MB | 2.31% |
-| Q6_K   | [nemotron-speech-streaming-en-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q6_K.gguf) |  573 MB | 2.29% |
-| Q5_K_M | [nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf) |  514 MB | 2.34% |
-| Q4_K_M | [nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf) |  453 MB | 2.38% |
+| F32          | [nemotron-speech-streaming-en-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F32.gguf) | 2.47 GB | 2.31% |
+| F16          | [nemotron-speech-streaming-en-0.6b-F16.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F16.gguf) | 1.24 GB | 2.31% |
+| Q8_0         | [nemotron-speech-streaming-en-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q8_0.gguf) |  730 MB | 2.31% |
+| Q6_K         | [nemotron-speech-streaming-en-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q6_K.gguf) |  600 MB | 2.29% |
+| Q5_K_M       | [nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf) |  539 MB | 2.34% |
+| Q4_K_M       | [nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf) |  475 MB | 2.38% |
+<!-- /catalog -->
 
 WER is measured on the full LibriSpeech test-clean split (2620
 utterances) with greedy RNN-T decoding. F32 reference baseline: 2.31%.

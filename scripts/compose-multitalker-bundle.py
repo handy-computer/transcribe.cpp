@@ -70,6 +70,13 @@ FRONTEND_AGREEMENT_KEYS = [
 # Keys the GGUFReader synthesizes (virtual) or the writer emits itself.
 SKIP_COPY_KEYS = {"general.architecture"}
 
+# Capability KVs describe the FILE, and the file being written is not the ASR
+# half: embedding a diarizer is precisely what makes the bundle diarize. The
+# ASR half either says speaker_diarization=false or omits it, so copying it
+# verbatim is how the bundle came to advertise diarize:false while the runtime
+# diarize path was implemented and working. Drop it on copy and state it below.
+SKIP_COPY_KEYS |= {"stt.capability.speaker_diarization"}
+
 # Diarizer checkpoints the runtime's multitalker path is validated against.
 # run_multitalker pins the reference operating point (14-frame chunk
 # cadence, spkcache/FIFO/update 188, gating threshold 0.5, 2-chunk gating
@@ -142,6 +149,10 @@ def main() -> int:
         if name.startswith("GGUF.") or name in SKIP_COPY_KEYS:
             continue
         copy_kv(writer, field)
+
+    # Model-level diarization capability: a property of the bundle, not of
+    # either half. read_capability_kv() and the catalog both read this.
+    writer.add_bool("stt.capability.speaker_diarization", True)
 
     writer.add_bool("stt.parakeet.diarizer.embedded", True)
     writer.add_string("stt.parakeet.diarizer.variant", diar.fields["stt.variant"].contents())

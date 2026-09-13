@@ -29,14 +29,16 @@ pinned 2026-06-06.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads units=dec -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [Voxtral-Mini-3B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-BF16.gguf)     | 9.37 GB | 1.88% |
-| F16    | [Voxtral-Mini-3B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-F16.gguf)       | 9.38 GB | 1.89% |
-| Q8_0   | [Voxtral-Mini-3B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q8_0.gguf)     | 5.00 GB | 1.87% |
-| Q6_K   | [Voxtral-Mini-3B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q6_K.gguf)     | 3.87 GB | 1.87% |
-| Q5_K_M | [Voxtral-Mini-3B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q5_K_M.gguf) | 3.46 GB | 1.91% |
-| Q4_K_M | [Voxtral-Mini-3B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q4_K_M.gguf) | 2.98 GB | 1.94% |
+| BF16         | [Voxtral-Mini-3B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-BF16.gguf) | 9.37 GB | 1.88% |
+| F16          | [Voxtral-Mini-3B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-F16.gguf) | 9.38 GB | 1.89% |
+| Q8_0         | [Voxtral-Mini-3B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q8_0.gguf) | 5.00 GB | 1.87% |
+| Q6_K         | [Voxtral-Mini-3B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q6_K.gguf) | 3.87 GB | 1.87% |
+| Q5_K_M       | [Voxtral-Mini-3B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q5_K_M.gguf) | 3.46 GB | 1.91% |
+| Q4_K_M       | [Voxtral-Mini-3B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q4_K_M.gguf) | 2.98 GB | 1.94% |
+<!-- /catalog -->
 
 WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
 with the Whisper-style English text normalizer, batch size 8 on an NVIDIA

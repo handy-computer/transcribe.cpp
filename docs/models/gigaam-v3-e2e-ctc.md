@@ -31,14 +31,16 @@ pinned 2026-05-12.
 
 ## Download
 
-| Quantization | Download | Size | WER (FLEURS ru) |
+<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+| Quantization | Download |   Size | WER (FLEURS ru) |
 | --- | --- | ---: | ---: |
-| F32    | [gigaam-v3-e2e-ctc-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-F32.gguf) |  843 MB |   5.50% |
-| F16    | [gigaam-v3-e2e-ctc-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-F16.gguf) |  428 MB |   5.50% |
-| Q8_0   | [gigaam-v3-e2e-ctc-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q8_0.gguf) |  260 MB |   5.50% |
-| Q6_K   | [gigaam-v3-e2e-ctc-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q6_K.gguf) |  216 MB |   5.56% |
-| Q5_K_M | [gigaam-v3-e2e-ctc-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q5_K_M.gguf) |  195 MB |   5.58% |
-| Q4_K_M | [gigaam-v3-e2e-ctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q4_K_M.gguf) |  174 MB |   5.57% |
+| F32          | [gigaam-v3-e2e-ctc-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-F32.gguf) | 884 MB | - |
+| F16          | [gigaam-v3-e2e-ctc-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-F16.gguf) | 449 MB | - |
+| Q8_0         | [gigaam-v3-e2e-ctc-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q8_0.gguf) | 272 MB | 5.53% |
+| Q6_K         | [gigaam-v3-e2e-ctc-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q6_K.gguf) | 226 MB | - |
+| Q5_K_M       | [gigaam-v3-e2e-ctc-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q5_K_M.gguf) | 205 MB | - |
+| Q4_K_M       | [gigaam-v3-e2e-ctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q4_K_M.gguf) | 182 MB | - |
+<!-- /catalog -->
 
 WER is measured on the full FLEURS ru test split (775 utterances) with
 greedy decoding and no external LM. F32 reference baseline: **5.50%**.

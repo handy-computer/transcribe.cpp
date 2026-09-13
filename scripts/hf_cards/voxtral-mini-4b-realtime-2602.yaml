@@ -1,11 +1,8 @@
 # Spec for the HF README of handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
-hf_repo: mistralai/Voxtral-Mini-4B-Realtime-2602
-target_repo: handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/voxtral-realtime.md
 
-upstream_commit: "2769294"
 pin_date: 2026-06-06
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -15,23 +12,7 @@ validation:
   commit: 483c122
   date: 2026-06-06
 
-license: apache-2.0
-license_display: Apache-2.0
 pipeline_tag: automatic-speech-recognition
-languages:
-  - en
-  - fr
-  - es
-  - de
-  - ru
-  - zh
-  - ja
-  - it
-  - pt
-  - nl
-  - ar
-  - hi
-  - ko
 tags:
   - gguf
   - transcribe.cpp
@@ -56,25 +37,7 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
-# Capability flags for the transcribe_cpp metadata block.
-capabilities:
-  streaming: true
-  translate: false
-  lang_detect: true
-  timestamps: none  # none | segment | word | token
-
-# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
-# raw as rtf_<machine> in the metadata block.
-perf:
-  m4-max:
-    metal: 8.6
-    cpu: 2.5
-  ryzen-4750u:
-    vulkan: 0.9
-    cpu: 0.6
-
 wer:
-  source: LibriSpeech test-clean
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances) with
     the Whisper English text normalizer, offline path at delay 6, batch size 8
@@ -85,29 +48,3 @@ wer:
     (2.07-2.09%), so the quantization ladder is WER-neutral down to Q4_K_M. The
     model is multilingual (13 languages, auto-detect); the published WER is
     English only.
-
-quants:
-  - name: BF16
-    filename: Voxtral-Mini-4B-Realtime-2602-BF16.gguf
-    size: 8.87 GB
-    wer: 2.08%
-  - name: F16
-    filename: Voxtral-Mini-4B-Realtime-2602-F16.gguf
-    size: 8.88 GB
-    wer: 2.09%
-  - name: Q8_0
-    filename: Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf
-    size: 4.73 GB
-    wer: 2.07%
-  - name: Q6_K
-    filename: Voxtral-Mini-4B-Realtime-2602-Q6_K.gguf
-    size: 3.66 GB
-    wer: 2.08%
-  - name: Q5_K_M
-    filename: Voxtral-Mini-4B-Realtime-2602-Q5_K_M.gguf
-    size: 3.28 GB
-    wer: 2.08%
-  - name: Q4_K_M
-    filename: Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf
-    size: 2.83 GB
-    wer: 2.08%

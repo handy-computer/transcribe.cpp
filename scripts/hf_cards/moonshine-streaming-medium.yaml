@@ -1,11 +1,8 @@
 # Spec for the HF README of handy-computer/moonshine-streaming-medium-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
-hf_repo: UsefulSensors/moonshine-streaming-medium
-target_repo: handy-computer/moonshine-streaming-medium-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine-streaming-medium.md
 
-upstream_commit: 57b8436
 pin_date: 2026-05-06
 
 validation:
@@ -13,11 +10,7 @@ validation:
   commit: 0d312ce
   date: 2026-05-06
 
-license: mit
-license_display: MIT
 pipeline_tag: automatic-speech-recognition
-languages:
-  - en
 tags:
   - gguf
   - transcribe.cpp
@@ -39,25 +32,7 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
-# Capability flags for the transcribe_cpp metadata block.
-capabilities:
-  streaming: true
-  translate: false
-  lang_detect: false
-  timestamps: none  # none | segment | word | token
-
-# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
-# raw as rtf_<machine> in the metadata block.
-perf:
-  m4-max:
-    metal: 63
-    cpu: 35.5
-  ryzen-4750u:
-    vulkan: 14
-    cpu: 7.5
-
 wer:
-  source: LibriSpeech test-clean
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances)
     with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
@@ -69,17 +44,3 @@ wer:
     found to be at 99.6% identical hypotheses to our port), and is not a
     numerical drift. Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped
     for this variant.
-
-quants:
-  - name: F32
-    filename: moonshine-streaming-medium-F32.gguf
-    size: 1015 MB
-    wer: 2.16%
-  - name: F16
-    filename: moonshine-streaming-medium-F16.gguf
-    size: 509 MB
-    wer: 2.16%
-  - name: Q8_0
-    filename: moonshine-streaming-medium-Q8_0.gguf
-    size: 282 MB
-    wer: 2.16%

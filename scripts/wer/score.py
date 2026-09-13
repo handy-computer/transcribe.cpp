@@ -11,7 +11,7 @@ score.py — compute WER/CER + bootstrap CI from a run.py report.
 
 Routes the metric and text normalizer by language:
     en              → WER + EnglishTextNormalizer
-    zh/yue/ja/ko/th → CER + BasicTextNormalizer
+    zh/yue/ja/ko/th/km/lo/my → CER + BasicTextNormalizer
     other           → WER + BasicTextNormalizer
 
 Region suffixes (zh-tw, pt-br, ...) are stripped for routing, so
@@ -47,10 +47,7 @@ import jiwer
 from whisper_normalizer.basic import BasicTextNormalizer
 from whisper_normalizer.english import EnglishTextNormalizer
 
-
-# Languages where CER is the canonical metric. Region suffix is stripped
-# before lookup so zh / zh-cn / zh-tw all resolve to the same set entry.
-CER_LANGUAGES = {"zh", "yue", "ja", "ko", "th"}
+from languages import CER_LANGUAGES
 
 
 # Optional diarization metadata spans: timestamps `[6.98]`, speaker tags
@@ -154,6 +151,7 @@ def main() -> int:
     # per-utterance results.
     entries: list[dict] = []
     header_language: str | None = None
+    recipe: dict = {}
     with open(args.report) as f:
         for line in f:
             if not line.strip():
@@ -161,6 +159,10 @@ def main() -> int:
             rec = json.loads(line)
             if rec.get("type") == "batch_header":
                 header_language = rec.get("language")
+                # The decode recipe travels with the score, not just with the
+                # hypotheses: a WER is only comparable to another WER measured
+                # the same way, and the catalog keys its rows on it.
+                recipe = rec.get("recipe") or {}
                 continue
             entries.append(rec)
 
@@ -283,6 +285,10 @@ def main() -> int:
         "latency_p50_ms": round(lat_p50, 1),
         "latency_p99_ms": round(lat_p99, 1),
         "report_file": str(args.report),
+        "recipe": recipe,
+        "timestamps": recipe.get("timestamps"),
+        "batch_size": recipe.get("batch_size"),
+        "engine_sha": recipe.get("engine_sha"),
         "per_utterance": per_utt,
     }
     # Backward-compat aliases for WER reports. porting-7-wer SKILL.md

@@ -1,0 +1,285 @@
+"""Shared helpers for reading catalog records and rendering them.
+
+Pure stdlib, so every consumer -- check.py, db.py, render.py and
+scripts/hf_cards/generate.py -- can import it without a dependency block.
+
+The catalog stores identity and exact numbers. Everything about how a number
+LOOKS (units, decimal places, column padding, a dataset's display name) is a
+rendering concern and lives here or in the marker that calls the renderer.
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+CATALOG_DIR = REPO / "catalog"
+DOCS_DIR = REPO / "docs" / "models"
+CARDS_DIR = REPO / "scripts" / "hf_cards"
+
+HEADLINE_KEYS = ("dataset", "split", "language", "metric", "batch_size", "timestamps")
+
+
+# --------------------------------------------------------------------------
+# loading
+
+
+def load_records(directory: pathlib.Path | None = None) -> dict[str, dict]:
+    """Every catalog record, keyed by variant. `_`-prefixed files are tooling."""
+    directory = directory or CATALOG_DIR
+    return {path.stem: json.loads(path.read_text())
+            for path in sorted(directory.glob("*.json"))
+            if not path.name.startswith("_")}
+
+
+def load_record(variant: str, directory: pathlib.Path | None = None) -> dict:
+    path = (directory or CATALOG_DIR) / f"{variant}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"no catalog record for {variant!r} at {path}")
+    return json.loads(path.read_text())
+
+
+# --------------------------------------------------------------------------
+# sizes
+#
+# Published docs settled on three different conventions for the same byte
+# count: decimal MB/GB, binary sizes labelled MB/GB, and always-MB. Which one a
+# given table uses is a property of that table, recorded in its marker, not of
+# the record -- so adopting markers into existing docs changes no published
+# string. Normalising on one convention is a separate, deliberate edit.
+
+SIZE_BASE = {"dec": (10**6, 10**9), "bin": (2**20, 2**30)}
+
+
+def fmt_size(size_bytes: int, units: str = "dec", gb_dp: int = 2,
+             mb_only: bool = False) -> str:
+    """Render a byte count the way a download table prints it."""
+    mb, gb = SIZE_BASE[units]
+    if mb_only or size_bytes < gb:
+        return f"{size_bytes / mb:.0f} MB"
+    return f"{size_bytes / gb:.{gb_dp}f} GB"
+
+
+def size_conventions() -> list[dict]:
+    """Every convention `fmt_size` can produce, best-guess order first.
+
+    Used by `render.py --adopt` to work out which one a doc already uses.
+    """
+    return [{"units": u, "gb_dp": d, "mb_only": m}
+            for u in ("dec", "bin") for m in (False, True) for d in (2, 1)]
+
+
+# --------------------------------------------------------------------------
+# accuracy
+
+DATASET_LABELS = {
+    ("librispeech", "test-clean"): "LibriSpeech test-clean",
+    ("ami", "ihm-test"): "AMI IHM test",
+}
+
+
+def dataset_label(dataset: str, split: str, language: str) -> str:
+    if dataset == "fleurs":
+        return f"FLEURS {language}"
+    return DATASET_LABELS.get((dataset, split), f"{dataset} {split}")
+
+
+def headline(record: dict) -> dict | None:
+    """The benchmark row-set a variant publishes in its download table.
+
+    A variant can carry several runs of the same dataset that differ only in
+    batch size or timestamp mode, so the pointer names the full identity
+    tuple rather than just the dataset.
+    """
+    return record.get("headline_benchmark")
+
+
+def headline_rows(record: dict) -> dict[str, dict]:
+    """{quant: accuracy row} for the headline benchmark. Empty if unset."""
+    target = headline(record)
+    if not target:
+        return {}
+    rows = {}
+    for row in record.get("accuracy_benchmarks", []):
+        # A null recipe field in the pointer is an intentional wildcard for a
+        # legacy table assembled before recipe metadata was standardized.
+        if all(target.get(key) is None or row.get(key) == target.get(key)
+               for key in HEADLINE_KEYS):
+            rows[row["quant"]] = row
+    return rows
+
+
+def headline_label(record: dict) -> str:
+    target = headline(record)
+    if not target:
+        return ""
+    return dataset_label(target["dataset"], target["split"], target["language"])
+
+
+def fmt_err(row: dict | None, dp: int = 2) -> str:
+    """An error rate as a card prints it. `-` when the cell was not measured."""
+    if row is None:
+        return "-"
+    return f"{row['err_pct']:.{dp}f}%"
+
+
+# --------------------------------------------------------------------------
+# speed
+
+
+def fmt_ms(total_ms: float, dp_ms: int = 0, dp_s: int = 2) -> str:
+    if total_ms < 1000:
+        return f"{total_ms:.{dp_ms}f} ms"
+    return f"{total_ms / 1000:.{dp_s}f} s"
+
+
+def fmt_xrt(xrt: float, dp: int | None = None) -> str:
+    """Speedup over realtime. Below 10x a single decimal carries real signal."""
+    if dp is None:
+        dp = 1 if xrt < 10 else 0
+    return f"{xrt:.{dp}f}×"
+
+
+def perf_rows(record: dict, machine: str) -> dict[tuple[str, str, str], dict]:
+    """{(backend, sample, quant): row} for one machine."""
+    return {(row["backend"], row["sample"], row["quant"]): row
+            for row in record.get("speed_benchmarks", [])
+            if row["machine"] == machine}
+
+
+# --------------------------------------------------------------------------
+# downloads
+
+
+def downloads(record: dict) -> dict[str, dict]:
+    return {item["quant"]: item for item in record.get("downloads", [])}
+
+
+def download_url(record: dict, filename: str) -> str:
+    repo = record.get("published_repo")
+    if not repo:
+        return ""
+    return f"https://huggingface.co/{repo}/resolve/main/{filename}"
+
+
+# --------------------------------------------------------------------------
+# markdown tables
+
+
+MAX_PAD = 14
+
+
+def render_table(header: list[str], aligns: list[str], rows: list[list[str]],
+                 rule_fill: bool = False, max_pad: int = MAX_PAD,
+                 pad_header: bool = True) -> list[str]:
+    """A GitHub markdown table, columns padded so the source reads as a grid.
+
+    `aligns` is "l" or "r" per column. `rule_fill` draws the separator out to
+    the column width (`| ------- |`) instead of the short form (`| --- |`);
+    both are used in docs/models and neither renders differently.
+
+    Columns wider than `max_pad` are left ragged: a download table's link
+    column runs past 120 characters, and padding it buys nothing while making
+    every other cell unreadable in the source.
+    """
+    source = [header] + rows if pad_header else rows
+    widths = [max(len(row[i]) for row in source) for i in range(len(header))]
+    widths = [0 if width > max_pad else width for width in widths]
+
+    def line(cells: list[str], pad: bool = True) -> str:
+        return "| " + " | ".join(
+            (cell.rjust(width) if align == "r" else cell.ljust(width)) if pad else cell
+            for cell, width, align in zip(cells, widths, aligns)).rstrip() + " |"
+
+    head = line(header, pad_header)
+    if rule_fill:
+        rules = ["-" * max(width - 1, 2) + ":" if align == "r" else "-" * max(width, 3)
+                 for width, align in zip(widths, aligns)]
+        return [head, "| " + " | ".join(rules) + " |"] + [line(row) for row in rows]
+    rules = ["---:" if align == "r" else "---" for align in aligns]
+    return [head, "| " + " | ".join(rules) + " |"] + [line(row) for row in rows]
+
+
+# --------------------------------------------------------------------------
+# writing records
+
+WRAP_WIDTH = 79
+
+
+def _compact(value) -> str:
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def _fill(items: list[str], pad: str, inner: str) -> str:
+    """A scalar array too long for one line, filled to WRAP_WIDTH."""
+    lines, current = [], ""
+    for index, item in enumerate(items):
+        piece = item + ("," if index < len(items) - 1 else "")
+        candidate = (current + " " + piece) if current else inner + piece
+        if current and len(candidate) > WRAP_WIDTH:
+            lines.append(current)
+            current = inner + piece
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return "[\n" + "\n".join(lines) + "\n" + pad + "]"
+
+
+def _holds_records(value) -> bool:
+    """True when `value` contains a list of objects somewhere inside.
+
+    That is the shape worth expanding: a streaming block's `presets` is a list
+    of rows a reader scans, while an accuracy row's `errors` is three counts
+    that belong on the row's own line. Both sit at the same depth, so depth
+    alone cannot tell them apart.
+    """
+    if isinstance(value, list):
+        return any(isinstance(item, dict) for item in value) or \
+               any(_holds_records(item) for item in value)
+    if isinstance(value, dict):
+        return any(_holds_records(item) for item in value.values())
+    return False
+
+
+def _fmt(value, depth: int = 0, indent: int = 2) -> str:
+    pad, inner = " " * (indent * depth), " " * (indent * (depth + 1))
+    if isinstance(value, list):
+        if not any(isinstance(item, (dict, list)) for item in value):
+            one = _compact(value)
+            if len(pad) + len(one) <= WRAP_WIDTH or not value:
+                return one
+            return _fill([json.dumps(v, ensure_ascii=False) for v in value], pad, inner)
+        if depth >= 2 and not _holds_records(value):
+            return _compact(value)
+        if not value:
+            return "[]"
+        body = ",\n".join(inner + _fmt(item, depth + 1, indent) for item in value)
+        return "[\n" + body + "\n" + pad + "]"
+    if isinstance(value, dict):
+        if depth >= 2 and not _holds_records(value):
+            return _compact(value)
+        if not value:
+            return "{}"
+        body = ",\n".join(f"{inner}{json.dumps(key, ensure_ascii=False)}: "
+                          f"{_fmt(val, depth + 1, indent)}"
+                          for key, val in value.items())
+        return "{\n" + body + "\n" + pad + "}"
+    return _compact(value)
+
+
+def dumps_record(record: dict) -> str:
+    """Serialize a record the way every checked-in record is written.
+
+    Top level and depth-1 containers expand one entry per line; anything
+    deeper, and any array of scalars, stays compact -- so a benchmark row is
+    one greppable line and a 99-language list wraps instead of running 99
+    lines. Plain `json.dumps(indent=2)` writes the same data as a file five to
+    eight times longer, which turns a one-value correction into an
+    unreviewable diff. Every writer here goes through this.
+    """
+    return _fmt(record) + "\n"
+
+
+def write_record(path: pathlib.Path, record: dict) -> None:
+    path.write_text(dumps_record(record))
