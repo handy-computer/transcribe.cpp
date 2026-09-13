@@ -168,6 +168,12 @@ tags:
   - <architecture-style>
 summary: |
   <reviewed editorial summary>
+
+default_quant_index: <index into catalog downloads[] of the quant the usage snippet names>
+
+wer:
+  notes: |
+    <how the headline number was measured; anything a reader needs to compare it>
 ```
 
 Before rendering, verify that the validation pin is a real commit and its date
@@ -234,57 +240,39 @@ uv run scripts/hf_cards/check_release.py <variant>
 
 ```bash
 uv run --project scripts/envs/moonshine scripts/audit_gguf_metadata.py models/<variant>
-uv run scripts/catalog/sync_capabilities.py --repair <variant> --dry-run
+uv run scripts/catalog/sync_capabilities.py --check --local-only
 ```
 
 `audit_gguf_metadata.py` exits non-zero on any metadata issue and was written
-to gate exactly this. The `--repair --dry-run` pass must report `already
-correct` for every quant: a capability KV that disagrees with the record means
-the file and its own model card are about to contradict each other on the Hub.
-
-**Audit the file you are about to upload, and know where it came from.** Both
-tools read `models/<variant>/`, which for most variants is a symlink into
-external storage holding whatever was built there last. That mirror can be
-*older* than the Hub: a re-export or reconvert lands on the Hub and the local
-copy is never refreshed. Auditing it then reports the mirror's gaps as if they
-were the published file's, and repairing and uploading it republishes the older
-build under an unchanged filename -- reverting whatever the published file had
-gained. A stale `granite-speech-4.1-2b-nar` mirror here carried an older
-upstream snapshot (`enc.ctc_bpe` 100353 vs the published 100352, no
-`bpe_blank_id`) while looking like a perfectly ordinary repair target.
-
-`sync_capabilities.py --repair` now range-reads the published header and
-refuses any file whose tensor shapes, dtypes, or unrelated KVs differ from what
-is published; `--skip-published-check` overrides it, and is only correct when
-the local file is deliberately newer than the Hub. Nothing enforces this for a
-plain `hf upload`, so before re-uploading a variant you did not just convert,
-either re-download it from its published repo or confirm the divergence is
-intended.
+to gate exactly this. `sync_capabilities.py --check` exits non-zero when the
+record disagrees with the file: a capability KV that disagrees with the
+record means the file and its own model card are about to contradict each
+other on the Hub.
 
 **Absence is not falsity.** `read_capability_bool()` returns OK and leaves the
 field untouched when a key is missing, so a missing KV silently inherits the
 family default. `granite/capabilities.cpp` sets `supports_translate = true` on
 purpose so each variant's GGUF can lower it; `granite-speech-4.1-2b-plus`
 spelled that key `stt.capability.translation`, the lowering never happened,
-and a model that does not translate advertised that it does. Declare every
-capability explicitly rather than relying on a default to be right.
+and a model that does not translate advertised that it does. Every converter
+declares every capability explicitly rather than relying on a default.
 
 If `sync_capabilities.py` disagrees with what the model actually does, the
 GGUF is wrong and the fix is a converter change plus a re-export. Do not
-paper over it with an override in the card spec.
+paper over it with an edit to the record or the card spec.
 
-The HF card spec under `scripts/hf_cards/` is a complete, committed input to
-`generate.py`. Start with the editorial copy (summary, tags, pipeline tag,
-validation pin and prose notes), then populate repos, commit, licence,
-languages, quant table, capability flags and per-rig speedups from the catalog:
+**Audit the file you are about to upload, and know where it came from.**
+`models/<variant>/` is for most variants a symlink into external storage
+holding whatever was built there last. That mirror can be *older* than the
+Hub: a re-export lands on the Hub and the local copy is never refreshed. Before
+re-uploading a variant you did not just convert, either re-download it from
+its published repo or confirm the divergence is intended.
 
-```bash
-uv run scripts/catalog/sync_hf_cards.py --write --models <variant>
-```
-
-Existing values are preserved unless `--refresh` is passed deliberately.
-List exceptional hand-maintained fields under `catalog_sync.preserve` so a
-refresh does not replace them.
+The HF card spec under `scripts/hf_cards/` is editorial only. `generate.py`
+reads it together with `catalog/<variant>.json` and refuses a spec that states
+a catalog-owned field (repos, commit, licence, languages, quants, perf,
+capabilities), so a number that belongs on the card goes into the catalog
+first.
 
 ## Postconditions
 

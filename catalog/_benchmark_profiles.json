@@ -32,24 +32,13 @@
         "samples": ["jfk","dots"],
         "iterations": 3,
         "warmup": 1,
-        "model_overrides": {
-          "gigaam-v3-ctc": {
+        "family_overrides": {
+          "gigaam": {
             "samples": ["ru"],
-            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
-          },
-          "gigaam-v3-e2e-ctc": {
-            "samples": ["ru"],
-            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
-          },
-          "gigaam-v3-e2e-rnnt": {
-            "samples": ["ru"],
-            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
-          },
-          "gigaam-v3-rnnt": {
-            "samples": ["ru"],
-            "reason": "Russian-only model; use the currently published supported-language clip until a long Russian fixture is added."
+            "reason": "Russian-only family; use the currently published supported-language clip until a long Russian fixture is added."
           }
         },
+        "model_overrides": {},
         "targets": [
           {
             "machine": "m4-max",

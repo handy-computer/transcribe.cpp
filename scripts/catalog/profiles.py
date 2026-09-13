@@ -145,7 +145,9 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
 def expected_speed(record: dict, profile: dict) -> list[dict]:
     """Expand the exact publication speed matrix for one model."""
     spec = profile["speed"]
-    override = (spec.get("model_overrides") or {}).get(record["variant"], {})
+    # A variant override wins over its family's; both are whole-key replacements.
+    override = ((spec.get("model_overrides") or {}).get(record["variant"])
+                or (spec.get("family_overrides") or {}).get(record["family"], {}))
     samples = override.get("samples", spec.get("samples", []))
     cells: list[dict] = []
     for target in spec.get("targets", []):

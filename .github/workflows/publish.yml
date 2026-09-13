@@ -126,7 +126,7 @@ jobs:
       - name: Validate and build catalog.db
         run: |
           set -euo pipefail
-          uv run catalog/_format.py --check catalog/*.json
+          uv run scripts/catalog/format.py --check
           uv run scripts/catalog/check.py --publication-profile
           mkdir -p release-catalog
           uv run scripts/catalog/db.py --out release-catalog/catalog.db
