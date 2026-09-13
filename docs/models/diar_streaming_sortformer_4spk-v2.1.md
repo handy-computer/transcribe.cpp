@@ -94,33 +94,25 @@ second (many small windows).
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Default (model-config)
-operating point.
-
 ### Apple M4
 
 <!-- catalog:perf machine=m4 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |              F16 |             Q8_0 |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  |  68 ms (161.23×) |  64 ms (172.42×) |
 | Metal   | dots (35.3s) | 316 ms (111.81×) | 318 ms (111.16×) |
 | CPU     | jfk (11.0s)  |  136 ms (80.68×) | 109 ms (101.09×) |
 | CPU     | dots (35.3s) |  794 ms (44.49×) |  685 ms (51.59×) |
-<!-- /catalog -->
 
-macOS 25.5.0, transcribe.cpp `d42c3bb`.
+m4: transcribe.cpp `d42c3bb` on 2026-07-22.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models diar_streaming_sortformer_4spk-v2.1 \
-  --quants f16,q8_0 \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name diar_streaming_sortformer_4spk-v2.1-publication
+uv run scripts/bench/run.py --profile --models diar_streaming_sortformer_4spk-v2.1
 ```
 
 ## Numerical Validation

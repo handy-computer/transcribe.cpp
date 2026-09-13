@@ -75,47 +75,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 5 iterations after 2 warmups),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
-(2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
 | Metal   | jfk (11.0s)  | 82 ms (133.58×) |
 | Metal   | dots (35.3s) | 612 ms (57.69×) |
 | CPU     | jfk (11.0s)  | 174 ms (63.31×) |
 | CPU     | dots (35.3s) | 699 ms (50.55×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `0d312ce`.
+Apple M4 Max: transcribe.cpp `0d312ce` on 2026-05-06.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
 | Vulkan  | jfk (11.0s)  | 349 ms (31.53×) |
 | Vulkan  | dots (35.3s) | 2.38 s (14.84×) |
 | CPU     | jfk (11.0s)  | 735 ms (14.97×) |
 | CPU     | dots (35.3s) |  4.00 s (8.83×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `f243f34`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `f243f34` on 2026-05-06.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models moonshine-streaming-small \
-  --quants q8_0 \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 5 --warmup 2 \
-  --name moonshine-streaming-publication
+uv run scripts/bench/run.py --profile --models moonshine-streaming-small
 ```
 
 ## Numerical Validation

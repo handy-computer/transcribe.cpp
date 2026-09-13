@@ -96,10 +96,6 @@ CLI flags specific to canary:
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 The 24-layer decoder makes this the slowest canary variant for decode-bound
 workloads — roughly 1.5× the wall time of canary-1b-flash on the same
 backend, and the GPU win over CPU is smaller here than on the *flash
@@ -110,40 +106,37 @@ overhead.
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
 | Metal   | jfk (11.0s)  | 212.3 ms (51.81×) | 195.9 ms (56.14×) |
 | Metal   | dots (35.3s) |   1.03 s (34.42×) | 931.4 ms (37.94×) |
 | CPU     | jfk (11.0s)  | 510.2 ms (21.56×) | 425.3 ms (25.87×) |
 | CPU     | dots (35.3s) |   2.05 s (17.27×) |   1.71 s (20.61×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `19b3b87`.
+Apple M4 Max: transcribe.cpp `23c2ee6` on 2026-05-08; transcribe.cpp `19b3b87` on 2026-05-08.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |            Q4_K_M |
 | ------- | ------------ | --------------: | ----------------: |
 | Vulkan  | jfk (11.0s)  | 1.07 s (10.28×) | 918.6 ms (11.97×) |
 | Vulkan  | dots (35.3s) |  4.62 s (7.65×) |    3.87 s (9.13×) |
 | CPU     | jfk (11.0s)  |  1.70 s (6.46×) |    1.23 s (8.92×) |
 | CPU     | dots (35.3s) |  7.59 s (4.66×) |    5.96 s (5.92×) |
-<!-- /catalog -->
 
-Fedora Linux 43, transcribe.cpp `4d44530`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `23c2ee6` on 2026-05-08; transcribe.cpp `4d44530` on 2026-05-08.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models canary-1b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name canary-1b-publication
+uv run scripts/bench/run.py --profile --models canary-1b
 ```
 
 ## Numerical Validation

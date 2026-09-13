@@ -155,7 +155,6 @@
     {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":10160.7,"xrt_compute":3.48,"load_ms":555.3,"mel_ms":44.3,"encode_ms":4395.9,"decode_ms":5720.5,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null,"wall_ms":10161.1,"xrt_wall":3.48},
     {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":4773.2,"xrt_compute":2.31,"load_ms":547.3,"mel_ms":39.4,"encode_ms":4365.9,"decode_ms":367.9,"engine_sha":"5fccd5d","measured_on":"2026-04-28","thermal_gated":null,"wall_ms":4773.4,"xrt_wall":2.3}
   ],
-  "architecture_pattern": "encoder-decoder-cross-attention",
   "language_aliases": {
     "tl": "fil",
     "no": "nb",

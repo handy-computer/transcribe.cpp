@@ -205,3 +205,8 @@ def dataset_spec(cell: dict) -> str:
     if cell["dataset"] == "fleurs":
         return f"fleurs:{cell['language']}"
     return f"{cell['dataset']}:{cell['split']}"
+
+
+def machine_display(profile: dict, machine_slug: str) -> str:
+    target = target_for_machine(profile, machine_slug)
+    return (target or {}).get("display") or machine_slug

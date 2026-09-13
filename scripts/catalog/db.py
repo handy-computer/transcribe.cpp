@@ -36,7 +36,6 @@ CREATE TABLE models(
     family TEXT NOT NULL,
     display_name TEXT NOT NULL,
     params INTEGER NOT NULL,
-    architecture_pattern TEXT,
     license_spdx TEXT NOT NULL,
     license_display TEXT NOT NULL,
     upstream_repo TEXT NOT NULL,
@@ -203,9 +202,8 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
         for variant, record in records.items():
             license_info = record["license"]
             headline = record.get("headline_benchmark") or {}
-            con.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            con.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
                 variant, record["family"], record["display_name"], record["params"],
-                record.get("architecture_pattern"),
                 license_info["spdx"], license_info["display"], record["upstream_repo"],
                 record["upstream_commit"], record.get("published_repo"),
                 record.get("language_tag_form"), record.get("encoder_window_s"),

@@ -144,60 +144,46 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode, mean over the recorded
-iterations after warmup), with speedup over realtime in parentheses. Units:
-`ms` below 1 s, `s` above (2 decimal places). Decode latency dominates as
-model size grows; the encoder is only run once per 30-second window.
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
 | Metal   | jfk (11.0s)  | 288.3 ms (38.16×) | 288.9 ms (38.07×) |
 | Metal   | dots (35.3s) | 649.5 ms (54.40×) | 666.0 ms (53.05×) |
 | CPU     | jfk (11.0s)  |    7.60 s (1.45×) |    5.89 s (1.87×) |
 | CPU     | dots (35.3s) |   15.34 s (2.30×) |   11.87 s (2.98×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `e0fa0f6`.
+Apple M4 Max: transcribe.cpp `4d2270e` on 2026-04-28; transcribe.cpp `e0fa0f6`.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-large-v3-turbo \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu \
-  --iters 3 --warmup 1 \
-  --name whisper-large-v3-turbo-publication
+uv run scripts/bench/run.py --profile --models whisper-large-v3-turbo
 ```
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  |  4.77 s (2.31×) |  4.92 s (2.24×) |
 | Vulkan  | dots (35.3s) | 10.16 s (3.48×) | 10.26 s (3.44×) |
 | CPU     | jfk (11.0s)  | 19.85 s (0.55×) | 15.74 s (0.70×) |
 | CPU     | dots (35.3s) | 40.18 s (0.88×) | 32.22 s (1.10×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `2ab01b8`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `5fccd5d` on 2026-04-28.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-large-v3-turbo \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name whisper-large-v3-turbo-publication
+uv run scripts/bench/run.py --profile --models whisper-large-v3-turbo
 ```
 
 ## Numerical Validation

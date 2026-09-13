@@ -69,47 +69,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  |  94 ms (116.36×) |  97 ms (113.42×) |
 | Metal   | dots (35.3s) | 255 ms (138.52×) | 254 ms (139.09×) |
-| CPU     | jfk (11.0s)  |     608 ms (18×) |     505 ms (22×) |
-| CPU     | dots (35.3s) |     2.04 s (17×) |     1.73 s (20×) |
-<!-- /catalog -->
+| CPU     | jfk (11.0s)  |    608 ms (18×)† |    505 ms (22×)† |
+| CPU     | dots (35.3s) |    2.04 s (17×)† |    1.73 s (20×)† |
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+Apple M4 Max: transcribe.cpp `a6c097e` on 2026-05-10. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 961 ms (11.45×) | 936 ms (11.75×) |
 | Vulkan  | dots (35.3s) | 3.02 s (11.70×) | 2.99 s (11.80×) |
-| CPU     | jfk (11.0s)  |  1.92 s (5.74×) |     1.49 s (7×) |
+| CPU     | jfk (11.0s)  |  1.92 s (5.74×) |    1.49 s (7×)† |
 | CPU     | dots (35.3s) |  6.81 s (5.19×) |  5.93 s (5.96×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-tdt-1.1b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-tdt-1.1b-publication
+uv run scripts/bench/run.py --profile --models parakeet-tdt-1.1b
 ```
 
 ## Numerical Validation

@@ -78,47 +78,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 5 iterations after 2 warmups),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
-(2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
-| Metal   | jfk (11.0s)  |    96 ms (115×) |
-| Metal   | dots (35.3s) |    811 ms (44×) |
+| Metal   | jfk (11.0s)  |   96 ms (115×)† |
+| Metal   | dots (35.3s) |   811 ms (44×)† |
 | CPU     | jfk (11.0s)  | 96 ms (114.16×) |
 | CPU     | dots (35.3s) | 719 ms (49.16×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `e0fa0f6`.
+Apple M4 Max: transcribe.cpp `9824fdb` on 2026-05-06. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
-| Vulkan  | jfk (11.0s)  |    218 ms (50×) |
-| Vulkan  | dots (35.3s) |    1.85 s (19×) |
+| Vulkan  | jfk (11.0s)  |   218 ms (50×)† |
+| Vulkan  | dots (35.3s) |   1.85 s (19×)† |
 | CPU     | jfk (11.0s)  | 331 ms (33.22×) |
 | CPU     | dots (35.3s) | 3.17 s (11.15×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `f243f34` on 2026-05-06. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models moonshine-base \
-  --quants q8_0 \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 5 --warmup 2 \
-  --name moonshine-publication
+uv run scripts/bench/run.py --profile --models moonshine-base
 ```
 
 ## Numerical Validation

@@ -149,49 +149,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-| Backend | Sample       |         Q8_0 |       Q4_K_M |
-| ------- | ------------ | -----------: | -----------: |
-| Metal   | jfk (11.0s)  | 156 ms (70×) | 144 ms (76×) |
-| Metal   | dots (35.3s) | 539 ms (66×) | 499 ms (71×) |
-| CPU     | jfk (11.0s)  | 661 ms (17×) | 575 ms (19×) |
-| CPU     | dots (35.3s) | 2.36 s (15×) | 2.12 s (17×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `f094d28`. MLT is ~10–15% slower than
-Fun-ASR-Nano on the same hardware; the gap is from per-step LLM
-generation cost (different decoded transcript lengths between the two
-variants).
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  | 156 ms (70×)† | 144 ms (76×)† |
+| Metal   | dots (35.3s) | 539 ms (66×)† | 499 ms (71×)† |
+| CPU     | jfk (11.0s)  | 661 ms (17×)† | 575 ms (19×)† |
+| CPU     | dots (35.3s) | 2.36 s (15×)† | 2.12 s (17×)† |
+
+Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |           Q8_0 |          Q4_K_M |
 | ------- | ------------ | -------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 1.12 s (9.84×) | 1.00 s (10.98×) |
 | Vulkan  | dots (35.3s) | 4.43 s (7.98×) |  3.86 s (9.15×) |
 | CPU     | jfk (11.0s)  | 2.31 s (4.75×) |  1.81 s (6.08×) |
 | CPU     | dots (35.3s) | 8.48 s (4.17×) |  6.87 s (5.14×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `8635bd1`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8635bd1` on 2026-05-07.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models Fun-ASR-MLT-Nano-2512 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name fun-asr-mlt-nano-2512-publication
+uv run scripts/bench/run.py --profile --models fun-asr-mlt-nano-2512
 ```
 
 ## Numerical Validation

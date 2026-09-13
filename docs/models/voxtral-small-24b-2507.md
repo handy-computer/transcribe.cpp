@@ -106,17 +106,17 @@ CLI flags:
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-| Backend | Sample       |           Q8_0 |        Q4_K_M |
-| ------- | ------------ | -------------: | ------------: |
-| Metal   | jfk (11.0s)  |  3.36 s (3.3×) | 2.62 s (4.2×) |
-| Metal   | dots (35.3s) | 11.20 s (3.2×) | 8.95 s (3.9×) |
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
+| Backend | Sample       |            Q8_0 |         Q4_K_M |
+| ------- | ------------ | --------------: | -------------: |
+| Metal   | jfk (11.0s)  |  3.36 s (3.3×)† | 2.62 s (4.2×)† |
+| Metal   | dots (35.3s) | 11.20 s (3.2×)† | 8.95 s (3.9×)† |
+
+Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 <!-- /catalog -->
 
 A 24B is a GPU-class model; on Apple Silicon it runs at **~3–4× realtime**
@@ -126,13 +126,7 @@ not benchmarked. transcribe.cpp `96adddb`.
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models Voxtral-Small-24B-2507 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal \
-  --iters 3 --warmup 1 \
-  --name voxtral-small-24b-2507-publication
+uv run scripts/bench/run.py --profile --models voxtral-small-24b-2507
 ```
 
 ## Notes

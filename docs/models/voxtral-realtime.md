@@ -90,48 +90,40 @@ CLI flags:
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode) (mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places). Measured on the offline path at the family-default `K=1`
-speculative decoding.
-
 ### Apple M4 Max
 
 <!-- catalog:perf variant=voxtral-mini-4b-realtime-2602 machine=m4-max -->
-| Backend | Sample       |           Q8_0 |         Q4_K_M |
-| ------- | ------------ | -------------: | -------------: |
-| Metal   | jfk (11.0s)  |    1.22 s (9×) |  1.14 s (9.7×) |
-| Metal   | dots (35.3s) |  4.34 s (8.1×) |    3.91 s (9×) |
-| CPU     | jfk (11.0s)  |  4.43 s (2.5×) |  4.69 s (2.3×) |
-| CPU     | dots (35.3s) | 13.65 s (2.6×) | 13.12 s (2.7×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-macOS 15, transcribe.cpp `483c122`. Metal device: Apple M4 Max.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  |    1.22 s (9×)† |  1.14 s (9.7×)† |
+| Metal   | dots (35.3s) |  4.34 s (8.1×)† |    3.91 s (9×)† |
+| CPU     | jfk (11.0s)  |  4.43 s (2.5×)† |  4.69 s (2.3×)† |
+| CPU     | dots (35.3s) | 13.65 s (2.6×)† | 13.12 s (2.7×)† |
+
+Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf variant=voxtral-mini-4b-realtime-2602 machine=ryzen-4750u -->
-| Backend | Sample       |            Q8_0 |          Q4_K_M |
-| ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 12.62 s (0.87×) |    10.97 s (1×) |
-| Vulkan  | dots (35.3s) |  39.29 s (0.9×) | 33.51 s (1.05×) |
-| CPU     | jfk (11.0s)  | 19.54 s (0.56×) |  13.80 s (0.8×) |
-| CPU     | dots (35.3s) | 58.00 s (0.61×) | 41.54 s (0.85×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `483c122`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Vulkan  | jfk (11.0s)  | 12.62 s (0.87×)† |    10.97 s (1×)† |
+| Vulkan  | dots (35.3s) |  39.29 s (0.9×)† | 33.51 s (1.05×)† |
+| CPU     | jfk (11.0s)  | 19.54 s (0.56×)† |  13.80 s (0.8×)† |
+| CPU     | dots (35.3s) | 58.00 s (0.61×)† | 41.54 s (0.85×)† |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR). † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models Voxtral-Mini-4B-Realtime-2602 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name voxtral-mini-4b-realtime-2602-publication
+uv run scripts/bench/run.py --profile --models voxtral-mini-4b-realtime-2602
 ```
 
 ## Speculative decoding

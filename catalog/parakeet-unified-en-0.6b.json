@@ -79,6 +79,5 @@
     {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":844.0,"xrt_compute":13.03,"load_ms":599.8,"mel_ms":20.0,"encode_ms":435.6,"decode_ms":388.5,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true,"wall_ms":847.6,"xrt_wall":12.98},
     {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":3026.6,"xrt_compute":11.67,"load_ms":393.1,"mel_ms":67.0,"encode_ms":1141.2,"decode_ms":1818.5,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true,"wall_ms":3032.5,"xrt_wall":11.65},
     {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":834.9,"xrt_compute":13.18,"load_ms":677.6,"mel_ms":22.5,"encode_ms":419.3,"decode_ms":393.2,"engine_sha":"12f1076","measured_on":"2026-05-11","thermal_gated":true,"wall_ms":838.8,"xrt_wall":13.11}
-  ],
-  "architecture_pattern": "encoder-transducer"
+  ]
 }

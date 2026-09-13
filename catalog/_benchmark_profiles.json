@@ -42,10 +42,12 @@
         "targets": [
           {
             "machine": "m4-max",
+            "display": "Apple M4 Max",
             "backends": ["cpu","metal"]
           },
           {
             "machine": "ryzen-4750u",
+            "display": "AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR)",
             "backends": ["cpu","vulkan"],
             "cooldown_tctl_c": 55.0
           }

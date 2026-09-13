@@ -706,6 +706,36 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+# What a report must carry to be ingested (scripts/catalog/ingest_perf.py)
+# and compared (scripts/bench/compare.py). A gap here is a bench-harness
+# regression, so the driver refuses to write the file rather than leave a
+# report that looks complete and is not.
+REQUIRED_TOP = ("schema", "timestamp", "machine", "git_sha", "variant", "backend",
+                "iters", "warmup", "runs")
+REQUIRED_MACHINE = ("slug", "os")
+REQUIRED_RUN = ("model_path", "sample_path", "sample_duration_s", "per_iter",
+                "summary", "rtf_wall_mean", "transcript_sha256")
+REQUIRED_ITER = ("mel_ms", "encode_ms", "decode_ms", "total_ms", "wall_ms")
+
+
+def report_gaps(report: dict) -> list[str]:
+    """Names of required fields the report lacks; empty when it is complete."""
+    gaps = [key for key in REQUIRED_TOP if key not in report]
+    gaps += [f"machine.{key}" for key in REQUIRED_MACHINE
+             if key not in (report.get("machine") or {})]
+    for index, run in enumerate(report.get("runs") or []):
+        gaps += [f"runs[{index}].{key}" for key in REQUIRED_RUN if key not in run]
+        if not run.get("per_iter"):
+            gaps.append(f"runs[{index}].per_iter is empty")
+        for it_index, it in enumerate(run.get("per_iter") or []):
+            gaps += [f"runs[{index}].per_iter[{it_index}].{key}"
+                     for key in REQUIRED_ITER if key not in it]
+        summary = run.get("summary") or {}
+        gaps += [f"runs[{index}].summary.{key}.mean" for key in ("total_ms", "wall_ms")
+                 if (summary.get(key) or {}).get("mean") is None]
+    return gaps
+
+
 def _run_one_backend(backend: BackendSpec,
                      by_variant: dict[str, list[Cell]],
                      args: argparse.Namespace, repo: Path, machine: dict,
@@ -777,6 +807,12 @@ def _run_one_backend(backend: BackendSpec,
             "warmup": args.warmup,
             "runs": runs,
         }
+        missing = report_gaps(aggregate)
+        if missing:
+            print(f"[{backend.name}][{variant}] refusing to write an incomplete "
+                  f"report: {', '.join(missing)}", file=sys.stderr)
+            exit_code = 1
+            continue
         out_path.write_text(json.dumps(aggregate, indent=2) + "\n")
         try:
             rel = out_path.relative_to(repo)

@@ -70,47 +70,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  68 ms (163×) |  67 ms (163×) |
-| Metal   | dots (35.3s) | 189 ms (187×) | 193 ms (183×) |
-| CPU     | jfk (11.0s)  |  371 ms (30×) |  312 ms (35×) |
-| CPU     | dots (35.3s) |  1.26 s (28×) |  1.07 s (33×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+| Backend | Sample       |           Q8_0 |         Q4_K_M |
+| ------- | ------------ | -------------: | -------------: |
+| Metal   | jfk (11.0s)  |  68 ms (163×)† |  67 ms (163×)† |
+| Metal   | dots (35.3s) | 189 ms (187×)† | 193 ms (183×)† |
+| CPU     | jfk (11.0s)  |  371 ms (30×)† |  312 ms (35×)† |
+| CPU     | dots (35.3s) |  1.26 s (28×)† |  1.07 s (33×)† |
+
+Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 670 ms (16.42×) | 682 ms (16.13×) |
 | Vulkan  | dots (35.3s) | 2.45 s (14.44×) | 2.44 s (14.51×) |
 | CPU     | jfk (11.0s)  |  1.23 s (8.97×) | 1.05 s (10.51×) |
-| CPU     | dots (35.3s) |     4.75 s (7×) |     4.14 s (9×) |
-<!-- /catalog -->
+| CPU     | dots (35.3s) |    4.75 s (7×)† |    4.14 s (9×)† |
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-tdt-0.6b-v2 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-tdt-0.6b-v2-publication
+uv run scripts/bench/run.py --profile --models parakeet-tdt-0.6b-v2
 ```
 
 ## Numerical Validation

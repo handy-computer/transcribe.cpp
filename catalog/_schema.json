@@ -31,10 +31,6 @@
       "type": "integer",
       "description": "Exact parameter count, summed from GGUF tensor shapes."
     },
-    "architecture_pattern": {
-      "type": ["string","null"],
-      "description": "One of the patterns in docs/porting/0-porting.md. Groups models for readers."
-    },
     "license": {
       "type": "object",
       "additionalProperties": false,
@@ -475,6 +471,10 @@
           "measured_on": {
             "type": ["string","null"],
             "format": "date"
+          },
+          "os": {
+            "type": "string",
+            "description": "Operating system string the bench driver recorded (machine.os), e.g. \"macOS 26.4.1\". Provenance for the doc footer; absent on rows ingested before it was carried."
           },
           "thermal_gated": {
             "type": ["boolean","null"],

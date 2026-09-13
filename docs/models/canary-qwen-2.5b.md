@@ -96,47 +96,40 @@ CLI flags:
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
 | Metal   | jfk (11.0s)  | 240.7 ms (45.71×) | 225.7 ms (48.73×) |
 | Metal   | dots (35.3s) |   1.02 s (34.78×) | 903.3 ms (39.11×) |
 | CPU     | jfk (11.0s)  |    1.42 s (7.76×) |   1.06 s (10.40×) |
 | CPU     | dots (35.3s) |    5.14 s (6.88×) |    4.00 s (8.84×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `1b19945`.
+Apple M4 Max: transcribe.cpp `1b19945` on 2026-05-17.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  |  2.39 s (4.60×) |  2.10 s (5.24×) |
 | Vulkan  | dots (35.3s) |  9.70 s (3.64×) |  8.46 s (4.18×) |
 | CPU     | jfk (11.0s)  |  4.72 s (2.33×) |  3.42 s (3.22×) |
 | CPU     | dots (35.3s) | 18.41 s (1.92×) | 13.49 s (2.62×) |
-<!-- /catalog -->
 
-Fedora Linux 43, transcribe.cpp `51db32d`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `51db32d` on 2026-05-16.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models canary-qwen-2.5b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name canary-qwen-2.5b-publication
+uv run scripts/bench/run.py --profile --models canary-qwen-2.5b
 ```
 
 ## Numerical Validation

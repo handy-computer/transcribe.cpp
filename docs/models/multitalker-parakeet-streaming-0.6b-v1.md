@@ -138,47 +138,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  |  66 ms (167.17×) |  68 ms (162.41×) |
 | Metal   | dots (35.3s) | 182 ms (194.69×) | 183 ms (192.82×) |
 | CPU     | jfk (11.0s)  |  309 ms (35.60×) |  306 ms (35.95×) |
 | CPU     | dots (35.3s) |  1.05 s (33.68×) |  1.03 s (34.41×) |
-<!-- /catalog -->
 
-macOS 26.5.1, transcribe.cpp `c55a09d`.
+Apple M4 Max: transcribe.cpp `c55a09d` on 2026-07-13.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 458 ms (23.99×) | 466 ms (23.58×) |
 | Vulkan  | dots (35.3s) | 1.34 s (26.32×) | 1.38 s (25.63×) |
 | CPU     | jfk (11.0s)  | 750 ms (14.68×) | 814 ms (13.51×) |
 | CPU     | dots (35.3s) | 2.99 s (11.81×) | 3.12 s (11.34×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `c55a09d`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `c55a09d` on 2026-07-13.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models multitalker-parakeet-streaming-0.6b-v1 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name multitalker-parakeet-streaming-0.6b-v1-publication
+uv run scripts/bench/run.py --profile --models multitalker-parakeet-streaming-0.6b-v1
 ```
 
 ## Numerical Validation

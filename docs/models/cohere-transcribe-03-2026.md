@@ -94,47 +94,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-| Backend | Sample       |         Q8_0 |       Q4_K_M |
-| ------- | ------------ | -----------: | -----------: |
-| Metal   | jfk (11.0s)  | 150 ms (74×) | 154 ms (71×) |
-| Metal   | dots (35.3s) | 491 ms (72×) | 465 ms (76×) |
-| CPU     | jfk (11.0s)  |  1.21 s (9×) | 1.05 s (11×) |
-| CPU     | dots (35.3s) |  4.13 s (9×) | 3.49 s (10×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `e0fa0f6`.
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  | 150 ms (74×)† | 154 ms (71×)† |
+| Metal   | dots (35.3s) | 491 ms (72×)† | 465 ms (76×)† |
+| CPU     | jfk (11.0s)  |  1.21 s (9×)† | 1.05 s (11×)† |
+| CPU     | dots (35.3s) |  4.13 s (9×)† | 3.49 s (10×)† |
+
+Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |         Q4_K_M |
 | ------- | ------------ | --------------: | -------------: |
-| Vulkan  | jfk (11.0s)  |     1.43 s (8×) |    1.33 s (8×) |
-| Vulkan  | dots (35.3s) |     4.25 s (8×) |    4.25 s (8×) |
+| Vulkan  | jfk (11.0s)  |    1.43 s (8×)† |   1.33 s (8×)† |
+| Vulkan  | dots (35.3s) |    4.25 s (8×)† |   4.25 s (8×)† |
 | CPU     | jfk (11.0s)  |  3.57 s (3.08×) | 2.89 s (3.80×) |
-| CPU     | dots (35.3s) | 12.39 s (2.85×) |   10.08 s (4×) |
-<!-- /catalog -->
+| CPU     | dots (35.3s) | 12.39 s (2.85×) |  10.08 s (4×)† |
 
-Fedora 43, transcribe.cpp `2ab01b8`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8345d95` on 2026-04-16. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models cohere-transcribe-03-2026 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name cohere-transcribe-03-2026-publication
+uv run scripts/bench/run.py --profile --models cohere-transcribe-03-2026
 ```
 
 ## Numerical Validation

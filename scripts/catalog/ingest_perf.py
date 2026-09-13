@@ -110,6 +110,7 @@ def cells(report: dict) -> list[dict]:
             "decode_ms": mean("decode_ms"),
             "engine_sha": report.get("git_sha"),
             "measured_on": (report.get("timestamp") or "")[:10] or None,
+            "os": (report.get("machine") or {}).get("os"),
             "_when": report.get("timestamp") or "",
             "_file": report["_file"],
         })
@@ -166,7 +167,7 @@ def collect(reports_dir: pathlib.Path,
 
 
 FIELDS = ("sample_duration_s", "total_ms", "xrt_compute", "wall_ms", "xrt_wall",
-          "load_ms", "mel_ms", "encode_ms", "decode_ms", "engine_sha", "measured_on")
+          "load_ms", "mel_ms", "encode_ms", "decode_ms", "engine_sha", "measured_on", "os")
 
 
 def catalog_row(source: dict) -> dict:

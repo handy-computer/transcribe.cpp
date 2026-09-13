@@ -96,47 +96,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  |  74 ms (149.59×) |  75 ms (146.35×) |
 | Metal   | dots (35.3s) | 224 ms (157.78×) | 224 ms (157.68×) |
-| CPU     | jfk (11.0s)  |  386 ms (28.53×) |     323 ms (34×) |
-| CPU     | dots (35.3s) |  1.31 s (26.98×) |     1.11 s (32×) |
-<!-- /catalog -->
+| CPU     | jfk (11.0s)  |  386 ms (28.53×) |    323 ms (34×)† |
+| CPU     | dots (35.3s) |  1.31 s (26.98×) |    1.11 s (32×)† |
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+Apple M4 Max: transcribe.cpp `140ed3a` on 2026-04-16. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 854 ms (12.88×) | 864 ms (12.72×) |
 | Vulkan  | dots (35.3s) | 3.06 s (11.54×) | 3.10 s (11.42×) |
 | CPU     | jfk (11.0s)  |  1.41 s (7.80×) |  1.22 s (9.01×) |
-| CPU     | dots (35.3s) |     5.34 s (7×) |     4.78 s (7×) |
-<!-- /catalog -->
+| CPU     | dots (35.3s) |    5.34 s (7×)† |    4.78 s (7×)† |
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-tdt-0.6b-v3 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-tdt-0.6b-v3-publication
+uv run scripts/bench/run.py --profile --models parakeet-tdt-0.6b-v3
 ```
 
 ## Numerical Validation

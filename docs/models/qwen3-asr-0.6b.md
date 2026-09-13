@@ -121,47 +121,40 @@ chat template is tracked as follow-up work; see the family note at
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-| Backend | Sample       |         Q8_0 |       Q4_K_M |
-| ------- | ------------ | -----------: | -----------: |
-| Metal   | jfk (11.0s)  | 155 ms (71×) | 142 ms (77×) |
-| Metal   | dots (35.3s) | 597 ms (59×) | 527 ms (67×) |
-| CPU     | jfk (11.0s)  | 660 ms (17×) | 588 ms (19×) |
-| CPU     | dots (35.3s) | 2.26 s (16×) | 2.10 s (17×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-macOS 26.3.1, transcribe.cpp `0c88a71`.
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  | 155 ms (71×)† | 142 ms (77×)† |
+| Metal   | dots (35.3s) | 597 ms (59×)† | 527 ms (67×)† |
+| CPU     | jfk (11.0s)  | 660 ms (17×)† | 588 ms (19×)† |
+| CPU     | dots (35.3s) | 2.26 s (16×)† | 2.10 s (17×)† |
+
+Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |           Q8_0 |          Q4_K_M |
 | ------- | ------------ | -------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 1.27 s (8.66×) | 1.08 s (10.16×) |
 | Vulkan  | dots (35.3s) | 4.87 s (7.26×) |  3.99 s (8.86×) |
 | CPU     | jfk (11.0s)  | 2.37 s (4.65×) |  1.92 s (5.73×) |
 | CPU     | dots (35.3s) | 8.60 s (4.11×) |  7.34 s (4.82×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `3d16f74`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `3d16f74` on 2026-04-20.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models Qwen3-ASR-0.6B \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name qwen3-asr-0.6b-publication
+uv run scripts/bench/run.py --profile --models qwen3-asr-0.6b
 ```
 
 ## Numerical Validation

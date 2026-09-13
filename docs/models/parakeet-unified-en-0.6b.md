@@ -82,47 +82,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  |  69 ms (158.00×) |  71 ms (155.00×) |
 | Metal   | dots (35.3s) | 210 ms (168.00×) | 209 ms (169.00×) |
 | CPU     | jfk (11.0s)  |  375 ms (29.00×) |  318 ms (35.00×) |
 | CPU     | dots (35.3s) |  1.27 s (28.00×) |  1.09 s (32.00×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+Apple M4 Max: transcribe.cpp `12f1076`.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 835 ms (13.18×) | 844 ms (13.03×) |
 | Vulkan  | dots (35.3s) | 3.03 s (11.67×) | 3.04 s (11.62×) |
 | CPU     | jfk (11.0s)  |  1.35 s (8.17×) |  1.18 s (9.33×) |
 | CPU     | dots (35.3s) |  5.21 s (6.78×) |  4.66 s (7.58×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-unified-en-0.6b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-unified-en-0.6b-publication
+uv run scripts/bench/run.py --profile --models parakeet-unified-en-0.6b
 ```
 
 ## Numerical Validation

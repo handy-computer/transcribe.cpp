@@ -68,47 +68,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). 
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  |  56 ms (198.18×) |  57 ms (191.56×) |
 | Metal   | dots (35.3s) | 141 ms (251.18×) | 142 ms (248.04×) |
 | CPU     | jfk (11.0s)  |  355 ms (30.98×) |  297 ms (37.07×) |
 | CPU     | dots (35.3s) |  1.19 s (29.64×) |  999 ms (35.35×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `a6c097e`.
+Apple M4 Max: transcribe.cpp `a6c097e` on 2026-05-10.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 520 ms (21.14×) | 537 ms (20.47×) |
 | Vulkan  | dots (35.3s) | 1.50 s (23.61×) | 1.50 s (23.58×) |
 | CPU     | jfk (11.0s)  | 1.07 s (10.29×) | 863 ms (12.74×) |
 | CPU     | dots (35.3s) |  3.67 s (9.64×) | 3.14 s (11.25×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `57997dc`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `57997dc` on 2026-05-10.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-ctc-0.6b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-ctc-0.6b-publication
+uv run scripts/bench/run.py --profile --models parakeet-ctc-0.6b
 ```
 
 ## Numerical Validation

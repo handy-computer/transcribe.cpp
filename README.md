@@ -6,33 +6,37 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 
 **Supported models:**
 
-| Family | Variants | Docs |
-| --- | --- | --- |
-| Parakeet | 11 variants: TDT, RNN-T, CTC, TDT+CTC (110M–1.1B), incl. German `parakeet-primeline` | [docs/models/parakeet.md](docs/models/parakeet.md) |
-| Canary | `canary-1b`, `canary-1b-v2`, `canary-1b-flash`, `canary-180m-flash` | [docs/models/canary.md](docs/models/canary.md) |
-| Canary-Qwen | `canary-qwen-2.5b` (FastConformer + Qwen3-1.7B SALM) | [docs/models/canary-qwen-2.5b.md](docs/models/canary-qwen-2.5b.md) |
-| Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
-| GigaAM | `gigaam-v3-{e2e-rnnt,e2e-ctc,rnnt,ctc}` | [docs/models/gigaam.md](docs/models/gigaam.md) |
-| Moonshine | `moonshine-tiny`, `moonshine-base` | [docs/models/moonshine.md](docs/models/moonshine.md) |
-| Moonshine Streaming | `moonshine-streaming-{tiny,small,medium}` | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
-| Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
-| Cohere Transcribe | `cohere-transcribe-03-2026` (14 languages), `cohere-transcribe-arabic-07-2026` (Arabic dialects + code-switching) | [docs/models/cohere.md](docs/models/cohere.md) |
-| SenseVoice | `sensevoice-small` | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
-| FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
-| Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
-| Nemotron 3.5 ASR Streaming | `nemotron-3.5-asr-streaming-0.6b` (multilingual, 32 transcription locales) | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
-| Multitalker Parakeet Streaming | `multitalker-parakeet-streaming-0.6b-v1` (bundles an embedded Sortformer diarizer; speaker-attributed ASR with `--diarize`) | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
-| Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b{,-plus,-nar}` | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
-| Voxtral | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` (audio-LLM; transcription + translation) | [docs/models/voxtral.md](docs/models/voxtral.md) |
-| Voxtral Realtime | `voxtral-mini-4b-realtime-2602` (streaming audio-LLM) | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |
-| MedASR | `medasr` (Conformer + CTC, English medical-dictation, gated) | [docs/models/medasr.md](docs/models/medasr.md) |
-| MOSS Transcribe-Diarize | `moss-transcribe-diarize` (audio-LLM; English + Chinese ASR with inline speaker diarization) | [docs/models/moss-transcribe-diarize.md](docs/models/moss-transcribe-diarize.md) |
+<!-- catalog:family-index -->
+| Family | Variants | Capabilities | Docs |
+| --- | --- | --- | --- |
+| Canary | `canary-180m-flash`, `canary-1b`, `canary-1b-flash`, `canary-1b-v2` | translate | [docs/models/canary.md](docs/models/canary.md) |
+| Canary-Qwen 2.5B | `canary-qwen-2.5b` | - | [docs/models/canary-qwen-2.5b.md](docs/models/canary-qwen-2.5b.md) |
+| Cohere Transcribe | `cohere-transcribe-03-2026`, `cohere-transcribe-arabic-07-2026` | - | [docs/models/cohere.md](docs/models/cohere.md) |
+| Fun-ASR-Nano | `fun-asr-mlt-nano-2512`, `fun-asr-nano-2512` | - | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
+| GigaAM-v3 | `gigaam-v3-ctc`, `gigaam-v3-e2e-ctc`, `gigaam-v3-e2e-rnnt`, `gigaam-v3-rnnt` | token timestamps | [docs/models/gigaam.md](docs/models/gigaam.md) |
+| Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b`, `granite-speech-4.1-2b-nar`, `granite-speech-4.1-2b-plus` | diarize, translate, word timestamps | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
+| MedASR | `medasr` | token timestamps | [docs/models/medasr.md](docs/models/medasr.md) |
+| Moonshine | `moonshine-base`, `moonshine-base-ar`, `moonshine-base-ja`, `moonshine-base-ko`, `moonshine-base-uk`, `moonshine-base-vi`, `moonshine-base-zh`, `moonshine-tiny`, `moonshine-tiny-ar`, `moonshine-tiny-ja`, `moonshine-tiny-ko`, `moonshine-tiny-uk`, `moonshine-tiny-vi`, `moonshine-tiny-zh` | - | [docs/models/moonshine.md](docs/models/moonshine.md) |
+| Moonshine Streaming | `moonshine-streaming-medium`, `moonshine-streaming-small`, `moonshine-streaming-tiny` | streaming | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
+| MOSS-Transcribe-Diarize | `moss-transcribe-diarize` | diarize, segment timestamps | [docs/models/moss-transcribe-diarize.md](docs/models/moss-transcribe-diarize.md) |
+| Multitalker Parakeet Streaming 0.6B v1 | `multitalker-parakeet-streaming-0.6b-v1` | diarize, streaming, token timestamps | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
+| Nemotron 3.5 ASR Streaming 0.6B | `nemotron-3.5-asr-streaming-0.6b` | streaming, token timestamps | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
+| Nemotron Speech Streaming EN 0.6B | `nemotron-speech-streaming-en-0.6b` | streaming, token timestamps | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
+| Parakeet | `parakeet-ctc-0.6b`, `parakeet-ctc-1.1b`, `parakeet-primeline`, `parakeet-rnnt-0.6b`, `parakeet-rnnt-1.1b`, `parakeet-tdt-0.6b-v2`, `parakeet-tdt-0.6b-v3`, `parakeet-tdt-1.1b`, `parakeet-tdt_ctc-1.1b`, `parakeet-tdt_ctc-110m`, `parakeet-unified-en-0.6b` | streaming, token timestamps | [docs/models/parakeet.md](docs/models/parakeet.md) |
+| Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | - | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
+| SenseVoice Small | `sensevoice-small` | - | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
+| Voxtral (2507) | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` | translate | [docs/models/voxtral.md](docs/models/voxtral.md) |
+| voxtral-mini-4b-realtime-2602 | `voxtral-mini-4b-realtime-2602` | streaming | [handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf) |
+| Whisper | `breeze-asr-25`, `whisper-base`, `whisper-base.en`, `whisper-large`, `whisper-large-v2`, `whisper-large-v3`, `whisper-large-v3-turbo`, `whisper-medium`, `whisper-medium.en`, `whisper-small`, `whisper-small.en`, `whisper-tiny`, `whisper-tiny.en` | segment timestamps, translate | [docs/models/whisper.md](docs/models/whisper.md) |
+<!-- /catalog -->
 
 **Speaker diarization models** (no transcription; verified by DER/JER rather than WER):
 
-| Family | Variants | Docs |
-| --- | --- | --- |
-| Sortformer | `diar_streaming_sortformer_4spk-v2.1` (streaming speaker diarizer, up to 4 speakers) | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
+<!-- catalog:family-index transcribe=false -->
+| Family | Variants | Capabilities | Docs |
+| --- | --- | --- | --- |
+| Streaming Sortformer Diarizer 4spk v2.1 | `diar_streaming_sortformer_4spk-v2.1` | diarize, streaming | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
+<!-- /catalog -->
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
 

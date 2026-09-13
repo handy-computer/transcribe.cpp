@@ -94,37 +94,35 @@ build/bin/transcribe-cli \
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode), with speedup over realtime in parentheses.
-
 ### Apple M4 Max
 
-Mean over 3 iterations after 1 warmup.
-
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  |  126 ms (86.92×) |  129 ms (85.41×) |
 | Metal   | dots (35.3s) | 341 ms (103.69×) | 347 ms (101.77×) |
 | CPU     | jfk (11.0s)  |   1.55 s (7.08×) |   1.30 s (8.47×) |
 | CPU     | dots (35.3s) |   4.81 s (7.34×) |   4.25 s (8.31×) |
-<!-- /catalog -->
 
-macOS 26.4, transcribe.cpp `de05c43`.
+Apple M4 Max: transcribe.cpp `de05c43` on 2026-05-21.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
-Mean over 3 iterations after 1 warmup.
-
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  |  2.43 s (4.52×) |  2.45 s (4.49×) |
 | Vulkan  | dots (35.3s) |  6.50 s (5.43×) |  6.61 s (5.35×) |
 | CPU     | jfk (11.0s)  |  5.27 s (2.09×) |  4.30 s (2.56×) |
 | CPU     | dots (35.3s) | 17.39 s (2.03×) | 13.72 s (2.58×) |
-<!-- /catalog -->
 
-Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `dbe5814` on 2026-05-18.
+<!-- /catalog -->
 
 ## Capabilities
 

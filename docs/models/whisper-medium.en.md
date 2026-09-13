@@ -64,60 +64,46 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode, mean over the recorded
-iterations after warmup), with speedup over realtime in parentheses. Units:
-`ms` below 1 s, `s` above (2 decimal places). Decode latency dominates as
-model size grows; the encoder is only run once per 30-second window.
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  |   249.7 ms (44×) | 243.3 ms (45.2×) |
-| Metal   | dots (35.3s) | 762.9 ms (46.3×) | 725.9 ms (48.7×) |
-| CPU     | jfk (11.0s)  |   4.29 s (2.56×) |   3.37 s (3.26×) |
-| CPU     | dots (35.3s) |   9.07 s (3.89×) |   7.23 s (4.89×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `e0fa0f6`.
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Metal   | jfk (11.0s)  |   249.7 ms (44×)† | 243.3 ms (45.2×)† |
+| Metal   | dots (35.3s) | 762.9 ms (46.3×)† | 725.9 ms (48.7×)† |
+| CPU     | jfk (11.0s)  |    4.29 s (2.56×) |    3.37 s (3.26×) |
+| CPU     | dots (35.3s) |    9.07 s (3.89×) |    7.23 s (4.89×) |
+
+Apple M4 Max: transcribe.cpp `4d2270e` on 2026-04-28. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-medium.en \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu \
-  --iters 3 --warmup 1 \
-  --name whisper-medium.en-publication
+uv run scripts/bench/run.py --profile --models whisper-medium.en
 ```
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  2.88 s (3.82×) |   2.55 s (4.3×) |
-| Vulkan  | dots (35.3s) |   6.76 s (5.2×) |   6.44 s (5.5×) |
+| Vulkan  | jfk (11.0s)  |  2.88 s (3.82×) |  2.55 s (4.3×)† |
+| Vulkan  | dots (35.3s) |  6.76 s (5.2×)† |  6.44 s (5.5×)† |
 | CPU     | jfk (11.0s)  | 11.53 s (0.95×) |  9.36 s (1.18×) |
 | CPU     | dots (35.3s) | 26.63 s (1.33×) | 21.07 s (1.68×) |
-<!-- /catalog -->
 
-Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `01127e6` on 2026-04-28. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-medium.en \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name whisper-medium.en-publication
+uv run scripts/bench/run.py --profile --models whisper-medium.en
 ```
 
 ## Numerical Validation

@@ -105,47 +105,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Metal   | jfk (11.0s)  |    73 ms (151×) |    73 ms (151×) |
-| Metal   | dots (35.3s) |   224 ms (158×) |   221 ms (160×) |
+| Metal   | jfk (11.0s)  |   73 ms (151×)† |   73 ms (151×)† |
+| Metal   | dots (35.3s) |  224 ms (158×)† |  221 ms (160×)† |
 | CPU     | jfk (11.0s)  | 346 ms (31.77×) | 345 ms (31.89×) |
 | CPU     | dots (35.3s) | 1.18 s (30.02×) | 1.16 s (30.52×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+Apple M4 Max: transcribe.cpp `c2e7bf9` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  | 808 ms (13.61×) | 810 ms (13.59×) |
 | Vulkan  | dots (35.3s) | 2.92 s (12.08×) | 2.98 s (11.87×) |
 | CPU     | jfk (11.0s)  |  1.39 s (7.94×) |  1.22 s (8.99×) |
-| CPU     | dots (35.3s) |  5.21 s (6.78×) |     4.76 s (7×) |
-<!-- /catalog -->
+| CPU     | dots (35.3s) |  5.21 s (6.78×) |    4.76 s (7×)† |
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models nemotron-speech-streaming-en-0.6b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name nemotron-speech-streaming-en-0.6b-publication
+uv run scripts/bench/run.py --profile --models nemotron-speech-streaming-en-0.6b
 ```
 
 ## Numerical Validation

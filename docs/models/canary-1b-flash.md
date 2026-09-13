@@ -95,47 +95,40 @@ CLI flags specific to canary:
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |               Q8_0 |             Q4_K_M |
 | ------- | ------------ | -----------------: | -----------------: |
 | Metal   | jfk (11.0s)  | 104.2 ms (105.60×) | 108.9 ms (100.97×) |
 | Metal   | dots (35.3s) |  365.6 ms (96.65×) | 346.2 ms (102.06×) |
 | CPU     | jfk (11.0s)  |  517.2 ms (21.27×) |  429.0 ms (25.64×) |
 | CPU     | dots (35.3s) |    1.79 s (19.72×) |    1.51 s (23.43×) |
-<!-- /catalog -->
 
-macOS 26.4.1, transcribe.cpp `19b3b87`.
+Apple M4 Max: transcribe.cpp `0f42b37` on 2026-05-08; transcribe.cpp `19b3b87` on 2026-05-08.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
 | Vulkan  | jfk (11.0s)  | 758.1 ms (14.51×) | 698.9 ms (15.74×) |
 | Vulkan  | dots (35.3s) |   2.45 s (14.39×) |   2.30 s (15.33×) |
 | CPU     | jfk (11.0s)  |    1.49 s (7.40×) |    1.13 s (9.73×) |
 | CPU     | dots (35.3s) |    5.48 s (6.45×) |    4.50 s (7.85×) |
-<!-- /catalog -->
 
-Fedora Linux 43, transcribe.cpp `4d44530`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `0f42b37` on 2026-05-08; transcribe.cpp `4d44530` on 2026-05-08.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models canary-1b-flash \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name canary-1b-flash-publication
+uv run scripts/bench/run.py --profile --models canary-1b-flash
 ```
 
 ## Numerical Validation

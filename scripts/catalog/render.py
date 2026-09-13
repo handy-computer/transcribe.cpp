@@ -18,8 +18,10 @@ files, this rewrites only the regions a doc explicitly delegates:
 Blocks: `downloads`, `perf machine=<slug>`, `accuracy` (one table per
 dataset split beyond the headline), `intro` (upstream link plus the card
 spec's `summary`), `prose field=wer.notes` (any `|` text field of the spec,
-dotted path), and `family variants=a,b,c` (a roll-up row per variant, for
-family pages). Everything outside a marker pair is untouched. The variant is the file stem
+dotted path), `family variants=a,b,c` (a roll-up row per variant, for
+family pages), and `family-index` (the root README's supported-models table,
+one row per documentation page). Everything outside a marker pair is
+untouched. The root README is rendered along with docs/models. The variant is the file stem
 unless the marker overrides it with `variant=`, so family docs can pull a
 table for a model they are not named after.
 
@@ -39,6 +41,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import common  # noqa: E402
+import profiles  # noqa: E402
 
 OPEN = re.compile(r"^(\s*)<!--\s*catalog:([a-z-]+)\s*(.*?)\s*-->\s*$")
 CLOSE = re.compile(r"^\s*<!--\s*/catalog\s*-->\s*$")
@@ -140,7 +143,7 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
                     cells.append("-")
                     continue
                 cells.append(f"{common.fmt_ms(row['total_ms'], dp_ms)} "
-                             f"({common.fmt_xrt(row)})")
+                             f"({common.fmt_xrt(row)})" + ("" if row.get("engine_sha") else "†"))
             body.append(cells)
     if blocked:
         raise RenderError(
@@ -149,9 +152,43 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
             + (" ..." if len(blocked) > 4 else ""))
     if not body:
         raise RenderError(f"no rows matched on {machine}")
-    return common.render_table(["Backend", "Sample"] + quants,
-                               ["l", "l"] + ["r"] * len(quants), body,
-                               rule_fill=True, max_pad=20)
+    table = common.render_table(["Backend", "Sample"] + quants,
+                                ["l", "l"] + ["r"] * len(quants), body,
+                                rule_fill=True, max_pad=20)
+    return perf_methodology(rows) + [""] + table + [""] + perf_provenance(machine, rows)
+
+
+def perf_methodology(rows: dict) -> list[str]:
+    """What a cell is. Iterations and warmup are profile policy."""
+    _, profile = profiles.load_profile()
+    speed = profile["speed"]
+    return [f"Compute latency (mel + encode + decode), speedup over realtime in "
+            f"parentheses; mean over {speed['iterations']} iterations after "
+            f"{speed['warmup']} warmup."]
+
+
+def perf_provenance(machine: str, rows: dict) -> list[str]:
+    """Where the numbers came from: machine, engine commit, date, OS."""
+    _, profile = profiles.load_profile()
+    display = profiles.machine_display(profile, machine)
+    builds: dict[tuple, int] = {}
+    for row in rows.values():
+        if row.get("engine_sha"):
+            key = (row["engine_sha"], row.get("measured_on") or "", row.get("os") or "")
+            builds[key] = builds.get(key, 0) + 1
+    legacy = sum(1 for row in rows.values() if not row.get("engine_sha"))
+    parts = []
+    for (sha, date, os_name), _ in sorted(builds.items(), key=lambda kv: -kv[1]):
+        text = f"transcribe.cpp `{sha}`"
+        if date:
+            text += f" on {date}"
+        if os_name:
+            text += f", {os_name}"
+        parts.append(text)
+    line = f"{display}: " + "; ".join(parts) + "." if parts else f"{display}."
+    if legacy:
+        line += " † published before provenance was recorded; not yet re-measured."
+    return [line]
 
 
 _SPECS: dict[str, dict] = {}
@@ -273,6 +310,52 @@ def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
         ["l", "r", "l", "r", "l", "r", "l", "l"], body, max_pad=34)
 
 
+def doc_for(records: dict[str, dict], variant: str) -> pathlib.Path | None:
+    """The page a variant is documented on: its own, else the family page
+    whose roll-up lists it."""
+    own = common.DOCS_DIR / f"{variant}.md"
+    for path in sorted(common.DOCS_DIR.glob("*.md")):
+        if path.stem in records:
+            continue
+        for line in path.read_text().splitlines():
+            match = OPEN.match(line)
+            if match and match.group(2) == "family" \
+                    and variant in parse_attrs(match.group(3)).get("variants", "").split(","):
+                return path
+    return own if own.exists() else None
+
+
+def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
+    """The root README's supported-models table: one row per documentation
+    page, listing the variants it covers. `transcribe=false` selects the
+    models that only diarize."""
+    want = as_bool(attrs.get("transcribe"), True)
+    groups: dict[str, dict] = {}
+    for variant, record in records.items():
+        if bool(record.get("capabilities", {}).get("transcribe", {}).get("supported")) != want:
+            continue
+        doc = doc_for(records, variant)
+        if doc is not None:
+            key = doc.stem
+            title = doc.read_text().splitlines()[0].lstrip("# ").strip()
+            link = f"[docs/models/{doc.name}](docs/models/{doc.name})"
+        else:
+            key = variant
+            title = record["display_name"]
+            link = f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})"
+        group = groups.setdefault(key, {"title": title, "link": link, "variants": [], "caps": set()})
+        group["variants"].append(variant)
+        group["caps"].update(c for c in common.capabilities_summary(record).split(", ") if c != "-")
+    if not groups:
+        raise RenderError("no models matched")
+    body = []
+    for group in sorted(groups.values(), key=lambda g: g["title"].lower()):
+        body.append([group["title"], ", ".join(f"`{v}`" for v in sorted(group["variants"])),
+                     ", ".join(sorted(group["caps"])) or "-", group["link"]])
+    return common.render_table(["Family", "Variants", "Capabilities", "Docs"],
+                               ["l", "l", "l", "l"], body)
+
+
 BLOCKS = {"downloads": block_downloads, "perf": block_perf,
           "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy}
 
@@ -283,9 +366,11 @@ BLOCKS = {"downloads": block_downloads, "perf": block_perf,
 
 def rewrite(path: pathlib.Path, records: dict[str, dict]) -> tuple[str, list[str]]:
     lines = path.read_text().splitlines()
-    out, errors, index = [], [], 0
+    out, errors, index, fenced = [], [], 0, False
     while index < len(lines):
-        match = OPEN.match(lines[index])
+        if lines[index].lstrip().startswith("```"):
+            fenced = not fenced  # a marker quoted in a code block is documentation
+        match = None if fenced else OPEN.match(lines[index])
         if not match:
             out.append(lines[index])
             index += 1
@@ -303,6 +388,8 @@ def rewrite(path: pathlib.Path, records: dict[str, dict]) -> tuple[str, list[str
         try:
             if name == "family":
                 rendered = block_family(records, attrs)
+            elif name == "family-index":
+                rendered = block_family_index(records, attrs)
             elif name not in BLOCKS:
                 raise RenderError(f"unknown block type {name!r}")
             elif variant not in records:
@@ -332,7 +419,7 @@ def main() -> int:
 
     records = common.load_records()
     docs = ([pathlib.Path(p) for p in args.paths]
-            or sorted(pathlib.Path(args.docs).glob("*.md")))
+            or sorted(pathlib.Path(args.docs).glob("*.md")) + [common.REPO / "README.md"])
 
     stale, errors, rendered = [], [], 0
     for path in docs:

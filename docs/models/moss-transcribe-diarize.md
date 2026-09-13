@@ -114,47 +114,40 @@ CLI flags:
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-| Backend | Sample       |           Q8_0 |         Q4_K_M |
-| ------- | ------------ | -------------: | -------------: |
-| Metal   | jfk (11.0s)  | 388 ms (28.3×) | 369 ms (29.8×) |
-| Metal   | dots (35.3s) | 1.27 s (27.8×) | 1.17 s (30.1×) |
-| CPU     | jfk (11.0s)  |  2.06 s (5.3×) |  2.37 s (4.6×) |
-| CPU     | dots (35.3s) |  5.71 s (6.2×) |    5.84 s (6×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-macOS 26.5.1, transcribe.cpp `e745720`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 388 ms (28.3×)† | 369 ms (29.8×)† |
+| Metal   | dots (35.3s) | 1.27 s (27.8×)† | 1.17 s (30.1×)† |
+| CPU     | jfk (11.0s)  |  2.06 s (5.3×)† |  2.37 s (4.6×)† |
+| CPU     | dots (35.3s) |  5.71 s (6.2×)† |    5.84 s (6×)† |
+
+Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-| Backend | Sample       |           Q8_0 |         Q4_K_M |
-| ------- | ------------ | -------------: | -------------: |
-| Vulkan  | jfk (11.0s)  |  3.88 s (2.8×) |    3.68 s (3×) |
-| Vulkan  | dots (35.3s) | 11.38 s (3.1×) | 10.68 s (3.3×) |
-| CPU     | jfk (11.0s)  |  7.49 s (1.5×) |  7.06 s (1.6×) |
-| CPU     | dots (35.3s) | 21.20 s (1.7×) | 19.22 s (1.8×) |
-<!-- /catalog -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
 
-Fedora Linux 43, transcribe.cpp `e745720`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  3.88 s (2.8×)† |    3.68 s (3×)† |
+| Vulkan  | dots (35.3s) | 11.38 s (3.1×)† | 10.68 s (3.3×)† |
+| CPU     | jfk (11.0s)  |  7.49 s (1.5×)† |  7.06 s (1.6×)† |
+| CPU     | dots (35.3s) | 21.20 s (1.7×)† | 19.22 s (1.8×)† |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR). † published before provenance was recorded; not yet re-measured.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models moss-transcribe-diarize \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name moss-transcribe-diarize-publication
+uv run scripts/bench/run.py --profile --models moss-transcribe-diarize
 ```
 
 ## Numerical Validation

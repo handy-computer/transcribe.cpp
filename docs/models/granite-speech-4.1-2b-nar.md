@@ -91,43 +91,35 @@ editor handles language detection implicitly.
 
 ## Performance
 
-Cells are compute latency (mel + encode + decode), with speedup over realtime in parentheses.
-NAR is faster than the AR variants on GPU backends because there is no
-autoregressive step loop — a single bidirectional forward through 40 LLM
-layers replaces the per-token decode graph.
-
 ### Apple M4 Max
 
-Mean over 3 iterations after 1 warmup.
-
 <!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Metal   | jfk (11.0s)  | 151 ms (72.70×) | 163 ms (67.43×) |
 | Metal   | dots (35.3s) | 491 ms (71.91×) | 518 ms (68.21×) |
 | CPU     | jfk (11.0s)  |  1.89 s (5.81×) |  1.78 s (6.17×) |
 | CPU     | dots (35.3s) |  7.38 s (4.79×) |  6.21 s (5.69×) |
-<!-- /catalog -->
 
-macOS 26.4, transcribe.cpp `de05c43`.
+Apple M4 Max: transcribe.cpp `de05c43` on 2026-05-21.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
-Mean over 3 iterations after 1 warmup.
-
 <!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
 | Vulkan  | jfk (11.0s)  |  2.68 s (4.10×) |  2.75 s (4.00×) |
 | Vulkan  | dots (35.3s) |  8.32 s (4.25×) |  8.53 s (4.14×) |
 | CPU     | jfk (11.0s)  |  6.75 s (1.63×) |  5.46 s (2.01×) |
 | CPU     | dots (35.3s) | 23.77 s (1.49×) | 19.55 s (1.81×) |
-<!-- /catalog -->
 
-Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`. NAR's Vulkan RTF stays
-flat across short and long samples (jfk and dots both ~3.6×) because the
-single bidirectional LLM pass dominates over the encoder; on CPU the
-encoder dominates so RTF tapers slightly with sequence length.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `dbe5814` on 2026-05-18.
+<!-- /catalog -->
 
 ## Capabilities
 
