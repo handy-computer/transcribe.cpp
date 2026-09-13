@@ -38,8 +38,6 @@ summary: |
   **License: CC-BY-NC-4.0 (non-commercial only)** — the only canary
   variant under a non-commercial license.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

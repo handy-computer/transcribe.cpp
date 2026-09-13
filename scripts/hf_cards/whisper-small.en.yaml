@@ -23,8 +23,6 @@ tags:
 summary: |
   OpenAI Whisper small.en — converted to GGUF for transcribe.cpp. English-only; faster than the multilingual model at the same size. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
 
-default_quant_index: 2
-
 wer:
   source: LibriSpeech test-clean
   notes: |

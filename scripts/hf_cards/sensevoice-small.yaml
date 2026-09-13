@@ -33,8 +33,6 @@ summary: |
   audio-event tags, and an inverse-text-normalization flag — opt-in via
   `--raw-tokens` and `--itn`.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

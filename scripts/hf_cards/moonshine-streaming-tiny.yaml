@@ -30,8 +30,6 @@ summary: |
   WAV and produces a transcript. No translation, no multilingual capability,
   no timestamps.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

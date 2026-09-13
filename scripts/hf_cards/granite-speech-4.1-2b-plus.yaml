@@ -40,8 +40,6 @@ summary: |
   This variant is transcription-only: unlike the base granite-speech-4.1-2b,
   it does not perform speech translation.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

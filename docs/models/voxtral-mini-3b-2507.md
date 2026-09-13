@@ -83,27 +83,31 @@ CLI flags:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup), with
 speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
 decimal places).
 
 ### Apple M4 Max
 
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
 | Metal   | jfk (11.0s)  | 727.3 ms (15.1×) | 656.8 ms (16.7×) |
 | Metal   | dots (35.3s) |   2.40 s (14.7×) |   1.90 s (18.6×) |
-| CPU     | jfk (11.0s)  |   6.06 s (1.8×)  |   6.76 s (1.6×)  |
-| CPU     | dots (35.3s) |  16.60 s (2.1×)  |  15.31 s (2.3×)  |
+| CPU     | jfk (11.0s)  |    6.06 s (1.8×) |    6.76 s (1.6×) |
+| CPU     | dots (35.3s) |   16.60 s (2.1×) |   15.31 s (2.3×) |
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Vulkan  | jfk (11.0s)  |   9.57 s (1.2×)  |   9.37 s (1.2×)  |
-| Vulkan  | dots (35.3s) |  26.49 s (1.3×)  |  23.82 s (1.5×)  |
-| CPU     | jfk (11.0s)  |  26.15 s (0.4×)  |  19.39 s (0.6×)  |
-| CPU     | dots (35.3s) |  63.96 s (0.6×)  |  45.92 s (0.8×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  9.57 s (1.15×) |  9.37 s (1.17×) |
+| Vulkan  | dots (35.3s) | 26.49 s (1.33×) | 23.82 s (1.48×) |
+| CPU     | jfk (11.0s)  |  26.15 s (0.4×) |  19.39 s (0.6×) |
+| CPU     | dots (35.3s) |  63.96 s (0.6×) | 45.92 s (0.77×) |
+<!-- /catalog -->
 
 Fedora Linux 43, transcribe.cpp `91af262`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

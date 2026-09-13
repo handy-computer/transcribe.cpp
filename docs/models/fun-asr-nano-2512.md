@@ -86,29 +86,33 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
 above (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |   134 ms (82×)  |   129 ms (86×)  |
-| Metal   | dots (35.3s) |   486 ms (73×)  |   433 ms (82×)  |
-| CPU     | jfk (11.0s)  |   379 ms (29×)  |   358 ms (31×)  |
-| CPU     | dots (35.3s) |   1.40 s (25×)  |   1.31 s (27×)  |
+<!-- catalog:perf machine=m4-max -->
+| Backend | Sample       |         Q8_0 |       Q4_K_M |
+| ------- | ------------ | -----------: | -----------: |
+| Metal   | jfk (11.0s)  | 134 ms (82×) | 129 ms (86×) |
+| Metal   | dots (35.3s) | 486 ms (73×) | 433 ms (82×) |
+| CPU     | jfk (11.0s)  | 379 ms (29×) | 358 ms (31×) |
+| CPU     | dots (35.3s) | 1.40 s (25×) | 1.31 s (27×) |
+<!-- /catalog -->
 
 macOS 26.4.1, transcribe.cpp `f094d28`.
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  887 ms (12×)  |  825 ms (13×)  |
-| Vulkan  | dots (35.3s) | 3.74 s (9×)    | 2.95 s (12×)   |
-| CPU     | jfk (11.0s)  | 1.48 s (7×)    | 1.15 s (10×)   |
-| CPU     | dots (35.3s) | 5.54 s (6×)    | 4.52 s (8×)    |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 864 ms (12.73×) | 801 ms (13.73×) |
+| Vulkan  | dots (35.3s) |  3.69 s (9.57×) | 2.90 s (12.20×) |
+| CPU     | jfk (11.0s)  |     1.48 s (7×) |  1.12 s (9.83×) |
+| CPU     | dots (35.3s) |     5.54 s (6×) |  4.42 s (7.99×) |
+<!-- /catalog -->
 
 Fedora 43, transcribe.cpp `8635bd1`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
 

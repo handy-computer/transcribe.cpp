@@ -73,29 +73,33 @@ chat template is tracked as follow-up work; see the family note at
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
 above (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  155 ms (71×)  |  142 ms (77×)  |
-| Metal   | dots (35.3s) |  597 ms (59×)  |  527 ms (67×)  |
-| CPU     | jfk (11.0s)  |  660 ms (17×)  |  588 ms (19×)  |
-| CPU     | dots (35.3s) | 2.26 s (16×)   | 2.10 s (17×)   |
+<!-- catalog:perf machine=m4-max -->
+| Backend | Sample       |         Q8_0 |       Q4_K_M |
+| ------- | ------------ | -----------: | -----------: |
+| Metal   | jfk (11.0s)  | 155 ms (71×) | 142 ms (77×) |
+| Metal   | dots (35.3s) | 597 ms (59×) | 527 ms (67×) |
+| CPU     | jfk (11.0s)  | 660 ms (17×) | 588 ms (19×) |
+| CPU     | dots (35.3s) | 2.26 s (16×) | 2.10 s (17×) |
+<!-- /catalog -->
 
 macOS 26.3.1, transcribe.cpp `0c88a71`.
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  | 1.27 s (8.7×)  | 1.08 s (10.1×) |
-| Vulkan  | dots (35.3s) | 4.87 s (7.3×)  | 3.99 s (8.9×)  |
-| CPU     | jfk (11.0s)  | 2.37 s (4.6×)  | 1.92 s (5.7×)  |
-| CPU     | dots (35.3s) | 8.61 s (4.1×)  | 7.34 s (4.8×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |           Q8_0 |          Q4_K_M |
+| ------- | ------------ | -------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 1.27 s (8.66×) | 1.08 s (10.16×) |
+| Vulkan  | dots (35.3s) | 4.87 s (7.26×) |  3.99 s (8.86×) |
+| CPU     | jfk (11.0s)  | 2.37 s (4.65×) |  1.92 s (5.73×) |
+| CPU     | dots (35.3s) | 8.60 s (4.11×) |  7.34 s (4.82×) |
+<!-- /catalog -->
 
 Fedora 43, transcribe.cpp `3d16f74`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

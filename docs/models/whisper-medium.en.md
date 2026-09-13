@@ -52,19 +52,21 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mel + encode + decode, mean over the recorded
+Cells are compute latency (mel + encode + decode, mean over the recorded
 iterations after warmup), with speedup over realtime in parentheses. Units:
 `ms` below 1 s, `s` above (2 decimal places). Decode latency dominates as
 model size grows; the encoder is only run once per 30-second window.
 
 ### Apple M4 Max
 
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 249.7 ms (44.0×) | 243.3 ms (45.2×) |
+| Metal   | jfk (11.0s)  |   249.7 ms (44×) | 243.3 ms (45.2×) |
 | Metal   | dots (35.3s) | 762.9 ms (46.3×) | 725.9 ms (48.7×) |
-| CPU     | jfk (11.0s)  |    4.29 s (2.6×) |    3.37 s (3.3×) |
-| CPU     | dots (35.3s) |    9.07 s (3.9×) |    7.23 s (4.9×) |
+| CPU     | jfk (11.0s)  |   4.29 s (2.56×) |   3.37 s (3.26×) |
+| CPU     | dots (35.3s) |   9.07 s (3.89×) |   7.23 s (4.89×) |
+<!-- /catalog -->
 
 macOS 26.4.1, transcribe.cpp `e0fa0f6`.
 
@@ -82,12 +84,14 @@ uv run scripts/bench/run.py \
 
 ### AMD Ryzen 7 PRO 4750U
 
+<!-- catalog:perf machine=ryzen-4750u -->
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  2.74 s (4.0×)  |  2.55 s (4.3×)  |
-| Vulkan  | dots (35.3s) |  6.76 s (5.2×)  |  6.44 s (5.5×)  |
-| CPU     | jfk (11.0s)  |  11.53 s (1.0×) |  9.36 s (1.2×)  |
-| CPU     | dots (35.3s) |  26.63 s (1.3×) |  21.07 s (1.7×) |
+| Vulkan  | jfk (11.0s)  |  2.88 s (3.82×) |   2.55 s (4.3×) |
+| Vulkan  | dots (35.3s) |   6.76 s (5.2×) |   6.44 s (5.5×) |
+| CPU     | jfk (11.0s)  | 11.53 s (0.95×) |  9.36 s (1.18×) |
+| CPU     | dots (35.3s) | 26.63 s (1.33×) | 21.07 s (1.68×) |
+<!-- /catalog -->
 
 Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

@@ -32,8 +32,6 @@ summary: |
   word and segment timestamps from the upstream model are not exposed in
   the v1 port.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

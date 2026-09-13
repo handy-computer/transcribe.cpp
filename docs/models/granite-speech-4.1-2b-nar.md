@@ -70,7 +70,7 @@ editor handles language detection implicitly.
 
 ## Performance
 
-Cells are wall-clock latency, with speedup over realtime in parentheses.
+Cells are compute latency (mel + encode + decode), with speedup over realtime in parentheses.
 NAR is faster than the AR variants on GPU backends because there is no
 autoregressive step loop — a single bidirectional forward through 40 LLM
 layers replaces the per-token decode graph.
@@ -79,50 +79,29 @@ layers replaces the per-token decode graph.
 
 Mean over 3 iterations after 1 warmup.
 
-**Metal**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |    209 ms (53×)  |    196 ms (56×)  |
-| dots (35.3s) |    664 ms (53×)  |    635 ms (56×)  |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   1.87 s (5.9×)  |   1.99 s (5.5×)  |
-| dots (35.3s) |   6.50 s (5.4×)  |   7.71 s (4.6×)  |
+<!-- catalog:perf machine=m4-max -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 151 ms (72.70×) | 163 ms (67.43×) |
+| Metal   | dots (35.3s) | 491 ms (71.91×) | 518 ms (68.21×) |
+| CPU     | jfk (11.0s)  |  1.89 s (5.81×) |  1.78 s (6.17×) |
+| CPU     | dots (35.3s) |  7.38 s (4.79×) |  6.21 s (5.69×) |
+<!-- /catalog -->
 
 macOS 26.4, transcribe.cpp `de05c43`.
-
-### Apple M4
-
-Mean over 5 iterations after 2 warmups. Q8_0.
-
-| Backend | Sample      |       Q8_0        |
-| ------- | ----------- | ----------------: |
-| Metal   | jfk (11.0s) |    614 ms (18×)   |
-| CPU     | jfk (11.0s) |   2.55 s (4×)     |
-
-macOS 26.1, transcribe.cpp `275332d`.
 
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
 Mean over 3 iterations after 1 warmup.
 
-**Vulkan (RADV)**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   3.16 s (3.5×)  |   3.06 s (3.6×)  |
-| dots (35.3s) |   9.85 s (3.6×)  |   9.57 s (3.7×)  |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   5.71 s (1.9×)  |   7.05 s (1.6×)  |
-| dots (35.3s) |  20.39 s (1.7×)  |  24.81 s (1.4×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  2.68 s (4.10×) |  2.75 s (4.00×) |
+| Vulkan  | dots (35.3s) |  8.32 s (4.25×) |  8.53 s (4.14×) |
+| CPU     | jfk (11.0s)  |  6.75 s (1.63×) |  5.46 s (2.01×) |
+| CPU     | dots (35.3s) | 23.77 s (1.49×) | 19.55 s (1.81×) |
+<!-- /catalog -->
 
 Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`. NAR's Vulkan RTF stays
 flat across short and long samples (jfk and dots both ~3.6×) because the

@@ -63,29 +63,33 @@ the rationale and the planned follow-up.
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
 above (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  256 ms (43×)  |  213 ms (52×)  |
-| Metal   | dots (35.3s) |  978 ms (36×)  |  803 ms (44×)  |
-| CPU     | jfk (11.0s)  | 1.40 s (8×)    | 1.10 s (10×)   |
-| CPU     | dots (35.3s) | 4.46 s (8×)    | 4.04 s (9×)    |
+<!-- catalog:perf machine=m4-max -->
+| Backend | Sample       |         Q8_0 |       Q4_K_M |
+| ------- | ------------ | -----------: | -----------: |
+| Metal   | jfk (11.0s)  | 256 ms (43×) | 213 ms (52×) |
+| Metal   | dots (35.3s) | 978 ms (36×) | 803 ms (44×) |
+| CPU     | jfk (11.0s)  |  1.40 s (8×) | 1.10 s (10×) |
+| CPU     | dots (35.3s) |  4.46 s (8×) |  4.04 s (9×) |
+<!-- /catalog -->
 
 macOS 26.3.1, transcribe.cpp `0c88a71`.
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  | 2.66 s (4.1×)  | 2.29 s (4.8×)  |
-| Vulkan  | dots (35.3s) | 9.87 s (3.6×)  | 8.37 s (4.2×)  |
-| CPU     | jfk (11.0s)  | 5.19 s (2.1×)  | 3.58 s (3.1×)  |
-| CPU     | dots (35.3s) | 18.53 s (1.9×) | 12.93 s (2.7×) |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  2.66 s (4.13×) |  2.29 s (4.81×) |
+| Vulkan  | dots (35.3s) |  9.87 s (3.58×) |  8.36 s (4.22×) |
+| CPU     | jfk (11.0s)  |  5.19 s (2.12×) |  3.57 s (3.08×) |
+| CPU     | dots (35.3s) | 18.52 s (1.91×) | 12.93 s (2.73×) |
+<!-- /catalog -->
 
 Fedora 43, transcribe.cpp `3d16f74`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

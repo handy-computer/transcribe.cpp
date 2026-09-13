@@ -26,8 +26,6 @@ summary: |
   three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
   English-only; no translation, no language detection, no timestamps.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

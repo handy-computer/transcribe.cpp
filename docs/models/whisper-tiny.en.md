@@ -52,19 +52,21 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup), with
 speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
 decimal places). Decode latency dominates as model size grows; the encoder
 is only run once per 30-second window.
 
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
 | Metal   | jfk (11.0s)  |  39.1 ms (281.2×) |  34.0 ms (323.8×) |
 | Metal   | dots (35.3s) | 127.0 ms (278.3×) | 125.8 ms (280.9×) |
-| CPU     | jfk (11.0s)  | 165.0 ms (66.7×)  | 161.4 ms (68.1×)  |
-| CPU     | dots (35.3s) | 389.4 ms (90.7×)  | 381.8 ms (92.5×)  |
+| CPU     | jfk (11.0s)  | 165.0 ms (66.67×) | 161.4 ms (68.15×) |
+| CPU     | dots (35.3s) | 389.4 ms (90.74×) | 381.7 ms (92.55×) |
+<!-- /catalog -->
 
 macOS 26.4.1, transcribe.cpp `e0fa0f6`.
 
@@ -82,12 +84,14 @@ uv run scripts/bench/run.py \
 
 ### AMD Ryzen 7 PRO 4750U
 
+<!-- catalog:perf machine=ryzen-4750u -->
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  197 ms (56.0×) |  193 ms (56.9×) |
+| Vulkan  | jfk (11.0s)  |    197 ms (56×) |  193 ms (56.9×) |
 | Vulkan  | dots (35.3s) |  540 ms (65.4×) |  541 ms (65.3×) |
-| CPU     | jfk (11.0s)  |  493 ms (22.3×) |  436 ms (25.2×) |
-| CPU     | dots (35.3s) |  1.19 s (29.8×) |  1.09 s (32.5×) |
+| CPU     | jfk (11.0s)  | 493 ms (22.32×) | 436 ms (25.25×) |
+| CPU     | dots (35.3s) | 1.19 s (29.77×) | 1.09 s (32.48×) |
+<!-- /catalog -->
 
 Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

@@ -59,8 +59,6 @@ usage: |
   See the [transcribe.cpp model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-arabic-07-2026.md) for performance
   numbers, numerical validation, and reproduction steps.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   metadata_key: fleurs_ar_test
   source: FLEURS Arabic test

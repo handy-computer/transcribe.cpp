@@ -15,9 +15,11 @@ import pathlib
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CATALOG_DIR = REPO / "catalog"
 DOCS_DIR = REPO / "docs" / "models"
-CARDS_DIR = REPO / "scripts" / "hf_cards"
 
 HEADLINE_KEYS = ("dataset", "split", "language", "metric", "batch_size", "timestamps")
+# The recipe half of the pointer may be null, meaning "any"; the identity
+# half never is. db.py's headline view encodes the same predicate in SQL.
+HEADLINE_WILDCARD_KEYS = ("batch_size", "timestamps")
 
 
 # --------------------------------------------------------------------------
@@ -83,9 +85,10 @@ def headline_rows(record: dict) -> dict[str, dict]:
         return {}
     rows = {}
     for row in record.get("accuracy_benchmarks", []):
-        # A null recipe field in the pointer is an intentional wildcard for a
+        # A null batch_size or timestamps is an intentional wildcard for a
         # legacy table assembled before recipe metadata was standardized.
-        if all(target.get(key) is None or row.get(key) == target.get(key)
+        if all((key in HEADLINE_WILDCARD_KEYS and target[key] is None)
+               or row.get(key) == target[key]
                for key in HEADLINE_KEYS):
             rows[row["quant"]] = row
     return rows
@@ -115,11 +118,19 @@ def fmt_ms(total_ms: float, dp_ms: int = 0, dp_s: int = 2) -> str:
     return f"{total_ms / 1000:.{dp_s}f} s"
 
 
-def fmt_xrt(xrt: float, dp: int | None = None) -> str:
-    """Speedup over realtime. Below 10x a single decimal carries real signal."""
-    if dp is None:
-        dp = 1 if xrt < 10 else 0
-    return f"{xrt:.{dp}f}×"
+XRT_DP = 2
+
+
+def fmt_xrt(row: dict) -> str:
+    """Speedup over realtime, two decimals. A legacy row carries only the
+    precision its doc published (an integer or one decimal), so it is printed
+    as stored rather than padded to a fidelity it never had."""
+    xrt = row["xrt_compute"]
+    if row.get("engine_sha"):
+        return f"{xrt:.{XRT_DP}f}×"
+    text = repr(float(xrt))
+    decimals = len(text.split(".")[1].rstrip("0"))
+    return f"{xrt:.{min(decimals, XRT_DP)}f}×"
 
 
 def perf_rows(record: dict, machine: str) -> dict[tuple[str, str, str], dict]:
@@ -131,10 +142,6 @@ def perf_rows(record: dict, machine: str) -> dict[tuple[str, str, str], dict]:
 
 # --------------------------------------------------------------------------
 # downloads
-
-
-def downloads(record: dict) -> dict[str, dict]:
-    return {item["quant"]: item for item in record.get("downloads", [])}
 
 
 def download_url(record: dict, filename: str) -> str:

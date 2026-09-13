@@ -22,8 +22,6 @@ tags:
 summary: |
   OpenAI Whisper large-v3 — converted to GGUF for transcribe.cpp. Multilingual transcription, language detection, and speech translation (audio in any supported language → English text). v3 family adds Cantonese (yue) and uses a 128-bin mel input. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
 
-default_quant_index: 1
-
 wer:
   source: LibriSpeech test-clean
   notes: |

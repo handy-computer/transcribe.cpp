@@ -28,8 +28,6 @@ summary: |
   size 416, partial RoPE 0.62). English-only; no translation, no language
   detection, no timestamps.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

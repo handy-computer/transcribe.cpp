@@ -267,7 +267,7 @@
             "description": "Cached from the Hub listing and verified against it, not authored."
           },
           "size_bytes": {
-            "type": ["integer","null"],
+            "type": "integer",
             "minimum": 1,
             "description": "Exact blob size. Prose units are a rendering concern -- the card's '845 MB' is 845 MiB mislabelled, and the sweep's 1 GB quant threshold keys off the real number."
           }

@@ -8,8 +8,9 @@
 The GGUF is the truth and the catalog follows it. If the file is wrong, the
 fix is a converter change plus a re-export, never an edit to the record:
 absence is not falsity, since read_capability_bool() leaves a field alone
-when its KV is missing and the family default then applies, so every
-converter must declare every capability explicitly.
+when its KV is missing and the family default then applies. The shared
+writer factory (scripts/lib/gguf_common.py) fills any unset capability KV
+with false, so every fresh export states all four.
 
 Hand-writing this block is how moss-transcribe-diarize shipped as
 diarize:false and how whisper-large-v3 came to claim translate:false while its
@@ -36,11 +37,14 @@ from the published repo (a few MB, not the weights).
     uv run scripts/catalog/sync_capabilities.py --local-only
     uv run scripts/catalog/sync_capabilities.py
     uv run scripts/catalog/sync_capabilities.py --check   # exit 1 on any disagreement
+    uv run scripts/catalog/sync_capabilities.py --check --models <variant>
+                                # ship gate: every quant, every KV present, all agree
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import json
 import pathlib
 import re
 import sys
@@ -107,19 +111,32 @@ def read_kvs(reader) -> dict:
     return out
 
 
-def open_gguf(record: dict, local_only: bool):
-    """A GGUFReader over a local file, else over a range-fetched header."""
+def local_path(filename: str) -> pathlib.Path | None:
+    for directory in sorted((common.REPO / "models").glob("*")):
+        if directory.is_dir() and (directory / filename).exists():
+            return directory / filename
+    return None
+
+
+def default_filename(record: dict) -> str:
+    """The one file the sweep reads per record: a local one if any is on
+    disk, else the smallest published quant (cheapest header fetch)."""
+    for item in record["downloads"]:
+        if local_path(item["filename"]):
+            return item["filename"]
+    return sorted(record["downloads"], key=lambda d: d["size_bytes"])[0]["filename"]
+
+
+def open_gguf(record: dict, filename: str, local_only: bool):
+    """A GGUFReader over the named file: local if present, else its
+    range-fetched header from the published repo."""
     from gguf import GGUFReader
 
-    names = {item["filename"] for item in record["downloads"]}
-    for directory in sorted((common.REPO / "models").glob("*")):
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.glob("*.gguf")):
-            if path.name in names:
-                return GGUFReader(str(path)), f"local {path.name}", None
+    path = local_path(filename)
+    if path:
+        return GGUFReader(str(path)), "local", None
     if local_only or not record.get("published_repo"):
-        return None, None, "no local GGUF"
+        return None, None, f"{filename} not on disk"
 
     # Header-only read: pad the temp file out to the declared size so
     # GGUFReader's memmap of the tensor region stays in bounds and is never
@@ -128,7 +145,6 @@ def open_gguf(record: dict, local_only: bool):
     from huggingface_hub import get_hf_file_metadata, hf_hub_url
     from huggingface_hub.utils import build_hf_headers
 
-    filename = sorted(record["downloads"], key=lambda d: d["size_bytes"])[0]["filename"]
     try:
         url = hf_hub_url(record["published_repo"], filename)
         total = get_hf_file_metadata(url).size
@@ -138,13 +154,13 @@ def open_gguf(record: dict, local_only: bool):
         response = requests.get(url, headers=headers, timeout=120)
         response.raise_for_status()
     except Exception as exc:  # noqa: BLE001 - any transport failure is just "unavailable"
-        return None, None, f"{type(exc).__name__}: {str(exc)[:70]}"
+        return None, None, f"{filename}: {type(exc).__name__}: {str(exc)[:70]}"
     with tempfile.NamedTemporaryFile(suffix=".gguf", delete=False) as handle:
         tmp = pathlib.Path(handle.name)
         handle.write(response.content)
         handle.truncate(total)
     try:
-        return GGUFReader(str(tmp)), f"hub {record['published_repo']}", None
+        return GGUFReader(str(tmp)), "hub", None
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -204,20 +220,52 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--local-only", action="store_true",
                         help="skip the hub fallback")
+    parser.add_argument("--models", default="",
+                        help="comma-separated variants; every published quant "
+                             "of each is inspected (default: all variants, one "
+                             "file each)")
     parser.add_argument("--check", action="store_true",
                         help="write nothing; exit 1 if any record disagrees "
-                             "with its GGUF")
+                             "with its GGUF. With --models, a missing "
+                             "capability KV, an unreadable file, or quants that "
+                             "disagree with each other also fail.")
     args = parser.parse_args()
     args.dry_run = args.dry_run or args.check
 
-    changed, unreachable, sources = [], [], collections.Counter()
-    for variant, record in common.load_records().items():
-        reader, source, error = open_gguf(record, args.local_only)
-        if reader is None:
-            unreachable.append((variant, error))
+    records = common.load_records()
+    selected = {item.strip() for item in args.models.split(",") if item.strip()}
+    unknown = selected - records.keys()
+    if unknown:
+        print(f"unknown catalog variant(s): {', '.join(sorted(unknown))}", file=sys.stderr)
+        return 2
+    strict = args.check and bool(selected)
+
+    changed, unreachable, missing, disagree = [], [], [], []
+    sources = collections.Counter()
+    for variant, record in records.items():
+        if selected and variant not in selected:
             continue
-        sources[source.split()[0]] += 1
-        caps = build(record, read_kvs(reader))
+        filenames = ([item["filename"] for item in record["downloads"]] if selected
+                     else [default_filename(record)])
+        caps_by_file = {}
+        for filename in filenames:
+            reader, source, error = open_gguf(record, filename, args.local_only)
+            if reader is None:
+                unreachable.append((variant, error))
+                continue
+            sources[source] += 1
+            kvs = read_kvs(reader)
+            absent = [key for key in KV.values() if key not in kvs]
+            if absent:
+                missing.append((variant, filename, absent))
+            caps_by_file[filename] = build(record, kvs)
+        if not caps_by_file:
+            continue
+        distinct = {json.dumps(caps, sort_keys=True) for caps in caps_by_file.values()}
+        if len(distinct) > 1:
+            disagree.append((variant, sorted(caps_by_file)))
+            continue
+        caps = next(iter(caps_by_file.values()))
         before = record.get("capabilities", {})
         if caps == before:
             continue
@@ -231,21 +279,37 @@ def main() -> int:
         changed.append((variant, diff))
         if not args.dry_run:
             record["capabilities"] = caps
-            (common.CATALOG_DIR / f"{variant}.json").write_text(
-                common.dumps_record(record))
+            common.write_record(common.CATALOG_DIR / f"{variant}.json", record)
 
     print(f"read {sum(sources.values())} GGUF(s): "
           + ", ".join(f"{count} {where}" for where, count in sources.most_common()))
     print(f"{len(changed)} record(s) corrected\n")
     for variant, diff in changed:
         print(f"  {variant:42s} {'; '.join(diff) or 'payload only'}")
+    if disagree:
+        print(f"\n{len(disagree)} record(s) whose quants disagree with each other "
+              f"(not updated):")
+        for variant, files in disagree:
+            print(f"  {variant:42s} {', '.join(files)}")
+    if missing:
+        # Every converter now writes every capability KV; a file without one
+        # predates that and inherits the family default, which is exactly the
+        # silence that let wrong flags ship. Fatal at ship time, a warning in
+        # the sweep until the published files are re-exported.
+        print(f"\n{len(missing)} file(s) missing capability KV(s)"
+              + (":" if strict else " (warning; --check --models makes this fatal):"))
+        for variant, filename, absent in missing:
+            print(f"  {variant}/{filename}: {', '.join(absent)}")
     if unreachable:
-        print(f"\n{len(unreachable)} record(s) with no readable GGUF:")
+        print(f"\n{len(unreachable)} file(s) not readable:")
         for variant, error in unreachable:
             print(f"  {variant:42s} {error}")
     if args.dry_run:
         print("\ndry run: nothing written")
-    return 1 if (args.check and changed) else 0
+    failed = bool(changed or disagree) if args.check else False
+    if strict and (missing or unreachable):
+        failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

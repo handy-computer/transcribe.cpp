@@ -41,13 +41,13 @@
     "timestamps": null
   },
   "speed_benchmarks": [
-    {"machine":"m4","backend":"cpu","quant":"F16","sample":"jfk","sample_duration_s":11.0,"total_ms":136.3,"xrt_compute":80.679,"load_ms":66.4,"mel_ms":0.0,"encode_ms":136.3,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
-    {"machine":"m4","backend":"cpu","quant":"F16","sample":"dots","sample_duration_s":35.332,"total_ms":794.2,"xrt_compute":44.487,"load_ms":68.5,"mel_ms":0.0,"encode_ms":794.2,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
-    {"machine":"m4","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":108.8,"xrt_compute":101.092,"load_ms":49.4,"mel_ms":0.0,"encode_ms":108.8,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
-    {"machine":"m4","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":684.9,"xrt_compute":51.588,"load_ms":49.9,"mel_ms":0.0,"encode_ms":684.9,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
-    {"machine":"m4","backend":"metal","quant":"F16","sample":"jfk","sample_duration_s":11.0,"total_ms":68.2,"xrt_compute":161.226,"load_ms":155.2,"mel_ms":0.0,"encode_ms":68.2,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
-    {"machine":"m4","backend":"metal","quant":"F16","sample":"dots","sample_duration_s":35.332,"total_ms":316.0,"xrt_compute":111.806,"load_ms":68.4,"mel_ms":0.0,"encode_ms":316.0,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
-    {"machine":"m4","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":63.8,"xrt_compute":172.416,"load_ms":104.6,"mel_ms":0.0,"encode_ms":63.8,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
-    {"machine":"m4","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":317.9,"xrt_compute":111.157,"load_ms":50.4,"mel_ms":0.0,"encode_ms":317.9,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null}
+    {"machine":"m4","backend":"cpu","quant":"F16","sample":"jfk","sample_duration_s":11.0,"total_ms":136.3,"xrt_compute":80.68,"load_ms":66.4,"mel_ms":0.0,"encode_ms":136.3,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"F16","sample":"dots","sample_duration_s":35.332,"total_ms":794.2,"xrt_compute":44.49,"load_ms":68.5,"mel_ms":0.0,"encode_ms":794.2,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":108.8,"xrt_compute":101.09,"load_ms":49.4,"mel_ms":0.0,"encode_ms":108.8,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":684.9,"xrt_compute":51.59,"load_ms":49.9,"mel_ms":0.0,"encode_ms":684.9,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
+    {"machine":"m4","backend":"metal","quant":"F16","sample":"jfk","sample_duration_s":11.0,"total_ms":68.2,"xrt_compute":161.23,"load_ms":155.2,"mel_ms":0.0,"encode_ms":68.2,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
+    {"machine":"m4","backend":"metal","quant":"F16","sample":"dots","sample_duration_s":35.332,"total_ms":316.0,"xrt_compute":111.81,"load_ms":68.4,"mel_ms":0.0,"encode_ms":316.0,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
+    {"machine":"m4","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":63.8,"xrt_compute":172.42,"load_ms":104.6,"mel_ms":0.0,"encode_ms":63.8,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null},
+    {"machine":"m4","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":317.9,"xrt_compute":111.16,"load_ms":50.4,"mel_ms":0.0,"encode_ms":317.9,"decode_ms":0.0,"engine_sha":"d42c3bb","measured_on":"2026-07-22","thermal_gated":null}
   ]
 }

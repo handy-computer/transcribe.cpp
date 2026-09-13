@@ -101,9 +101,9 @@ def cells(report: dict) -> list[dict]:
             # xrt is recomputed from the unrounded mean rather than carried
             # over: a stored value that no longer matches its own latency is
             # the drift this ingest exists to remove.
-            "xrt_compute": round(duration / (total / 1000), 3),
+            "xrt_compute": round(duration / (total / 1000), 2),
             "wall_ms": None if wall is None else round(wall, 1),
-            "xrt_wall": None if wall is None else round(duration / (wall / 1000), 3),
+            "xrt_wall": None if wall is None else round(duration / (wall / 1000), 2),
             "load_ms": None if run.get("load_ms") is None else round(run["load_ms"], 1),
             "mel_ms": mean("mel_ms"),
             "encode_ms": mean("encode_ms"),
@@ -144,15 +144,12 @@ def collect(reports_dir: pathlib.Path,
                 continue
             key = (row["variant"], row["machine"], row["backend"], row["quant"], row["sample"])
             previous = best.get(key)
-            order = (row["_rank"], row["_when"])
-            if previous is None or order < (previous["_rank"], previous["_when"]):
-                # A better-intentioned run always wins; among equals, the newest.
-                if previous is not None and row["_rank"] > previous["_rank"]:
-                    order = None
-            if previous is None or (order is not None
-                                    and (row["_rank"] < previous["_rank"]
-                                         or (row["_rank"] == previous["_rank"]
-                                             and row["_when"] > previous["_when"]))):
+            # A better-intentioned run always wins; among equals, the newest.
+            wins = previous is None or (
+                row["_rank"] < previous["_rank"]
+                or (row["_rank"] == previous["_rank"]
+                    and row["_when"] > previous["_when"]))
+            if wins:
                 if previous is not None:
                     superseded[key] += 1
                 best[key] = row

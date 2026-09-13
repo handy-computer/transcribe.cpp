@@ -31,8 +31,6 @@ summary: |
   five other languages in either direction (en ↔ fr, en ↔ de, en ↔ es,
   en ↔ pt, en ↔ ja) — always via English, no direct fr↔de etc.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

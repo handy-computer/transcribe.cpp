@@ -323,13 +323,47 @@ def move_bulk_metadata_last(writer) -> list[str]:
     return moved
 
 
+# The capability KVs the loader reads (read_capability_kv in
+# src/transcribe-meta.cpp). Absence is not falsity there: a missing key leaves
+# the family default in place, which is how a model that does not translate
+# came to advertise that it does. Every file therefore states all four.
+CAPABILITY_KV_KEYS = (
+    "stt.capability.translate",
+    "stt.capability.lang_detect",
+    "stt.capability.streaming",
+    "stt.capability.speaker_diarization",
+)
+
+
+def declare_missing_capabilities(writer) -> list[str]:
+    """Write `false` for any capability KV the converter did not set.
+
+    False is the honest default: a converter that knows a model translates,
+    streams, or diarizes says so explicitly, and every family whose C++ default
+    is true already writes that key. Returns the keys filled in.
+    """
+    filled = []
+    for key in CAPABILITY_KV_KEYS:
+        if any(key in shard for shard in writer.kv_data):
+            continue
+        writer.kv_data[0][key] = gguf.GGUFValue(value=False, type=gguf.GGUFValueType.BOOL)
+        filled.append(key)
+    return filled
+
+
 class _BulkLastGGUFWriter(gguf.GGUFWriter):
-    """GGUFWriter that relocates the bulk tokenizer KVs to the trailer at write
-    time. Hooked at write_kv_data_to_file (not write_header_to_file): the header
-    pass calls add_shard_kv_data(), which appends split.* scalar KVs, so we must
-    reorder *after* those are present but immediately before the KV dict is
-    serialized. The header only writes the KV count, which reordering leaves
-    unchanged."""
+    """GGUFWriter that declares every capability KV and relocates the bulk
+    tokenizer KVs to the trailer at write time. Hooked at write_kv_data_to_file
+    (not write_header_to_file): the header pass calls add_shard_kv_data(), which
+    appends split.* scalar KVs, so we must reorder *after* those are present but
+    immediately before the KV dict is serialized. The header only writes the KV
+    count, so the capability fill runs before it and the reorder after."""
+
+    def write_header_to_file(self, path=None) -> None:
+        # Before the header: it writes the KV count, so a key added later
+        # would be silently dropped by every reader.
+        declare_missing_capabilities(self)
+        super().write_header_to_file(path)
 
     def write_kv_data_to_file(self) -> None:
         move_bulk_metadata_last(self)

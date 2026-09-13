@@ -32,8 +32,6 @@ summary: |
   the other 24 v3 languages with correct per-language casing and
   punctuation. Not a streaming model and does not translate.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   metadata_key: fleurs_de
   source: FLEURS de test

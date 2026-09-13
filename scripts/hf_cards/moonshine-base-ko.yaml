@@ -27,8 +27,6 @@ summary: |
   STFT, no mel filterbank) and emits transcript-only output. Single-language
   (ko); no translation, no language detection, no timestamps.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   metadata_key: fleurs_ko
   source: FLEURS ko test

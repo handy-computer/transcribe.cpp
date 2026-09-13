@@ -31,8 +31,6 @@ summary: |
   the prompt. English only. Takes a 16 kHz mono WAV and produces a
   transcript via greedy decoding.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

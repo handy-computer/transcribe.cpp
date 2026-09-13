@@ -30,8 +30,6 @@ summary: |
   transcript via greedy decoding. The larger sibling of Voxtral Mini 3B — same
   encoder, projector, frontend, and tokenizer, with a scaled-up decoder.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

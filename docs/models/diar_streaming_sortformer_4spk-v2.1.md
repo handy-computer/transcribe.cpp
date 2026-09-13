@@ -87,18 +87,20 @@ second (many small windows).
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Default (model-config)
 operating point.
 
 ### Apple M4
 
-| Backend | Sample       |           F16 |          Q8_0 |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  69 ms (159×) |  65 ms (171×) |
-| Metal   | dots (35.3s) | 318 ms (111×) | 320 ms (111×) |
-| CPU     | jfk (11.0s)  |  137 ms (80×) | 110 ms (100×) |
-| CPU     | dots (35.3s) | 796 ms (44×)  | 687 ms (51×)  |
+<!-- catalog:perf machine=m4 -->
+| Backend | Sample       |              F16 |             Q8_0 |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  68 ms (161.23×) |  64 ms (172.42×) |
+| Metal   | dots (35.3s) | 316 ms (111.81×) | 318 ms (111.16×) |
+| CPU     | jfk (11.0s)  |  136 ms (80.68×) | 109 ms (101.09×) |
+| CPU     | dots (35.3s) |  794 ms (44.49×) |  685 ms (51.59×) |
+<!-- /catalog -->
 
 macOS 25.5.0, transcribe.cpp `d42c3bb`.
 

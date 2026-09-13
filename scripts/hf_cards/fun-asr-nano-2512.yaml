@@ -36,8 +36,6 @@ summary: |
   via the `--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
   in the library API.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

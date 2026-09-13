@@ -68,8 +68,6 @@ usage: |
   See the [transcribe.cpp model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/diar_streaming_sortformer_4spk-v2.1.md) for performance
   numbers, numerical validation, and reproduction steps.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: AMI IHM test
   metadata_key: ami_ihm_test

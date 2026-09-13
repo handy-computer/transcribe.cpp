@@ -99,21 +99,20 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
     if not rows:
         raise RenderError(f"no speed_benchmarks rows for machine {machine!r}")
 
-    def ordered(index: int, override: str | None) -> list[str]:
+    def ordered(index: int, override: str | None, rank) -> list[str]:
         if override:
             return override.split(",")
-        seen = []
-        for key in rows:
-            if key[index] not in seen:
-                seen.append(key[index])
-        return seen
+        return sorted({key[index] for key in rows}, key=rank)
 
-    backends = ordered(0, attrs.get("backends"))
-    samples = ordered(1, attrs.get("samples"))
-    quants = ordered(2, attrs.get("quants"))
+    # GPU backends first, then CPU; samples shortest first; quants in the
+    # record's download order (reference dtype down to the smallest quant).
+    backend_rank = {"metal": 0, "cuda": 1, "vulkan": 2, "cpu": 9}
+    duration = {key[1]: row["sample_duration_s"] for key, row in rows.items()}
+    quant_rank = {item["quant"]: i for i, item in enumerate(record.get("downloads", []))}
+    backends = ordered(0, attrs.get("backends"), lambda b: (backend_rank.get(b, 5), b))
+    samples = ordered(1, attrs.get("samples"), lambda s: (duration.get(s, 0), s))
+    quants = ordered(2, attrs.get("quants"), lambda q: (quant_rank.get(q, 99), q))
     dp_ms = int(attrs.get("dp_ms", 0))
-    dp_xrt = attrs.get("dp_xrt")
-    dp_xrt = None if dp_xrt is None else int(dp_xrt)
 
     body, blocked = [], []
     for backend in backends:
@@ -133,7 +132,7 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
                     cells.append("-")
                     continue
                 cells.append(f"{common.fmt_ms(row['total_ms'], dp_ms)} "
-                             f"({common.fmt_xrt(row['xrt_compute'], dp_xrt)})")
+                             f"({common.fmt_xrt(row)})")
             body.append(cells)
     if blocked:
         raise RenderError(
@@ -144,7 +143,7 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
         raise RenderError(f"no rows matched on {machine}")
     return common.render_table(["Backend", "Sample"] + quants,
                                ["l", "l"] + ["r"] * len(quants), body,
-                               rule_fill=True)
+                               rule_fill=True, max_pad=20)
 
 
 BLOCKS = {"downloads": block_downloads, "perf": block_perf}

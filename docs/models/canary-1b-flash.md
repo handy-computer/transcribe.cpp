@@ -73,29 +73,33 @@ CLI flags specific to canary:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup), with
 speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 106.6 ms (103.2×) | 111.3 ms (98.8×) |
-| Metal   | dots (35.3s) | 368.6 ms (95.9×)  | 349.2 ms (101.2×) |
-| CPU     | jfk (11.0s)  | 518.3 ms (21.2×) | 430.1 ms (25.6×) |
-| CPU     | dots (35.3s) |   1.79 s (19.7×) |   1.51 s (23.4×) |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+| Backend | Sample       |               Q8_0 |             Q4_K_M |
+| ------- | ------------ | -----------------: | -----------------: |
+| Metal   | jfk (11.0s)  | 104.2 ms (105.60×) | 108.9 ms (100.97×) |
+| Metal   | dots (35.3s) |  365.6 ms (96.65×) | 346.2 ms (102.06×) |
+| CPU     | jfk (11.0s)  |  517.2 ms (21.27×) |  429.0 ms (25.64×) |
+| CPU     | dots (35.3s) |    1.79 s (19.72×) |    1.51 s (23.43×) |
+<!-- /catalog -->
 
 macOS 26.4.1, transcribe.cpp `19b3b87`.
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Vulkan  | jfk (11.0s)  | 763.5 ms (14.4×) | 704.2 ms (15.6×) |
-| Vulkan  | dots (35.3s) |   2.46 s (14.4×) |   2.31 s (15.3×) |
-| CPU     | jfk (11.0s)  |    1.49 s (7.4×) |    1.13 s (9.7×) |
-| CPU     | dots (35.3s) |    5.48 s (6.4×) |    4.51 s (7.8×) |
+<!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Vulkan  | jfk (11.0s)  | 758.1 ms (14.51×) | 698.9 ms (15.74×) |
+| Vulkan  | dots (35.3s) |   2.45 s (14.39×) |   2.30 s (15.33×) |
+| CPU     | jfk (11.0s)  |    1.49 s (7.40×) |    1.13 s (9.73×) |
+| CPU     | dots (35.3s) |    5.48 s (6.45×) |    4.50 s (7.85×) |
+<!-- /catalog -->
 
 Fedora Linux 43, transcribe.cpp `4d44530`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

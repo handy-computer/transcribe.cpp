@@ -30,8 +30,6 @@ tags:
 summary: |
   Offline Russian speech-to-text with greedy RNN-T decoding. 16-layer Conformer encoder paired with an RNN-T transducer head. Output is cased Russian with punctuation, decoded from a 1024-piece SentencePiece tokenizer. Not a streaming model and does not translate. Short-form only (≤25 s per utterance).
 
-default_quant_index: 2  # Q8_0
-
 wer:
   metadata_key: fleurs_ru
   source: FLEURS ru

@@ -29,8 +29,6 @@ tags:
 summary: |
   Offline Russian speech-to-text with greedy CTC decoding. 16-layer Conformer encoder with a 1×1 Conv1d CTC head. Output is cased Russian with punctuation, decoded from a 256-piece SentencePiece tokenizer.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   metadata_key: fleurs_ru
   source: FLEURS ru

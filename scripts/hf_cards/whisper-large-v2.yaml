@@ -22,8 +22,6 @@ tags:
 summary: |
   OpenAI Whisper large-v2 — converted to GGUF for transcribe.cpp. Multilingual transcription, language detection, and speech translation (audio in any supported language → English text). Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
 
-default_quant_index: 2
-
 wer:
   source: LibriSpeech test-clean
   notes: |

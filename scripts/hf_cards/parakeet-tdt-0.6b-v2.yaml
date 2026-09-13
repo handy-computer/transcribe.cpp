@@ -29,8 +29,6 @@ summary: |
   with optional token-level timestamps. Not a streaming model; no multilingual
   capability (see v3 for that).
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   # metadata_key: librispeech_test_clean  # names the wer_<key> field; override when scored on another corpus

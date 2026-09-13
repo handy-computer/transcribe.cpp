@@ -36,8 +36,6 @@ summary: |
   tokenizer, but only Mandarin and English are optimized and validated —
   other languages remain technically accessible but out of scope.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   metadata_key: librispeech_test_clean

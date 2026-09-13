@@ -32,8 +32,6 @@ summary: |
   same encoder, projector, log-mel frontend, and tekken tokenizer, with a 3B
   decoder in place of Mistral-Small-24B.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

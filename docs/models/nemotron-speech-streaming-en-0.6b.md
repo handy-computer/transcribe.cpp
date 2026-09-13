@@ -97,29 +97,33 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+Cells are compute latency (mel + encode + decode; mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
 above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
 
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  73 ms (151×) |  73 ms (151×) |
-| Metal   | dots (35.3s) | 224 ms (158×) | 221 ms (160×) |
-| CPU     | jfk (11.0s)  |  329 ms (33×) |  330 ms (33×) |
-| CPU     | dots (35.3s) |  1.12 s (31×) |  1.12 s (31×) |
+<!-- catalog:perf machine=m4-max -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  |    73 ms (151×) |    73 ms (151×) |
+| Metal   | dots (35.3s) |   224 ms (158×) |   221 ms (160×) |
+| CPU     | jfk (11.0s)  | 346 ms (31.77×) | 345 ms (31.89×) |
+| CPU     | dots (35.3s) | 1.18 s (30.02×) | 1.16 s (30.52×) |
+<!-- /catalog -->
 
 macOS 26.4.1, transcribe.cpp `12f1076`.
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  812 ms (14×) |  813 ms (14×) |
-| Vulkan  | dots (35.3s) |  2.93 s (12×) |  2.98 s (12×) |
-| CPU     | jfk (11.0s)  |  1.39 s (8×)  |  1.22 s (9×)  |
-| CPU     | dots (35.3s) |  5.21 s (7×)  |  4.76 s (7×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 808 ms (13.61×) | 810 ms (13.59×) |
+| Vulkan  | dots (35.3s) | 2.92 s (12.08×) | 2.98 s (11.87×) |
+| CPU     | jfk (11.0s)  |  1.39 s (7.94×) |  1.22 s (8.99×) |
+| CPU     | dots (35.3s) |  5.21 s (6.78×) |     4.76 s (7×) |
+<!-- /catalog -->
 
 Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

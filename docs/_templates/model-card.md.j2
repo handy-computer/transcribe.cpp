@@ -121,19 +121,15 @@ validated at commit [`{{ validation_commit }}`](https://github.com/handy-compute
 
 ## Performance
 
-{% if perf_machines %}
-Wall-clock latency, mean over iterations after warmup. Speedup over realtime in parentheses.
+Cells are compute latency (mel + encode + decode), mean over the profile's
+iterations after warmup, with speedup over realtime in parentheses. Rendered
+from `catalog/{{ variant }}.json` by `scripts/catalog/render.py`.
 
 {% for m in perf_machines -%}
-### {{ m.slug }}
+### {{ m.title }}
 
-| Backend | Sample | {% for q in m.quants %}{{ q }}{% if not loop.last %} | {% endif %}{% endfor %} |
-| --- | --- | {% for q in m.quants %}---:{% if not loop.last %} | {% endif %}{% endfor %} |
-{% for row in m.rows -%}
-| {{ row.backend }} | {{ row.sample }} | {% for q in m.quants %}{{ row.latency[q] }}{% if not loop.last %} | {% endif %}{% endfor %} |
-{% endfor %}
-
-{{ m.os }}, transcribe.cpp `{{ m.transcribe_sha }}`.
+<!-- catalog:perf machine={{ m.slug }} -->
+<!-- /catalog -->
 
 {% endfor -%}
 
@@ -142,9 +138,6 @@ Benchmark reproduction:
 ```bash
 uv run scripts/bench/run.py --profile --models {{ variant }}
 ```
-{% else %}
-Performance numbers are pending. Run `uv run scripts/bench/run.py --models {{ variant }}` to generate them.
-{% endif %}
 
 ## Reproduction
 

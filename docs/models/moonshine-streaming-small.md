@@ -60,29 +60,33 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 5 iterations after 2 warmups),
+Cells are compute latency (mel + encode + decode; mean over 5 iterations after 2 warmups),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
 (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |         Q8_0 |
-| ------- | ------------ | -----------: |
-| Metal   | jfk (11.0s)  |  82 ms (134×) |
-| Metal   | dots (35.3s) | 612 ms (58×)  |
-| CPU     | jfk (11.0s)  | 174 ms (63×)  |
-| CPU     | dots (35.3s) | 699 ms (51×)  |
+<!-- catalog:perf machine=m4-max -->
+| Backend | Sample       |            Q8_0 |
+| ------- | ------------ | --------------: |
+| Metal   | jfk (11.0s)  | 82 ms (133.58×) |
+| Metal   | dots (35.3s) | 612 ms (57.69×) |
+| CPU     | jfk (11.0s)  | 174 ms (63.31×) |
+| CPU     | dots (35.3s) | 699 ms (50.55×) |
+<!-- /catalog -->
 
 macOS 26.4.1, transcribe.cpp `0d312ce`.
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |
-| ------- | ------------ | ------------: |
-| Vulkan  | jfk (11.0s)  |  349 ms (32×) |
-| Vulkan  | dots (35.3s) | 2.38 s (15×)  |
-| CPU     | jfk (11.0s)  |  735 ms (15×) |
-| CPU     | dots (35.3s) | 4.00 s (9×)   |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |            Q8_0 |
+| ------- | ------------ | --------------: |
+| Vulkan  | jfk (11.0s)  | 349 ms (31.53×) |
+| Vulkan  | dots (35.3s) | 2.38 s (14.84×) |
+| CPU     | jfk (11.0s)  | 735 ms (14.97×) |
+| CPU     | dots (35.3s) |  4.00 s (8.83×) |
+<!-- /catalog -->
 
 Fedora 43, transcribe.cpp `f243f34`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.

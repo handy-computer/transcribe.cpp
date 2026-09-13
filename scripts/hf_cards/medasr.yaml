@@ -27,8 +27,6 @@ tags:
 summary: |
   Offline English speech-to-text optimized for medical dictation (radiology, internal medicine, family medicine). 17-layer Conformer encoder with RoPE attention, macaron FFNs, and a 512-token SentencePiece CTC head. Greedy CTC decode; no language model, no beam search.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

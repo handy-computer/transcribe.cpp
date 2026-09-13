@@ -25,8 +25,6 @@ tags:
 summary: |
   English speech-to-text with punctuation and capitalization. A 0.6B-parameter FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in both offline and buffered streaming modes.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean, offline
   notes: |

@@ -60,9 +60,9 @@
     "timestamps": "none"
   },
   "speed_benchmarks": [
-    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":3.9,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":4.2,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":3.2,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":3.3,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"}
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.3,"total_ms":8950.0,"xrt_compute":3.9,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":2620.0,"xrt_compute":4.2,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":11200.0,"xrt_compute":3.2,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":3360.0,"xrt_compute":3.3,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"}
   ]
 }

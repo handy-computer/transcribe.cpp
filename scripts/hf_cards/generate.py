@@ -51,9 +51,10 @@ import common  # noqa: E402
 CATALOG_OWNED = {
     "hf_repo", "target_repo", "upstream_commit", "license", "license_display",
     "license_name", "license_link", "languages", "capabilities", "perf",
-    "quants", "metric", "catalog_sync",
+    "quants", "metric",
 }
 CAP_FLAGS = ("streaming", "translate", "lang_detect")
+DEFAULT_QUANT = "Q8_0"
 
 
 def load_spec(path: Path) -> dict:
@@ -65,6 +66,9 @@ def load_spec(path: Path) -> dict:
         raise SystemExit(
             f"{path.name}: {', '.join(stale)} come from catalog/{path.stem}.json; "
             f"remove them from the spec")
+    if "default_quant_index" in spec:
+        raise SystemExit(f"{path.name}: default_quant_index is gone; the default is "
+                         f"{DEFAULT_QUANT}, override with default_quant: <QUANT>")
     return spec
 
 
@@ -95,8 +99,7 @@ def derive_perf(record: dict, default_quant: str | None) -> dict:
         cells.setdefault((row["machine"], row["backend"]), []).append(row["xrt_compute"])
     perf: dict[str, dict[str, float]] = {}
     for (machine, backend), values in sorted(cells.items()):
-        mean = round(statistics.fmean(values), 1)
-        perf.setdefault(machine, {})[backend] = int(mean) if mean == int(mean) else mean
+        perf.setdefault(machine, {})[backend] = round(statistics.fmean(values), 2)
     return perf
 
 
@@ -121,9 +124,11 @@ def derive_quants(record: dict, secondary: dict | None) -> list[dict]:
 
 def build_context(record: dict, spec: dict) -> dict:
     """Everything the template needs: catalog facts plus the editorial spec."""
-    downloads = record.get("downloads", [])
-    index = spec.get("default_quant_index", 0)
-    default_quant = downloads[index]["quant"] if index < len(downloads) else None
+    downloads = {item["quant"]: item for item in record.get("downloads", [])}
+    default_quant = spec.get("default_quant", DEFAULT_QUANT)
+    if default_quant not in downloads:
+        raise SystemExit(f"{record['variant']}: default quant {default_quant!r} is not "
+                         f"a published download ({', '.join(downloads) or 'none'})")
     wer = dict(spec.get("wer") or {})
     if not wer.get("source"):
         wer["source"] = common.headline_label(record)
@@ -146,6 +151,7 @@ def build_context(record: dict, spec: dict) -> dict:
         "capabilities": derive_capabilities(record),
         "perf": derive_perf(record, default_quant),
         "quants": derive_quants(record, secondary),
+        "default_quant_filename": downloads[default_quant]["filename"],
         "wer": wer,
     }
     if headline.get("metric"):

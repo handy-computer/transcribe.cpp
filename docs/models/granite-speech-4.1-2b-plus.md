@@ -95,56 +95,35 @@ words: 22
 
 ## Performance
 
-Cells are wall-clock latency, with speedup over realtime in parentheses.
+Cells are compute latency (mel + encode + decode), with speedup over realtime in parentheses.
 
 ### Apple M4 Max
 
 Mean over 3 iterations after 1 warmup.
 
-**Metal**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |    280 ms (39×)  |    308 ms (36×)  |
-| dots (35.3s) |   1.02 s (34×)   |   1.18 s (30×)   |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   1.87 s (5.9×)  |   2.04 s (5.4×)  |
-| dots (35.3s) |   5.71 s (6.2×)  |   6.91 s (5.1×)  |
+<!-- catalog:perf machine=m4-max -->
+| Backend | Sample       |             Q8_0 |          Q4_K_M |
+| ------- | ------------ | ---------------: | --------------: |
+| Metal   | jfk (11.0s)  |  136 ms (80.88×) | 140 ms (78.83×) |
+| Metal   | dots (35.3s) | 351 ms (100.61×) | 359 ms (98.49×) |
+| CPU     | jfk (11.0s)  |   1.77 s (6.21×) |  1.64 s (6.69×) |
+| CPU     | dots (35.3s) |   5.49 s (6.44×) |  4.54 s (7.78×) |
+<!-- /catalog -->
 
 macOS 26.4, transcribe.cpp `de05c43`.
-
-### Apple M4
-
-Mean over 5 iterations after 2 warmups. Q8_0.
-
-| Backend | Sample      |       Q8_0        |
-| ------- | ----------- | ----------------: |
-| Metal   | jfk (11.0s) |   1.00 s (11×)    |
-| CPU     | jfk (11.0s) |   2.44 s (5×)     |
-
-macOS 26.1, transcribe.cpp `275332d`.
 
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
 Mean over 3 iterations after 1 warmup.
 
-**Vulkan (RADV)**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   3.63 s (3.0×)  |   3.85 s (2.9×)  |
-| dots (35.3s) |  12.29 s (2.9×)  |  13.42 s (2.6×)  |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   6.08 s (1.8×)  |   7.80 s (1.4×)  |
-| dots (35.3s) |  20.45 s (1.7×)  |  26.23 s (1.3×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  2.46 s (4.48×) |  2.50 s (4.40×) |
+| Vulkan  | dots (35.3s) |  6.73 s (5.25×) |  6.83 s (5.17×) |
+| CPU     | jfk (11.0s)  |  6.20 s (1.77×) |  5.02 s (2.19×) |
+| CPU     | dots (35.3s) | 18.19 s (1.94×) | 15.06 s (2.35×) |
+<!-- /catalog -->
 
 Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 

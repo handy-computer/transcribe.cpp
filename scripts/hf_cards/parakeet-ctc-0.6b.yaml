@@ -25,8 +25,6 @@ tags:
 summary: |
   Offline English speech-to-text with greedy CTC decoding. A 0.6B-parameter FastConformer-Large encoder with a linear CTC head — the simplest and fastest decoder in the parakeet family. Output is lowercase, no punctuation. Not a streaming model and does not translate.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

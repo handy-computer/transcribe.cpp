@@ -26,8 +26,6 @@ tags:
 summary: |
   Offline English speech-to-text with punctuation and capitalization. A 1.1B-parameter FastConformer-XL encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

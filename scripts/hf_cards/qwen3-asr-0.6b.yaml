@@ -29,8 +29,6 @@ summary: |
   across 30 languages and emits the transcript in that language. Takes a
   16 kHz mono WAV; explicit language hints are not supported at this time.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

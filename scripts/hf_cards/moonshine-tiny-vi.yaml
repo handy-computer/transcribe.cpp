@@ -27,8 +27,6 @@ summary: |
   STFT, no mel filterbank) and emits transcript-only output. Single-language
   (vi); no translation, no language detection, no timestamps.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   metadata_key: fleurs_vi
   source: FLEURS vi test

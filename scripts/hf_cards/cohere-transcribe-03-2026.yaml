@@ -30,8 +30,6 @@ summary: |
   encoder-decoder head (cross-attention, tied token embedding). Takes a 16 kHz
   mono WAV and produces a transcript. Decoding is autoregressive.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

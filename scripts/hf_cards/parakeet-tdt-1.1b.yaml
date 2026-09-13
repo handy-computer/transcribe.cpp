@@ -26,8 +26,6 @@ tags:
 summary: |
   Offline English speech-to-text. A 1.1B-parameter FastConformer-XL encoder with a TDT/RNNT transducer decoder. Takes a 16 kHz mono WAV and produces a transcript with optional token-level timestamps. Not a streaming model and does not translate.
 
-default_quant_index: 2  # Q8_0
-
 wer:
   source: LibriSpeech test-clean
   notes: |

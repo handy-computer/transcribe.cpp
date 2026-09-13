@@ -100,6 +100,8 @@ CREATE TABLE accuracy(
     variant TEXT NOT NULL REFERENCES models(variant),
     quant TEXT NOT NULL,
     metric TEXT NOT NULL,
+    language_hint TEXT,
+    backend TEXT,
     err_pct REAL NOT NULL CHECK(err_pct >= 0),
     ci_lo REAL,
     ci_hi REAL,
@@ -132,6 +134,8 @@ CREATE TABLE speed(
     sample_duration_s REAL NOT NULL,
     total_ms REAL,
     xrt_compute REAL NOT NULL,
+    wall_ms REAL,
+    xrt_wall REAL,
     load_ms REAL,
     mel_ms REAL,
     encode_ms REAL,
@@ -223,8 +227,9 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                 (variant, item["quant"], item["filename"], item["size_bytes"])
                 for item in record.get("downloads", [])])
             con.executemany(
-                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
-                    (dataset_id(row), variant, row["quant"], row["metric"], row["err_pct"],
+                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                    (dataset_id(row), variant, row["quant"], row["metric"],
+                     row.get("language_hint"), row.get("backend"), row["err_pct"],
                      (row.get("ci95") or [None, None])[0],
                      (row.get("ci95") or [None, None])[1], row["n_utts"],
                      row.get("batch_size"), row.get("timestamps"), row.get("engine_sha"),
@@ -235,10 +240,10 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                      row.get("utts_over_50pct"))
                     for row in record.get("accuracy_benchmarks", [])])
             con.executemany(
-                "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (variant, row["machine"], row["backend"], row["quant"], row["sample"],
                      row["sample_duration_s"], row.get("total_ms"), row["xrt_compute"],
-                     row.get("load_ms"), row.get("mel_ms"), row.get("encode_ms"),
+                     row.get("wall_ms"), row.get("xrt_wall"), row.get("load_ms"), row.get("mel_ms"), row.get("encode_ms"),
                      row.get("decode_ms"), row.get("engine_sha"),
                      row.get("measurement_provenance"), row.get("measured_on"),
                      None if row.get("thermal_gated") is None else int(row["thermal_gated"]))
