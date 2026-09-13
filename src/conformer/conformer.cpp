@@ -651,7 +651,7 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
             matrix_bd = matrix_bd == nullptr ? head_mask : ggml_concat(ctx, matrix_bd, head_mask, /*dim=*/2);
         }
     } else {
-        // Position mask / bias: matrix_bd = rel_shift(q_v @ p^T), truncated.
+        // Compute position scores; shifted_view narrows and shifts them below.
         matrix_bd = ggml_mul_mat(ctx, p, q_v);
 
         // Local-attention pad/slice. The standard rel_shift trick assumes
