@@ -102,17 +102,15 @@ struct BlockView {
 };
 
 // Per-family conv dispatch policy. direct_pw is shared (detect_direct_pw is
-// the same for every family today); direct_dw splits between the block site
-// (direct_dw_in_block: the conformer block's 1-D depthwise after GLU) and the
-// pre_encode site (direct_dw_in_pre_encode: the stride-2 2-D depthwise), since
-// the two have different shapes and per-family backend choices. Defaults are
-// conservative: direct_pw true (pointwise is direct mul_mat everywhere), both
-// direct_dw_* false (im2col), which is safe on Metal where the direct 2-D
-// depthwise kernel is not implemented for all shapes.
+// the same for every family today). The pre-encode conv0 and depthwise sites
+// have separate direct-op controls because their shapes and backend tradeoffs
+// differ from the block convolutions. Defaults keep the established im2col
+// paths except for direct_pw; families opt into direct pre-encode ops.
 struct ConvPolicy {
-    bool direct_pw               = true;
-    bool direct_dw_in_block      = false;
-    bool direct_dw_in_pre_encode = false;
+    bool direct_pw                  = true;
+    bool direct_conv0_in_pre_encode = false;
+    bool direct_dw_in_block         = false;
+    bool direct_dw_in_pre_encode    = false;
 
     // Causal pre_encode convolutions. NeMo's cache-aware streaming swaps
     // every Conv2d in ConvSubsampling for CausalConv2D, padding

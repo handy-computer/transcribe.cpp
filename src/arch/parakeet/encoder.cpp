@@ -325,14 +325,15 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     }
     const bool       var_len_masks = batch_var_len && n_batch > 1;
     conf::ConvPolicy policy{};
-    policy.direct_pw               = conf::detect_direct_pw(backend_name);
-    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
+    policy.direct_pw                  = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode = true;
+    policy.direct_dw_in_block         = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode    = detect_direct_dw_in_pre_encode(backend_name);
     // Cache-aware streaming (NeMo causal_downsampling=true) uses
     // CausalConv2D for the pre-encode subsample (left=k-1, right=stride-1).
     // Inferred from the attention style — only ChunkedLimited is causal.
     // Independent of the conformer conv-module's conv_context.
-    policy.causal_pre_encode       = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+    policy.causal_pre_encode          = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb{};
 
@@ -702,11 +703,12 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
                                            const char *              backend_name,
                                            bool                      spk_supervision) {
     conf::ConvPolicy policy{};
-    policy.direct_pw               = conf::detect_direct_pw(backend_name);
-    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
+    policy.direct_pw                  = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode = true;
+    policy.direct_dw_in_block         = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode    = detect_direct_dw_in_pre_encode(backend_name);
     // Causal pre-encode is the cache-aware streaming convention only.
-    policy.causal_pre_encode       = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+    policy.causal_pre_encode          = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb{};
 
