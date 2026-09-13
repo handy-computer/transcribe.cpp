@@ -22,7 +22,7 @@ pinned 2026-05-06.
 
 ## Download
 
-<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | F32          | [moonshine-streaming-medium-F32.gguf](https://huggingface.co/handy-computer/moonshine-streaming-medium-gguf/resolve/main/moonshine-streaming-medium-F32.gguf) | 1.07 GB | 2.16% |

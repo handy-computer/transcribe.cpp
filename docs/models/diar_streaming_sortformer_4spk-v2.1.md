@@ -24,7 +24,7 @@ pinned 2026-07-19.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |   Size | DER (AMI IHM test) |
 | --- | --- | ---: | ---: |
 | F32          | [diar_streaming_sortformer_4spk-v2.1-F32.gguf](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf/resolve/main/diar_streaming_sortformer_4spk-v2.1-F32.gguf) | 471 MB | 14.59% |

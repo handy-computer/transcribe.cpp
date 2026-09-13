@@ -25,7 +25,7 @@ pinned 2026-05-10.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | F32          | [parakeet-ctc-0.6b-F32.gguf](https://huggingface.co/handy-computer/parakeet-ctc-0.6b-gguf/resolve/main/parakeet-ctc-0.6b-F32.gguf) | 2.44 GB | 1.87% |

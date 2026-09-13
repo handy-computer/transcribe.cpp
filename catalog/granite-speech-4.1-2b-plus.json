@@ -8,13 +8,6 @@
     "spdx": "apache-2.0",
     "display": "Apache-2.0"
   },
-  "identity": {
-    "name": "Granite Speech 4.1 2B Plus",
-    "basename": "granite-speech",
-    "author": "IBM",
-    "license_name": "Apache License 2.0",
-    "license_link": "https://www.apache.org/licenses/LICENSE-2.0"
-  },
   "upstream_repo": "ibm-granite/granite-speech-4.1-2b-plus",
   "upstream_commit": "edd3bf5",
   "published_repo": "handy-computer/granite-speech-4.1-2b-plus-gguf",

@@ -25,7 +25,7 @@ pinned 2026-05-10.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | F32          | [parakeet-tdt-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt-1.1b-gguf/resolve/main/parakeet-tdt-1.1b-F32.gguf) | 4.28 GB | 1.39% |

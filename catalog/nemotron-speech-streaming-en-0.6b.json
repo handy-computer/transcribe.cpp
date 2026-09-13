@@ -6,7 +6,9 @@
   "params": 618079745,
   "license": {
     "spdx": "other",
-    "display": "NVIDIA Open Model License"
+    "display": "NVIDIA Open Model License",
+    "name": "nvidia-open-model-license",
+    "link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
   },
   "upstream_repo": "nvidia/nemotron-speech-streaming-en-0.6b",
   "upstream_commit": "ef3bf40",

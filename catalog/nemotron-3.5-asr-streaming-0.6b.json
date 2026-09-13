@@ -6,15 +6,9 @@
   "params": 637991968,
   "license": {
     "spdx": "other",
-    "display": "OpenMDW-1.1"
-  },
-  "identity": {
-    "name": "Nemotron Streaming 3.5",
-    "basename": "parakeet-rnnt",
-    "size_label": "0.6B",
-    "author": "NVIDIA",
-    "license_name": "openmdw-1.1",
-    "license_link": "https://openmdw.ai/license/1-1/"
+    "display": "OpenMDW-1.1",
+    "name": "openmdw-1.1",
+    "link": "https://openmdw.ai/license/1-1/"
   },
   "upstream_repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
   "upstream_commit": "24b151a",

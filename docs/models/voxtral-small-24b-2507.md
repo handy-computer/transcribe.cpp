@@ -34,7 +34,7 @@ pinned 2026-06-05.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |     Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | BF16         | [Voxtral-Small-24B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-BF16.gguf) | 48.54 GB | 1.56% |

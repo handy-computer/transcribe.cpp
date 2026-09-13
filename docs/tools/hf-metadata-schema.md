@@ -10,12 +10,13 @@ capability flags; any 0–100 score is left to the consumer to compute from thes
 
 ## Where it comes from
 
-`scripts/hf_cards/generate.py` serializes the block from a per-model spec
-(`scripts/hf_cards/<variant>.yaml`) — per-quant WER (`quants:`), realtime factors
-(`perf:`), optional task-specific raw measurements (`metrics:`), and capability
-flags (`capabilities:`) — into the card via `template.md.j2`. A spec with no
-`perf:` emits no block, so the rollout is per-spec and never breaks an
-un-migrated card.
+`scripts/hf_cards/generate.py` serializes the block from the catalog record
+(`catalog/<variant>.json`): per-quant error rates from the headline benchmark
+rows, realtime factors from the speed rows at the card's default quant, and
+capability flags from the record's `capabilities` block. The editorial spec
+(`scripts/hf_cards/<variant>.yaml`) adds only optional task-specific raw
+measurements (`metrics:`) and secondary per-quant maps under `wer:`. A record
+with no speed rows at the default quant emits no block.
 
 ## Fields
 

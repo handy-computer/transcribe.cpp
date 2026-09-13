@@ -27,7 +27,7 @@ pinned 2026-05-17.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | BF16         | [granite-speech-4.1-2b-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-gguf/resolve/main/granite-speech-4.1-2b-BF16.gguf) | 4.63 GB | 1.31% |

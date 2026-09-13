@@ -14,30 +14,9 @@
   "languages": ["en","fr","de","es","it","pt","nl","hi"],
   "long_form_strategy": "hard-cap",
   "benchmark_exceptions": [
-    {
-      "kind": "speed",
-      "match": {
-        "machine": "m4-max",
-        "backend": "cpu"
-      },
-      "reason": "The model card explicitly scopes this 24B GPU-class model to Metal; CPU execution is impractical at its 14.3-25.8 GB publication-quant footprint."
-    },
-    {
-      "kind": "speed",
-      "match": {
-        "machine": "ryzen-4750u",
-        "backend": "cpu"
-      },
-      "reason": "The model card explicitly omits CPU for this 24B GPU-class model; the publication quants are 14.3 GB and 25.8 GB before runtime state."
-    },
-    {
-      "kind": "speed",
-      "match": {
-        "machine": "ryzen-4750u",
-        "backend": "vulkan"
-      },
-      "reason": "The smallest downloadable quant is 14.3 GB, exceeding the reference Ryzen 4750U Vulkan device-memory budget."
-    }
+    {"kind":"speed","match":{"machine":"m4-max","backend":"cpu"},"reason":"The model card explicitly scopes this 24B GPU-class model to Metal; CPU execution is impractical at its 14.3-25.8 GB publication-quant footprint."},
+    {"kind":"speed","match":{"machine":"ryzen-4750u","backend":"cpu"},"reason":"The model card explicitly omits CPU for this 24B GPU-class model; the publication quants are 14.3 GB and 25.8 GB before runtime state."},
+    {"kind":"speed","match":{"machine":"ryzen-4750u","backend":"vulkan"},"reason":"The smallest downloadable quant is 14.3 GB, exceeding the reference Ryzen 4750U Vulkan device-memory budget."}
   ],
   "capabilities": {
     "transcribe": {"supported":true,"verified":false},

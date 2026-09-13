@@ -35,7 +35,7 @@ pinned 2026-05-11.
 
 ## Download
 
-<!-- catalog:downloads units=dec gb_dp=2 mb_only=false label="LibriSpeech test-clean, offline" -->
+<!-- catalog:downloads label="LibriSpeech test-clean, offline" -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean, offline) |
 | --- | --- | ---: | ---: |
 | F32          | [nemotron-speech-streaming-en-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F32.gguf) | 2.47 GB | 2.31% |

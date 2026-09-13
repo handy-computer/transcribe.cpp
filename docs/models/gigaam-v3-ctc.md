@@ -31,7 +31,7 @@ pinned 2026-05-12.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |   Size | WER (FLEURS ru) |
 | --- | --- | ---: | ---: |
 | F32          | [gigaam-v3-ctc-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-ctc-gguf/resolve/main/gigaam-v3-ctc-F32.gguf) | 883 MB | 8.42% |

@@ -20,7 +20,7 @@ on 2026-04-26.
 
 ## Download
 
-<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+<!-- catalog:downloads -->
 | Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | F32          | [whisper-tiny.en-F32.gguf](https://huggingface.co/handy-computer/whisper-tiny.en-gguf/resolve/main/whisper-tiny.en-F32.gguf) | 153 MB | 5.77% |

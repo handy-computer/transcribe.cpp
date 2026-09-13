@@ -28,6 +28,12 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | MedASR | `medasr` (Conformer + CTC, English medical-dictation, gated) | [docs/models/medasr.md](docs/models/medasr.md) |
 | MOSS Transcribe-Diarize | `moss-transcribe-diarize` (audio-LLM; English + Chinese ASR with inline speaker diarization) | [docs/models/moss-transcribe-diarize.md](docs/models/moss-transcribe-diarize.md) |
 
+**Speaker diarization models** (no transcription; verified by DER/JER rather than WER):
+
+| Family | Variants | Docs |
+| --- | --- | --- |
+| Sortformer | `diar_streaming_sortformer_4spk-v2.1` (streaming speaker diarizer, up to 4 speakers) | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
+
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
 ## Model catalog
@@ -55,17 +61,15 @@ only what sits between the pair:
 ```
 
 The Hugging Face card specs under [`scripts/hf_cards/`](scripts/hf_cards/)
-are complete, committed inputs to `generate.py`. To create or deliberately
-refresh their mechanical fields (repos, licence, languages, capabilities,
-quant table, and per-rig speedups) from the catalog, use
-`scripts/catalog/sync_hf_cards.py`; editorial copy stays in the YAML. Exceptional
-hand-maintained fields can be listed under `catalog_sync.preserve`.
+hold editorial copy only (summary, tags, validation pin, prose notes).
+`scripts/hf_cards/generate.py` reads the spec and the catalog record together,
+so repos, licence, languages, capabilities, the quant table, and per-rig
+speedups are never written into a YAML by hand.
 
 ```bash
-uv run scripts/catalog/check.py     # schema, integrity, pairing
-uv run scripts/catalog/sync_hf_cards.py --check
-uv run scripts/catalog/sync_hf_cards.py --check-consistency
-uv run scripts/catalog/render.py    # rewrite the marked doc regions
+uv run scripts/catalog/format.py --check  # canonical record layout
+uv run scripts/catalog/check.py           # schema, integrity, pairing
+uv run scripts/catalog/render.py          # rewrite the marked doc regions
 uv run scripts/catalog/render.py --check
 ```
 

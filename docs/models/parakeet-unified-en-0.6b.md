@@ -38,7 +38,7 @@ pinned 2026-05-10.
 
 ## Download
 
-<!-- catalog:downloads label="LibriSpeech test-clean, offline" units=dec -->
+<!-- catalog:downloads label="LibriSpeech test-clean, offline" -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean, offline) |
 | --- | --- | ---: | ---: |
 | F32          | [parakeet-unified-en-0.6b-F32.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-F32.gguf) | 2.47 GB | 1.59% |

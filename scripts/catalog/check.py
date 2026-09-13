@@ -26,12 +26,8 @@ from jsonschema import Draft202012Validator
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "catalog"))
+import common  # noqa: E402
 import profiles  # noqa: E402
-
-
-def load(d: pathlib.Path) -> dict[str, dict]:
-    return {p.stem: json.loads(p.read_text())
-            for p in sorted(d.glob("*.json")) if not p.name.startswith("_")}
 
 
 def schema_pass(records: dict, schema: dict) -> int:
@@ -70,10 +66,9 @@ def pairing_pass(records: dict) -> int:
 
     A dozen variants are documented inside a family page rather than a page of
     their own (the Moonshine language fine-tunes), so a missing doc is a note
-    rather than a failure. The card specs under scripts/hf_cards/ are now
-    committed standalone inputs, so pairing is bidirectional: an orphan spec
-    no longer renders a card nobody can trace to a record, and a record with
-    no spec cannot produce an uploadable card at all.
+    rather than a failure. The editorial card specs under scripts/hf_cards/
+    pair one to one with records: generate.py reads both, so an orphan spec
+    has no catalog to render from and a record with no spec has no card.
     """
     card_names = {path.stem for path in (REPO / "scripts" / "hf_cards").glob("*.yaml")}
     record_names = set(records)
@@ -259,7 +254,7 @@ def main() -> int:
     args = ap.parse_args()
     d = pathlib.Path(args.dir)
     schema = json.loads((REPO / "catalog/_schema.json").read_text())
-    records = load(d)
+    records = common.load_records(d)
     selected = {item.strip() for item in args.models.split(",") if item.strip()}
     unknown = selected - records.keys()
     if unknown:

@@ -20,7 +20,7 @@ on 2026-04-26.
 
 ## Download
 
-<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | F16          | [whisper-large-v3-F16.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-F16.gguf) | 3.11 GB | 1.81% |

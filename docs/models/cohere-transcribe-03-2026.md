@@ -28,7 +28,7 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 
 ## Download
 
-<!-- catalog:downloads units=dec gb_dp=2 mb_only=false -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | BF16         | [cohere-transcribe-03-2026-BF16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-BF16.gguf) | 4.11 GB | 1.26% |

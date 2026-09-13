@@ -36,18 +36,6 @@ import profiles  # noqa: E402
 
 REPORTS = common.REPO / "reports" / "perf"
 
-# The bench driver derives a slug from the CPU model string; the catalog uses a
-# shorter house name. One physical machine must land on exactly one catalog
-# slug, so the mapping lives here rather than being inferred from the
-# directory name -- reports/perf/amd-ryzen-7-4750u-pro is a stale hand-made
-# directory holding reports whose own payload says the auto-detected slug.
-MACHINE_ALIASES = {
-    "apple-m4": "m4",
-    "apple-m4-max": "m4-max",
-    "amd-ryzen-7-pro-4750u-with-radeon-graphics": "ryzen-4750u",
-    "amd-ryzen-7-4750u-pro": "ryzen-4750u",
-}
-
 # models/<dir>/<stem>-<QUANT>.gguf -- the quant is the last dash-separated
 # field, and K-quants carry underscores (Q4_K_M) so the split is on "-".
 QUANT_RE = re.compile(r"-([A-Za-z0-9_]+)\.gguf$")
@@ -79,12 +67,7 @@ def intent(report: dict) -> int:
         return 0
     if report.get("publication") is True:
         return 1
-    if "publication" in report:
-        return 2  # explicitly declared not publishable
-    stem = re.sub(r"-?20\d{6}t\d{6}z", "", (report.get("name") or "").lower()).rstrip("-")
-    if stem.endswith("publication"):
-        return 1
-    return 2
+    return 2  # an experiment, or a report from before the driver stamped intent
 
 
 def cells(report: dict) -> list[dict]:
@@ -107,7 +90,7 @@ def cells(report: dict) -> list[dict]:
             "_rank": (intent(report), ),
             "_profile": report.get("publication_profile"),
             "variant": variant,
-            "machine": MACHINE_ALIASES.get(report["machine"]["slug"], report["machine"]["slug"]),
+            "machine": profiles.canonical_machine(report["machine"]["slug"]),
             # The run's own `backend` is the runtime device name (MTL0), not
             # the canonical backend; the driver records that at the top level.
             "backend": (report.get("backend") or run.get("backend", "")).lower(),
@@ -224,7 +207,7 @@ def main() -> int:
           f"{len({key[1] for key in measured})} machine slug(s)")
     by_intent = collections.Counter(row["_rank"][0] for row in measured.values())
     labels = {0: "profile-stamped publication run",
-              1: "manual or legacy publication run",
+              1: "manual publication run (--publication without --profile)",
               2: "experiment or baseline only"}
     for rank in sorted(by_intent):
         print(f"  {by_intent[rank]:5d}  {labels[rank]}")

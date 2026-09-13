@@ -41,32 +41,14 @@ def load_record(variant: str, directory: pathlib.Path | None = None) -> dict:
 
 # --------------------------------------------------------------------------
 # sizes
-#
-# Published docs settled on three different conventions for the same byte
-# count: decimal MB/GB, binary sizes labelled MB/GB, and always-MB. Which one a
-# given table uses is a property of that table, recorded in its marker, not of
-# the record -- so adopting markers into existing docs changes no published
-# string. Normalising on one convention is a separate, deliberate edit.
-
-SIZE_BASE = {"dec": (10**6, 10**9), "bin": (2**20, 2**30)}
 
 
-def fmt_size(size_bytes: int, units: str = "dec", gb_dp: int = 2,
-             mb_only: bool = False) -> str:
-    """Render a byte count the way a download table prints it."""
-    mb, gb = SIZE_BASE[units]
-    if mb_only or size_bytes < gb:
-        return f"{size_bytes / mb:.0f} MB"
-    return f"{size_bytes / gb:.{gb_dp}f} GB"
-
-
-def size_conventions() -> list[dict]:
-    """Every convention `fmt_size` can produce, best-guess order first.
-
-    Used by `render.py --adopt` to work out which one a doc already uses.
-    """
-    return [{"units": u, "gb_dp": d, "mb_only": m}
-            for u in ("dec", "bin") for m in (False, True) for d in (2, 1)]
+def fmt_size(size_bytes: int) -> str:
+    """Render a byte count the way a download table prints it: decimal MB
+    below a gigabyte, decimal GB to two places above."""
+    if size_bytes < 10**9:
+        return f"{size_bytes / 10**6:.0f} MB"
+    return f"{size_bytes / 10**9:.2f} GB"
 
 
 # --------------------------------------------------------------------------

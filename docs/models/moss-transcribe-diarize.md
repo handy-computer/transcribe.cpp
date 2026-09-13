@@ -37,7 +37,7 @@ into shorter pieces.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | BF16         | [MOSS-Transcribe-Diarize-BF16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-BF16.gguf) | 1.83 GB | 2.08% |

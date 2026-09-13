@@ -6,7 +6,9 @@
   "params": 739989513,
   "license": {
     "spdx": "other",
-    "display": "NVIDIA Open Model License"
+    "display": "NVIDIA Open Model License",
+    "name": "nvidia-open-model-license",
+    "link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
   },
   "upstream_repo": "nvidia/multitalker-parakeet-streaming-0.6b-v1",
   "upstream_commit": "8749fc7",

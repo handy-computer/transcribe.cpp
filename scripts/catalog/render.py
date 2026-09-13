@@ -8,7 +8,7 @@ The docs are hand-written prose with a few tables that restate numbers the
 catalog already owns. Rather than generate whole files, this rewrites only the
 regions a doc explicitly delegates:
 
-    <!-- catalog:downloads label="LibriSpeech test-clean" units=bin -->
+    <!-- catalog:downloads label="LibriSpeech test-clean" -->
     | Quantization | Download | Size | WER (LibriSpeech test-clean) |
     ...
     <!-- /catalog -->
@@ -19,12 +19,6 @@ table for a model they are not named after.
 
     uv run scripts/catalog/render.py                 # rewrite marked regions
     uv run scripts/catalog/render.py --check         # fail if any is stale
-    uv run scripts/catalog/render.py --adopt         # wrap existing tables
-
-`--adopt` is a one-time migration: it finds a download table that is already
-correct, wraps it in a marker, and records the units convention that table
-uses so adoption changes no published string. Normalising conventions is then
-a separate, deliberate edit to the marker.
 """
 from __future__ import annotations
 
@@ -60,25 +54,12 @@ def as_bool(value: str | None, default: bool) -> bool:
     return value.lower() in ("1", "true", "yes")
 
 
-def fmt_attrs(attrs: dict[str, object]) -> str:
-    out = []
-    for key, value in attrs.items():
-        if isinstance(value, bool):
-            value = "true" if value else "false"
-        value = str(value)
-        out.append(f'{key}="{value}"' if " " in value or "," in value else f"{key}={value}")
-    return " ".join(out)
-
-
 # --------------------------------------------------------------------------
 # blocks
 
 
 def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
     """The Download table: one row per published GGUF, plus the headline metric."""
-    units = attrs.get("units", "dec")
-    gb_dp = int(attrs.get("gb_dp", 2))
-    mb_only = as_bool(attrs.get("mb_only"), False)
     want_metric = as_bool(attrs.get("metric"), True)
 
     rows_by_quant = common.headline_rows(record) if want_metric else {}
@@ -100,7 +81,7 @@ def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
         if not url:
             raise RenderError("published_repo is null, so downloads have no URL")
         cells = [item["quant"], f"[{item['filename']}]({url})",
-                 common.fmt_size(item["size_bytes"], units, gb_dp, mb_only)]
+                 common.fmt_size(item["size_bytes"])]
         if want_metric:
             cells.append(common.fmt_err(rows_by_quant.get(item["quant"])))
         body.append(cells)
@@ -209,102 +190,12 @@ def rewrite(path: pathlib.Path, records: dict[str, dict]) -> tuple[str, list[str
 
 
 # --------------------------------------------------------------------------
-# adoption
-
-
-DOWNLOAD_HEADER = re.compile(r"^\|\s*Quantization\s*\|\s*Download\s*\|\s*Size\s*\|(.*)$")
-DOWNLOAD_ROW = re.compile(r"^\|\s*(\S+)\s*\|\s*\[[^\]]+\]\([^)]+\)\s*\|\s*([\d.]+\s*[GM]i?B)\s*\|")
-
-
-def detect_units(record: dict, published: dict[str, str]) -> dict[str, object] | None:
-    """Which size convention reproduces this table's existing strings."""
-    sizes = common.downloads(record)
-    best, score = None, -1
-    for convention in common.size_conventions():
-        hit = sum(1 for quant, text in published.items()
-                  if quant in sizes
-                  and common.fmt_size(sizes[quant]["size_bytes"], **convention) == text)
-        if hit > score:
-            best, score = convention, hit
-    return best if score == len(published) else None
-
-
-def adopt(path: pathlib.Path, records: dict[str, dict],
-          units: dict | None = None) -> tuple[str, str]:
-    """Wrap an existing Download table in a marker.
-
-    With `units` unset the table must already be self-consistent, and adoption
-    changes no published string. Passing a convention instead adopts on the
-    house standard and lets the next render correct whatever was stale.
-    """
-    record = records.get(path.stem)
-    if record is None:
-        return "", "no catalog record"
-    lines = path.read_text().splitlines()
-    if any(OPEN.match(line) for line in lines):
-        return "", "already has markers"
-
-    start = next((i for i, line in enumerate(lines) if DOWNLOAD_HEADER.match(line)), None)
-    if start is None:
-        return "", "no Download table"
-    tail = DOWNLOAD_HEADER.match(lines[start]).group(1)
-    end = start + 2
-    published = {}
-    while end < len(lines) and lines[end].startswith("|"):
-        row = DOWNLOAD_ROW.match(lines[end])
-        if not row:
-            return "", "download row this renderer cannot reproduce"
-        published[row.group(1)] = re.sub(r"\s+", " ", row.group(2)).strip()
-        end += 1
-
-    if {d["quant"] for d in record.get("downloads", [])} != set(published):
-        return "", "table and catalog list different quants"
-    convention = detect_units(record, published) if units is None else dict(units)
-    if convention is None:
-        return "", "sizes match no single units convention (stale or hand-edited)"
-    covered = set(common.headline_rows(record))
-    if covered and not set(published) <= covered:
-        return "", ("headline_benchmark covers only "
-                    + ", ".join(sorted(covered)) + "; table publishes more")
-
-    attrs: dict[str, object] = dict(convention)
-    columns = [c.strip() for c in tail.split("|") if c.strip()]
-    if not columns:
-        attrs["metric"] = False
-    else:
-        head = columns[0]
-        if len(columns) > 1:
-            return "", "second metric column is not supported yet"
-        label = re.match(r"^(\w+)\s*\((.+)\)$", head)
-        if not label:
-            return "", f"cannot parse metric header {head!r}"
-        attrs["metric_name"], attrs["label"] = label.group(1), label.group(2)
-        target = common.headline(record)
-        if not target:
-            return "", "headline_benchmark is null"
-        if attrs["metric_name"] == target["metric"].upper():
-            del attrs["metric_name"]
-        if attrs["label"] == common.headline_label(record):
-            del attrs["label"]
-
-    body = lines[:start] + [f"<!-- catalog:downloads {fmt_attrs(attrs)} -->"] \
-        + lines[start:end] + ["<!-- /catalog -->"] + lines[end:]
-    return "\n".join(body) + "\n", ""
-
-
-# --------------------------------------------------------------------------
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true",
                         help="report stale regions and exit non-zero; write nothing")
-    parser.add_argument("--adopt", action="store_true",
-                        help="one-time: wrap existing correct tables in markers")
-    parser.add_argument("--adopt-units", choices=("dec", "bin"),
-                        help="adopt on this units convention instead of "
-                             "detecting the table's own; stale sizes are then "
-                             "corrected by the next render")
     parser.add_argument("--docs", default=str(common.DOCS_DIR))
     parser.add_argument("paths", nargs="*", help="limit to these files")
     args = parser.parse_args()
@@ -312,22 +203,6 @@ def main() -> int:
     records = common.load_records()
     docs = ([pathlib.Path(p) for p in args.paths]
             or sorted(pathlib.Path(args.docs).glob("*.md")))
-
-    if args.adopt:
-        units = {"units": args.adopt_units, "gb_dp": 2, "mb_only": False} \
-            if args.adopt_units else None
-        adopted, skipped = 0, []
-        for path in docs:
-            text, why = adopt(path, records, units)
-            if why:
-                skipped.append((path.name, why))
-                continue
-            path.write_text(text)
-            adopted += 1
-        print(f"adopted {adopted} download table(s)")
-        for name, why in skipped:
-            print(f"  skipped {name}: {why}")
-        return 0
 
     stale, errors, rendered = [], [], 0
     for path in docs:

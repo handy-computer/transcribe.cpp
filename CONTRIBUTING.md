@@ -233,7 +233,7 @@ Required before canonical publication:
 | Gate | Owner | Requirement |
 | --- | --- | --- |
 | WER / benchmarks | maintainer or contributor | Per-quant numbers recorded in `docs/models/<family>.md` |
-| HF card | maintainer | `scripts/hf_cards/<variant>.yaml` updated and README rendered |
+| HF card | maintainer | Catalog record current; README rendered per `scripts/hf_cards/README.md` |
 | Canonical upload | maintainer | GGUFs uploaded to the `handy-computer` Hugging Face organization |
 | Download roundtrip | maintainer | Downloaded canonical GGUF reloads and validates cleanly; validation commit recorded in docs/HF card |
 | Preflight D | maintainer | Planned post-quantization gate once implemented |
@@ -256,7 +256,7 @@ project release artifact only after a maintainer publishes it there and records
 the validation commit in both:
 
 - `docs/models/<family>.md`
-- `scripts/hf_cards/<variant>.yaml`, rendered into the HF README
+- `scripts/hf_cards/<variant>.yaml` (`validation` block), rendered into the HF README
 
 Golden manifests are not mutated for uploads. They pin validation provenance
 for the port. Release state lives in the model card and rendered HF README; HF

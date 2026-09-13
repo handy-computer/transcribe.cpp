@@ -1,11 +1,8 @@
 # Spec for the HF README of handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf.
-# Consumed by scripts/hf_cards/generate.py.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-hf_repo: nvidia/multitalker-parakeet-streaming-0.6b-v1
-target_repo: handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/multitalker-parakeet-streaming-0.6b-v1.md
 
-upstream_commit: 8749fc7
 pin_date: 2026-07-12
 
 # Validation pin for the most recent upload. Updated on each release;
@@ -15,18 +12,7 @@ validation:
   commit: 3083021
   date: 2026-08-03
 
-# Upstream is the NVIDIA Open Model License (not a standard SPDX id), so
-# the HF `license` field gets `other` and `license_name` / `license_link`
-# carry the actual identifier + URL into the YAML frontmatter (HF prefers
-# this when license=other). `license_display` is the human-facing form
-# rendered in the README body.
-license: other
-license_name: nvidia-open-model-license
-license_link: https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/
-license_display: NVIDIA Open Model License
 pipeline_tag: automatic-speech-recognition
-languages:
-  - en
 tags:
   - gguf
   - transcribe.cpp
@@ -46,24 +32,6 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
-# Capability flags for the transcribe_cpp metadata block.
-capabilities:
-  streaming: true
-  diarize: true
-  translate: false
-  lang_detect: false
-  timestamps: token  # none | segment | word | token
-
-# Speedup-over-realtime (xRT) per rig/backend, from docs/models; published
-# raw as rtf_<machine> in the metadata block. Values average the Q8_0 jfk and
-# dots publication cells.
-perf:
-  m4-max:
-    cpu: 34.6
-    metal: 180.9
-  ryzen-4750u:
-    cpu: 13.2
-    vulkan: 25.2
 metrics:
   cpwer_ami_ihm_test:
     bundle_f32_kernel: 19.35
@@ -94,29 +62,3 @@ wer:
       -m bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf \
       meeting.wav
     ```
-
-quants:
-  - name: F32
-    filename: bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf
-    size: 2.96 GB
-    wer: 2.19%
-  - name: F16
-    filename: bundle/multitalker-parakeet-streaming-0.6b-v1-F16.gguf
-    size: 1.48 GB
-    wer: 2.19%
-  - name: Q8_0
-    filename: bundle/multitalker-parakeet-streaming-0.6b-v1-Q8_0.gguf
-    size: 873 MB
-    wer: 2.18%
-  - name: Q6_K
-    filename: bundle/multitalker-parakeet-streaming-0.6b-v1-Q6_K.gguf
-    size: 743 MB
-    wer: 2.20%
-  - name: Q5_K_M
-    filename: bundle/multitalker-parakeet-streaming-0.6b-v1-Q5_K_M.gguf
-    size: 681 MB
-    wer: 2.18%
-  - name: Q4_K_M
-    filename: bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf
-    size: 617 MB
-    wer: 2.18%

@@ -37,7 +37,7 @@ pinned 2026-07-12.
 
 ## Download
 
-<!-- catalog:downloads label="LibriSpeech test-clean, offline" units=dec -->
+<!-- catalog:downloads label="LibriSpeech test-clean, offline" -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean, offline) |
 | --- | --- | ---: | ---: |
 | F32          | [bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-F32.gguf) | 2.96 GB | 2.19% |

@@ -45,38 +45,14 @@
         },
         "display": {
           "type": "string"
-        }
-      }
-    },
-    "identity": {
-      "type": "object",
-      "description": "The general.* GGUF identity block, for the parts no other catalog field can supply. organization and repo_url come from upstream_repo, license from license.spdx, size_label from params; general.languages stays whatever the file already carries, which may legitimately narrow this record's languages (nemotron advertises 32 of its 40 locales). scripts/catalog/sync_capabilities.py --repair writes these into a published GGUF that predates add_general_identity() in scripts/lib/gguf_common.py.",
-      "required": ["name","basename","author"],
-      "additionalProperties": false,
-      "properties": {
+        },
         "name": {
           "type": "string",
-          "description": "general.name -- the friendly display name, e.g. \"Granite Speech 4.1 2B Plus\"."
+          "description": "HF card license_name, for licences with no SPDX id (spdx \"other\")."
         },
-        "basename": {
+        "link": {
           "type": "string",
-          "description": "general.basename -- the family slug, e.g. \"granite-speech\"."
-        },
-        "size_label": {
-          "type": "string",
-          "description": "general.size_label. Carried, not computed from params: most converters bucket the parameter count but the parakeet profiles hardcode a marketing label (\"0.6B\" for a 638M-parameter nemotron)."
-        },
-        "author": {
-          "type": "string",
-          "description": "general.author -- the creating lab, e.g. \"IBM\"."
-        },
-        "license_name": {
-          "type": "string",
-          "description": "general.license.name. Distinct from license.display, which is the human label the docs print."
-        },
-        "license_link": {
-          "type": "string",
-          "description": "general.license.link -- URL of the full licence text."
+          "description": "HF card license_link -- URL of the full licence text."
         }
       }
     },

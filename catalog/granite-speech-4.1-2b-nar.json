@@ -8,14 +8,6 @@
     "spdx": "apache-2.0",
     "display": "Apache-2.0"
   },
-  "identity": {
-    "name": "Granite Speech 4.1 2B NAR",
-    "basename": "granite-speech-nar",
-    "size_label": "2.3B",
-    "author": "IBM",
-    "license_name": "Apache License 2.0",
-    "license_link": "https://www.apache.org/licenses/LICENSE-2.0"
-  },
   "upstream_repo": "ibm-granite/granite-speech-4.1-2b-nar",
   "upstream_commit": "99a4df9",
   "published_repo": "handy-computer/granite-speech-4.1-2b-nar-gguf",

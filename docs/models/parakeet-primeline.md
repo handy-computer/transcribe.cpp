@@ -24,7 +24,7 @@ pinned 2026-08-16.
 
 ## Download
 
-<!-- catalog:downloads label="FLEURS de test" units=dec -->
+<!-- catalog:downloads label="FLEURS de test" -->
 | Quantization | Download |    Size | WER (FLEURS de test) |
 | --- | --- | ---: | ---: |
 | F32          | [parakeet-primeline-F32.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F32.gguf) | 2.51 GB | 6.00% |

@@ -32,7 +32,7 @@ pinned 2026-05-06.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | BF16         | [Fun-ASR-Nano-2512-BF16.gguf](https://huggingface.co/handy-computer/Fun-ASR-Nano-2512-gguf/resolve/main/Fun-ASR-Nano-2512-BF16.gguf) | 1.67 GB | 1.78% |

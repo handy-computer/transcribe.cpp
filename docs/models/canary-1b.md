@@ -27,7 +27,7 @@ pinned 2026-05-08.
 
 ## Download
 
-<!-- catalog:downloads units=dec -->
+<!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
 | F32          | [canary-1b-F32.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F32.gguf) | 4.09 GB | 1.55% |

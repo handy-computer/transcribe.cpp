@@ -53,7 +53,7 @@ stays unbounded for the same reason. See the
 
 ## Download
 
-<!-- catalog:downloads metric=false units=dec -->
+<!-- catalog:downloads metric=false -->
 | Quantization | Download |    Size |
 | --- | --- | ---: |
 | F32          | [nemotron-3.5-asr-streaming-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-F32.gguf) | 2.55 GB |
