@@ -47,8 +47,10 @@ summary: |
   30 seconds per call, per upstream's direct-inference contract) and produces
   a transcript. Not a streaming model, no translation, no built-in long-form
   chunking. The same CTC head also emits language-ID, simple emotion labels,
-  audio-event tags, and an inverse-text-normalization flag — opt-in via
-  `--raw-tokens` and `--itn`.
+  audio-event tags, and inverse-text-normalization control tags. These tags are
+  hidden unless `--raw-tokens` is passed. ITN is on by default for readable
+  casing, punctuation, and digits; pass `--no-itn` for upstream's spoken-form
+  output.
 
 default_quant_index: 2  # Q8_0
 
@@ -79,7 +81,9 @@ wer:
     manifest: 3.13% (95% CI [2.93%, 3.34%]). transcribe.cpp's F32 port matches
     that baseline within +0.002 percentage-points. LibriSpeech is an English
     benchmark; SenseVoice's strongest case is Mandarin, and AISHELL-1 (CER)
-    is the recommended complementary check.
+    is the recommended complementary check. These table values were measured
+    with ITN off, matching the FunASR reference; `scripts/wer/run.py` pins
+    `--no-itn` so the benchmark does not inherit the runtime default.
 
 quants:
   - name: F32
