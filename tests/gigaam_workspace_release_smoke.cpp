@@ -61,7 +61,8 @@ int main() {
     }
 
     const std::vector<float> short_pcm = make_pcm(5.0);
-    const std::vector<float> long_pcm  = make_pcm(45.0);
+    // Crosses the encoder's long-input query-tiling threshold.
+    const std::vector<float> long_pcm  = make_pcm(90.0);
 
     if (transcribe_run(s, short_pcm.data(), static_cast<int>(short_pcm.size()), nullptr) != TRANSCRIBE_OK) {
         return fail("short run #1");
