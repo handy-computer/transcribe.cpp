@@ -1,10 +1,16 @@
 # Cohere Transcribe Arabic 07-2026
 
-Cohere's [`CohereLabs/cohere-transcribe-arabic-07-2026`](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026)
-ported to transcribe.cpp. An Arabic-focused adaptation of the
-[Cohere Transcribe 03-2026](cohere-transcribe-03-2026.md) architecture: a
-Conformer encoder with a Transformer encoder-decoder head (cross-attention,
-tied token embedding), retrained for Arabic.
+<!-- catalog:intro -->
+Upstream: [`CohereLabs/cohere-transcribe-arabic-07-2026`](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) at [`0a8193c`](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026/commit/0a8193c).
+
+Offline Arabic speech-to-text, including dialectal Arabic and
+Arabic-English code-switching, with English as a secondary language. An
+Arabic-focused adaptation of the Cohere Transcribe 03-2026 architecture:
+a Conformer encoder with a Transformer encoder-decoder head
+(cross-attention, tied token embedding). Takes a 16 kHz mono WAV and a
+language flag (`-l ar` or `-l en`) and produces a transcript. Decoding
+is autoregressive.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -40,14 +46,15 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 | Q4_K_M       | [cohere-transcribe-arabic-07-2026-Q4_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-Q4_K_M.gguf) | 1.56 GB | 11.18% |
 <!-- /catalog -->
 
-WER is measured on the full FLEURS Arabic (`ar_eg`) test split (428
-utterances) with greedy decoding and no external LM, scored with the Whisper
-`BasicTextNormalizer` (the Arabic routing in `scripts/wer/score.py`).
-BF16 reference baseline, measured with native Transformers on the same
-manifest: 11.00%; our BF16 port scores 11.02%, and every quant falls inside
-the reference's 95% confidence interval. Note that FLEURS Arabic is
-Egyptian-dialect speech; upstream numbers published on other Arabic test
-sets are not directly comparable.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full FLEURS Arabic (`ar_eg`) test split (428
+utterances) with greedy decoding and no external LM, scored with the
+Whisper BasicTextNormalizer. BF16 reference baseline, measured with
+native Transformers on the same manifest: 11.00%; the BF16 port scores
+11.02%, and every quant falls inside the reference's 95% confidence
+interval. FLEURS Arabic is Egyptian-dialect speech; upstream numbers
+published on other Arabic test sets are not directly comparable.
+<!-- /catalog -->
 
 ## Quick Start
 

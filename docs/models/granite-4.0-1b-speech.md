@@ -1,9 +1,17 @@
 # Granite Speech 4.0-1b
 
-IBM's [`ibm-granite/granite-4.0-1b-speech`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech)
-ported to transcribe.cpp. An audio-LLM: a Conformer encoder with block-local
-Shaw attention, a BLIP-2 Q-Former projector, and the Granite-4.0-1b-base LLM
-as an autoregressive decoder.
+<!-- catalog:intro -->
+Upstream: [`ibm-granite/granite-4.0-1b-speech`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) at [`bd87ab8`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech/commit/bd87ab8).
+
+Offline multilingual speech-to-text. IBM Granite Speech 4.0-1b is an
+audio-LLM: a Conformer encoder with block-local Shaw attention, a BLIP-2
+Q-Former projector, and the Granite-4.0-1b-base LLM as an autoregressive
+decoder. Takes a 16 kHz mono WAV and produces a transcript; the LLM half is
+what writes the text. Transcribes English, French, German, Spanish,
+Portuguese, and Japanese. Translates between English and each of those
+five other languages in either direction (en ↔ fr, en ↔ de, en ↔ es,
+en ↔ pt, en ↔ ja) — always via English, no direct fr↔de etc.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -37,12 +45,13 @@ pinned 2026-05-17.
 | Q4_K_M       | [granite-4.0-1b-speech-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q4_K_M.gguf) | 1.60 GB | 1.48% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-greedy decoding. The BF16 reference baseline (transformers, re-run locally
-with the model-card prompt `USER: <|audio|>can you transcribe the speech
-into a written format?\n ASSISTANT:`) is 1.42%, matching IBM's published
-Open ASR Leaderboard number exactly. Text normalizer: Whisper
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
+with greedy decoding. BF16 reference baseline (re-run locally with the
+model card's exact prompt): 1.42% — matches the upstream Open ASR
+Leaderboard number exactly. Text normalizer: Whisper
 `EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
+<!-- /catalog -->
 
 ## Quick Start
 

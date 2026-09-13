@@ -1,9 +1,16 @@
 # Parakeet primeLine (German-tuned)
 
-primeLine's [`primeline/parakeet-primeline`](https://huggingface.co/primeline/parakeet-primeline)
-ported to transcribe.cpp. A German fine-tune of NVIDIA's
-[`parakeet-tdt-0.6b-v3`](parakeet-tdt-0.6b-v3.md): a 0.6B-parameter
-FastConformer encoder with a TDT/RNNT transducer decoder.
+<!-- catalog:intro -->
+Upstream: [`primeline/parakeet-primeline`](https://huggingface.co/primeline/parakeet-primeline) at [`3f1a9bc`](https://huggingface.co/primeline/parakeet-primeline/commit/3f1a9bc).
+
+primeLine's German fine-tune of NVIDIA's parakeet-tdt-0.6b-v3. A
+0.6B-parameter FastConformer encoder with a TDT/RNNT transducer decoder,
+taking 16 kHz mono WAV and producing a punctuated, cased transcript with
+optional token-level timestamps. Tuned for German, but the fine-tune did
+not collapse the base model's multilingual ability: it still transcribes
+the other 24 v3 languages with correct per-language casing and
+punctuation. Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -35,12 +42,26 @@ pinned 2026-08-16.
 | Q4_K_M       | [parakeet-primeline-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q4_K_M.gguf) |  485 MB | 5.98% |
 <!-- /catalog -->
 
-WER is measured on the full FLEURS German test split (862 utterances)
-with greedy transducer decoding and no external LM. The reference
-baseline, primeLine's own NeMo checkpoint over the identical manifest,
-is 5.98%. The quant matrix spans 0.04pp with no monotonic degradation;
-Q4_K_M scores marginally better than F32 (5.9845% vs 5.9952%), which is
-noise, not an improvement. Any preset is safe to ship.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the FLEURS German test split (862 utterances) with greedy
+transducer decoding and no external LM.
+
+primeLine's published figures (2.95% average over Tuda-De, Multilingual
+LibriSpeech, and Common Voice 19.0) are on different corpora and are not
+comparable to these numbers. As a like-for-like baseline we ran primeLine's
+own NeMo checkpoint over the identical manifest: **5.98% WER**. The C++
+numbers above match that reference within bootstrap-CI noise, and the quant
+spread is 0.04pp end to end with no monotonic degradation.
+
+Orthography note: this checkpoint writes Swiss `ss` forms (`grosse`,
+`heisst`) almost everywhere instead of `ß`, which appears just 5 times
+across the 862 hypotheses. The upstream SentencePiece vocabulary carries
+only 4 pieces containing `ß` against 58 containing `ss`, so this is a
+property of the v3-family tokenizer, not of the port — the NeMo reference
+produces the same spellings on the same utterances. FLEURS references use
+`ß` throughout, which costs roughly 1.05pp: folding `ß`→`ss` on both sides
+gives 4.92% for the reference and 4.94% for F32.
+<!-- /catalog -->
 
 primeLine's published 2.95% average is over Tuda-De, Multilingual
 LibriSpeech, and Common Voice 19.0. Those corpora are not in this repo's

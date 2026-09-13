@@ -15,6 +15,7 @@ import pathlib
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CATALOG_DIR = REPO / "catalog"
 DOCS_DIR = REPO / "docs" / "models"
+CARDS_DIR = REPO / "scripts" / "hf_cards"
 
 HEADLINE_KEYS = ("dataset", "split", "language", "metric", "batch_size", "timestamps")
 # The recipe half of the pointer may be null, meaning "any"; the identity

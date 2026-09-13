@@ -1,9 +1,14 @@
 # Qwen3-ASR 0.6B
 
-Alibaba's [`Qwen/Qwen3-ASR-0.6B`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
-ported to transcribe.cpp. An 18-layer bidirectional audio encoder feeds a
-28-layer Qwen3 causal LM with audio-token injection (no cross-attention —
-the LM processes a fused audio+text sequence through a chat template).
+<!-- catalog:intro -->
+Upstream: [`Qwen/Qwen3-ASR-0.6B`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) at [`5eb144179a02acc5e5ba31e748d22b0cf3e303b0`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B/commit/5eb144179a02acc5e5ba31e748d22b0cf3e303b0).
+
+Offline multilingual speech-to-text. An 18-layer bidirectional audio encoder
+feeds a 28-layer Qwen3 causal LM with audio-token injection (fused
+audio+text sequence, no cross-attention). Auto-detects the audio's language
+across 30 languages and emits the transcript in that language. Takes a
+16 kHz mono WAV; explicit language hints are not supported at this time.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -34,9 +39,15 @@ Ported from upstream commit
 | Q4_K_M       | [Qwen3-ASR-0.6B-Q4_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q4_K_M.gguf) |  590 MB | 2.26% |
 <!-- /catalog -->
 
-WER measured on LibriSpeech `test-clean` (2620 utterances), Whisper-style
-English text normalizer, jiwer 3.x, metal backend on Apple M4. Reproduce
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech `test-clean` split (2620 English
+utterances) with the Whisper-style English text normalizer and jiwer 3.x,
+on the metal backend of an Apple M4. Qwen3-ASR is a multilingual model —
+this number characterizes the English case only. BF16 / F16 / Q8_0 / Q6_K
+are all within bootstrap CI of each other; Q5_K_M and Q4_K_M show a small
+but real regression driven by the tied token-embedding / head. Reproduce
 with `scripts/wer/run.py` + `scripts/wer/score.py`.
+<!-- /catalog -->
 
 **FLEURS-zh** (945 utterances) CER: 7.6% on the upstream `qwen_asr`
 reference, 7.64% on the Q8_0 port (95% CI [6.74%, 8.51%]); within

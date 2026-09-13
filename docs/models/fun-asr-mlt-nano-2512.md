@@ -1,13 +1,24 @@
 # Fun-ASR-MLT-Nano
 
-Alibaba / FunAudioLLM's [`FunAudioLLM/Fun-ASR-MLT-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512)
-ported to transcribe.cpp — the multilingual sibling of
-[Fun-ASR-Nano](fun-asr-nano-2512.md). Identical architecture
-(SenseVoiceEncoderSmall + 2-layer audio adaptor + bundled Qwen3-0.6B LLM,
-~800M trainable parameters), trained on a smaller corpus
+<!-- catalog:intro -->
+Upstream: [`FunAudioLLM/Fun-ASR-MLT-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512) at [`cf67a938bf2829959d08fdfb84e186eff02a67ff`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a938bf2829959d08fdfb84e186eff02a67ff).
+
+Offline speech-to-text covering 31 languages, with focused optimization
+on East and Southeast Asian languages: Chinese, English, Cantonese,
+Japanese, Korean, Vietnamese, Indonesian, Thai, Malay, Filipino, plus
+Arabic, Hindi, and 19 European languages (Bulgarian, Croatian, Czech,
+Danish, Dutch, Estonian, Finnish, Greek, Hungarian, Irish, Latvian,
+Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian,
+Swedish). Same architecture as Fun-ASR-Nano-2512 (~800M trainable
+parameters: frozen SenseVoiceEncoderSmall + 2-layer audio adaptor +
+bundled Qwen3-0.6B LLM); trained on a smaller multilingual corpus
 ("hundreds of thousands of hours" per the model card, vs Nano's
-"tens of millions") with broad multilingual coverage instead of
-Mandarin-dialect depth.
+"tens of millions"). Takes a 16 kHz mono WAV and emits text. Not
+streaming, no translation, no timestamps. ITN (inverse text
+normalization) is supported by the model and exposed via the
+`--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
+in the library API.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -55,16 +66,18 @@ pinned 2026-05-06.
 | Q4_K_M       | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  557 MB | 1.89% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620
-utterances) with greedy LLM decoding via the bundled Qwen3-0.6B head.
-The publisher does **not** report a numerical LibriSpeech WER for the MLT
-variant specifically (the shared Fun-ASR README's per-model table covers
-the regular Fun-ASR-Nano only). Gate baseline is our own FunASR 1.3.1
-reference run on the same manifest: 1.76% (95% CI [1.60%, 1.93%]).
-transcribe.cpp's BF16 port matches that baseline within -0.02
-percentage-points; F16/Q8_0 are numerically indistinguishable. Q4_K_M is
-the only quant with a visible regression (+0.13 pp); F16/Q8_0/Q6_K/Q5_K_M
-are within bootstrap noise of BF16.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
+with greedy LLM decoding via the bundled Qwen3-0.6B head. The publisher
+does not report a numerical LibriSpeech WER for the MLT variant
+specifically (the shared README's per-model table covers Fun-ASR-Nano
+only). Gate baseline is our own FunASR 1.3.1 reference run on the same
+manifest: 1.76% (95% CI [1.60%, 1.93%]). transcribe.cpp's BF16 port
+matches that baseline within -0.02 percentage-points. LibriSpeech is
+English only; the strength of the MLT variant is multilingual coverage,
+not English accuracy. For the other 30 languages, run your own
+representative manifest.
+<!-- /catalog -->
 
 LibriSpeech is English only and is not the strength of this model. For
 the other 30 languages, run your own representative manifest. CommonVoice

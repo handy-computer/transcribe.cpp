@@ -1,11 +1,16 @@
 # Moonshine Streaming Medium
 
-Useful Sensors' [`UsefulSensors/moonshine-streaming-medium`](https://huggingface.co/UsefulSensors/moonshine-streaming-medium)
-ported to transcribe.cpp. A 245M-parameter encoder-decoder English ASR model
-designed for streaming use (ergodic encoder + sliding-window attention,
-50 Hz time-domain frontend). Same family as the tiny and small variants;
-deepest of the three (14 / 14 layers) and widest hidden dims (encoder 768 /
-decoder 640).
+<!-- catalog:intro -->
+Upstream: [`UsefulSensors/moonshine-streaming-medium`](https://huggingface.co/UsefulSensors/moonshine-streaming-medium) at [`57b8436`](https://huggingface.co/UsefulSensors/moonshine-streaming-medium/commit/57b8436).
+
+English speech-to-text in both one-shot and streaming modes. A 245M-parameter
+encoder-decoder ASR model designed for streaming use (ergodic encoder +
+sliding-window attention, 50 Hz time-domain frontend). Same family as
+moonshine-streaming-tiny and moonshine-streaming-small; deepest of the three
+(14 / 14 layers) and widest hidden dims (encoder 768 / decoder 640). Takes a
+16 kHz mono WAV and produces a transcript. No translation, no multilingual
+capability, no timestamps.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -30,15 +35,18 @@ pinned 2026-05-06.
 | Q8_0         | [moonshine-streaming-medium-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-streaming-medium-gguf/resolve/main/moonshine-streaming-medium-Q8_0.gguf) |  296 MB | 2.16% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
-baseline: 2.16%. Quants are numerically indistinguishable from F32 on this
-manifest. Useful Sensors' self-reported number on this split is 2.08% from
-the Open ASR Leaderboard table; the +0.08pp residual matches the same
-scoring / text-normalization difference seen across the tiny and small
-variants (where the tiny cross-check against the HF Transformers reference
-on the same manifest landed within 0.01pp of our port), and is not a
-numerical drift in the port.
+baseline: 2.16%. Quants are numerically indistinguishable from F32 on
+this manifest. Useful Sensors' self-reported number on this split is
+2.08% from the Open ASR Leaderboard table; the +0.08pp residual matches
+the same scoring / text-normalization difference seen across the tiny
+and small variants (cross-checked against HF Transformers on tiny and
+found to be at 99.6% identical hypotheses to our port), and is not a
+numerical drift. Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped
+for this variant.
+<!-- /catalog -->
 
 **One utterance the model cannot end.** A single LibriSpeech test-clean clip —
 `7176-92135-0020` (7.2 s; reference *"DOUBLE NINE TWO THREE ELSINORE DOUBLE NINE

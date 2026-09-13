@@ -1,9 +1,13 @@
 # Moonshine tiny
 
-Useful Sensors' [`UsefulSensors/moonshine-tiny`](https://huggingface.co/UsefulSensors/moonshine-tiny)
-ported to transcribe.cpp. A 27M-parameter encoder-decoder transformer that
-consumes raw 16 kHz PCM directly (no STFT, no mel filterbank) via a three-layer
-Conv1d stem.
+<!-- catalog:intro -->
+Upstream: [`UsefulSensors/moonshine-tiny`](https://huggingface.co/UsefulSensors/moonshine-tiny) at [`390624e`](https://huggingface.co/UsefulSensors/moonshine-tiny/commit/390624e).
+
+Useful Sensors Moonshine tiny — a 27M-parameter encoder-decoder transformer
+for English speech recognition. Consumes raw 16 kHz PCM directly via a
+three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
+English-only; no translation, no language detection, no timestamps.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -34,16 +38,15 @@ on 2026-05-05.
 | Q8_0         | [moonshine-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-Q8_0.gguf) |  35 MB | 4.60% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-the transcribe.cpp default decode (greedy, `num_beams=1`, `max_length=194` —
-matching the upstream `generation_config`). Useful Sensors' self-reported
-number on the same split is 4.55% (model card). Our F32 reference baseline
-lands at 4.58%, within rounding of upstream and well within the ±1.00 pp
-Stage 7 acceptance gate. Q8_0 drift is +0.02 pp vs F32 — within bootstrap CI
-noise. Only F16 and Q8_0 are shipped as derived presets: at moonshine-tiny's
-shapes (hidden 288, intermediate 1152, vocab 32768) none of the dimensions
-divide the k-quant super-block size of 256, so Q6_K / Q5_K_M / Q4_K_M would
-all fall back to Q8_0 storage and be near-duplicates.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
+with the transcribe.cpp default decode (greedy, num_beams=1,
+max_length=194 — matching the upstream generation_config). Useful
+Sensors' self-reported number on the same split is 4.55% (model card).
+Our F32 reference baseline lands at 4.58%, within rounding of upstream
+and well within the ±1.00 pp Stage 7 acceptance gate. Q8_0 drift is
++0.02 pp vs F32 — within bootstrap CI noise.
+<!-- /catalog -->
 
 ## Quick Start
 

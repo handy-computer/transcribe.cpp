@@ -1,14 +1,17 @@
 # Canary 1B
 
-NVIDIA's [`nvidia/canary-1b`](https://huggingface.co/nvidia/canary-1b)
-ported to transcribe.cpp. A 1B-parameter multitask AED with a 24-layer
-FastConformer encoder and a 24-layer Transformer decoder — the original
-canary release.
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-1b`](https://huggingface.co/nvidia/canary-1b) at [`1698acf`](https://huggingface.co/nvidia/canary-1b/commit/1698acf).
 
-> **License: CC-BY-NC-4.0 (non-commercial only).** This is the only
-> canary variant under a non-commercial license. Every shipped GGUF
-> carries `general.license: CC-BY-NC-4.0` in its KV metadata so
-> downstream tooling can detect this without re-reading the model card.
+Offline multilingual speech-to-text and translation. A 1B-parameter
+multitask AED with a 24-layer FastConformer encoder and a 24-layer
+Transformer decoder — the original canary release. Supports automatic
+speech recognition in English, German, Spanish, and French, and
+translation between supported pairs. Takes a 16 kHz mono WAV and
+produces a transcript. Not a streaming model.
+**License: CC-BY-NC-4.0 (non-commercial only)** — the only canary
+variant under a non-commercial license.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -38,11 +41,13 @@ pinned 2026-05-08.
 | Q4_K_M       | [canary-1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q4_K_M.gguf) |  730 MB | 1.55% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.55%.
-NVIDIA's self-reported number on the upstream model card is 1.48%.
-Likely this is due to differences in how we score WER based on the results
-we have from Canary 180m.
+NVIDIA's self-reported number on the upstream model card is 1.48%;
+likely this is due to differences in how we score WER, based on the
+results we have from canary-180m-flash.
+<!-- /catalog -->
 
 ## Quick Start
 

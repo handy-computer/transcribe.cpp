@@ -1,12 +1,18 @@
 # Granite Speech 4.1-2b NAR
 
-IBM's [`ibm-granite/granite-speech-4.1-2b-nar`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar)
-ported to transcribe.cpp. The non-autoregressive editor variant of
-Granite-Speech. Shares the Conformer audio encoder with the AR Granite-
-Speech family but pairs it with a custom MLP-with-attention projector and
-the Granite-4.0-1b LLM used as a bidirectional editor (causal mask
-disabled). One forward pass produces logits over the full transcript;
-CTC decode yields the final text — no token-by-token loop.
+<!-- catalog:intro -->
+Upstream: [`ibm-granite/granite-speech-4.1-2b-nar`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar) at [`99a4df9`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/99a4df9).
+
+Offline multilingual speech-to-text in a single non-autoregressive editor
+pass. IBM Granite Speech 4.1-2b NAR shares the Conformer audio encoder
+with the AR Granite-Speech family but pairs it with a custom MLP-with-
+attention projector and the Granite-4.0-1b LLM used as a bidirectional
+editor (causal mask disabled). One forward pass produces logits over the
+full transcript; CTC decode yields the final text. No token-by-token loop.
+Takes a 16 kHz mono WAV and produces a transcript. English plus French,
+German, Spanish, and Portuguese; ASR only (no translation, no
+timestamps).
+<!-- /catalog -->
 
 ## What it's for
 
@@ -35,17 +41,20 @@ the README's canonical inference target).
 | Q4_K_M       | [granite-speech-4.1-2b-nar-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q4_K_M.gguf) | 1.56 GB | 1.34% |
 <!-- /catalog -->
 
+<!-- catalog:prose field=wer.notes -->
 WER measured on the full LibriSpeech test-clean split (2620 utterances).
 BF16 reference baseline (transformers `model.transcribe`, MPS, re-run
 locally): 1.28% — matches the upstream model card's 1.29% to within
-sampling noise. Text normalizer: Whisper `EnglishTextNormalizer`. F16,
-Q8_0, and Q6_K all score the same 1.29% as BF16 — the editor is very
-robust to weight quantization down through Q5_K_M, where the WER
-actually dips slightly (1.25%, within overlapping 95% CI of REF).
-Reference reproduction follows the model card path verbatim
-(`AutoProcessor` + `AutoModel.transcribe` + `processor.batch_decode`)
-at HF revision `99a4df9`; the older snapshot's bidirectional-mask patch
-is obsolete in this snapshot.
+sampling noise. Text normalizer: Whisper `EnglishTextNormalizer`, the
+same normalizer Open ASR Leaderboard uses. Reference reproduction
+follows the model card path verbatim (`AutoProcessor` +
+`AutoModel.transcribe` + `processor.batch_decode`) at HF revision
+`99a4df9` (single-file `modeling_granite_speech_nar.py` snapshot, the
+README's canonical target); no mask patching is required because the
+NAR LM uses `create_bidirectional_mask()` natively. F16, Q8_0, and
+Q6_K all match BF16's 1.29%; Q5_K_M dips slightly to 1.25% (within
+overlapping CIs).
+<!-- /catalog -->
 
 ## Quick Start
 

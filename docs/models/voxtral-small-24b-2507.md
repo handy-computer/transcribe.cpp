@@ -1,17 +1,15 @@
 # Voxtral Small 24B (2507)
 
-Mistral's [`mistralai/Voxtral-Small-24B-2507`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507)
-ported to transcribe.cpp. An offline audio-LLM: a Whisper-large-v3
-bidirectional audio encoder (32 layers, `d_model=1280`, 20 heads) feeds
-a 4-frame-group projector (375 audio tokens per 30 s chunk) into a
-Mistral-Small-24B causal LM (40 layers, `hidden_size=5120`,
-`intermediate_size=32768`, GQA 32 q / 8 kv heads, NEOX RoPE, SwiGLU) via
-audio-token injection at the `audio_token_id=24` positions in the prompt.
+<!-- catalog:intro -->
+Upstream: [`mistralai/Voxtral-Small-24B-2507`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507) at [`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b424).
 
-It is the larger sibling of [Voxtral Mini 3B](voxtral-mini-3b-2507.md):
-the audio encoder, projector pattern, log-mel frontend, and tekken
-tokenizer are identical — only the text decoder is scaled up (Mistral-Small-24B
-in place of Ministral-3B).
+Offline audio-LLM speech-to-text and speech translation. A Whisper-large-v3
+bidirectional audio encoder feeds a 4-frame-group projector (375 audio tokens
+per 30 s chunk) into a Mistral-Small-24B causal LM (40 layers, GQA 32/8, NEOX
+RoPE, SwiGLU) via audio-token injection. Takes a 16 kHz mono WAV and produces a
+transcript via greedy decoding. The larger sibling of Voxtral Mini 3B — same
+encoder, projector, frontend, and tokenizer, with a scaled-up decoder.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -45,11 +43,15 @@ pinned 2026-06-05.
 | Q4_K_M       | [Voxtral-Small-24B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q4_K_M.gguf) | 14.30 GB | 2.11% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
-with the Whisper-style English text normalizer, batch size 8 on an NVIDIA
-A100 80 GB. The same-split HuggingFace `transformers` reference run
-(`VoxtralForConditionalGeneration`, BF16, greedy) lands at **1.57%**, and
-the BF16 GGUF matches it at **1.56%**.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with
+the Whisper English text normalizer, greedy decoding, batch size 8 on an
+NVIDIA A100 80 GB. Same-machine HuggingFace transformers reference
+(VoxtralForConditionalGeneration, BF16, greedy): 1.57%; the BF16 GGUF matches
+at 1.56%. Validation for this variant is end-to-end by WER — the family's
+tensor-level numerical parity is established by the Voxtral Mini 3B sibling
+(identical architecture).
+<!-- /catalog -->
 
 ## Quick Start
 

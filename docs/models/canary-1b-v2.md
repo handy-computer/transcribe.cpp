@@ -1,9 +1,17 @@
 # Canary 1B v2
 
-NVIDIA's [`nvidia/canary-1b-v2`](https://huggingface.co/nvidia/canary-1b-v2)
-ported to transcribe.cpp. A 978M-parameter multitask AED with a 32-layer
-FastConformer encoder and an 8-layer Transformer decoder, covering 25
-European languages.
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-1b-v2`](https://huggingface.co/nvidia/canary-1b-v2) at [`87bc526`](https://huggingface.co/nvidia/canary-1b-v2/commit/87bc526).
+
+Offline multilingual speech-to-text and translation across 25 European
+languages. A 978M-parameter multitask AED with a 32-layer FastConformer
+encoder and an 8-layer Transformer decoder. Supports automatic speech
+recognition for any of the 25 supported languages, plus translation
+between supported language pairs (per the upstream model card). Takes
+a 16 kHz mono WAV and produces a transcript. Not a streaming model;
+word and segment timestamps from the upstream model are not exposed in
+the v1 port.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -46,11 +54,13 @@ pinned 2026-05-08.
 | Q4_K_M       | [canary-1b-v2-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q4_K_M.gguf) |  735 MB | 1.91% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.92%.
-NVIDIA's self-reported number on the upstream model card is 2.18%; our
-F32 port comes in slightly under upstream (Δ −0.26pp) and is likely
-down to scoring differences.
+NVIDIA's self-reported number on the upstream model card is 2.18%;
+our F32 port comes in slightly under the upstream-reported number
+(Δ −0.26pp) and is likely down to scoring differences.
+<!-- /catalog -->
 
 ## Quick Start
 

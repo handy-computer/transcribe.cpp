@@ -1,10 +1,16 @@
 # Qwen3-ASR 1.7B
 
-Alibaba's [`Qwen/Qwen3-ASR-1.7B`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B)
-ported to transcribe.cpp. Architecture is the same audio-LLM pattern as
-the 0.6B variant (24-layer bidirectional audio encoder + Qwen3 causal LM
-with audio-token injection); the 1.7B is wider: encoder `d_model=1024`
-(16 heads), LM `hidden_size=2048`, `intermediate_size=6144`.
+<!-- catalog:intro -->
+Upstream: [`Qwen/Qwen3-ASR-1.7B`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) at [`7278e1e70fe206f11671096ffdd38061171dd6e5`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/commit/7278e1e70fe206f11671096ffdd38061171dd6e5).
+
+Offline multilingual speech-to-text. Same audio-LLM architecture as the
+0.6B variant (bidirectional audio encoder feeding a Qwen3 causal LM with
+audio-token injection), wider: encoder `d_model=1024` (16 heads), LM
+`hidden_size=2048`, `intermediate_size=6144`. Auto-detects the audio's
+language across 30 languages and emits the transcript in that language.
+Takes a 16 kHz mono WAV; explicit language hints are not supported at
+this time.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -33,9 +39,16 @@ Ported from upstream commit
 | Q4_K_M       | [Qwen3-ASR-1.7B-Q4_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-1.7B-gguf/resolve/main/Qwen3-ASR-1.7B-Q4_K_M.gguf) | 1.32 GB | 1.81% |
 <!-- /catalog -->
 
-WER measured on LibriSpeech `test-clean` (2620 utterances), Whisper-style
-English text normalizer, jiwer 3.x, metal backend on Apple M4. Reproduce
-with `scripts/wer/run.py` + `scripts/wer/score.py`.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech `test-clean` split (2620 English
+utterances) with the Whisper-style English text normalizer and jiwer 3.x,
+on the metal backend of an Apple M4. Qwen3-ASR is a multilingual model —
+this number characterizes the English case only. The larger decoder
+gives 1.7B more quantization headroom than the 0.6B; BF16 / F16 / Q8_0 /
+Q6_K / Q5_K_M are all within bootstrap CI of each other, and Q4_K_M
+regresses only ~0.2 WER points. Reproduce with `scripts/wer/run.py` +
+`scripts/wer/score.py`.
+<!-- /catalog -->
 
 ## Quick Start
 

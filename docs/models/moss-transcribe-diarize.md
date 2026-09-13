@@ -1,11 +1,16 @@
 # MOSS-Transcribe-Diarize
 
-OpenMOSS's [`OpenMOSS-Team/MOSS-Transcribe-Diarize`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize)
-ported to transcribe.cpp. A 0.9B audio-LLM: a 24-layer Whisper-Medium audio
-encoder (`d_model=1024`, GELU, LayerNorm) feeds a 4x temporal merge
-(1024 -> 4096) and a VQAdaptor MLP bridge into a Qwen3-0.6B causal decoder
-(28 layers, `hidden_size=1024`, GQA 16/8 heads, `rope_theta=1e6`) via
-audio-token injection at `<|audio_pad|>` positions.
+<!-- catalog:intro -->
+Upstream: [`OpenMOSS-Team/MOSS-Transcribe-Diarize`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize) at [`d7231bb`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/commit/d7231bb).
+
+Offline English/Chinese speech-to-text with speaker diarization. A 0.9B
+audio-LLM: a Whisper-Medium encoder (24 layers, d_model=1024) feeds a
+4x temporal merge + VQAdaptor bridge into a Qwen3-0.6B decoder (28 layers)
+via audio-token injection. The model emits `[start][Sxx]text[end]`; the
+runtime parses those generated markers into clean text and segment rows.
+Speaker attribution is opt-in (`--diarize`) and returns structured speaker
+ids/turns. Not a streaming model.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -48,24 +53,27 @@ into shorter pieces.
 | Q4_K_M       | [MOSS-Transcribe-Diarize-Q4_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q4_K_M.gguf) |  617 MB | 2.59% |
 <!-- /catalog -->
 
-These WER values describe this dataset only, not a general quality ranking. A
-quant that scores slightly better here is not necessarily better in real-world
-use; dataset-specific decoding near-ties can make quantization noise help or
-hurt individual utterances.
-
-WER measured on the full LibriSpeech `test-clean` split (2620 utterances) with
-the Whisper-style English normalizer and jiwer 3.x. MOSS emits the diarized
-format `[start][Sxx]text[end]`; the bracket spans are metadata and are
-de-diarized to a space (for both hypothesis and reference) before scoring,
-matching the author-repo reference runner. The same-manifest MOSS author-repo
-reference (bf16, greedy) lands at **2.07%**, 95% bootstrap CI [1.82%, 2.40%];
-the BF16 port lands at 2.08%, within `+0.01pp` of the reference and well inside
-the CI. Q4_K_M's higher 2.59% is not broad degradation but a handful of 4-bit
-tail failures (6 empty outputs, 5 English->Chinese language-drift utterances,
-1 timestamp-token repetition loop); prefer Q5_K_M or higher if those matter.
-The runtime applies the same marker removal to `full_text`, so WER scoring and
-the public transcript agree. The pre-parsed inline marker string remains
-available verbatim via `transcribe_raw_text()`.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech `test-clean` split (2620 English
+utterances) with the Whisper-style English text normalizer and jiwer
+3.x. MOSS emits the diarized format `[start][Sxx]text[end]`; the bracket
+spans are metadata and are de-diarized to a space (for both hypothesis
+and reference) before scoring, matching the author-repo reference runner.
+These values describe this dataset only, not a general quality ranking: a
+quant that scores slightly better here is not necessarily better in
+real-world use, because dataset-specific decoding near-ties can make
+quantization noise help or hurt individual utterances. The same-manifest
+MOSS author-repo reference (bf16, greedy) lands at
+**2.07%** with 95% bootstrap CI [1.82%, 2.40%]. The BF16 port lands at
+2.08% (within +0.01 of the reference, well inside the CI band); the
+lower-bit presets sit between 1.93% and 1.99% (statistical noise) except
+Q4_K_M at 2.59%, whose excess is a handful of 4-bit tail failures
+(6 empty outputs, 5 English->Chinese language-drift utterances, 1
+timestamp-token repetition loop) rather than broad degradation. Prefer
+Q5_K_M or higher if those tail failures matter. Reproduce with
+`scripts/wer/run.py` + `scripts/wer/score.py --dediarize`; public
+`full_text` applies equivalent marker removal.
+<!-- /catalog -->
 
 ## Quick Start
 

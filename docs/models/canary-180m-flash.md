@@ -1,8 +1,17 @@
 # Canary 180M Flash
 
-NVIDIA's [`nvidia/canary-180m-flash`](https://huggingface.co/nvidia/canary-180m-flash)
-ported to transcribe.cpp. A 182M-parameter multitask AED with a 17-layer
-FastConformer encoder and a 4-layer Transformer decoder.
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-180m-flash`](https://huggingface.co/nvidia/canary-180m-flash) at [`b12ab41`](https://huggingface.co/nvidia/canary-180m-flash/commit/b12ab41).
+
+Offline multilingual speech-to-text and translation. A 182M-parameter
+multitask AED with a 17-layer FastConformer encoder and a 4-layer
+Transformer decoder. Supports automatic speech recognition in English,
+German, Spanish, and French, and bidirectional EN↔{DE, ES, FR}
+translation. Takes a
+16 kHz mono WAV and produces a transcript. Not a streaming model;
+word/segment timestamps are upstream-experimental and not exposed in
+the v1 port.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -38,12 +47,14 @@ pinned 2026-05-08.
 | Q4_K_M       | [canary-180m-flash-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-180m-flash-gguf/resolve/main/canary-180m-flash-Q4_K_M.gguf) | 139 MB | 1.93% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.94%.
-On the same wavs, NeMo's reference run produces 1.93% — one substitution
-difference out of ~27k reference words — so the F32 port matches the
-reference framework at the noise floor. NVIDIA's self-reported number on
-the upstream model card is 1.87%
+On the same wavs, NeMo's reference run produces 1.93% (one substitution
+difference out of ~27k reference words), so the F32 port matches the
+reference framework at the noise floor. NVIDIA's self-reported number
+on the upstream model card is 1.87%.
+<!-- /catalog -->
 
 ## Quick Start
 

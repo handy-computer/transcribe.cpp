@@ -1,8 +1,10 @@
 # Nemotron Speech Streaming EN 0.6B
 
-NVIDIA's [`nvidia/nemotron-speech-streaming-en-0.6b`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)
-ported to transcribe.cpp. A 0.6B-parameter cache-aware streaming
-FastConformer encoder with an RNN-T transducer decoder.
+<!-- catalog:intro -->
+Upstream: [`nvidia/nemotron-speech-streaming-en-0.6b`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b) at [`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40).
+
+English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in both offline and cache-aware streaming modes. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -46,11 +48,9 @@ pinned 2026-05-11.
 | Q4_K_M       | [nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf) |  475 MB | 2.38% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620
-utterances) with greedy RNN-T decoding. F32 reference baseline: 2.31%.
-NVIDIA's self-reported number on the same split at
-`att_context_size=[70, 13]` (1.12s chunk, w/o PnC) is 2.32% (from the
-[HF model card](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)).
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding. F32 reference baseline: 2.31%. NVIDIA's self-reported number on the same split at att_context_size=[70, 13] (1.12s chunk, w/o PnC) is 2.32%.
+<!-- /catalog -->
 
 ## Streaming WER
 

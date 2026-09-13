@@ -1,8 +1,14 @@
 # Cohere Transcribe 03-2026
 
-Cohere's [`CohereLabs/cohere-transcribe-03-2026`](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026)
-ported to transcribe.cpp. A Conformer encoder with a Transformer encoder-decoder
-head (cross-attention, tied token embedding).
+<!-- catalog:intro -->
+Upstream: [`CohereLabs/cohere-transcribe-03-2026`](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026) at [`76b8b23`](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026/commit/76b8b23).
+
+Offline multilingual speech-to-text covering 14 languages (English, French,
+German, Spanish, Italian, Portuguese, Dutch, Polish, Greek, Arabic, Japanese,
+Chinese, Vietnamese, Korean). A Conformer encoder with a Transformer
+encoder-decoder head (cross-attention, tied token embedding). Takes a 16 kHz
+mono WAV and produces a transcript. Decoding is autoregressive.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -39,11 +45,14 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 | Q4_K_M       | [cohere-transcribe-03-2026-Q4_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q4_K_M.gguf) | 1.56 GB | 1.24% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy decoding and no external LM. BF16 reference baseline: 1.26%.
-Cohere's self-reported number on the same split is 1.25% (Open ASR Leaderboard,
-as of 2026-03-26). Text normalizer: Whisper `EnglishTextNormalizer` — the same
-normalizer the Open ASR Leaderboard uses, so the comparison is apples-to-apples.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with
+greedy decoding and no external LM. BF16 reference baseline: 1.26%.
+Cohere's self-reported number on the same split is 1.25%
+(Open ASR Leaderboard, as of 2026-03-26). Both ours and Cohere's numbers
+use the Whisper EnglishTextNormalizer, so the comparison is apples-to-apples
+and our port matches the upstream reference within rounding.
+<!-- /catalog -->
 
 ## Quick Start
 

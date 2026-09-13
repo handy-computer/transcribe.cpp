@@ -1,7 +1,10 @@
 # GigaAM-v3 e2e-CTC
 
-ai-sage's [`ai-sage/GigaAM-v3`](https://huggingface.co/ai-sage/GigaAM-v3)
-(e2e_ctc branch) ported to transcribe.cpp. Same 16-layer Conformer encoder as `gigaam-v3-e2e-rnnt`, paired with a 1×1 Conv1d CTC head. 256-piece SentencePiece vocabulary keeps the head compact while preserving punctuation and Cyrillic casing in output. Faster than RNN-T at comparable accuracy on short utterances.
+<!-- catalog:intro -->
+Upstream: [`ai-sage/GigaAM-v3`](https://huggingface.co/ai-sage/GigaAM-v3) at [`cec030b`](https://huggingface.co/ai-sage/GigaAM-v3/commit/cec030b).
+
+Offline Russian speech-to-text with greedy CTC decoding. 16-layer Conformer encoder with a 1×1 Conv1d CTC head. Output is cased Russian with punctuation, decoded from a 256-piece SentencePiece tokenizer.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -42,8 +45,9 @@ pinned 2026-05-12.
 | Q4_K_M       | [gigaam-v3-e2e-ctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q4_K_M.gguf) | 182 MB | 5.57% |
 <!-- /catalog -->
 
-WER is measured on the full FLEURS ru test split (775 utterances) with
-greedy decoding and no external LM. F32 reference baseline: **5.50%**.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full FLEURS ru test split (775 utterances) with greedy decoding and no external LM. F32 reference baseline: 5.50%. Upstream `gigaam` author package measured on the same manifest: 6.93%; the 1.4 pp gap is upstream rejecting 5 long (>25 s) utterances with `Too long wav file, use 'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not publish a FLEURS ru WER; this number is measured here.
+<!-- /catalog -->
 
 Upstream (`gigaam` author package at `6e4b027c`) measured on the same
 manifest: **6.93%**. The 1.4 pp gap is the upstream package

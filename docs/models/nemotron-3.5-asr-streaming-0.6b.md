@@ -1,10 +1,10 @@
 # Nemotron 3.5 ASR Streaming 0.6B
 
-NVIDIA's [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
-ported to transcribe.cpp. A 0.6B-parameter cache-aware streaming
-FastConformer encoder with an RNN-T transducer decoder — the multilingual
-successor to
-[`nemotron-speech-streaming-en-0.6b`](nemotron-speech-streaming-en-0.6b.md).
+<!-- catalog:intro -->
+Upstream: [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) at [`24b151a`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/commit/24b151a).
+
+Multilingual speech-to-text across 32 supported language-locales (the model's tokenizer recognizes 40, but 8 are adaptation-ready and need fine-tuning) with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with a prompt-conditioned RNN-T transducer decoder; the target language is selected per call (--language en-US, fr-FR, de-DE, ...) and an auto mode emits a <lang-XX> tag. Ships both the offline path (att_context_size=[56, 13], 1.12s, headline accuracy) and runtime-selectable chunked streaming (--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}).
+<!-- /catalog -->
 
 ## What it's for
 
@@ -64,13 +64,9 @@ stays unbounded for the same reason. See the
 | Q4_K_M       | [nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf) |  496 MB |
 <!-- /catalog -->
 
-**Accuracy.** Word error rate at the offline `att_context_size=[56,13]`
-(1.12 s) setting, `--language en-US`, greedy RNN-T. C++ hypotheses were
-generated on an L4 GPU and scored with the whisper-normalizer; the
-reference column is NVIDIA NeMo measured on the same manifests. For
-context, NVIDIA's self-reported FLEURS en-US WER is **7.91%** (and an
-**8.84%** 19-locale macro-average) per the
-[HF model card](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b).
+<!-- catalog:prose field=wer.notes -->
+WER measured on FLEURS test en (647 utterances), greedy RNN-T, --language en-US, whisper-normalizer scoring; the per-quant column is FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports 7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32 3.04 / F16 3.03 / Q8_0 3.06 / Q6_K 3.07 / Q5_K_M 3.10 / Q4_K_M 3.28, against a 3.03% NeMo reference.
+<!-- /catalog -->
 
 | Preset | FLEURS test en (n=647) | LibriSpeech test-clean (n=2620) |
 | --- | ---: | ---: |

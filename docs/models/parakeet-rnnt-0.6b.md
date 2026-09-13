@@ -1,8 +1,10 @@
 # Parakeet RNN-T 0.6B
 
-NVIDIA's [`nvidia/parakeet-rnnt-0.6b`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b)
-ported to transcribe.cpp. A 0.6B-parameter FastConformer-Large encoder with a
-classic RNN-T transducer decoder (predictor + joint, no duration head).
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-rnnt-0.6b`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b) at [`c0c1f09`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b/commit/c0c1f09).
+
+Offline English speech-to-text with greedy RNN-T decoding. A 0.6B-parameter FastConformer-Large encoder with an RNN-T transducer decoder. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -37,7 +39,9 @@ pinned 2026-05-10.
 | Q4_K_M       | [parakeet-rnnt-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q4_K_M.gguf) |  476 MB | 1.66% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding and no external LM. F32 reference baseline: 1.62%. NVIDIA's self-reported number on the same split is 1.63% (from the [HF model card](https://huggingface.co/nvidia/parakeet-rnnt-0.6b)).
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding and no external LM. F32 reference baseline: 1.62%. NVIDIA's self-reported number on the same split is 1.63%.
+<!-- /catalog -->
 
 ## Quick Start
 

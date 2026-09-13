@@ -1,8 +1,10 @@
 # Parakeet Unified EN 0.6B
 
-NVIDIA's [`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b)
-ported to transcribe.cpp. A 0.6B-parameter FastConformer encoder with an
-RNN-T transducer decoder, trained as a "unified" streaming/offline model.
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) at [`d4ac992`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b/commit/d4ac992).
+
+English speech-to-text with punctuation and capitalization. A 0.6B-parameter FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in both offline and buffered streaming modes.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -49,7 +51,9 @@ pinned 2026-05-10.
 | Q4_K_M       | [parakeet-unified-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-Q4_K_M.gguf) |  477 MB | 1.62% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding and no external LM. F32 reference baseline: 1.59%. NVIDIA's self-reported number on the same split is 1.63% (from the [HF model card](https://huggingface.co/nvidia/parakeet-unified-en-0.6b)).
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding and no external LM. F32 reference baseline: 1.59%. NVIDIA's self-reported number on the same split is 1.63%.
+<!-- /catalog -->
 
 ## Quick Start
 

@@ -1,10 +1,18 @@
 # Granite Speech 4.1-2b
 
-IBM's [`ibm-granite/granite-speech-4.1-2b`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b)
-ported to transcribe.cpp. An audio-LLM with the same architecture as
-4.0-1b (Conformer encoder with block-local Shaw attention, BLIP-2 Q-Former
-projector, Granite-4.0-1b-base autoregressive LLM decoder) and improved
-punctuation/casing over 4.0-1b.
+<!-- catalog:intro -->
+Upstream: [`ibm-granite/granite-speech-4.1-2b`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b) at [`8f4bb5f`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b/commit/8f4bb5f).
+
+Offline multilingual speech-to-text. IBM Granite Speech 4.1-2b is an
+audio-LLM with the same architecture as 4.0-1b (Conformer encoder with
+block-local Shaw attention, BLIP-2 Q-Former projector, Granite-4.0-1b-base
+autoregressive LLM decoder) and improved punctuation and casing over 4.0-1b.
+Takes a 16 kHz mono WAV and produces a transcript. Transcribes English,
+French, German, Spanish, Portuguese, and Japanese. Translates between
+English and each of those five other languages in either direction
+(en ↔ fr, en ↔ de, en ↔ es, en ↔ pt, en ↔ ja) — always via English, no
+direct fr↔de etc.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -38,12 +46,14 @@ pinned 2026-05-17.
 | Q4_K_M       | [granite-speech-4.1-2b-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-gguf/resolve/main/granite-speech-4.1-2b-Q4_K_M.gguf) | 1.60 GB | 1.37% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-greedy decoding and the model-card prompt `transcribe the speech with proper
-punctuation and capitalization.`. BF16 reference baseline (transformers,
-re-run locally with that prompt): 1.31% — 0.02pp below upstream's published
-1.33%, within bootstrap CI overlap. Text normalizer: Whisper
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
+with greedy decoding. BF16 reference baseline (re-run locally with the
+model card's exact prompt): 1.31% — 0.02pp below upstream's published
+1.33%, likely a minor normalization difference on the publisher side and
+well within bootstrap CI overlap. Text normalizer: Whisper
 `EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
+<!-- /catalog -->
 
 ## Quick Start
 

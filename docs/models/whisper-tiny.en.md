@@ -1,8 +1,10 @@
 # Whisper tiny.en
 
-OpenAI's [`openai/whisper-tiny.en`](https://huggingface.co/openai/whisper-tiny.en) ported to transcribe.cpp. A 39M-parameter
-encoder-decoder transformer (audio encoder + autoregressive text decoder with
-cross-attention).
+<!-- catalog:intro -->
+Upstream: [`openai/whisper-tiny.en`](https://huggingface.co/openai/whisper-tiny.en) at [`87c7102`](https://huggingface.co/openai/whisper-tiny.en/commit/87c7102).
+
+OpenAI Whisper tiny.en — converted to GGUF for transcribe.cpp. English-only; faster than the multilingual model at the same size. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -31,7 +33,9 @@ on 2026-04-26.
 | Q4_K_M       | [whisper-tiny.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-tiny.en-gguf/resolve/main/whisper-tiny.en-Q4_K_M.gguf) |  44 MB | 5.96% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with transcribe.cpp's default greedy decode and timestamps off (`scripts/wer/run.py --timestamps none`, the WER harness default) — the same runs summarized in the [Whisper family table](whisper.md#all-variants). Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions add ~0.1pp of run-to-run variance on the noise floor, and quantization is otherwise generally WER-neutral. See the [WER methodology](../tools/wer.md) for the harness.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 5.66%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
+<!-- /catalog -->
 
 ## Quick Start
 

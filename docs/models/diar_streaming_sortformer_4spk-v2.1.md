@@ -1,10 +1,15 @@
 # Streaming Sortformer Diarizer 4spk v2.1
 
-NVIDIA's [`nvidia/diar_streaming_sortformer_4spk-v2.1`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1)
-ported to transcribe.cpp. A FastConformer encoder with an 18-layer
-Transformer head that emits per-frame speaker-activity probabilities for
-up to 4 speakers, running online with an Arrival-Order Speaker Cache
-(AOSC) + FIFO.
+<!-- catalog:intro -->
+Upstream: [`nvidia/diar_streaming_sortformer_4spk-v2.1`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1) at [`fafaab5`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1/commit/fafaab5).
+
+Streaming speaker diarization: who spoke when, for up to 4 speakers.
+A FastConformer encoder with an 18-layer Transformer head emitting
+per-frame speaker-activity probabilities, running online with an
+Arrival-Order Speaker Cache (AOSC) + FIFO. NOT a transcription model:
+a run produces speaker segments (start, end, speaker id in arrival
+order), no text. Takes 16 kHz mono WAV.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -32,14 +37,16 @@ pinned 2026-07-19.
 | Q8_0         | [diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf/resolve/main/diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf) | 139 MB | 14.73% |
 <!-- /catalog -->
 
-DER is measured on the full AMI IHM test set (16 meetings, ~9 h) against
+<!-- catalog:prose field=wer.notes -->
+DER measured on the full AMI IHM test set (16 meetings, ~9 h) against
 forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
-overlap scored, at the `very_high_latency` operating point. Our measured
-NeMo reference under the identical protocol is **14.83% DER / 19.89%
-JER**; the C++ F32 port scores 14.59% / 19.51%. (Published DER numbers
-for this model vary with the RTTM source and post-processing; manual
-RTTMs score ~13 points worse than forced-alignment RTTMs on the same
-system output. Compare like with like.)
+overlap scored, at the very_high_latency operating point. Measured NeMo
+reference under the identical protocol: 14.83% DER / 19.89% JER; the
+C++ F32 port scores 14.59% / 19.51%. Published DER numbers vary with
+RTTM source and post-processing; compare like with like. Only
+near-reference tiers ship for this family (k-quant tiers withdrawn;
+see the transcribe.cpp family doc, "Quant policy (Stage 7)").
+<!-- /catalog -->
 
 Only near-reference tiers ship for this family. K-quant tiers were
 evaluated and withdrawn: the model's output depends on discrete

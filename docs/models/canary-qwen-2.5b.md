@@ -1,11 +1,15 @@
 # Canary-Qwen 2.5B
 
-NVIDIA's [`nvidia/canary-qwen-2.5b`](https://huggingface.co/nvidia/canary-qwen-2.5b)
-ported to transcribe.cpp. A NeMo SALM (Speech-Augmented Language Model):
-a 32-layer FastConformer audio encoder (`d_model=1024`, 16 heads) feeds
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-qwen-2.5b`](https://huggingface.co/nvidia/canary-qwen-2.5b) at [`b1469e1bba1cfe140205529c79c434ca47180960`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1bba1cfe140205529c79c434ca47180960).
+
+Offline English speech-to-text. NeMo SALM (Speech-Augmented Language
+Model): a FastConformer audio encoder (32 layers, `d_model=1024`) feeds
 audio embeddings into a Qwen3-1.7B causal LM (28 layers,
-`hidden_size=2048`, `intermediate_size=6144`) via audio-token injection
-at a sentinel position in the prompt.
+`hidden_size=2048`) via audio-token injection at a sentinel position in
+the prompt. English only. Takes a 16 kHz mono WAV and produces a
+transcript via greedy decoding.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -43,16 +47,20 @@ exact per-session value. See the [input-length contract](../input-limits.md).
 | Q4_K_M       | [canary-qwen-2.5b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q4_K_M.gguf) | 1.74 GB | 1.63% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
-with the Whisper-style English text normalizer and jiwer 3.x. The
-same-machine NeMo SALM reference run (CPU torch, dither=0.0, greedy
-`model.generate`) lands at **1.61%** with 95% bootstrap CI [1.47%,
-1.75%]; NVIDIA's published number is 1.60% (within the same CI). All six
-GGUF presets land at exactly 1.63% (`+0.02pp` over our same-machine REF
-run). The remaining `+0.02pp` C++ vs REF gap is BF16 weight-precision
-cascade noise: of 2620 utterances, only 21 (0.8%) differ post-normalizer,
-all classic small-margin token flips (homophones, word-boundary flips,
-function-word substitutions).
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech `test-clean` split (2620 English
+utterances) with the Whisper-style English text normalizer and jiwer
+3.x, on the metal backend of an Apple M4. The same-machine NeMo SALM
+reference run (CPU torch, dither=0.0, greedy `model.generate`) lands
+at **1.61%** with 95% bootstrap CI [1.47%, 1.75%]: `0.01` above
+NVIDIA's published 1.60% but well within statistical noise. All six
+GGUF presets land at exactly 1.63% (`+0.02` over our reference run,
+same CI band). Investigation of the worst per-utterance differences
+shows scattered token-level noise consistent with BF16 weight
+precision (homophones, word-boundary flips, function-word
+substitutions). Reproduce with `scripts/wer/run.py` +
+`scripts/wer/score.py`.
+<!-- /catalog -->
 
 ## Quick Start
 

@@ -1,9 +1,17 @@
 # SenseVoice Small
 
-Alibaba / FunAudioLLM's [`FunAudioLLM/SenseVoiceSmall`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall)
-ported to transcribe.cpp. A 234M-parameter SAN-M encoder with a single CTC
-head over a 25,055-token SentencePiece vocabulary covering Chinese, Cantonese,
-English, Japanese, and Korean.
+<!-- catalog:intro -->
+Upstream: [`FunAudioLLM/SenseVoiceSmall`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) at [`3eb3b4eeffc2f2dde6051b853983753db33e35c3`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4eeffc2f2dde6051b853983753db33e35c3).
+
+Offline multilingual speech-to-text in Chinese, Cantonese, English, Japanese,
+and Korean. A 234M-parameter SAN-M encoder with a single CTC head over a
+25,055-token SentencePiece vocabulary. Takes a 16 kHz mono WAV (capped at
+30 seconds per call, per upstream's direct-inference contract) and produces
+a transcript. Not a streaming model, no translation, no built-in long-form
+chunking. The same CTC head also emits language-ID, simple emotion labels,
+audio-event tags, and an inverse-text-normalization flag — opt-in via
+`--raw-tokens` and `--itn`.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -49,14 +57,16 @@ recordings (e.g. with VAD) for best results. See the
 | Q4_K_M       | [SenseVoiceSmall-Q4_K_M.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q4_K_M.gguf) | 146 MB | 3.45% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy CTC decoding. The publisher does not report a numerical
-LibriSpeech WER, so the
-gate baseline is **our own FunASR 1.3.1 reference run** on the same manifest:
-3.13% (95% CI [2.93%, 3.34%]). transcribe.cpp's F32 port matches that
-baseline within +0.002 percentage-points. Q4_K_M is the only quant with a
-visible regression (+0.32 pp); F16 / Q8_0 / Q6_K / Q5_K_M are within
-bootstrap noise of F32.
+LibriSpeech WER (the model card publishes scores only as PNG figures), so
+the gate baseline is our own FunASR 1.3.1 reference run on the same
+manifest: 3.13% (95% CI [2.93%, 3.34%]). transcribe.cpp's F32 port matches
+that baseline within +0.002 percentage-points. LibriSpeech is an English
+benchmark; SenseVoice's strongest case is Mandarin, and AISHELL-1 (CER)
+is the recommended complementary check.
+<!-- /catalog -->
 
 LibriSpeech is an English benchmark; SenseVoice's strongest case is
 Mandarin. **FLEURS-zh** (945 utterances) CER: 10.20% on our FunASR 1.3.1

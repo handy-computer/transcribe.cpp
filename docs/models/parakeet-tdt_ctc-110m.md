@@ -1,9 +1,10 @@
 # Parakeet TDT-CTC 110M
 
-NVIDIA's [`nvidia/parakeet-tdt_ctc-110m`](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m)
-ported to transcribe.cpp. A hybrid 110M-parameter FastConformer encoder with
-both TDT and CTC heads sharing the same encoder; transcribe.cpp uses the TDT
-head by default.
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-tdt_ctc-110m`](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m) at [`431a349`](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m/commit/431a349).
+
+Offline English speech-to-text with punctuation and capitalization. A 110M-parameter FastConformer encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -33,7 +34,9 @@ pinned 2026-05-10.
 | Q4_K_M       | [parakeet-tdt_ctc-110m-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-Q4_K_M.gguf) |  90 MB | 2.53% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT decoding and no external LM. F32 reference baseline: 2.43%. NVIDIA's self-reported number on the same split is 2.40% (from the [HF model card](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m)).
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT/RNN-T transducer decoding and no external LM. F32 reference baseline: 2.43%. NVIDIA's self-reported number on the same split is 2.40%.
+<!-- /catalog -->
 
 ## Quick Start
 

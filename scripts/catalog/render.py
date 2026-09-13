@@ -1,19 +1,23 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
+# dependencies = ["pyyaml"]
 # ///
-"""Render catalog-derived tables into docs/models/*.md.
+"""Render catalog-derived regions into docs/models/*.md.
 
-The docs are hand-written prose with a few tables that restate numbers the
-catalog already owns. Rather than generate whole files, this rewrites only the
-regions a doc explicitly delegates:
+The docs are hand-written pages with a few regions that restate what the
+catalog or the HF card spec already owns: the download and perf tables, the
+intro summary, and the WER methodology note. Rather than generate whole
+files, this rewrites only the regions a doc explicitly delegates:
 
     <!-- catalog:downloads label="LibriSpeech test-clean" -->
     | Quantization | Download | Size | WER (LibriSpeech test-clean) |
     ...
     <!-- /catalog -->
 
-Everything outside a marker pair is untouched. The variant is the file stem
+Blocks: `downloads`, `perf machine=<slug>`, `intro` (upstream link plus the
+card spec's `summary`), and `prose field=wer.notes` (any `|` text field of
+the spec, dotted path). Everything outside a marker pair is untouched. The variant is the file stem
 unless the marker overrides it with `variant=`, so family docs can pull a
 table for a model they are not named after.
 
@@ -28,6 +32,8 @@ import pathlib
 import re
 import shlex
 import sys
+
+import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import common  # noqa: E402
@@ -146,7 +152,48 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
                                rule_fill=True, max_pad=20)
 
 
-BLOCKS = {"downloads": block_downloads, "perf": block_perf}
+_SPECS: dict[str, dict] = {}
+
+
+def spec_for(record: dict) -> dict:
+    """The editorial HF card spec, the prose source of truth for a variant."""
+    variant = record["variant"]
+    if variant not in _SPECS:
+        path = common.CARDS_DIR / f"{variant}.yaml"
+        if not path.exists():
+            raise RenderError(f"no card spec at {path.relative_to(common.REPO)}")
+        _SPECS[variant] = yaml.safe_load(path.read_text()) or {}
+    return _SPECS[variant]
+
+
+def prose_lines(text: object, what: str) -> list[str]:
+    if not isinstance(text, str) or not text.strip():
+        raise RenderError(f"{what} is empty")
+    return text.strip().split("\n")
+
+
+def block_intro(record: dict, attrs: dict[str, str]) -> list[str]:
+    """Upstream pointer from the catalog, then the card spec's summary."""
+    repo = record["upstream_repo"]
+    line = (f"Upstream: [`{repo}`](https://huggingface.co/{repo}) at "
+            f"[`{record['upstream_commit']}`]"
+            f"(https://huggingface.co/{repo}/commit/{record['upstream_commit']}).")
+    return [line, ""] + prose_lines(spec_for(record).get("summary"), "summary")
+
+
+def block_prose(record: dict, attrs: dict[str, str]) -> list[str]:
+    """A text field of the card spec, named by dotted path (`wer.notes`)."""
+    field = attrs.get("field")
+    if not field:
+        raise RenderError("prose block needs field=")
+    value: object = spec_for(record)
+    for part in field.split("."):
+        value = value.get(part) if isinstance(value, dict) else None
+    return prose_lines(value, f"spec field {field!r}")
+
+
+BLOCKS = {"downloads": block_downloads, "perf": block_perf,
+          "intro": block_intro, "prose": block_prose}
 
 
 # --------------------------------------------------------------------------

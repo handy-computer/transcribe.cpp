@@ -1,8 +1,10 @@
 # Parakeet TDT 1.1B
 
-NVIDIA's [`nvidia/parakeet-tdt-1.1b`](https://huggingface.co/nvidia/parakeet-tdt-1.1b)
-ported to transcribe.cpp. A 1.1B-parameter FastConformer-XL encoder with a
-TDT/RNN-T transducer decoder (predictor + joint with duration head).
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-tdt-1.1b`](https://huggingface.co/nvidia/parakeet-tdt-1.1b) at [`53276c6`](https://huggingface.co/nvidia/parakeet-tdt-1.1b/commit/53276c6).
+
+Offline English speech-to-text. A 1.1B-parameter FastConformer-XL encoder with a TDT/RNNT transducer decoder. Takes a 16 kHz mono WAV and produces a transcript with optional token-level timestamps. Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -36,7 +38,9 @@ pinned 2026-05-10.
 | Q4_K_M       | [parakeet-tdt-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-1.1b-gguf/resolve/main/parakeet-tdt-1.1b-Q4_K_M.gguf) |  825 MB | 1.42% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT decoding and no external LM. F32 reference baseline: 1.39%. NVIDIA's self-reported number on the same split is 1.39% (from the [HF model card](https://huggingface.co/nvidia/parakeet-tdt-1.1b)).
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT/RNN-T transducer decoding and no external LM. F32 reference baseline: 1.39%. NVIDIA's self-reported number on the same split is 1.39%.
+<!-- /catalog -->
 
 ## Quick Start
 

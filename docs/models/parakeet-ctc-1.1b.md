@@ -1,8 +1,10 @@
 # Parakeet CTC 1.1B
 
-NVIDIA's [`nvidia/parakeet-ctc-1.1b`](https://huggingface.co/nvidia/parakeet-ctc-1.1b)
-ported to transcribe.cpp. A 1.1B-parameter FastConformer-XL encoder with a
-linear CTC head.
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-ctc-1.1b`](https://huggingface.co/nvidia/parakeet-ctc-1.1b) at [`a707e81`](https://huggingface.co/nvidia/parakeet-ctc-1.1b/commit/a707e81).
+
+Offline English speech-to-text with greedy CTC decoding. A 1.1B-parameter FastConformer-XL encoder with a linear CTC head. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -35,7 +37,9 @@ pinned 2026-05-10.
 | Q4_K_M       | [parakeet-ctc-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q4_K_M.gguf) |  818 MB | 1.90% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline: 1.85%. NVIDIA's self-reported number on the same split is 1.83% (from the [HF model card](https://huggingface.co/nvidia/parakeet-ctc-1.1b)).
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline: 1.85%. NVIDIA's self-reported number on the same split is 1.83%.
+<!-- /catalog -->
 
 ## Quick Start
 

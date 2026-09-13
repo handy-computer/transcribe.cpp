@@ -1,9 +1,14 @@
 # Moonshine Streaming Tiny
 
-Useful Sensors' [`UsefulSensors/moonshine-streaming-tiny`](https://huggingface.co/UsefulSensors/moonshine-streaming-tiny)
-ported to transcribe.cpp. A 34M-parameter encoder-decoder English ASR model
-designed for streaming use (ergodic encoder + sliding-window attention,
-50 Hz time-domain frontend).
+<!-- catalog:intro -->
+Upstream: [`UsefulSensors/moonshine-streaming-tiny`](https://huggingface.co/UsefulSensors/moonshine-streaming-tiny) at [`f8e9dfd`](https://huggingface.co/UsefulSensors/moonshine-streaming-tiny/commit/f8e9dfd).
+
+English speech-to-text in both one-shot and streaming modes. A 34M-parameter
+encoder-decoder ASR model designed for streaming use (ergodic encoder +
+sliding-window attention, 50 Hz time-domain frontend). Takes a 16 kHz mono
+WAV and produces a transcript. No translation, no multilingual capability,
+no timestamps.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -28,14 +33,17 @@ pinned 2026-05-06.
 | Q8_0         | [moonshine-streaming-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-Q8_0.gguf) |  50 MB | 4.52% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
 baseline: 4.53%. The HF Transformers reference scored on the same manifest
 in the same regime lands at 4.52% with 99.6% byte-identical hypotheses to
 our F32, so the port is at exact parity with the reference. Useful Sensors'
 self-reported number on this split is 4.49% from the Open ASR Leaderboard
 table; the +0.04pp residual is a scoring / text-normalization difference vs
-that methodology, not a numerical drift in the port.
+that methodology, not a numerical drift in the port. Q6_K / Q5_K_M / Q4_K_M
+GGUFs are not currently shipped for this variant.
+<!-- /catalog -->
 
 Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped for this variant.
 

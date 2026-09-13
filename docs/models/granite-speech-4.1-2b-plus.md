@@ -1,12 +1,24 @@
 # Granite Speech 4.1-2b-plus
 
-IBM's [`ibm-granite/granite-speech-4.1-2b-plus`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus)
-ported to transcribe.cpp. The timestamp-and-diarization variant of the
+<!-- catalog:intro -->
+Upstream: [`ibm-granite/granite-speech-4.1-2b-plus`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus) at [`edd3bf5`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus/commit/edd3bf5).
+
+Offline multilingual speech-to-text with word-level timestamps. IBM Granite
+Speech 4.1-2b-plus is the timestamp-and-diarization variant of the
 Granite-Speech family. Same architecture as the base 4.1-2b (Conformer
 encoder, BLIP-2 Q-Former projector, Granite-4.0-1b autoregressive LLM
 decoder) with two changes: the encoder concatenates mid-layer (idx 3) and
-final-layer hidden states (doubling the projector K/V input from 1024 to
-2048), and the LM token embeddings are tied with the lm_head.
+final-layer hidden states (`cat_hidden_layers=[3]`, doubling the projector
+K/V input from 1024 to 2048), and the LM token embeddings are tied with
+the lm_head. Takes a 16 kHz mono WAV and produces a transcript, with
+`--timestamps word` returning structured per-word timestamps (parsed from the
+model's `[T:N]` centisecond markers), or `--diarize` returning structured
+speaker-attributed turns from its separate SAA prompt. Those two prompt tasks
+cannot be combined. Transcribes English,
+French, German, Spanish, and Portuguese (no Japanese on this variant).
+This variant is transcription-only: unlike the base granite-speech-4.1-2b,
+it does not perform speech translation.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -41,15 +53,19 @@ pinned 2026-05-17.
 | Q4_K_M       | [granite-speech-4.1-2b-plus-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q4_K_M.gguf) | 1.49 GB | 1.56% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-greedy decoding and the model-card chat template (system prompt + leading-
-space user instruction + `add_generation_prompt=True`). BF16 reference
-baseline (transformers, re-run locally with that exact prompt): 1.48%;
-0.04pp above upstream's published 1.44%, within bootstrap CI overlap and
-likely a chat-template / normalization difference on the publisher side.
-Text normalizer: Whisper `EnglishTextNormalizer`. The transcribe.cpp runtime
-hard-codes the correct chat template; the WER quoted here is what the C++
-runtime actually scores.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
+with greedy decoding and the model-card chat template (system prompt +
+leading-space user instruction + `add_generation_prompt=True`). BF16
+reference baseline (re-run locally with that exact prompt): 1.48%; 0.04pp
+above upstream's published 1.44%, within bootstrap CI overlap and likely
+a chat-template / normalization difference on the publisher side. Text
+normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+Leaderboard uses. The `add_generation_prompt=True` is load-bearing —
+without it the model emits 25-27 empty hypotheses on short test-clean
+clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the
+prompt correctly; this note only matters if you reproduce the reference.
+<!-- /catalog -->
 
 ## Quick Start
 

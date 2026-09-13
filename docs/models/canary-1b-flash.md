@@ -1,8 +1,17 @@
 # Canary 1B Flash
 
-NVIDIA's [`nvidia/canary-1b-flash`](https://huggingface.co/nvidia/canary-1b-flash)
-ported to transcribe.cpp. An 883M-parameter multitask AED with a 32-layer
-FastConformer encoder and a 4-layer Transformer decoder.
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-1b-flash`](https://huggingface.co/nvidia/canary-1b-flash) at [`a9a55e0`](https://huggingface.co/nvidia/canary-1b-flash/commit/a9a55e0).
+
+Offline multilingual speech-to-text and translation. An 883M-parameter
+multitask AED with a 32-layer FastConformer encoder and a 4-layer
+Transformer decoder. Supports automatic speech recognition in English,
+German, Spanish, and French, and bidirectional EN↔{DE, ES, FR}
+translation. Takes a
+16 kHz mono WAV and produces a transcript. Not a streaming model;
+word/segment timestamps are upstream-experimental and not exposed in
+the v1 port.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -34,9 +43,11 @@ pinned 2026-05-08.
 | Q4_K_M       | [canary-1b-flash-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-flash-gguf/resolve/main/canary-1b-flash-Q4_K_M.gguf) |  677 MB | 1.59% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.62%.
-NVIDIA's self-reported number on the upstream model card is 1.48%
+NVIDIA's self-reported number on the upstream model card is 1.48%.
+<!-- /catalog -->
 
 ## Quick Start
 

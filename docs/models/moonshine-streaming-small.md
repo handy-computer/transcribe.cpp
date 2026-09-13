@@ -1,11 +1,15 @@
 # Moonshine Streaming Small
 
-Useful Sensors' [`UsefulSensors/moonshine-streaming-small`](https://huggingface.co/UsefulSensors/moonshine-streaming-small)
-ported to transcribe.cpp. A 123M-parameter encoder-decoder English ASR model
-designed for streaming use (ergodic encoder + sliding-window attention,
-50 Hz time-domain frontend). Same family as the tiny and medium variants;
-deeper encoder/decoder (10 / 10 layers vs 6 / 6 for tiny) and wider hidden
-dims (encoder 620 / decoder 512).
+<!-- catalog:intro -->
+Upstream: [`UsefulSensors/moonshine-streaming-small`](https://huggingface.co/UsefulSensors/moonshine-streaming-small) at [`2c03650`](https://huggingface.co/UsefulSensors/moonshine-streaming-small/commit/2c03650).
+
+English speech-to-text in both one-shot and streaming modes. A 123M-parameter
+encoder-decoder ASR model designed for streaming use (ergodic encoder +
+sliding-window attention, 50 Hz time-domain frontend). Same family as
+moonshine-streaming-tiny; deeper encoder/decoder (10 / 10 layers) and wider
+hidden dims (encoder 620 / decoder 512). Takes a 16 kHz mono WAV and produces
+a transcript. No translation, no multilingual capability, no timestamps.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -30,14 +34,17 @@ pinned 2026-05-06.
 | Q8_0         | [moonshine-streaming-small-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-streaming-small-gguf/resolve/main/moonshine-streaming-small-Q8_0.gguf) | 199 MB | 2.54% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
 baseline: 2.53%. Useful Sensors' self-reported number on this split is
 2.49% from the Open ASR Leaderboard table; the +0.04pp residual matches
 the same scoring / text-normalization difference seen on the tiny variant
-where we cross-checked against the HF Transformers reference (4.52% on the
-same manifest, 99.6% identical hypotheses to our F32) and confirmed it is
-not a numerical drift in the port.
+where we cross-checked against the HF Transformers reference (4.52% on
+the same manifest, 99.6% identical hypotheses to our F32) and confirmed
+it is not a numerical drift in the port. Q6_K / Q5_K_M / Q4_K_M GGUFs
+are not currently shipped for this variant.
+<!-- /catalog -->
 
 Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped for this variant.
 

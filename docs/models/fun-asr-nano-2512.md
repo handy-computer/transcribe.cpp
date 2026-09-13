@@ -1,10 +1,20 @@
 # Fun-ASR-Nano
 
-Alibaba / FunAudioLLM's [`FunAudioLLM/Fun-ASR-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512)
-ported to transcribe.cpp. ~800M trainable parameters wrapping a frozen
-**SenseVoiceEncoderSmall** (50 SAN-M main blocks + 20 transformer blocks),
-a 2-layer audio adaptor (512 → 1024), and a bundled **Qwen3-0.6B** LLM
+<!-- catalog:intro -->
+Upstream: [`FunAudioLLM/Fun-ASR-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512) at [`a7088d620f755dcdca575b63db184c3ad55b2865`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/commit/a7088d620f755dcdca575b63db184c3ad55b2865).
+
+Offline speech-to-text in Chinese, English, and Japanese, plus 7 Chinese
+dialects (Wu, Cantonese, Min, Hakka, Gan, Xiang, Jin) and 26 regional
+Mandarin accents. ~800M trainable parameters wrapping a frozen
+SenseVoiceEncoderSmall (50 SAN-M main blocks + 20 transformer blocks),
+a 2-layer audio adaptor (512 → 1024), and a bundled Qwen3-0.6B LLM
 (28 layers, 16/8 GQA, BF16) that produces the transcript autoregressively.
+Takes a 16 kHz mono WAV and emits text. Not a streaming model, no
+translation, no built-in long-form chunking, no timestamps. ITN
+(inverse text normalization) is supported by the model and exposed
+via the `--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
+in the library API.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -43,13 +53,17 @@ pinned 2026-05-06.
 | Q4_K_M       | [Fun-ASR-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-Nano-2512-gguf/resolve/main/Fun-ASR-Nano-2512-Q4_K_M.gguf) |  557 MB | 1.92% |
 <!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy LLM decoding via the bundled Qwen3-0.6B head. Publisher
-reports 1.76% on this split (model card "Open-Source Dataset Performance"
-table). Our FunASR 1.3.1 reference run scores 1.79% (95% CI [1.63%, 1.95%]),
-within bootstrap noise of the publisher's number. transcribe.cpp's BF16
-port matches that baseline within -0.01 percentage-points; F16/Q8_0/Q6_K
-are numerically indistinguishable.
+reports 1.76% on this split (model card "Open-Source Dataset
+Performance" table). Our FunASR 1.3.1 reference run scores 1.79%
+(95% CI [1.63%, 1.95%]), within bootstrap noise of the publisher's
+number. transcribe.cpp's BF16 port matches that baseline within
+-0.01 percentage-points. LibriSpeech is an English-only benchmark;
+Chinese (AISHELL-1, WenetSpeech) and Japanese (CommonVoice JA) are
+the recommended complementary checks.
+<!-- /catalog -->
 
 LibriSpeech is an English benchmark; Fun-ASR-Nano's strongest case is
 Mandarin. **FLEURS-zh** (945 utterances) CER: 8.61% on our FunASR 1.3.1

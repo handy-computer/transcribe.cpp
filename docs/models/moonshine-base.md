@@ -1,10 +1,15 @@
 # Moonshine base
 
-Useful Sensors' [`UsefulSensors/moonshine-base`](https://huggingface.co/UsefulSensors/moonshine-base)
-ported to transcribe.cpp. A 61M-parameter encoder-decoder transformer that
-consumes raw 16 kHz PCM directly (no STFT, no mel filterbank) via a three-layer
-Conv1d stem. Wider and deeper than moonshine-tiny (8 encoder / 8 decoder
-layers, hidden size 416, intermediate 1664, partial RoPE 0.62).
+<!-- catalog:intro -->
+Upstream: [`UsefulSensors/moonshine-base`](https://huggingface.co/UsefulSensors/moonshine-base) at [`7a73d8d`](https://huggingface.co/UsefulSensors/moonshine-base/commit/7a73d8d).
+
+Useful Sensors Moonshine base — a 61M-parameter encoder-decoder transformer
+for English speech recognition. Consumes raw 16 kHz PCM directly via a
+three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
+Wider and deeper than moonshine-tiny (8 encoder / 8 decoder layers, hidden
+size 416, partial RoPE 0.62). English-only; no translation, no language
+detection, no timestamps.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -35,17 +40,16 @@ on 2026-05-05.
 | Q8_0         | [moonshine-base-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-Q8_0.gguf) |  77 MB | 3.26% |
 <!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-the transcribe.cpp default decode (greedy, `num_beams=1`, `max_length=194` —
-matching the upstream `generation_config`). Upstream reports 3.27% on the same
-split (Moonshine paper, Table 2; also Open ASR Leaderboard). Our F32 reference
-baseline lands at 3.28%, identical to upstream within rounding and well within
-the ±1.00 pp Stage 7 acceptance gate. Q8_0 lands at 3.26%, slightly under F32
-— that delta sits inside the 95% bootstrap CI and is noise, not a real
-improvement. Only F16 and Q8_0 are shipped as derived presets: at
-moonshine-base's shapes (hidden 416, intermediate 1664, vocab 32768) none of
-the dimensions divide the k-quant super-block size of 256, so Q6_K / Q5_K_M /
-Q4_K_M would all fall back to Q8_0 storage and be near-duplicates.
+<!-- catalog:prose field=wer.notes -->
+WER measured on the full LibriSpeech test-clean split (2620 utterances)
+with the transcribe.cpp default decode (greedy, num_beams=1,
+max_length=194 — matching the upstream generation_config). Upstream
+reports 3.27% on the same split (Moonshine paper, Table 2; also Open
+ASR Leaderboard). Our F32 reference baseline lands at 3.28%, identical
+to upstream within rounding and well within the ±1.00 pp Stage 7
+acceptance gate. Q8_0 lands at 3.26%, slightly under F32 — that delta
+sits inside the 95% bootstrap CI and is noise, not a real improvement.
+<!-- /catalog -->
 
 ## Quick Start
 
