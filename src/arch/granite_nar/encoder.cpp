@@ -4,10 +4,9 @@
 // self-attention, GLU conv module with conv_expansion=2, macaron FFN,
 // mid-layer self-conditioned CTC bypass). NLE additions:
 //
-//   - A second CTC head over a BPE vocab. We emit
-//     frame-level logits as `enc.ctc_bpe_logits` here; the
-//     posterior-weighted window pool + greedy decode runs host-side at
-//     run() time.
+//   - A second CTC head over a BPE vocab. Its posterior-weighted encoder
+//     states are projected in bounded chunks after this graph; each chunk
+//     performs greedy argmax before returning to host.
 //   - All-hidden-states capture: we tap the per-block POST-LN output at
 //     indices specified by hp.enc_layer_indices (e.g. [4, 8, 12, -1]
 //     1-indexed → block outputs after 3, 7, 11, 15). These are
@@ -269,6 +268,16 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     }
 
     std::vector<ggml_tensor *> captures(capture_idx.size(), nullptr);
+    for (size_t k = 0; k < capture_idx.size(); ++k) {
+        if (capture_idx[k] == n_layers - 1) {
+            eb.final_capture_offset = static_cast<int64_t>(k) * d_model;
+            break;
+        }
+    }
+    if (eb.final_capture_offset < 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar encoder: projector captures do not include final layer");
+        return eb;
+    }
 
     for (int i = 0; i < n_layers; ++i) {
         const auto & b = weights.enc_blocks[i];
@@ -392,16 +401,6 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
         }
     }
 
-    // Frame-level BPE CTC head (the pool happens host-side).
-    ggml_tensor * ctc_bpe = nullptr;
-    if (weights.enc_top.ctc_bpe_w != nullptr) {
-        ctc_bpe = ggml_mul_mat(ctx, weights.enc_top.ctc_bpe_w, x);
-        ctc_bpe = ggml_add(ctx, ctc_bpe, weights.enc_top.ctc_bpe_b);
-        named(ctc_bpe, "enc.ctc_bpe_logits");
-        eb.ctc_bpe_logits = ctc_bpe;
-        ggml_set_output(ctc_bpe);
-    }
-
     // Channel concat of captured layer outputs. Walk captures in order
     // (capture_idx ordered by hp.enc_layer_indices entry).
     ggml_tensor * cat = nullptr;
@@ -428,9 +427,6 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     }
     ggml_build_forward_expand(eb.graph, eb.cat_out);
     ggml_build_forward_expand(eb.graph, eb.ctc_logits);
-    if (eb.ctc_bpe_logits) {
-        ggml_build_forward_expand(eb.graph, eb.ctc_bpe_logits);
-    }
     if (eb.mid_blank_probs) {
         ggml_build_forward_expand(eb.graph, eb.mid_blank_probs);
     }
@@ -465,82 +461,36 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     return eb;
 }
 
-// Host-side BPE CTC pool + greedy decode.
-
-void compute_bpe_ctc_initial_hypothesis(const std::vector<float> & importance_non_blank,
-                                        const std::vector<float> & ctc_bpe_logits,
-                                        int                        n_bpe_vocab,
-                                        int                        T_enc,
-                                        int                        pool_window,
-                                        int                        blank_id,
-                                        std::vector<int32_t> &     out_token_ids) {
-    out_token_ids.clear();
-    if (T_enc <= 0 || pool_window <= 0 || n_bpe_vocab <= 0) {
-        return;
-    }
-    if (static_cast<int>(importance_non_blank.size()) < T_enc) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar BPE CTC: importance has %zu entries, need >= %d",
-                importance_non_blank.size(), T_enc);
-        return;
-    }
-    const std::vector<float> & non_blank = importance_non_blank;
-
-    // Pool over consecutive windows of pool_window. Only windows whose
-    // total non-blank posterior is non-zero contribute. Within a window
-    // we form a weighted sum of the BPE logits, weighted by per-frame
-    // non_blank_prob, normalised by the sum of weights.
-    const int          n_windows = (T_enc + pool_window - 1) / pool_window;
-    std::vector<float> pooled(static_cast<size_t>(n_windows) * n_bpe_vocab, 0.0f);
-    std::vector<int>   valid(n_windows, 0);
-    for (int w = 0; w < n_windows; ++w) {
-        const int t0    = w * pool_window;
-        const int t1    = std::min(t0 + pool_window, T_enc);
-        float     total = 0.0f;
-        for (int t = t0; t < t1; ++t) {
-            total += non_blank[t];
-        }
-        if (total <= 1e-9f) {
-            continue;  // all-blank window — emit a blank, which collapse drops
-        }
-        float * dst = pooled.data() + static_cast<size_t>(w) * n_bpe_vocab;
-        for (int t = t0; t < t1; ++t) {
-            const float   wt  = non_blank[t] / total;
-            const float * row = ctc_bpe_logits.data() + static_cast<size_t>(t) * n_bpe_vocab;
-            for (int v = 0; v < n_bpe_vocab; ++v) {
-                dst[v] += wt * row[v];
-            }
-        }
-        valid[w] = 1;
+BpeCtcBuild build_bpe_ctc_graph(ggml_context *            ctx,
+                                const GraniteNarWeights & weights,
+                                const GraniteNarHParams & hp,
+                                int                       n_windows) {
+    BpeCtcBuild bb{};
+    if (ctx == nullptr || weights.enc_top.ctc_bpe_w == nullptr || weights.enc_top.ctc_bpe_b == nullptr ||
+        hp.enc_hidden <= 0 || hp.enc_bpe_pool_window <= 0 || n_windows <= 0) {
+        return bb;
     }
 
-    // Greedy + collapse repeats + drop blanks. For windows with no
-    // valid mass, we emit blank (no-op).
-    int prev = -1;
-    out_token_ids.reserve(n_windows);
-    for (int w = 0; w < n_windows; ++w) {
-        int argmax = blank_id;
-        if (valid[w]) {
-            const float * dst  = pooled.data() + static_cast<size_t>(w) * n_bpe_vocab;
-            float         best = dst[0];
-            for (int v = 1; v < n_bpe_vocab; ++v) {
-                if (dst[v] > best) {
-                    best   = dst[v];
-                    argmax = v;
-                }
-            }
-        }
-        if (argmax != blank_id && argmax != prev) {
-            // Two BPE-CTC schemes, distinguished by blank_id alone:
-            //   - blank_id == 0 (bpe_output_dim = vocab_size + 1): channel 0
-            //     is a synthetic blank, channels 1..N hold the LLM token ids —
-            //     recover the LLM id with `argmax - 1`.
-            //   - blank_id != 0 (bpe_output_dim = vocab_size): channels ARE
-            //     the LLM ids directly (blank is the BOS id). No shift.
-            const int shift = (blank_id == 0) ? 1 : 0;
-            out_token_ids.push_back(argmax - shift);
-        }
-        prev = argmax;
+    bb.n_windows = n_windows;
+
+    bb.hidden_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.enc_hidden, n_windows);
+    named(bb.hidden_in, "enc.ctc_bpe.hidden_in");
+    ggml_set_input(bb.hidden_in);
+
+    ggml_tensor * logits = ggml_mul_mat(ctx, weights.enc_top.ctc_bpe_w, bb.hidden_in);
+    logits               = ggml_add(ctx, logits, weights.enc_top.ctc_bpe_b);
+
+    bb.token_ids = ggml_argmax(ctx, logits);
+    named(bb.token_ids, "enc.ctc_bpe.token_ids");
+    ggml_set_output(bb.token_ids);
+
+    bb.graph = ggml_new_graph_custom(ctx, /*size=*/1024, /*grads=*/false);
+    if (bb.graph == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar BPE CTC: ggml_new_graph_custom failed");
+        return {};
     }
+    ggml_build_forward_expand(bb.graph, bb.token_ids);
+    return bb;
 }
 
 }  // namespace transcribe::granite_nar

@@ -308,14 +308,15 @@ transcribe_status init_context(transcribe_model *                model,
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
             kv_type = GGML_TYPE_F32;
         }
-        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
-                                            /*n_ctx=*/2048, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
-                                            cm->hparams.dec_n_layers, kv_type)) {
+        const int initial_n_ctx = std::min(1024, qwen3_context_ceiling(cc->n_ctx, cm->hparams));
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, initial_n_ctx, cm->hparams.dec_n_kv_heads,
+                                            cm->hparams.dec_head_dim, cm->hparams.dec_n_layers, kv_type)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "qwen3_asr init_context: KV cache allocation failed "
-                                "(n_ctx=2048, %d kv-heads x %d head-dim x %d layers) — "
+                                "(n_ctx=%d, %d kv-heads x %d head-dim x %d layers) — "
                                 "out of memory.",
-                                cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim, cm->hparams.dec_n_layers);
+                                initial_n_ctx, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
+                                cm->hparams.dec_n_layers);
             return TRANSCRIBE_ERR_OOM;
         }
     }
@@ -655,20 +656,6 @@ transcribe_status run(transcribe_session *          session,
     {
         std::vector<float> pe = build_sinusoid_pe(cm->hparams.enc_d_model, timing.per_chunk_aftercnn);
         ggml_backend_tensor_set(eb.pos_emb_in, pe.data(), 0, pe.size() * sizeof(float));
-    }
-
-    // Attention mask (block-diagonal from cu_seqlens).
-    {
-        std::vector<float> mask = build_cu_seqlens_mask(timing, cm->hparams);
-        if (cc->encoder_use_flash) {
-            std::vector<ggml_fp16_t> mask_f16(mask.size());
-            for (size_t i = 0; i < mask.size(); ++i) {
-                mask_f16[i] = ggml_fp32_to_fp16(mask[i]);
-            }
-            ggml_backend_tensor_set(eb.mask_in, mask_f16.data(), 0, mask_f16.size() * sizeof(ggml_fp16_t));
-        } else {
-            ggml_backend_tensor_set(eb.mask_in, mask.data(), 0, mask.size() * sizeof(float));
-        }
     }
 
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);

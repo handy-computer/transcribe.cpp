@@ -13,6 +13,7 @@
 #include "transcribe-log.h"
 #include "weights.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +24,9 @@ namespace transcribe::gigaam {
 namespace {
 
 namespace conf = transcribe::conformer;
+
+constexpr int64_t kAttentionQueryChunk = 256;
+constexpr int64_t kAttentionChunkMinT  = 2048;
 
 // Project a GigaamBlock onto the shared BlockView so we can reuse
 // conf::conv_module. The attention-half fields stay nullptr because we
@@ -190,7 +194,7 @@ ggml_tensor * build_rotary_attn(ggml_context *      ctx,
         // Flash attention already writes contiguous
         // [head_dim, n_head, T, B] data.
         o = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr, scale, 0.0f, 0.0f);
-    } else {
+    } else if (T <= kAttentionChunkMinT) {
         ggml_tensor * kq = ggml_mul_mat(ctx, k, q);  // [T_k, T_q, n_head, B]
         // Additive key-padding mask: ne=[T_k, 1, 1, B] broadcasts over
         // queries (ne[1]) and heads (ne[2]). -INF/0 are scale-invariant, so
@@ -204,6 +208,37 @@ ggml_tensor * build_rotary_attn(ggml_context *      ctx,
         // Manual attention writes [head_dim, T, n_head, B]. Transpose it
         // to the contiguous layout returned by flash attention.
         o                     = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
+    } else {
+        // Tile only the query axis. Every query still attends all T keys, so
+        // this is the same full-context attention with bounded score storage.
+        ggml_tensor *              v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+        std::vector<ggml_tensor *> chunks;
+        chunks.reserve(static_cast<size_t>((T + kAttentionQueryChunk - 1) / kAttentionQueryChunk));
+        for (int64_t q0 = 0; q0 < T; q0 += kAttentionQueryChunk) {
+            const int64_t n_query = std::min<int64_t>(kAttentionQueryChunk, T - q0);
+            ggml_tensor * q_chunk =
+                ggml_view_4d(ctx, q, head_dim, n_query, n_head, Bb, q->nb[1], q->nb[2], q->nb[3], q0 * q->nb[1]);
+            q_chunk          = ggml_cont(ctx, q_chunk);
+            ggml_tensor * kq = ggml_mul_mat(ctx, k, q_chunk);
+            if (attn_pad_mask != nullptr) {
+                kq = ggml_add(ctx, kq, attn_pad_mask);
+            }
+            ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr, scale, 0.0f);
+            ggml_tensor * chunk   = ggml_mul_mat(ctx, v_t, kq_soft);
+            chunk                 = ggml_cont(ctx, ggml_permute(ctx, chunk, 0, 2, 1, 3));
+            chunk                 = ggml_reshape_3d(ctx, chunk, d_model, n_query, Bb);
+            chunks.push_back(chunk);
+        }
+        while (chunks.size() > 1) {
+            std::vector<ggml_tensor *> next;
+            next.reserve((chunks.size() + 1) / 2);
+            for (size_t i = 0; i < chunks.size(); i += 2) {
+                next.push_back(i + 1 < chunks.size() ? ggml_concat(ctx, chunks[i], chunks[i + 1], /*dim=*/1) :
+                                                       chunks[i]);
+            }
+            chunks.swap(next);
+        }
+        o = chunks.front();
     }
     // Fold [head_dim, n_head] into d_model without another copy.
     o = ggml_reshape_3d(ctx, o, d_model, T, Bb);

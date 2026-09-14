@@ -45,9 +45,8 @@ struct EncoderBuild {
     // ggml_backend_tensor_set after alloc.
     ggml_tensor * audio_in = nullptr;
 
-    // Per-layer sliding-window attention masks. Each tensor is f32
-    // shape [T_enc, T_enc] (n_kv, n_q). Caller uploads from host-built
-    // mask buffers before computing the graph.
+    // Per-layer sliding-window attention masks. Each unique window geometry
+    // has one shared f16 tensor of shape [T_enc, T_enc] (n_kv, n_q).
     std::vector<ggml_tensor *> per_layer_masks;
 
     // Output: final encoder hidden state [d_model, T_enc] f32.
@@ -89,7 +88,7 @@ EncoderBuild build_encoder_graph(ggml_context *                    compute_ctx,
 //     (q-k >= 0 && q-k < L)   // up to L-1 positions back, including self
 //   || (k-q >= 1 && k-q < R)  // up to R-1 positions ahead
 //
-// Caller-provided buffer must be at least T_enc*T_enc floats.
-void build_sliding_window_mask(int T_enc, int left_window, int right_window, float * out_mask);
+// Caller-provided buffer must contain at least T_enc*T_enc fp16 values.
+void build_sliding_window_mask(int T_enc, int left_window, int right_window, ggml_fp16_t * out_mask);
 
 }  // namespace transcribe::moonshine_streaming

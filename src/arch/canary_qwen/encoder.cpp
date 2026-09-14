@@ -108,9 +108,11 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
                                  bool                      use_flash,
                                  const char *              backend_name) {
     conf::ConvPolicy policy{};
-    policy.direct_pw               = conf::detect_direct_pw(backend_name);
-    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = false;
+    policy.direct_pw                = conf::detect_direct_pw(backend_name);
+    policy.direct_dw_in_block       = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode  = false;
+    policy.inplace_pre_encode       = true;
+    policy.pre_encode_dw_time_chunk = 256;
 
     EncoderBuild eb{};
 

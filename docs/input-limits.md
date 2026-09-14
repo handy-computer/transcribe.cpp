@@ -71,7 +71,7 @@ need and do not have a length gate.
 
 | Families | Limit source | Behavior |
 | --- | --- | --- |
-| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or the encoder positional table (`enc_pos_emb_max_len`, for cohere/canary) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
+| qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary, moonshine_streaming | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or a learned encoder/adapter positional table (`enc_pos_emb_max_len`, and `adapter.pos_emb` for moonshine_streaming) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where a positional table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
 
 These families wrap an LLM-style decoder whose context window
 (`audio_tokens + prompt + generation`) is the binding constraint. The number of
@@ -80,6 +80,12 @@ tokens a clip consumes is a deterministic function of its sample count
 computes the prefill size *before* running the encoder and rejects an
 over-length clip immediately — the caller never pays for a compute pass that
 cannot fit. The rejection goes through the log callback, not raw stderr.
+
+Moonshine Streaming is encoder-decoder rather than audio-LLM, but has the same
+hard-gate behavior: its 4096-row learned adapter position table receives one
+row per 20 ms encoder frame, imposing an exact **81.92 s** audio limit. This is
+also the limit reported by `max_audio_ms`; one-shot, batch, and streaming calls
+reject audio past it before an out-of-range embedding lookup can occur.
 
 The one case that cannot be predicted up front is the transcript itself running
 long enough to exhaust the remaining budget mid-decode (rare — the output would
@@ -95,7 +101,7 @@ status (the whole-batch call still returns `TRANSCRIBE_OK`).
 
 | Families | Window | Behavior |
 | --- | --- | --- |
-| gigaam (~25 s), sensevoice (~30 s), medasr (~400 s), moonshine (output-bound, ~48 s), moonshine_streaming (output-bound, ~17 min) | training / positional window | Any length is accepted; past the window the library emits a `WARN` (degraded accuracy is possible) and proceeds. `max_audio_ms` reports the window as advisory. |
+| gigaam (~25 s), sensevoice (~30 s), medasr (~400 s), moonshine (output-bound, ~48 s) | training / positional window | Any length is accepted; past the window the library emits a `WARN` (degraded accuracy is possible) and proceeds. `max_audio_ms` reports the window as advisory. |
 
 These families have no hard architectural wall but were trained on a bounded
 window; beyond it, accuracy degrades rather than failing. The library does not
@@ -109,11 +115,6 @@ Moonshine is the honest edge case in this bucket: its cap is on *output*
 audio length — a dense short clip can hit it too. It is reported via
 `transcribe_was_truncated()` and a `WARN` (and, offline, the hard
 `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` status) when the cap is reached.
-`moonshine_streaming` has the same output-bound shape with a much larger window
-(`dec_max_position_embeddings = 4096`, ≈ 17 min); because it also streams, its
-truncation follows the streaming rule below — `stream_finalize` still returns
-`TRANSCRIBE_OK` and the truncation surfaces only through
-`transcribe_was_truncated()`.
 
 ## Context sizing and the `n_ctx` knob
 
@@ -138,9 +139,10 @@ reports the model's default-context ceiling (`n_ctx == 0`); it is not re-derived
 for a session that narrows `n_ctx`. A session that lowers `n_ctx` may therefore
 reject audio shorter than the advertised `max_audio_ms`.
 
-Encoder-bound families are different. For cohere and canary, the input-audio
-limit is the encoder positional table, while `n_ctx` only bounds the decoder
-self-KV / output budget. In those families `transcribe_session_get_limits()`
+Encoder-bound families are different. For cohere, canary, and
+moonshine_streaming, the input-audio limit is an encoder or adapter positional
+table, while `n_ctx` only bounds the decoder self-KV / output budget. In those
+families `transcribe_session_get_limits()`
 reports a smaller `effective_n_ctx` and `max_kv_bytes` when `n_ctx` is lowered,
 but `effective_max_audio_ms` stays pinned to the encoder input bound.
 
@@ -182,9 +184,8 @@ and has its own terminal-state machine (`transcribe_stream_*`,
 IDLE/ACTIVE/FINISHED/FAILED), and `stream_feed` / `stream_finalize` return the
 status of *that step*, not a verdict on the whole transcript. So when a
 streaming decode reaches its context cap (e.g. `voxtral_realtime` at its
-absolute position limit — hours of continuous audio, or `moonshine_streaming`
-at its output window), the stream does **not** fail and `stream_finalize`
-returns `TRANSCRIBE_OK`; the truncation is surfaced through
+absolute position limit — hours of continuous audio), the stream does **not**
+fail and `stream_finalize` returns `TRANSCRIBE_OK`; the truncation is surfaced through
 `transcribe_was_truncated(session)` and a `WARN`. This is deliberate:
 forcing a stream into a failed terminal state on truncation would discard the
 committed text the caller has been consuming. A streaming caller that needs to

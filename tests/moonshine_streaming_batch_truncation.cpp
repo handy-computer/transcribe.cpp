@@ -1,16 +1,10 @@
-// moonshine_streaming_batch_truncation.cpp - real-model gated test that
-// transcribe_run_batch reports output truncation PER UTTERANCE.
+// moonshine_streaming_batch_truncation.cpp - real-model gated test for the
+// learned adapter-position limit in one-shot and batch inference.
 //
-// Moonshine's cap is on output (max_length decode tokens), not input, so a
-// long clip runs the decoder into the cap before end-of-stream. In a batch,
-// that must surface as a per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED on the
-// affected row (with its partial text retained), while a short row that
-// finishes normally stays TRANSCRIBE_OK and the whole-batch call still returns
-// OK. transcribe_was_truncated() is also set. See docs/input-limits.md.
-//
-// Batch makeup:
-//   row 0 = jfk.wav (~11 s)  -> completes under the cap   -> OK
-//   row 1 = love-loss.wav (~197 s) -> exceeds the cap     -> OUTPUT_TRUNCATED
+// The adapter has 4096 position rows and receives one position per 20 ms
+// encoder frame, so tiny accepts at most 81.92 seconds. Longer audio must be
+// rejected before encoder compute rather than reaching ggml_get_rows with an
+// out-of-range index.
 //
 // Gating:
 //   - TRANSCRIBE_BUILD_REAL_MODEL_TESTS (CMake, default OFF) builds it.
@@ -89,48 +83,72 @@ int main() {
 
     transcribe_model_load_params mp;
     transcribe_model_load_params_init(&mp);
-    struct transcribe_model * model = nullptr;
+    transcribe_model * model = nullptr;
     if (transcribe_model_load_file(model_path, &mp, &model) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "model load failed: %s\n", model_path);
         return 1;
     }
 
+    transcribe_capabilities caps;
+    transcribe_capabilities_init(&caps);
+    CHECK(transcribe_model_get_capabilities(model, &caps) == TRANSCRIBE_OK);
+    CHECK_EQ_INT(caps.max_audio_ms, 81920);
+
     transcribe_session_params sp;
     transcribe_session_params_init(&sp);
-    struct transcribe_session * s = nullptr;
+    transcribe_session * s = nullptr;
     if (transcribe_session_init(model, &sp, &s) != TRANSCRIBE_OK) {
-        std::fprintf(stderr, "session init failed\n");
+        std::fprintf(stderr, "context init failed\n");
         transcribe_model_free(model);
         return 1;
     }
 
-    const float * pcms[2] = { pcm_short.data(), pcm_long.data() };
-    const int     lens[2] = { (int) pcm_short.size(), (int) pcm_long.size() };
+    transcribe_session_limits limits;
+    transcribe_session_limits_init(&limits);
+    CHECK(transcribe_session_get_limits(s, &limits) == TRANSCRIBE_OK);
+    CHECK_EQ_INT(limits.effective_n_ctx, 4096);
+    CHECK_EQ_INT(limits.effective_max_audio_ms, 81920);
+    CHECK_EQ_INT(limits.max_kv_bytes, 62914560);
 
-    // The whole-batch call succeeds even though a row truncates.
+    // One-shot rejects before encoder compute and clears a prior transcript.
+    CHECK(transcribe_run(s, pcm_short.data(), static_cast<int>(pcm_short.size()), nullptr) == TRANSCRIBE_OK);
+    CHECK(transcribe_full_text(s) != nullptr && transcribe_full_text(s)[0] != '\0');
+    CHECK(transcribe_run(s, pcm_long.data(), static_cast<int>(pcm_long.size()), nullptr) ==
+          TRANSCRIBE_ERR_INPUT_TOO_LONG);
+    CHECK(transcribe_full_text(s) == nullptr || transcribe_full_text(s)[0] == '\0');
+
+    const float * pcms[2] = { pcm_short.data(), pcm_long.data() };
+    const int     lens[2] = { static_cast<int>(pcm_short.size()), static_cast<int>(pcm_long.size()) };
+
+    // A mixed batch reports the hard input limit per utterance.
     CHECK(transcribe_run_batch(s, pcms, lens, 2, nullptr) == TRANSCRIBE_OK);
     CHECK_EQ_INT(transcribe_batch_n_results(s), 2);
-
-    // Row 0 (short) completes; row 1 (long) hits the output cap.
     CHECK(transcribe_batch_status(s, 0) == TRANSCRIBE_OK);
-    CHECK(transcribe_batch_status(s, 1) == TRANSCRIBE_ERR_OUTPUT_TRUNCATED);
+    CHECK(transcribe_batch_status(s, 1) == TRANSCRIBE_ERR_INPUT_TOO_LONG);
+    const char * short_text = transcribe_batch_full_text(s, 0);
+    const char * long_text  = transcribe_batch_full_text(s, 1);
+    CHECK(short_text != nullptr && short_text[0] != '\0');
+    CHECK(long_text == nullptr || long_text[0] == '\0');
+    CHECK(transcribe_was_truncated(s) == false);
 
-    // Both rows keep their (partial, for row 1) transcript.
-    for (int i = 0; i < 2; ++i) {
-        const char * text = transcribe_batch_full_text(s, i);
-        CHECK(text != nullptr && text[0] != '\0');
-    }
-
-    // The supplemental flag is set whenever any row truncated.
-    CHECK(transcribe_was_truncated(s) == true);
+    // Streaming rejects a feed that would cross the same table bound.
+    transcribe_run_params run_params;
+    transcribe_run_params_init(&run_params);
+    transcribe_stream_params stream_params;
+    transcribe_stream_params_init(&stream_params);
+    CHECK(transcribe_stream_begin(s, &run_params, &stream_params) == TRANSCRIBE_OK);
+    transcribe_stream_update update;
+    transcribe_stream_update_init(&update);
+    CHECK(transcribe_stream_feed(s, pcm_long.data(), static_cast<int>(pcm_long.size()), &update) ==
+          TRANSCRIBE_ERR_INPUT_TOO_LONG);
 
     transcribe_session_free(s);
     transcribe_model_free(model);
 
     if (g_failures > 0) {
-        std::fprintf(stderr, "moonshine_streaming_batch_truncation: %d failures\n", g_failures);
+        std::fprintf(stderr, "moonshine_streaming_input_limit: %d failures\n", g_failures);
         return EXIT_FAILURE;
     }
-    std::fprintf(stdout, "moonshine_streaming_batch_truncation: ok\n");
+    std::fprintf(stdout, "moonshine_streaming_input_limit: ok\n");
     return EXIT_SUCCESS;
 }

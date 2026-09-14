@@ -57,7 +57,7 @@ ggml_tensor * asinh_op(ggml_context * ctx, ggml_tensor * z) {
 // Encoder MHSA without RoPE, with a per-layer sliding-window mask.
 //
 // x:        [d_model, T_enc]            (residual stream dim = enc_d_model)
-// mask:     [T_enc, T_enc] f32 — uploaded by caller, cast to F16 inside graph
+// mask:     [T_enc, T_enc] f16
 // Returns:  [d_model, T_enc]
 //
 // q_w/k_w/v_w have ggml ne [d_model, attn_dim]; out_w has ne
@@ -65,7 +65,7 @@ ggml_tensor * asinh_op(ggml_context * ctx, ggml_tensor * z) {
 // smaller than d_model (small/medium); for tiny they are equal.
 ggml_tensor * mha_encoder_swa(ggml_context *                    ctx,
                               ggml_tensor *                     x,
-                              ggml_tensor *                     mask_f32,
+                              ggml_tensor *                     mask,
                               ggml_tensor *                     q_w,
                               ggml_tensor *                     k_w,
                               ggml_tensor *                     v_w,
@@ -104,18 +104,15 @@ ggml_tensor * mha_encoder_swa(ggml_context *                    ctx,
     K = to_attn_layout(K);
     V = to_attn_layout(V);
 
-    // ggml_soft_max_ext / ggml_flash_attn_ext require F16 mask.
-    ggml_tensor * mask_f16 = ggml_cast(ctx, mask_f32, GGML_TYPE_F16);
-
     ggml_tensor * o;
     if (use_flash) {
-        o = ggml_flash_attn_ext(ctx, Q, K, V, mask_f16, scale, 0.0f, 0.0f);
+        o = ggml_flash_attn_ext(ctx, Q, K, V, mask, scale, 0.0f, 0.0f);
         // FA output: [head_dim_pad, n_heads, T, 1] → [head_dim_pad, T, n_heads, 1]
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
         o = ggml_cont(ctx, o);
     } else {
         ggml_tensor * kq      = ggml_mul_mat(ctx, K, Q);
-        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask_f16, scale, 0.0f);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask, scale, 0.0f);
         ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, V, 1, 0, 2, 3));
         o                     = ggml_mul_mat(ctx, v_t, kq_soft);
         // o ne: [head_dim_pad, T, n_heads, 1]
@@ -229,17 +226,15 @@ int encoder_t_enc(const MoonshineStreamingHParams & hp, int n_samples) {
     return T_enc;
 }
 
-void build_sliding_window_mask(int T_enc, int left_window, int right_window, float * out_mask) {
-    constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
-    // mask[q, k]: q is row (n_q axis), k is col (n_kv axis = innermost).
-    // ggml mask layout convention: ne0 = n_kv, ne1 = n_q. Row-major
-    // memory has q as outer index, k as inner.
+void build_sliding_window_mask(int T_enc, int left_window, int right_window, ggml_fp16_t * out_mask) {
+    const ggml_fp16_t zero    = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t neg_inf = ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity());
     for (int q = 0; q < T_enc; ++q) {
         for (int k = 0; k < T_enc; ++k) {
             const int  dist                              = q - k;
             const bool left_ok                           = (dist >= 0) && (dist < left_window);
             const bool right_ok                          = (dist < 0) && (-dist < right_window);
-            out_mask[static_cast<size_t>(q) * T_enc + k] = (left_ok || right_ok) ? 0.0f : NEG_INF;
+            out_mask[static_cast<size_t>(q) * T_enc + k] = (left_ok || right_ok) ? zero : neg_inf;
         }
     }
 }
@@ -368,9 +363,23 @@ EncoderBuild build_encoder_graph(ggml_context *                    ctx,
     transcribe::debug::mark_tensor_for_dump(x);
 
     // ---- per-layer sliding-window masks (input tensors) ----
+    // Layers with identical geometry share one input. The tiny variant has
+    // only two unique masks across six layers; retaining six dense T x T
+    // inputs needlessly dominates long-utterance memory.
     eb.per_layer_masks.assign(hp.enc_n_layers, nullptr);
     for (int i = 0; i < hp.enc_n_layers; ++i) {
-        ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, T_enc, T_enc);
+        const int left  = hp.enc_sliding_windows[2 * i + 0];
+        const int right = hp.enc_sliding_windows[2 * i + 1];
+        for (int j = 0; j < i; ++j) {
+            if (hp.enc_sliding_windows[2 * j + 0] == left && hp.enc_sliding_windows[2 * j + 1] == right) {
+                eb.per_layer_masks[i] = eb.per_layer_masks[j];
+                break;
+            }
+        }
+        if (eb.per_layer_masks[i] != nullptr) {
+            continue;
+        }
+        ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, T_enc, T_enc);
         char          mname[64];
         std::snprintf(mname, sizeof(mname), "enc.swa_mask.%d", i);
         named(mask, mname);
