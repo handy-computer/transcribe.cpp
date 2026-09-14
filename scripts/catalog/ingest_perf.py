@@ -45,14 +45,29 @@ def quant_of(model_path: str) -> str | None:
     return match.group(1) if match else None
 
 
+_CATALOG_KEYS: dict[str, str] | None = None
+
+
+def _canonical_variant(name: str | None) -> str | None:
+    """Catalog variant for a report/path name. Model dirs keep the upstream
+    repo casing (models/Qwen3-ASR-0.6B) while catalog keys are lowercase
+    (qwen3-asr-0.6b), so match case-insensitively before falling back."""
+    global _CATALOG_KEYS
+    if not name:
+        return name
+    if _CATALOG_KEYS is None:
+        _CATALOG_KEYS = {key.lower(): key for key in common.load_records()}
+    return _CATALOG_KEYS.get(name.lower(), name)
+
+
 def variant_of(report: dict, model_path: str) -> str | None:
     """Reports carry `variant` or the older `family`; the path is definitive."""
     parts = pathlib.PurePosixPath(model_path.replace("\\", "/")).parts
     if "models" in parts:
         index = len(parts) - 1 - parts[::-1].index("models")
         if index + 1 < len(parts):
-            return parts[index + 1]
-    return report.get("variant")
+            return _canonical_variant(parts[index + 1])
+    return _canonical_variant(report.get("variant"))
 
 
 def publishable(report: dict) -> bool:
