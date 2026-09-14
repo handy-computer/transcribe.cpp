@@ -46,13 +46,16 @@ pinned 2026-05-17.
 | Q4_K_M       | [granite-speech-4.1-2b-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-gguf/resolve/main/granite-speech-4.1-2b-Q4_K_M.gguf) | 1.60 GB | 1.37% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy decoding. BF16 reference baseline (re-run locally with the
-model card's exact prompt): 1.31% — 0.02pp below upstream's published
-1.33%, likely a minor normalization difference on the publisher side and
-well within bootstrap CI overlap. Text normalizer: Whisper
-`EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
+Greedy decoding. BF16 reference baseline (re-run locally with the model card's exact
+prompt): 1.31% — 0.02pp below upstream's published 1.33%, likely a minor
+normalization difference on the publisher side and well within bootstrap CI overlap.
+Text normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+Leaderboard uses.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -99,7 +102,7 @@ build/bin/transcribe-cli \
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
@@ -114,7 +117,7 @@ Apple M4 Max: transcribe.cpp `de05c43` on 2026-05-21.
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

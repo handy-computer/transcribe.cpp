@@ -45,13 +45,16 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 | Q4_K_M       | [cohere-transcribe-03-2026-Q4_K_M.gguf](https://huggingface.co/handy-computer/cohere-transcribe-03-2026-gguf/resolve/main/cohere-transcribe-03-2026-Q4_K_M.gguf) | 1.56 GB | 1.24% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-greedy decoding and no external LM. BF16 reference baseline: 1.26%.
-Cohere's self-reported number on the same split is 1.25%
-(Open ASR Leaderboard, as of 2026-03-26). Both ours and Cohere's numbers
-use the Whisper EnglishTextNormalizer, so the comparison is apples-to-apples
-and our port matches the upstream reference within rounding.
+Greedy decoding, no external LM. BF16 reference baseline: 1.26%. Cohere's
+self-reported number on the same split is 1.25% (Open ASR Leaderboard, as of
+2026-03-26). Both ours and Cohere's numbers use the Whisper EnglishTextNormalizer,
+so the comparison is apples-to-apples and our port matches the upstream reference
+within rounding.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -97,7 +100,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
@@ -112,7 +115,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |         Q4_K_M |
 | ------- | ------------ | --------------: | -------------: |

@@ -13,6 +13,7 @@
   "upstream_repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
   "upstream_commit": "24b151a",
   "published_repo": "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
+  "docs_page": "nemotron-3.5-asr-streaming-0.6b.md",
   "languages": [
     "en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT", "pt-BR",
     "pt-PT", "nl-NL", "de-DE", "tr-TR", "ru-RU", "ar-AR", "hi-IN", "ja-JP",

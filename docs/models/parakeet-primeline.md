@@ -42,9 +42,12 @@ pinned 2026-08-16.
 | Q4_K_M       | [parakeet-primeline-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q4_K_M.gguf) |  485 MB | 5.98% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full FLEURS de split (862 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the FLEURS German test split (862 utterances) with greedy
-transducer decoding and no external LM.
+Greedy transducer decoding, no external LM.
 
 primeLine's published figures (2.95% average over Tuda-De, Multilingual
 LibriSpeech, and Common Voice 19.0) are on different corpora and are not

@@ -64,8 +64,16 @@ stays unbounded for the same reason. See the
 | Q4_K_M       | [nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf) |  496 MB |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full FLEURS en split (647 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on FLEURS test en (647 utterances), greedy RNN-T, --language en-US, whisper-normalizer scoring; the per-quant column is FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports 7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32 3.04 / F16 3.03 / Q8_0 3.06 / Q6_K 3.07 / Q5_K_M 3.10 / Q4_K_M 3.28, against a 3.03% NeMo reference.
+Greedy RNN-T decoding with whisper-normalizer scoring; the per-quant column is
+FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports
+7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32
+3.04 / F16 3.03 / Q8_0 3.06 / Q6_K 3.07 / Q5_K_M 3.10 / Q4_K_M 3.28, against a 3.03%
+NeMo reference.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -136,7 +144,7 @@ are out-of-the-box numbers with no tuning.
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
@@ -151,7 +159,7 @@ Apple M4 Max: transcribe.cpp `d9708f1` on 2026-06-08.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

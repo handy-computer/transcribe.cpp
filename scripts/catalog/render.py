@@ -16,9 +16,10 @@ files, this rewrites only the regions a doc explicitly delegates:
     <!-- /catalog -->
 
 Blocks: `downloads`, `perf machine=<slug>`, `accuracy` (one table per
-dataset split beyond the headline), `intro` (upstream link plus the card
-spec's `summary`), `prose field=wer.notes` (any `|` text field of the spec,
-dotted path), `family variants=a,b,c` (a roll-up row per variant, for
+dataset split beyond the headline), `recipe` (the mechanical WER sentence
+from the headline rows), `pin` (licence, upstream and validation pins),
+`intro` (upstream link plus the card spec's `summary`), `prose
+field=wer.notes` (any `|` text field of the spec, dotted path), `family variants=a,b,c` (a roll-up row per variant, for
 family pages), and `family-index` (the root README's supported-models table,
 one row per documentation page). Everything outside a marker pair is
 untouched. The root README is rendered along with docs/models. The variant is the file stem
@@ -159,32 +160,34 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
 
 
 def perf_methodology(rows: dict) -> list[str]:
-    """What a cell is. Iterations and warmup are profile policy."""
-    _, profile = profiles.load_profile()
-    speed = profile["speed"]
-    return [f"Compute latency (mel + encode + decode), speedup over realtime in "
-            f"parentheses; mean over {speed['iterations']} iterations after "
-            f"{speed['warmup']} warmup."]
+    """What a cell is. Iterations and warmup are claimed only for rows that
+    name the profile they were measured under."""
+    line = "Compute latency (mel + encode + decode), speedup over realtime in parentheses"
+    ids = sorted({row["publication_profile"] for row in rows.values()
+                  if row.get("publication_profile")})
+    claims = []
+    for profile_id in ids:
+        speed = profiles.load_profile(profile_id)[1]["speed"]
+        claims.append(f"profile `{profile_id}`: mean over {speed['iterations']} iterations "
+                      f"after {speed['warmup']} warmup")
+    if claims:
+        line += "; " + "; ".join(claims)
+    return [line + "."]
 
 
 def perf_provenance(machine: str, rows: dict) -> list[str]:
-    """Where the numbers came from: machine, engine commit, date, OS."""
+    """Where the numbers came from: machine, engine commit, date."""
     _, profile = profiles.load_profile()
     display = profiles.machine_display(profile, machine)
     builds: dict[tuple, int] = {}
     for row in rows.values():
         if row.get("engine_sha"):
-            key = (row["engine_sha"], row.get("measured_on") or "", row.get("os") or "")
+            key = (row["engine_sha"], row.get("measured_on") or "")
             builds[key] = builds.get(key, 0) + 1
     legacy = sum(1 for row in rows.values() if not row.get("engine_sha"))
     parts = []
-    for (sha, date, os_name), _ in sorted(builds.items(), key=lambda kv: -kv[1]):
-        text = f"transcribe.cpp `{sha}`"
-        if date:
-            text += f" on {date}"
-        if os_name:
-            text += f", {os_name}"
-        parts.append(text)
+    for (sha, date), _ in sorted(builds.items(), key=lambda kv: -kv[1]):
+        parts.append(f"transcribe.cpp `{sha}`" + (f" on {date}" if date else ""))
     line = f"{display}: " + "; ".join(parts) + "." if parts else f"{display}."
     if legacy:
         line += " † published before provenance was recorded; not yet re-measured."
@@ -220,6 +223,30 @@ def block_intro(record: dict, attrs: dict[str, str]) -> list[str]:
     return [line, ""] + prose_lines(spec_for(record).get("summary"), "summary")
 
 
+def block_recipe(record: dict, attrs: dict[str, str]) -> list[str]:
+    """The mechanical WER sentence, from the headline rows."""
+    text = common.headline_recipe(record)
+    if not text:
+        raise RenderError("no headline rows to describe")
+    return [text]
+
+
+def block_pin(record: dict, attrs: dict[str, str]) -> list[str]:
+    """Licence, upstream pin and validation pin, from the record and the
+    card spec's release fields."""
+    spec = spec_for(record)
+    repo, commit = record["upstream_repo"], record["upstream_commit"]
+    validation = spec.get("validation") or {}
+    if not (spec.get("pin_date") and validation.get("commit") and validation.get("date")):
+        raise RenderError("spec needs pin_date and validation.{commit,date}")
+    return [f"Licensed {record['license']['display']}. Ported from upstream commit "
+            f"[`{commit}`](https://huggingface.co/{repo}/commit/{commit}), pinned "
+            f"{spec['pin_date']}. Validated against the {validation.get('reference', 'reference')} "
+            f"reference at transcribe.cpp commit [`{validation['commit']}`]"
+            f"(https://github.com/handy-computer/transcribe.cpp/tree/{validation['commit']}) "
+            f"on {validation['date']}."]
+
+
 def block_prose(record: dict, attrs: dict[str, str]) -> list[str]:
     """A text field of the card spec, named by dotted path (`wer.notes`)."""
     field = attrs.get("field")
@@ -243,22 +270,25 @@ def block_accuracy(record: dict, attrs: dict[str, str]) -> list[str]:
     wanted = None
     if attrs.get("datasets"):
         wanted = {tuple(item.split(":", 1)) for item in attrs["datasets"].split(",")}
-    groups: dict[tuple[str, str], list[dict]] = {}
+    groups: dict[tuple, list[dict]] = {}
     for row in record.get("accuracy_benchmarks", []):
-        key = (row["dataset"], row["split"])
-        if wanted is not None and key not in wanted:
+        split_key = (row["dataset"], row["split"])
+        if wanted is not None and split_key not in wanted:
             continue
         if wanted is None and not as_bool(attrs.get("all"), False) \
-                and (*key, row["language"]) == (headline.get("dataset"), headline.get("split"),
-                                               headline.get("language")):
+                and not row.get("scoring") and not row.get("mode") \
+                and (*split_key, row["language"]) == (headline.get("dataset"), headline.get("split"),
+                                                     headline.get("language")):
             continue
-        groups.setdefault(key, []).append(row)
+        # A scoring step or decoding mode makes a separate result set.
+        groups.setdefault((*split_key, row.get("scoring") or "", row.get("mode") or ""),
+                          []).append(row)
     if not groups:
         raise RenderError("no accuracy rows beyond the headline benchmark")
 
     quant_rank = {item["quant"]: i for i, item in enumerate(record.get("downloads", []))}
     out: list[str] = []
-    for (dataset, split), rows in sorted(groups.items()):
+    for (dataset, split, scoring, mode), rows in sorted(groups.items()):
         quants = sorted({row["quant"] for row in rows}, key=lambda q: (quant_rank.get(q, 99), q))
         cells: dict[tuple[str, str], dict] = {}
         for row in rows:
@@ -275,6 +305,10 @@ def block_accuracy(record: dict, attrs: dict[str, str]) -> list[str]:
         if out:
             out.append("")
         label = f"FLEURS {split}" if dataset == "fleurs" else common.dataset_label(dataset, split, "")
+        if scoring:
+            label += f", scoring `{scoring}`"
+        if mode:
+            label += f", `{mode}` mode"
         out.extend([f"**{label}**", ""])
         out.extend(common.render_table(["Language", "Metric"] + quants,
                                        ["l", "l"] + ["r"] * len(quants), body))
@@ -294,8 +328,10 @@ def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
             raise RenderError(f"no catalog record for {name!r}")
         download = next((d for d in record.get("downloads", []) if d["quant"] == quant), None)
         headline = common.headline(record) or {}
-        doc = common.DOCS_DIR / f"{name}.md"
-        link = (f"[{name}.md]({name}.md)" if doc.exists()
+        # A variant with a page of its own links there; one documented only
+        # on this family page links to its published repo.
+        own = f"{name}.md"
+        link = (f"[{own}]({own})" if (common.DOCS_DIR / own).exists() and own != attrs.get("_page")
                 else f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})")
         body.append([
             f"`{name}`", common.fmt_params(record["params"]), common.languages_summary(record),
@@ -310,19 +346,9 @@ def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
         ["l", "r", "l", "r", "l", "r", "l", "l"], body, max_pad=34)
 
 
-def doc_for(records: dict[str, dict], variant: str) -> pathlib.Path | None:
-    """The page a variant is documented on: its own, else the family page
-    whose roll-up lists it."""
-    own = common.DOCS_DIR / f"{variant}.md"
-    for path in sorted(common.DOCS_DIR.glob("*.md")):
-        if path.stem in records:
-            continue
-        for line in path.read_text().splitlines():
-            match = OPEN.match(line)
-            if match and match.group(2) == "family" \
-                    and variant in parse_attrs(match.group(3)).get("variants", "").split(","):
-                return path
-    return own if own.exists() else None
+def doc_for(record: dict) -> pathlib.Path | None:
+    page = record.get("docs_page")
+    return common.DOCS_DIR / page if page else None
 
 
 def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
@@ -334,7 +360,7 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
     for variant, record in records.items():
         if bool(record.get("capabilities", {}).get("transcribe", {}).get("supported")) != want:
             continue
-        doc = doc_for(records, variant)
+        doc = doc_for(record)
         if doc is not None:
             key = doc.stem
             title = doc.read_text().splitlines()[0].lstrip("# ").strip()
@@ -352,12 +378,13 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
     for group in sorted(groups.values(), key=lambda g: g["title"].lower()):
         body.append([group["title"], ", ".join(f"`{v}`" for v in sorted(group["variants"])),
                      ", ".join(sorted(group["caps"])) or "-", group["link"]])
-    return common.render_table(["Family", "Variants", "Capabilities", "Docs"],
+    return common.render_table(["Family", "Variants", "Available capabilities", "Docs"],
                                ["l", "l", "l", "l"], body)
 
 
 BLOCKS = {"downloads": block_downloads, "perf": block_perf,
-          "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy}
+          "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy,
+          "recipe": block_recipe, "pin": block_pin}
 
 
 # --------------------------------------------------------------------------
@@ -387,7 +414,7 @@ def rewrite(path: pathlib.Path, records: dict[str, dict]) -> tuple[str, list[str
         variant = attrs.get("variant", path.stem)
         try:
             if name == "family":
-                rendered = block_family(records, attrs)
+                rendered = block_family(records, {**attrs, "_page": path.name})
             elif name == "family-index":
                 rendered = block_family_index(records, attrs)
             elif name not in BLOCKS:

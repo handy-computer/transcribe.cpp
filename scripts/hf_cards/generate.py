@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -103,9 +104,35 @@ def derive_perf(record: dict, default_quant: str | None) -> dict:
     return perf
 
 
+def metric_key(row: dict) -> str:
+    """`<metric>_<dataset>_<split|language>[_<scoring>][_<mode>]`, the name of
+    the per-quant map this row belongs to in the metadata block."""
+    tail = row["language"] if row["dataset"] == "fleurs" else row["split"]
+    key = f"{row['metric']}_{row['dataset']}_{tail}"
+    for extra in ("scoring", "mode"):
+        if row.get(extra):
+            key += f"_{row[extra]}"
+    return re.sub(r"[^a-z0-9]+", "_", key.lower())
+
+
+def derive_metric_blocks(record: dict) -> dict[str, dict[str, float]]:
+    """Every per-quant error map the catalog holds, keyed by metric_key.
+    Where a cell was measured under several recipes (batch size, timestamps)
+    the profile-stamped row wins, else the first listed."""
+    chosen: dict[tuple[str, str], dict] = {}
+    for row in record.get("accuracy_benchmarks", []):
+        cell = (metric_key(row), row["quant"].lower())
+        if cell not in chosen or (row.get("engine_sha") and not chosen[cell].get("engine_sha")):
+            chosen[cell] = row
+    blocks: dict[str, dict[str, float]] = {}
+    for (key, quant), row in chosen.items():
+        blocks.setdefault(key, {})[quant] = row["err_pct"]
+    return blocks
+
+
 def derive_quants(record: dict, secondary: dict | None) -> list[dict]:
     """One row per published GGUF: size, headline error rate, and the optional
-    second metric column the spec supplies under `wer.<metadata_key2>`."""
+    second metric column named by `wer.secondary`."""
     errors = common.headline_rows(record)
     quants = []
     for item in record.get("downloads", []):
@@ -122,6 +149,23 @@ def derive_quants(record: dict, secondary: dict | None) -> list[dict]:
     return quants
 
 
+
+def hub_language_tags(languages) -> tuple[list[str], list[str]]:
+    """Split catalog language tags the way the Hub's metadata validator wants.
+
+    `language:` accepts ISO 639 codes only, so a model whose GGUF advertises
+    locales (nemotron tags `en-US`) keeps the full tags in `language_bcp47`
+    and contributes each primary subtag, deduped, to `language`.
+    """
+    tags = [str(lang) for lang in languages]
+    base, seen = [], set()
+    for tag in tags:
+        primary = tag.split("-")[0].lower()
+        if primary not in seen:
+            seen.add(primary)
+            base.append(primary)
+    return base, [tag for tag in tags if "-" in tag]
+
 def build_context(record: dict, spec: dict) -> dict:
     """Everything the template needs: catalog facts plus the editorial spec."""
     downloads = {item["quant"]: item for item in record.get("downloads", [])}
@@ -130,16 +174,25 @@ def build_context(record: dict, spec: dict) -> dict:
         raise SystemExit(f"{record['variant']}: default quant {default_quant!r} is not "
                          f"a published download ({', '.join(downloads) or 'none'})")
     wer = dict(spec.get("wer") or {})
+    stale = [k for k, v in wer.items() if isinstance(v, dict)] + \
+            [k for k in ("metadata_key", "metadata_key2") if k in wer]
+    if stale or "metrics" in spec:
+        raise SystemExit(f"{record['variant']}: per-quant numbers and metadata keys are "
+                         f"derived from the catalog; remove wer.{'/'.join(stale)}"
+                         + (" and metrics" if "metrics" in spec else ""))
     if not wer.get("source"):
         wer["source"] = common.headline_label(record)
+    wer["recipe"] = common.headline_recipe(record)
+    blocks = derive_metric_blocks(record)
     secondary = None
     if "source2" in wer:
-        key2 = wer.get("metadata_key2")
-        if not key2 or not isinstance(wer.get(key2), dict):
-            raise SystemExit("wer.source2 needs wer.metadata_key2 naming a "
-                             "{quant: value} map under wer:")
-        secondary = {str(q).lower(): v for q, v in wer[key2].items()}
+        key2 = wer.get("secondary")
+        if key2 not in blocks:
+            raise SystemExit(f"{record['variant']}: wer.secondary must name one of "
+                             f"{sorted(blocks)}")
+        secondary = blocks[key2]
     headline = common.headline(record) or {}
+    hub_languages, languages_bcp47 = hub_language_tags(record.get("languages", []))
     ctx = {
         **spec,
         "hf_repo": record["upstream_repo"],
@@ -147,12 +200,14 @@ def build_context(record: dict, spec: dict) -> dict:
         "upstream_commit": record["upstream_commit"],
         "license": record["license"]["spdx"],
         "license_display": record["license"]["display"],
-        "languages": list(record.get("languages", [])),
+        "languages": hub_languages,
+        "languages_bcp47": languages_bcp47,
         "capabilities": derive_capabilities(record),
         "perf": derive_perf(record, default_quant),
         "quants": derive_quants(record, secondary),
         "default_quant_filename": downloads[default_quant]["filename"],
         "wer": wer,
+        "metric_blocks": blocks,
     }
     if headline.get("metric"):
         ctx["metric"] = headline["metric"].upper()
@@ -169,7 +224,8 @@ def build_context(record: dict, spec: dict) -> dict:
 
 
 def build_transcribe_cpp_block(ctx: dict) -> str:
-    """Serialize the `transcribe_cpp:` block (raw WER/RTF + capability flags).
+    """Serialize the `transcribe_cpp:` block (raw error rates, RTF, and
+    capability flags), entirely from the catalog record.
 
     See docs/tools/hf-metadata-schema.md. Returns "" when the catalog holds no
     speed rows for the default quant, opting out of the block.
@@ -178,31 +234,15 @@ def build_transcribe_cpp_block(ctx: dict) -> str:
         return ""
 
     caps = ctx["capabilities"]
-    wer = ctx["wer"]
-    dataset_key = wer.get("metadata_key", "librispeech_test_clean")
-    block: dict = {}
-    # Headline dataset: per-quant WER taken from the `quants:` column.
-    headline = {
-        q["name"].lower(): float(str(q["wer"]).rstrip("%"))
-        for q in ctx["quants"] if q.get("wer") is not None
-    }
-    if headline:
-        block[f"wer_{dataset_key}"] = headline
-    # Any additional per-quant WER maps listed inline under `wer:` (keyed by
-    # dataset name, e.g. `librispeech_test_clean:`) are emitted as their own
-    # `wer_<dataset>` blocks. Only dict values count as datasets; scalar keys
-    # (metadata_key, source, notes) are skipped.
-    for key, per_quant in wer.items():
-        if isinstance(per_quant, dict):
-            block[f"wer_{key}"] = {
-                str(q).lower(): float(str(v).rstrip("%")) for q, v in per_quant.items()
-            }
+    # Bumped when key names or shapes change. 2: every result set the catalog
+    # holds is emitted, keyed <metric>_<dataset>_<split|lang>[_scoring][_mode];
+    # earlier cards emitted a hand-named headline map and up to one extra.
+    block: dict = {"schema_version": 2}
+    # Every per-quant error map the catalog holds, headline first.
+    for key, per_quant in ctx["metric_blocks"].items():
+        block[key] = dict(per_quant)
     for machine, backends in ctx["perf"].items():
         block[f"rtf_{machine.replace('-', '_')}"] = backends
-    # Optional non-WER task metrics (for example cpWER for
-    # speaker-attributed ASR). Values are emitted verbatim so the spec keeps
-    # the metric's natural shape and units.
-    block.update(ctx.get("metrics", {}))
     block["streaming"] = bool(caps.get("streaming", False))
     if "diarize" in caps:
         block["diarize"] = bool(caps["diarize"])

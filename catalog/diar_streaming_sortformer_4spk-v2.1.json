@@ -11,6 +11,7 @@
   "upstream_repo": "nvidia/diar_streaming_sortformer_4spk-v2.1",
   "upstream_commit": "fafaab5",
   "published_repo": "handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf",
+  "docs_page": "diar_streaming_sortformer_4spk-v2.1.md",
   "languages": ["en"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

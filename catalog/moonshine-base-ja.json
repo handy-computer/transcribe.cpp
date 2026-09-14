@@ -11,6 +11,7 @@
   "upstream_repo": "UsefulSensors/moonshine-base-ja",
   "upstream_commit": "f9d4e6a",
   "published_repo": "handy-computer/moonshine-base-ja-gguf",
+  "docs_page": "moonshine.md",
   "languages": ["ja"],
   "long_form_strategy": "soft-window",
   "capabilities": {

@@ -23,12 +23,9 @@ timestamps.
 See the [upstream model card](https://huggingface.co/UsefulSensors/moonshine-base)
 for training data, intended use, and the original evaluation methodology.
 
-Licensed MIT. Ported from upstream commit
-[`7a73d8d`](https://huggingface.co/UsefulSensors/moonshine-base/commit/7a73d8d55ac0ba2ef3ae761593f6784b51f96dcf),
-pinned 2026-05-05. Validated against the transformers reference at
-transcribe.cpp commit
-[`07a8a84`](https://github.com/handy-computer/transcribe.cpp/tree/07a8a84)
-on 2026-05-05.
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`7a73d8d`](https://huggingface.co/UsefulSensors/moonshine-base/commit/7a73d8d), pinned 2026-05-05. Validated against the transformers reference at transcribe.cpp commit [`07a8a84`](https://github.com/handy-computer/transcribe.cpp/tree/07a8a84) on 2026-05-05.
+<!-- /catalog -->
 
 ## Download
 
@@ -40,15 +37,17 @@ on 2026-05-05.
 | Q8_0         | [moonshine-base-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-base-gguf/resolve/main/moonshine-base-Q8_0.gguf) |  77 MB | 3.26% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with the transcribe.cpp default decode (greedy, num_beams=1,
-max_length=194 — matching the upstream generation_config). Upstream
-reports 3.27% on the same split (Moonshine paper, Table 2; also Open
-ASR Leaderboard). Our F32 reference baseline lands at 3.28%, identical
-to upstream within rounding and well within the ±1.00 pp Stage 7
-acceptance gate. Q8_0 lands at 3.26%, slightly under F32 — that delta
-sits inside the 95% bootstrap CI and is noise, not a real improvement.
+Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=194,
+matching the upstream generation_config). Upstream reports 3.27% on the same split
+(Moonshine paper, Table 2; also Open ASR Leaderboard). Our F32 reference baseline
+lands at 3.28%, identical to upstream within rounding and well within the ±1.00 pp
+Stage 7 acceptance gate. Q8_0 lands at 3.26%, slightly under F32 — that delta sits
+inside the 95% bootstrap CI and is noise, not a real improvement.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -81,7 +80,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
@@ -96,7 +95,7 @@ Apple M4 Max: transcribe.cpp `9824fdb` on 2026-05-06. † published before prove
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |

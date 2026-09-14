@@ -53,26 +53,26 @@ into shorter pieces.
 | Q4_K_M       | [MOSS-Transcribe-Diarize-Q4_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q4_K_M.gguf) |  617 MB | 2.59% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech `test-clean` split (2620 English
-utterances) with the Whisper-style English text normalizer and jiwer
-3.x. MOSS emits the diarized format `[start][Sxx]text[end]`; the bracket
-spans are metadata and are de-diarized to a space (for both hypothesis
-and reference) before scoring, matching the author-repo reference runner.
-These values describe this dataset only, not a general quality ranking: a
-quant that scores slightly better here is not necessarily better in
-real-world use, because dataset-specific decoding near-ties can make
-quantization noise help or hurt individual utterances. The same-manifest
-MOSS author-repo reference (bf16, greedy) lands at
-**2.07%** with 95% bootstrap CI [1.82%, 2.40%]. The BF16 port lands at
-2.08% (within +0.01 of the reference, well inside the CI band); the
-lower-bit presets sit between 1.93% and 1.99% (statistical noise) except
-Q4_K_M at 2.59%, whose excess is a handful of 4-bit tail failures
-(6 empty outputs, 5 English->Chinese language-drift utterances, 1
-timestamp-token repetition loop) rather than broad degradation. Prefer
-Q5_K_M or higher if those tail failures matter. Reproduce with
-`scripts/wer/run.py` + `scripts/wer/score.py --dediarize`; public
-`full_text` applies equivalent marker removal.
+Scored with the Whisper-style English text normalizer and jiwer 3.x. MOSS emits the
+diarized format `[start][Sxx]text[end]`; the bracket spans are metadata and are
+de-diarized to a space (for both hypothesis and reference) before scoring, matching
+the author-repo reference runner. These values describe this dataset only, not a
+general quality ranking: a quant that scores slightly better here is not necessarily
+better in real-world use, because dataset-specific decoding near-ties can make
+quantization noise help or hurt individual utterances. The same-manifest MOSS
+author-repo reference (bf16, greedy) lands at **2.07%** with 95% bootstrap CI
+[1.82%, 2.40%]. The BF16 port lands at 2.08% (within +0.01 of the reference, well
+inside the CI band); the lower-bit presets sit between 1.93% and 1.99% (statistical
+noise) except Q4_K_M at 2.59%, whose excess is a handful of 4-bit tail failures (6
+empty outputs, 5 English->Chinese language-drift utterances, 1 timestamp-token
+repetition loop) rather than broad degradation. Prefer Q5_K_M or higher if those
+tail failures matter. Reproduce with `scripts/wer/run.py` + `scripts/wer/score.py
+--dediarize`; public `full_text` applies equivalent marker removal.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -117,7 +117,7 @@ CLI flags:
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
@@ -132,7 +132,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

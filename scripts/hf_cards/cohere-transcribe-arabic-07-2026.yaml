@@ -60,13 +60,11 @@ usage: |
   numbers, numerical validation, and reproduction steps.
 
 wer:
-  metadata_key: fleurs_ar_test
   source: FLEURS Arabic test
   notes: |
-    WER measured on the full FLEURS Arabic (`ar_eg`) test split (428
-    utterances) with greedy decoding and no external LM, scored with the
-    Whisper BasicTextNormalizer. BF16 reference baseline, measured with
-    native Transformers on the same manifest: 11.00%; the BF16 port scores
-    11.02%, and every quant falls inside the reference's 95% confidence
-    interval. FLEURS Arabic is Egyptian-dialect speech; upstream numbers
-    published on other Arabic test sets are not directly comparable.
+    Greedy decoding, no external LM, scored with the Whisper BasicTextNormalizer; the
+    FLEURS Arabic split is `ar_eg`, Egyptian-dialect speech. BF16 reference baseline,
+    measured with native Transformers on the same manifest: 11.00%; the BF16 port scores
+    11.02%, and every quant falls inside the reference's 95% confidence interval. FLEURS
+    Arabic is Egyptian-dialect speech; upstream numbers published on other Arabic test
+    sets are not directly comparable.

@@ -35,10 +35,8 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-    the Whisper English text normalizer, batch size 8 on an NVIDIA L40S.
-    Same-machine HuggingFace transformers reference
-    (VoxtralForConditionalGeneration, BF16, attn_implementation=eager, greedy):
-    1.87%; the BF16 GGUF matches within rounding. The BF16-vs-reference parity is
-    the family's tensor-level numerical gate — 43 checkpointed tensors within
-    tolerance, transcript byte-exact.
+    Scored with the Whisper English text normalizer on an NVIDIA L40S. Same-machine
+    HuggingFace transformers reference (VoxtralForConditionalGeneration, BF16,
+    attn_implementation=eager, greedy): 1.87%; the BF16 GGUF matches within rounding.
+    The BF16-vs-reference parity is the family's tensor-level numerical gate — 43
+    checkpointed tensors within tolerance, transcript byte-exact.

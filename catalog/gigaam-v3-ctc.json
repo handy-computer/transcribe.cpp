@@ -11,6 +11,7 @@
   "upstream_repo": "ai-sage/GigaAM-v3",
   "upstream_commit": "15ef3b5",
   "published_repo": "handy-computer/gigaam-v3-ctc-gguf",
+  "docs_page": "gigaam.md",
   "languages": ["ru"],
   "long_form_strategy": "soft-window",
   "capabilities": {

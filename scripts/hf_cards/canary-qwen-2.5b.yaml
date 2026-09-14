@@ -34,15 +34,12 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech `test-clean` split (2620 English
-    utterances) with the Whisper-style English text normalizer and jiwer
-    3.x, on the metal backend of an Apple M4. The same-machine NeMo SALM
-    reference run (CPU torch, dither=0.0, greedy `model.generate`) lands
-    at **1.61%** with 95% bootstrap CI [1.47%, 1.75%]: `0.01` above
-    NVIDIA's published 1.60% but well within statistical noise. All six
-    GGUF presets land at exactly 1.63% (`+0.02` over our reference run,
-    same CI band). Investigation of the worst per-utterance differences
-    shows scattered token-level noise consistent with BF16 weight
-    precision (homophones, word-boundary flips, function-word
-    substitutions). Reproduce with `scripts/wer/run.py` +
+    Scored with the Whisper-style English text normalizer and jiwer 3.x on an Apple M4.
+    The same-machine NeMo SALM reference run (CPU torch, dither=0.0, greedy
+    `model.generate`) lands at **1.61%** with 95% bootstrap CI [1.47%, 1.75%]: `0.01`
+    above NVIDIA's published 1.60% but well within statistical noise. All six GGUF
+    presets land at exactly 1.63% (`+0.02` over our reference run, same CI band).
+    Investigation of the worst per-utterance differences shows scattered token-level
+    noise consistent with BF16 weight precision (homophones, word-boundary flips,
+    function-word substitutions). Reproduce with `scripts/wer/run.py` +
     `scripts/wer/score.py`.

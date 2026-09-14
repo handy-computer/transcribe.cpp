@@ -102,6 +102,38 @@ def headline_label(record: dict) -> str:
     return dataset_label(target["dataset"], target["split"], target["language"])
 
 
+def headline_recipe(record: dict) -> str:
+    """The mechanical half of a WER note, from the headline rows themselves:
+    dataset, size, batch, timestamps, backend, and which build measured it."""
+    rows = list(headline_rows(record).values())
+    target = headline(record)
+    if not rows or not target:
+        return ""
+    measured = [row for row in rows if row.get("engine_sha")] or rows
+    sample = measured[0]
+    n_utts = max(row["n_utts"] for row in rows)
+    unit = "meetings" if target["metric"] in ("der", "cpwer") else "utterances"
+    parts = [f"{target['metric'].upper()} on the full {headline_label(record)} split "
+             f"({n_utts:,} {unit})"]
+    if sample.get("batch_size") is not None:
+        parts.append(f"batch size {sample['batch_size']}")
+    if sample.get("timestamps"):
+        parts.append(f"timestamps {sample['timestamps']}")
+    if sample.get("language_hint"):
+        parts.append(f"language hint `{sample['language_hint']}`")
+    if sample.get("backend"):
+        parts.append(f"decoded on {sample['backend']}")
+    text = ", ".join(parts) + "."
+    shas = sorted({(row["engine_sha"], row.get("measured_on") or "")
+                   for row in rows if row.get("engine_sha")})
+    if shas:
+        text += " Measured at " + "; ".join(
+            f"transcribe.cpp `{sha}`" + (f" on {date}" if date else "") for sha, date in shas) + "."
+    if any(not row.get("engine_sha") for row in rows):
+        text += " Figures without a commit were published before provenance was recorded."
+    return text
+
+
 def fmt_err(row: dict | None, dp: int = 2) -> str:
     """An error rate as a card prints it. `-` when the cell was not measured."""
     if row is None:

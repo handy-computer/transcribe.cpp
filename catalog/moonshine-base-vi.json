@@ -11,6 +11,7 @@
   "upstream_repo": "UsefulSensors/moonshine-base-vi",
   "upstream_commit": "0ee9ce9",
   "published_repo": "handy-computer/moonshine-base-vi-gguf",
+  "docs_page": "moonshine.md",
   "languages": ["vi"],
   "long_form_strategy": "soft-window",
   "capabilities": {

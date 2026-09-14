@@ -33,11 +33,9 @@ summary: |
   punctuation. Not a streaming model and does not translate.
 
 wer:
-  metadata_key: fleurs_de
   source: FLEURS de test
   notes: |
-    WER measured on the FLEURS German test split (862 utterances) with greedy
-    transducer decoding and no external LM.
+    Greedy transducer decoding, no external LM.
 
     primeLine's published figures (2.95% average over Tuda-De, Multilingual
     LibriSpeech, and Common Voice 19.0) are on different corpora and are not

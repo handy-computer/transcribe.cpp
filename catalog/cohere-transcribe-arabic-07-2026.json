@@ -11,6 +11,7 @@
   "upstream_repo": "CohereLabs/cohere-transcribe-arabic-07-2026",
   "upstream_commit": "0a8193c",
   "published_repo": "handy-computer/cohere-transcribe-arabic-07-2026-gguf",
+  "docs_page": "cohere.md",
   "languages": ["en","ar"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

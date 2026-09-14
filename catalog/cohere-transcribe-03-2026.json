@@ -11,6 +11,7 @@
   "upstream_repo": "CohereLabs/cohere-transcribe-03-2026",
   "upstream_commit": "76b8b23",
   "published_repo": "handy-computer/cohere-transcribe-03-2026-gguf",
+  "docs_page": "cohere.md",
   "languages": ["en","fr","de","es","it","pt","nl","pl","el","ar","ja","zh","vi","ko"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

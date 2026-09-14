@@ -11,6 +11,7 @@
   "upstream_repo": "ibm-granite/granite-4.0-1b-speech",
   "upstream_commit": "bd87ab8",
   "published_repo": "handy-computer/granite-4.0-1b-speech-gguf",
+  "docs_page": "granite-speech.md",
   "languages": ["en","fr","de","es","pt","ja"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

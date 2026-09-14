@@ -28,12 +28,10 @@ summary: |
   (ja); no translation, no language detection, no timestamps.
 
 wer:
-  metadata_key: fleurs_ja
   source: FLEURS ja test
   notes: |
-    CER measured on the FLEURS-ja test split (650
-    utterances) using the transcribe.cpp default decode (greedy,
-    num_beams=1, max_length=192 — matching the upstream generation_config).
+    Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=192,
+    matching the upstream generation_config).
 
     UsefulSensors does not publish a per-language CER number
     for this variant. As a comparable baseline we ran the Transformers F32

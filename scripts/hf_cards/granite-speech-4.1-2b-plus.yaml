@@ -43,14 +43,12 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances)
-    with greedy decoding and the model-card chat template (system prompt +
-    leading-space user instruction + `add_generation_prompt=True`). BF16
-    reference baseline (re-run locally with that exact prompt): 1.48%; 0.04pp
-    above upstream's published 1.44%, within bootstrap CI overlap and likely
-    a chat-template / normalization difference on the publisher side. Text
-    normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
-    Leaderboard uses. The `add_generation_prompt=True` is load-bearing —
-    without it the model emits 25-27 empty hypotheses on short test-clean
-    clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the
-    prompt correctly; this note only matters if you reproduce the reference.
+    Greedy decoding with the model-card chat template (system prompt + leading-space
+    user instruction + `add_generation_prompt=True`). BF16 reference baseline (re-run
+    locally with that exact prompt): 1.48%; 0.04pp above upstream's published 1.44%,
+    within bootstrap CI overlap and likely a chat-template / normalization difference on
+    the publisher side. Text normalizer: Whisper `EnglishTextNormalizer`, the same
+    normalizer Open ASR Leaderboard uses. The `add_generation_prompt=True` is
+    load-bearing — without it the model emits 25-27 empty hypotheses on short test-clean
+    clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the prompt
+    correctly; this note only matters if you reproduce the reference.

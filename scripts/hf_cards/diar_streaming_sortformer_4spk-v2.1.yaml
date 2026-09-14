@@ -70,13 +70,10 @@ usage: |
 
 wer:
   source: AMI IHM test
-  metadata_key: ami_ihm_test
   notes: |
-    DER measured on the full AMI IHM test set (16 meetings, ~9 h) against
-    forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
-    overlap scored, at the very_high_latency operating point. Measured NeMo
-    reference under the identical protocol: 14.83% DER / 19.89% JER; the
-    C++ F32 port scores 14.59% / 19.51%. Published DER numbers vary with
-    RTTM source and post-processing; compare like with like. Only
-    near-reference tiers ship for this family (k-quant tiers withdrawn;
-    see the transcribe.cpp family doc, "Quant policy (Stage 7)").
+    Scored against forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
+    overlap scored, at the very_high_latency operating point. Measured NeMo reference
+    under the identical protocol: 14.83% DER / 19.89% JER; the C++ F32 port scores
+    14.59% / 19.51%. Published DER numbers vary with RTTM source and post-processing;
+    compare like with like. Only near-reference tiers ship for this family (k-quant
+    tiers withdrawn; see the transcribe.cpp family doc, "Quant policy (Stage 7)").

@@ -41,8 +41,7 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances)
-    with greedy decoding and no external LM. F32 reference baseline: 1.55%.
-    NVIDIA's self-reported number on the upstream model card is 1.48%;
-    likely this is due to differences in how we score WER, based on the
-    results we have from canary-180m-flash.
+    Greedy decoding, no external LM. F32 reference baseline: 1.55%. NVIDIA's
+    self-reported number on the upstream model card is 1.48%; likely this is due to
+    differences in how we score WER, based on the results we have from
+    canary-180m-flash.

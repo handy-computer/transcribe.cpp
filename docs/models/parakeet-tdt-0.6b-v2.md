@@ -36,11 +36,14 @@ pinned 2026-04-15.
 | Q4_K_M       | [parakeet-tdt-0.6b-v2-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/main/parakeet-tdt-0.6b-v2-Q4_K_M.gguf) |  475 MB | 1.72% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-greedy transducer decoding and no external LM. F32 reference baseline: 1.68%.
-NVIDIA's self-reported number on the same split is 1.69%, so the F32 and Q8_0
-ports match the upstream reference within rounding.
+Greedy transducer decoding, no external LM. F32 reference baseline: 1.68%. NVIDIA's
+self-reported number on the same split is 1.69%, so the F32 and Q8_0 ports match the
+upstream reference within rounding.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -73,7 +76,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |           Q8_0 |         Q4_K_M |
 | ------- | ------------ | -------------: | -------------: |
@@ -88,7 +91,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

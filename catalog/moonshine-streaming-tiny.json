@@ -11,6 +11,7 @@
   "upstream_repo": "UsefulSensors/moonshine-streaming-tiny",
   "upstream_commit": "f8e9dfd",
   "published_repo": "handy-computer/moonshine-streaming-tiny-gguf",
+  "docs_page": "moonshine-streaming.md",
   "languages": ["en"],
   "long_form_strategy": "soft-window",
   "capabilities": {

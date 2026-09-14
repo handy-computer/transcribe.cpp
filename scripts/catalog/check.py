@@ -61,33 +61,40 @@ def integrity_pass(records: dict) -> int:
     return bad
 
 
-def pairing_pass(records: dict) -> int:
+def pairing_pass(records: dict, selected: bool = False) -> int:
     """Catalog records and card specs pair exactly; docs may be shared.
 
-    A dozen variants are documented inside a family page rather than a page of
-    their own (the Moonshine language fine-tunes), so a missing doc is a note
-    rather than a failure. The editorial card specs under scripts/hf_cards/
+    Every record names its docs page (its own, or the family page whose
+    roll-up lists it), and that file must exist. The editorial card specs under scripts/hf_cards/
     pair one to one with records: generate.py reads both, so an orphan spec
     has no catalog to render from and a record with no spec has no card.
     """
     card_names = {path.stem for path in (REPO / "scripts" / "hf_cards").glob("*.yaml")}
     record_names = set(records)
     missing_cards = sorted(record_names - card_names)
-    missing_records = sorted(card_names - record_names)
-    undocumented = sorted(
-        name for name in record_names
-        if not (REPO / "docs" / "models" / f"{name}.md").exists()
-    )
+    # Orphan specs are a whole-catalog question; a --models run only asks
+    # whether the selected records have their card.
+    missing_records = [] if selected else sorted(card_names - record_names)
+    if selected:
+        card_names &= record_names
+    undocumented = sorted(name for name in record_names if not records[name].get("docs_page"))
+    bad_pages = sorted(
+        f"{name}: docs/models/{records[name]['docs_page']} does not exist"
+        for name in record_names
+        if records[name].get("docs_page")
+        and not (REPO / "docs" / "models" / records[name]["docs_page"]).exists())
+    for line in bad_pages:
+        print(f"  FAIL {line}")
     for name in missing_cards:
         print(f"  FAIL {name}: no scripts/hf_cards/{name}.yaml")
     for name in missing_records:
         print(f"  FAIL scripts/hf_cards/{name}.yaml: no catalog/{name}.json")
     paired = len(record_names & card_names)
     print(f"pairing    {paired}/{len(record_names | card_names)} catalog/card pairs; "
-          f"{len(records) - len(undocumented)}/{len(records)} have their own doc")
+          f"{len(records) - len(undocumented)}/{len(records)} name a docs page")
     if undocumented:
-        print(f"           documented elsewhere: {', '.join(undocumented)}")
-    return len(missing_cards) + len(missing_records)
+        print(f"           no docs_page: {', '.join(undocumented)}")
+    return len(missing_cards) + len(missing_records) + len(bad_pages)
 
 
 def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> int:
@@ -122,15 +129,14 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
                 stale_exceptions += 1
         per_model = collections.Counter(stale_exception=stale_exceptions)
 
-        # Accuracy is closed by dataset/language/quant/metric. New results
-        # match the profile recipe exactly; explicitly marked legacy results
-        # retain the published recipe (or null when it did not survive).
-        expected_by_key = {
-            profiles.cell_key(cell, "accuracy"): cell for cell in accuracy
-        }
+        # Accuracy is closed by dataset/language/quant/metric/timestamps. Any
+        # batch size satisfies a cell (the row records which); explicitly
+        # marked legacy results retain the published recipe (or null when it
+        # did not survive).
+        expected_by_key = {profiles.profile_key(cell): cell for cell in accuracy}
         expected_keys = set(expected_by_key)
         expected_by_core = {
-            profiles.accuracy_core_key(cell): profiles.cell_key(cell, "accuracy")
+            profiles.accuracy_core_key(cell): profiles.profile_key(cell)
             for cell in accuracy
         }
         accuracy_rows = record.get("accuracy_benchmarks", [])
@@ -138,7 +144,7 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
             profiles.cell_key(row, "accuracy") for row in accuracy_rows)
         accuracy_covered, accuracy_extra, accuracy_invalid = set(), set(), set()
         for row in accuracy_rows:
-            key = profiles.cell_key(row, "accuracy")
+            key = profiles.profile_key(row)
             legacy = row.get("measurement_provenance") == "legacy-published"
             if key in expected_keys:
                 target_key = key
@@ -268,7 +274,7 @@ def main() -> int:
     enforce_publication = args.publication_profile is not None
     selected_profile = args.publication_profile or None
     bad = (schema_pass(records, schema) + integrity_pass(records)
-           + pairing_pass(records) + provenance_pass(records)
+           + pairing_pass(records, bool(selected)) + provenance_pass(records)
            + publication_pass(records, selected_profile, enforce_publication))
     return 1 if bad else 0
 

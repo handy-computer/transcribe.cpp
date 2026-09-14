@@ -11,6 +11,7 @@
   "upstream_repo": "nvidia/parakeet-tdt-0.6b-v3",
   "upstream_commit": "6d590f7",
   "published_repo": "handy-computer/parakeet-tdt-0.6b-v3-gguf",
+  "docs_page": "parakeet.md",
   "languages": [
     "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu",
     "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv",

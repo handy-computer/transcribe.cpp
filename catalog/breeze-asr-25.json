@@ -11,17 +11,8 @@
   "upstream_repo": "MediaTek-Research/Breeze-ASR-25",
   "upstream_commit": "cffe7ccb404d025296a00758d0a33468bec3a9d0",
   "published_repo": "handy-computer/Breeze-ASR-25-gguf",
-  "languages": [
-    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs",
-    "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
-    "fo", "fr", "gl", "gu", "haw", "ha", "he", "hi", "hr", "ht", "hu", "hy",
-    "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb",
-    "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
-    "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru",
-    "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw",
-    "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi",
-    "yi", "yo", "zh"
-  ],
+  "docs_page": "whisper.md",
+  "languages": ["zh","en"],
   "long_form_strategy": "chunked-unbounded",
   "capabilities": {
     "transcribe": {"supported":true,"verified":false},
@@ -48,7 +39,13 @@
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q8_0","metric":"wer","err_pct":2.27,"ci95":[null,null],"n_utts":2620,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q6_K","metric":"wer","err_pct":2.29,"ci95":[null,null],"n_utts":2620,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q5_K_M","metric":"wer","err_pct":2.25,"ci95":[null,null],"n_utts":2620,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
-    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":2.26,"ci95":[null,null],"n_utts":2620,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"}
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":2.26,"ci95":[null,null],"n_utts":2620,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"BF16","metric":"cer","err_pct":8.12,"ci95":[null,null],"n_utts":945,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","scoring":"opencc-t2s"},
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"F16","metric":"cer","err_pct":8.11,"ci95":[null,null],"n_utts":945,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","scoring":"opencc-t2s"},
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"Q8_0","metric":"cer","err_pct":8.1,"ci95":[null,null],"n_utts":945,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","scoring":"opencc-t2s"},
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"Q6_K","metric":"cer","err_pct":8.12,"ci95":[null,null],"n_utts":945,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","scoring":"opencc-t2s"},
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"Q5_K_M","metric":"cer","err_pct":8.12,"ci95":[null,null],"n_utts":945,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","scoring":"opencc-t2s"},
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"Q4_K_M","metric":"cer","err_pct":8.08,"ci95":[null,null],"n_utts":945,"batch_size":1,"timestamps":"segment","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","scoring":"opencc-t2s"}
   ],
   "headline_benchmark": {
     "dataset": "librispeech",

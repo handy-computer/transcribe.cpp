@@ -45,8 +45,17 @@ pinned 2026-05-12.
 | Q4_K_M       | [gigaam-v3-rnnt-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q4_K_M.gguf) | 183 MB | 8.12% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full FLEURS ru split (775 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full FLEURS ru test split (775 utterances) with greedy decoding and no external LM. F32 reference baseline: 8.08%. Upstream `gigaam` author package measured on the same manifest: 9.46%; the 1.4 pp gap is upstream rejecting 5 long (>25 s) utterances with `Too long wav file, use 'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not publish a FLEURS ru WER; this number is measured here.
+Greedy decoding, no external LM. F32 reference baseline: 8.08%. Upstream `gigaam`
+author package measured on the same manifest: 9.46%; the 1.4 pp gap is upstream
+rejecting 5 long (>25 s) utterances with `Too long wav file, use
+'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt
+subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not
+publish a FLEURS ru WER; this number is measured here.
 <!-- /catalog -->
 
 Upstream (`gigaam` author package at `6e4b027c`) measured on the same
@@ -82,7 +91,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample    |          Q8_0 |        Q4_K_M |
 | ------- | --------- | ------------: | ------------: |
@@ -95,7 +104,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample    |          Q8_0 |        Q4_K_M |
 | ------- | --------- | ------------: | ------------: |

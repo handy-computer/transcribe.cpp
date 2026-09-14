@@ -45,14 +45,16 @@ pinned 2026-06-06.
 | Q4_K_M       | [Voxtral-Mini-3B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q4_K_M.gguf) | 2.98 GB | 1.94% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-the Whisper English text normalizer, batch size 8 on an NVIDIA L40S.
-Same-machine HuggingFace transformers reference
-(VoxtralForConditionalGeneration, BF16, attn_implementation=eager, greedy):
-1.87%; the BF16 GGUF matches within rounding. The BF16-vs-reference parity is
-the family's tensor-level numerical gate — 43 checkpointed tensors within
-tolerance, transcript byte-exact.
+Scored with the Whisper English text normalizer on an NVIDIA L40S. Same-machine
+HuggingFace transformers reference (VoxtralForConditionalGeneration, BF16,
+attn_implementation=eager, greedy): 1.87%; the BF16 GGUF matches within rounding.
+The BF16-vs-reference parity is the family's tensor-level numerical gate — 43
+checkpointed tensors within tolerance, transcript byte-exact.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -109,7 +111,7 @@ CLI flags:
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
@@ -124,7 +126,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

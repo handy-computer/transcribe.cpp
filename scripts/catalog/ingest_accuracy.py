@@ -36,7 +36,7 @@ def score_path(record: dict, cell: dict, reports: pathlib.Path) -> pathlib.Path:
     return reports / f"{model}.{dataset}{batch}{timestamps}.score.json"
 
 
-def row_from_score(cell: dict, score: dict) -> dict:
+def row_from_score(cell: dict, score: dict, profile_id: str) -> dict:
     per_utterance = score.get("per_utterance") or []
     metric = cell["metric"]
     return {
@@ -51,9 +51,10 @@ def row_from_score(cell: dict, score: dict) -> dict:
         "ci95": [round(score["error_rate_ci_lo"] * 100, 2),
                  round(score["error_rate_ci_hi"] * 100, 2)],
         "n_utts": score["n"],
-        "batch_size": cell["batch_size"],
+        "batch_size": score.get("batch_size") if score.get("batch_size") is not None else cell["batch_size"],
         "timestamps": cell["timestamps"],
         "engine_sha": score["engine_sha"],
+        "publication_profile": profile_id,
         "measured_on": None,
         "errors": {
             "sub": score["substitutions"],
@@ -85,7 +86,7 @@ def main() -> int:
         print(f"error: no catalog record for {', '.join(sorted(unknown))}", file=sys.stderr)
         return 2
 
-    added = replaced = rejected = missing = 0
+    added = replaced = rejected = missing = unstamped = 0
     for variant, record in records.items():
         if selected and variant not in selected:
             continue
@@ -101,13 +102,20 @@ def main() -> int:
                 continue
             score = json.loads(source_path.read_text())
             recipe = score.get("recipe") or {}
+            covered = any(profiles.profile_key(row) == profiles.profile_key(cell)
+                          or (row.get("measurement_provenance") == "legacy-published"
+                              and profiles.accuracy_core_key(row) == profiles.accuracy_core_key(cell))
+                          for row in rows)
+            if not recipe.get("publication_profile") and covered:
+                # A score from before profile stamping, for a cell the catalog
+                # already publishes: superseded history, not a problem.
+                unstamped += 1
+                continue
             reasons = []
             if recipe.get("publication_profile") != profile_id:
                 reasons.append(f"profile={recipe.get('publication_profile')!r}")
             if score.get("metric") != cell["metric"]:
                 reasons.append(f"metric={score.get('metric')!r}")
-            if score.get("batch_size") != cell["batch_size"]:
-                reasons.append(f"batch_size={score.get('batch_size')!r}")
             if score.get("timestamps") != cell["timestamps"]:
                 reasons.append(f"timestamps={score.get('timestamps')!r}")
             if recipe.get("backend") != cell["backend"]:
@@ -119,9 +127,11 @@ def main() -> int:
                 print(f"  reject {source_path.name}: {', '.join(reasons)}")
                 continue
 
-            key = profiles.cell_key(cell, "accuracy")
+            # Any batch size satisfies the cell; the newest measurement
+            # replaces whatever the cell held and records its own batch size.
+            key = profiles.profile_key(cell)
             indices = [index for index, row in enumerate(rows)
-                       if profiles.cell_key(row, "accuracy") == key]
+                       if profiles.profile_key(row) == key]
             if not indices:
                 # A fresh exact run supersedes the matching historical table
                 # row even if that row used an older/unknown recipe.
@@ -129,7 +139,7 @@ def main() -> int:
                 indices = [index for index, row in enumerate(rows)
                            if row.get("measurement_provenance") == "legacy-published"
                            and profiles.accuracy_core_key(row) == core]
-            new_row = row_from_score(cell, score)
+            new_row = row_from_score(cell, score, profile_id)
             if indices:
                 first = indices[0]
                 if rows[first] == new_row and len(indices) == 1:
@@ -146,7 +156,8 @@ def main() -> int:
             common.write_record(path, record)
 
     print(f"profile {profile_id}: {added} added, {replaced} replaced, "
-          f"{rejected} rejected, {missing} score file(s) absent")
+          f"{rejected} rejected, {unstamped} unstamped score(s) for already published "
+          f"cells skipped, {missing} score file(s) absent")
     if args.dry_run:
         print("dry run: nothing written")
     return 1 if rejected else 0

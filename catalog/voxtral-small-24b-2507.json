@@ -11,6 +11,7 @@
   "upstream_repo": "mistralai/Voxtral-Small-24B-2507",
   "upstream_commit": "da5b424",
   "published_repo": "handy-computer/Voxtral-Small-24B-2507-gguf",
+  "docs_page": "voxtral.md",
   "languages": ["en","fr","de","es","it","pt","nl","hi"],
   "long_form_strategy": "hard-cap",
   "benchmark_exceptions": [

@@ -36,15 +36,12 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances).
-    BF16 reference baseline (transformers `model.transcribe`, MPS, re-run
-    locally): 1.28% — matches the upstream model card's 1.29% to within
-    sampling noise. Text normalizer: Whisper `EnglishTextNormalizer`, the
-    same normalizer Open ASR Leaderboard uses. Reference reproduction
-    follows the model card path verbatim (`AutoProcessor` +
-    `AutoModel.transcribe` + `processor.batch_decode`) at HF revision
-    `99a4df9` (single-file `modeling_granite_speech_nar.py` snapshot, the
-    README's canonical target); no mask patching is required because the
-    NAR LM uses `create_bidirectional_mask()` natively. F16, Q8_0, and
-    Q6_K all match BF16's 1.29%; Q5_K_M dips slightly to 1.25% (within
-    overlapping CIs).
+    BF16 reference baseline (transformers `model.transcribe`, MPS, re-run locally):
+    1.28% — matches the upstream model card's 1.29% to within sampling noise. Text
+    normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+    Leaderboard uses. Reference reproduction follows the model card path verbatim
+    (`AutoProcessor` + `AutoModel.transcribe` + `processor.batch_decode`) at HF revision
+    `99a4df9` (single-file `modeling_granite_speech_nar.py` snapshot, the README's
+    canonical target); no mask patching is required because the NAR LM uses
+    `create_bidirectional_mask()` natively. F16, Q8_0, and Q6_K all match BF16's 1.29%;
+    Q5_K_M dips slightly to 1.25% (within overlapping CIs).

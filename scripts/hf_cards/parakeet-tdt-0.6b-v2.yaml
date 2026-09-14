@@ -33,7 +33,6 @@ wer:
   source: LibriSpeech test-clean
   # metadata_key: librispeech_test_clean  # names the wer_<key> field; override when scored on another corpus
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-    greedy transducer decoding and no external LM. F32 reference baseline: 1.68%.
-    NVIDIA's self-reported number on the same split is 1.69%, so the F32 and Q8_0
-    ports match the upstream reference within rounding.
+    Greedy transducer decoding, no external LM. F32 reference baseline: 1.68%. NVIDIA's
+    self-reported number on the same split is 1.69%, so the F32 and Q8_0 ports match the
+    upstream reference within rounding.

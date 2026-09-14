@@ -38,13 +38,11 @@ summary: |
 
 wer:
   source: LibriSpeech test-clean
-  metadata_key: librispeech_test_clean
-  source2: FLEURS zh
-  metadata_key2: fleurs_zh
+  source2: FLEURS zh (OpenCC t2s-folded)
+  secondary: cer_fleurs_zh_opencc_t2s
   notes: |
-    Two benchmarks, both full test splits, decoded on a Modal L40S with the
-    transcribe.cpp default recipe (greedy + temperature fallback,
-    suppress_tokens, segment timestamps), batch 1.
+    Both benchmarks use the transcribe.cpp default recipe (greedy with temperature
+    fallback, suppress_tokens) on a Modal L40S.
 
     **English — WER, LibriSpeech test-clean (2620 utterances).** Standard
     Whisper/`EnglishTextNormalizer` scoring.
@@ -59,12 +57,3 @@ wer:
     Quantization is effectively free on both languages: every quant down to
     Q4_K_M (1.0 GB) sits within run-to-run noise of the BF16 reference
     (English 2.25-2.29%, Chinese 8.08-8.12%).
-
-  # Secondary per-quant metric → wer_fleurs_zh in the metadata block.
-  fleurs_zh:
-    bf16: 8.12
-    f16: 8.11
-    q8_0: 8.10
-    q6_k: 8.12
-    q5_k_m: 8.12
-    q4_k_m: 8.08

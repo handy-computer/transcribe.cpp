@@ -43,14 +43,17 @@ pinned 2026-06-05.
 | Q4_K_M       | [Voxtral-Small-24B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q4_K_M.gguf) | 14.30 GB | 2.11% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-the Whisper English text normalizer, greedy decoding, batch size 8 on an
-NVIDIA A100 80 GB. Same-machine HuggingFace transformers reference
-(VoxtralForConditionalGeneration, BF16, greedy): 1.57%; the BF16 GGUF matches
-at 1.56%. Validation for this variant is end-to-end by WER — the family's
-tensor-level numerical parity is established by the Voxtral Mini 3B sibling
-(identical architecture).
+Greedy decoding scored with the Whisper English text normalizer on an NVIDIA A100 80
+GB. Same-machine HuggingFace transformers reference
+(VoxtralForConditionalGeneration, BF16, greedy): 1.57%; the BF16 GGUF matches at
+1.56%. Validation for this variant is end-to-end by WER — the family's tensor-level
+numerical parity is established by the Voxtral Mini 3B sibling (identical
+architecture).
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -109,7 +112,7 @@ CLI flags:
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |         Q4_K_M |
 | ------- | ------------ | --------------: | -------------: |

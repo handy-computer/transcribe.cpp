@@ -31,11 +31,9 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances)
-    with the transcribe.cpp default decode (greedy, num_beams=1,
-    max_length=194 — matching the upstream generation_config). Upstream
-    reports 3.27% on the same split (Moonshine paper, Table 2; also Open
-    ASR Leaderboard). Our F32 reference baseline lands at 3.28%, identical
-    to upstream within rounding and well within the ±1.00 pp Stage 7
-    acceptance gate. Q8_0 lands at 3.26%, slightly under F32 — that delta
-    sits inside the 95% bootstrap CI and is noise, not a real improvement.
+    Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=194,
+    matching the upstream generation_config). Upstream reports 3.27% on the same split
+    (Moonshine paper, Table 2; also Open ASR Leaderboard). Our F32 reference baseline
+    lands at 3.28%, identical to upstream within rounding and well within the ±1.00 pp
+    Stage 7 acceptance gate. Q8_0 lands at 3.26%, slightly under F32 — that delta sits
+    inside the 95% bootstrap CI and is noise, not a real improvement.

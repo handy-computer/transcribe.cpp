@@ -60,6 +60,10 @@
       "type": "string",
       "description": "The upstream revision used to produce the published GGUFs."
     },
+    "docs_page": {
+      "type": "string",
+      "description": "Filename under docs/models/ of the page that documents this variant: its own page, or the family page whose roll-up lists it. Drives the family roll-ups and the root README index."
+    },
     "published_repo": {
       "type": ["string","null"],
       "description": "Our GGUF repo. null until published."
@@ -370,6 +374,18 @@
           "utts_over_50pct": {
             "type": ["integer","null"],
             "description": "Catastrophic-tail count."
+          },
+          "publication_profile": {
+            "type": ["string","null"],
+            "description": "Id of the catalog/_benchmark_profiles.json profile whose sweep produced this row. Names the recipe; absent on rows published before profiles existed."
+          },
+          "scoring": {
+            "type": "string",
+            "description": "A scoring step beyond the standard normalizer, e.g. \"opencc-t2s\" for Traditional-to-Simplified folding of both sides. Rows with a scoring value are a separate result set from the profile cell."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Decoding mode for models that publish one metric under several modes (multitalker \"kernel\" / \"masked\" cpWER). Rows with a mode are a separate result set."
           }
         }
       }
@@ -472,13 +488,13 @@
             "type": ["string","null"],
             "format": "date"
           },
-          "os": {
-            "type": "string",
-            "description": "Operating system string the bench driver recorded (machine.os), e.g. \"macOS 26.4.1\". Provenance for the doc footer; absent on rows ingested before it was carried."
-          },
           "thermal_gated": {
             "type": ["boolean","null"],
             "description": "Whether the machine's thermal precondition was met before this block. Not cosmetic: the same parakeet-unified CPU cells measure 8.17x realtime gated and 5.51x ungated, a 48% difference that dwarfs most code changes."
+          },
+          "publication_profile": {
+            "type": ["string","null"],
+            "description": "Id of the profile whose bench run produced this row; it pins iterations, warmup, samples and thermal policy. Absent on rows measured before profile stamping."
           }
         }
       }

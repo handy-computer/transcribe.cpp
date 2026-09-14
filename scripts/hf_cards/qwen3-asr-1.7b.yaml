@@ -34,11 +34,8 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech `test-clean` split (2620 English
-    utterances) with the Whisper-style English text normalizer and jiwer 3.x,
-    on the metal backend of an Apple M4. Qwen3-ASR is a multilingual model —
-    this number characterizes the English case only. The larger decoder
-    gives 1.7B more quantization headroom than the 0.6B; BF16 / F16 / Q8_0 /
-    Q6_K / Q5_K_M are all within bootstrap CI of each other, and Q4_K_M
-    regresses only ~0.2 WER points. Reproduce with `scripts/wer/run.py` +
-    `scripts/wer/score.py`.
+    Scored with the Whisper-style English text normalizer and jiwer 3.x on an Apple M4.
+    Qwen3-ASR is a multilingual model — this number characterizes the English case only.
+    The larger decoder gives 1.7B more quantization headroom than the 0.6B; BF16 / F16 /
+    Q8_0 / Q6_K / Q5_K_M are all within bootstrap CI of each other, and Q4_K_M regresses
+    only ~0.2 WER points. Reproduce with `scripts/wer/run.py` + `scripts/wer/score.py`.

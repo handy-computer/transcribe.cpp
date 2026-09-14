@@ -28,4 +28,5 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline: 1.87%. NVIDIA's self-reported number on the same split is 1.87%.
+    Greedy CTC decoding, no external LM. F32 reference baseline: 1.87%. NVIDIA's
+    self-reported number on the same split is 1.87%.

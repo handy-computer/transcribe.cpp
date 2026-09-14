@@ -21,12 +21,9 @@ timestamps.
 See the [upstream model card](https://huggingface.co/UsefulSensors/moonshine-tiny)
 for training data, intended use, and the original evaluation methodology.
 
-Licensed MIT. Ported from upstream commit
-[`390624e`](https://huggingface.co/UsefulSensors/moonshine-tiny/commit/390624ed33d594443aa4aa221f5b9f283b545b5a),
-pinned 2026-05-05. Validated against the transformers reference at
-transcribe.cpp commit
-[`07a8a84`](https://github.com/handy-computer/transcribe.cpp/tree/07a8a84)
-on 2026-05-05.
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`390624e`](https://huggingface.co/UsefulSensors/moonshine-tiny/commit/390624e), pinned 2026-05-05. Validated against the transformers reference at transcribe.cpp commit [`07a8a84`](https://github.com/handy-computer/transcribe.cpp/tree/07a8a84) on 2026-05-05.
+<!-- /catalog -->
 
 ## Download
 
@@ -38,14 +35,16 @@ on 2026-05-05.
 | Q8_0         | [moonshine-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-Q8_0.gguf) |  35 MB | 4.60% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with the transcribe.cpp default decode (greedy, num_beams=1,
-max_length=194 — matching the upstream generation_config). Useful
-Sensors' self-reported number on the same split is 4.55% (model card).
-Our F32 reference baseline lands at 4.58%, within rounding of upstream
-and well within the ±1.00 pp Stage 7 acceptance gate. Q8_0 drift is
-+0.02 pp vs F32 — within bootstrap CI noise.
+Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=194,
+matching the upstream generation_config). Useful Sensors' self-reported number on
+the same split is 4.55% (model card). Our F32 reference baseline lands at 4.58%,
+within rounding of upstream and well within the ±1.00 pp Stage 7 acceptance gate.
+Q8_0 drift is +0.02 pp vs F32 — within bootstrap CI noise.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -78,7 +77,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
@@ -93,7 +92,7 @@ Apple M4 Max: transcribe.cpp `9824fdb` on 2026-05-06. † published before prove
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |

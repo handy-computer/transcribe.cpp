@@ -12,10 +12,9 @@ moves it into the catalog, where it is durable and publishable.
 A cell is identified by (machine, backend, quant, sample). Many reports cover
 the same cell, because porting-6-bench runs a hypothesis loop over it, and
 those iterations are NOT interchangeable with the published figure -- CPU
-cells in particular swing tens of percent with thermal state. So selection is
-by intent first: a profile-stamped publication run beats a manual/legacy
-publication run, which beats any experiment, and only within a tier does the
-newest timestamp win.
+cells in particular swing tens of percent with thermal state. Only a
+profile-stamped run (`scripts/bench/run.py --profile`) is eligible, and among
+those the newest wins.
 
     uv run scripts/catalog/ingest_perf.py --dry-run
     uv run scripts/catalog/ingest_perf.py
@@ -56,18 +55,11 @@ def variant_of(report: dict, model_path: str) -> str | None:
     return report.get("variant")
 
 
-def intent(report: dict) -> int:
-    """Rank a bench run by publication intent. Lower wins.
-
-    A profile-stamped run wins over a manually selected publication run: the
-    latter says the operator intended to publish it, while the former also
-    proves which checked-in matrix selected it.
-    """
-    if report.get("publication") is True and report.get("publication_profile"):
-        return 0
-    if report.get("publication") is True:
-        return 1
-    return 2  # an experiment, or a report from before the driver stamped intent
+def publishable(report: dict) -> bool:
+    """Only a profile-stamped run can become a catalog row: the stamp names
+    the recipe (iterations, warmup, samples, thermal policy) the number was
+    measured under. Hypothesis-loop and hand-flagged runs are experiments."""
+    return bool(report.get("publication_profile"))
 
 
 def cells(report: dict) -> list[dict]:
@@ -87,7 +79,6 @@ def cells(report: dict) -> list[dict]:
             return None if value is None else round(value, 1)
 
         out.append({
-            "_rank": (intent(report), ),
             "_profile": report.get("publication_profile"),
             "variant": variant,
             "machine": profiles.canonical_machine(report["machine"]["slug"]),
@@ -109,23 +100,17 @@ def cells(report: dict) -> list[dict]:
             "encode_ms": mean("encode_ms"),
             "decode_ms": mean("decode_ms"),
             "engine_sha": report.get("git_sha"),
+            "publication_profile": report.get("publication_profile"),
             "measured_on": (report.get("timestamp") or "")[:10] or None,
-            "os": (report.get("machine") or {}).get("os"),
             "_when": report.get("timestamp") or "",
             "_file": report["_file"],
         })
     return out
 
 
-def collect(reports_dir: pathlib.Path,
-            allow_experiments: bool = False) -> tuple[dict, list[str]]:
-    """Best measurement per cell, plus notes about what was skipped.
-
-    "Best" means publication-grade: porting-6-bench leaves a long tail of
-    hypothesis-loop runs per cell, and on CPU those differ from the published
-    figure by tens of percent. They are measurements of a question, not of the
-    shipped build, so by default they are not eligible at all.
-    """
+def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
+    """Newest profile-stamped measurement per cell, plus notes on what was
+    skipped."""
     best: dict[tuple, dict] = {}
     superseded, unreadable, experiments = collections.Counter(), [], 0
     for path in sorted(reports_dir.glob("*/*.json")):
@@ -138,19 +123,14 @@ def collect(reports_dir: pathlib.Path,
             kind = report.get("schema") if isinstance(report, dict) else type(report).__name__
             unreadable.append(f"{path.relative_to(common.REPO)} (schema {kind!r})")
             continue
+        if not publishable(report):
+            experiments += 1
+            continue
         report["_file"] = str(path.relative_to(common.REPO))
         for row in cells(report):
-            if row["_rank"][0] == 2 and not allow_experiments:
-                experiments += 1
-                continue
             key = (row["variant"], row["machine"], row["backend"], row["quant"], row["sample"])
             previous = best.get(key)
-            # A better-intentioned run always wins; among equals, the newest.
-            wins = previous is None or (
-                row["_rank"] < previous["_rank"]
-                or (row["_rank"] == previous["_rank"]
-                    and row["_when"] > previous["_when"]))
-            if wins:
+            if previous is None or row["_when"] > previous["_when"]:
                 if previous is not None:
                     superseded[key] += 1
                 best[key] = row
@@ -158,8 +138,7 @@ def collect(reports_dir: pathlib.Path,
                 superseded[key] += 1
     notes = [f"{path}: unreadable or not a bench report" for path in unreadable]
     if experiments:
-        notes.append(f"{experiments} experiment/baseline run(s) ignored "
-                     f"(--allow-experiments to include)")
+        notes.append(f"{experiments} report(s) without a profile stamp ignored")
     if superseded:
         notes.append(f"{sum(superseded.values())} older report(s) superseded on "
                      f"{len(superseded)} cell(s)")
@@ -167,7 +146,8 @@ def collect(reports_dir: pathlib.Path,
 
 
 FIELDS = ("sample_duration_s", "total_ms", "xrt_compute", "wall_ms", "xrt_wall",
-          "load_ms", "mel_ms", "encode_ms", "decode_ms", "engine_sha", "measured_on", "os")
+          "load_ms", "mel_ms", "encode_ms", "decode_ms", "engine_sha",
+          "publication_profile", "measured_on")
 
 
 def catalog_row(source: dict) -> dict:
@@ -190,25 +170,15 @@ def main() -> int:
     parser.add_argument("--force", action="store_true",
                         help="apply measurements even when they contradict the "
                              "published xRT")
-    parser.add_argument("--allow-experiments", action="store_true",
-                        help="also ingest reports not marked for publication. "
-                             "Off by default: a hypothesis-loop run is not a "
-                             "publishable number.")
     args = parser.parse_args()
 
     reports_dir = pathlib.Path(args.reports)
     if not reports_dir.exists():
         print(f"no reports at {reports_dir}", file=sys.stderr)
         return 2
-    measured, notes = collect(reports_dir, args.allow_experiments)
+    measured, notes = collect(reports_dir)
     print(f"{len(measured)} measured cell(s) across "
           f"{len({key[1] for key in measured})} machine slug(s)")
-    by_intent = collections.Counter(row["_rank"][0] for row in measured.values())
-    labels = {0: "profile-stamped publication run",
-              1: "manual publication run (--publication without --profile)",
-              2: "experiment or baseline only"}
-    for rank in sorted(by_intent):
-        print(f"  {by_intent[rank]:5d}  {labels[rank]}")
     for note in notes:
         print(f"  note: {note}")
 

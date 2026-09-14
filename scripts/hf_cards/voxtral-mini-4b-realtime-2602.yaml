@@ -38,12 +38,10 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-    the Whisper English text normalizer, offline path at delay 6, batch size 8
-    on an NVIDIA L40S. A delay-30 remeasurement is pending. Same-machine
-    HuggingFace transformers reference
-    (VoxtralRealtimeForConditionalGeneration, BF16, greedy): 2.08%; the BF16 GGUF
-    matches at 2.08%. Every shipped quant stays within bootstrap noise
-    (2.07-2.09%), so the quantization ladder is WER-neutral down to Q4_K_M. The
-    model is multilingual (13 languages, auto-detect); the published WER is
-    English only.
+    Scored with the Whisper English text normalizer, offline path at delay 6, on an
+    NVIDIA L40S. A delay-30 remeasurement is pending. Same-machine HuggingFace
+    transformers reference (VoxtralRealtimeForConditionalGeneration, BF16, greedy):
+    2.08%; the BF16 GGUF matches at 2.08%. Every shipped quant stays within bootstrap
+    noise (2.07-2.09%), so the quantization ladder is WER-neutral down to Q4_K_M. The
+    model is multilingual (13 languages, auto-detect); the published WER is English
+    only.

@@ -11,6 +11,7 @@
   "upstream_repo": "openai/whisper-small",
   "upstream_commit": "973afd2",
   "published_repo": "handy-computer/whisper-small-gguf",
+  "docs_page": "whisper.md",
   "languages": [
     "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs",
     "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",

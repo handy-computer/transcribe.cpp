@@ -41,12 +41,15 @@ pinned 2026-05-08.
 | Q4_K_M       | [canary-1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q4_K_M.gguf) |  730 MB | 1.55% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy decoding and no external LM. F32 reference baseline: 1.55%.
-NVIDIA's self-reported number on the upstream model card is 1.48%;
-likely this is due to differences in how we score WER, based on the
-results we have from canary-180m-flash.
+Greedy decoding, no external LM. F32 reference baseline: 1.55%. NVIDIA's
+self-reported number on the upstream model card is 1.48%; likely this is due to
+differences in how we score WER, based on the results we have from
+canary-180m-flash.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -106,7 +109,7 @@ overhead.
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
@@ -121,7 +124,7 @@ Apple M4 Max: transcribe.cpp `23c2ee6` on 2026-05-08; transcribe.cpp `19b3b87` o
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |            Q4_K_M |
 | ------- | ------------ | --------------: | ----------------: |

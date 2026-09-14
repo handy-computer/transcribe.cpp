@@ -41,19 +41,20 @@ the README's canonical inference target).
 | Q4_K_M       | [granite-speech-4.1-2b-nar-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q4_K_M.gguf) | 1.56 GB | 1.34% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances).
-BF16 reference baseline (transformers `model.transcribe`, MPS, re-run
-locally): 1.28% — matches the upstream model card's 1.29% to within
-sampling noise. Text normalizer: Whisper `EnglishTextNormalizer`, the
-same normalizer Open ASR Leaderboard uses. Reference reproduction
-follows the model card path verbatim (`AutoProcessor` +
-`AutoModel.transcribe` + `processor.batch_decode`) at HF revision
-`99a4df9` (single-file `modeling_granite_speech_nar.py` snapshot, the
-README's canonical target); no mask patching is required because the
-NAR LM uses `create_bidirectional_mask()` natively. F16, Q8_0, and
-Q6_K all match BF16's 1.29%; Q5_K_M dips slightly to 1.25% (within
-overlapping CIs).
+BF16 reference baseline (transformers `model.transcribe`, MPS, re-run locally):
+1.28% — matches the upstream model card's 1.29% to within sampling noise. Text
+normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+Leaderboard uses. Reference reproduction follows the model card path verbatim
+(`AutoProcessor` + `AutoModel.transcribe` + `processor.batch_decode`) at HF revision
+`99a4df9` (single-file `modeling_granite_speech_nar.py` snapshot, the README's
+canonical target); no mask patching is required because the NAR LM uses
+`create_bidirectional_mask()` natively. F16, Q8_0, and Q6_K all match BF16's 1.29%;
+Q5_K_M dips slightly to 1.25% (within overlapping CIs).
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -94,7 +95,7 @@ editor handles language detection implicitly.
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
@@ -109,7 +110,7 @@ Apple M4 Max: transcribe.cpp `de05c43` on 2026-05-21.
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

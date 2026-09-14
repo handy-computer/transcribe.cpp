@@ -11,6 +11,7 @@
   "upstream_repo": "UsefulSensors/moonshine-tiny-vi",
   "upstream_commit": "d4d20da",
   "published_repo": "handy-computer/moonshine-tiny-vi-gguf",
+  "docs_page": "moonshine.md",
   "languages": ["vi"],
   "long_form_strategy": "soft-window",
   "capabilities": {

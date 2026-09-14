@@ -49,8 +49,15 @@ pinned 2026-07-12.
 | Q4_K_M       | [bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf](https://huggingface.co/handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf/resolve/main/bundle/multitalker-parakeet-streaming-0.6b-v1-Q4_K_M.gguf) |  617 MB | 2.18% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances) in single_speaker_mode with greedy RNN-T decoding and whisper-normalizer (PnC-stripped) scoring. F32 reference baseline: 2.19%. The measured NeMo single_speaker_mode reference and NVIDIA's self-reported number on the same split are both 2.19%.
+Run in single_speaker_mode with greedy RNN-T decoding and whisper-normalizer
+(PnC-stripped) scoring. F32 reference baseline: 2.19%. The measured NeMo
+single_speaker_mode reference and NVIDIA's self-reported number on the same split
+are both 2.19%.
 
 ### Multitalker bundles (speaker-attributed ASR)
 
@@ -75,6 +82,18 @@ build/bin/transcribe-cli --diarize \
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
+**AMI IHM test, `kernel` mode**
+
+| Language | Metric |    F32 |
+| --- | --- | ---: |
+| en       | CPWER  | 19.35% |
+
+**AMI IHM test, `masked` mode**
+
+| Language | Metric |    F32 |
+| --- | --- | ---: |
+| en       | CPWER  | 23.73% |
+
 **FLEURS test**
 
 | Language | Metric |  Q8_0 |
@@ -141,7 +160,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
@@ -156,7 +175,7 @@ Apple M4 Max: transcribe.cpp `c55a09d` on 2026-07-13.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

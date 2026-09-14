@@ -55,3 +55,8 @@ for _language, _config in FLEURS_LANGS.items():
 # words in FLEURS. Khmer/Lao/Burmese spaces are phrase separators rather than
 # dependable word boundaries, so WER would mostly measure orthography policy.
 CER_LANGUAGES = {"zh", "yue", "ja", "ko", "th", "km", "lo", "my"}
+
+# Model-side spellings that name the same language as a dataset code. A
+# language hint is checked against the manifest through this map, so a model
+# that prompts with Whisper's legacy `jw` can be scored on FLEURS `jv`.
+LANGUAGE_ALIASES = {"jw": "jv", "tl": "fil", "no": "nb", "zh-cn": "zh"}

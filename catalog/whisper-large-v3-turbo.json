@@ -11,6 +11,7 @@
   "upstream_repo": "openai/whisper-large-v3-turbo",
   "upstream_commit": "41f01f3",
   "published_repo": "handy-computer/whisper-large-v3-turbo-gguf",
+  "docs_page": "whisper.md",
   "languages": [
     "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs",
     "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
@@ -127,7 +128,8 @@
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":2.04,"ci95":[1.85,2.26],"n_utts":2620,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":784,"del":188,"ins":111},"empty_hyp":0,"utts_over_50pct":6,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"km","quant":"Q8_0","metric":"cer","err_pct":95.2,"ci95":[93.97,96.37],"n_utts":771,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":29731,"del":27154,"ins":3767},"empty_hyp":2,"utts_over_50pct":771,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"lo","quant":"Q8_0","metric":"cer","err_pct":115.41,"ci95":[111.93,119.15],"n_utts":405,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":25892,"del":10285,"ins":7018},"empty_hyp":0,"utts_over_50pct":405,"measurement_provenance":"legacy-published"},
-    {"dataset":"fleurs","split":"test","language":"my","quant":"Q8_0","metric":"cer","err_pct":121.67,"ci95":[117.84,125.71],"n_utts":880,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":39288,"del":15150,"ins":16732},"empty_hyp":1,"utts_over_50pct":880,"measurement_provenance":"legacy-published"}
+    {"dataset":"fleurs","split":"test","language":"my","quant":"Q8_0","metric":"cer","err_pct":121.67,"ci95":[117.84,125.71],"n_utts":880,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":39288,"del":15150,"ins":16732},"empty_hyp":1,"utts_over_50pct":880,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"jv","language_hint":"jw","backend":"cuda","quant":"Q8_0","metric":"wer","err_pct":53.8,"ci95":[52.56,55.0],"n_utts":728,"batch_size":8,"timestamps":"none","engine_sha":"0a26478","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":6586,"del":622,"ins":705},"empty_hyp":0,"utts_over_50pct":405}
   ],
   "headline_benchmark": {
     "dataset": "librispeech",

@@ -11,6 +11,7 @@
   "upstream_repo": "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
   "upstream_commit": "cf67a938bf2829959d08fdfb84e186eff02a67ff",
   "published_repo": "handy-computer/Fun-ASR-MLT-Nano-2512-gguf",
+  "docs_page": "fun-asr-nano.md",
   "languages": [
     "zh", "en", "yue", "ja", "ko", "vi", "id", "th", "ms", "tl", "ar", "hi",
     "bg", "hr", "cs", "da", "nl", "et", "fi", "el", "hu", "ga", "lv", "lt",

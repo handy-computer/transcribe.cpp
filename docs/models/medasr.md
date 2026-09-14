@@ -37,8 +37,20 @@ long recordings for best results. See the
 | Q4_K_M       | [medasr-Q4_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q4_K_M.gguf) |  83 MB | 18.14% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2,620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline (HuggingFace transformers, Mac MPS): 17.88%; transcribe.cpp F32 matches exactly. Absolute WER is higher than general-purpose ASR (e.g. Whisper-base ~5%) because the model is fine-tuned for medical dictation — on the publisher's internal RAD-DICT / GENERAL-DICT / FM-DICT datasets the model scores 6.6%–9.3%, but those datasets are not publicly reproducible. Q8_0 is the recommended default (smallest preset with no statistically detectable WER degradation); Q4_K_M shows a real +0.26 pp degradation and is shipped for completeness but not recommended — prefer Q5_K_M if you need smaller than Q8_0.
+Greedy CTC decoding, no external LM. F32 reference baseline (HuggingFace
+transformers, Mac MPS): 17.88%; transcribe.cpp F32 matches exactly. Absolute WER is
+higher than general-purpose ASR (e.g. Whisper-base ~5%) because the model is
+fine-tuned for medical dictation — on the publisher's internal RAD-DICT /
+GENERAL-DICT / FM-DICT datasets the model scores 6.6%–9.3%, but those datasets are
+not publicly reproducible. Q8_0 is the recommended default (smallest preset with no
+statistically detectable WER degradation); Q4_K_M shows a real +0.26 pp degradation
+and is shipped for completeness but not recommended — prefer Q5_K_M if you need
+smaller than Q8_0.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -72,7 +84,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
@@ -87,7 +99,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

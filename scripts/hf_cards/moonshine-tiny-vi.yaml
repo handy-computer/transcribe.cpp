@@ -28,12 +28,10 @@ summary: |
   (vi); no translation, no language detection, no timestamps.
 
 wer:
-  metadata_key: fleurs_vi
   source: FLEURS vi test
   notes: |
-    WER measured on the FLEURS-vi test split (857
-    utterances) using the transcribe.cpp default decode (greedy,
-    num_beams=1, max_length=192 — matching the upstream generation_config).
+    Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=192,
+    matching the upstream generation_config).
 
     UsefulSensors does not publish a per-language WER number
     for this variant. As a comparable baseline we ran the Transformers F32

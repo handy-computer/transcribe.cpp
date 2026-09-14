@@ -11,6 +11,7 @@
   "upstream_repo": "nvidia/parakeet-unified-en-0.6b",
   "upstream_commit": "d4ac992",
   "published_repo": "handy-computer/parakeet-unified-en-0.6b-gguf",
+  "docs_page": "parakeet.md",
   "languages": ["en"],
   "language_tag_form": "bare-bcp47",
   "long_form_strategy": "chunked-unbounded",

@@ -678,10 +678,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--name", type=str, default=None,
                    help="stable label for named baselines "
                         "(replaces timestamp in output filename)")
-    p.add_argument("--publication", action="store_true",
-                   help="mark a manually specified matrix as publishable. "
-                        "Prefer --profile, which derives and validates the "
-                        "whole publication protocol.")
     p.add_argument("--profile", nargs="?", const="",
                    help="run a catalog publication profile; optionally name "
                         "it (default: catalog/_benchmark_profiles.json default). "
@@ -765,7 +761,7 @@ def _run_one_backend(backend: BackendSpec,
 
         # A publication run names itself after the variant unless told
         # otherwise, so the file on disk says what it is.
-        run_name = args.name or (f"{variant}-publication" if args.publication else None)
+        run_name = args.name or (f"{variant}-publication" if args.profile is not None else None)
         name_slug = slugify(run_name) if run_name else None
         runs: list[dict] = []
         for cell in group:
@@ -797,7 +793,6 @@ def _run_one_backend(backend: BackendSpec,
             "name": run_name or "",
             # Eligibility for the catalog is a property the run declares, not
             # something an importer infers from the filename later.
-            "publication": bool(args.publication),
             "publication_profile": args._profile_id,
             "machine": machine,
             "git_sha": git_sha,
@@ -872,7 +867,6 @@ def main() -> int:
         args.iters = int(speed["iterations"])
         args.warmup = int(speed["warmup"])
         args.cooldown_tctl_c = float(target.get("cooldown_tctl_c", 0.0))
-        args.publication = True
     else:
         quants = [q.strip() for q in (args.quants or ",".join(DEFAULT_QUANTS)).split(",")
                   if q.strip()]

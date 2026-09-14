@@ -11,6 +11,7 @@
   "upstream_repo": "nvidia/parakeet-ctc-1.1b",
   "upstream_commit": "a707e81",
   "published_repo": "handy-computer/parakeet-ctc-1.1b-gguf",
+  "docs_page": "parakeet.md",
   "languages": ["en"],
   "long_form_strategy": "chunked-unbounded",
   "capabilities": {

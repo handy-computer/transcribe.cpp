@@ -11,6 +11,7 @@
   "upstream_repo": "nvidia/canary-1b",
   "upstream_commit": "1698acf",
   "published_repo": "handy-computer/canary-1b-gguf",
+  "docs_page": "canary.md",
   "languages": ["en","de","es","fr"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

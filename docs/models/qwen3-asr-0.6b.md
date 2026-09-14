@@ -39,14 +39,16 @@ Ported from upstream commit
 | Q4_K_M       | [Qwen3-ASR-0.6B-Q4_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q4_K_M.gguf) |  590 MB | 2.26% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech `test-clean` split (2620 English
-utterances) with the Whisper-style English text normalizer and jiwer 3.x,
-on the metal backend of an Apple M4. Qwen3-ASR is a multilingual model —
-this number characterizes the English case only. BF16 / F16 / Q8_0 / Q6_K
-are all within bootstrap CI of each other; Q5_K_M and Q4_K_M show a small
-but real regression driven by the tied token-embedding / head. Reproduce
-with `scripts/wer/run.py` + `scripts/wer/score.py`.
+Scored with the Whisper-style English text normalizer and jiwer 3.x on an Apple M4.
+Qwen3-ASR is a multilingual model — this number characterizes the English case only.
+BF16 / F16 / Q8_0 / Q6_K are all within bootstrap CI of each other; Q5_K_M and
+Q4_K_M show a small but real regression driven by the tied token-embedding / head.
+Reproduce with `scripts/wer/run.py` + `scripts/wer/score.py`.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -124,7 +126,7 @@ chat template is tracked as follow-up work; see the family note at
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
@@ -139,7 +141,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |           Q8_0 |          Q4_K_M |
 | ------- | ------------ | -------------: | --------------: |

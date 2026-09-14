@@ -71,6 +71,10 @@ uv run scripts/catalog/check.py --publication-profile --models <variant>
 Arbitrary `run.py` and `modal_sweep.py::sweep` invocations remain useful for
 experiments, but only profile-stamped full-split reports can be ingested as
 published accuracy.
+Batch size is not part of a cell's identity: the profile recommends batch 8
+because it is faster and cheaper, a cell measured at batch 1 still satisfies
+it, and the catalog row records whichever was run.
+
 > **ITN is pinned, not inherited.** The run-time ITN default is per-family and
 > is a product decision that can move: `sensevoice` resolves it to *on* (there
 > the ITN toggle is also the only source of casing and punctuation, so ITN-off

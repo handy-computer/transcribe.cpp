@@ -11,6 +11,7 @@
   "upstream_repo": "google/medasr",
   "upstream_commit": "ae1e484",
   "published_repo": "handy-computer/medasr-gguf",
+  "docs_page": "medasr.md",
   "languages": ["en"],
   "long_form_strategy": "soft-window",
   "capabilities": {

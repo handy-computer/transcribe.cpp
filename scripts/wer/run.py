@@ -81,11 +81,13 @@ if REMOTE_HELPERS.is_dir() and str(REMOTE_HELPERS) not in sys.path:
     sys.path.insert(0, str(REMOTE_HELPERS))
 
 from dataset_specs import (  # noqa: E402
+
     default_language_for,
     ingest_args_for,
     local_manifest_path_for,
     parse_dataset_spec,
 )
+from languages import LANGUAGE_ALIASES  # noqa: E402
 
 
 def read_stderr_tail(path: str, max_lines: int = 50, max_bytes: int = 65536) -> str:
@@ -317,7 +319,10 @@ def main() -> int:
     # models like nemotron-3.5-asr-streaming-0.6b require because their
     # caps.languages list carries only the BCP-47 long forms.
     def _primary(tag: str) -> str:
-        return tag.split("-", 1)[0].lower() if tag else tag
+        if not tag:
+            return tag
+        primary = tag.split("-", 1)[0].lower()
+        return LANGUAGE_ALIASES.get(tag.lower(), LANGUAGE_ALIASES.get(primary, primary))
     manifest_langs = {
         e["language"] for e in manifest if e.get("language")
     }

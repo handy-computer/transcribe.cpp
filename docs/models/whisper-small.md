@@ -13,12 +13,9 @@ Offline multilingual speech-to-text and any-language → English speech translat
 See the [upstream model card](https://huggingface.co/openai/whisper-small) for training data, intended
 use, and the original evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`973afd2`](https://huggingface.co/openai/whisper-small/commit/973afd2),
-pinned 2026-04-25. Validated against the transformers reference at
-transcribe.cpp commit
-[`5.6.1`](https://github.com/handy-computer/transcribe.cpp/tree/5.6.1)
-on 2026-04-26.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`973afd2`](https://huggingface.co/openai/whisper-small/commit/973afd2), pinned 2026-04-25. Validated against the transformers reference at transcribe.cpp commit [`5.6.1`](https://github.com/handy-computer/transcribe.cpp/tree/5.6.1) on 2026-04-26.
+<!-- /catalog -->
 
 ## Download
 
@@ -33,8 +30,16 @@ on 2026-04-26.
 | Q4_K_M       | [whisper-small-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q4_K_M.gguf) | 172 MB | 3.40% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 3.432%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
+OpenAI's self-reported number on the same split is 3.432%. Both are
+short-form WER decoded without timestamps; OpenAI does not publish its exact
+evaluation configuration, so small differences are expected. Single-run
+figures: GPU reductions can shift corpus WER by about 0.1pp between runs,
+mostly on short-clip hallucination outcomes at the noise floor.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -147,7 +152,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |               Q8_0 |             Q4_K_M |
 | ------- | ------------ | -----------------: | -----------------: |
@@ -168,7 +173,7 @@ uv run scripts/bench/run.py --profile --models whisper-small
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

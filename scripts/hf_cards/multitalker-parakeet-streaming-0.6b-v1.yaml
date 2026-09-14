@@ -30,15 +30,13 @@ tags:
 summary: |
   Offline and cache-aware streaming English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder, fine-tuned from nvidia/nemotron-speech-streaming-en-0.6b. Plain GGUFs run the single_speaker_mode ASR path, while bundle GGUFs under `bundle/` embed nvidia/diar_streaming_sortformer_4spk-v2.1 and, with `--diarize`, transcribe up to four overlapping speakers into a speaker-tagged transcript. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask; all four latency lookahead settings are selectable.
 
-metrics:
-  cpwer_ami_ihm_test:
-    bundle_f32_kernel: 19.35
-    bundle_f32_masked: 23.73
-
 wer:
   source: LibriSpeech test-clean, offline
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) in single_speaker_mode with greedy RNN-T decoding and whisper-normalizer (PnC-stripped) scoring. F32 reference baseline: 2.19%. The measured NeMo single_speaker_mode reference and NVIDIA's self-reported number on the same split are both 2.19%.
+    Run in single_speaker_mode with greedy RNN-T decoding and whisper-normalizer
+    (PnC-stripped) scoring. F32 reference baseline: 2.19%. The measured NeMo
+    single_speaker_mode reference and NVIDIA's self-reported number on the same split
+    are both 2.19%.
 
     ### Multitalker bundles (speaker-attributed ASR)
 

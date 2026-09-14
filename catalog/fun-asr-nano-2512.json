@@ -11,6 +11,7 @@
   "upstream_repo": "FunAudioLLM/Fun-ASR-Nano-2512",
   "upstream_commit": "a7088d620f755dcdca575b63db184c3ad55b2865",
   "published_repo": "handy-computer/Fun-ASR-Nano-2512-gguf",
+  "docs_page": "fun-asr-nano.md",
   "languages": ["zh","en","ja"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

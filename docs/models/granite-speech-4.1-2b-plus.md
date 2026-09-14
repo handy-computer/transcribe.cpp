@@ -53,18 +53,20 @@ pinned 2026-05-17.
 | Q4_K_M       | [granite-speech-4.1-2b-plus-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q4_K_M.gguf) | 1.49 GB | 1.56% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy decoding and the model-card chat template (system prompt +
-leading-space user instruction + `add_generation_prompt=True`). BF16
-reference baseline (re-run locally with that exact prompt): 1.48%; 0.04pp
-above upstream's published 1.44%, within bootstrap CI overlap and likely
-a chat-template / normalization difference on the publisher side. Text
-normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
-Leaderboard uses. The `add_generation_prompt=True` is load-bearing —
-without it the model emits 25-27 empty hypotheses on short test-clean
-clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the
-prompt correctly; this note only matters if you reproduce the reference.
+Greedy decoding with the model-card chat template (system prompt + leading-space
+user instruction + `add_generation_prompt=True`). BF16 reference baseline (re-run
+locally with that exact prompt): 1.48%; 0.04pp above upstream's published 1.44%,
+within bootstrap CI overlap and likely a chat-template / normalization difference on
+the publisher side. Text normalizer: Whisper `EnglishTextNormalizer`, the same
+normalizer Open ASR Leaderboard uses. The `add_generation_prompt=True` is
+load-bearing — without it the model emits 25-27 empty hypotheses on short test-clean
+clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the prompt
+correctly; this note only matters if you reproduce the reference.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -126,7 +128,7 @@ words: 22
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |             Q8_0 |          Q4_K_M |
 | ------- | ------------ | ---------------: | --------------: |
@@ -141,7 +143,7 @@ Apple M4 Max: transcribe.cpp `de05c43` on 2026-05-21.
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

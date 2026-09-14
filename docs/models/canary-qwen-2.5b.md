@@ -47,18 +47,19 @@ exact per-session value. See the [input-length contract](../input-limits.md).
 | Q4_K_M       | [canary-qwen-2.5b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q4_K_M.gguf) | 1.74 GB | 1.63% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech `test-clean` split (2620 English
-utterances) with the Whisper-style English text normalizer and jiwer
-3.x, on the metal backend of an Apple M4. The same-machine NeMo SALM
-reference run (CPU torch, dither=0.0, greedy `model.generate`) lands
-at **1.61%** with 95% bootstrap CI [1.47%, 1.75%]: `0.01` above
-NVIDIA's published 1.60% but well within statistical noise. All six
-GGUF presets land at exactly 1.63% (`+0.02` over our reference run,
-same CI band). Investigation of the worst per-utterance differences
-shows scattered token-level noise consistent with BF16 weight
-precision (homophones, word-boundary flips, function-word
-substitutions). Reproduce with `scripts/wer/run.py` +
+Scored with the Whisper-style English text normalizer and jiwer 3.x on an Apple M4.
+The same-machine NeMo SALM reference run (CPU torch, dither=0.0, greedy
+`model.generate`) lands at **1.61%** with 95% bootstrap CI [1.47%, 1.75%]: `0.01`
+above NVIDIA's published 1.60% but well within statistical noise. All six GGUF
+presets land at exactly 1.63% (`+0.02` over our reference run, same CI band).
+Investigation of the worst per-utterance differences shows scattered token-level
+noise consistent with BF16 weight precision (homophones, word-boundary flips,
+function-word substitutions). Reproduce with `scripts/wer/run.py` +
 `scripts/wer/score.py`.
 <!-- /catalog -->
 
@@ -99,7 +100,7 @@ CLI flags:
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
@@ -114,7 +115,7 @@ Apple M4 Max: transcribe.cpp `1b19945` on 2026-05-17.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

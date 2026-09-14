@@ -13,6 +13,7 @@
   "upstream_repo": "nvidia/nemotron-speech-streaming-en-0.6b",
   "upstream_commit": "ef3bf40",
   "published_repo": "handy-computer/nemotron-speech-streaming-en-0.6b-gguf",
+  "docs_page": "nemotron-speech-streaming-en-0.6b.md",
   "languages": ["en"],
   "long_form_strategy": "chunked-unbounded",
   "capabilities": {

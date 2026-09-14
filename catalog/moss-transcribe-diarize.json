@@ -11,6 +11,7 @@
   "upstream_repo": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
   "upstream_commit": "d7231bb",
   "published_repo": "handy-computer/MOSS-Transcribe-Diarize-gguf",
+  "docs_page": "moss-transcribe-diarize.md",
   "languages": ["en","zh"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

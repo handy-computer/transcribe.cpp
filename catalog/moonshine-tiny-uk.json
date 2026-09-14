@@ -11,6 +11,7 @@
   "upstream_repo": "UsefulSensors/moonshine-tiny-uk",
   "upstream_commit": "8cf70f4",
   "published_repo": "handy-computer/moonshine-tiny-uk-gguf",
+  "docs_page": "moonshine.md",
   "languages": ["uk"],
   "long_form_strategy": "soft-window",
   "capabilities": {

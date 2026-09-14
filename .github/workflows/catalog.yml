@@ -8,6 +8,9 @@ on:
       - "scripts/catalog/**"
       - "scripts/hf_cards/**"
       - "docs/models/**"
+      - "README.md"
+      - "scripts/bench/**"
+      - "scripts/wer/languages.py"
       - ".github/workflows/catalog.yml"
   push:
     branches: [main]
@@ -16,6 +19,9 @@ on:
       - "scripts/catalog/**"
       - "scripts/hf_cards/**"
       - "docs/models/**"
+      - "README.md"
+      - "scripts/bench/**"
+      - "scripts/wer/languages.py"
       - ".github/workflows/catalog.yml"
 
 concurrency:
@@ -42,5 +48,6 @@ jobs:
         run: uv run scripts/catalog/render.py --check
       - name: Rebuild portable database
         run: |
+          uv run --with pytest pytest -q scripts/catalog/test_db_mapping.py
           uv run scripts/catalog/db.py --out "$RUNNER_TEMP/catalog.db"
           sqlite3 "$RUNNER_TEMP/catalog.db" "PRAGMA integrity_check"

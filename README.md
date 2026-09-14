@@ -7,7 +7,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 **Supported models:**
 
 <!-- catalog:family-index -->
-| Family | Variants | Capabilities | Docs |
+| Family | Variants | Available capabilities | Docs |
 | --- | --- | --- | --- |
 | Canary | `canary-180m-flash`, `canary-1b`, `canary-1b-flash`, `canary-1b-v2` | translate | [docs/models/canary.md](docs/models/canary.md) |
 | Canary-Qwen 2.5B | `canary-qwen-2.5b` | - | [docs/models/canary-qwen-2.5b.md](docs/models/canary-qwen-2.5b.md) |
@@ -15,6 +15,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Fun-ASR-Nano | `fun-asr-mlt-nano-2512`, `fun-asr-nano-2512` | - | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
 | GigaAM-v3 | `gigaam-v3-ctc`, `gigaam-v3-e2e-ctc`, `gigaam-v3-e2e-rnnt`, `gigaam-v3-rnnt` | token timestamps | [docs/models/gigaam.md](docs/models/gigaam.md) |
 | Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b`, `granite-speech-4.1-2b-nar`, `granite-speech-4.1-2b-plus` | diarize, translate, word timestamps | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
+| Granite Speech 5.0 TurboCTC | `granite-speech-5.0-470m-turboctc`, `granite-speech-5.0-470m-turboctc-nc` | - | [docs/models/granite-speech-5.0-turboctc.md](docs/models/granite-speech-5.0-turboctc.md) |
 | MedASR | `medasr` | token timestamps | [docs/models/medasr.md](docs/models/medasr.md) |
 | Moonshine | `moonshine-base`, `moonshine-base-ar`, `moonshine-base-ja`, `moonshine-base-ko`, `moonshine-base-uk`, `moonshine-base-vi`, `moonshine-base-zh`, `moonshine-tiny`, `moonshine-tiny-ar`, `moonshine-tiny-ja`, `moonshine-tiny-ko`, `moonshine-tiny-uk`, `moonshine-tiny-vi`, `moonshine-tiny-zh` | - | [docs/models/moonshine.md](docs/models/moonshine.md) |
 | Moonshine Streaming | `moonshine-streaming-medium`, `moonshine-streaming-small`, `moonshine-streaming-tiny` | streaming | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
@@ -26,14 +27,14 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | - | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
 | SenseVoice Small | `sensevoice-small` | - | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
 | Voxtral (2507) | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` | translate | [docs/models/voxtral.md](docs/models/voxtral.md) |
-| voxtral-mini-4b-realtime-2602 | `voxtral-mini-4b-realtime-2602` | streaming | [handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf) |
+| Voxtral Realtime (2602) | `voxtral-mini-4b-realtime-2602` | streaming | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |
 | Whisper | `breeze-asr-25`, `whisper-base`, `whisper-base.en`, `whisper-large`, `whisper-large-v2`, `whisper-large-v3`, `whisper-large-v3-turbo`, `whisper-medium`, `whisper-medium.en`, `whisper-small`, `whisper-small.en`, `whisper-tiny`, `whisper-tiny.en` | segment timestamps, translate | [docs/models/whisper.md](docs/models/whisper.md) |
 <!-- /catalog -->
 
 **Speaker diarization models** (no transcription; verified by DER/JER rather than WER):
 
 <!-- catalog:family-index transcribe=false -->
-| Family | Variants | Capabilities | Docs |
+| Family | Variants | Available capabilities | Docs |
 | --- | --- | --- | --- |
 | Streaming Sortformer Diarizer 4spk v2.1 | `diar_streaming_sortformer_4spk-v2.1` | diarize, streaming | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
 <!-- /catalog -->

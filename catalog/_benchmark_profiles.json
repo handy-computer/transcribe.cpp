@@ -1,8 +1,77 @@
 {
-  "default": "asr-publication-v1",
+  "default": "asr-publication-v2",
   "profiles": {
+    "asr-publication-v2": {
+      "description": "The complete benchmark set published for transcription models. v2: accuracy on L40S; batch_size is the recommended setting for new runs, and a cell is satisfied at any batch size (the row records the one used).",
+      "accuracy": [
+        {
+          "dataset": "librispeech",
+          "split": "test-clean",
+          "languages": "english-if-supported",
+          "quants": "all-downloads",
+          "batch_size": 8,
+          "sort_by_length": true,
+          "timestamps": "none",
+          "gpu": "L40S",
+          "backend": "cuda"
+        },
+        {
+          "dataset": "fleurs",
+          "split": "test",
+          "languages": "supported-intersect-fleurs",
+          "quants": [
+            "Q8_0"
+          ],
+          "batch_size": 8,
+          "sort_by_length": true,
+          "timestamps": "none",
+          "gpu": "L40S",
+          "backend": "cuda"
+        }
+      ],
+      "speed": {
+        "quants": [
+          "Q8_0",
+          "Q4_K_M"
+        ],
+        "samples": [
+          "jfk",
+          "dots"
+        ],
+        "iterations": 3,
+        "warmup": 1,
+        "family_overrides": {
+          "gigaam": {
+            "samples": [
+              "ru"
+            ],
+            "reason": "Russian-only family; use the currently published supported-language clip until a long Russian fixture is added."
+          }
+        },
+        "model_overrides": {},
+        "targets": [
+          {
+            "machine": "m4-max",
+            "display": "Apple M4 Max",
+            "backends": [
+              "cpu",
+              "metal"
+            ]
+          },
+          {
+            "machine": "ryzen-4750u",
+            "display": "AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR)",
+            "backends": [
+              "cpu",
+              "vulkan"
+            ],
+            "cooldown_tctl_c": 55.0
+          }
+        ]
+      }
+    },
     "asr-publication-v1": {
-      "description": "The complete benchmark set published for transcription models.",
+      "description": "Superseded by v2 (L4, LibriSpeech at batch 1); kept so rows stamped with it still resolve.",
       "accuracy": [
         {
           "dataset": "librispeech",
@@ -19,7 +88,9 @@
           "dataset": "fleurs",
           "split": "test",
           "languages": "supported-intersect-fleurs",
-          "quants": ["Q8_0"],
+          "quants": [
+            "Q8_0"
+          ],
           "batch_size": 8,
           "sort_by_length": true,
           "timestamps": "none",
@@ -28,13 +99,21 @@
         }
       ],
       "speed": {
-        "quants": ["Q8_0","Q4_K_M"],
-        "samples": ["jfk","dots"],
+        "quants": [
+          "Q8_0",
+          "Q4_K_M"
+        ],
+        "samples": [
+          "jfk",
+          "dots"
+        ],
         "iterations": 3,
         "warmup": 1,
         "family_overrides": {
           "gigaam": {
-            "samples": ["ru"],
+            "samples": [
+              "ru"
+            ],
             "reason": "Russian-only family; use the currently published supported-language clip until a long Russian fixture is added."
           }
         },
@@ -43,12 +122,18 @@
           {
             "machine": "m4-max",
             "display": "Apple M4 Max",
-            "backends": ["cpu","metal"]
+            "backends": [
+              "cpu",
+              "metal"
+            ]
           },
           {
             "machine": "ryzen-4750u",
             "display": "AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR)",
-            "backends": ["cpu","vulkan"],
+            "backends": [
+              "cpu",
+              "vulkan"
+            ],
             "cooldown_tctl_c": 55.0
           }
         ]

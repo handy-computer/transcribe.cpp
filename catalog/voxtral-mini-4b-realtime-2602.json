@@ -11,6 +11,7 @@
   "upstream_repo": "mistralai/Voxtral-Mini-4B-Realtime-2602",
   "upstream_commit": "2769294",
   "published_repo": "handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf",
+  "docs_page": "voxtral-realtime.md",
   "languages": ["en","fr","es","de","ru","zh","ja","it","pt","nl","ar","hi","ko"],
   "long_form_strategy": "chunked-unbounded",
   "capabilities": {

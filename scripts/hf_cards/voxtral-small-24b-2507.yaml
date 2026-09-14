@@ -33,10 +33,9 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-    the Whisper English text normalizer, greedy decoding, batch size 8 on an
-    NVIDIA A100 80 GB. Same-machine HuggingFace transformers reference
-    (VoxtralForConditionalGeneration, BF16, greedy): 1.57%; the BF16 GGUF matches
-    at 1.56%. Validation for this variant is end-to-end by WER — the family's
-    tensor-level numerical parity is established by the Voxtral Mini 3B sibling
-    (identical architecture).
+    Greedy decoding scored with the Whisper English text normalizer on an NVIDIA A100 80
+    GB. Same-machine HuggingFace transformers reference
+    (VoxtralForConditionalGeneration, BF16, greedy): 1.57%; the BF16 GGUF matches at
+    1.56%. Validation for this variant is end-to-end by WER — the family's tensor-level
+    numerical parity is established by the Voxtral Mini 3B sibling (identical
+    architecture).

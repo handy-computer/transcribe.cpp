@@ -60,10 +60,11 @@ Rules:
 
 ## Standardized bench schema
 
-Every per-cell report under
-`reports/perf/<machine>/<name>_<variant>_<backend>.json` is checked by the
-`required_*` sets in Step 5. Missing required fields block Stage 6;
-optional gaps are surfaced but do not gate.
+`scripts/bench/run.py` refuses to write a report under
+`reports/perf/<machine>/<name>_<variant>_<backend>.json` that lacks any field
+the catalog ingester or `compare.py` reads (`report_gaps()` in the driver). A
+report on disk is complete by construction; a refusal is a bench-harness
+regression and halts Stage 6.
 
 ## Workflow
 
@@ -74,9 +75,8 @@ Bench progress:
 - [ ] Step 3: Confirm bench scope (publication default, optional widening)
 - [ ] Step 4: Capture publication baseline
 - [ ] Step 4b: Batch throughput sweep (good-to-know, non-gating)
-- [ ] Step 5: Validate schema completeness
-- [ ] Step 6: Iteration loop (human-driven, with validate gate per accept)
-- [ ] Step 7: Sign-off review
+- [ ] Step 5: Iteration loop (human-driven, with validate gate per accept)
+- [ ] Step 6: Sign-off review
 ```
 
 ### Step 1: Matrix presence (execute)
@@ -102,7 +102,7 @@ capturing baseline.
 **Publication scope (default, required for sign-off).** This is the
 matrix that ends up rendered in `docs/models/<variant>.md`:
 
-The checked-in profile `asr-publication-v1` is the source of truth. It measures
+The checked-in profile `asr-publication-v2` is the source of truth. It measures
 the publication quants Q8_0 and Q4_K_M when downloaded, on both `jfk` and
 `dots`, with three iterations after one warmup, using the backends assigned to
 the detected publication machine (M4 Max CPU/Metal or Ryzen 4750U CPU/Vulkan).
@@ -124,9 +124,7 @@ pollute timings.
 Publication-scope baseline (default):
 
 ```bash
-uv run scripts/bench/run.py --profile \
-  --models <variant> \
-  --name <variant>-publication-baseline-$(date -u +%Y%m%dT%H%M%SZ)
+uv run scripts/bench/run.py --profile --models <variant>
 ```
 
 Writes one report per (variant, backend) pair to `reports/perf/<machine>/`.
@@ -151,36 +149,7 @@ Emits per-batch `{batch_size, per_utt_ms, wall_ms}` to
 `reports/perf/<machine>/<name>_<variant>_batch_<backend>.json`. This is
 exploratory and does not gate sign-off. Batch runs stay strictly serial.
 
-### Step 5: Schema validation (execute)
-
-For each report file, confirm every required field is present and
-surface any optional gaps:
-
-```python
-# uv run python -c '...'
-import json, pathlib, sys
-required_top = {"git_sha", "machine"}
-required_run = {"schema", "model_path", "backend", "per_iter",
-                "sample_duration_s", "rtf_wall_mean", "transcript_sha256"}
-required_iter = {"mel_ms", "encode_ms", "decode_ms", "total_ms", "wall_ms"}
-optional_top = {"git_dirty"}
-optional_run = {"rtf_compute_mean", "token_ids_sha256"}
-for p in sys.argv[1:]:
-    d = json.loads(pathlib.Path(p).read_text())
-    missing_top = required_top - d.keys()
-    missing_run = any(required_run - r.keys() for r in d["runs"])
-    missing_iter = any(required_iter - it.keys() for r in d["runs"] for it in r["per_iter"])
-    absent_opt_top = optional_top - d.keys()
-    absent_opt_run = any(optional_run - r.keys() for r in d["runs"])
-    print(f"{p}: required_top_missing={missing_top} required_run_missing={missing_run} "
-          f"required_iter_missing={missing_iter} optional_absent_top={absent_opt_top} "
-          f"optional_absent_run={absent_opt_run}")
-```
-
-Any missing **required** field is a bench-harness regression — halt Stage
-6 sign-off. Absent **optional** fields are surfaced but do not block.
-
-### Step 6: Iteration loop (human-driven)
+### Step 5: Iteration loop (human-driven)
 
 For each optimization hypothesis:
 
@@ -220,13 +189,12 @@ For each optimization hypothesis:
 
 Repeat until the user is satisfied.
 
-### Step 7: Sign-off
+### Step 6: Sign-off
 
 Report:
 - Baseline reports and machine matrix covered. Name **each of the two
   required rigs** and its state: covered, or `INCOMPLETE — pending`. Do
   not report Stage 6 as complete while either rig is missing.
-- Any schema gaps observed.
 - Total iterations run, net timing improvement, and that every accepted
   iteration passed `validate.py all`.
 
@@ -271,8 +239,6 @@ produced it. The stage is not finished until the numbers are in the catalog.
   `jfk` and `dots`, for every profile machine/backend target. Legacy xRT-only
   rows may satisfy a cell but are explicitly marked and should be replaced
   during the long-form/memory sweep.
-- Schema completeness reported to the user; any gap is a known bench-
-  harness task, not a porting task.
 - Optimization iteration loop scripted end-to-end (user drives
   hypotheses; skill runs the loop).
 - Every accepted performance iteration was followed by a passing

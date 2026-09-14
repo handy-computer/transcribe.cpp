@@ -28,10 +28,12 @@ Apache one unless you specifically want the NC weights.
 
 ## All variants
 
-| Variant | Licence | WER (test-clean) | Card |
-| --- | --- | ---: | --- |
-| `granite-speech-5.0-470m-turboctc` | Apache-2.0 | 1.33% | [card](granite-speech-5.0-470m-turboctc.md) |
-| `granite-speech-5.0-470m-turboctc-nc` | CC-BY-NC-SA-4.0 | 1.29% | [card](granite-speech-5.0-470m-turboctc-nc.md) |
+<!-- catalog:family variants=granite-speech-5.0-470m-turboctc,granite-speech-5.0-470m-turboctc-nc -->
+| Variant | Params | Languages | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `granite-speech-5.0-470m-turboctc` |   473M | en        |    506 MB | LibriSpeech test-clean (WER) | 1.33% | -            | [granite-speech-5.0-470m-turboctc.md](granite-speech-5.0-470m-turboctc.md) |
+| `granite-speech-5.0-470m-turboctc-nc` |   473M | en        |    506 MB | LibriSpeech test-clean (WER) | 1.29% | -            | [granite-speech-5.0-470m-turboctc-nc.md](granite-speech-5.0-470m-turboctc-nc.md) |
+<!-- /catalog -->
 
 Both ship BF16, F16, Q8_0, Q6_K, Q5_K_M and Q4_K_M, from 948 MB down to 279 MB.
 Download links are on the per-variant cards.

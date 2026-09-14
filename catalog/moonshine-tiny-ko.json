@@ -11,6 +11,7 @@
   "upstream_repo": "UsefulSensors/moonshine-tiny-ko",
   "upstream_commit": "80995f0",
   "published_repo": "handy-computer/moonshine-tiny-ko-gguf",
+  "docs_page": "moonshine.md",
   "languages": ["ko"],
   "long_form_strategy": "soft-window",
   "capabilities": {

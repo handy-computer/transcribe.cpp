@@ -31,11 +31,12 @@ Stage 7 re-confirms after bench and records human review for every quant.
 ```
 WER progress:
 - [ ] Step 1: Ensure acceptance manifest
-- [ ] Step 2: Score the reference-dtype model
+- [ ] Step 2: Run the publication profile (every profile cell, every quant)
 - [ ] Step 3: Check the ref-dtype WER limit
-- [ ] Step 4: Score each shipped quant
+- [ ] Step 4: Score acceptance cells the profile does not cover
 - [ ] Step 5: Write the summary table
-- [ ] Step 6: Sign-off review
+- [ ] Step 6: Ingest into the catalog and render
+- [ ] Step 7: Sign-off review
 ```
 
 ### Step 1: Acceptance manifest (execute or ask-point)
@@ -68,26 +69,28 @@ MANIFEST=samples/wer/fleurs-${LANG}.manifest.jsonl
 
 CER auto-routes for zh / yue / ja / ko / th via the manifest's `language` field. The score JSON's `error_rate_pct` is the canonical report metric.
 
-### Step 2: Score the reference-dtype model (execute)
+### Step 2: Run the publication profile (execute)
 
-Read intake for the reference dtype and acceptance dataset:
+One sweep produces both the release numbers and the gate inputs. The
+checked-in profile (`catalog/_benchmark_profiles.json`) selects the cells:
+LibriSpeech test-clean at every downloaded quant for English-capable models,
+and FLEURS test at Q8_0 for every supported FLEURS language. Run whatever is
+missing:
 
 ```bash
-REFDTYPE=$(uv run python -c "import json; d=json.load(open('reports/porting/<family>/<variant>/intake.json')); \
-  m={'float32':'F32','float16':'F16','bfloat16':'BF16'}; print(m[d['dtype']['expected']])")
-DATASET=$(uv run python -c "import json; d=json.load(open('reports/porting/<family>/<variant>/intake.json'))['upstream_benchmarks'][0]['dataset']; \
-  print(d.replace(' ', '-').lower())")
-
-# $MANIFEST was resolved in Step 1 — use it directly.
-uv run scripts/wer/run.py \
-  --model models/<variant>/<variant>-${REFDTYPE}.gguf \
-  --manifest "$MANIFEST" \
-  --out reports/wer/<variant>-${REFDTYPE}.${DATASET}.jsonl
-
-uv run scripts/wer/score.py reports/wer/<variant>-${REFDTYPE}.${DATASET}.jsonl
+modal run scripts/wer/remote/modal_sweep.py::publication_sweep \
+  --models <variant>                 # --plan-only to inspect the expansion
+for f in reports/wer/<variant>-*.jsonl; do uv run scripts/wer/score.py "$f"; done
 ```
 
-`score.py` writes the `.score.json` consumed by the gate and summary.
+The sweep writes `reports/wer/<variant>-<PRESET>.<dataset>[.bN].jsonl` and
+`score.py` writes the matching `.score.json`. Every JSONL carries its decode
+recipe, engine sha, and profile id in the batch header, and the score carries
+them forward, which is what makes it ingestible in Step 6.
+
+Do not also run the same cells locally with `run.py`: a second measurement of
+one cell under a different backend is a second number to reconcile, not a
+check.
 
 ### Step 3: Ref-dtype WER limit (execute)
 
@@ -146,14 +149,21 @@ Proceed only when the higher WER is explained, reviewed, and written in
 the WER summary or family doc. Higher WER without evidence is a release
 blocker.
 
-### Step 4: Score each shipped quant (execute)
+### Step 4: Acceptance cells outside the profile (execute)
 
-Loop over `F16, Q8_0, Q6_K, Q5_K_M, Q4_K_M`, skipping whichever equals
-`REFDTYPE`:
+The profile covers the acceptance dataset for most ports. Two cases fall
+outside it and are scored locally, exactly as the profile would, so the files
+land under the same names:
+
+- The acceptance dataset is FLEURS (a single-language port such as
+  `parakeet-primeline` or `gigaam`): the profile ran Q8_0 only. Score the
+  reference dtype and the remaining quants on `$MANIFEST`.
+- The acceptance dataset is not a profile dataset at all (AMI for a
+  diarizer): score every preset on `$MANIFEST`.
 
 ```bash
-for PRESET in F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
-  [ "$PRESET" = "$REFDTYPE" ] && continue
+for PRESET in <REFDTYPE> F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
+  [ -f reports/wer/<variant>-${PRESET}.${DATASET}.score.json ] && continue
   uv run scripts/wer/run.py \
     --model models/<variant>/<variant>-${PRESET}.gguf \
     --manifest "$MANIFEST" \
@@ -162,10 +172,9 @@ for PRESET in F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
 done
 ```
 
-Quant WER is reviewed and signed off by the user, not auto-gated.
-
-Batch mode should be WER-neutral. If a `--batch-size > 1` sweep differs
-from serial beyond dataset noise (~0.01), stop and report the numbers.
+Quant WER is reviewed and signed off by the user, not auto-gated. Batch mode
+should be WER-neutral; if a `--batch-size > 1` sweep differs from serial
+beyond dataset noise (~0.01), stop and report the numbers.
 
 ### Step 5: Summary table (execute)
 
@@ -176,44 +185,19 @@ gate result (`PASS` or `BLOCKED`). Quant rows record human disposition
 (`ACCEPTED`, `REJECTED`, or `PENDING REVIEW`) plus any short note the
 user gives. Stage 8 (`porting-8-ship`) consumes this into the model card.
 
-### Step 6: Sign-off
+### Step 6: Ingest into the catalog and render (execute)
 
-Report:
-- Manifest path and utterance count.
-- Ref-dtype status: measured Oracle reference WER, C++ WER, max allowed
-  WER, pass/blocked, and any required justification.
-- Path to every produced `.score.json`.
-- Path to the summary markdown.
-- Human disposition for every shipped quant. Quant WER has no automatic
-  numeric gate; unresolved quant review means Stage 7 sign-off is pending.
-
-**Do not commit.** WER outputs under `reports/wer/` are local generated
-artifacts, ignored by `.gitignore`. The summary tables and per-quant
-WER cells are what ships in-repo via Stage 8.
-
-## Catalog (mandatory exit step)
-
-A score is only comparable to another score measured the same way, so the
-decode recipe travels with the number. `scripts/wer/run.py` stamps it into the
-JSONL batch header (timestamps, batch size, language, backend, engine sha, and
-publication profile) and `scripts/wer/score.py` carries it into the
-`.score.json`.
-
-Run any missing publication cells from the checked-in profile rather than
-reconstructing the matrix with flags:
+Only profile-stamped scores are ingested; a score with no engine sha or a
+different recipe is rejected by name, and the rejection is the finding.
 
 ```bash
-modal run scripts/wer/remote/modal_sweep.py::publication_sweep \
-  --models <variant>
-# Score the JSONLs named by the sweep output, then:
 uv run scripts/catalog/ingest_accuracy.py --models <variant>
-uv run scripts/catalog/check.py --publication-profile --models <variant>
 ```
 
-Record the featured download-table column explicitly. A variant routinely carries several
-runs of one dataset differing only in batch size or timestamp mode, so
-`headline_benchmark` in `catalog/<variant>.json` names the whole identity
-tuple and the download table is rendered from it:
+Set `headline_benchmark` in `catalog/<variant>.json` to the cell the
+download table features. A variant can carry several runs of one dataset
+differing only in batch size or timestamp mode, so the pointer names the
+whole identity:
 
 ```json
 "headline_benchmark": {"dataset": "librispeech", "split": "test-clean",
@@ -221,19 +205,40 @@ tuple and the download table is rendered from it:
                        "batch_size": 1, "timestamps": "none"}
 ```
 
-Then `uv run scripts/catalog/render.py && uv run scripts/catalog/check.py`.
-Never hand-edit a WER into a doc or an HF card spec: both are rendered, and
-CI fails when they drift.
+```bash
+uv run scripts/catalog/check.py --publication-profile --models <variant>
+uv run scripts/catalog/render.py
+```
+
+Never hand-edit a WER into a doc or an HF card spec: both are rendered from
+the catalog, and CI fails when they drift.
+
+### Step 7: Sign-off
+
+Report:
+- Manifest path and utterance count.
+- Ref-dtype status: measured Oracle reference WER, C++ WER, max allowed
+  WER, pass/blocked, and any required justification.
+- Path to every produced `.score.json`, and which came from the profile
+  sweep versus Step 4.
+- Path to the summary markdown.
+- The catalog check result for the variant.
+- Human disposition for every shipped quant. Quant WER has no automatic
+  numeric gate; unresolved quant review means Stage 7 sign-off is pending.
+
+**Do not commit.** WER outputs under `reports/wer/` are local generated
+artifacts, ignored by `.gitignore`. The catalog record and the rendered
+tables are what ships in-repo.
 
 ## Postconditions
 
 - `reports/wer/<variant>-<PRESET>.<dataset>.score.json` for every
-  shipped preset.
+  shipped preset, profile-stamped where the profile covers the cell.
 - `reports/wer/<variant>.<dataset>.summary.md` table.
 - Ref-dtype status is known and reported as plain WER numbers against
   the measured Oracle reference baseline.
-- Sign-off names the manifest path and utterance count so consumers can
-  verify which dataset was scored.
+- `catalog/<variant>.json` holds every profile accuracy cell and a
+  `headline_benchmark`; the per-variant profile check passes.
 - Quant WER is reviewed and signed off by the user, not auto-gated.
 
 ## Pointers (read, not execute)

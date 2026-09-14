@@ -66,17 +66,18 @@ pinned 2026-05-06.
 | Q4_K_M       | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  557 MB | 1.89% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances). Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy LLM decoding via the bundled Qwen3-0.6B head. The publisher
-does not report a numerical LibriSpeech WER for the MLT variant
-specifically (the shared README's per-model table covers Fun-ASR-Nano
-only). Gate baseline is our own FunASR 1.3.1 reference run on the same
-manifest: 1.76% (95% CI [1.60%, 1.93%]). transcribe.cpp's BF16 port
-matches that baseline within -0.02 percentage-points. LibriSpeech is
-English only; the strength of the MLT variant is multilingual coverage,
-not English accuracy. For the other 30 languages, run your own
-representative manifest.
+Greedy LLM decoding via the bundled Qwen3-0.6B head. The publisher does not report a
+numerical LibriSpeech WER for the MLT variant specifically (the shared README's
+per-model table covers Fun-ASR-Nano only). Gate baseline is our own FunASR 1.3.1
+reference run on the same manifest: 1.76% (95% CI [1.60%, 1.93%]). transcribe.cpp's
+BF16 port matches that baseline within -0.02 percentage-points. LibriSpeech is
+English only; the strength of the MLT variant is multilingual coverage, not English
+accuracy. For the other 30 languages, run your own representative manifest.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -152,7 +153,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
@@ -167,7 +168,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |           Q8_0 |          Q4_K_M |
 | ------- | ------------ | -------------: | --------------: |

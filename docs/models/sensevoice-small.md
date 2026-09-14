@@ -9,8 +9,10 @@ and Korean. A 234M-parameter SAN-M encoder with a single CTC head over a
 30 seconds per call, per upstream's direct-inference contract) and produces
 a transcript. Not a streaming model, no translation, no built-in long-form
 chunking. The same CTC head also emits language-ID, simple emotion labels,
-audio-event tags, and an inverse-text-normalization flag — opt-in via
-`--raw-tokens` and `--itn`.
+audio-event tags, and inverse-text-normalization control tags. These tags are
+hidden unless `--raw-tokens` is passed. ITN is on by default for readable
+casing, punctuation, and digits; pass `--no-itn` for upstream's spoken-form
+output.
 <!-- /catalog -->
 
 ## What it's for
@@ -82,15 +84,19 @@ recordings (e.g. with VAD) for best results. See the
 | Q4_K_M       | [SenseVoiceSmall-Q4_K_M.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q4_K_M.gguf) | 146 MB | 3.45% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances). Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy CTC decoding. The publisher does not report a numerical
-LibriSpeech WER (the model card publishes scores only as PNG figures), so
-the gate baseline is our own FunASR 1.3.1 reference run on the same
-manifest: 3.13% (95% CI [2.93%, 3.34%]). transcribe.cpp's F32 port matches
-that baseline within +0.002 percentage-points. LibriSpeech is an English
-benchmark; SenseVoice's strongest case is Mandarin, and AISHELL-1 (CER)
-is the recommended complementary check.
+Greedy CTC decoding. The publisher does not report a numerical LibriSpeech WER (the
+model card publishes scores only as PNG figures), so the gate baseline is our own
+FunASR 1.3.1 reference run on the same manifest: 3.13% (95% CI [2.93%, 3.34%]).
+transcribe.cpp's F32 port matches that baseline within +0.002 percentage-points.
+LibriSpeech is an English benchmark; SenseVoice's strongest case is Mandarin, and
+AISHELL-1 (CER) is the recommended complementary check. These table values were
+measured with ITN off, matching the FunASR reference; `scripts/wer/run.py` pins
+`--no-itn` so the benchmark does not inherit the runtime default.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -153,7 +159,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |           Q8_0 |         Q4_K_M |
 | ------- | ------------ | -------------: | -------------: |
@@ -168,7 +174,7 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

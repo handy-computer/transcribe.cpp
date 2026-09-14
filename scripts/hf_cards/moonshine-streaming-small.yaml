@@ -32,12 +32,10 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances)
-    with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
-    baseline: 2.53%. Useful Sensors' self-reported number on this split is
-    2.49% from the Open ASR Leaderboard table; the +0.04pp residual matches
-    the same scoring / text-normalization difference seen on the tiny variant
-    where we cross-checked against the HF Transformers reference (4.52% on
-    the same manifest, 99.6% identical hypotheses to our F32) and confirmed
-    it is not a numerical drift in the port. Q6_K / Q5_K_M / Q4_K_M GGUFs
-    are not currently shipped for this variant.
+    Greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference baseline: 2.53%.
+    Useful Sensors' self-reported number on this split is 2.49% from the Open ASR
+    Leaderboard table; the +0.04pp residual matches the same scoring /
+    text-normalization difference seen on the tiny variant where we cross-checked
+    against the HF Transformers reference (4.52% on the same manifest, 99.6% identical
+    hypotheses to our F32) and confirmed it is not a numerical drift in the port. Q6_K /
+    Q5_K_M / Q4_K_M GGUFs are not currently shipped for this variant.

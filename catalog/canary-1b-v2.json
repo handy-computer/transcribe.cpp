@@ -11,6 +11,7 @@
   "upstream_repo": "nvidia/canary-1b-v2",
   "upstream_commit": "87bc526",
   "published_repo": "handy-computer/canary-1b-v2-gguf",
+  "docs_page": "canary.md",
   "languages": [
     "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu",
     "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru",

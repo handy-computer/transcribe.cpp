@@ -11,6 +11,7 @@
   "upstream_repo": "nvidia/canary-1b-flash",
   "upstream_commit": "a9a55e0",
   "published_repo": "handy-computer/canary-1b-flash-gguf",
+  "docs_page": "canary.md",
   "languages": ["en","de","es","fr"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

@@ -48,8 +48,13 @@ pinned 2026-05-11.
 | Q4_K_M       | [nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf) |  475 MB | 2.38% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding. F32 reference baseline: 2.31%. NVIDIA's self-reported number on the same split at att_context_size=[70, 13] (1.12s chunk, w/o PnC) is 2.32%.
+Greedy RNN-T decoding. F32 reference baseline: 2.31%. NVIDIA's self-reported number
+on the same split at att_context_size=[70, 13] (1.12s chunk, w/o PnC) is 2.32%.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -108,7 +113,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
@@ -123,7 +128,7 @@ Apple M4 Max: transcribe.cpp `c2e7bf9` on 2026-05-11. † published before prove
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |

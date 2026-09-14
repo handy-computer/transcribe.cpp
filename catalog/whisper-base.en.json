@@ -11,6 +11,7 @@
   "upstream_repo": "openai/whisper-base.en",
   "upstream_commit": "911407f",
   "published_repo": "handy-computer/whisper-base.en-gguf",
+  "docs_page": "whisper.md",
   "languages": ["en"],
   "long_form_strategy": "chunked-unbounded",
   "capabilities": {

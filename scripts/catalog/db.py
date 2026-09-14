@@ -114,11 +114,14 @@ CREATE TABLE accuracy(
     deletions INTEGER,
     insertions INTEGER,
     empty_hyp INTEGER,
-    utts_over_50pct INTEGER
+    utts_over_50pct INTEGER,
+    publication_profile TEXT,
+    scoring TEXT,
+    mode TEXT
 );
 CREATE UNIQUE INDEX accuracy_identity ON accuracy(
     dataset_id, variant, quant, metric,
-    IFNULL(batch_size, 0), IFNULL(timestamps, '')
+    IFNULL(batch_size, 0), IFNULL(timestamps, ''), IFNULL(scoring, ''), IFNULL(mode, '')
 );
 
 CREATE TABLE machines(
@@ -143,6 +146,7 @@ CREATE TABLE speed(
     measurement_provenance TEXT,
     measured_on TEXT,
     thermal_gated INTEGER,
+    publication_profile TEXT,
     PRIMARY KEY(variant, machine, backend, quant, sample)
 );
 
@@ -225,7 +229,7 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                 (variant, item["quant"], item["filename"], item["size_bytes"])
                 for item in record.get("downloads", [])])
             con.executemany(
-                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (dataset_id(row), variant, row["quant"], row["metric"],
                      row.get("language_hint"), row.get("backend"), row["err_pct"],
                      (row.get("ci95") or [None, None])[0],
@@ -235,16 +239,18 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                      (row.get("errors") or {}).get("sub"),
                      (row.get("errors") or {}).get("del"),
                      (row.get("errors") or {}).get("ins"), row.get("empty_hyp"),
-                     row.get("utts_over_50pct"))
+                     row.get("utts_over_50pct"), row.get("publication_profile"),
+                     row.get("scoring"), row.get("mode"))
                     for row in record.get("accuracy_benchmarks", [])])
             con.executemany(
-                "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (variant, row["machine"], row["backend"], row["quant"], row["sample"],
                      row["sample_duration_s"], row.get("total_ms"), row["xrt_compute"],
                      row.get("wall_ms"), row.get("xrt_wall"), row.get("load_ms"), row.get("mel_ms"), row.get("encode_ms"),
                      row.get("decode_ms"), row.get("engine_sha"),
                      row.get("measurement_provenance"), row.get("measured_on"),
-                     None if row.get("thermal_gated") is None else int(row["thermal_gated"]))
+                     None if row.get("thermal_gated") is None else int(row["thermal_gated"]),
+                     row.get("publication_profile"))
                     for row in record.get("speed_benchmarks", [])])
 
         profile_id, _ = profiles.load_profile()

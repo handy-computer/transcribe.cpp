@@ -11,6 +11,7 @@
   "upstream_repo": "openai/whisper-base",
   "upstream_commit": "e37978b",
   "published_repo": "handy-computer/whisper-base-gguf",
+  "docs_page": "whisper.md",
   "languages": [
     "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs",
     "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",

@@ -33,16 +33,18 @@ pinned 2026-05-06.
 | Q8_0         | [moonshine-streaming-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-streaming-tiny-gguf/resolve/main/moonshine-streaming-tiny-Q8_0.gguf) |  50 MB | 4.52% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances). Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-WER measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
-baseline: 4.53%. The HF Transformers reference scored on the same manifest
-in the same regime lands at 4.52% with 99.6% byte-identical hypotheses to
-our F32, so the port is at exact parity with the reference. Useful Sensors'
-self-reported number on this split is 4.49% from the Open ASR Leaderboard
-table; the +0.04pp residual is a scoring / text-normalization difference vs
-that methodology, not a numerical drift in the port. Q6_K / Q5_K_M / Q4_K_M
-GGUFs are not currently shipped for this variant.
+Greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference baseline: 4.53%.
+The HF Transformers reference scored on the same manifest in the same regime lands
+at 4.52% with 99.6% byte-identical hypotheses to our F32, so the port is at exact
+parity with the reference. Useful Sensors' self-reported number on this split is
+4.49% from the Open ASR Leaderboard table; the +0.04pp residual is a scoring /
+text-normalization difference vs that methodology, not a numerical drift in the
+port. Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped for this variant.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -97,7 +99,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |             Q8_0 |
 | ------- | ------------ | ---------------: |
@@ -112,7 +114,7 @@ Apple M4 Max: transcribe.cpp `0d312ce` on 2026-05-06.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |

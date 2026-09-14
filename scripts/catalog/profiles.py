@@ -168,12 +168,21 @@ def has_measurement_provenance(row: dict) -> bool:
 
 
 ACCURACY_CORE_KEY = ("dataset", "split", "language", "quant", "metric")
-ACCURACY_KEY = (*ACCURACY_CORE_KEY, "batch_size", "timestamps")
+# What a profile cell requires. Batch size is deliberately absent: a cell is
+# satisfied at any batch size and the row records the one that was run. The
+# profile's batch_size is the recommendation for new runs, not an identity.
+PROFILE_KEY = (*ACCURACY_CORE_KEY, "timestamps", "scoring", "mode")
+# A row's full identity, for duplicate detection.
+ACCURACY_KEY = (*PROFILE_KEY, "batch_size")
 SPEED_KEY = ("machine", "backend", "quant", "sample")
 
 
 def accuracy_core_key(cell: dict) -> tuple:
     return tuple(cell.get(field) for field in ACCURACY_CORE_KEY)
+
+
+def profile_key(cell: dict) -> tuple:
+    return tuple(cell.get(field) for field in PROFILE_KEY)
 
 
 def cell_key(cell: dict, kind: str) -> tuple:

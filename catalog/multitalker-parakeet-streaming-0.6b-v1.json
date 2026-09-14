@@ -13,6 +13,7 @@
   "upstream_repo": "nvidia/multitalker-parakeet-streaming-0.6b-v1",
   "upstream_commit": "8749fc7",
   "published_repo": "handy-computer/multitalker-parakeet-streaming-0.6b-v1-gguf",
+  "docs_page": "multitalker-parakeet-streaming-0.6b-v1.md",
   "languages": ["en"],
   "long_form_strategy": "chunked-unbounded",
   "capabilities": {
@@ -39,7 +40,9 @@
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q8_0","metric":"wer","err_pct":2.18,"ci95":[2.02,2.36],"n_utts":2620,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":869,"del":173,"ins":114},"empty_hyp":0,"utts_over_50pct":6,"measurement_provenance":"legacy-published"},
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q6_K","metric":"wer","err_pct":2.2,"ci95":[2.04,2.38],"n_utts":2620,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":875,"del":174,"ins":119},"empty_hyp":0,"utts_over_50pct":6,"measurement_provenance":"legacy-published"},
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q5_K_M","metric":"wer","err_pct":2.18,"ci95":[2.01,2.36],"n_utts":2620,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":869,"del":169,"ins":116},"empty_hyp":0,"utts_over_50pct":6,"measurement_provenance":"legacy-published"},
-    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":2.18,"ci95":[2.02,2.36],"n_utts":2620,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":864,"del":176,"ins":117},"empty_hyp":0,"utts_over_50pct":5,"measurement_provenance":"legacy-published"}
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":2.18,"ci95":[2.02,2.36],"n_utts":2620,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":864,"del":176,"ins":117},"empty_hyp":0,"utts_over_50pct":5,"measurement_provenance":"legacy-published"},
+    {"dataset":"ami","split":"ihm-test","language":"en","backend":"cuda","quant":"F32","metric":"cpwer","err_pct":19.35,"ci95":[null,null],"n_utts":16,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","mode":"kernel"},
+    {"dataset":"ami","split":"ihm-test","language":"en","backend":"cuda","quant":"F32","metric":"cpwer","err_pct":23.73,"ci95":[null,null],"n_utts":16,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published","mode":"masked"}
   ],
   "headline_benchmark": {
     "dataset": "librispeech",

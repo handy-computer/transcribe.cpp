@@ -11,6 +11,7 @@
   "upstream_repo": "FunAudioLLM/SenseVoiceSmall",
   "upstream_commit": "3eb3b4eeffc2f2dde6051b853983753db33e35c3",
   "published_repo": "handy-computer/SenseVoiceSmall-gguf",
+  "docs_page": "sensevoice-small.md",
   "languages": ["zh","yue","en","ja","ko"],
   "long_form_strategy": "soft-window",
   "capabilities": {

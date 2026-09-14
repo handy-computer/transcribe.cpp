@@ -11,6 +11,7 @@
   "upstream_repo": "Qwen/Qwen3-ASR-0.6B",
   "upstream_commit": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
   "published_repo": "handy-computer/Qwen3-ASR-0.6B-gguf",
+  "docs_page": "qwen3-asr.md",
   "languages": [
     "zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko", "ru",
     "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi", "pl", "cs",

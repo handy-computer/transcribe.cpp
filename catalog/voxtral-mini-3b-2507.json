@@ -11,6 +11,7 @@
   "upstream_repo": "mistralai/Voxtral-Mini-3B-2507",
   "upstream_commit": "3060fe3",
   "published_repo": "handy-computer/Voxtral-Mini-3B-2507-gguf",
+  "docs_page": "voxtral.md",
   "languages": ["en","fr","de","es","it","pt","nl","hi"],
   "long_form_strategy": "hard-cap",
   "capabilities": {

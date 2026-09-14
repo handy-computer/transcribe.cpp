@@ -11,6 +11,7 @@
   "upstream_repo": "primeline/parakeet-primeline",
   "upstream_commit": "3f1a9bc",
   "published_repo": "handy-computer/parakeet-primeline-gguf",
+  "docs_page": "parakeet.md",
   "languages": [
     "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu",
     "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv",

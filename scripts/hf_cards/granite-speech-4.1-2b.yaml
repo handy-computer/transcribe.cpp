@@ -35,9 +35,8 @@ summary: |
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances)
-    with greedy decoding. BF16 reference baseline (re-run locally with the
-    model card's exact prompt): 1.31% — 0.02pp below upstream's published
-    1.33%, likely a minor normalization difference on the publisher side and
-    well within bootstrap CI overlap. Text normalizer: Whisper
-    `EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
+    Greedy decoding. BF16 reference baseline (re-run locally with the model card's exact
+    prompt): 1.31% — 0.02pp below upstream's published 1.33%, likely a minor
+    normalization difference on the publisher side and well within bootstrap CI overlap.
+    Text normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+    Leaderboard uses.

@@ -37,15 +37,17 @@ pinned 2026-07-19.
 | Q8_0         | [diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf/resolve/main/diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf) | 139 MB | 14.73% |
 <!-- /catalog -->
 
+<!-- catalog:recipe -->
+DER on the full AMI IHM test split (16 meetings). Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
 <!-- catalog:prose field=wer.notes -->
-DER measured on the full AMI IHM test set (16 meetings, ~9 h) against
-forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
-overlap scored, at the very_high_latency operating point. Measured NeMo
-reference under the identical protocol: 14.83% DER / 19.89% JER; the
-C++ F32 port scores 14.59% / 19.51%. Published DER numbers vary with
-RTTM source and post-processing; compare like with like. Only
-near-reference tiers ship for this family (k-quant tiers withdrawn;
-see the transcribe.cpp family doc, "Quant policy (Stage 7)").
+Scored against forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
+overlap scored, at the very_high_latency operating point. Measured NeMo reference
+under the identical protocol: 14.83% DER / 19.89% JER; the C++ F32 port scores
+14.59% / 19.51%. Published DER numbers vary with RTTM source and post-processing;
+compare like with like. Only near-reference tiers ship for this family (k-quant
+tiers withdrawn; see the transcribe.cpp family doc, "Quant policy (Stage 7)").
 <!-- /catalog -->
 
 Only near-reference tiers ship for this family. K-quant tiers were
@@ -97,7 +99,7 @@ second (many small windows).
 ### Apple M4
 
 <!-- catalog:perf machine=m4 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses; mean over 3 iterations after 1 warmup.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses.
 
 | Backend | Sample       |              F16 |             Q8_0 |
 | ------- | ------------ | ---------------: | ---------------: |

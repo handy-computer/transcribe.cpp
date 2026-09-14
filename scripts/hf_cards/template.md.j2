@@ -14,6 +14,12 @@ language:
 {%- for lang in languages %}
   - {{ lang }}
 {%- endfor %}
+{%- if languages_bcp47 %}
+language_bcp47:
+{%- for lang in languages_bcp47 %}
+  - {{ lang }}
+{%- endfor %}
+{%- endif %}
 tags:
 {%- for tag in tags %}
   - {{ tag }}
@@ -44,6 +50,8 @@ on {{ validation.date }}.
 {%- for q in quants %}
 | {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer | default("-") }}{% if wer.source2 is defined %} | {{ q.wer2 | default("-") }}{% endif %} |
 {%- endfor %}
+
+{{ wer.recipe }}
 
 {{ wer.notes }}
 
