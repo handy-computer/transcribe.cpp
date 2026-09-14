@@ -20,9 +20,9 @@ on this codebase.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-ctc-0.6b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`ad09ba1`](https://huggingface.co/nvidia/parakeet-ctc-0.6b/commit/ad09ba1cc62743fbc9814de5d2016fca9096485a),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`ad09ba1`](https://huggingface.co/nvidia/parakeet-ctc-0.6b/commit/ad09ba1), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 

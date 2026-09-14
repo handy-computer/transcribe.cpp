@@ -101,8 +101,7 @@ identical output, but buys almost nothing here.
 transcribe.cpp is validated tensor-by-tensor against Hugging Face transformers
 on `samples/jfk.wav` and `samples/dots.wav`. All 35 checkpointed tensors fall
 within variant tolerance, and the final transcript matches the reference
-verbatim. Last validated at commit
-[`f1d0e10`](https://github.com/handy-computer/transcribe.cpp/tree/f1d0e10).
+verbatim.
 
 | Field | Value |
 | --- | --- |

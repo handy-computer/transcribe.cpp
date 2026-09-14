@@ -58,7 +58,8 @@
     },
     "upstream_commit": {
       "type": "string",
-      "description": "The upstream revision used to produce the published GGUFs."
+      "pattern": "^[0-9a-f]{7}$",
+      "description": "The upstream revision used to produce the published GGUFs, as the 7-character short SHA. One spelling so a doc link, an HF card and a database row never differ on the same commit; the Hub resolves the prefix."
     },
     "docs_page": {
       "type": "string",

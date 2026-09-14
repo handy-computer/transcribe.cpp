@@ -28,9 +28,9 @@ mono WAV and produces a transcript via greedy decoding.
 See Mistral's [model card](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507)
 for training data, intended use, and upstream evaluation.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`3060fe3`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/commit/3060fe34b35ba5d44202ce9ff3c097642914f8f3),
-pinned 2026-06-06.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`3060fe3`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/commit/3060fe3), pinned 2026-06-06. Validated against the Transformers reference at transcribe.cpp commit [`483c122`](https://github.com/handy-computer/transcribe.cpp/tree/483c122) on 2026-06-06.
+<!-- /catalog -->
 
 ## Download
 
@@ -126,16 +126,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  9.57 s (1.15×) |  9.37 s (1.17×) |
-| Vulkan  | dots (35.3s) | 26.49 s (1.33×) | 23.82 s (1.48×) |
-| CPU     | jfk (11.0s)  | 26.15 s (0.4×)† | 19.39 s (0.6×)† |
-| CPU     | dots (35.3s) | 63.96 s (0.6×)† | 45.92 s (0.77×) |
+| Vulkan  | jfk (11.0s)  | 11.11 s (0.99×) | 10.58 s (1.04×) |
+| Vulkan  | dots (35.3s) | 30.04 s (1.18×) | 27.46 s (1.29×) |
+| CPU     | jfk (11.0s)  | 22.37 s (0.49×) | 20.88 s (0.53×) |
+| CPU     | dots (35.3s) | 55.99 s (0.63×) | 49.49 s (0.71×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `91af262` on 2026-06-05. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

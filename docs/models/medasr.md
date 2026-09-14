@@ -12,9 +12,11 @@ Offline English speech-to-text optimized for medical dictation (radiology, inter
 
 Trained on ~5,000 hours of de-identified physician dictations on top of a LibriHeavy 50k-hour pretrain. The upstream model card flags lower accuracy on non-native accents and a male-skewed speaker distribution.
 
-Licensed under the [Health AI Developer Foundations terms](https://developers.google.com/health-ai-developer-foundations/terms). The upstream repo is gated; you must accept the HF terms before download.
+The upstream repo is gated; you must accept the HF terms before download.
 
-Ported from upstream commit [`ae1e484`](https://huggingface.co/google/medasr/commit/ae1e4845b4b07479735d93e1e591e566435b7104), pinned 2026-06-04.
+<!-- catalog:pin -->
+Licensed [Health AI Developer Foundations](https://developers.google.com/health-ai-developer-foundations/terms). Ported from upstream commit [`ae1e484`](https://huggingface.co/google/medasr/commit/ae1e484), pinned 2026-06-04. Validated against the transformers @ 65dc2615 (dev; v5.0.0 unreleased) reference at transcribe.cpp commit [`782abfd`](https://github.com/handy-computer/transcribe.cpp/tree/782abfd) on 2026-06-04.
+<!-- /catalog -->
 
 ## Input limits
 

@@ -6,10 +6,12 @@
   "params": 829791840,
   "license": {
     "spdx": "other",
-    "display": "FunASR Model Open Source License Agreement v1.1"
+    "display": "FunASR Model Open Source License Agreement v1.1",
+    "name": "funasr-model-license-v1.1",
+    "link": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE"
   },
   "upstream_repo": "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
-  "upstream_commit": "cf67a938bf2829959d08fdfb84e186eff02a67ff",
+  "upstream_commit": "cf67a93",
   "published_repo": "handy-computer/Fun-ASR-MLT-Nano-2512-gguf",
   "docs_page": "fun-asr-nano.md",
   "languages": [

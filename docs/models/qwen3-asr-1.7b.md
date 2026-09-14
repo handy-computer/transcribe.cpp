@@ -1,7 +1,7 @@
 # Qwen3-ASR 1.7B
 
 <!-- catalog:intro -->
-Upstream: [`Qwen/Qwen3-ASR-1.7B`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) at [`7278e1e70fe206f11671096ffdd38061171dd6e5`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/commit/7278e1e70fe206f11671096ffdd38061171dd6e5).
+Upstream: [`Qwen/Qwen3-ASR-1.7B`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) at [`7278e1e`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/commit/7278e1e).
 
 Offline multilingual speech-to-text. Same audio-LLM architecture as the
 0.6B variant (bidirectional audio encoder feeding a Qwen3 causal LM with
@@ -22,9 +22,11 @@ See the
 [Qwen3-ASR-1.7B model card](https://huggingface.co/Qwen/Qwen3-ASR-1.7B)
 for training data and upstream evaluation.
 
-Licensed Apache-2.0 (weights) / Apache-2.0 (author `qwen_asr` package).
-Ported from upstream commit
-[`7278e1e`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/commit/7278e1e70fe206f11671096ffdd38061171dd6e5).
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`7278e1e`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/commit/7278e1e), pinned 2026-04-19. Validated against the qwen_asr 0.0.6 reference at transcribe.cpp commit [`3f61df7`](https://github.com/handy-computer/transcribe.cpp/tree/3f61df7) on 2026-04-20.
+<!-- /catalog -->
+
+The author's `qwen_asr` package is likewise Apache-2.0.
 
 ## Download
 

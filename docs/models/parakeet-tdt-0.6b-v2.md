@@ -19,9 +19,9 @@ see v3.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`1b149a3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2/commit/1b149a3589351c96ddb101709fe7dd9c7069572f),
-pinned 2026-04-15.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`1b149a3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2/commit/1b149a3), pinned 2026-04-15. Validated against the NeMo reference at transcribe.cpp commit [`bf0d0b7`](https://github.com/handy-computer/transcribe.cpp/tree/bf0d0b7) on 2026-04-18.
+<!-- /catalog -->
 
 ## Download
 
@@ -91,16 +91,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 670 ms (16.42×) | 682 ms (16.13×) |
-| Vulkan  | dots (35.3s) | 2.45 s (14.44×) | 2.44 s (14.51×) |
-| CPU     | jfk (11.0s)  |  1.23 s (8.97×) | 1.05 s (10.51×) |
-| CPU     | dots (35.3s) |    4.75 s (7×)† |    4.14 s (9×)† |
+| Vulkan  | jfk (11.0s)  | 416 ms (26.45×) | 418 ms (26.34×) |
+| Vulkan  | dots (35.3s) | 1.24 s (28.42×) | 1.26 s (28.09×) |
+| CPU     | jfk (11.0s)  | 696 ms (15.81×) | 749 ms (14.69×) |
+| CPU     | dots (35.3s) | 2.77 s (12.73×) | 2.83 s (12.48×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:
@@ -113,8 +113,7 @@ uv run scripts/bench/run.py --profile --models parakeet-tdt-0.6b-v2
 
 transcribe.cpp is validated tensor-by-tensor against NeMo on `samples/jfk.wav`.
 All 18 checkpointed tensors fall within family tolerance, and the final
-transcript matches the NeMo reference verbatim. Last validated at commit
-[`bf0d0b7`](https://github.com/handy-computer/transcribe.cpp/tree/bf0d0b7).
+transcript matches the NeMo reference verbatim.
 
 | Field | Value |
 | --- | --- |

@@ -6,10 +6,12 @@
   "params": 234000287,
   "license": {
     "spdx": "other",
-    "display": "model-license (FunASR MODEL_LICENSE)"
+    "display": "model-license (FunASR MODEL_LICENSE)",
+    "name": "model-license",
+    "link": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE"
   },
   "upstream_repo": "FunAudioLLM/SenseVoiceSmall",
-  "upstream_commit": "3eb3b4eeffc2f2dde6051b853983753db33e35c3",
+  "upstream_commit": "3eb3b4e",
   "published_repo": "handy-computer/SenseVoiceSmall-gguf",
   "docs_page": "sensevoice-small.md",
   "languages": ["zh","yue","en","ja","ko"],

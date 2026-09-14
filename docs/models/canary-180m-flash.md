@@ -30,9 +30,9 @@ and not exposed in the v1 port (deferred — would require porting the
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-180m-flash)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`b12ab41`](https://huggingface.co/nvidia/canary-180m-flash/commit/b12ab418510d093e83890178fd0e8b0d0f7918a6),
-pinned 2026-05-08.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`b12ab41`](https://huggingface.co/nvidia/canary-180m-flash/commit/b12ab41), pinned 2026-05-08. Validated against the NeMo reference at transcribe.cpp commit [`db53eda`](https://github.com/handy-computer/transcribe.cpp/tree/db53eda) on 2026-05-08.
+<!-- /catalog -->
 
 ## Download
 
@@ -144,10 +144,9 @@ uv run scripts/bench/run.py --profile --models canary-180m-flash
 
 transcribe.cpp is validated tensor-by-tensor against NeMo on
 `samples/jfk.wav`. All 17 checkpointed tensors fall within family
-tolerance, and the F32 transcript matches the NeMo reference at the
-noise floor (one substitution out of ~27k reference words across full
-test-clean). Last validated at commit
-[`db53eda`](https://github.com/handy-computer/transcribe.cpp/tree/db53eda).
+tolerance, and the F32 transcript matches the NeMo reference at the noise
+floor (one substitution out of ~27k reference words across full
+test-clean).
 
 | Field | Value |
 | --- | --- |

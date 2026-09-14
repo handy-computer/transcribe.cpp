@@ -9,7 +9,7 @@
     "display": "CC-BY-4.0"
   },
   "upstream_repo": "nvidia/canary-qwen-2.5b",
-  "upstream_commit": "b1469e1bba1cfe140205529c79c434ca47180960",
+  "upstream_commit": "b1469e1",
   "published_repo": "handy-computer/canary-qwen-2.5b-gguf",
   "docs_page": "canary-qwen-2.5b.md",
   "languages": ["en"],

@@ -165,12 +165,20 @@ WHERE a.dataset_id = m.headline_dataset
 
 
 def dataset_id(row: dict) -> str:
-    dataset, split, lang = row["dataset"], row["split"], row["language"]
-    if dataset == "fleurs" and split == "test":
-        return f"fleurs-{lang}"
-    if dataset == "librispeech":
-        return f"librispeech-{split}"
-    return f"{dataset}-{split}-{lang}"
+    """Primary key of the `datasets` table.
+
+    The report slug drops whichever dimension its dataset holds constant, so
+    it is not always a full identity: `fleurs-es` names its language and
+    `librispeech-test-clean` has only one, but a dataset that varies by both
+    keeps the language segment so two languages cannot collide on one key.
+    """
+    dataset, split, language = row["dataset"], row["split"], row["language"]
+    if (dataset in common.LANGUAGE_KEYED_DATASETS
+            and split == common.PUBLISHED_SPLIT.get(dataset)):
+        return common.dataset_slug(row)                  # fleurs-es
+    if dataset in common.SINGLE_LANGUAGE_DATASETS:
+        return common.dataset_slug(row)                  # librispeech-test-clean
+    return f"{dataset}-{split}-{language}"               # ami-ihm-test-en
 
 
 def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:

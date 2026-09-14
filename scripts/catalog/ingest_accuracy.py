@@ -29,8 +29,7 @@ def score_path(record: dict, cell: dict, reports: pathlib.Path) -> pathlib.Path:
     filename = next(item["filename"] for item in record["downloads"]
                     if item["quant"] == cell["quant"])
     model = pathlib.Path(filename).stem
-    dataset = (f"fleurs-{cell['language']}" if cell["dataset"] == "fleurs"
-               else f"{cell['dataset']}-{cell['split']}")
+    dataset = common.dataset_slug(cell)
     batch = "" if cell["batch_size"] <= 1 else f".b{cell['batch_size']}"
     timestamps = "" if cell["timestamps"] == "none" else f".ts-{cell['timestamps']}"
     return reports / f"{model}.{dataset}{batch}{timestamps}.score.json"

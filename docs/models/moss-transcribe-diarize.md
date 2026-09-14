@@ -26,9 +26,9 @@ for training data, intended use, and upstream evaluation. All of OpenMOSS's
 published metrics are Chinese multi-speaker diarization CER/cpCER; LibriSpeech
 test-clean is used here only as an English acceptance set.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`d7231bb`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/commit/d7231bbae2587a4af278735eb765b318c4f64edd),
-pinned 2026-07-12.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`d7231bb`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/commit/d7231bb), pinned 2026-07-12. Validated against the MOSS author repo (OpenMOSS/MOSS-Transcribe-Diarize) reference at transcribe.cpp commit [`3f5e15c`](https://github.com/handy-computer/transcribe.cpp/tree/3f5e15c) on 2026-07-12.
+<!-- /catalog -->
 
 ## Memory and length
 
@@ -132,16 +132,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  3.88 s (2.8×)† |    3.68 s (3×)† |
-| Vulkan  | dots (35.3s) | 11.38 s (3.1×)† | 10.68 s (3.3×)† |
-| CPU     | jfk (11.0s)  |  7.49 s (1.5×)† |  7.06 s (1.6×)† |
-| CPU     | dots (35.3s) | 21.20 s (1.7×)† | 19.22 s (1.8×)† |
+| Vulkan  | jfk (11.0s)  |  3.73 s (2.95×) |  3.48 s (3.16×) |
+| Vulkan  | dots (35.3s) | 11.09 s (3.18×) |  9.95 s (3.55×) |
+| CPU     | jfk (11.0s)  |  7.54 s (1.46×) |  6.90 s (1.59×) |
+| CPU     | dots (35.3s) | 21.08 s (1.68×) | 19.24 s (1.84×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR). † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:
@@ -156,15 +156,14 @@ transcribe.cpp is validated tensor-by-tensor against the MOSS author repo
 (`scripts/dump_reference_moss_author.py`, `trust_remote_code`) on
 `samples/jfk.wav` with the strict CPU backend. The reference runs BF16 (torch,
 eager attention); the C++ path dequantizes BF16 weights to F32 and computes in
-F32, so C++ is the *more* precise side and the residual gap is a constant
-~1-3% relative bf16-vs-f32 drift, not a bug. The transcript compare is
-`dediarized` (bracket metadata stripped to a space). Confirmed WER-neutral: on
-the first 100 test-clean utterances the C++ ref-dtype WER (1.40%) is
-bit-identical to the Oracle reference on the same subset (1.40%). Tolerances
-are pinned in `tests/tolerances/moss.json` with a `_comment` block naming the
-precision regime, the large-pre-normalization-activation maxes, and the encoder
-padding-trim contract. Last validated at commit
-[`3f5e15c`](https://github.com/handy-computer/transcribe.cpp/tree/3f5e15c).
+F32, so C++ is the *more* precise side and the residual gap is a constant ~1-3%
+relative bf16-vs-f32 drift, not a bug. The transcript compare is `dediarized`
+(bracket metadata stripped to a space). Confirmed WER-neutral: on the first 100
+test-clean utterances the C++ ref-dtype WER (1.40%) is bit-identical to the
+Oracle reference on the same subset (1.40%). Tolerances are pinned in
+`tests/tolerances/moss.json` with a `_comment` block naming the precision
+regime, the large-pre-normalization-activation maxes, and the encoder
+padding-trim contract.
 
 | Field | Value |
 | --- | --- |

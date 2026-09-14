@@ -1,7 +1,7 @@
 # Fun-ASR-Nano
 
 <!-- catalog:intro -->
-Upstream: [`FunAudioLLM/Fun-ASR-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512) at [`a7088d620f755dcdca575b63db184c3ad55b2865`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/commit/a7088d620f755dcdca575b63db184c3ad55b2865).
+Upstream: [`FunAudioLLM/Fun-ASR-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512) at [`a7088d6`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/commit/a7088d6).
 
 Offline speech-to-text in Chinese, English, and Japanese, plus 7 Chinese
 dialects (Wu, Cantonese, Min, Hakka, Gan, Xiang, Jin) and 26 regional
@@ -34,11 +34,9 @@ For multilingual coverage beyond zh/en/ja, see the sibling
 See FunAudioLLM's [model card](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed under the **FunASR Model Open Source License Agreement v1.1**
-([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
-Ported from upstream commit
-[`a7088d6`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/commit/a7088d620f755dcdca575b63db184c3ad55b2865),
-pinned 2026-05-06.
+<!-- catalog:pin -->
+Licensed [FunASR Model Open Source License Agreement v1.1](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). Ported from upstream commit [`a7088d6`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/commit/a7088d6), pinned 2026-05-06. Validated against the FunASR reference at transcribe.cpp commit [`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28) on 2026-05-06.
+<!-- /catalog -->
 
 ## Download
 
@@ -129,16 +127,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 864 ms (12.73×) | 801 ms (13.73×) |
-| Vulkan  | dots (35.3s) |  3.69 s (9.57×) | 2.90 s (12.20×) |
-| CPU     | jfk (11.0s)  |    1.48 s (7×)† |  1.12 s (9.83×) |
-| CPU     | dots (35.3s) |    5.54 s (6×)† |  4.42 s (7.99×) |
+| Vulkan  | jfk (11.0s)  | 905 ms (12.16×) | 838 ms (13.12×) |
+| Vulkan  | dots (35.3s) |  3.80 s (9.30×) | 3.06 s (11.54×) |
+| CPU     | jfk (11.0s)  |  1.23 s (8.94×) |  1.15 s (9.60×) |
+| CPU     | dots (35.3s) |  5.08 s (6.95×) |  4.66 s (7.59×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8635bd1` on 2026-05-07. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:
@@ -149,12 +147,11 @@ uv run scripts/bench/run.py --profile --models fun-asr-nano-2512
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1
-on `samples/jfk.wav`. All 22 checkpointed tensors fall within family
+transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1 on
+`samples/jfk.wav`. All 22 checkpointed tensors fall within family
 tolerance, and the final transcript matches the FunASR reference verbatim
 ("And so my fellow Americans ask not what your country can do for you ask
-what you can do for your country."). Last validated at commit
-[`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28).
+what you can do for your country.").
 
 | Field | Value |
 | --- | --- |

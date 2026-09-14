@@ -17,6 +17,8 @@ requirement.
 
 - `models/<variant>/<variant>-<PRESET>.gguf` exists for every shipped
   preset (F16, Q8_0, Q6_K, Q5_K_M, Q4_K_M) — i.e. Stage 5 complete.
+- `catalog/<variant>.json` exists, or Step 0 creates it. Nothing this stage
+  measures can be published without a record to hold it.
 - `build/bin/transcribe-bench` and `build/bin/transcribe-cli` are built
   under `build/`.
 - `scripts/bench/run.py` is runnable.
@@ -47,9 +49,9 @@ Rules:
   rig's own `reports/perf/<slug>/`. Vulkan cells only exist on the Ryzen
   box; Metal cells only exist on the Mac.
 - `reports/` is gitignored (`.gitignore:66`), so the per-rig JSON never
-  travels with the repo. The durable artifact is the **rendered table in
-  `docs/models/<variant>.md`** plus the `perf:` block in
-  `scripts/hf_cards/<variant>.yaml`. Transcribe the numbers into both.
+  travels with the repo. The durable artifact is the speed rows in
+  **`catalog/<variant>.json`**, ingested from those reports; the doc table
+  and the HF card are rendered from them. Never transcribe a number by hand.
 - A dev box that is neither rig (for example a base `apple-m4`) is
   iteration data. It may be added as an extra card section, but it does
   **not** substitute for either required rig.
@@ -70,6 +72,7 @@ regression and halts Stage 6.
 
 ```
 Bench progress:
+- [ ] Step 0: Catalog record exists (create it on a first port)
 - [ ] Step 1: Confirm full quant matrix present
 - [ ] Step 2: Rebuild transcribe-bench
 - [ ] Step 3: Confirm bench scope (publication default, optional widening)
@@ -78,6 +81,30 @@ Bench progress:
 - [ ] Step 5: Iteration loop (human-driven, with validate gate per accept)
 - [ ] Step 6: Sign-off review
 ```
+
+### Step 0: Catalog record (execute, first port only)
+
+Stage 6 is the first stage that writes to the catalog, so the record has to
+exist before a report can be ingested. A model that was ported before the
+catalog existed already has one; a new port does not.
+
+```bash
+ls catalog/<variant>.json || uv run scripts/catalog/new_record.py <variant> \
+    --long-form <chunked-unbounded|hard-cap|soft-window> --docs-page <family>.md
+```
+
+Everything mechanical is read from artifacts Stage 5 already produced: the
+intake supplies family, upstream repo and revision, and languages; the GGUFs
+under `models/<variant>/` supply the download table, byte sizes, parameter
+count, capability KVs, licence and display name. The two required flags are
+the facts no artifact carries: which `docs/input-limits.md` bucket the family
+falls into, and which page under `docs/models/` documents it. Benchmark rows
+are left empty for this stage and Stage 7 to fill.
+
+Check the seeded record before benching. `--published-repo`,
+`--display-name`, `--license`, `--license-display` and `--language-tag-form`
+override a wrong guess; a capability KV that the GGUF states wrongly is a
+Stage 5 export bug, so fix it there and re-run rather than editing the record.
 
 ### Step 1: Matrix presence (execute)
 
@@ -235,6 +262,7 @@ produced it. The stage is not finished until the numbers are in the catalog.
 
 ## Postconditions
 
+- `catalog/<variant>.json` exists and is schema-valid.
 - A sourced speed measurement for Q8_0 and Q4_K_M when downloaded, on both
   `jfk` and `dots`, for every profile machine/backend target. Legacy xRT-only
   rows may satisfy a cell but are explicitly marked and should be replaced
@@ -254,6 +282,8 @@ produced it. The stage is not finished until the numbers are in the catalog.
 ## Pointers (read, not execute)
 
 - `docs/porting/5-benchmarks.md` — bench procedure context
+- `scripts/catalog/new_record.py` — seeds the record from intake + GGUFs
+- `catalog/_schema.json` — what a record is allowed to hold
 - `scripts/bench/run.py` — driver, already discovers `build/bin/` first
 - `scripts/bench/compare.py` — baseline-vs-candidate delta table
 - `tools/transcribe-bench/main.cpp` — bench binary source if the schema

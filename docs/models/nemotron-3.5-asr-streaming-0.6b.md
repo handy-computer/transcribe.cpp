@@ -35,10 +35,9 @@ See NVIDIA's [model card](https://huggingface.co/nvidia/nemotron-3.5-asr-streami
 for training data, the full language list, intended use, and the
 latency-vs-accuracy table.
 
-Licensed under [OpenMDW-1.1](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b).
-Ported from upstream commit
-[`24b151a`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/commit/24b151a851dd15909e1fc611b11bb2da52b9fc81),
-pinned 2026-06-08.
+<!-- catalog:pin -->
+Licensed [OpenMDW-1.1](https://openmdw.ai/license/1-1/). Ported from upstream commit [`24b151a`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/commit/24b151a), pinned 2026-06-08. Validated against the NeMo reference at transcribe.cpp commit [`909e94e`](https://github.com/handy-computer/transcribe.cpp/tree/909e94e) on 2026-06-08.
+<!-- /catalog -->
 
 ## Input limits
 
@@ -159,16 +158,16 @@ Apple M4 Max: transcribe.cpp `d9708f1` on 2026-06-08.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 769 ms (14.31×) | 780 ms (14.11×) |
-| Vulkan  | dots (35.3s) | 2.37 s (14.93×) | 2.37 s (14.92×) |
-| CPU     | jfk (11.0s)  |  1.36 s (8.06×) | 1.09 s (10.11×) |
-| CPU     | dots (35.3s) |    4.76 s (7×)† |    4.17 s (8×)† |
+| Vulkan  | jfk (11.0s)  | 640 ms (17.18×) | 644 ms (17.09×) |
+| Vulkan  | dots (35.3s) | 2.07 s (17.09×) | 2.09 s (16.88×) |
+| CPU     | jfk (11.0s)  | 951 ms (11.56×) | 993 ms (11.07×) |
+| CPU     | dots (35.3s) |  3.67 s (9.62×) |  3.74 s (9.45×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `ef35659` on 2026-06-08. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

@@ -125,6 +125,9 @@ Report:
 - Quant matrix pushed to a private HF repo (`<org>/<variant>-gguf`).
 - Tentative per-quant WER produced and reviewed; authoritative WER is
   Stage 7.
+- The GGUFs are now the input Stage 6 seeds `catalog/<variant>.json` from
+  (`scripts/catalog/new_record.py`), so a wrong capability KV or licence
+  read propagates into the catalog. Fix it here, not in the record.
 
 ## Pointers (read, not execute)
 

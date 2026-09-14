@@ -21,9 +21,9 @@ multilingual capability, and does not emit timestamps.
 See Useful Sensors' [model card](https://huggingface.co/UsefulSensors/moonshine-streaming-medium)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed MIT. Ported from upstream commit
-[`57b8436`](https://huggingface.co/UsefulSensors/moonshine-streaming-medium/commit/57b843633a8c183cadf6699ffa761377a933a866),
-pinned 2026-05-06.
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`57b8436`](https://huggingface.co/UsefulSensors/moonshine-streaming-medium/commit/57b8436), pinned 2026-05-06. Validated against the HF Transformers v5.7.0 reference at transcribe.cpp commit [`0d312ce`](https://github.com/handy-computer/transcribe.cpp/tree/0d312ce) on 2026-05-06.
+<!-- /catalog -->
 
 ## Download
 
@@ -113,16 +113,16 @@ Apple M4 Max: transcribe.cpp `0d312ce` on 2026-05-06.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
-| Vulkan  | jfk (11.0s)  | 570 ms (19.31×) |
-| Vulkan  | dots (35.3s) |  4.01 s (8.80×) |
-| CPU     | jfk (11.0s)  | 1.07 s (10.32×) |
-| CPU     | dots (35.3s) |    6.50 s (5×)† |
+| Vulkan  | jfk (11.0s)  | 560 ms (19.66×) |
+| Vulkan  | dots (35.3s) |  3.97 s (8.90×) |
+| CPU     | jfk (11.0s)  | 817 ms (13.47×) |
+| CPU     | dots (35.3s) |  6.03 s (5.86×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `f243f34` on 2026-05-06. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:
@@ -137,8 +137,7 @@ transcribe.cpp is validated tensor-by-tensor against the HF Transformers
 reference (`MoonshineStreamingForConditionalGeneration`, fp32 inference,
 `attn_implementation="eager"`) on `samples/jfk.wav`. All contract tensors
 fall within family tolerance, and the final transcript matches the
-reference. Last validated at commit
-[`0d312ce`](https://github.com/handy-computer/transcribe.cpp/tree/0d312ce).
+reference.
 
 | Field | Value |
 | --- | --- |

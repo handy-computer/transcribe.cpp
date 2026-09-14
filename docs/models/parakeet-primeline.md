@@ -25,9 +25,9 @@ correct per-language casing and punctuation, so all 25 v3 languages
 remain usable. Pick this variant when German is your primary workload
 and `parakeet-tdt-0.6b-v3` when it is not.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`3f1a9bc`](https://huggingface.co/primeline/parakeet-primeline/commit/3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e),
-pinned 2026-08-16.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`3f1a9bc`](https://huggingface.co/primeline/parakeet-primeline/commit/3f1a9bc), pinned 2026-08-16. Validated against the NeMo reference at transcribe.cpp commit [`856d7c1`](https://github.com/handy-computer/transcribe.cpp/tree/856d7c1) on 2026-08-16.
+<!-- /catalog -->
 
 ## Download
 

@@ -55,6 +55,49 @@ def fmt_size(size_bytes: int) -> str:
 
 
 # --------------------------------------------------------------------------
+# dataset identity
+#
+# A benchmark row names its dataset with three fields (dataset, split,
+# language), but every consumer wants a single string: a `<kind>:<value>`
+# spec for the WER harness, a slug for a report filename, a key for the
+# database. They differ in punctuation, not in meaning, so the rule that
+# picks the value lives here once. scripts/wer/remote/dataset_specs.py owns
+# the other direction (spec string -> manifest and volume paths) and
+# `dataset_spec` below emits exactly what its parse_dataset_spec accepts.
+
+# FLEURS publishes one split across many languages, so its language is what
+# identifies a result; every other dataset varies by split instead. The WER
+# harness agrees: `fleurs:zh` names a language and carries the split as a
+# separate --split flag, while `librispeech:test-clean` names a split.
+LANGUAGE_KEYED_DATASETS = ("fleurs", "eka-medical-asr")
+# The split a language-keyed dataset is published at, which its spec leaves
+# implicit.
+PUBLISHED_SPLIT = {"fleurs": "test", "eka-medical-asr": "test"}
+# Datasets that publish a single language, so a slug need not name one.
+SINGLE_LANGUAGE_DATASETS = ("librispeech",)
+
+
+def dataset_tail(row: dict) -> str:
+    """The value half of a dataset spec: which FLEURS language, which
+    LibriSpeech split."""
+    if row["dataset"] in LANGUAGE_KEYED_DATASETS:
+        return str(row["language"])
+    return str(row["split"])
+
+
+def dataset_slug(row: dict) -> str:
+    """`fleurs-es`, `librispeech-test-clean`. The dataset half of a WER report
+    filename, and the stem the catalog looks for when ingesting a score."""
+    return f"{row['dataset']}-{dataset_tail(row)}"
+
+
+def dataset_spec(row: dict) -> str:
+    """`fleurs:es`, `librispeech:test-clean`. What run.py and the Modal sweep
+    take as `--dataset`."""
+    return f"{row['dataset']}:{dataset_tail(row)}"
+
+
+# --------------------------------------------------------------------------
 # accuracy
 
 DATASET_LABELS = {

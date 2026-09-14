@@ -6,7 +6,9 @@
   "params": 105316112,
   "license": {
     "spdx": "other",
-    "display": "Health AI Developer Foundations"
+    "display": "Health AI Developer Foundations",
+    "name": "health-ai-developer-foundations",
+    "link": "https://developers.google.com/health-ai-developer-foundations/terms"
   },
   "upstream_repo": "google/medasr",
   "upstream_commit": "ae1e484",

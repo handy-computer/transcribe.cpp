@@ -20,9 +20,9 @@ multilingual capability, and does not emit timestamps.
 See Useful Sensors' [model card](https://huggingface.co/UsefulSensors/moonshine-streaming-small)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed MIT. Ported from upstream commit
-[`2c03650`](https://huggingface.co/UsefulSensors/moonshine-streaming-small/commit/2c036506f23a09c18df5a50057599ba6d9280999),
-pinned 2026-05-06.
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`2c03650`](https://huggingface.co/UsefulSensors/moonshine-streaming-small/commit/2c03650), pinned 2026-05-06. Validated against the HF Transformers v5.7.0 reference at transcribe.cpp commit [`0d312ce`](https://github.com/handy-computer/transcribe.cpp/tree/0d312ce) on 2026-05-06.
+<!-- /catalog -->
 
 ## Download
 
@@ -119,8 +119,7 @@ transcribe.cpp is validated tensor-by-tensor against the HF Transformers
 reference (`MoonshineStreamingForConditionalGeneration`, fp32 inference,
 `attn_implementation="eager"`) on `samples/jfk.wav`. All contract tensors
 fall within family tolerance, and the final transcript matches the
-reference. Last validated at commit
-[`0d312ce`](https://github.com/handy-computer/transcribe.cpp/tree/0d312ce).
+reference.
 
 | Field | Value |
 | --- | --- |

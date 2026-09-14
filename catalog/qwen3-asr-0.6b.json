@@ -9,7 +9,7 @@
     "display": "Apache-2.0"
   },
   "upstream_repo": "Qwen/Qwen3-ASR-0.6B",
-  "upstream_commit": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+  "upstream_commit": "5eb1441",
   "published_repo": "handy-computer/Qwen3-ASR-0.6B-gguf",
   "docs_page": "qwen3-asr.md",
   "languages": [

@@ -173,16 +173,16 @@ uv run scripts/bench/run.py --profile --models whisper-tiny
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 200 ms (55.1×)† | 209 ms (52.6×)† |
-| Vulkan  | dots (35.3s) | 528 ms (66.9×)† | 529 ms (66.8×)† |
-| CPU     | jfk (11.0s)  | 531 ms (20.73×) | 466 ms (23.59×) |
-| CPU     | dots (35.3s) | 1.23 s (28.76×) | 1.14 s (31.01×) |
+| Vulkan  | jfk (11.0s)  | 254 ms (43.22×) | 253 ms (43.55×) |
+| Vulkan  | dots (35.3s) | 822 ms (42.96×) | 825 ms (42.82×) |
+| CPU     | jfk (11.0s)  | 306 ms (35.96×) | 311 ms (35.39×) |
+| CPU     | dots (35.3s) | 811 ms (43.55×) | 820 ms (43.08×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `5fccd5d` on 2026-04-28. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

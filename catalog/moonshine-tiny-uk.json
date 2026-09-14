@@ -43,13 +43,12 @@
     "timestamps": "none"
   },
   "speed_benchmarks": [
-    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":97.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
     {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":210.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":74.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
     {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":180.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":23.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":68.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.3,"total_ms":null,"xrt_compute":35.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":77.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"}
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":239.2,"xrt_compute":45.98,"load_ms":99.6,"mel_ms":0.0,"encode_ms":72.8,"decode_ms":166.4,"engine_sha":"218aeae3","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":239.3,"xrt_wall":45.98,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":182.7,"xrt_compute":60.21,"load_ms":91.6,"mel_ms":0.0,"encode_ms":44.2,"decode_ms":138.5,"engine_sha":"218aeae3","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":182.8,"xrt_wall":60.16,"publication_profile":"asr-publication-v2"}
+  ],
+  "benchmark_exceptions": [
+    {"kind":"speed","match":{"sample":"dots"},"reason":"Speed is benched on the English `jfk` clip only. On 35 s of out-of-language audio this fine-tune degenerates into a repetition loop, never emits end-of-stream, and decode hits its 194-token position cap, so the `dots` cell times a loop rather than a transcript and the bench binary exits non-zero. Restore the cell when a long in-language fixture exists."}
   ]
 }

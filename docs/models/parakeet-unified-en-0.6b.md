@@ -34,9 +34,9 @@ See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-unified-en-0.6b
 for training data, intended use, streaming methodology, and upstream
 evaluation results.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`d4ac992`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b/commit/d4ac9928),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`d4ac992`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b/commit/d4ac992), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 

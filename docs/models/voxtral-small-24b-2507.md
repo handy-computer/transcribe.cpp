@@ -26,9 +26,9 @@ mono WAV and produces a transcript via greedy decoding.
 See Mistral's [model card](https://huggingface.co/mistralai/Voxtral-Small-24B-2507)
 for training data, intended use, and upstream evaluation.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b42409f279fdd92febee0511a6c32828569c1),
-pinned 2026-06-05.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b424), pinned 2026-06-05. Validated against the Transformers reference at transcribe.cpp commit [`dac22fa`](https://github.com/handy-computer/transcribe.cpp/tree/dac22fa) on 2026-06-05.
+<!-- /catalog -->
 
 ## Download
 

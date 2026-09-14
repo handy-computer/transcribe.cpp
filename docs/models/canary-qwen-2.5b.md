@@ -1,7 +1,7 @@
 # Canary-Qwen 2.5B
 
 <!-- catalog:intro -->
-Upstream: [`nvidia/canary-qwen-2.5b`](https://huggingface.co/nvidia/canary-qwen-2.5b) at [`b1469e1bba1cfe140205529c79c434ca47180960`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1bba1cfe140205529c79c434ca47180960).
+Upstream: [`nvidia/canary-qwen-2.5b`](https://huggingface.co/nvidia/canary-qwen-2.5b) at [`b1469e1`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1).
 
 Offline English speech-to-text. NeMo SALM (Speech-Augmented Language
 Model): a FastConformer audio encoder (32 layers, `d_model=1024`) feeds
@@ -21,9 +21,9 @@ implicitly when the audio supports it).
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-qwen-2.5b)
 for training data, intended use, and upstream evaluation.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`b1469e1`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1bba1cfe140205529c79c434ca47180960),
-pinned 2026-05-15.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`b1469e1`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1), pinned 2026-05-15. Validated against the NeMo SALM 2.7.3 reference at transcribe.cpp commit [`6f6c699`](https://github.com/handy-computer/transcribe.cpp/tree/6f6c699) on 2026-05-16.
+<!-- /catalog -->
 
 ## Input limits
 
@@ -135,18 +135,13 @@ uv run scripts/bench/run.py --profile --models canary-qwen-2.5b
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against NeMo SALM
-(`nemo.collections.speechlm2.SALM` 2.7.3) on `samples/jfk.wav` with the
-strict CPU backend, BF16 weights promoted to F32 at load time. All 16
-checkpointed tensors fall within family tolerance, and the BF16
-transcript matches the reference verbatim
-(`And so my fellow Americans ask not what your country can do for you ask what you can do for your country`).
-Tolerances are pinned in `tests/tolerances/canary_qwen.json` with a
-detailed `_comment` block naming the precision regime, the two
-implementation gotchas (BF16 mel filterbank in NeMo's preprocessor,
-forced F32 promotion of F16 depthwise conv kernels on CPU), and the
-mechanism behind every widened entry. Last validated at commit
-[`6f6c699`](https://github.com/handy-computer/transcribe.cpp/tree/6f6c699).
+transcribe.cpp is validated tensor-by-tensor against NeMo SALM (`nemo.collections.speechlm2.SALM` 2.7.3) on
+`samples/jfk.wav` with the strict CPU backend, BF16 weights promoted to F32 at load time. All 16 checkpointed
+tensors fall within family tolerance, and the BF16 transcript matches the reference verbatim (`And so my
+fellow Americans ask not what your country can do for you ask what you can do for your country`). Tolerances
+are pinned in `tests/tolerances/canary_qwen.json` with a detailed `_comment` block naming the precision
+regime, the two implementation gotchas (BF16 mel filterbank in NeMo's preprocessor, forced F32 promotion of
+F16 depthwise conv kernels on CPU), and the mechanism behind every widened entry.
 
 | Field | Value |
 | --- | --- |

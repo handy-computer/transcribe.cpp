@@ -20,9 +20,9 @@ On our LibriSpeech test-clean runs `parakeet-tdt-1.1b` edges it out (1.38% vs
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-rnnt-1.1b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`a07b19e`](https://huggingface.co/nvidia/parakeet-rnnt-1.1b/commit/a07b19e9),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`a07b19e`](https://huggingface.co/nvidia/parakeet-rnnt-1.1b/commit/a07b19e), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 

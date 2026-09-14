@@ -24,6 +24,9 @@ from languages import (  # noqa: E402
     FLEURS_LANGS,
 )
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import common  # noqa: E402
+
 MACHINE_ALIASES = {
     "apple-m4": "m4",
     "apple-m4-max": "m4-max",
@@ -211,9 +214,8 @@ def target_for_machine(profile: dict, machine_slug: str) -> dict | None:
 
 
 def dataset_spec(cell: dict) -> str:
-    if cell["dataset"] == "fleurs":
-        return f"fleurs:{cell['language']}"
-    return f"{cell['dataset']}:{cell['split']}"
+    """The `--dataset` string for one profile cell. See common.dataset_spec."""
+    return common.dataset_spec(cell)
 
 
 def machine_display(profile: dict, machine_slug: str) -> str:

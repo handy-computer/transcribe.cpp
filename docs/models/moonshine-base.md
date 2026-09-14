@@ -95,16 +95,16 @@ Apple M4 Max: transcribe.cpp `9824fdb` on 2026-05-06. † published before prove
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
-| Vulkan  | jfk (11.0s)  |   218 ms (50×)† |
-| Vulkan  | dots (35.3s) |   1.85 s (19×)† |
-| CPU     | jfk (11.0s)  | 331 ms (33.22×) |
-| CPU     | dots (35.3s) | 3.17 s (11.15×) |
+| Vulkan  | jfk (11.0s)  | 216 ms (50.90×) |
+| Vulkan  | dots (35.3s) | 1.74 s (20.28×) |
+| CPU     | jfk (11.0s)  | 306 ms (35.95×) |
+| CPU     | dots (35.3s) | 3.20 s (11.03×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `f243f34` on 2026-05-06. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

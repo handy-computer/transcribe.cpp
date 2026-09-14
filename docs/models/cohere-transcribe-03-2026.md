@@ -21,9 +21,9 @@ autoregressive.
 See Cohere's [model card](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`76b8b23`](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026/commit/76b8b23e8607f35f0265a23d481b338fb0e26aea),
-pinned 2026-04-16.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`76b8b23`](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026/commit/76b8b23), pinned 2026-04-16. Validated against the Transformers reference at transcribe.cpp commit [`bf0d0b7`](https://github.com/handy-computer/transcribe.cpp/tree/bf0d0b7) on 2026-04-18.
+<!-- /catalog -->
 
 ## Input limits
 
@@ -115,16 +115,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-| Backend | Sample       |            Q8_0 |         Q4_K_M |
-| ------- | ------------ | --------------: | -------------: |
-| Vulkan  | jfk (11.0s)  |    1.43 s (8×)† |   1.33 s (8×)† |
-| Vulkan  | dots (35.3s) |    4.25 s (8×)† |   4.25 s (8×)† |
-| CPU     | jfk (11.0s)  |  3.57 s (3.08×) | 2.89 s (3.80×) |
-| CPU     | dots (35.3s) | 12.39 s (2.85×) |  10.08 s (4×)† |
+| Backend | Sample       |           Q8_0 |         Q4_K_M |
+| ------- | ------------ | -------------: | -------------: |
+| Vulkan  | jfk (11.0s)  | 1.43 s (7.67×) | 1.41 s (7.81×) |
+| Vulkan  | dots (35.3s) | 4.15 s (8.52×) | 4.00 s (8.83×) |
+| CPU     | jfk (11.0s)  | 2.40 s (4.59×) | 2.47 s (4.46×) |
+| CPU     | dots (35.3s) | 8.76 s (4.03×) | 8.93 s (3.96×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8345d95` on 2026-04-16. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:
@@ -138,8 +138,7 @@ uv run scripts/bench/run.py --profile --models cohere-transcribe-03-2026
 transcribe.cpp is validated tensor-by-tensor against the Transformers
 reference implementation on `samples/jfk.wav`. All 22 checkpointed tensors
 fall within family tolerance, and the final transcript matches the reference
-verbatim. Last validated at commit
-[`bf0d0b7`](https://github.com/handy-computer/transcribe.cpp/tree/bf0d0b7).
+verbatim.
 
 | Field | Value |
 | --- | --- |

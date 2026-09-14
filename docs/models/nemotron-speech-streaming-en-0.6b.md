@@ -30,10 +30,9 @@ See NVIDIA's [model card](https://huggingface.co/nvidia/nemotron-speech-streamin
 for training data, intended use, streaming methodology, and the full
 latency-vs-accuracy table.
 
-Licensed under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/).
-Ported from upstream commit
-[`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4),
-pinned 2026-05-11.
+<!-- catalog:pin -->
+Licensed [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/). Ported from upstream commit [`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40), pinned 2026-05-11. Validated against the NeMo reference at transcribe.cpp commit [`12f1076`](https://github.com/handy-computer/transcribe.cpp/tree/12f1076) on 2026-05-11.
+<!-- /catalog -->
 
 ## Download
 
@@ -128,16 +127,16 @@ Apple M4 Max: transcribe.cpp `c2e7bf9` on 2026-05-11. † published before prove
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 808 ms (13.61×) | 810 ms (13.59×) |
-| Vulkan  | dots (35.3s) | 2.92 s (12.08×) | 2.98 s (11.87×) |
-| CPU     | jfk (11.0s)  |  1.39 s (7.94×) |  1.22 s (8.99×) |
-| CPU     | dots (35.3s) |  5.21 s (6.78×) |    4.76 s (7×)† |
+| Vulkan  | jfk (11.0s)  | 424 ms (25.97×) | 426 ms (25.83×) |
+| Vulkan  | dots (35.3s) | 1.25 s (28.32×) | 1.26 s (28.01×) |
+| CPU     | jfk (11.0s)  | 743 ms (14.81×) | 788 ms (13.96×) |
+| CPU     | dots (35.3s) | 2.86 s (12.33×) | 2.93 s (12.06×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

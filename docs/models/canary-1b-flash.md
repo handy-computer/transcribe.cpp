@@ -26,9 +26,9 @@ Offline multilingual speech-to-text and translation. The model takes a
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-flash)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`a9a55e0`](https://huggingface.co/nvidia/canary-1b-flash/commit/a9a55e0295e7dd50d0c8c2a19491900a0daf24f3),
-pinned 2026-05-08.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`a9a55e0`](https://huggingface.co/nvidia/canary-1b-flash/commit/a9a55e0), pinned 2026-05-08. Validated against the NeMo reference at transcribe.cpp commit [`db53eda`](https://github.com/handy-computer/transcribe.cpp/tree/db53eda) on 2026-05-08.
+<!-- /catalog -->
 
 ## Download
 

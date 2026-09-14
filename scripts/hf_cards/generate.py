@@ -107,8 +107,7 @@ def derive_perf(record: dict, default_quant: str | None) -> dict:
 def metric_key(row: dict) -> str:
     """`<metric>_<dataset>_<split|language>[_<scoring>][_<mode>]`, the name of
     the per-quant map this row belongs to in the metadata block."""
-    tail = row["language"] if row["dataset"] == "fleurs" else row["split"]
-    key = f"{row['metric']}_{row['dataset']}_{tail}"
+    key = f"{row['metric']}_{row['dataset']}_{common.dataset_tail(row)}"
     for extra in ("scoring", "mode"):
         if row.get(extra):
             key += f"_{row[extra]}"

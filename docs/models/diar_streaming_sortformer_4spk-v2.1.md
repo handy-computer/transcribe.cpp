@@ -23,9 +23,9 @@ speaker-attributed ASR path (future work).
 See NVIDIA's [model card](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed under the NVIDIA Open Model License. Ported from upstream commit
-[`fafaab5`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1/commit/fafaab5faa1617a0ca52d38dd3dc4bd636800d3d),
-pinned 2026-07-19.
+<!-- catalog:pin -->
+Licensed NVIDIA Open Model License. Ported from upstream commit [`fafaab5`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1/commit/fafaab5), pinned 2026-07-19. Validated against the NeMo reference at transcribe.cpp commit [`d42c3bb`](https://github.com/handy-computer/transcribe.cpp/tree/d42c3bb) on 2026-07-22.
+<!-- /catalog -->
 
 ## Download
 
@@ -124,8 +124,7 @@ transcribe.cpp is validated tensor-by-tensor against NeMo on
 mix with a 1.5 s overlap). All 6 checkpointed tensors fall within family
 tolerance, and the streaming AOSC cache-compression internals were
 additionally verified bit-exact against NeMo at the index level on a
-full 39-minute AMI meeting (87 compression calls). Last validated at
-commit `d42c3bb`.
+full 39-minute AMI meeting (87 compression calls).
 
 | Field | Value |
 | --- | --- |

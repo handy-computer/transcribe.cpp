@@ -21,9 +21,9 @@ each step can advance more than one frame.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt-1.1b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`53276c6`](https://huggingface.co/nvidia/parakeet-tdt-1.1b/commit/53276c64),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`53276c6`](https://huggingface.co/nvidia/parakeet-tdt-1.1b/commit/53276c6), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 
@@ -92,16 +92,16 @@ Apple M4 Max: transcribe.cpp `a6c097e` on 2026-05-10. † published before prove
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 961 ms (11.45×) | 936 ms (11.75×) |
-| Vulkan  | dots (35.3s) | 3.02 s (11.70×) | 2.99 s (11.80×) |
-| CPU     | jfk (11.0s)  |  1.92 s (5.74×) |    1.49 s (7×)† |
-| CPU     | dots (35.3s) |  6.81 s (5.19×) |  5.93 s (5.96×) |
+| Vulkan  | jfk (11.0s)  | 694 ms (15.86×) | 706 ms (15.58×) |
+| Vulkan  | dots (35.3s) | 2.07 s (17.03×) | 2.12 s (16.65×) |
+| CPU     | jfk (11.0s)  |  1.12 s (9.82×) |  1.21 s (9.08×) |
+| CPU     | dots (35.3s) |  4.54 s (7.79×) |  4.66 s (7.57×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

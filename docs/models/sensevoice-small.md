@@ -1,7 +1,7 @@
 # SenseVoice Small
 
 <!-- catalog:intro -->
-Upstream: [`FunAudioLLM/SenseVoiceSmall`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) at [`3eb3b4eeffc2f2dde6051b853983753db33e35c3`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4eeffc2f2dde6051b853983753db33e35c3).
+Upstream: [`FunAudioLLM/SenseVoiceSmall`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) at [`3eb3b4e`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4e).
 
 Offline multilingual speech-to-text in Chinese, Cantonese, English, Japanese,
 and Korean. A 234M-parameter SAN-M encoder with a single CTC head over a
@@ -56,12 +56,11 @@ numbers below are measured with ITN **off**, matching the reference runs; see
 See FunAudioLLM's [model card](https://huggingface.co/FunAudioLLM/SenseVoiceSmall)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed under the **FunASR Model Open Source License Agreement** —
-the legacy "model-license" form
-([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
-Ported from upstream commit
-[`3eb3b4e`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4eeffc2f2dde6051b853983753db33e35c3),
-pinned 2026-05-06.
+<!-- catalog:pin -->
+Licensed [model-license (FunASR MODEL_LICENSE)](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). Ported from upstream commit [`3eb3b4e`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4e), pinned 2026-05-06. Validated against the FunASR reference at transcribe.cpp commit [`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28) on 2026-05-06.
+<!-- /catalog -->
+
+This is the legacy `model-license` form of the agreement.
 
 ## Input limits
 
@@ -194,12 +193,11 @@ uv run scripts/bench/run.py --profile --models sensevoice-small
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1
-on `samples/jfk.wav`. All 16 checkpointed tensors fall within family
+transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1 on
+`samples/jfk.wav`. All 16 checkpointed tensors fall within family
 tolerance, and the final transcript matches the FunASR reference verbatim
 (both spelled `… laled out …` on token `1089-134686-0000` — a quirk of
-SenseVoice, not a port defect). Last validated at commit
-[`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28).
+SenseVoice, not a port defect).
 
 | Field | Value |
 | --- | --- |

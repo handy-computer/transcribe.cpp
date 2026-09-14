@@ -239,7 +239,13 @@ def block_pin(record: dict, attrs: dict[str, str]) -> list[str]:
     validation = spec.get("validation") or {}
     if not (spec.get("pin_date") and validation.get("commit") and validation.get("date")):
         raise RenderError("spec needs pin_date and validation.{commit,date}")
-    return [f"Licensed {record['license']['display']}. Ported from upstream commit "
+    # A licence with no SPDX id carries its own URL; link the display name to
+    # it rather than leaving the reader to find the terms. Same field the HF
+    # card emits as license_link.
+    licence = record["license"]
+    display = (f"[{licence['display']}]({licence['link']})"
+               if licence.get("link") else licence["display"])
+    return [f"Licensed {display}. Ported from upstream commit "
             f"[`{commit}`](https://huggingface.co/{repo}/commit/{commit}), pinned "
             f"{spec['pin_date']}. Validated against the {validation.get('reference', 'reference')} "
             f"reference at transcribe.cpp commit [`{validation['commit']}`]"

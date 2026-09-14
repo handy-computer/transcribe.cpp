@@ -31,10 +31,9 @@ See NVIDIA's [model card](https://huggingface.co/nvidia/multitalker-parakeet-str
 for training data, intended use, the multitalker methodology, and the full
 latency-vs-accuracy table.
 
-Licensed under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/).
-Ported from upstream commit
-[`8749fc7`](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1/commit/8749fc71fd6e2d88ef230159bbf2aea69b524ee1),
-pinned 2026-07-12.
+<!-- catalog:pin -->
+Licensed [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/). Ported from upstream commit [`8749fc7`](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1/commit/8749fc7), pinned 2026-07-12. Validated against the NeMo reference at transcribe.cpp commit [`3083021`](https://github.com/handy-computer/transcribe.cpp/tree/3083021) on 2026-08-03.
+<!-- /catalog -->
 
 ## Download
 

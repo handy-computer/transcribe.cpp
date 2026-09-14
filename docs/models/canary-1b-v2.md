@@ -37,9 +37,9 @@ model are not exposed in the v1 port.
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-v2)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`87bc526`](https://huggingface.co/nvidia/canary-1b-v2/commit/87bc52657add533cd0156b3fc1aef027280754bf),
-pinned 2026-05-08.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`87bc526`](https://huggingface.co/nvidia/canary-1b-v2/commit/87bc526), pinned 2026-05-08. Validated against the NeMo reference at transcribe.cpp commit [`db53eda`](https://github.com/handy-computer/transcribe.cpp/tree/db53eda) on 2026-05-08.
+<!-- /catalog -->
 
 ## Download
 

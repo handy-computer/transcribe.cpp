@@ -22,9 +22,9 @@ model takes a 16 kHz mono WAV and produces a transcript; pass the language
 See Cohere's [model card](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`0a8193c`](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026/commit/0a8193caa4f3f92131471ab08824e488141cb392),
-pinned 2026-07-07.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`0a8193c`](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026/commit/0a8193c), pinned 2026-07-07. Validated against the Transformers reference at transcribe.cpp commit [`d89ecb7`](https://github.com/handy-computer/transcribe.cpp/tree/d89ecb7) on 2026-07-07.
+<!-- /catalog -->
 
 ## Input limits
 
@@ -116,16 +116,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  1.43 s (8×)† |  1.33 s (8×)† |
-| Vulkan  | dots (35.3s) |  4.25 s (8×)† |  4.25 s (8×)† |
-| CPU     | jfk (11.0s)  |  3.57 s (3×)† |  2.90 s (4×)† |
-| CPU     | dots (35.3s) | 12.40 s (3×)† | 10.08 s (4×)† |
+| Backend | Sample       |           Q8_0 |         Q4_K_M |
+| ------- | ------------ | -------------: | -------------: |
+| Vulkan  | jfk (11.0s)  | 1.35 s (8.17×) | 1.31 s (8.40×) |
+| Vulkan  | dots (35.3s) | 4.19 s (8.44×) | 4.00 s (8.83×) |
+| CPU     | jfk (11.0s)  | 2.40 s (4.58×) | 2.46 s (4.48×) |
+| CPU     | dots (35.3s) | 8.75 s (4.04×) | 8.94 s (3.95×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR). † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction (substitute this variant's slug):

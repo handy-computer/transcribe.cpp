@@ -862,7 +862,18 @@ def main() -> int:
         speed = args._profile_data["speed"]
         quants = sorted({item["quant"] for record in args._catalog_records.values()
                          for item in record.get("downloads", [])})
-        sample_stems = list(speed["samples"])
+        # Family and model overrides can name a sample the top-level set does
+        # not: gigaam benches a Russian clip rather than jfk/dots. The
+        # candidate matrix has to contain every such sample before the
+        # per-variant expected-cell filter in _run_one_backend can select it,
+        # or the override's variants match nothing and are silently skipped.
+        sample_stems = sorted({
+            sample
+            for spec in (speed,
+                         *(speed.get("family_overrides") or {}).values(),
+                         *(speed.get("model_overrides") or {}).values())
+            for sample in spec.get("samples", [])
+        })
         args.backends = ",".join(target["backends"])
         args.iters = int(speed["iterations"])
         args.warmup = int(speed["warmup"])

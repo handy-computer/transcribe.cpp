@@ -20,9 +20,9 @@ LibriSpeech test-clean over the 0.6B sibling.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-ctc-1.1b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`a707e81`](https://huggingface.co/nvidia/parakeet-ctc-1.1b/commit/a707e818195cb97c8f7da2fc36b221a29f69a5db),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`a707e81`](https://huggingface.co/nvidia/parakeet-ctc-1.1b/commit/a707e81), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 

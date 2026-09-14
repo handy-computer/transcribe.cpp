@@ -12,9 +12,11 @@ delay-token latency conditioning emits one text token per 80 ms audio slot
 Architecturally distinct from the offline [Voxtral 2507](voxtral.md) family
 (own arch, streaming frontend with a fixed global log-mel max, causal encoder,
 additive fusion, ada-norm FFN scaling) — it shares only the projector shape
-and the tekken tokenizer. Licensed Apache-2.0. Ported from upstream commit
-[`2769294`](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/commit/2769294),
-pinned 2026-06-06.
+and the tekken tokenizer.
+
+<!-- catalog:pin variant=voxtral-mini-4b-realtime-2602 -->
+Licensed Apache-2.0. Ported from upstream commit [`2769294`](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/commit/2769294), pinned 2026-06-06. Validated against the Transformers reference at transcribe.cpp commit [`483c122`](https://github.com/handy-computer/transcribe.cpp/tree/483c122) on 2026-06-06.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -108,16 +110,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf variant=voxtral-mini-4b-realtime-2602 machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Vulkan  | jfk (11.0s)  | 12.62 s (0.87×)† |    10.97 s (1×)† |
-| Vulkan  | dots (35.3s) |  39.29 s (0.9×)† | 33.51 s (1.05×)† |
-| CPU     | jfk (11.0s)  | 19.54 s (0.56×)† |  13.80 s (0.8×)† |
-| CPU     | dots (35.3s) | 58.00 s (0.61×)† | 41.54 s (0.85×)† |
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 14.95 s (0.74×) | 13.17 s (0.84×) |
+| Vulkan  | dots (35.3s) | 45.03 s (0.78×) | 39.16 s (0.90×) |
+| CPU     | jfk (11.0s)  | 19.76 s (0.56×) | 16.39 s (0.67×) |
+| CPU     | dots (35.3s) | 57.92 s (0.61×) | 46.12 s (0.77×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR). † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

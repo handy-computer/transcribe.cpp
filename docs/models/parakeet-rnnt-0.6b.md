@@ -22,9 +22,9 @@ than the CTC variant at the same encoder size.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-rnnt-0.6b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`c0c1f09`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b/commit/c0c1f09fdc3f18b0b2ddbeafd5d6684f1b38078f),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`c0c1f09`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b/commit/c0c1f09), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 
@@ -93,16 +93,16 @@ Apple M4 Max. † published before provenance was recorded; not yet re-measured.
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 738 ms (14.90×) | 751 ms (14.65×) |
-| Vulkan  | dots (35.3s) | 2.54 s (13.88×) | 2.59 s (13.67×) |
-| CPU     | jfk (11.0s)  |  1.24 s (8.86×) | 1.07 s (10.32×) |
-| CPU     | dots (35.3s) |    4.71 s (7×)† |    4.14 s (9×)† |
+| Vulkan  | jfk (11.0s)  | 425 ms (25.87×) | 431 ms (25.51×) |
+| Vulkan  | dots (35.3s) | 1.25 s (28.33×) | 1.27 s (27.86×) |
+| CPU     | jfk (11.0s)  | 675 ms (16.30×) | 720 ms (15.29×) |
+| CPU     | dots (35.3s) | 2.64 s (13.39×) | 2.71 s (13.05×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `12f1076` on 2026-05-11. † published before provenance was recorded; not yet re-measured.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

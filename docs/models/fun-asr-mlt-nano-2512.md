@@ -1,7 +1,7 @@
 # Fun-ASR-MLT-Nano
 
 <!-- catalog:intro -->
-Upstream: [`FunAudioLLM/Fun-ASR-MLT-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512) at [`cf67a938bf2829959d08fdfb84e186eff02a67ff`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a938bf2829959d08fdfb84e186eff02a67ff).
+Upstream: [`FunAudioLLM/Fun-ASR-MLT-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512) at [`cf67a93`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a93).
 
 Offline speech-to-text covering 31 languages, with focused optimization
 on East and Southeast Asian languages: Chinese, English, Cantonese,
@@ -47,11 +47,9 @@ zh/en/ja corpus and may give better Chinese accuracy.
 See FunAudioLLM's [model card](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed under the **FunASR Model Open Source License Agreement v1.1**
-([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
-Ported from upstream commit
-[`cf67a93`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a938bf2829959d08fdfb84e186eff02a67ff),
-pinned 2026-05-06.
+<!-- catalog:pin -->
+Licensed [FunASR Model Open Source License Agreement v1.1](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). Ported from upstream commit [`cf67a93`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a93), pinned 2026-05-06. Validated against the FunASR reference at transcribe.cpp commit [`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28) on 2026-05-06.
+<!-- /catalog -->
 
 ## Download
 
@@ -188,12 +186,11 @@ uv run scripts/bench/run.py --profile --models fun-asr-mlt-nano-2512
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1
-on `samples/jfk.wav`. All 22 checkpointed tensors fall within family
+transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1 on
+`samples/jfk.wav`. All 22 checkpointed tensors fall within family
 tolerance, and the final transcript matches the FunASR reference verbatim
 ("and so my fellow americans ask not what your country can do for you ask
-what you can do for your country"). Last validated at commit
-[`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28).
+what you can do for your country").
 
 | Field | Value |
 | --- | --- |

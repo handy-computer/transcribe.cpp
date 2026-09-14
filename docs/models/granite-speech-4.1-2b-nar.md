@@ -23,10 +23,12 @@ only — no translation, no timestamps, no diarization.
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`99a4df9`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/99a4df9007ac5682f9daa093fb7008ff606e9a5d),
-pinned 2026-05-24 (single-file `modeling_granite_speech_nar.py` snapshot —
-the README's canonical inference target).
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`99a4df9`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/99a4df9), pinned 2026-05-24. Validated against the Transformers reference at transcribe.cpp commit [`c53af2c`](https://github.com/handy-computer/transcribe.cpp/tree/c53af2c) on 2026-05-24.
+<!-- /catalog -->
+
+The pinned revision is the single-file `modeling_granite_speech_nar.py`
+snapshot, the README's canonical inference target.
 
 ## Download
 

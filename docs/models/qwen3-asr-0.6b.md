@@ -1,7 +1,7 @@
 # Qwen3-ASR 0.6B
 
 <!-- catalog:intro -->
-Upstream: [`Qwen/Qwen3-ASR-0.6B`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) at [`5eb144179a02acc5e5ba31e748d22b0cf3e303b0`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B/commit/5eb144179a02acc5e5ba31e748d22b0cf3e303b0).
+Upstream: [`Qwen/Qwen3-ASR-0.6B`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) at [`5eb1441`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B/commit/5eb1441).
 
 Offline multilingual speech-to-text. An 18-layer bidirectional audio encoder
 feeds a 28-layer Qwen3 causal LM with audio-token injection (fused
@@ -22,9 +22,11 @@ See the
 [Qwen3-ASR model card](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0 (weights) / Apache-2.0 (author `qwen_asr` package).
-Ported from upstream commit
-[`5eb1441`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B/commit/5eb144179a02acc5e5ba31e748d22b0cf3e303b0).
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`5eb1441`](https://huggingface.co/Qwen/Qwen3-ASR-0.6B/commit/5eb1441), pinned 2026-04-19. Validated against the qwen_asr 0.0.6 reference at transcribe.cpp commit [`3f61df7`](https://github.com/handy-computer/transcribe.cpp/tree/3f61df7) on 2026-04-20.
+<!-- /catalog -->
+
+The author's `qwen_asr` package is likewise Apache-2.0.
 
 ## Download
 
@@ -161,12 +163,10 @@ uv run scripts/bench/run.py --profile --models qwen3-asr-0.6b
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against the author
-reference implementation (`qwen_asr` 0.0.6 / transformers 4.57.6) on
-`samples/jfk.wav`. All 13 checkpointed tensors fall within family
-tolerance on CPU / Metal / Vulkan, and the transcript matches the
-reference verbatim. Last validated at commit
-[`3f61df7`](https://github.com/handy-computer/transcribe.cpp/tree/3f61df7).
+transcribe.cpp is validated tensor-by-tensor against the author reference
+implementation (`qwen_asr` 0.0.6 / transformers 4.57.6) on
+`samples/jfk.wav`. All 13 checkpointed tensors fall within family tolerance
+on CPU / Metal / Vulkan, and the transcript matches the reference verbatim.
 
 | Field | Value |
 | --- | --- |

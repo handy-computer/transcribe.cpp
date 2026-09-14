@@ -28,9 +28,9 @@ across heads). Variants in this family:
 See ai-sage's [model card](https://huggingface.co/ai-sage/GigaAM-v3)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed MIT. Ported from upstream commit
-[`15ef3b5`](https://huggingface.co/ai-sage/GigaAM-v3/commit/15ef3b5a88da78f93134b3cb7f015c70aefa8946),
-pinned 2026-05-12.
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`15ef3b5`](https://huggingface.co/ai-sage/GigaAM-v3/commit/15ef3b5), pinned 2026-05-12. Validated against the gigaam author package reference at transcribe.cpp commit [`42b96d9`](https://github.com/handy-computer/transcribe.cpp/tree/42b96d9) on 2026-05-12.
+<!-- /catalog -->
 
 ## Download
 

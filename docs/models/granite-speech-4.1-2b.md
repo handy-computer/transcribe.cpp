@@ -29,9 +29,9 @@ etc. Pass the target language as a BCP-47 code via `--translate
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`8f4bb5f`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b/commit/8f4bb5f31ae98971bd218169f00065a041d20058),
-pinned 2026-05-17.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`8f4bb5f`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b/commit/8f4bb5f), pinned 2026-05-17. Validated against the Transformers reference at transcribe.cpp commit [`275332d`](https://github.com/handy-computer/transcribe.cpp/tree/275332d) on 2026-05-17.
+<!-- /catalog -->
 
 ## Download
 

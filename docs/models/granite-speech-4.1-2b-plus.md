@@ -36,9 +36,9 @@ speech translation.
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`edd3bf5`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus/commit/edd3bf54fbb06d8e263aa0c1939321d67b073f86),
-pinned 2026-05-17.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`edd3bf5`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus/commit/edd3bf5), pinned 2026-05-17. Validated against the Transformers reference at transcribe.cpp commit [`275332d`](https://github.com/handy-computer/transcribe.cpp/tree/275332d) on 2026-05-17.
+<!-- /catalog -->
 
 ## Download
 
