@@ -42,13 +42,5 @@
     "batch_size": 1,
     "timestamps": "none"
   },
-  "speed_benchmarks": [
-    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":210.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":null,"xrt_compute":180.0,"load_ms":null,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":null,"measured_on":null,"thermal_gated":null,"measurement_provenance":"legacy-published"},
-    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":529.1,"xrt_compute":20.79,"load_ms":102.4,"mel_ms":0.0,"encode_ms":76.0,"decode_ms":453.2,"engine_sha":"218aeae3","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":529.2,"xrt_wall":20.79,"publication_profile":"asr-publication-v2"},
-    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":377.5,"xrt_compute":29.14,"load_ms":92.2,"mel_ms":0.0,"encode_ms":47.7,"decode_ms":329.9,"engine_sha":"218aeae3","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":377.8,"xrt_wall":29.12,"publication_profile":"asr-publication-v2"}
-  ],
-  "benchmark_exceptions": [
-    {"kind":"speed","match":{"sample":"dots"},"reason":"Speed is benched on the English `jfk` clip only. On 35 s of out-of-language audio this fine-tune degenerates into a repetition loop, never emits end-of-stream, and decode hits its 194-token position cap, so the `dots` cell times a loop rather than a transcript and the bench binary exits non-zero. Restore the cell when a long in-language fixture exists."}
-  ]
+  "speed_benchmarks": []
 }

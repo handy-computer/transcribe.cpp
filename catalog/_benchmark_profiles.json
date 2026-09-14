@@ -48,7 +48,44 @@
             "reason": "Russian-only family; use the currently published supported-language clip until a long Russian fixture is added."
           }
         },
-        "model_overrides": {},
+        "model_overrides": {
+          "moonshine-tiny-ja": {
+            "samples": [
+              "ja"
+            ],
+            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+          },
+          "moonshine-base-ja": {
+            "samples": [
+              "ja"
+            ],
+            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+          },
+          "moonshine-tiny-ko": {
+            "samples": [
+              "ko"
+            ],
+            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+          },
+          "moonshine-base-ko": {
+            "samples": [
+              "ko"
+            ],
+            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+          },
+          "moonshine-tiny-zh": {
+            "samples": [
+              "zh"
+            ],
+            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+          },
+          "moonshine-base-zh": {
+            "samples": [
+              "zh"
+            ],
+            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+          }
+        },
         "targets": [
           {
             "machine": "m4-max",

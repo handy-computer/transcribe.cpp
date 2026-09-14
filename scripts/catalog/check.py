@@ -53,6 +53,14 @@ def integrity_pass(records: dict) -> int:
             if missing:
                 bad += 1
                 print(f"  FAIL {name}: {sect} references unpublished quant(s) {sorted(missing)}")
+        # A shipped model always says how fast it runs somewhere. The
+        # publication profile decides which cells are required; this is the
+        # weaker floor underneath it, so a record can never render a page or
+        # a card with no performance at all.
+        if not rec.get("speed_benchmarks"):
+            bad += 1
+            print(f"  FAIL {name}: no speed_benchmarks; every shipped model "
+                  f"carries at least one measured cell")
         for r in rec.get("speed_benchmarks", []):
             if r.get("machine"):
                 machines[r["machine"]].add(name)
