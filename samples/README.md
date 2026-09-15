@@ -33,7 +33,7 @@ and is recorded here so each clip can be traced back.
 | `uk-short.wav` | 10.98 s | `uk_ua` | 7177130321767122387 |
 | `uk-long.wav` | 28.92 s | `uk_ua` | 12340201221281017924 |
 | `vi-short.wav` | 10.98 s | `vi_vn` | 9897090359729012443 |
-| `vi-long.wav` | 38.10 s | `vi_vn` | 11806133943011932690 |
+| `vi-long.wav` | 25.10 s | `vi_vn` | 16802725889904809484 |
 | `zh-short.wav` | 11.00 s | `cmn_hans_cn` | 17639585860488007329 |
 | `zh-long.wav` | 31.12 s | `cmn_hans_cn` | 5655534691025010514 |
 
