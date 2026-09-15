@@ -143,16 +143,16 @@ are out-of-the-box numbers with no tuning.
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-| Backend | Sample       |            Q8_0 |          Q4_K_M |
-| ------- | ------------ | --------------: | --------------: |
-| Metal   | jfk (11.0s)  | 112 ms (98.65×) | 112 ms (98.69×) |
-| Metal   | dots (35.3s) | 359 ms (98.39×) | 366 ms (96.54×) |
-| CPU     | jfk (11.0s)  | 366 ms (30.07×) | 362 ms (30.42×) |
-| CPU     | dots (35.3s) | 1.27 s (27.72×) | 1.25 s (28.31×) |
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  76 ms (143.94×) |  77 ms (143.14×) |
+| Metal   | dots (35.3s) | 256 ms (138.26×) | 256 ms (137.88×) |
+| CPU     | jfk (11.0s)  |  358 ms (30.76×) |  355 ms (31.01×) |
+| CPU     | dots (35.3s) |  1.19 s (29.73×) |  1.21 s (29.23×) |
 
-Apple M4 Max: transcribe.cpp `d9708f1` on 2026-06-08.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro

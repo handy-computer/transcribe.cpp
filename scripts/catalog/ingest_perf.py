@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import functools
 import json
 import pathlib
 import re
@@ -45,14 +46,39 @@ def quant_of(model_path: str) -> str | None:
     return match.group(1) if match else None
 
 
+@functools.lru_cache(maxsize=1)
+def variant_by_directory() -> dict[str, str]:
+    """Catalog variant by the lowercased models/ directory that holds it.
+
+    A directory mirrors the upstream repo name (`Qwen3-ASR-0.6B`,
+    `SenseVoiceSmall`) while the record is kebab-case, so a report's path
+    names its variant only up to case, and sometimes not even that. An
+    upstream repo that several records share (the four gigaam variants ship
+    from one repo) is ambiguous, so it resolves to nothing rather than to an
+    arbitrary one of them; those variants have directories of their own.
+    """
+    records = common.load_records()
+    lookup = {variant.lower(): variant for variant in records}
+    by_upstream = collections.defaultdict(list)
+    for variant, record in records.items():
+        by_upstream[record["upstream_repo"].rsplit("/", 1)[-1].lower()].append(variant)
+    for slug, variants in by_upstream.items():
+        if len(variants) == 1:
+            lookup.setdefault(slug, variants[0])
+    return lookup
+
+
 def variant_of(report: dict, model_path: str) -> str | None:
     """Reports carry `variant` or the older `family`; the path is definitive."""
+    name = report.get("variant")
     parts = pathlib.PurePosixPath(model_path.replace("\\", "/")).parts
     if "models" in parts:
         index = len(parts) - 1 - parts[::-1].index("models")
         if index + 1 < len(parts):
-            return parts[index + 1]
-    return report.get("variant")
+            name = parts[index + 1]
+    if not name:
+        return None
+    return variant_by_directory().get(name.lower(), name)
 
 
 def publishable(report: dict) -> bool:
@@ -126,7 +152,13 @@ def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
         if not publishable(report):
             experiments += 1
             continue
-        report["_file"] = str(path.relative_to(common.REPO))
+        # Reports normally live under the repo, but --reports can name a
+        # staging directory elsewhere (or a relative one); the label is only
+        # for the operator, so fall back to the path as given.
+        try:
+            report["_file"] = str(path.resolve().relative_to(common.REPO))
+        except ValueError:
+            report["_file"] = str(path)
         for row in cells(report):
             key = (row["variant"], row["machine"], row["backend"], row["quant"], row["sample"])
             previous = best.get(key)

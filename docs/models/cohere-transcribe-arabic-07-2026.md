@@ -101,16 +101,16 @@ the same architecture with identical tensor shapes and quantization layout
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  | 150 ms (74×)† | 154 ms (71×)† |
-| Metal   | dots (35.3s) | 491 ms (72×)† | 465 ms (76×)† |
-| CPU     | jfk (11.0s)  |  1.21 s (9×)† | 1.05 s (11×)† |
-| CPU     | dots (35.3s) |  4.13 s (9×)† | 3.49 s (10×)† |
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 142 ms (77.53×) | 143 ms (77.15×) |
+| Metal   | dots (35.3s) | 469 ms (75.36×) | 460 ms (76.89×) |
+| CPU     | jfk (11.0s)  | 912 ms (12.07×) |  1.31 s (8.37×) |
+| CPU     | dots (35.3s) | 3.36 s (10.53×) | 3.43 s (10.29×) |
 
-Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro

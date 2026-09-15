@@ -101,31 +101,31 @@ CLI flags specific to canary:
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |               Q8_0 |             Q4_K_M |
 | ------- | ------------ | -----------------: | -----------------: |
-| Metal   | jfk (11.0s)  | 104.2 ms (105.60×) | 108.9 ms (100.97×) |
-| Metal   | dots (35.3s) |  365.6 ms (96.65×) | 346.2 ms (102.06×) |
-| CPU     | jfk (11.0s)  |  517.2 ms (21.27×) |  429.0 ms (25.64×) |
-| CPU     | dots (35.3s) |    1.79 s (19.72×) |    1.51 s (23.43×) |
+| Metal   | jfk (11.0s)  |  93.5 ms (117.69×) |  91.8 ms (119.77×) |
+| Metal   | dots (35.3s) | 333.9 ms (105.82×) | 315.5 ms (112.00×) |
+| CPU     | jfk (11.0s)  |  416.7 ms (26.40×) |  429.5 ms (25.61×) |
+| CPU     | dots (35.3s) |    1.44 s (24.47×) |    1.49 s (23.78×) |
 
-Apple M4 Max: transcribe.cpp `0f42b37` on 2026-05-08; transcribe.cpp `19b3b87` on 2026-05-08.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |              Q8_0 |            Q4_K_M |
 | ------- | ------------ | ----------------: | ----------------: |
-| Vulkan  | jfk (11.0s)  | 758.1 ms (14.51×) | 698.9 ms (15.74×) |
-| Vulkan  | dots (35.3s) |   2.45 s (14.39×) |   2.30 s (15.33×) |
-| CPU     | jfk (11.0s)  |    1.49 s (7.40×) |    1.13 s (9.73×) |
-| CPU     | dots (35.3s) |    5.48 s (6.45×) |    4.50 s (7.85×) |
+| Vulkan  | jfk (11.0s)  | 691.8 ms (15.90×) | 693.5 ms (15.86×) |
+| Vulkan  | dots (35.3s) |   2.35 s (15.06×) |   2.24 s (15.78×) |
+| CPU     | jfk (11.0s)  |   1.09 s (10.07×) |    1.10 s (9.96×) |
+| CPU     | dots (35.3s) |    4.63 s (7.63×) |    4.54 s (7.79×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `0f42b37` on 2026-05-08; transcribe.cpp `4d44530` on 2026-05-08.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

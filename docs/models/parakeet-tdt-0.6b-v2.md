@@ -76,16 +76,16 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-| Backend | Sample       |           Q8_0 |         Q4_K_M |
-| ------- | ------------ | -------------: | -------------: |
-| Metal   | jfk (11.0s)  |  68 ms (163×)† |  67 ms (163×)† |
-| Metal   | dots (35.3s) | 189 ms (187×)† | 193 ms (183×)† |
-| CPU     | jfk (11.0s)  |  371 ms (30×)† |  312 ms (35×)† |
-| CPU     | dots (35.3s) |  1.26 s (28×)† |  1.07 s (33×)† |
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  55 ms (199.95×) |  56 ms (196.11×) |
+| Metal   | dots (35.3s) | 142 ms (248.28×) | 145 ms (243.28×) |
+| CPU     | jfk (11.0s)  |  278 ms (39.64×) |  318 ms (34.64×) |
+| CPU     | dots (35.3s) |  987 ms (35.80×) |  1.09 s (32.53×) |
 
-Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro

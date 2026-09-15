@@ -64,31 +64,31 @@ build/bin/transcribe-cli \
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Metal   | jfk (11.0s)  | 35 ms (312.62×) | 36 ms (303.27×) |
-| Metal   | dots (35.3s) | 81 ms (435.64×) | 83 ms (425.61×) |
-| CPU     | jfk (11.0s)  | 231 ms (47.54×) | 232 ms (47.46×) |
-| CPU     | dots (35.3s) | 694 ms (50.91×) | 685 ms (51.59×) |
+| Metal   | jfk (11.0s)  | 35 ms (312.54×) | 37 ms (295.13×) |
+| Metal   | dots (35.3s) | 83 ms (424.15×) | 87 ms (407.09×) |
+| CPU     | jfk (11.0s)  | 244 ms (45.18×) | 255 ms (43.17×) |
+| CPU     | dots (35.3s) | 746 ms (47.39×) | 764 ms (46.26×) |
 
-Apple M4 Max: transcribe.cpp `144ccad` on 2026-09-12.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  | 585 ms (18.79×) | 598 ms (18.40×) |
-| Vulkan  | dots (35.3s) | 1.32 s (26.86×) | 1.34 s (26.37×) |
-| CPU     | jfk (11.0s)  | 694 ms (15.84×) | 648 ms (16.98×) |
-| CPU     | dots (35.3s) | 2.25 s (15.72×) | 2.24 s (15.74×) |
+| Vulkan  | jfk (11.0s)  | 583 ms (18.88×) | 605 ms (18.18×) |
+| Vulkan  | dots (35.3s) | 1.32 s (26.77×) | 1.34 s (26.45×) |
+| CPU     | jfk (11.0s)  | 614 ms (17.91×) | 653 ms (16.84×) |
+| CPU     | dots (35.3s) | 2.13 s (16.59×) | 2.12 s (16.63×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `3a5ed01` on 2026-09-12.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
 <!-- /catalog -->
 
 Q8_0 is usually a little faster than Q4_K_M despite being 1.8× the size, so

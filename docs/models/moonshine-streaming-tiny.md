@@ -99,31 +99,31 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |             Q8_0 |
 | ------- | ------------ | ---------------: |
-| Metal   | jfk (11.0s)  |  50 ms (218.46×) |
-| Metal   | dots (35.3s) |  355 ms (99.53×) |
-| CPU     | jfk (11.0s)  |  44 ms (249.57×) |
-| CPU     | dots (35.3s) | 206 ms (171.94×) |
+| Metal   | jfk (11.0s)  |  46 ms (239.48×) |
+| Metal   | dots (35.3s) | 316 ms (111.87×) |
+| CPU     | jfk (11.0s)  |  41 ms (270.63×) |
+| CPU     | dots (35.3s) | 210 ms (168.59×) |
 
-Apple M4 Max: transcribe.cpp `0d312ce` on 2026-05-06.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
 <!-- catalog:perf machine=ryzen-4750u -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |
 | ------- | ------------ | --------------: |
-| Vulkan  | jfk (11.0s)  | 139 ms (78.88×) |
-| Vulkan  | dots (35.3s) | 892 ms (39.61×) |
-| CPU     | jfk (11.0s)  | 160 ms (68.67×) |
-| CPU     | dots (35.3s) | 882 ms (40.08×) |
+| Vulkan  | jfk (11.0s)  | 138 ms (80.00×) |
+| Vulkan  | dots (35.3s) | 922 ms (38.30×) |
+| CPU     | jfk (11.0s)  | 146 ms (75.29×) |
+| CPU     | dots (35.3s) | 948 ms (37.25×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `f243f34` on 2026-05-06.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

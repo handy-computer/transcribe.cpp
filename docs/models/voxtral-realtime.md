@@ -95,16 +95,16 @@ CLI flags:
 ### Apple M4 Max
 
 <!-- catalog:perf variant=voxtral-mini-4b-realtime-2602 machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Metal   | jfk (11.0s)  |    1.22 s (9×)† |  1.14 s (9.7×)† |
-| Metal   | dots (35.3s) |  4.34 s (8.1×)† |    3.91 s (9×)† |
-| CPU     | jfk (11.0s)  |  4.43 s (2.5×)† |  4.69 s (2.3×)† |
-| CPU     | dots (35.3s) | 13.65 s (2.6×)† | 13.12 s (2.7×)† |
+| Metal   | jfk (11.0s)  |  1.76 s (6.24×) |  1.49 s (7.36×) |
+| Metal   | dots (35.3s) |  5.03 s (7.03×) |  4.44 s (7.97×) |
+| CPU     | jfk (11.0s)  |  4.88 s (2.25×) |  5.04 s (2.18×) |
+| CPU     | dots (35.3s) | 13.80 s (2.56×) | 13.20 s (2.68×) |
 
-Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro

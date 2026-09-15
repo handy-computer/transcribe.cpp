@@ -112,14 +112,14 @@ CLI flags:
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-| Backend | Sample       |            Q8_0 |         Q4_K_M |
-| ------- | ------------ | --------------: | -------------: |
-| Metal   | jfk (11.0s)  |  3.36 s (3.3×)† | 2.62 s (4.2×)† |
-| Metal   | dots (35.3s) | 11.20 s (3.2×)† | 8.95 s (3.9×)† |
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  |  4.45 s (2.47×) |  3.96 s (2.77×) |
+| Metal   | dots (35.3s) | 14.68 s (2.41×) | 12.93 s (2.73×) |
 
-Apple M4 Max. † published before provenance was recorded; not yet re-measured.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 A 24B is a GPU-class model; on Apple Silicon it runs at **~3–4× realtime**

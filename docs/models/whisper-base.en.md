@@ -72,16 +72,16 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-Compute latency (mel + encode + decode), speedup over realtime in parentheses.
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
 | Backend | Sample       |               Q8_0 |             Q4_K_M |
 | ------- | ------------ | -----------------: | -----------------: |
-| Metal   | jfk (11.0s)  |  50.3 ms (218.9×)† |  49.5 ms (222.3×)† |
-| Metal   | dots (35.3s) | 172.4 ms (204.9×)† | 161.4 ms (218.9×)† |
-| CPU     | jfk (11.0s)  |  352.4 ms (31.21×) |  325.6 ms (33.78×) |
-| CPU     | dots (35.3s) |  780.9 ms (45.25×) |  733.6 ms (48.16×) |
+| Metal   | jfk (11.0s)  |  51.8 ms (212.45×) |  51.8 ms (212.42×) |
+| Metal   | dots (35.3s) | 185.2 ms (190.73×) | 181.2 ms (194.94×) |
+| CPU     | jfk (11.0s)  |  173.6 ms (63.35×) |  195.3 ms (56.31×) |
+| CPU     | dots (35.3s) |  423.6 ms (83.40×) |  463.9 ms (76.16×) |
 
-Apple M4 Max: transcribe.cpp `e6a8a27` on 2026-04-28. † published before provenance was recorded; not yet re-measured.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
 <!-- /catalog -->
 
 Benchmark reproduction:

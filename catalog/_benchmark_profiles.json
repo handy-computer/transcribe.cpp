@@ -43,47 +43,96 @@
         "family_overrides": {
           "gigaam": {
             "samples": [
-              "ru"
+              "ru-short",
+              "ru-long"
             ],
-            "reason": "Russian-only family; use the currently published supported-language clip until a long Russian fixture is added."
+            "reason": "Russian-only family; benched on a Russian pair at the same two lengths as jfk/dots. Replaces the 2.2 s ru.wav clip, which was short enough that the figure was load and encode dominated."
           }
         },
         "model_overrides": {
+          "moonshine-tiny-ar": {
+            "samples": [
+              "ar-short",
+              "ar-long"
+            ],
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
+          },
+          "moonshine-base-ar": {
+            "samples": [
+              "ar-short",
+              "ar-long"
+            ],
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
+          },
           "moonshine-tiny-ja": {
             "samples": [
-              "ja"
+              "ja-short",
+              "ja-long"
             ],
-            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
           },
           "moonshine-base-ja": {
             "samples": [
-              "ja"
+              "ja-short",
+              "ja-long"
             ],
-            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
           },
           "moonshine-tiny-ko": {
             "samples": [
-              "ko"
+              "ko-short",
+              "ko-long"
             ],
-            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
           },
           "moonshine-base-ko": {
             "samples": [
-              "ko"
+              "ko-short",
+              "ko-long"
             ],
-            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
+          },
+          "moonshine-tiny-uk": {
+            "samples": [
+              "uk-short",
+              "uk-long"
+            ],
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
+          },
+          "moonshine-base-uk": {
+            "samples": [
+              "uk-short",
+              "uk-long"
+            ],
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
+          },
+          "moonshine-tiny-vi": {
+            "samples": [
+              "vi-short",
+              "vi-long"
+            ],
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
+          },
+          "moonshine-base-vi": {
+            "samples": [
+              "vi-short",
+              "vi-long"
+            ],
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
           },
           "moonshine-tiny-zh": {
             "samples": [
-              "zh"
+              "zh-short",
+              "zh-long"
             ],
-            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
           },
           "moonshine-base-zh": {
             "samples": [
-              "zh"
+              "zh-short",
+              "zh-long"
             ],
-            "reason": "Single-language fine-tune; English jfk/dots decode out of distribution and loop until the position cap, and whether that happens differs between CPU and GPU, so replace them with the model's own language. Short clip: the figure is load and encode dominated until a longer fixture is recorded."
+            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
           }
         },
         "targets": [
