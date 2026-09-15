@@ -277,7 +277,7 @@
     },
     "accuracy_benchmarks": {
       "type": "array",
-      "description": "Published measurements only. New rows match a cell selected by catalog/_benchmark_profiles.json exactly; legacy-published rows may satisfy the same dataset/language/quant/metric under their honestly recorded historical recipe. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark.",
+      "description": "Published measurements only, with one row per dataset/split/language/quant/metric/timestamps/scoring/mode cell; batch size is recipe metadata and does not create a second publishable result. Prefer the profile recipe when selecting among runs. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark.",
       "items": {
         "type": "object",
         "additionalProperties": false,

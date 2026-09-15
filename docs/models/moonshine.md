@@ -66,18 +66,18 @@ F32 / F16 / Q8_0 table and the reference baseline.
 <!-- catalog:family variants=moonshine-tiny-vi,moonshine-tiny-uk,moonshine-tiny-zh,moonshine-tiny-ko,moonshine-tiny-ar,moonshine-tiny-ja,moonshine-base-vi,moonshine-base-uk,moonshine-base-zh,moonshine-base-ko,moonshine-base-ar,moonshine-base-ja -->
 | Variant             | Params | Languages | Q8_0 size | Benchmark       |   Q8_0 | Capabilities | Doc |
 | --- | ---: | --- | ---: | --- | ---: | --- | --- |
-| `moonshine-tiny-vi` |    27M | vi        |     35 MB | FLEURS vi (WER) | 13.16% | -            | [handy-computer/moonshine-tiny-vi-gguf](https://huggingface.co/handy-computer/moonshine-tiny-vi-gguf) |
-| `moonshine-tiny-uk` |    27M | uk        |     35 MB | FLEURS uk (WER) | 18.89% | -            | [handy-computer/moonshine-tiny-uk-gguf](https://huggingface.co/handy-computer/moonshine-tiny-uk-gguf) |
-| `moonshine-tiny-zh` |    27M | zh        |     35 MB | FLEURS zh (CER) | 13.78% | -            | [handy-computer/moonshine-tiny-zh-gguf](https://huggingface.co/handy-computer/moonshine-tiny-zh-gguf) |
-| `moonshine-tiny-ko` |    27M | ko        |     35 MB | FLEURS ko (CER) |  8.98% | -            | [handy-computer/moonshine-tiny-ko-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ko-gguf) |
-| `moonshine-tiny-ar` |    27M | ar        |     35 MB | FLEURS ar (WER) | 26.79% | -            | [handy-computer/moonshine-tiny-ar-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ar-gguf) |
-| `moonshine-tiny-ja` |    27M | ja        |     35 MB | FLEURS ja (CER) | 13.36% | -            | [handy-computer/moonshine-tiny-ja-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ja-gguf) |
-| `moonshine-base-vi` |    62M | vi        |     77 MB | FLEURS vi (WER) |  9.79% | -            | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
-| `moonshine-base-uk` |    62M | uk        |     77 MB | FLEURS uk (WER) | 14.39% | -            | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
-| `moonshine-base-zh` |    62M | zh        |     77 MB | FLEURS zh (CER) | 17.00% | -            | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
-| `moonshine-base-ko` |    62M | ko        |     77 MB | FLEURS ko (CER) |  8.13% | -            | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
-| `moonshine-base-ar` |    62M | ar        |     77 MB | FLEURS ar (WER) | 24.50% | -            | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
-| `moonshine-base-ja` |    62M | ja        |     77 MB | FLEURS ja (CER) | 10.53% | -            | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
+| `moonshine-tiny-vi` |    27M | vi        |     35 MB | FLEURS vi (WER) | 13.37% | -            | [handy-computer/moonshine-tiny-vi-gguf](https://huggingface.co/handy-computer/moonshine-tiny-vi-gguf) |
+| `moonshine-tiny-uk` |    27M | uk        |     35 MB | FLEURS uk (WER) | 18.76% | -            | [handy-computer/moonshine-tiny-uk-gguf](https://huggingface.co/handy-computer/moonshine-tiny-uk-gguf) |
+| `moonshine-tiny-zh` |    27M | zh        |     35 MB | FLEURS zh (CER) | 13.88% | -            | [handy-computer/moonshine-tiny-zh-gguf](https://huggingface.co/handy-computer/moonshine-tiny-zh-gguf) |
+| `moonshine-tiny-ko` |    27M | ko        |     35 MB | FLEURS ko (CER) |  9.00% | -            | [handy-computer/moonshine-tiny-ko-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ko-gguf) |
+| `moonshine-tiny-ar` |    27M | ar        |     35 MB | FLEURS ar (WER) | 26.70% | -            | [handy-computer/moonshine-tiny-ar-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ar-gguf) |
+| `moonshine-tiny-ja` |    27M | ja        |     35 MB | FLEURS ja (CER) | 13.44% | -            | [handy-computer/moonshine-tiny-ja-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ja-gguf) |
+| `moonshine-base-vi` |    62M | vi        |     77 MB | FLEURS vi (WER) |  9.96% | -            | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
+| `moonshine-base-uk` |    62M | uk        |     77 MB | FLEURS uk (WER) | 14.38% | -            | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
+| `moonshine-base-zh` |    62M | zh        |     77 MB | FLEURS zh (CER) | 17.79% | -            | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
+| `moonshine-base-ko` |    62M | ko        |     77 MB | FLEURS ko (CER) |  8.12% | -            | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
+| `moonshine-base-ar` |    62M | ar        |     77 MB | FLEURS ar (WER) | 24.62% | -            | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
+| `moonshine-base-ja` |    62M | ja        |     77 MB | FLEURS ja (CER) | 11.11% | -            | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
 <!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under

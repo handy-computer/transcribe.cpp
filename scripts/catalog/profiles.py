@@ -199,8 +199,9 @@ ACCURACY_CORE_KEY = ("dataset", "split", "language", "quant", "metric")
 # satisfied at any batch size and the row records the one that was run. The
 # profile's batch_size is the recommendation for new runs, not an identity.
 PROFILE_KEY = (*ACCURACY_CORE_KEY, "timestamps", "scoring", "mode")
-# A row's full identity, for duplicate detection.
-ACCURACY_KEY = (*PROFILE_KEY, "batch_size")
+# Published accuracy has one row per profile cell. Batch size is measured
+# recipe metadata, not a second publishable identity for the same result.
+ACCURACY_KEY = PROFILE_KEY
 SPEED_KEY = ("machine", "backend", "quant", "sample")
 
 

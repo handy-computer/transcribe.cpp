@@ -31,15 +31,14 @@
   "accuracy_benchmarks": [
     {"dataset":"fleurs","split":"test","language":"zh","quant":"Q8_0","metric":"cer","err_pct":17.79,"ci95":[15.81,19.77],"n_utts":945,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2587,"del":1557,"ins":2200},"empty_hyp":0,"utts_over_50pct":59,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"zh","quant":"F32","metric":"cer","err_pct":16.65,"ci95":[14.89,18.64],"n_utts":945,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2450,"del":1561,"ins":1927},"empty_hyp":0,"utts_over_50pct":47,"measurement_provenance":"legacy-published"},
-    {"dataset":"fleurs","split":"test","language":"zh","quant":"F16","metric":"cer","err_pct":16.65,"ci95":[14.89,18.64],"n_utts":945,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2450,"del":1561,"ins":1927},"empty_hyp":0,"utts_over_50pct":47,"measurement_provenance":"legacy-published"},
-    {"dataset":"fleurs","split":"test","language":"zh","quant":"Q8_0","metric":"cer","err_pct":17.0,"ci95":[15.14,18.92],"n_utts":945,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2449,"del":1555,"ins":2057},"empty_hyp":0,"utts_over_50pct":52,"measurement_provenance":"legacy-published"}
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"F16","metric":"cer","err_pct":16.65,"ci95":[14.89,18.64],"n_utts":945,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":2450,"del":1561,"ins":1927},"empty_hyp":0,"utts_over_50pct":47,"measurement_provenance":"legacy-published"}
   ],
   "headline_benchmark": {
     "dataset": "fleurs",
     "split": "test",
     "language": "zh",
     "metric": "cer",
-    "batch_size": 1,
+    "batch_size": null,
     "timestamps": "none"
   },
   "speed_benchmarks": [

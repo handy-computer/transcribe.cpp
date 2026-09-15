@@ -912,7 +912,8 @@ def _dispatch(cells: list[dict], gpu: str, *, clean: bool = False, n_utts: int =
                              batch_size=(bs if bs != 1 else None),
                              timestamps=c["timestamps"],
                              stream_chunk_ms=stream_chunk_ms,
-                             stream_att_right=stream_att_right)
+                             stream_att_right=stream_att_right,
+                             n_utts=(n_utts if n_utts >= 0 else None))
             s = res["summary"]
             rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
                          s["wall_s"], s["rtf_wall"], str(path)))

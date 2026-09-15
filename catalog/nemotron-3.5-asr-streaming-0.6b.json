@@ -75,7 +75,6 @@
     {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":3.3,"ci95":[3.1,3.51],"n_utts":2620,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":1372,"del":219,"ins":161},"empty_hyp":0,"utts_over_50pct":7,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"en","quant":"F32","metric":"wer","err_pct":7.97,"ci95":[7.33,8.7],"n_utts":647,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":796,"del":265,"ins":99},"empty_hyp":1,"utts_over_50pct":4,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"en","quant":"F16","metric":"wer","err_pct":7.97,"ci95":[7.33,8.7],"n_utts":647,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":796,"del":264,"ins":100},"empty_hyp":1,"utts_over_50pct":4,"measurement_provenance":"legacy-published"},
-    {"dataset":"fleurs","split":"test","language":"en","quant":"Q8_0","metric":"wer","err_pct":7.88,"ci95":[7.25,8.52],"n_utts":647,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":808,"del":235,"ins":104},"empty_hyp":0,"utts_over_50pct":2,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"en","quant":"Q6_K","metric":"wer","err_pct":8.02,"ci95":[7.39,8.71],"n_utts":647,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":824,"del":228,"ins":116},"empty_hyp":0,"utts_over_50pct":2,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"en","quant":"Q5_K_M","metric":"wer","err_pct":8.15,"ci95":[7.46,8.88],"n_utts":647,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":805,"del":282,"ins":99},"empty_hyp":1,"utts_over_50pct":5,"measurement_provenance":"legacy-published"},
     {"dataset":"fleurs","split":"test","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":8.49,"ci95":[7.8,9.23],"n_utts":647,"batch_size":1,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":840,"del":289,"ins":107},"empty_hyp":1,"utts_over_50pct":4,"measurement_provenance":"legacy-published"}
@@ -85,7 +84,7 @@
     "split": "test",
     "language": "en",
     "metric": "wer",
-    "batch_size": 1,
+    "batch_size": null,
     "timestamps": "none"
   },
   "speed_benchmarks": [

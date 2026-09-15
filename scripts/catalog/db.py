@@ -46,9 +46,9 @@ CREATE TABLE models(
     long_form_strategy TEXT NOT NULL,
     max_audio_s REAL,
     max_output_tokens INTEGER,
-    -- Which accuracy row-set this model publishes as its headline number. A
-    -- model carries several runs of one dataset that differ only in batch
-    -- size or timestamp mode, so the pointer names the whole identity.
+    -- Which accuracy row-set this model publishes as its headline number.
+    -- Recipe fields may be null to span quant rows measured with different
+    -- batch sizes while each quant still has one published result.
     headline_dataset TEXT,
     headline_metric TEXT,
     headline_batch_size INTEGER,
@@ -121,7 +121,7 @@ CREATE TABLE accuracy(
 );
 CREATE UNIQUE INDEX accuracy_identity ON accuracy(
     dataset_id, variant, quant, metric,
-    IFNULL(batch_size, 0), IFNULL(timestamps, ''), IFNULL(scoring, ''), IFNULL(mode, '')
+    IFNULL(timestamps, ''), IFNULL(scoring, ''), IFNULL(mode, '')
 );
 
 CREATE TABLE machines(

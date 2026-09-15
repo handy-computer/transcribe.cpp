@@ -36,14 +36,14 @@ Licensed CC-BY-4.0. Ported from upstream commit [`3f1a9bc`](https://huggingface.
 | --- | --- | ---: | ---: |
 | F32          | [parakeet-primeline-F32.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F32.gguf) | 2.51 GB | 6.00% |
 | F16          | [parakeet-primeline-F16.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F16.gguf) | 1.26 GB | 6.00% |
-| Q8_0         | [parakeet-primeline-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q8_0.gguf) |  740 MB | 6.00% |
+| Q8_0         | [parakeet-primeline-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q8_0.gguf) |  740 MB | 5.98% |
 | Q6_K         | [parakeet-primeline-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q6_K.gguf) |  610 MB | 5.96% |
 | Q5_K_M       | [parakeet-primeline-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q5_K_M.gguf) |  549 MB | 5.99% |
 | Q4_K_M       | [parakeet-primeline-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-Q4_K_M.gguf) |  485 MB | 5.98% |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-WER on the full FLEURS de split (862 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+WER on the full FLEURS de split (862 utterances), batch sizes 1 and 8, timestamps none. Figures without a commit were published before provenance was recorded.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->

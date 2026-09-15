@@ -81,6 +81,7 @@ mostly on short-clip hallucination outcomes at the noise floor.
 | is       | WER    |  99.32% |
 | it       | WER    |  17.26% |
 | ja       | CER    |  25.28% |
+| jv       | WER    |  93.07% |
 | ka       | WER    | 117.78% |
 | kk       | WER    |  99.79% |
 | km       | CER    | 134.48% |

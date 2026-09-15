@@ -53,6 +53,16 @@ def integrity_pass(records: dict) -> int:
             if missing:
                 bad += 1
                 print(f"  FAIL {name}: {sect} references unpublished quant(s) {sorted(missing)}")
+        accuracy_counts = collections.Counter(
+            profiles.cell_key(row, "accuracy")
+            for row in rec.get("accuracy_benchmarks", []))
+        duplicate_accuracy = sum(count - 1 for count in accuracy_counts.values()
+                                 if count > 1)
+        if duplicate_accuracy:
+            bad += 1
+            print(f"  FAIL {name}: {duplicate_accuracy} duplicate published "
+                  "accuracy cell(s); batch size is recipe metadata, not a "
+                  "separate result")
         # A shipped model always says how fast it runs somewhere. The
         # publication profile decides which cells are required; this is the
         # weaker floor underneath it, so a record can never render a page or

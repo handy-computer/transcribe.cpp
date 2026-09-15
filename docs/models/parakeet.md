@@ -57,7 +57,7 @@ quant matrix and the comparison to NVIDIA's self-reported numbers.
 | --- | ---: | --- | ---: | --- | ---: | --- | --- |
 | `parakeet-tdt-0.6b-v2`     |   618M | en                         |    730 MB | LibriSpeech test-clean (WER) | 1.69% | token timestamps            | [parakeet-tdt-0.6b-v2.md](parakeet-tdt-0.6b-v2.md) |
 | `parakeet-tdt-0.6b-v3`     |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.94% | token timestamps            | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
-| `parakeet-primeline`       |   627M | 25 languages + auto-detect |    740 MB | FLEURS de (WER)              | 6.00% | token timestamps            | [parakeet-primeline.md](parakeet-primeline.md) |
+| `parakeet-primeline`       |   627M | 25 languages + auto-detect |    740 MB | FLEURS de (WER)              | 5.98% | token timestamps            | [parakeet-primeline.md](parakeet-primeline.md) |
 | `parakeet-tdt-1.1b`        |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.38% | token timestamps            | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |
 | `parakeet-tdt_ctc-110m`    |   114M | en                         |    135 MB | LibriSpeech test-clean (WER) | 2.43% | token timestamps            | [parakeet-tdt_ctc-110m.md](parakeet-tdt_ctc-110m.md) |
 | `parakeet-tdt_ctc-1.1b`    |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.87% | token timestamps            | [parakeet-tdt_ctc-1.1b.md](parakeet-tdt_ctc-1.1b.md) |

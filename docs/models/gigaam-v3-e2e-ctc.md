@@ -39,14 +39,14 @@ Licensed MIT. Ported from upstream commit [`cec030b`](https://huggingface.co/ai-
 | --- | --- | ---: | ---: |
 | F32          | [gigaam-v3-e2e-ctc-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-F32.gguf) | 884 MB | 5.50% |
 | F16          | [gigaam-v3-e2e-ctc-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-F16.gguf) | 449 MB | 5.50% |
-| Q8_0         | [gigaam-v3-e2e-ctc-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q8_0.gguf) | 272 MB | 5.50% |
+| Q8_0         | [gigaam-v3-e2e-ctc-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q8_0.gguf) | 272 MB | 5.53% |
 | Q6_K         | [gigaam-v3-e2e-ctc-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q6_K.gguf) | 226 MB | 5.56% |
 | Q5_K_M       | [gigaam-v3-e2e-ctc-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q5_K_M.gguf) | 205 MB | 5.58% |
 | Q4_K_M       | [gigaam-v3-e2e-ctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/main/gigaam-v3-e2e-ctc-Q4_K_M.gguf) | 182 MB | 5.57% |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-WER on the full FLEURS ru split (775 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+WER on the full FLEURS ru split (775 utterances), batch sizes 1 and 8, timestamps none. Figures without a commit were published before provenance was recorded.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->

@@ -158,8 +158,12 @@ def headline_recipe(record: dict) -> str:
     unit = "meetings" if target["metric"] in ("der", "cpwer") else "utterances"
     parts = [f"{target['metric'].upper()} on the full {headline_label(record)} split "
              f"({n_utts:,} {unit})"]
-    if sample.get("batch_size") is not None:
-        parts.append(f"batch size {sample['batch_size']}")
+    batch_sizes = sorted({row["batch_size"] for row in rows
+                          if row.get("batch_size") is not None})
+    if len(batch_sizes) == 1:
+        parts.append(f"batch size {batch_sizes[0]}")
+    elif batch_sizes:
+        parts.append("batch sizes " + " and ".join(str(size) for size in batch_sizes))
     if sample.get("timestamps"):
         parts.append(f"timestamps {sample['timestamps']}")
     if sample.get("language_hint"):

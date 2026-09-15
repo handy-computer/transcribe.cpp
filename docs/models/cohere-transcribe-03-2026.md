@@ -46,7 +46,7 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch sizes 1 and 8, timestamps none. Figures without a commit were published before provenance was recorded.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->

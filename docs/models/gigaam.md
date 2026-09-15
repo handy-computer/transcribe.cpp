@@ -39,10 +39,10 @@ for the full quant matrix.
 <!-- catalog:family variants=gigaam-v3-e2e-rnnt,gigaam-v3-e2e-ctc,gigaam-v3-rnnt,gigaam-v3-ctc -->
 | Variant              | Params | Languages | Q8_0 size | Benchmark       |  Q8_0 | Capabilities     | Doc |
 | --- | ---: | --- | ---: | --- | ---: | --- | --- |
-| `gigaam-v3-e2e-rnnt` |   223M | ru        |    274 MB | FLEURS ru (WER) | 5.36% | token timestamps | [gigaam-v3-e2e-rnnt.md](gigaam-v3-e2e-rnnt.md) |
-| `gigaam-v3-e2e-ctc`  |   221M | ru        |    272 MB | FLEURS ru (WER) | 5.50% | token timestamps | [gigaam-v3-e2e-ctc.md](gigaam-v3-e2e-ctc.md) |
-| `gigaam-v3-rnnt`     |   222M | ru        |    273 MB | FLEURS ru (WER) | 8.08% | token timestamps | [gigaam-v3-rnnt.md](gigaam-v3-rnnt.md) |
-| `gigaam-v3-ctc`      |   221M | ru        |    272 MB | FLEURS ru (WER) | 8.40% | token timestamps | [gigaam-v3-ctc.md](gigaam-v3-ctc.md) |
+| `gigaam-v3-e2e-rnnt` |   223M | ru        |    274 MB | FLEURS ru (WER) | 5.35% | token timestamps | [gigaam-v3-e2e-rnnt.md](gigaam-v3-e2e-rnnt.md) |
+| `gigaam-v3-e2e-ctc`  |   221M | ru        |    272 MB | FLEURS ru (WER) | 5.53% | token timestamps | [gigaam-v3-e2e-ctc.md](gigaam-v3-e2e-ctc.md) |
+| `gigaam-v3-rnnt`     |   222M | ru        |    273 MB | FLEURS ru (WER) | 8.07% | token timestamps | [gigaam-v3-rnnt.md](gigaam-v3-rnnt.md) |
+| `gigaam-v3-ctc`      |   221M | ru        |    272 MB | FLEURS ru (WER) | 8.42% | token timestamps | [gigaam-v3-ctc.md](gigaam-v3-ctc.md) |
 <!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under

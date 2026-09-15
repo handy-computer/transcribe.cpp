@@ -21,7 +21,8 @@ FLEURS_LANGS: dict[str, str] = {
     "te": "te_in",
     # East / Southeast Asian
     "my": "my_mm", "fil": "fil_ph", "tl": "fil_ph",
-    "id": "id_id", "ja": "ja_jp", "jv": "jv_id", "km": "km_kh",
+    "id": "id_id", "ja": "ja_jp", "jv": "jv_id", "jw": "jv_id",
+    "km": "km_kh",
     "ko": "ko_kr", "lo": "lo_la", "ms": "ms_my", "th": "th_th",
     "vi": "vi_vn", "ceb": "ceb_ph",
     # Chinese / Cantonese
@@ -46,7 +47,7 @@ FLEURS_LANGS: dict[str, str] = {
 }
 
 # First spelling for a configuration is the canonical catalog spelling. This
-# makes aliases deterministic: tl -> fil, no -> nb, zh-cn -> zh.
+# makes aliases deterministic: jw -> jv, tl -> fil, no -> nb, zh-cn -> zh.
 FLEURS_CANONICAL_BY_CONFIG: dict[str, str] = {}
 for _language, _config in FLEURS_LANGS.items():
     FLEURS_CANONICAL_BY_CONFIG.setdefault(_config, _language)
