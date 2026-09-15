@@ -133,17 +133,6 @@ full 39-minute AMI meeting (87 compression calls).
 | Manifest | `tests/golden/sortformer/diar_streaming_sortformer_4spk-v2.1.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family sortformer` |
 
-Selected tensors:
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.mel.in`           | `0.000e+00` | `0.000e+00` | Exact (shape differs by NeMo pad_to=16, values identical) |
-| `enc.fastconformer.out`| `3.263e-03` | `1.396e-04` | F32 accumulation over 17 Conformer blocks |
-| `enc.encoder_proj.out` | `9.829e-04` | `1.242e-04` | Drift attenuates through the projection |
-| `enc.transformer.out`  | `1.128e-03` | `1.323e-04` | 18-layer Transformer head |
-| `diar.preds_offline`   | `2.961e-04` | `5.007e-06` | Final sigmoid probabilities (offline) |
-| `diar.probs`           | `2.961e-04` | `5.007e-06` | Streaming path output (== offline on a single-chunk clip) |
-
 ## Known Limitations
 
 - **Maximum 4 speakers** (architectural cap). More than 4 concurrent

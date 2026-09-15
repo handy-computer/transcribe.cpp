@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-ctc-1.1b`](https://huggingface.co/nvidia/parakeet-ctc-1.1b) at [`a707e81`](https://huggingface.co/nvidia/parakeet-ctc-1.1b/commit/a707e81).
 
-Offline English speech-to-text with greedy CTC decoding. A 1.1B-parameter FastConformer-XL encoder with a linear CTC head. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+Offline English speech-to-text with greedy CTC decoding. A FastConformer-XL encoder with a linear CTC head. Output is lowercase, no punctuation. Not a streaming model and does not translate.
 <!-- /catalog -->
 
 ## What it's for

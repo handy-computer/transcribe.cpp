@@ -4,8 +4,6 @@
 # Diarizer family: metric is DER (not WER); pipeline_tag follows the
 # upstream NVIDIA card's diarization tagging rather than ASR.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/diar_streaming_sortformer_4spk-v2.1.md
-
 pin_date: 2026-07-19
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -69,7 +67,6 @@ usage: |
   numbers, numerical validation, and reproduction steps.
 
 wer:
-  source: AMI IHM test
   notes: |
     Scored against forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
     overlap scored, at the very_high_latency operating point. Measured NeMo reference

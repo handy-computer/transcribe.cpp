@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/gigaam-v3-rnnt-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/gigaam-v3-rnnt.md
-
 pin_date: 2026-05-12
 # Upstream README lives only on the main branch (per-variant branches
 # ship empty README stubs); fetch the family card from main.
@@ -30,7 +28,6 @@ summary: |
   Offline Russian speech-to-text with greedy RNN-T decoding. Same 16-layer Conformer encoder as the e2e variant, fine-tuned to emit lowercased Russian with no punctuation; 33-entry character vocabulary.
 
 wer:
-  source: FLEURS ru
   notes: |
     Greedy decoding, no external LM. F32 reference baseline: 8.08%. Upstream `gigaam`
     author package measured on the same manifest: 9.46%; the 1.4 pp gap is upstream

@@ -42,8 +42,7 @@ If you specifically need the lowest WER or a different decoder:
   (`parakeet-ctc-0.6b` / `parakeet-ctc-1.1b`). Single-pass greedy
   alignment, no transducer loop — at a ~0.2pp WER cost vs the
   same-size RNN-T.
-- **Tiny footprint.** `parakeet-tdt_ctc-110m` (135 MB at Q8_0) is the
-  smallest Parakeet. The 1.1B `tdt_ctc` ships both heads but is
+- **Tiny footprint.** `parakeet-tdt_ctc-110m` is the smallest Parakeet. The 1.1B `tdt_ctc` ships both heads but is
   primarily useful when you want TDT speed with CTC as a fallback at
   runtime.
 

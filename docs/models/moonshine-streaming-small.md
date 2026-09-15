@@ -3,12 +3,12 @@
 <!-- catalog:intro -->
 Upstream: [`UsefulSensors/moonshine-streaming-small`](https://huggingface.co/UsefulSensors/moonshine-streaming-small) at [`2c03650`](https://huggingface.co/UsefulSensors/moonshine-streaming-small/commit/2c03650).
 
-English speech-to-text in both one-shot and streaming modes. A 123M-parameter
-encoder-decoder ASR model designed for streaming use (ergodic encoder +
-sliding-window attention, 50 Hz time-domain frontend). Same family as
+English speech-to-text in both one-shot and streaming modes. An encoder-decoder
+ASR model designed for streaming use (ergodic encoder + sliding-window
+attention, 50 Hz time-domain frontend). Same family as
 moonshine-streaming-tiny; deeper encoder/decoder (10 / 10 layers) and wider
-hidden dims (encoder 620 / decoder 512). Takes a 16 kHz mono WAV and produces
-a transcript. No translation, no multilingual capability, no timestamps.
+hidden dims (encoder 620 / decoder 512). Takes a 16 kHz mono WAV and produces a
+transcript. No translation, no multilingual capability, no timestamps.
 <!-- /catalog -->
 
 ## What it's for

@@ -3,14 +3,14 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/canary-1b`](https://huggingface.co/nvidia/canary-1b) at [`1698acf`](https://huggingface.co/nvidia/canary-1b/commit/1698acf).
 
-Offline multilingual speech-to-text and translation. A 1B-parameter
-multitask AED with a 24-layer FastConformer encoder and a 24-layer
-Transformer decoder — the original canary release. Supports automatic
-speech recognition in English, German, Spanish, and French, and
-translation between supported pairs. Takes a 16 kHz mono WAV and
-produces a transcript. Not a streaming model.
-**License: CC-BY-NC-4.0 (non-commercial only)** — the only canary
-variant under a non-commercial license.
+Offline multilingual speech-to-text and translation. A multitask AED
+with a 24-layer FastConformer encoder and a 24-layer Transformer
+decoder — the original canary release. Supports automatic speech
+recognition in English, German, Spanish, and French, and translation
+between supported pairs. Takes a 16 kHz mono WAV and produces a
+transcript. Not a streaming model. **License: CC-BY-NC-4.0
+(non-commercial only)** — the only canary variant under a
+non-commercial license.
 <!-- /catalog -->
 
 ## What it's for

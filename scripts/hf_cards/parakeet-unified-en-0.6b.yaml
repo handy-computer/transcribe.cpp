@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/parakeet-unified-en-0.6b-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-unified-en-0.6b.md
-
 pin_date: 2026-05-10
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -23,7 +21,7 @@ tags:
   - rnnt
 
 summary: |
-  English speech-to-text with punctuation and capitalization. A 0.6B-parameter FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in both offline and buffered streaming modes.
+  English speech-to-text with punctuation and capitalization. A FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in both offline and buffered streaming modes.
 
 wer:
   source: LibriSpeech test-clean, offline

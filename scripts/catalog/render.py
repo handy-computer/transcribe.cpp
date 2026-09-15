@@ -46,6 +46,7 @@ import profiles  # noqa: E402
 
 OPEN = re.compile(r"^(\s*)<!--\s*catalog:([a-z-]+)\s*(.*?)\s*-->\s*$")
 CLOSE = re.compile(r"^\s*<!--\s*/catalog\s*-->\s*$")
+SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 class RenderError(Exception):
@@ -239,6 +240,15 @@ def block_pin(record: dict, attrs: dict[str, str]) -> list[str]:
     validation = spec.get("validation") or {}
     if not (spec.get("pin_date") and validation.get("commit") and validation.get("date")):
         raise RenderError("spec needs pin_date and validation.{commit,date}")
+    # This renders as a link into the transcribe.cpp tree, so it has to be a
+    # commit. Three whisper specs carried the reference framework's version
+    # here ("5.6.1") and published a dead link claiming to be a validation
+    # pin; the field's meaning changed and nothing re-read the old values.
+    if not SHA.match(str(validation["commit"])):
+        raise RenderError(
+            f"validation.commit {validation['commit']!r} is not a transcribe.cpp "
+            f"commit SHA. Re-validate and record the commit it ran at "
+            f"(reference-framework versions belong in validation.reference)")
     # A licence with no SPDX id carries its own URL; link the display name to
     # it rather than leaving the reader to find the terms. Same field the HF
     # card emits as license_link.

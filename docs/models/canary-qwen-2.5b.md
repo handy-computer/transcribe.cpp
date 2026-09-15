@@ -151,27 +151,6 @@ F16 depthwise conv kernels on CPU), and the mechanism behind every widened entry
 | Tolerances | `tests/tolerances/canary_qwen.json` |
 | Command | `uv run scripts/validate.py all --family canary_qwen --variant canary-qwen-2.5b` |
 
-Selected tensors (observed on CPU, strict backend; see tolerance file
-for budgets):
-
-| Tensor | Shape | Max abs diff | Mean abs diff | Notes |
-| --- | --- | ---: | ---: | --- |
-| `enc.mel.in`         | `[128,1101]`  | `6.724e-01` | `5.242e-05` | NeMo preprocessor's BF16 fb/window matrices vs C++ F32 STFT |
-| `enc.pre_encode.out` | `[138,1024]`  | `2.610e+02` | `5.795e-01` | Output of the conv subsampler; large extreme-bin spikes from the mel difference are absorbed here, then drained by the next LayerNorm |
-| `enc.block.0.out`    | `[138,1024]`  | `1.653e+01` | `2.448e-02` | First FastConformer block |
-| `enc.block.16.out`   | `[138,1024]`  | `2.528e+01` | `7.975e-02` | Mid-encoder |
-| `enc.block.31.out`   | `[138,1024]`  | `7.921e-01` | `1.875e-02` | Final FastConformer block |
-| `enc.final`          | `[1024,138]`  | `7.921e-01` | `1.875e-02` | Encoder output (transposed) |
-| `perception.proj.out`| `[138,2048]`  | `3.520e+00` | `4.314e-02` | Audio→LM width projection |
-| `dec.token_emb`      | `[15,2048]`   | `0.000e+00` | `0.000e+00` | Pure embedding lookup |
-| `dec.audio_injected` | `[152,2048]`  | `3.520e+00` | `3.917e-02` | Audio-tokens scattered into the prompt sequence |
-| `dec.block.0.out`    | `[152,2048]`  | `3.355e+00` | `4.365e-02` | First Qwen3 LM block |
-| `dec.block.14.out`   | `[152,2048]`  | `1.506e+01` | `1.190e-01` | Mid-LM |
-| `dec.block.27.out`   | `[152,2048]`  | `1.112e+02` | `9.333e-01` | Final LM block (accumulated) |
-| `dec.out_before_head`| `[152,2048]`  | `1.566e+01` | `4.152e-02` | Pre-head hidden state |
-| `dec.logits_raw.gen0`| `[151936]`    | `5.226e-01` | `6.571e-02` | Greedy step 0 logits |
-| `dec.logits_raw.gen8`| `[151936]`    | `1.514e+00` | `2.116e-01` | Greedy step 8 logits (mid-generation, exercises KV cache write/read) |
-
 For the full porting writeup including the SALM trace, the
 audio-injection scatter contract, and the BF16-vs-F32 weight precision
 investigation, see

@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) at [`d4ac992`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b/commit/d4ac992).
 
-English speech-to-text with punctuation and capitalization. A 0.6B-parameter FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in both offline and buffered streaming modes.
+English speech-to-text with punctuation and capitalization. A FastConformer encoder with an RNN-T transducer decoder, trained as a 'unified' streaming/offline model. This port runs the model in both offline and buffered streaming modes.
 <!-- /catalog -->
 
 ## What it's for

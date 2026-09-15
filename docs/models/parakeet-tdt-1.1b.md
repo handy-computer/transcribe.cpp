@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-tdt-1.1b`](https://huggingface.co/nvidia/parakeet-tdt-1.1b) at [`53276c6`](https://huggingface.co/nvidia/parakeet-tdt-1.1b/commit/53276c6).
 
-Offline English speech-to-text. A 1.1B-parameter FastConformer-XL encoder with a TDT/RNNT transducer decoder. Takes a 16 kHz mono WAV and produces a transcript with optional token-level timestamps. Not a streaming model and does not translate.
+Offline English speech-to-text. A FastConformer-XL encoder with a TDT/RNNT transducer decoder. Takes a 16 kHz mono WAV and produces a transcript with optional token-level timestamps. Not a streaming model and does not translate.
 <!-- /catalog -->
 
 ## What it's for

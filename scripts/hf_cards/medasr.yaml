@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/medasr-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/medasr.md
-
 pin_date: 2026-06-04
 
 # Validation pin for the most recent upload. Updated on each release;
@@ -28,7 +26,6 @@ summary: |
   Offline English speech-to-text optimized for medical dictation (radiology, internal medicine, family medicine). 17-layer Conformer encoder with RoPE attention, macaron FFNs, and a 512-token SentencePiece CTC head. Greedy CTC decode; no language model, no beam search.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy CTC decoding, no external LM. F32 reference baseline (HuggingFace
     transformers, Mac MPS): 17.88%; transcribe.cpp F32 matches exactly. Absolute WER is

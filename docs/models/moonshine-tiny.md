@@ -3,10 +3,10 @@
 <!-- catalog:intro -->
 Upstream: [`UsefulSensors/moonshine-tiny`](https://huggingface.co/UsefulSensors/moonshine-tiny) at [`390624e`](https://huggingface.co/UsefulSensors/moonshine-tiny/commit/390624e).
 
-Useful Sensors Moonshine tiny — a 27M-parameter encoder-decoder transformer
-for English speech recognition. Consumes raw 16 kHz PCM directly via a
-three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
-English-only; no translation, no language detection, no timestamps.
+Useful Sensors Moonshine tiny — an encoder-decoder transformer for English
+speech recognition. Consumes raw 16 kHz PCM directly via a three-layer Conv1d
+stem (no STFT, no mel) and emits transcript-only output. English-only; no
+translation, no language detection, no timestamps.
 <!-- /catalog -->
 
 ## What it's for

@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/Voxtral-Small-24B-2507-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/voxtral-small-24b-2507.md
-
 pin_date: 2026-06-05
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -31,7 +29,6 @@ summary: |
   encoder, projector, frontend, and tokenizer, with a scaled-up decoder.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy decoding scored with the Whisper English text normalizer on an NVIDIA A100 80
     GB. Same-machine HuggingFace transformers reference

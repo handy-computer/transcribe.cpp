@@ -15,14 +15,14 @@ see the family doc at
 
 ## Choosing a variant
 
-- **Smallest footprint.** `moonshine-streaming-tiny` (34M params) at
-  Q8_0 is 48 MB. Decodes well above realtime on Apple Silicon and
-  Vulkan-class GPUs; CPU is also viable for live use.
-- **Better accuracy, modest cost.** `moonshine-streaming-small` (123M
-  params) at Q8_0 is 189 MB. Roughly halves WER vs tiny.
-- **Best accuracy in the family.** `moonshine-streaming-medium` (245M
-  params) at Q8_0 is 282 MB. Keep an eye on decode latency — the
-  14-layer decoder dominates wall time on long utterances.
+- **Smallest footprint.** `moonshine-streaming-tiny` decodes well above
+  realtime on Apple Silicon and Vulkan-class GPUs; CPU is also viable
+  for live use.
+- **Better accuracy, modest cost.** `moonshine-streaming-small` roughly
+  halves WER vs tiny.
+- **Best accuracy in the family.** `moonshine-streaming-medium` has the
+  most accuracy headroom. Keep an eye on decode latency; the 14-layer
+  decoder dominates wall time on long utterances.
 - **Non-streaming, batch-only workloads.** Use the
   [`moonshine`](moonshine.md) family instead — it's smaller for the
   same WER on offline audio because it doesn't carry the streaming

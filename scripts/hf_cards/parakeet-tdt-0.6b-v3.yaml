@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/parakeet-tdt-0.6b-v3-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-tdt-0.6b-v3.md
-
 pin_date: 2026-04-16
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -26,12 +24,11 @@ tags:
 
 summary: |
   Offline multilingual speech-to-text covering 25 European languages. A
-  0.6B-parameter Conformer encoder with a TDT/RNNT transducer decoder. Takes
-  a 16 kHz mono WAV and produces a transcript with optional token-level
-  timestamps. Not a streaming model and does not translate.
+  Conformer encoder with a TDT/RNNT transducer decoder. Takes a 16 kHz mono
+  WAV and produces a transcript with optional token-level timestamps. Not a
+  streaming model and does not translate.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy transducer decoding, no external LM. F32 reference baseline: 1.95%. NVIDIA's
     self-reported number on the same split is 1.93%.

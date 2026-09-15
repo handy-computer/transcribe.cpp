@@ -19,11 +19,10 @@ see the family doc at
 - **Best 4-language accuracy.** `canary-1b` (the original release;
   CC-BY-NC-4.0) uses a 24-layer decoder, trading decode speed for
   accuracy on en/de/es/fr.
-- **Faster decode, same 4 languages.** `canary-1b-flash` (883M, 4-layer
-  decoder) — the speed-tuned sibling at ~1.6% WER on LibriSpeech
-  test-clean.
-- **Smallest footprint.** `canary-180m-flash` (182M, 208 MB at Q8_0) —
-  the ultralight variant; same 4-language coverage as the flash 1B.
+- **Faster decode, same 4 languages.** `canary-1b-flash` uses a 4-layer
+  decoder, the speed-tuned sibling of `canary-1b`.
+- **Smallest footprint.** `canary-180m-flash` is the ultralight variant,
+  with the same 4-language coverage as the flash 1B.
 
 ## All variants
 

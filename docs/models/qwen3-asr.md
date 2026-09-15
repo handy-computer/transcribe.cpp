@@ -13,9 +13,8 @@ see the family doc at
 
 ## Choosing a variant
 
-- **Smaller, faster, near-realtime CPU.** `qwen3-asr-0.6b` — 600M
-  parameters, 811 MB at Q8_0. 18-layer encoder + Qwen3 LM with
-  `hidden_size=1024`. ~2.1% WER on LibriSpeech test-clean.
+- **Smaller, faster, near-realtime CPU.** `qwen3-asr-0.6b` pairs an
+  18-layer encoder with a Qwen3 LM at `hidden_size=1024`.
 - **Accuracy headroom.** `qwen3-asr-1.7b` widens both halves of the
   model (24-layer encoder, LM `hidden_size=2048`,
   `intermediate_size=6144`) for ~0.5pp WER improvement at ~2.5× the

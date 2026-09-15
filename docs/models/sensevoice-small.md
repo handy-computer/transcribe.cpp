@@ -4,15 +4,14 @@
 Upstream: [`FunAudioLLM/SenseVoiceSmall`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall) at [`3eb3b4e`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4e).
 
 Offline multilingual speech-to-text in Chinese, Cantonese, English, Japanese,
-and Korean. A 234M-parameter SAN-M encoder with a single CTC head over a
-25,055-token SentencePiece vocabulary. Takes a 16 kHz mono WAV (capped at
-30 seconds per call, per upstream's direct-inference contract) and produces
-a transcript. Not a streaming model, no translation, no built-in long-form
-chunking. The same CTC head also emits language-ID, simple emotion labels,
-audio-event tags, and inverse-text-normalization control tags. These tags are
-hidden unless `--raw-tokens` is passed. ITN is on by default for readable
-casing, punctuation, and digits; pass `--no-itn` for upstream's spoken-form
-output.
+and Korean. A SAN-M encoder with a single CTC head over a 25,055-token
+SentencePiece vocabulary. Takes a 16 kHz mono WAV (capped at 30 seconds per
+call, per upstream's direct-inference contract) and produces a transcript. Not
+a streaming model, no translation, no built-in long-form chunking. The same CTC
+head also emits language-ID, simple emotion labels, audio-event tags, and
+inverse-text-normalization control tags. These tags are hidden unless
+`--raw-tokens` is passed. ITN is on by default for readable casing,
+punctuation, and digits; pass `--no-itn` for upstream's spoken-form output.
 <!-- /catalog -->
 
 ## What it's for
@@ -205,23 +204,6 @@ SenseVoice, not a port defect).
 | Dump script | `scripts/dump_reference_sensevoice_funasr.py` |
 | Manifest | `tests/golden/sensevoice/sensevoice-small.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family sensevoice --variant sensevoice-small` |
-
-Selected tensors:
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `frontend.fbank.lfr.cmvn.out` | `3.13e-03` | `6.34e-04` | fp32 FFT vs C++ fp64 STFT round-off |
-| `enc.input.with_prefix`       | `3.13e-03` | `6.20e-04` | frontend drift carried by concat (no compute) |
-| `enc.embed.out`               | `7.08e-02` | `1.40e-02` | frontend drift × √d_model after sinusoidal PE |
-| `enc.encoders0.0.out`         | `1.53e+02` | `2.52e+00` | first SAN-M block (560→512 projection) |
-| `enc.encoders.0.out`          | `9.63e+01` | `2.78e+00` | main-tier block 0 |
-| `enc.encoders.24.out`         | `4.60e+02` | `1.41e+01` | mid-tier (block 24); reference values ~4.5k |
-| `enc.encoders.48.out`         | `4.52e+04` | `7.74e+01` | last main block; reference values ~46k |
-| `enc.after_norm.out`          | `6.66e+00` | `4.71e-01` | tier-boundary LayerNorm renormalises |
-| `enc.tp_encoders.{0,10,19}.out` | `≤ 1.10e+04` | `≤ 9.07e+00` | tp-tier 20-block stack |
-| `enc.tp_norm.out`             | `1.53e+01` | `5.86e-01` | final encoder output, post-LN |
-| `ctc.logits.raw`              | `3.23e+01` | `1.87e+00` | CTC logits — argmax positions identical |
-| `ctc.log_probs`               | `3.07e+01` | `2.90e+00` | log-softmax CTC distribution |
 
 The expected divergence is fp32 reduction-order drift accumulated through
 70 SAN-M blocks. SenseVoice's encoder has **no inter-layer normalization**

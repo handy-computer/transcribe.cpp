@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/gigaam-v3-ctc-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/gigaam-v3-ctc.md
-
 pin_date: 2026-05-12
 # Upstream README lives only on the main branch (per-variant branches
 # ship empty README stubs); fetch the family card from main.
@@ -30,7 +28,6 @@ summary: |
   Offline Russian speech-to-text with greedy CTC decoding. 16-layer Conformer encoder with a 1×1 Conv1d CTC head. Output is lowercased Russian, no punctuation; 33-entry character vocabulary.
 
 wer:
-  source: FLEURS ru
   notes: |
     Greedy decoding, no external LM. F32 reference baseline: 8.42%. Upstream `gigaam`
     author package measured on the same manifest: 9.81%; the 1.4 pp gap is upstream

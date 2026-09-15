@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-ctc-0.6b`](https://huggingface.co/nvidia/parakeet-ctc-0.6b) at [`ad09ba1`](https://huggingface.co/nvidia/parakeet-ctc-0.6b/commit/ad09ba1).
 
-Offline English speech-to-text with greedy CTC decoding. A 0.6B-parameter FastConformer-Large encoder with a linear CTC head — the simplest and fastest decoder in the parakeet family. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+Offline English speech-to-text with greedy CTC decoding. A FastConformer-Large encoder with a linear CTC head — the simplest and fastest decoder in the parakeet family. Output is lowercase, no punctuation. Not a streaming model and does not translate.
 <!-- /catalog -->
 
 ## What it's for

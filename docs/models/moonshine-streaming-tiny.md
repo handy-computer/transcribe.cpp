@@ -3,11 +3,11 @@
 <!-- catalog:intro -->
 Upstream: [`UsefulSensors/moonshine-streaming-tiny`](https://huggingface.co/UsefulSensors/moonshine-streaming-tiny) at [`f8e9dfd`](https://huggingface.co/UsefulSensors/moonshine-streaming-tiny/commit/f8e9dfd).
 
-English speech-to-text in both one-shot and streaming modes. A 34M-parameter
+English speech-to-text in both one-shot and streaming modes. An
 encoder-decoder ASR model designed for streaming use (ergodic encoder +
-sliding-window attention, 50 Hz time-domain frontend). Takes a 16 kHz mono
-WAV and produces a transcript. No translation, no multilingual capability,
-no timestamps.
+sliding-window attention, 50 Hz time-domain frontend). Takes a 16 kHz mono WAV
+and produces a transcript. No translation, no multilingual capability, no
+timestamps.
 <!-- /catalog -->
 
 ## What it's for
@@ -146,22 +146,6 @@ reference.
 | Dump script | `scripts/dump_reference_moonshine_streaming_transformers.py` |
 | Manifest | `tests/golden/moonshine_streaming/moonshine-streaming-tiny.manifest.json` |
 | Command | `uv run scripts/validate.py all --family moonshine_streaming --variant moonshine-streaming-tiny` |
-
-Selected tensors (max-abs and mean-abs differences, F32 vs reference, on
-`samples/jfk.wav`):
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.embedder.cmvn.out`   | `2.240e-04` | `9.942e-06` | Frontend CMVN output |
-| `enc.embedder.linear.out` | `2.840e-04` | `6.028e-06` | Time-domain linear projection |
-| `enc.embedder.conv2.out`  | `9.388e-05` | `1.945e-06` | After 2× causal stride-2 convs |
-| `enc.block.0.out`         | `1.099e-03` | `1.158e-05` | First sliding-window attention block |
-| `enc.block.5.out`         | `6.105e-03` | `2.195e-04` | Last encoder block — depth-amplified BLAS reduction drift |
-| `enc.final`               | `2.586e-04` | `8.776e-06` | Final encoder LN output |
-| `adapter.out`             | `2.677e-04` | `9.082e-06` | Encoder→decoder adapter (learned pos-emb add) |
-| `dec.block.0.out`         | `1.028e-03` | `4.340e-05` | First decoder block |
-| `dec.block.5.out`         | `2.746e-03` | `2.010e-04` | Last decoder block |
-| `dec.logits_raw.gen20`    | `1.829e-03` | `1.186e-04` | Mid-generation logits (token 20) |
 
 The dominant drift source is BLAS reduction-order differences between
 PyTorch's matmul kernels and ggml's `mul_mat` (Accelerate / Metal /

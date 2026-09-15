@@ -47,12 +47,20 @@ REPO_ROOT = HERE.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "catalog"))
 import common  # noqa: E402
 
-# Keys the catalog owns. A spec that states one of these is stale by
-# definition, so refuse it rather than let the two quietly diverge again.
-CATALOG_OWNED = {
-    "hf_repo", "target_repo", "upstream_commit", "license", "license_display",
-    "license_name", "license_link", "languages", "capabilities", "perf",
-    "quants", "metric",
+# The editorial surface of a card spec, and the whole of it. Anything else is
+# either owned by catalog/<variant>.json or a typo; both are refused, so the
+# two can never quietly diverge again and a misspelled key cannot silently
+# render an empty section. Adding a field here is a deliberate act.
+SPEC_KEYS = {
+    "pin_date",              # date the upstream revision was pinned
+    "validation",            # reference framework, transcribe.cpp commit, date
+    "pipeline_tag",          # HF Hub pipeline tag
+    "tags",                  # HF Hub tags
+    "summary",               # the card's opening paragraph
+    "wer",                   # editorial caveats; see README.md
+    "usage",                 # extra usage prose for an unusual model
+    "upstream_card_commit",  # revision of the upstream card that was quoted
+    "default_quant",         # override the Q8_0 default
 }
 CAP_FLAGS = ("streaming", "translate", "lang_detect")
 DEFAULT_QUANT = "Q8_0"
@@ -62,11 +70,12 @@ def load_spec(path: Path) -> dict:
     """The editorial half of a card. Fails on any catalog-owned key."""
     with path.open() as f:
         spec = yaml.safe_load(f) or {}
-    stale = sorted(CATALOG_OWNED & spec.keys())
-    if stale:
+    unknown = sorted(spec.keys() - SPEC_KEYS)
+    if unknown:
         raise SystemExit(
-            f"{path.name}: {', '.join(stale)} come from catalog/{path.stem}.json; "
-            f"remove them from the spec")
+            f"{path.name}: {', '.join(unknown)} is not an editorial field. It is "
+            f"either derived from catalog/{path.stem}.json or misspelled; remove "
+            f"it. Editorial fields: {', '.join(sorted(SPEC_KEYS))}")
     if "default_quant_index" in spec:
         raise SystemExit(f"{path.name}: default_quant_index is gone; the default is "
                          f"{DEFAULT_QUANT}, override with default_quant: <QUANT>")
@@ -165,6 +174,17 @@ def hub_language_tags(languages) -> tuple[list[str], list[str]]:
             base.append(primary)
     return base, [tag for tag in tags if "-" in tag]
 
+DOCS_BASE = "https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models"
+
+
+def docs_url(record: dict) -> str:
+    """The model's page on GitHub: its own, or the family page it shares."""
+    page = f"{record['variant']}.md"
+    if not (common.DOCS_DIR / page).exists():
+        page = record.get("docs_page") or page
+    return f"{DOCS_BASE}/{page}"
+
+
 def build_context(record: dict, spec: dict) -> dict:
     """Everything the template needs: catalog facts plus the editorial spec."""
     downloads = {item["quant"]: item for item in record.get("downloads", [])}
@@ -181,6 +201,9 @@ def build_context(record: dict, spec: dict) -> dict:
                          + (" and metrics" if "metrics" in spec else ""))
     if not wer.get("source"):
         wer["source"] = common.headline_label(record)
+    elif wer["source"] == common.headline_label(record):
+        raise SystemExit(f"{record['variant']}: wer.source restates the catalog's "
+                         f"headline label; remove it")
     wer["recipe"] = common.headline_recipe(record)
     blocks = derive_metric_blocks(record)
     secondary = None
@@ -207,6 +230,7 @@ def build_context(record: dict, spec: dict) -> dict:
         "default_quant_filename": downloads[default_quant]["filename"],
         "wer": wer,
         "metric_blocks": blocks,
+        "transcribe_docs_url": docs_url(record),
     }
     if headline.get("metric"):
         ctx["metric"] = headline["metric"].upper()

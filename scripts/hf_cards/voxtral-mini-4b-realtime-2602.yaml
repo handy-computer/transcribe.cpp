@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/voxtral-realtime.md
-
 pin_date: 2026-06-06
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -36,7 +34,6 @@ summary: |
   encoder, additive audio fusion.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Scored with the Whisper English text normalizer, offline path at delay 6, on an
     NVIDIA L40S. A delay-30 remeasurement is pending. Same-machine HuggingFace

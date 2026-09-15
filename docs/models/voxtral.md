@@ -26,7 +26,7 @@ For Mistral's **streaming** sibling, see
 
 WER on the full LibriSpeech `test-clean` split (2620 utterances), Whisper
 English normalizer. Both match the HuggingFace `transformers` reference
-within rounding (3B 1.87%, 24B 1.57%). See each variant's card for the full
+within rounding. See each variant's card for the full
 quant matrix, per-quant WER, and quick-start commands.
 
 ## Input limits

@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/moonshine-base-zh-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine.md
-
 pin_date: 2026-05-12
 
 validation:
@@ -28,7 +26,6 @@ summary: |
   (zh); no translation, no language detection, no timestamps.
 
 wer:
-  source: FLEURS zh test
   notes: |
     Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=192,
     matching the upstream generation_config).

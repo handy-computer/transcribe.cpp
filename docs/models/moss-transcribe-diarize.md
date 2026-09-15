@@ -173,26 +173,6 @@ padding-trim contract.
 | Tolerances | `tests/tolerances/moss.json` |
 | Command | `uv run scripts/validate.py all --family moss --variant moss-transcribe-diarize` |
 
-Selected tensors (observed on CPU, strict backend; see the tolerance file for
-budgets and per-tensor notes):
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.mel.in`          | `9.872e-05` | `5.150e-06` | C++ MelFrontend vs reference feature extractor |
-| `enc.pos_add.out`     | `5.000e-02` | `2.200e-03` | Encoder input + positional embedding |
-| `enc.block.0.out`     | `1.200e-01` | `4.000e-03` | First Whisper encoder block |
-| `enc.block.23.out`    | `3.100e+03` | `8.000e-02` | Pre-final-LN residual; ref \|max\| ~3.6e3, bf16 rel error dominates max_abs (renormalized by `enc.ln_post`) |
-| `enc.ln_post.out`     | `1.300e+01` | `3.000e-03` | Encoder output LayerNorm |
-| `enc.merge.out`       | `1.500e+00` | `3.000e-03` | 4x temporal merge |
-| `enc.adaptor.out`     | `4.000e-01` | `1.200e-02` | VQAdaptor decoder handoff (rel_mean ~0.96%) |
-| `dec.audio_injected`  | `4.000e-01` | `7.000e-03` | Audio tokens scattered into the prompt |
-| `dec.block.0.out`     | `7.500e-01` | `9.500e-03` | First Qwen3 decoder block |
-| `dec.block.27.out`    | `3.200e+02` | `2.600e-01` | Pre-final-RMSNorm residual (bf16 accumulation over 28 layers) |
-| `dec.out_before_head` | `8.500e+00` | `8.000e-02` | Pre-head hidden state |
-| `dec.logits_raw`      | `4.800e-01` | `7.200e-02` | Prefill logits; argmax preserved (transcript exact) |
-| `dec.logits_raw.gen8` | `5.000e-01` | `6.500e-02` | Greedy step 8 logits (KV-cache decode coverage) |
-| `dec.token_emb`       | `0.000e+00` | `0.000e+00` | Pure embedding lookup (pinned exact) |
-
 For the full porting writeup, see
 [`docs/porting/families/moss.md`](../porting/families/moss.md).
 

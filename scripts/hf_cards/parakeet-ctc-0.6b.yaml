@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/parakeet-ctc-0.6b-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-ctc-0.6b.md
-
 pin_date: 2026-05-10
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -23,10 +21,9 @@ tags:
   - ctc
 
 summary: |
-  Offline English speech-to-text with greedy CTC decoding. A 0.6B-parameter FastConformer-Large encoder with a linear CTC head — the simplest and fastest decoder in the parakeet family. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+  Offline English speech-to-text with greedy CTC decoding. A FastConformer-Large encoder with a linear CTC head — the simplest and fastest decoder in the parakeet family. Output is lowercase, no punctuation. Not a streaming model and does not translate.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy CTC decoding, no external LM. F32 reference baseline: 1.87%. NVIDIA's
     self-reported number on the same split is 1.87%.

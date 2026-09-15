@@ -175,22 +175,6 @@ on CPU / Metal / Vulkan, and the transcript matches the reference verbatim.
 | Manifest | `tests/golden/qwen3_asr/qwen3-asr-0.6b.manifest.json` |
 | Command | `uv run scripts/validate.py all --family qwen3_asr --variant qwen3-asr-0.6b` |
 
-Selected tensors (observed on CPU; see tolerance file for budgets):
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.mel.in`         | `3.906e-03` | `6.608e-04` | fp64 vs fp32 STFT precision gap |
-| `enc.subsample.out`  | `1.814e-02` | `1.891e-03` | After the 4× conv subsampler |
-| `enc.block.0.out`    | `5.645e-02` | `2.768e-03` | Early encoder |
-| `enc.block.17.out`   | `8.221e-01` | `9.720e-03` | Final encoder block |
-| `enc.proj.out`       | `1.484e-02` | `2.324e-04` | Audio→LM width projection |
-| `dec.audio_injected` | `1.484e-02` | `2.103e-04` | Fused audio+text sequence |
-| `dec.token_emb`      | `0.000e+00` | `0.000e+00` | Exact match |
-| `dec.block.0.out`    | `1.719e-01` | `3.127e-03` | Early LM |
-| `dec.block.27.out`   | `2.912e+01` | `3.824e-01` | Final LM block (accumulated) |
-| `dec.out_before_head`| `2.844e+01` | `1.786e-01` | Pre-head hidden state |
-| `dec.logits_raw`     | `1.054e+00` | `1.749e-01` | Raw logits |
-
 ## Reproduction
 
 ### Convert

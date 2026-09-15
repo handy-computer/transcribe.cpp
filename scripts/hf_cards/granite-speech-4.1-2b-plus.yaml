@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/granite-speech-4.1-2b-plus-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/granite-speech-4.1-2b-plus.md
-
 pin_date: 2026-05-17
 
 validation:
@@ -41,7 +39,6 @@ summary: |
   it does not perform speech translation.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy decoding with the model-card chat template (system prompt + leading-space
     user instruction + `add_generation_prompt=True`). BF16 reference baseline (re-run

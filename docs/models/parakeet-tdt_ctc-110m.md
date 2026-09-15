@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-tdt_ctc-110m`](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m) at [`431a349`](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m/commit/431a349).
 
-Offline English speech-to-text with punctuation and capitalization. A 110M-parameter FastConformer encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
+Offline English speech-to-text with punctuation and capitalization. A FastConformer encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
 <!-- /catalog -->
 
 ## What it's for

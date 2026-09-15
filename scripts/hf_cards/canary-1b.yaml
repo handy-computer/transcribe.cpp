@@ -7,8 +7,6 @@
 # into every preset; the YAML below mirrors that distinction so the HF
 # card surfaces the constraint to anyone clicking through to download.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/canary-1b.md
-
 pin_date: 2026-05-08
 
 validation:
@@ -29,17 +27,16 @@ tags:
   - non-commercial
 
 summary: |
-  Offline multilingual speech-to-text and translation. A 1B-parameter
-  multitask AED with a 24-layer FastConformer encoder and a 24-layer
-  Transformer decoder — the original canary release. Supports automatic
-  speech recognition in English, German, Spanish, and French, and
-  translation between supported pairs. Takes a 16 kHz mono WAV and
-  produces a transcript. Not a streaming model.
-  **License: CC-BY-NC-4.0 (non-commercial only)** — the only canary
-  variant under a non-commercial license.
+  Offline multilingual speech-to-text and translation. A multitask AED
+  with a 24-layer FastConformer encoder and a 24-layer Transformer
+  decoder — the original canary release. Supports automatic speech
+  recognition in English, German, Spanish, and French, and translation
+  between supported pairs. Takes a 16 kHz mono WAV and produces a
+  transcript. Not a streaming model. **License: CC-BY-NC-4.0
+  (non-commercial only)** — the only canary variant under a
+  non-commercial license.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy decoding, no external LM. F32 reference baseline: 1.55%. NVIDIA's
     self-reported number on the upstream model card is 1.48%; likely this is due to

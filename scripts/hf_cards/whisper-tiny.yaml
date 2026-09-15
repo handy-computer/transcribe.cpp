@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/whisper-tiny-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-tiny.md
-
 pin_date: 2026-04-25
 
 validation:
@@ -23,7 +21,6 @@ summary: |
   OpenAI Whisper tiny — converted to GGUF for transcribe.cpp. Multilingual transcription, language detection, and speech translation (audio in any supported language → English text). Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     OpenAI's self-reported number on the same split is 7.54%. Both are
     short-form WER decoded without timestamps; OpenAI does not publish its exact

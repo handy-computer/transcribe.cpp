@@ -35,8 +35,8 @@ it into shorter segments. See the [input-length contract](../input-limits.md).
 
 ## Download
 
-<!-- catalog:downloads label="FLEURS Arabic test" -->
-| Quantization | Download |    Size | WER (FLEURS Arabic test) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (FLEURS ar) |
 | --- | --- | ---: | ---: |
 | BF16         | [cohere-transcribe-arabic-07-2026-BF16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-BF16.gguf) | 4.11 GB | 11.02% |
 | F16          | [cohere-transcribe-arabic-07-2026-F16.gguf](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf/resolve/main/cohere-transcribe-arabic-07-2026-F16.gguf) | 4.11 GB | 11.00% |

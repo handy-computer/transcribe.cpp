@@ -3,12 +3,12 @@
 <!-- catalog:intro -->
 Upstream: [`UsefulSensors/moonshine-base`](https://huggingface.co/UsefulSensors/moonshine-base) at [`7a73d8d`](https://huggingface.co/UsefulSensors/moonshine-base/commit/7a73d8d).
 
-Useful Sensors Moonshine base — a 61M-parameter encoder-decoder transformer
-for English speech recognition. Consumes raw 16 kHz PCM directly via a
-three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
-Wider and deeper than moonshine-tiny (8 encoder / 8 decoder layers, hidden
-size 416, partial RoPE 0.62). English-only; no translation, no language
-detection, no timestamps.
+Useful Sensors Moonshine base — an encoder-decoder transformer for English
+speech recognition. Consumes raw 16 kHz PCM directly via a three-layer Conv1d
+stem (no STFT, no mel) and emits transcript-only output. Wider and deeper
+than moonshine-tiny (8 encoder / 8 decoder layers, hidden size 416, partial
+RoPE 0.62). English-only; no translation, no language detection, no
+timestamps.
 <!-- /catalog -->
 
 ## What it's for

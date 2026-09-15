@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/parakeet-primeline-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-primeline.md
-
 pin_date: 2026-08-16
 
 validation:
@@ -25,15 +23,14 @@ tags:
 
 summary: |
   primeLine's German fine-tune of NVIDIA's parakeet-tdt-0.6b-v3. A
-  0.6B-parameter FastConformer encoder with a TDT/RNNT transducer decoder,
-  taking 16 kHz mono WAV and producing a punctuated, cased transcript with
-  optional token-level timestamps. Tuned for German, but the fine-tune did
-  not collapse the base model's multilingual ability: it still transcribes
-  the other 24 v3 languages with correct per-language casing and
-  punctuation. Not a streaming model and does not translate.
+  FastConformer encoder with a TDT/RNNT transducer decoder, taking 16 kHz
+  mono WAV and producing a punctuated, cased transcript with optional
+  token-level timestamps. Tuned for German, but the fine-tune did not
+  collapse the base model's multilingual ability: it still transcribes the
+  other 24 v3 languages with correct per-language casing and punctuation.
+  Not a streaming model and does not translate.
 
 wer:
-  source: FLEURS de test
   notes: |
     Greedy transducer decoding, no external LM.
 

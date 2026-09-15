@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/moonshine-base-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine-base.md
-
 pin_date: 2026-05-05
 
 validation:
@@ -21,15 +19,14 @@ tags:
   - encoder-decoder
 
 summary: |
-  Useful Sensors Moonshine base — a 61M-parameter encoder-decoder transformer
-  for English speech recognition. Consumes raw 16 kHz PCM directly via a
-  three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
-  Wider and deeper than moonshine-tiny (8 encoder / 8 decoder layers, hidden
-  size 416, partial RoPE 0.62). English-only; no translation, no language
-  detection, no timestamps.
+  Useful Sensors Moonshine base — an encoder-decoder transformer for English
+  speech recognition. Consumes raw 16 kHz PCM directly via a three-layer Conv1d
+  stem (no STFT, no mel) and emits transcript-only output. Wider and deeper
+  than moonshine-tiny (8 encoder / 8 decoder layers, hidden size 416, partial
+  RoPE 0.62). English-only; no translation, no language detection, no
+  timestamps.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=194,
     matching the upstream generation_config). Upstream reports 3.27% on the same split

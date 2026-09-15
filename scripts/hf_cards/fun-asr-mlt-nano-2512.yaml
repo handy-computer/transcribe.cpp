@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/Fun-ASR-MLT-Nano-2512-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/fun-asr-mlt-nano-2512.md
-
 pin_date: 2026-05-06
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -43,7 +41,6 @@ summary: |
   in the library API.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy LLM decoding via the bundled Qwen3-0.6B head. The publisher does not report a
     numerical LibriSpeech WER for the MLT variant specifically (the shared README's

@@ -4,12 +4,12 @@
 Upstream: [`primeline/parakeet-primeline`](https://huggingface.co/primeline/parakeet-primeline) at [`3f1a9bc`](https://huggingface.co/primeline/parakeet-primeline/commit/3f1a9bc).
 
 primeLine's German fine-tune of NVIDIA's parakeet-tdt-0.6b-v3. A
-0.6B-parameter FastConformer encoder with a TDT/RNNT transducer decoder,
-taking 16 kHz mono WAV and producing a punctuated, cased transcript with
-optional token-level timestamps. Tuned for German, but the fine-tune did
-not collapse the base model's multilingual ability: it still transcribes
-the other 24 v3 languages with correct per-language casing and
-punctuation. Not a streaming model and does not translate.
+FastConformer encoder with a TDT/RNNT transducer decoder, taking 16 kHz
+mono WAV and producing a punctuated, cased transcript with optional
+token-level timestamps. Tuned for German, but the fine-tune did not
+collapse the base model's multilingual ability: it still transcribes the
+other 24 v3 languages with correct per-language casing and punctuation.
+Not a streaming model and does not translate.
 <!-- /catalog -->
 
 ## What it's for
@@ -31,8 +31,8 @@ Licensed CC-BY-4.0. Ported from upstream commit [`3f1a9bc`](https://huggingface.
 
 ## Download
 
-<!-- catalog:downloads label="FLEURS de test" -->
-| Quantization | Download |    Size | WER (FLEURS de test) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (FLEURS de) |
 | --- | --- | ---: | ---: |
 | F32          | [parakeet-primeline-F32.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F32.gguf) | 2.51 GB | 6.00% |
 | F16          | [parakeet-primeline-F16.gguf](https://huggingface.co/handy-computer/parakeet-primeline-gguf/resolve/main/parakeet-primeline-F16.gguf) | 1.26 GB | 6.00% |

@@ -40,101 +40,6 @@
         ],
         "iterations": 3,
         "warmup": 1,
-        "family_overrides": {
-          "gigaam": {
-            "samples": [
-              "ru-short",
-              "ru-long"
-            ],
-            "reason": "Russian-only family; benched on a Russian pair at the same two lengths as jfk/dots. Replaces the 2.2 s ru.wav clip, which was short enough that the figure was load and encode dominated."
-          }
-        },
-        "model_overrides": {
-          "moonshine-tiny-ar": {
-            "samples": [
-              "ar-short",
-              "ar-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-base-ar": {
-            "samples": [
-              "ar-short",
-              "ar-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-tiny-ja": {
-            "samples": [
-              "ja-short",
-              "ja-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-base-ja": {
-            "samples": [
-              "ja-short",
-              "ja-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-tiny-ko": {
-            "samples": [
-              "ko-short",
-              "ko-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-base-ko": {
-            "samples": [
-              "ko-short",
-              "ko-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-tiny-uk": {
-            "samples": [
-              "uk-short",
-              "uk-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-base-uk": {
-            "samples": [
-              "uk-short",
-              "uk-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-tiny-vi": {
-            "samples": [
-              "vi-short",
-              "vi-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-base-vi": {
-            "samples": [
-              "vi-short",
-              "vi-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-tiny-zh": {
-            "samples": [
-              "zh-short",
-              "zh-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          },
-          "moonshine-base-zh": {
-            "samples": [
-              "zh-short",
-              "zh-long"
-            ],
-            "reason": "Single-language fine-tune. English jfk/dots decode out of distribution and can loop until the 194-token position cap, and whether that happens differs between CPU and GPU, so the pair is replaced with this model's own language at the same two lengths."
-          }
-        },
         "targets": [
           {
             "machine": "m4-max",
@@ -153,76 +58,14 @@
             ],
             "cooldown_tctl_c": 55.0
           }
-        ]
-      }
-    },
-    "asr-publication-v1": {
-      "description": "Superseded by v2 (L4, LibriSpeech at batch 1); kept so rows stamped with it still resolve.",
-      "accuracy": [
-        {
-          "dataset": "librispeech",
-          "split": "test-clean",
-          "languages": "english-if-supported",
-          "quants": "all-downloads",
-          "batch_size": 1,
-          "sort_by_length": true,
-          "timestamps": "none",
-          "gpu": "L4",
-          "backend": "cuda"
-        },
-        {
-          "dataset": "fleurs",
-          "split": "test",
-          "languages": "supported-intersect-fleurs",
-          "quants": [
-            "Q8_0"
+        ],
+        "single_language_samples": {
+          "pattern": [
+            "{lang}-short",
+            "{lang}-long"
           ],
-          "batch_size": 8,
-          "sort_by_length": true,
-          "timestamps": "none",
-          "gpu": "L4",
-          "backend": "cuda"
+          "reason": "A variant that supports exactly one non-English language is benched on that language at the same two clip lengths as jfk/dots. English jfk/dots decode out of distribution on a single-language fine-tune and can loop until the position cap, and whether that happens differs between CPU and GPU, so the figure would not be comparable."
         }
-      ],
-      "speed": {
-        "quants": [
-          "Q8_0",
-          "Q4_K_M"
-        ],
-        "samples": [
-          "jfk",
-          "dots"
-        ],
-        "iterations": 3,
-        "warmup": 1,
-        "family_overrides": {
-          "gigaam": {
-            "samples": [
-              "ru"
-            ],
-            "reason": "Russian-only family; use the currently published supported-language clip until a long Russian fixture is added."
-          }
-        },
-        "model_overrides": {},
-        "targets": [
-          {
-            "machine": "m4-max",
-            "display": "Apple M4 Max",
-            "backends": [
-              "cpu",
-              "metal"
-            ]
-          },
-          {
-            "machine": "ryzen-4750u",
-            "display": "AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR)",
-            "backends": [
-              "cpu",
-              "vulkan"
-            ],
-            "cooldown_tctl_c": 55.0
-          }
-        ]
       }
     }
   }

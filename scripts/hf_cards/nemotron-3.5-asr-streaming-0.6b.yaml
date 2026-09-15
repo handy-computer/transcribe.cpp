@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/nemotron-3.5-asr-streaming-0.6b.md
-
 pin_date: 2026-06-08
 
 # Validation pin for the most recent upload. Updated on each release;
@@ -26,7 +24,7 @@ tags:
   - multilingual
 
 summary: |
-  Multilingual speech-to-text across 32 supported language-locales (the model's tokenizer recognizes 40, but 8 are adaptation-ready and need fine-tuning) with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with a prompt-conditioned RNN-T transducer decoder; the target language is selected per call (--language en-US, fr-FR, de-DE, ...) and an auto mode emits a <lang-XX> tag. Ships both the offline path (att_context_size=[56, 13], 1.12s, headline accuracy) and runtime-selectable chunked streaming (--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}).
+  Multilingual speech-to-text across 32 supported language-locales (the model's tokenizer recognizes 40, but 8 are adaptation-ready and need fine-tuning) with punctuation and capitalization. A cache-aware streaming FastConformer encoder with a prompt-conditioned RNN-T transducer decoder; the target language is selected per call (--language en-US, fr-FR, de-DE, ...) and an auto mode emits a <lang-XX> tag. Ships both the offline path (att_context_size=[56, 13], 1.12s, headline accuracy) and runtime-selectable chunked streaming (--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}).
 
 wer:
   source: FLEURS test en (en-US), offline att_context_size=[56, 13]

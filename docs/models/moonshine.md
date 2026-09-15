@@ -16,13 +16,12 @@ see the family doc at
 
 ## Choosing a variant
 
-- **Smallest footprint, near-realtime CPU.** `moonshine-tiny` (27M
-  params) at Q8_0 is 34 MB and decodes well above realtime on commodity
-  hardware. WER is on par with `whisper-tiny.en` while running on raw
-  audio (no mel frontend in the load path).
-- **Higher accuracy, still small.** `moonshine-base` (61M params) at
-  Q8_0 is 74 MB and lands inside `whisper-small.en` accuracy territory
-  for English audio.
+- **Smallest footprint, near-realtime CPU.** `moonshine-tiny` decodes
+  well above realtime on commodity hardware. WER is on par with
+  `whisper-tiny.en` while running on raw audio (no mel frontend in the
+  load path).
+- **Higher accuracy, still small.** `moonshine-base` lands inside
+  `whisper-small.en` accuracy territory for English audio.
 - **Streaming workloads.** Moonshine is **not** streaming-first — the
   encoder is global, the decoder runs on the whole utterance. If you
   need chunked / real-time decoding, see

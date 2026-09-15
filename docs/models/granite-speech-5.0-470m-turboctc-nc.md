@@ -3,9 +3,9 @@
 <!-- catalog:intro -->
 Upstream: [`ibm-granite/granite-speech-5.0-470m-turboctc-nc`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc-nc) at [`0eb7b4f`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc-nc/commit/0eb7b4f).
 
-Offline English speech-to-text, research and non-commercial use only. A 470M
-parameter Granite Conformer encoder with a self-conditioned CTC head.
-Takes a 16 kHz mono WAV and produces a transcript. Not a streaming model. English only.
+Offline English speech-to-text, research and non-commercial use only. A Granite Conformer
+encoder with a self-conditioned CTC head. Takes a 16 kHz mono WAV and produces a
+transcript. Not a streaming model. English only.
 <!-- /catalog -->
 
 ## What it's for
@@ -110,17 +110,6 @@ verbatim.
 | Manifest | `tests/golden/granite5_ctc/granite-speech-5.0-470m-turboctc-nc.manifest.json` |
 | Tolerances | `tests/tolerances/granite5_ctc-nc.json` |
 | Command | `uv run scripts/validate.py all --family granite5_ctc --variant granite-speech-5.0-470m-turboctc-nc` |
-
-Selected tensors (the `dots` case, 441 output frames):
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `mel.in`               | `8.821e-06` | `1.007e-07` | Production C++ frontend, no injection |
-| `enc.input_linear.out` | `1.851e-02` | `1.080e-03` | 0.18% of RMS |
-| `enc.block.7.out`      | `8.640e-03` | `9.496e-04` | Before the self-conditioning injection |
-| `enc.ctc.mid_logits`   | `4.356e-02` | `3.568e-03` | Mid-layer CTC head |
-| `enc.block.15.out`     | `2.187e-01` | `1.625e-03` | Max is one frame of 441; mean is 0.25% of RMS |
-| `enc.ctc_logits`       | `7.307e-01` | `6.497e-03` | 0.09% of RMS |
 
 Drift is BF16 matmul accumulation, amplified by a massive-activation channel in
 encoder blocks 10-13 that sits ~20x above the rest of its tensor. It is

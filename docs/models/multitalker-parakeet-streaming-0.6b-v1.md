@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/multitalker-parakeet-streaming-0.6b-v1`](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1) at [`8749fc7`](https://huggingface.co/nvidia/multitalker-parakeet-streaming-0.6b-v1/commit/8749fc7).
 
-Offline and cache-aware streaming English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder, fine-tuned from nvidia/nemotron-speech-streaming-en-0.6b. Plain GGUFs run the single_speaker_mode ASR path, while bundle GGUFs under `bundle/` embed nvidia/diar_streaming_sortformer_4spk-v2.1 and, with `--diarize`, transcribe up to four overlapping speakers into a speaker-tagged transcript. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask; all four latency lookahead settings are selectable.
+Offline and cache-aware streaming English speech-to-text with punctuation and capitalization. A cache-aware streaming FastConformer encoder with an RNN-T transducer decoder, fine-tuned from nvidia/nemotron-speech-streaming-en-0.6b. Plain GGUFs run the single_speaker_mode ASR path, while bundle GGUFs under `bundle/` embed nvidia/diar_streaming_sortformer_4spk-v2.1 and, with `--diarize`, transcribe up to four overlapping speakers into a speaker-tagged transcript. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask; all four latency lookahead settings are selectable.
 <!-- /catalog -->
 
 ## What it's for

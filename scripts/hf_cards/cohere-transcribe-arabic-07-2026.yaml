@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/cohere-transcribe-arabic-07-2026-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-arabic-07-2026.md
-
 pin_date: 2026-07-07
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -60,7 +58,6 @@ usage: |
   numbers, numerical validation, and reproduction steps.
 
 wer:
-  source: FLEURS Arabic test
   notes: |
     Greedy decoding, no external LM, scored with the Whisper BasicTextNormalizer; the
     FLEURS Arabic split is `ar_eg`, Egyptian-dialect speech. BF16 reference baseline,

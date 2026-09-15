@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/nemotron-speech-streaming-en-0.6b`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b) at [`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40).
 
-English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in both offline and cache-aware streaming modes. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end.
+English speech-to-text with punctuation and capitalization. A cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in both offline and cache-aware streaming modes. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end.
 <!-- /catalog -->
 
 ## What it's for

@@ -147,26 +147,6 @@ verbatim.
 | Manifest | `tests/golden/cohere/cohere-transcribe-03-2026.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family cohere` |
 
-Selected tensors:
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.mel.in`          | `2.678e-01` | `4.238e-03` | fp64 vs fp32 STFT precision gap |
-| `enc.pre_encode.out`  | `8.794e+00` | `3.049e-02` | Mel gap propagated through pre-encoder |
-| `enc.block.0.out`     | `4.542e+00` | `1.939e-02` | Early encoder |
-| `enc.block.23.out`    | `3.173e+00` | `3.118e-02` | Mid-encoder |
-| `enc.block.47.out`    | `2.039e-01` | `4.615e-03` | Final encoder block |
-| `enc.final`           | `2.039e-01` | `4.615e-03` | Encoder output |
-| `enc_dec_proj.out`    | `3.693e-01` | `1.074e-02` | Encoder→decoder projection |
-| `dec.token_emb`       | `2.980e-08` | `2.910e-12` | Exact within fp32 round-off |
-| `dec.pos_emb`         | `0.000e+00` | `0.000e+00` | Exact |
-| `dec.embed_norm`      | `1.241e-01` | `1.327e-03` | LayerNorm output |
-| `dec.block.0.out`     | `3.409e+00` | `2.491e-02` | Early decoder |
-| `dec.block.7.out`     | `3.177e+01` | `1.416e-01` | Final decoder block (accumulated) |
-| `dec.out_before_head` | `2.465e-01` | `1.339e-02` | Pre-head projection |
-| `dec.logits_raw`      | `6.675e-01` | `3.328e-02` | Raw logits |
-| `dec.logits`          | `nan`       | `nan`       | Softmax: `-inf` entries produce `nan`; first diff index 114692 is masked |
-
 The expected divergence is in the frontend: C++ runs the STFT in fp64 where
 the reference runs fp32. The gap enters at the mel spectrogram, propagates
 through the encoder, and attenuates to a few tenths by the final encoder

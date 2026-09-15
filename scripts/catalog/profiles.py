@@ -145,13 +145,37 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
     return cells
 
 
+def speed_samples(record: dict, profile: dict) -> list[str]:
+    """Which clips a variant is benched on.
+
+    The default pair is English. A variant that supports exactly one other
+    language is benched on that language instead, at the same two lengths:
+    English audio decodes out of distribution on a single-language fine-tune
+    and the figure would not be comparable. The rule replaces what used to be
+    one hand-written override per such variant.
+    """
+    spec = profile["speed"]
+    samples = spec.get("samples", [])
+    rule = spec.get("single_language_samples")
+    languages = record.get("languages") or []
+    if rule and len(languages) == 1 and languages[0] != "en":
+        return [part.format(lang=languages[0]) for part in rule["pattern"]]
+    return samples
+
+
+def all_speed_samples(profile: dict, records: dict[str, dict]) -> list[str]:
+    """Every clip the profile can ask for, across all known variants. The bench
+    driver needs this union up front to build its candidate matrix."""
+    samples = set(profile["speed"].get("samples", []))
+    for record in records.values():
+        samples.update(speed_samples(record, profile))
+    return sorted(samples)
+
+
 def expected_speed(record: dict, profile: dict) -> list[dict]:
     """Expand the exact publication speed matrix for one model."""
     spec = profile["speed"]
-    # A variant override wins over its family's; both are whole-key replacements.
-    override = ((spec.get("model_overrides") or {}).get(record["variant"])
-                or (spec.get("family_overrides") or {}).get(record["family"], {}))
-    samples = override.get("samples", spec.get("samples", []))
+    samples = speed_samples(record, profile)
     cells: list[dict] = []
     for target in spec.get("targets", []):
         for backend in target.get("backends", []):

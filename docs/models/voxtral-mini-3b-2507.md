@@ -174,11 +174,3 @@ are pinned in `tests/tolerances/voxtral.json`.
 | Tolerances | `tests/tolerances/voxtral.json` |
 | Command | `uv run scripts/validate.py all --family voxtral --variant voxtral-mini-3b-2507` |
 
-Selected tensors (observed on CPU, strict backend; see tolerance file
-for budgets):
-
-| Tensor | Shape | Max abs diff | Mean abs diff | Notes |
-| --- | --- | ---: | ---: | --- |
-| `enc.mel.in` | `[128,3000]` | `2.229e-05` | `4.060e-08` | In-process log-mel vs reference `WhisperFeatureExtractor` — the frontend-parity gate |
-| `enc.out`    | `[1500,1280]` | `1.414e+01` | `1.121e-02` | Final encoder LayerNorm; the drift here is the reference's BF16 activation rounding (cpp-vs-F32-ref is ~4× tighter) |
-| `proj.out`   | `[375,3072]`  | `3.493e-01` | `3.158e-03` | Projector output (the audio embeddings injected into the LM) |

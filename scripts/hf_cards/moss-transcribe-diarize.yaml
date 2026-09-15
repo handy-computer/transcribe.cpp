@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/MOSS-Transcribe-Diarize-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moss-transcribe-diarize.md
-
 pin_date: 2026-07-12
 
 validation:
@@ -32,7 +30,6 @@ summary: |
   ids/turns. Not a streaming model.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Scored with the Whisper-style English text normalizer and jiwer 3.x. MOSS emits the
     diarized format `[start][Sxx]text[end]`; the bracket spans are metadata and are

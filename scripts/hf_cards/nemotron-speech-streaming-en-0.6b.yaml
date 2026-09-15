@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/nemotron-speech-streaming-en-0.6b-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/nemotron-speech-streaming-en-0.6b.md
-
 pin_date: 2026-05-11
 
 # Validation pin for the most recent upload. Updated on each release;
@@ -25,7 +23,7 @@ tags:
   - cache-aware
 
 summary: |
-  English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in both offline and cache-aware streaming modes. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end.
+  English speech-to-text with punctuation and capitalization. A cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in both offline and cache-aware streaming modes. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end.
 
 wer:
   source: LibriSpeech test-clean, offline

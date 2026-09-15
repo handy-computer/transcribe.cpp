@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/parakeet-ctc-1.1b-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-ctc-1.1b.md
-
 pin_date: 2026-05-10
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -23,10 +21,9 @@ tags:
   - ctc
 
 summary: |
-  Offline English speech-to-text with greedy CTC decoding. A 1.1B-parameter FastConformer-XL encoder with a linear CTC head. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+  Offline English speech-to-text with greedy CTC decoding. A FastConformer-XL encoder with a linear CTC head. Output is lowercase, no punctuation. Not a streaming model and does not translate.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy CTC decoding, no external LM. F32 reference baseline: 1.85%. NVIDIA's
     self-reported number on the same split is 1.83%.

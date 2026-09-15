@@ -3,8 +3,6 @@
 
 # Pure fine-tune of whisper-large-v2 (identical architecture), so the model
 # page points at the whisper-large-v2 doc rather than a Breeze-specific one.
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-large-v2.md
-
 pin_date: 2026-06-29
 
 validation:
@@ -37,7 +35,6 @@ summary: |
   other languages remain technically accessible but out of scope.
 
 wer:
-  source: LibriSpeech test-clean
   source2: FLEURS zh (OpenCC t2s-folded)
   secondary: cer_fleurs_zh_opencc_t2s
   notes: |

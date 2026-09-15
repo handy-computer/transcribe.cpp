@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/whisper-medium.en-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-medium.en.md
-
 pin_date: 2026-04-25
 
 validation:
@@ -24,7 +22,6 @@ summary: |
   OpenAI Whisper medium.en — converted to GGUF for transcribe.cpp. English-only; faster than the multilingual model at the same size. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     OpenAI's self-reported number on the same split is 3.02%. Both are
     short-form WER decoded without timestamps; OpenAI does not publish its exact

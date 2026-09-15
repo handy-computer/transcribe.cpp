@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/Voxtral-Mini-3B-2507-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/voxtral-mini-3b-2507.md
-
 pin_date: 2026-06-06
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -33,7 +31,6 @@ summary: |
   decoder in place of Mistral-Small-24B.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Scored with the Whisper English text normalizer on an NVIDIA L40S. Same-machine
     HuggingFace transformers reference (VoxtralForConditionalGeneration, BF16,

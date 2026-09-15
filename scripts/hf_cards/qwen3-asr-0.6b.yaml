@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/qwen3-asr-0.6b-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/qwen3-asr-0.6b.md
-
 pin_date: 2026-04-19
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -30,7 +28,6 @@ summary: |
   16 kHz mono WAV; explicit language hints are not supported at this time.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Scored with the Whisper-style English text normalizer and jiwer 3.x on an Apple M4.
     Qwen3-ASR is a multilingual model — this number characterizes the English case only.

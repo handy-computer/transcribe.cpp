@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-tdt_ctc-1.1b`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b) at [`675e786`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b/commit/675e786).
 
-Offline English speech-to-text with punctuation and capitalization. A 1.1B-parameter FastConformer-XL encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
+Offline English speech-to-text with punctuation and capitalization. A FastConformer-XL encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
 <!-- /catalog -->
 
 ## What it's for

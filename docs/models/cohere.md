@@ -4,7 +4,7 @@ Cohere's [Transcribe](https://huggingface.co/CohereLabs) family ported to
 transcribe.cpp. A large Conformer encoder paired with a lightweight
 Transformer decoder (cross-attention, tied token embedding); decoding is
 autoregressive with a language-conditioned prompt. The variants share one
-architecture (2.0B parameters, identical tensor shapes) and differ in
+architecture (identical tensor shapes) and differ in
 training focus and language coverage.
 
 For the architecture deep-dive, validation contract, and porting notes,

@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/moonshine-streaming-medium-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine-streaming-medium.md
-
 pin_date: 2026-05-06
 
 validation:
@@ -22,16 +20,14 @@ tags:
   - encoder-decoder
 
 summary: |
-  English speech-to-text in both one-shot and streaming modes. A 245M-parameter
-  encoder-decoder ASR model designed for streaming use (ergodic encoder +
-  sliding-window attention, 50 Hz time-domain frontend). Same family as
-  moonshine-streaming-tiny and moonshine-streaming-small; deepest of the three
-  (14 / 14 layers) and widest hidden dims (encoder 768 / decoder 640). Takes a
-  16 kHz mono WAV and produces a transcript. No translation, no multilingual
-  capability, no timestamps.
+  English speech-to-text in both one-shot and streaming modes. An encoder-decoder
+  ASR model designed for streaming use (ergodic encoder + sliding-window
+  attention, 50 Hz time-domain frontend). Same family as moonshine-streaming-tiny
+  and moonshine-streaming-small; deepest of the three (14 / 14 layers) and widest
+  hidden dims (encoder 768 / decoder 640). Takes a 16 kHz mono WAV and produces a
+  transcript. No translation, no multilingual capability, no timestamps.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference baseline: 2.16%.
     Quants are numerically indistinguishable from F32 on this manifest. Useful Sensors'

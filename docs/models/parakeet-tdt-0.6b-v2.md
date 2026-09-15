@@ -3,10 +3,10 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) at [`1b149a3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2/commit/1b149a3).
 
-Offline English speech-to-text. A 0.6B-parameter Conformer encoder with a
-TDT/RNNT transducer decoder. Takes a 16 kHz mono WAV and produces a transcript
-with optional token-level timestamps. Not a streaming model; no multilingual
-capability (see v3 for that).
+Offline English speech-to-text. A Conformer encoder with a TDT/RNNT transducer
+decoder. Takes a 16 kHz mono WAV and produces a transcript with optional
+token-level timestamps. Not a streaming model; no multilingual capability (see
+v3 for that).
 <!-- /catalog -->
 
 ## What it's for
@@ -121,21 +121,6 @@ transcript matches the NeMo reference verbatim.
 | Dump script | `scripts/dump_reference_parakeet_nemo.py` |
 | Manifest | `tests/golden/parakeet/parakeet-tdt-0.6b-v2.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family parakeet` |
-
-Selected tensors:
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.mel.in`          | `5.189e+00` | `1.639e-03` | fp64 vs fp32 STFT precision gap |
-| `enc.pre_encode.out`  | `2.011e+03` | `6.590e+01` | Mel gap amplified through pre-encoder |
-| `enc.block.0.out`     | `1.016e+03` | `1.396e+01` | Early encoder, still amplified |
-| `enc.block.12.out`    | `1.040e+03` | `1.330e+01` | Mid-encoder |
-| `enc.block.23.out`    | `4.392e-02` | `1.169e-03` | Converged by final block |
-| `enc.final`           | `4.392e-02` | `1.169e-03` | Final encoder output |
-| `dec.enc_out`         | `4.392e-02` | `1.169e-03` | Decoder input from encoder |
-| `dec.embed.0`         | `0.000e+00` | `0.000e+00` | Exact match |
-| `dec.lstm.*`          | `<= 1.788e-07` | near zero | fp32 round-off on first step |
-| `dec.joint.0`         | `7.033e+01` | `6.956e+01` | Joint projection over encoder drift |
 
 The expected divergence is in the frontend: C++ runs the STFT in fp64 where
 NeMo runs fp32. The gap enters at the mel spectrogram, is amplified through

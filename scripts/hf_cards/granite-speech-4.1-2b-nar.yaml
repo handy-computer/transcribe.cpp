@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/granite-speech-4.1-2b-nar-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/granite-speech-4.1-2b-nar.md
-
 pin_date: 2026-05-24
 
 validation:
@@ -34,7 +32,6 @@ summary: |
   timestamps).
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     BF16 reference baseline (transformers `model.transcribe`, MPS, re-run locally):
     1.28% — matches the upstream model card's 1.29% to within sampling noise. Text

@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/parakeet-rnnt-0.6b`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b) at [`c0c1f09`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b/commit/c0c1f09).
 
-Offline English speech-to-text with greedy RNN-T decoding. A 0.6B-parameter FastConformer-Large encoder with an RNN-T transducer decoder. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+Offline English speech-to-text with greedy RNN-T decoding. A FastConformer-Large encoder with an RNN-T transducer decoder. Output is lowercase, no punctuation. Not a streaming model and does not translate.
 <!-- /catalog -->
 
 ## What it's for

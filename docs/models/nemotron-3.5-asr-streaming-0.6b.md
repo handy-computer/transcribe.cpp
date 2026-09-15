@@ -3,7 +3,7 @@
 <!-- catalog:intro -->
 Upstream: [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) at [`24b151a`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/commit/24b151a).
 
-Multilingual speech-to-text across 32 supported language-locales (the model's tokenizer recognizes 40, but 8 are adaptation-ready and need fine-tuning) with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with a prompt-conditioned RNN-T transducer decoder; the target language is selected per call (--language en-US, fr-FR, de-DE, ...) and an auto mode emits a <lang-XX> tag. Ships both the offline path (att_context_size=[56, 13], 1.12s, headline accuracy) and runtime-selectable chunked streaming (--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}).
+Multilingual speech-to-text across 32 supported language-locales (the model's tokenizer recognizes 40, but 8 are adaptation-ready and need fine-tuning) with punctuation and capitalization. A cache-aware streaming FastConformer encoder with a prompt-conditioned RNN-T transducer decoder; the target language is selected per call (--language en-US, fr-FR, de-DE, ...) and an auto mode emits a <lang-XX> tag. Ships both the offline path (att_context_size=[56, 13], 1.12s, headline accuracy) and runtime-selectable chunked streaming (--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}).
 <!-- /catalog -->
 
 ## What it's for

@@ -1,8 +1,6 @@
 # Spec for the HF README of handy-computer/parakeet-tdt_ctc-1.1b-gguf.
 # Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-tdt_ctc-1.1b.md
-
 pin_date: 2026-05-10
 
 # Validation pin for the most recent upload. Updated on each release —
@@ -24,10 +22,9 @@ tags:
   - tdt
 
 summary: |
-  Offline English speech-to-text with punctuation and capitalization. A 1.1B-parameter FastConformer-XL encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
+  Offline English speech-to-text with punctuation and capitalization. A FastConformer-XL encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
 
 wer:
-  source: LibriSpeech test-clean
   notes: |
     Greedy TDT/RNN-T transducer decoding, no external LM. F32 reference baseline: 1.87%.
     NVIDIA's self-reported number on the same split is 1.82%.

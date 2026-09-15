@@ -4,13 +4,12 @@
 Upstream: [`nvidia/canary-1b-v2`](https://huggingface.co/nvidia/canary-1b-v2) at [`87bc526`](https://huggingface.co/nvidia/canary-1b-v2/commit/87bc526).
 
 Offline multilingual speech-to-text and translation across 25 European
-languages. A 978M-parameter multitask AED with a 32-layer FastConformer
-encoder and an 8-layer Transformer decoder. Supports automatic speech
-recognition for any of the 25 supported languages, plus translation
-between supported language pairs (per the upstream model card). Takes
-a 16 kHz mono WAV and produces a transcript. Not a streaming model;
-word and segment timestamps from the upstream model are not exposed in
-the v1 port.
+languages. A multitask AED with a 32-layer FastConformer encoder and an
+8-layer Transformer decoder. Supports automatic speech recognition for
+any of the 25 supported languages, plus translation between supported
+language pairs (per the upstream model card). Takes a 16 kHz mono WAV and
+produces a transcript. Not a streaming model; word and segment timestamps
+from the upstream model are not exposed in the v1 port.
 <!-- /catalog -->
 
 ## What it's for
