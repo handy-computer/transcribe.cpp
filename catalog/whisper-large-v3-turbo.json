@@ -159,8 +159,7 @@
   ],
   "language_aliases": {
     "tl": "fil",
-    "no": "nb",
-    "jw": "jv"
+    "no": "nb"
   },
   "encoder_window_s": 30.0,
   "max_output_tokens": 448

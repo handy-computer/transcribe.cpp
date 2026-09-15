@@ -59,7 +59,7 @@
     "upstream_commit": {
       "type": "string",
       "pattern": "^[0-9a-f]{7}$",
-      "description": "The upstream revision used to produce the published GGUFs, as the 7-character short SHA. One spelling so a doc link, an HF card and a database row never differ on the same commit; the Hub resolves the prefix."
+      "description": "The upstream revision used to produce the published GGUFs, as the 7-character short SHA."
     },
     "docs_page": {
       "type": "string",
@@ -79,11 +79,11 @@
     },
     "language_tag_form": {
       "enum": ["bare-bcp47","locale","mixed"],
-      "description": "What the --language argument accepts. nemotron validates the hint against locales (ar-AR) while its card advertises bare codes, so a caller passing the advertised spelling is rejected with UNSUPPORTED_LANGUAGE. A consumer needs this before it can call the model at all."
+      "description": "What the --language argument accepts. Needed because a model can advertise bare codes while validating hints against locales (nemotron rejects the advertised spelling with UNSUPPORTED_LANGUAGE)."
     },
     "language_aliases": {
       "type": "object",
-      "description": "{advertised spelling: canonical code}, for the languages this model names differently from everyone else (whisper says tl and no where the rest of the world says fil and nb). Lets a caller holding a canonical code find the tag this model wants.",
+      "description": "{advertised spelling: canonical code}, for languages this model names differently from everyone else (whisper says tl and no where others say fil and nb).",
       "additionalProperties": {
         "type": "string"
       }
@@ -132,7 +132,7 @@
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What this port supports. Every capability in the vocabulary is listed on every record, supported or not, so a reviewer sees the whole surface at a glance and every model renders into the same table rows. `supported` comes from the loader's own capability surface (transcribe_capabilities, read from the GGUF) rather than being hand-written -- hand-writing it is how moss-transcribe-diarize shipped as diarize:false. `verified` says whether we ran it and watched it work, and only applies when supported; the Stage 8 gate sets it and refuses sign-off while anything supported is unverified. Why something is unverified is a bring-up question and lives in the family doc's Capability Validation table. An unsupported capability carries no payload and no verified flag -- there is nothing to verify.",
+      "description": "What this port supports; every capability is listed on every record so all models render the same table rows. `supported` is read from the GGUF capability surface by sync_capabilities.py, never hand-written; `verified` means we ran it and watched it work, set by the Stage 8 gate.",
       "properties": {
         "transcribe": {
           "$ref": "#/$defs/capability",
@@ -140,7 +140,7 @@
         },
         "translate": {
           "$ref": "#/$defs/capability",
-          "description": "Speech in one language to text in another. The direction set IS the capability -- whisper does any-source to English only, canary translates between its 25 languages. Mirrors what the loader reads from stt.translation.target_languages / .pairs.",
+          "description": "Speech in one language to text in another. Mirrors what the loader reads from stt.translation.target_languages / .pairs.",
           "properties": {
             "targets": {
               "type": ["array","null"],
@@ -190,7 +190,7 @@
         },
         "timestamps": {
           "$ref": "#/$defs/capability",
-          "description": "Timestamp granularities this port emits, mirroring transcribe_capabilities::max_timestamp_kind. Not always what upstream offers -- whisper exposes word-level alignment upstream while this port ships segment.",
+          "description": "Timestamp granularities this port emits, mirroring transcribe_capabilities::max_timestamp_kind. Not always what upstream offers.",
           "properties": {
             "granularities": {
               "type": "array",
@@ -203,7 +203,7 @@
         },
         "streaming": {
           "$ref": "#/$defs/capability",
-          "description": "Incremental transcription over a live stream. The shipped latency presets ARE the capability: parakeet-unified publishes six whose accuracy spans 1.40% to 5.76% WER.",
+          "description": "Incremental transcription over a live stream; the shipped latency presets are the capability.",
           "properties": {
             "mode": {
               "type": ["string","null"],
@@ -235,15 +235,15 @@
         },
         "punctuation": {
           "$ref": "#/$defs/capability",
-          "description": "Emits punctuation. Reserved and deferred. Optional until the transcription-style work lands: absent means not yet determined, which is different from supported:false."
+          "description": "Emits punctuation. Reserved and deferred: absent means not yet determined, which differs from supported:false."
         },
         "casing": {
           "$ref": "#/$defs/capability",
-          "description": "Emits mixed case. Reserved and deferred. Optional until the transcription-style work lands: absent means not yet determined, which is different from supported:false."
+          "description": "Emits mixed case. Reserved and deferred: absent means not yet determined, which differs from supported:false."
         },
         "itn": {
           "$ref": "#/$defs/capability",
-          "description": "Inverse text normalisation -- '25' rather than 'twenty five'. Reserved and deferred. Optional until the transcription-style work lands: absent means not yet determined, which is different from supported:false."
+          "description": "Inverse text normalisation ('25' rather than 'twenty five'). Reserved and deferred: absent means not yet determined, which differs from supported:false."
         }
       },
       "required": [
@@ -270,14 +270,14 @@
           "size_bytes": {
             "type": "integer",
             "minimum": 1,
-            "description": "Exact blob size. Prose units are a rendering concern -- the card's '845 MB' is 845 MiB mislabelled, and the sweep's 1 GB quant threshold keys off the real number."
+            "description": "Exact blob size; prose units are a rendering concern."
           }
         }
       }
     },
     "accuracy_benchmarks": {
       "type": "array",
-      "description": "Published measurements only, with one row per dataset/split/language/quant/metric/timestamps/scoring/mode cell; batch size is recipe metadata and does not create a second publishable result. Prefer the profile recipe when selecting among runs. Full dataset splits only -- a subset run is a bring-up artifact, not a published benchmark.",
+      "description": "Published measurements only, on full dataset splits, one row per dataset/split/language/quant/metric/timestamps/scoring/mode cell. Batch size is recipe metadata; prefer the profile recipe when selecting among runs.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -346,7 +346,7 @@
           },
           "measurement_provenance": {
             "enum": ["legacy-published"],
-            "description": "Present only for a pre-profile result migrated from a published table whose original engine SHA is unavailable. This is an explicit provenance limitation, never a guessed commit."
+            "description": "Present only for a pre-profile result migrated from a published table whose original engine SHA is unavailable; never a guessed commit."
           },
           "measured_on": {
             "type": ["string","null"],
@@ -393,7 +393,7 @@
     },
     "headline_benchmark": {
       "type": ["object","null"],
-      "description": "Which accuracy row-set the variant PUBLISHES as its headline number -- the WER/CER/DER column of docs/models/<variant>.md and of the HF card. A renderer selects matching accuracy_benchmarks rows, one per quant. batch_size or timestamps may be null as an explicit wildcard for a legacy published table whose quants used mixed or incompletely recorded recipes. null for the whole object means the variant publishes no headline column.",
+      "description": "Which accuracy row-set the variant publishes as its headline number, the metric column of its doc and HF card; a renderer selects matching accuracy_benchmarks rows, one per quant. batch_size or timestamps may be null as a wildcard for a legacy table with mixed recipes; a null object means no headline column.",
       "required": ["dataset","split","language","metric","batch_size","timestamps"],
       "additionalProperties": false,
       "properties": {
@@ -431,7 +431,7 @@
         "properties": {
           "machine": {
             "type": "string",
-            "description": "Canonical machine slug, as scripts/bench/run.py derives it from the CPU model string. One slug per physical machine is a hard gate, not a lookup table: reports/perf/amd-ryzen-7-4750u-pro is a stale hand-made directory for the same box that auto-detection names amd-ryzen-7-pro-4750u-with-radeon-graphics."
+            "description": "Canonical machine slug, as scripts/bench/run.py derives it from the CPU model string. One slug per physical machine."
           },
           "backend": {
             "enum": ["cpu","metal","vulkan","cuda"]
@@ -442,7 +442,7 @@
           },
           "sample": {
             "type": "string",
-            "description": "Sample id. The set is OPEN: a long-audio sample is new rows, not a schema change."
+            "description": "Sample id; the set is open, so a new sample means new rows, not a schema change."
           },
           "sample_duration_s": {
             "type": "number",
@@ -458,7 +458,7 @@
           },
           "wall_ms": {
             "type": ["number","null"],
-            "description": "End-to-end wall time for the same run, mean over iters after warmup. Differs from total_ms by whatever the family spends outside mel/encode/decode: negligible for 60 of 64 benched variants (median wall/total 1.002) but 1.10x-1.46x on the granite audio-LLMs, whose published tables quote wall. Carried so a doc can publish either without the catalog having to pick."
+            "description": "End-to-end wall time for the same run, mean over iters after warmup. Carried because the granite audio-LLMs publish wall rather than compute time."
           },
           "xrt_wall": {
             "type": ["number","null"],
@@ -469,7 +469,7 @@
           },
           "mel_ms": {
             "type": ["number","null"],
-            "description": "The stage split (mel/encode/decode) is what makes a regression attributable. A single total tells you something got slower and nothing else."
+            "description": "Stage split (mel/encode/decode) so a regression is attributable."
           },
           "encode_ms": {
             "type": ["number","null"]
@@ -483,7 +483,7 @@
           },
           "measurement_provenance": {
             "enum": ["legacy-published"],
-            "description": "Present only for a pre-profile result migrated from a published table whose original engine SHA is unavailable. The stored xRT remains publishable, but detailed timing/provenance awaits re-benchmarking."
+            "description": "Present only for a pre-profile result migrated from a published table whose original engine SHA is unavailable. The stored xRT remains publishable; detailed timing awaits re-benchmarking."
           },
           "measured_on": {
             "type": ["string","null"],
@@ -491,7 +491,7 @@
           },
           "thermal_gated": {
             "type": ["boolean","null"],
-            "description": "Whether the machine's thermal precondition was met before this block. Not cosmetic: the same parakeet-unified CPU cells measure 8.17x realtime gated and 5.51x ungated, a 48% difference that dwarfs most code changes."
+            "description": "Whether the machine's thermal precondition was met before this block; ungated runs can differ by tens of percent."
           },
           "publication_profile": {
             "type": ["string","null"],

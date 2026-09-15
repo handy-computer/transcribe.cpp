@@ -43,6 +43,8 @@ jobs:
         run: uv run scripts/catalog/format.py --check
       - name: Schema, integrity and pairing
         run: uv run scripts/catalog/check.py
+      - name: Publication profile
+        run: uv run scripts/catalog/check.py --publication-profile
       - name: HF cards render from the catalog
         run: |
           for spec in scripts/hf_cards/*.yaml; do

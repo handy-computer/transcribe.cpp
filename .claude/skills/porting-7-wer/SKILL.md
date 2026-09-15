@@ -11,8 +11,9 @@ the measured Oracle reference baseline from Stage 2.
 
 Quant WER is **reviewed and signed off** by the user, not auto-gated.
 
-Stage 4 already gated ref dtype, and Stage 5 took a tentative quant read.
-Stage 7 re-confirms after bench and records human review for every quant.
+Stage 4 already gated ref dtype, and Stage 5 took a preliminary
+512-utterance quant read. Stage 7 runs the authoritative full split after
+bench and records human review for every quant.
 
 ## Preconditions
 
