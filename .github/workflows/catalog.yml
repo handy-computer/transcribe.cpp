@@ -11,6 +11,8 @@ on:
       - "README.md"
       - "scripts/bench/**"
       - "scripts/wer/languages.py"
+      - "scripts/wer/der.py"
+      - "scripts/wer/test_der.py"
       - ".github/workflows/catalog.yml"
   push:
     branches: [main]
@@ -22,6 +24,8 @@ on:
       - "README.md"
       - "scripts/bench/**"
       - "scripts/wer/languages.py"
+      - "scripts/wer/der.py"
+      - "scripts/wer/test_der.py"
       - ".github/workflows/catalog.yml"
 
 concurrency:
@@ -49,5 +53,6 @@ jobs:
       - name: Rebuild portable database
         run: |
           uv run --with pytest pytest -q scripts/catalog/test_db_mapping.py
+          uv run scripts/wer/test_der.py
           uv run scripts/catalog/db.py --out "$RUNNER_TEMP/catalog.db"
           sqlite3 "$RUNNER_TEMP/catalog.db" "PRAGMA integrity_check"

@@ -182,41 +182,45 @@ rows:
 
 ### Step 4b: Model page
 
-Author `docs/models/<variant>.md`. The repo ships a Jinja template at
-`docs/_templates/model-card.md.j2` and existing rendered cards (e.g.
-`docs/models/parakeet-tdt-0.6b-v2.md`) are the shape reference.
+Author `docs/models/<variant>.md` by copying the closest existing model
+page (e.g. `docs/models/parakeet-tdt-0.6b-v2.md`) and editing the prose.
+There is one way to do this and this is it: a page is hand-written prose
+around `<!-- catalog:… -->` regions, and the copy already carries the right
+set of regions in the right order.
 
-Two acceptable approaches:
+Replace the prose only. Every table, number, repo, licence, language and
+capability comes from the `catalog:` regions, which Step 5 fills from
+`catalog/<variant>.json`. Leave the region bodies as they are; the renderer
+overwrites them. Reference context for the prose comes from
+`reports/wer/<variant>-*.score.json` and the acceptance dataset from
+`intake.upstream_benchmarks[0]`. `published_repo` is catalog data, not an
+editorial value to ask for again.
 
-1. **Copy from the closest existing model card** and edit by hand. Pull
-   facts directly from artifacts — published quants, accuracy, and speed from
-   `catalog/<variant>.json`; measured reference context from
-   `reports/wer/<variant>-*.score.json`; and the acceptance dataset from
-   `intake.upstream_benchmarks[0]`. `published_repo` is catalog data, not an
-   editorial value to ask for again.
-2. **Render from the existing template** if the template already covers
-   everything the variant needs and the variant has no rendered card
-   yet. Build the context dict in a short ad-hoc `uv run python -c`
-   and write the output. Do **not** extend the template with new
-   context fields just for one family — handcraft those sections in
-   the rendered markdown instead.
+Do not restate a catalogued number in the prose. The parameter count, the
+download sizes, the error rates and the validation commit are all rendered a
+few lines away, and a hand-typed copy of one is a second source of truth that
+nothing checks. Say what the model is for; let the regions say how big and
+how accurate it is.
 
-Subsequent regenerations must respect human edits.
+Everything outside a `catalog:` region is yours, and re-running the renderer
+never touches it.
 
 ### Step 4c: HF card spec
 
 Write `scripts/hf_cards/<variant>.yaml`, mirroring a current nearby spec.
 It contains editorial and release state only; identity, repositories, upstream
-commit, license, language support, downloads, benchmark values, and capability
-flags are derived from `catalog/<variant>.json`:
+commit, license, language support, downloads, benchmark values, capability
+flags, the metric column label and the link back to the model page are all
+derived from `catalog/<variant>.json`. `generate.py` accepts only the keys
+below and refuses anything else, so a field that belongs to the catalog
+cannot creep back in and a misspelled key fails loudly:
 
 ```yaml
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/<variant>.md
 pin_date: <ISO date when the upstream revision was pinned>
 
 validation:
   reference: <intake.reference_framework>
-  commit: <validated transcribe.cpp commit SHA>
+  commit: <the transcribe.cpp commit the validation actually ran at>
   date: <today in UTC>
 
 pipeline_tag: automatic-speech-recognition
@@ -234,6 +238,18 @@ wer:
   notes: |
     <how the headline number was measured; anything a reader needs to compare it>
 ```
+
+`validation.commit` is a real commit and is rendered as a link into the
+tree, so it must be a SHA. Record the commit the validation ran at; the
+reference framework's version belongs in `validation.reference`. Never
+copy a plausible-looking SHA from a sibling spec: a pin that names no
+real run is worse than no pin, because it cannot be told from one that does.
+
+`wer.notes` holds editorial caveats only. The mechanical sentence
+(dataset, size, batch, timestamps, build) is generated from the headline
+rows, and the metric column label is the catalog's own; state a number here
+only to compare against something the catalog does not hold, such as an
+upstream self-reported figure.
 
 ### Step 5: Render docs and card (execute)
 
