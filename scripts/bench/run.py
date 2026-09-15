@@ -341,6 +341,18 @@ def discover_matrix(repo: Path, model_tokens: list[str] | None,
     return cells
 
 
+def catalog_key(records: dict, variant: str) -> str | None:
+    """Catalog variant for an on-disk dir name. Model dirs keep the upstream
+    repo casing (models/Qwen3-ASR-0.6B) while catalog keys are lowercase
+    (qwen3-asr-0.6b); the two must be reconciled for profile lookups."""
+    if variant in records:
+        return variant
+    lower = variant.lower()
+    if lower in records:
+        return lower
+    return next((key for key in records if key.lower() == lower), None)
+
+
 def group_by_variant(cells: list[Cell]) -> dict[str, list[Cell]]:
     groups: dict[str, list[Cell]] = {}
     for cell in cells:
@@ -744,7 +756,10 @@ def _run_one_backend(backend: BackendSpec,
         # Profile runs contain only cells assigned to this machine/backend,
         # including model-specific reviewed exceptions.
         if args.profile is not None:
-            record = args._catalog_records[variant]
+            key = catalog_key(args._catalog_records, variant)
+            if key is None:
+                continue
+            record = args._catalog_records[key]
             expected = benchmark_profiles.apply_exceptions(
                 record, "speed",
                 benchmark_profiles.expected_speed(record, args._profile_data))
@@ -894,12 +909,12 @@ def main() -> int:
         # A local models directory may contain unpublished experiments. A
         # profile runs only files named by catalog downloads.
         allowed = {
-            (variant, item["quant"].lower())
+            (variant.lower(), item["quant"].lower())
             for variant, record in args._catalog_records.items()
             for item in record.get("downloads", [])
         }
         cells = [cell for cell in cells
-                 if (cell.variant, cell.quant.lower()) in allowed]
+                 if (cell.variant.lower(), cell.quant.lower()) in allowed]
     by_variant = group_by_variant(cells)
 
     if args.dry_run:
