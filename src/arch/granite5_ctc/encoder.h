@@ -144,8 +144,11 @@ struct EncoderBuild {
     std::vector<int32_t>   block_stage;  // block index -> stages[] index
 
     // Graph outputs.
-    ggml_tensor * out        = nullptr;  // [hidden, T_out]   ("enc.out")
-    ggml_tensor * ctc_logits = nullptr;  // [vocab,  T_out]   ("enc.ctc_logits")
+    ggml_tensor *              out        = nullptr;  // [hidden, T_out, B] ("enc.out")
+    ggml_tensor *              ctc_logits = nullptr;  // [vocab, T_out, B], debug validation only
+    ggml_tensor *              ctc_ids    = nullptr;  // [T_out, B] i32, normal greedy path
+    ggml_tensor *              ctc_probs  = nullptr;  // [T_out, B] f32 winning-class probabilities
+    std::vector<ggml_tensor *> ctc_diag_masks;        // chunk-local identity inputs
 
     ggml_cgraph * graph = nullptr;
 

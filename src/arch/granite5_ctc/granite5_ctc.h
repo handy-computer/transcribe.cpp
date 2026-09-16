@@ -63,8 +63,10 @@ struct Granite5CtcModel final : public transcribe_model {
 
 struct Granite5CtcSession final : public transcribe_session {
     // Host scratch, reused across runs.
-    std::vector<float> feats_buf;   // [T_enc, input_dim] stacked frontend output
-    std::vector<float> logits_buf;  // [T_out, vocab] CTC logits
+    std::vector<float>   feats_buf;   // [T_enc, input_dim] stacked frontend output
+    std::vector<float>   logits_buf;  // [T_out, vocab] CTC logits (debug only)
+    std::vector<int32_t> ctc_ids;     // [T_out] greedy labels
+    std::vector<float>   ctc_probs;   // [T_out] winning-class probabilities
 
     Granite5CtcSession() = default;
     ~Granite5CtcSession() override;

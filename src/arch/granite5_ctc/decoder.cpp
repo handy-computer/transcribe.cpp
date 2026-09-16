@@ -66,6 +66,28 @@ void collapse_whitespace(std::string & s) {
 
 }  // namespace
 
+void ctc_greedy_collapse_ids(const int32_t *         ids,
+                             const float *           probs,
+                             int                     t_len,
+                             int                     blank_id,
+                             std::vector<CtcToken> & out_tokens) {
+    out_tokens.clear();
+    if (ids == nullptr || probs == nullptr || t_len <= 0) {
+        return;
+    }
+    int prev = -1;
+    for (int t = 0; t < t_len; ++t) {
+        const int label = ids[t];
+        if (label == prev) {
+            continue;
+        }
+        prev = label;
+        if (label != blank_id) {
+            out_tokens.push_back({ label, probs[t], t });
+        }
+    }
+}
+
 void ctc_greedy_collapse(const float * logits, int t_len, int vocab, int blank_id, std::vector<CtcToken> & out_tokens) {
     out_tokens.clear();
     if (logits == nullptr || t_len <= 0 || vocab <= 0) {

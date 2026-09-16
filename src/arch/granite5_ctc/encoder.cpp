@@ -48,6 +48,98 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, ggml_
     return y;
 }
 
+// Concatenate a potentially long chunk list as a balanced tree so graph
+// traversal depth stays logarithmic.
+ggml_tensor * concat_columns(ggml_context * ctx, std::vector<ggml_tensor *> chunks) {
+    while (chunks.size() > 1) {
+        std::vector<ggml_tensor *> next;
+        next.reserve((chunks.size() + 1) / 2);
+        for (size_t i = 0; i < chunks.size(); i += 2) {
+            next.push_back(i + 1 < chunks.size() ? ggml_concat(ctx, chunks[i], chunks[i + 1], /*dim=*/1) : chunks[i]);
+        }
+        chunks.swap(next);
+    }
+    return chunks.front();
+}
+
+// The self-conditioning CTC vocabulary projection is frame-local. Chunk it
+// to avoid retaining full [vocab, time] logits and softmax tensors.
+ggml_tensor * self_condition_chunked(ggml_context * ctx,
+                                     ggml_tensor *  x,
+                                     ggml_tensor *  proj_w,
+                                     ggml_tensor *  proj_b,
+                                     ggml_tensor *  bypass_w,
+                                     ggml_tensor *  bypass_b) {
+    constexpr int64_t          kChunk = 128;
+    const int64_t              hidden = x->ne[0];
+    const int64_t              cols   = x->ne[1] * x->ne[2];
+    ggml_tensor *              flat   = ggml_reshape_2d(ctx, x, hidden, cols);
+    std::vector<ggml_tensor *> chunks;
+    chunks.reserve(static_cast<size_t>((cols + kChunk - 1) / kChunk));
+    for (int64_t col0 = 0; col0 < cols; col0 += kChunk) {
+        const int64_t n      = std::min<int64_t>(kChunk, cols - col0);
+        ggml_tensor * part   = ggml_view_2d(ctx, flat, hidden, n, flat->nb[1], col0 * flat->nb[1]);
+        ggml_tensor * logits = linear(ctx, part, proj_w, proj_b);
+        chunks.push_back(linear(ctx, ggml_soft_max(ctx, logits), bypass_w, bypass_b));
+    }
+    ggml_tensor * joined = concat_columns(ctx, std::move(chunks));
+    return ggml_reshape_3d(ctx, joined, hidden, x->ne[1], x->ne[2]);
+}
+
+struct ChunkedCtc {
+    ggml_tensor * ids   = nullptr;
+    ggml_tensor * probs = nullptr;
+};
+
+// Produce greedy labels and their softmax probabilities in bounded chunks.
+// get_rows selects each winning class; multiplying by a chunk-local identity
+// extracts the diagonal without a backend-specific gather-elements op.
+ChunkedCtc ctc_argmax_chunked(ggml_context *               ctx,
+                              ggml_tensor *                x,
+                              ggml_tensor *                proj_w,
+                              ggml_tensor *                proj_b,
+                              std::vector<ggml_tensor *> & diag_masks) {
+    constexpr int64_t          kChunk = 256;
+    const int64_t              hidden = x->ne[0];
+    const int64_t              cols   = x->ne[1] * x->ne[2];
+    ggml_tensor *              flat   = ggml_reshape_2d(ctx, x, hidden, cols);
+    std::vector<ggml_tensor *> id_chunks;
+    std::vector<ggml_tensor *> prob_chunks;
+    id_chunks.reserve(static_cast<size_t>((cols + kChunk - 1) / kChunk));
+    prob_chunks.reserve(id_chunks.capacity());
+    diag_masks.reserve(id_chunks.capacity());
+    for (int64_t col0 = 0; col0 < cols; col0 += kChunk) {
+        const int64_t n      = std::min<int64_t>(kChunk, cols - col0);
+        ggml_tensor * part   = ggml_view_2d(ctx, flat, hidden, n, flat->nb[1], col0 * flat->nb[1]);
+        ggml_tensor * logits = linear(ctx, part, proj_w, proj_b);
+        ggml_tensor * ids    = ggml_argmax(ctx, logits);
+        id_chunks.push_back(ids);
+
+        ggml_tensor * probs_t = ggml_cont(ctx, ggml_transpose(ctx, ggml_soft_max(ctx, logits)));
+        ggml_tensor * picked  = ggml_get_rows(ctx, probs_t, ids);  // [frame, selected frame]
+        ggml_tensor * diag    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n);
+        ggml_set_input(diag);
+        diag_masks.push_back(diag);
+        prob_chunks.push_back(ggml_reshape_1d(ctx, ggml_sum_rows(ctx, ggml_mul(ctx, picked, diag)), n));
+    }
+    auto concat_vectors = [ctx](std::vector<ggml_tensor *> chunks) {
+        while (chunks.size() > 1) {
+            std::vector<ggml_tensor *> next;
+            next.reserve((chunks.size() + 1) / 2);
+            for (size_t i = 0; i < chunks.size(); i += 2) {
+                next.push_back(i + 1 < chunks.size() ? ggml_concat(ctx, chunks[i], chunks[i + 1], /*dim=*/0) :
+                                                       chunks[i]);
+            }
+            chunks.swap(next);
+        }
+        return chunks.front();
+    };
+    return {
+        ggml_reshape_2d(ctx, concat_vectors(std::move(id_chunks)), x->ne[1], x->ne[2]),
+        ggml_reshape_2d(ctx, concat_vectors(std::move(prob_chunks)), x->ne[1], x->ne[2]),
+    };
+}
+
 }  // namespace
 
 // Host-side frontend.
@@ -583,13 +675,18 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
         // of block (self_cond_layer - 1), using the SAME projection as
         // the final CTC head (tied weights).
         if (i + 1 == hp.enc_self_cond_layer) {
-            ggml_tensor * mid_logits = linear(ctx, x, weights.enc_top.ctc_proj_w, weights.enc_top.ctc_proj_b);
-            record("enc.ctc.mid_logits", mid_logits);
+            ggml_tensor * injection;
+            if (transcribe::debug::enabled()) {
+                ggml_tensor * mid_logits = linear(ctx, x, weights.enc_top.ctc_proj_w, weights.enc_top.ctc_proj_b);
+                record("enc.ctc.mid_logits", mid_logits);
 
-            ggml_tensor * mid_soft  = ggml_soft_max(ctx, mid_logits);
-            ggml_tensor * injection = linear(ctx, mid_soft, weights.enc_top.ctc_bypass_w, weights.enc_top.ctc_bypass_b);
-            record("enc.ctc.mid_injection", injection);
-
+                ggml_tensor * mid_soft = ggml_soft_max(ctx, mid_logits);
+                injection = linear(ctx, mid_soft, weights.enc_top.ctc_bypass_w, weights.enc_top.ctc_bypass_b);
+                record("enc.ctc.mid_injection", injection);
+            } else {
+                injection = self_condition_chunked(ctx, x, weights.enc_top.ctc_proj_w, weights.enc_top.ctc_proj_b,
+                                                   weights.enc_top.ctc_bypass_w, weights.enc_top.ctc_bypass_b);
+            }
             x = ggml_add(ctx, x, injection);
         }
     }
@@ -603,17 +700,32 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
     ggml_set_output(eb.out);
     eb.dump_list.emplace_back("enc.out", eb.out);
 
-    // Tied CTC head: the same projection as the mid-layer one.
-    eb.ctc_logits = linear(ctx, x, weights.enc_top.ctc_proj_w, weights.enc_top.ctc_proj_b);
-    record("enc.ctc_logits", eb.ctc_logits);
-    ggml_set_output(eb.ctc_logits);
+    // Tied CTC head: retain complete logits only for numerical validation.
+    // Normal greedy inference downloads one int32 label per frame instead.
+    if (transcribe::debug::enabled()) {
+        eb.ctc_logits = linear(ctx, x, weights.enc_top.ctc_proj_w, weights.enc_top.ctc_proj_b);
+        record("enc.ctc_logits", eb.ctc_logits);
+        ggml_set_output(eb.ctc_logits);
+    } else {
+        const ChunkedCtc ctc =
+            ctc_argmax_chunked(ctx, x, weights.enc_top.ctc_proj_w, weights.enc_top.ctc_proj_b, eb.ctc_diag_masks);
+        eb.ctc_ids   = ctc.ids;
+        eb.ctc_probs = ctc.probs;
+        named(eb.ctc_ids, "enc.ctc_ids");
+        named(eb.ctc_probs, "enc.ctc_probs");
+        ggml_set_output(eb.ctc_ids);
+        ggml_set_output(eb.ctc_probs);
+    }
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (eb.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite5_ctc encoder: ggml_new_graph_custom failed");
         return eb;
     }
-    ggml_build_forward_expand(eb.graph, eb.ctc_logits);
+    ggml_build_forward_expand(eb.graph, eb.ctc_logits != nullptr ? eb.ctc_logits : eb.ctc_ids);
+    if (eb.ctc_probs != nullptr) {
+        ggml_build_forward_expand(eb.graph, eb.ctc_probs);
+    }
     ggml_build_forward_expand(eb.graph, eb.out);
 
     return eb;

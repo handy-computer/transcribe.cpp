@@ -44,6 +44,13 @@ struct CtcToken {
 // [T, vocab] host order (i.e. ggml ne = [vocab, T] read contiguously).
 void ctc_greedy_collapse(const float * logits, int t_len, int vocab, int blank_id, std::vector<CtcToken> & out_tokens);
 
+// Collapse device-computed frame argmax IDs and winning-class probabilities.
+void ctc_greedy_collapse_ids(const int32_t *         ids,
+                             const float *           probs,
+                             int                     t_len,
+                             int                     blank_id,
+                             std::vector<CtcToken> & out_tokens);
+
 // Milliseconds per encoder frame. Every subsampling block halves the
 // rate on top of the frontend's hop and frame stacking:
 //     hop * stack * 2^len(subsample_layers) / sample_rate

@@ -293,7 +293,8 @@ transcribe_status run_encoder(Granite5CtcSession *     cc,
     }
 
     out_eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_max, real_lens);
-    if (out_eb.graph == nullptr || out_eb.out == nullptr || out_eb.ctc_logits == nullptr) {
+    if (out_eb.graph == nullptr || out_eb.out == nullptr ||
+        (out_eb.ctc_logits == nullptr && out_eb.ctc_ids == nullptr)) {
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -348,6 +349,15 @@ transcribe_status run_encoder(Granite5CtcSession *     cc,
         }
     }
 
+    for (ggml_tensor * diag : out_eb.ctc_diag_masks) {
+        const int64_t      n = diag->ne[0];
+        std::vector<float> identity(static_cast<size_t>(n * n), 0.0f);
+        for (int64_t i = 0; i < n; ++i) {
+            identity[static_cast<size_t>(i * n + i)] = 1.0f;
+        }
+        ggml_backend_tensor_set(diag, identity.data(), 0, identity.size() * sizeof(float));
+    }
+
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
@@ -396,6 +406,19 @@ void decode_and_populate(Granite5CtcSession * cc,
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 }
 
+void decode_ids_and_populate(Granite5CtcSession * cc,
+                             Granite5CtcModel *   cm,
+                             const int32_t *      ids,
+                             const float *        probs,
+                             int                  t_valid,
+                             int64_t              clip_ms) {
+    const int64_t         t_dec_start = ggml_time_us();
+    std::vector<CtcToken> toks;
+    ctc_greedy_collapse_ids(ids, probs, t_valid, cm->hparams.blank_id, toks);
+    build_result(*cc, cm->tok, cm->hparams, toks, clip_ms);
+    cc->t_decode_us = ggml_time_us() - t_dec_start;
+}
+
 int64_t clip_ms_for(const Granite5CtcHParams & hp, int n_samples) {
     return (hp.fe_sample_rate > 0) ? (static_cast<int64_t>(n_samples) * 1000 / hp.fe_sample_rate) : 0;
 }
@@ -420,13 +443,20 @@ transcribe_status encode_and_decode(Granite5CtcSession * cc, Granite5CtcModel * 
         return st;
     }
 
-    const int t_out = static_cast<int>(eb.ctc_logits->ne[1]);
-    const int vocab = static_cast<int>(eb.ctc_logits->ne[0]);
-    cc->logits_buf.assign(static_cast<size_t>(t_out) * vocab, 0.0f);
-    ggml_backend_tensor_get(eb.ctc_logits, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
-
-    decode_and_populate(cc, cm, cc->logits_buf.data(), t_out, vocab, clip_ms_for(hp, n_samples),
-                        /*utt_index=*/-1);
+    const int t_out = eb.t_out;
+    if (eb.ctc_logits != nullptr) {
+        const int vocab = static_cast<int>(eb.ctc_logits->ne[0]);
+        cc->logits_buf.assign(static_cast<size_t>(t_out) * vocab, 0.0f);
+        ggml_backend_tensor_get(eb.ctc_logits, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
+        decode_and_populate(cc, cm, cc->logits_buf.data(), t_out, vocab, clip_ms_for(hp, n_samples),
+                            /*utt_index=*/-1);
+    } else {
+        cc->ctc_ids.assign(static_cast<size_t>(t_out), 0);
+        cc->ctc_probs.assign(static_cast<size_t>(t_out), 0.0f);
+        ggml_backend_tensor_get(eb.ctc_ids, cc->ctc_ids.data(), 0, cc->ctc_ids.size() * sizeof(int32_t));
+        ggml_backend_tensor_get(eb.ctc_probs, cc->ctc_probs.data(), 0, cc->ctc_probs.size() * sizeof(float));
+        decode_ids_and_populate(cc, cm, cc->ctc_ids.data(), cc->ctc_probs.data(), t_out, clip_ms_for(hp, n_samples));
+    }
     return TRANSCRIBE_OK;
 }
 
@@ -525,20 +555,35 @@ transcribe_status run_batch(transcribe_session *          session,
 
         EncoderBuild eb{};
         if (auto st = run_encoder(cc, cm, T_max, lens, eb); st == TRANSCRIBE_OK) {
-            const int    t_out     = static_cast<int>(eb.ctc_logits->ne[1]);
-            const int    vocab     = static_cast<int>(eb.ctc_logits->ne[0]);
-            const size_t utt_elems = static_cast<size_t>(t_out) * vocab;
-            // Full read then host-slice: non-zero-offset backend reads are
-            // not reliable across every backend.
-            cc->logits_buf.assign(utt_elems * static_cast<size_t>(n), 0.0f);
-            ggml_backend_tensor_get(eb.ctc_logits, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
+            const int t_out = eb.t_out;
+            if (eb.ctc_logits != nullptr) {
+                const int    vocab     = static_cast<int>(eb.ctc_logits->ne[0]);
+                const size_t utt_elems = static_cast<size_t>(t_out) * vocab;
+                // Full read then host-slice: non-zero-offset backend reads are
+                // not reliable across every backend.
+                cc->logits_buf.assign(utt_elems * static_cast<size_t>(n), 0.0f);
+                ggml_backend_tensor_get(eb.ctc_logits, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
 
-            return transcribe::decode_batch_slices(
-                cc, n, cc->logits_buf.data(), utt_elems, cc->t_encode_us, total_mel_us,
-                [&](int b, const float * logits_b) -> transcribe_status {
-                    const int t_valid = std::min(eb.real_lens_out[static_cast<size_t>(b)], t_out);
-                    decode_and_populate(cc, cm, logits_b, t_valid, vocab, clip_ms_for(cm->hparams, n_samples[b]),
-                                        /*utt_index=*/b);
+                return transcribe::decode_batch_slices(
+                    cc, n, cc->logits_buf.data(), utt_elems, cc->t_encode_us, total_mel_us,
+                    [&](int b, const float * logits_b) -> transcribe_status {
+                        const int t_valid = std::min(eb.real_lens_out[static_cast<size_t>(b)], t_out);
+                        decode_and_populate(cc, cm, logits_b, t_valid, vocab, clip_ms_for(cm->hparams, n_samples[b]),
+                                            /*utt_index=*/b);
+                        return TRANSCRIBE_OK;
+                    });
+            }
+
+            cc->ctc_ids.assign(static_cast<size_t>(t_out) * static_cast<size_t>(n), 0);
+            cc->ctc_probs.assign(static_cast<size_t>(t_out) * static_cast<size_t>(n), 0.0f);
+            ggml_backend_tensor_get(eb.ctc_ids, cc->ctc_ids.data(), 0, cc->ctc_ids.size() * sizeof(int32_t));
+            ggml_backend_tensor_get(eb.ctc_probs, cc->ctc_probs.data(), 0, cc->ctc_probs.size() * sizeof(float));
+            return transcribe::decode_batch_id_slices(
+                cc, n, cc->ctc_ids.data(), static_cast<size_t>(t_out), cc->t_encode_us, total_mel_us,
+                [&](int b, const int32_t * ids_b) -> transcribe_status {
+                    const int     t_valid = std::min(eb.real_lens_out[static_cast<size_t>(b)], t_out);
+                    const float * probs_b = cc->ctc_probs.data() + static_cast<size_t>(b) * t_out;
+                    decode_ids_and_populate(cc, cm, ids_b, probs_b, t_valid, clip_ms_for(cm->hparams, n_samples[b]));
                     return TRANSCRIBE_OK;
                 });
         }
