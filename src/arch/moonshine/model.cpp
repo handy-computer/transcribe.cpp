@@ -194,6 +194,19 @@ namespace {
 
 constexpr const char k_default_variant[] = "moonshine";
 
+// Upstream recommends roughly 6.5 generated tokens per second. Keep generous
+// short-clip headroom while avoiding a full 194-position self-KV allocation
+// for every utterance.
+int decode_generation_budget(int n_samples, int model_max) {
+    constexpr int64_t k_native_sr_hz  = 16000;
+    constexpr int64_t k_budget_num    = 13;
+    constexpr int64_t k_budget_den    = 2;
+    constexpr int64_t k_budget_floor  = 24;
+    const int         duration_budget = static_cast<int>(
+        static_cast<int64_t>(n_samples) * k_budget_num / (k_budget_den * k_native_sr_hz) + k_budget_floor);
+    return model_max > 0 ? std::min(duration_budget, model_max) : duration_budget;
+}
+
 extern transcribe_status load(Loader &, const transcribe_model_load_params *, transcribe_model **);
 extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *, transcribe_session **);
 extern transcribe_status run(transcribe_session *, const float *, int, const transcribe_run_params *);
@@ -437,18 +450,19 @@ transcribe_status run(transcribe_session *          session,
     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
 
     // ----- KV cache init -----
+    const int decode_cap = decode_generation_budget(n_samples, hp.dec_max_position_embeddings);
     {
-        if (cc->kv_cache.buffer != nullptr && cc->kv_cache.T_enc != T_enc) {
+        if (cc->kv_cache.buffer != nullptr && (cc->kv_cache.T_enc != T_enc || cc->kv_cache.n_ctx != decode_cap)) {
             cc->kv_cache.free();
         }
         if (cc->kv_cache.buffer == nullptr) {
-            const int n_ctx      = hp.dec_max_position_embeddings > 0 ? hp.dec_max_position_embeddings : 512;
             ggml_type cache_type = resolved_kv;
             // Default the cache to F32 to match moonshine's reference regime.
             if (cache_type == GGML_TYPE_COUNT) {
                 cache_type = GGML_TYPE_F32;
             }
-            if (!kv_cache_init(cc->kv_cache, cm->plan.primary, n_ctx, T_enc, d_model, hp.dec_n_layers, cache_type)) {
+            if (!kv_cache_init(cc->kv_cache, cm->plan.primary, decode_cap, T_enc, d_model, hp.dec_n_layers,
+                               cache_type)) {
                 transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                     "moonshine run: KV cache allocation failed — out of memory.");
                 return TRANSCRIBE_ERR_OOM;
@@ -492,7 +506,7 @@ transcribe_status run(transcribe_session *          session,
     const int64_t t_decode_start = ggml_time_us();
     const int     decoder_start  = hp.decoder_start_token_id;  // 1
     const int     eos            = hp.eos_token_id;            // 2
-    const int     max_pos        = hp.dec_max_position_embeddings;
+    const int     max_pos        = decode_cap;
 
     std::vector<int32_t> generated_ids;
     int                  next_token = -1;
@@ -903,7 +917,13 @@ transcribe_status run_batch(transcribe_session *          session,
     const int     n_layer       = hp.dec_n_layers;
     const int     decoder_start = hp.decoder_start_token_id;
     const int32_t eos           = hp.eos_token_id;
-    const int     max_pos       = hp.dec_max_position_embeddings;
+    int           max_samples   = 0;
+    for (int b = 0; b < n; ++b) {
+        if (pcm[b] != nullptr && n_samples[b] > 0) {
+            max_samples = std::max(max_samples, n_samples[b]);
+        }
+    }
+    const int max_pos = decode_generation_budget(max_samples, hp.dec_max_position_embeddings);
 
     // ----- Serial per-utterance encoder (no mel; raw PCM) -----
     std::vector<char>               valid(n, 0);
