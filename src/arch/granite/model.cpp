@@ -826,7 +826,8 @@ transcribe_status run(transcribe_session *          ctx_base,
     }
 
     // Build encoder graph.
-    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams, t_enc, cc->encoder_use_flash);
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams, t_enc, cc->encoder_use_flash,
+                                          ggml_backend_name(cm->plan.primary));
     if (eb.graph == nullptr || eb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1344,7 +1345,8 @@ transcribe_status encode_one(GraniteSession *           cc,
                             "out of memory.");
         return TRANSCRIBE_ERR_OOM;
     }
-    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, t_enc, cc->encoder_use_flash);
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, t_enc, cc->encoder_use_flash,
+                                          ggml_backend_name(cm->plan.primary));
     if (eb.graph == nullptr || eb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }

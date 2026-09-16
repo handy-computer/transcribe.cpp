@@ -96,12 +96,14 @@ struct EncoderBuild {
 // (== n_mel_frames / 2 after the whisper-mode trim). `use_flash` is
 // reserved for future use — the implementation uses manual mul_mat + soft_max
 // because the Shaw bias requires a per-(head, block) additive term and
-// the flash_attn_ext path doesn't yet broadcast that cleanly.
+// the flash_attn_ext path doesn't yet broadcast that cleanly. `backend_name`
+// selects the bounded depthwise-convolution implementation.
 EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  const GraniteWeights & weights,
                                  const GraniteHParams & hp,
                                  int                    T_enc,
-                                 bool                   use_flash);
+                                 bool                   use_flash,
+                                 const char *           backend_name);
 
 // Host-side precomputation of the Shaw positional-bias rows.
 //

@@ -223,7 +223,8 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
                                   ggml_tensor *           bn_fused_scale,
                                   ggml_tensor *           bn_fused_bias,
                                   int                     conv_kernel,
-                                  int                     inner_dim) {
+                                  int                     inner_dim,
+                                  bool                    direct_depthwise) {
     const int64_t d_model = x->ne[0];
     const int64_t T       = x->ne[1];
 
@@ -250,11 +251,49 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
     // Transpose for depthwise conv: [inner_dim, T] -> [T, inner_dim].
     x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
 
-    // Depthwise conv1d: kernel [k, 1, inner_dim], symmetric pad (k-1)/2
-    // (= 7 for k=15). Granite's depthwise has no bias.
+    // Depthwise conv1d: kernel [k, 1, inner_dim], symmetric pad (k-1)/2.
+    // The im2col implementation expands [T, C] to [k*C, T], which reaches
+    // gigabytes on long clips. Prefer the direct depthwise operator; keep a
+    // bounded im2col fallback for backends where the direct op is disabled.
     const int padding = (conv_kernel - 1) / 2;
-    x                 = transcribe::conformer::conv_1d_dw_f32(ctx, b.conv_depthwise_w, x,
-                                                              /*stride=*/1, /*padding=*/padding, /*dilation=*/1);
+    if (direct_depthwise) {
+        ggml_tensor * kernel = ggml_reshape_4d(ctx, b.conv_depthwise_w, conv_kernel, 1, 1, inner_dim);
+        ggml_tensor * data   = ggml_reshape_4d(ctx, x, T, 1, inner_dim, 1);
+        x                    = transcribe::conformer::conv_2d_dw_direct_f32(ctx, kernel, data,
+                                                                            /*s0=*/1, /*s1=*/1,
+                                                                            /*p0=*/padding, /*p1=*/0,
+                                                                            /*d0=*/1, /*d1=*/1);
+        x                    = ggml_reshape_3d(ctx, x, x->ne[0], x->ne[2], x->ne[3]);
+    } else {
+        constexpr int64_t          kTimeChunk = 256;
+        std::vector<ggml_tensor *> chunks;
+        chunks.reserve(static_cast<size_t>((T + kTimeChunk - 1) / kTimeChunk));
+        for (int64_t out0 = 0; out0 < T; out0 += kTimeChunk) {
+            const int64_t n_out     = std::min<int64_t>(kTimeChunk, T - out0);
+            const int64_t src0      = out0 - padding;
+            const int64_t src1      = src0 + n_out + conv_kernel - 1;
+            const int64_t view0     = std::max<int64_t>(0, src0);
+            const int64_t view1     = std::min<int64_t>(T, src1);
+            const int64_t pad_left  = view0 - src0;
+            const int64_t pad_right = src1 - view1;
+            ggml_tensor * input =
+                ggml_view_3d(ctx, x, view1 - view0, inner_dim, 1, x->nb[1], x->nb[2], view0 * x->nb[0]);
+            input = ggml_pad_ext(ctx, input, pad_left, pad_right, 0, 0, 0, 0, 0, 0);
+            chunks.push_back(transcribe::conformer::conv_1d_dw_f32(ctx, b.conv_depthwise_w, input,
+                                                                   /*stride=*/1, /*padding=*/0,
+                                                                   /*dilation=*/1));
+        }
+        while (chunks.size() > 1) {
+            std::vector<ggml_tensor *> next;
+            next.reserve((chunks.size() + 1) / 2);
+            for (size_t i = 0; i < chunks.size(); i += 2) {
+                next.push_back(i + 1 < chunks.size() ? ggml_concat(ctx, chunks[i], chunks[i + 1], /*dim=*/0) :
+                                                       chunks[i]);
+            }
+            chunks.swap(next);
+        }
+        x = chunks.front();
+    }
 
     // Fused BatchNorm: y = x * fused_scale + fused_bias, with 1-D scale
     // and bias broadcast across the time axis.
@@ -285,8 +324,15 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  const GraniteWeights & weights,
                                  const GraniteHParams & hp,
                                  int                    T_enc,
-                                 bool /*use_flash*/) {
+                                 bool /*use_flash*/,
+                                 const char * backend_name) {
     EncoderBuild eb{};
+
+    const bool backend_direct   = backend_name != nullptr && (std::strstr(backend_name, "Vulkan") != nullptr ||
+                                                              std::strstr(backend_name, "CUDA") != nullptr ||
+                                                              std::strstr(backend_name, "ROCm") != nullptr);
+    const bool direct_depthwise = transcribe::conformer::resolve_conv_direct(
+        "TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW", backend_direct);
     eb.n_blocks_local = (T_enc + hp.enc_context_size - 1) / hp.enc_context_size;
     const int T_pad   = eb.n_blocks_local * hp.enc_context_size;
     eb.last_block_rem = T_enc - (eb.n_blocks_local - 1) * hp.enc_context_size;
@@ -381,7 +427,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
         //   bias  = bn_b - bn_mean * scale
         // into [inner_dim] tensors stashed under conv_bn_fused_*.
         ggml_tensor * conv_out = granite_conv_module(ctx, x, b, b.conv_bn_fused_scale, b.conv_bn_fused_bias, conv_k,
-                                                     static_cast<int>(inner_dim));
+                                                     static_cast<int>(inner_dim), direct_depthwise);
         x                      = ggml_add(ctx, x, conv_out);
 
         // --- FF2 macaron half ---
