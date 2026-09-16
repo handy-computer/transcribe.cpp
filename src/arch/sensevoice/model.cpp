@@ -238,20 +238,26 @@ void apply_thread_policy(SenseVoiceSession * cc) {
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 }
 
-// Greedy CTC decode + public result-hierarchy build for ONE utterance's CTC
-// log-probabilities. Shared by the single-shot path (run) and the batched
-// path (run_batch). `log_probs` is the row-major [T_full, vocab] buffer for
-// this utterance (row t at log_probs + t*vocab); `lang` is the caller's
-// requested language (or null/auto) and `n_samples` sizes the segment
-// duration. Writes the session scratch result slot (token_ids / tokens /
-// segments / full_text / detected_language / result_kind / has_result) and
-// records cc->t_decode_us.
+static void argmax_rows(const float * rows, int n_rows, int n_columns, int32_t * out) {
+    for (int t = 0; t < n_rows; ++t) {
+        const float * row  = rows + static_cast<size_t>(t) * n_columns;
+        int32_t       best = 0;
+        for (int v = 1; v < n_columns; ++v) {
+            if (row[v] > row[best]) {
+                best = v;
+            }
+        }
+        out[t] = best;
+    }
+}
+
+// Greedy CTC collapse + public result-hierarchy build for one utterance.
+// `frame_ids` is the device- or host-computed argmax at each encoder frame.
 static transcribe_status decode_and_populate(SenseVoiceSession *           cc,
                                              SenseVoiceModel *             cm,
                                              const transcribe_run_params * params,
-                                             const float *                 log_probs,
+                                             const int32_t *               frame_ids,
                                              int                           T_full,
-                                             int                           vocab,
                                              const char *                  lang,
                                              int                           n_samples) {
     const auto &  hp          = cm->hparams;
@@ -263,20 +269,12 @@ static transcribe_status decode_and_populate(SenseVoiceSession *           cc,
     cc->token_ids.reserve(static_cast<size_t>(T_full));
     int prev_id = -1;
     for (int t = 0; t < T_full; ++t) {
-        const float * row     = log_probs + static_cast<size_t>(t) * vocab;
-        int           best_id = 0;
-        float         best    = row[0];
-        for (int v = 1; v < vocab; ++v) {
-            if (row[v] > best) {
-                best    = row[v];
-                best_id = v;
+        const int32_t id = frame_ids[t];
+        if (id != prev_id) {
+            if (id != blank_id) {
+                cc->token_ids.push_back(id);
             }
-        }
-        if (best_id != prev_id) {
-            if (best_id != blank_id) {
-                cc->token_ids.push_back(best_id);
-            }
-            prev_id = best_id;
+            prev_id = id;
         }
     }
 
@@ -451,7 +449,8 @@ transcribe_status run(transcribe_session *          session,
     }
 
     // ---------- Build the encoder graph -------------------------------
-    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_lfr);
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_lfr, /*n_batch=*/1,
+                                          /*batch_var_len=*/false, cm->backend.c_str());
     if (eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -460,7 +459,7 @@ transcribe_status run(transcribe_session *          session,
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
                                            static_cast<int>(cm->plan.scheduler_list.size()),
-                                           /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+                                           /*graph_size=*/32768, /*parallel=*/false, /*op_offload=*/true);
         if (cc->sched == nullptr) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "sensevoice run: scheduler allocation failed — out of memory. "
@@ -575,13 +574,18 @@ transcribe_status run(transcribe_session *          session,
     try_dump("ctc.logits.raw", eb.dumps.ctc_logits, "ctc.logits.raw");
     try_dump("ctc.log_probs", eb.dumps.ctc_log_probs, "ctc.log_probs");
 
-    // ---------- Read CTC log-probs to host ---------------------------
+    // ---------- Read greedy CTC ids ----------------------------------
     const int vocab = hp.vocab_size;
-    cc->logits_buf.resize(static_cast<size_t>(T_full) * vocab);
-    ggml_backend_tensor_get(eb.out, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
+    cc->argmax_buf.resize(static_cast<size_t>(T_full));
+    if (transcribe::debug::enabled()) {
+        cc->logits_buf.resize(static_cast<size_t>(T_full) * vocab);
+        ggml_backend_tensor_get(eb.out, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
+        argmax_rows(cc->logits_buf.data(), T_full, vocab, cc->argmax_buf.data());
+    } else {
+        ggml_backend_tensor_get(eb.out, cc->argmax_buf.data(), 0, cc->argmax_buf.size() * sizeof(int32_t));
+    }
 
-    // ---------- Greedy CTC decode + public result --------------------
-    return decode_and_populate(cc, cm, params, cc->logits_buf.data(), T_full, vocab, lang, n_samples);
+    return decode_and_populate(cc, cm, params, cc->argmax_buf.data(), T_full, lang, n_samples);
 }
 
 // ---------------------------------------------------------------------------
@@ -677,7 +681,7 @@ static transcribe_status run_batch_encode(
     }
 
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_max_lfr, /*n_batch=*/n,
-                                          /*batch_var_len=*/var_len);
+                                          /*batch_var_len=*/var_len, cm->backend.c_str());
     if (eb.out == nullptr || eb.graph == nullptr || eb.frontend_in == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -685,7 +689,7 @@ static transcribe_status run_batch_encode(
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
                                            static_cast<int>(cm->plan.scheduler_list.size()),
-                                           /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+                                           /*graph_size=*/32768, /*parallel=*/false, /*op_offload=*/true);
         if (cc->sched == nullptr) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "sensevoice run: scheduler allocation failed — out of memory. "
@@ -764,26 +768,30 @@ static transcribe_status run_batch_encode(
     }
     cc->t_encode_us = ggml_time_us() - t_enc_start;
 
-    // ---------- Read CTC log-probs + per-utterance decode ------------
-    const int    vocab     = hp.vocab_size;
-    const size_t utt_elems = static_cast<size_t>(vocab) * static_cast<size_t>(T_full_max);
-    cc->logits_buf.resize(utt_elems * static_cast<size_t>(n));
-    ggml_backend_tensor_get(eb.out, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
-
-    // Host-slice the shared CTC log-probs and decode each utterance, with the
-    // single shared encode + total mel cost amortized across the batch.
-    return transcribe::decode_batch_slices(
-        cc, n, cc->logits_buf.data(), utt_elems, cc->t_encode_us, total_mel_us, [&](int b, const float * lp) {
-            // Per-utterance CTC log-probs dump for the batch tensor-parity
-            // gate. Same vocab-innermost element order as the single-shot
-            // ctc.log_probs dump, so the harness can diff slice-for-slice.
-            if (transcribe::debug::enabled()) {
+    // ---------- Read CTC output + per-utterance decode ---------------
+    const int vocab = hp.vocab_size;
+    if (transcribe::debug::enabled()) {
+        const size_t utt_elems = static_cast<size_t>(vocab) * static_cast<size_t>(T_full_max);
+        cc->logits_buf.resize(utt_elems * static_cast<size_t>(n));
+        ggml_backend_tensor_get(eb.out, cc->logits_buf.data(), 0, cc->logits_buf.size() * sizeof(float));
+        cc->argmax_buf.resize(static_cast<size_t>(T_full_max));
+        return transcribe::decode_batch_slices(
+            cc, n, cc->logits_buf.data(), utt_elems, cc->t_encode_us, total_mel_us, [&](int b, const float * lp) {
                 const long long shape[2] = { real_T_full[b], vocab };
                 std::string     nm       = "ctc.log_probs.b" + std::to_string(b);
                 transcribe::debug::dump_host_f32(nm.c_str(), lp, static_cast<long long>(real_T_full[b]) * vocab, shape,
                                                  2, "ctc.log_probs");
-            }
-            return decode_and_populate(cc, cm, params, lp, real_T_full[b], vocab, lang, n_samples[b]);
+                argmax_rows(lp, real_T_full[b], vocab, cc->argmax_buf.data());
+                return decode_and_populate(cc, cm, params, cc->argmax_buf.data(), real_T_full[b], lang, n_samples[b]);
+            });
+    }
+
+    const size_t utt_ids = static_cast<size_t>(T_full_max);
+    cc->argmax_buf.resize(utt_ids * static_cast<size_t>(n));
+    ggml_backend_tensor_get(eb.out, cc->argmax_buf.data(), 0, cc->argmax_buf.size() * sizeof(int32_t));
+    return transcribe::decode_batch_id_slices(
+        cc, n, cc->argmax_buf.data(), utt_ids, cc->t_encode_us, total_mel_us, [&](int b, const int32_t * ids) {
+            return decode_and_populate(cc, cm, params, ids, real_T_full[b], lang, n_samples[b]);
         });
 }
 

@@ -85,7 +85,8 @@ struct EncoderBuild {
     ggml_tensor * attn_pad_mask_in = nullptr;
     ggml_tensor * conv_pad_mask_in = nullptr;
 
-    // CTC log-probabilities. ne=[vocab, T, n_batch, 1].
+    // Debug mode: CTC log-probabilities [vocab, T, n_batch]. Normal mode:
+    // per-frame argmax ids [T * n_batch] i32 from a chunked CTC head.
     ggml_tensor * out = nullptr;
 
     EncoderDumps dumps{};
@@ -104,6 +105,7 @@ EncoderBuild build_encoder_graph(ggml_context *            compute_ctx,
                                  const SenseVoiceHParams & hp,
                                  int                       n_lfr_frames,
                                  int                       n_batch       = 1,
-                                 bool                      batch_var_len = false);
+                                 bool                      batch_var_len = false,
+                                 const char *              backend_name  = nullptr);
 
 }  // namespace transcribe::sensevoice

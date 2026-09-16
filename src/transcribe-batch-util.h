@@ -102,6 +102,16 @@ transcribe_status decode_batch_slices(transcribe_session * session,
                                       int64_t              total_mel_us,
                                       const std::function<transcribe_status(int b, const float * slice)> & decode_fn);
 
+// Integer counterpart for device-side CTC argmax outputs.
+transcribe_status decode_batch_id_slices(
+    transcribe_session *                                                   session,
+    int                                                                    n,
+    const int32_t *                                                        host_buf,
+    std::size_t                                                            utt_elems,
+    int64_t                                                                total_encode_us,
+    int64_t                                                                total_mel_us,
+    const std::function<transcribe_status(int b, const int32_t * slice)> & decode_fn);
+
 // ---------------------------------------------------------------------------
 // Batched encoder-decoder greedy step loop (cohere / canary / moonshine)
 //

@@ -7,7 +7,9 @@
 #include "conformer/conformer.h"
 #include "ggml.h"
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace transcribe::sanm {
 
@@ -36,12 +38,14 @@ ggml_tensor * fsmn_branch(ggml_context * ctx,
                           ggml_tensor *  v_pre,          // [d_model, T, B]
                           ggml_tensor *  fsmn_w,         // ne=[K, 1, d_model]
                           int            kernel,
-                          ggml_tensor *  conv_pad_mask)  // [1, T, B] or null
-{
+                          ggml_tensor *  conv_pad_mask,  // [1, T, B] or null
+                          bool           direct_depthwise,
+                          bool           bounded_depthwise) {
     namespace conf = transcribe::conformer;
 
     const int64_t B       = v_pre->ne[2];
     const int64_t d_model = v_pre->ne[0];
+    const int64_t T       = v_pre->ne[1];
     const int     padding = (kernel - 1) / 2;  // sanm_shift=0
 
     // Variable-length batch: zero padded frames before the conv so a padded
@@ -59,28 +63,58 @@ ggml_tensor * fsmn_branch(ggml_context * ctx,
     ggml_tensor * v_t = ggml_cont(ctx, ggml_transpose(ctx, v_in));  // [T, d_model, B]
 
     ggml_tensor * fsmn;
-    if (B > 1) {
-        // Batched depthwise conv. conv_1d_dw_f32 (im2col) collapses the
-        // batch axis, so use the direct depthwise-2D op (W=T, H=1, C=d_model,
-        // N=B), which threads the utterance batch at ne[3]. Kernel
-        // [K, 1, d_model] -> [K, 1, 1, d_model].
+    if (B > 1 || direct_depthwise) {
+        // The direct op supports a real batch axis and avoids im2col's K-fold
+        // expansion. Promote non-F32 kernels for backend portability.
         ggml_tensor * knl  = ggml_reshape_4d(ctx, fsmn_w, kernel, 1, 1, d_model);
         ggml_tensor * data = ggml_reshape_4d(ctx, v_t, v_t->ne[0], 1, d_model, B);
-        fsmn               = ggml_conv_2d_dw_direct(ctx, knl, data,
-                                                    /*s0=*/1, /*s1=*/1,
-                                                    /*p0=*/padding, /*p1=*/0,
-                                                    /*d0=*/1, /*d1=*/1);
-        // [T, 1, d_model, B] -> [T, d_model, B].
+        fsmn               = conf::conv_2d_dw_direct_f32(ctx, knl, data,
+                                                         /*s0=*/1, /*s1=*/1,
+                                                         /*p0=*/padding, /*p1=*/0,
+                                                         /*d0=*/1, /*d1=*/1);
         fsmn               = ggml_reshape_3d(ctx, fsmn, fsmn->ne[0], d_model, B);
-    } else {
-        // Single-shot: im2col path.
+        if (B == 1) {
+            fsmn = ggml_reshape_2d(ctx, fsmn, fsmn->ne[0], d_model);
+        }
+    } else if (!bounded_depthwise || T <= 256) {
+        // Keep established CPU/Metal numerics for short validation clips.
         fsmn = conf::conv_1d_dw_f32(ctx, fsmn_w, v_t,
                                     /*stride=*/1, /*padding=*/padding,
                                     /*dilation=*/1);
-        // fsmn ne=[T, d_model, 1]. Drop the singleton batch.
-        fsmn = ggml_reshape_2d(ctx, fsmn, fsmn->ne[0], fsmn->ne[1]);  // [T, d_model]
+        fsmn = ggml_reshape_2d(ctx, fsmn, fsmn->ne[0], fsmn->ne[1]);
+    } else {
+        // Bound im2col to 256 output frames while preserving the full kernel
+        // receptive field at every chunk boundary.
+        constexpr int64_t          kTimeChunk = 256;
+        std::vector<ggml_tensor *> chunks;
+        chunks.reserve(static_cast<size_t>((T + kTimeChunk - 1) / kTimeChunk));
+        for (int64_t out0 = 0; out0 < T; out0 += kTimeChunk) {
+            const int64_t n_out     = std::min<int64_t>(kTimeChunk, T - out0);
+            const int64_t src0      = out0 - padding;
+            const int64_t src1      = src0 + n_out + kernel - 1;
+            const int64_t view0     = std::max<int64_t>(0, src0);
+            const int64_t view1     = std::min<int64_t>(T, src1);
+            const int64_t pad_left  = view0 - src0;
+            const int64_t pad_right = src1 - view1;
+            ggml_tensor * input =
+                ggml_view_3d(ctx, v_t, view1 - view0, d_model, 1, v_t->nb[1], v_t->nb[2], view0 * v_t->nb[0]);
+            input = ggml_pad_ext(ctx, input, pad_left, pad_right, 0, 0, 0, 0, 0, 0);
+            chunks.push_back(conf::conv_1d_dw_f32(ctx, fsmn_w, input,
+                                                  /*stride=*/1, /*padding=*/0,
+                                                  /*dilation=*/1));
+        }
+        while (chunks.size() > 1) {
+            std::vector<ggml_tensor *> next;
+            next.reserve((chunks.size() + 1) / 2);
+            for (size_t i = 0; i < chunks.size(); i += 2) {
+                next.push_back(i + 1 < chunks.size() ? ggml_concat(ctx, chunks[i], chunks[i + 1], /*dim=*/0) :
+                                                       chunks[i]);
+            }
+            chunks.swap(next);
+        }
+        fsmn = ggml_reshape_2d(ctx, chunks.front(), T, d_model);
     }
-    fsmn = ggml_cont(ctx, ggml_transpose(ctx, fsmn));                 // [d_model, T, B]
+    fsmn = ggml_cont(ctx, ggml_transpose(ctx, fsmn));  // [d_model, T, B]
 
     // Residual within the FSMN: x_fsmn += masked_v. (Padded frames carry
     // unmasked residual here, but they are masked out of attention and
@@ -124,7 +158,8 @@ ggml_tensor * sanm_attention(ggml_context *          ctx,
     ggml_tensor * v_pre = ggml_cont(ctx, v);
 
     // FSMN branch (parallel to SDPA).
-    ggml_tensor * fsmn = fsmn_branch(ctx, v_pre, b.attn_fsmn_w, kernel, p.conv_pad_mask);
+    ggml_tensor * fsmn =
+        fsmn_branch(ctx, v_pre, b.attn_fsmn_w, kernel, p.conv_pad_mask, p.direct_depthwise, p.bounded_depthwise);
 
     // SDPA. Reshape Q,K,V to [head_dim, n_heads, T, B]. The fused QKV split
     // is non-contiguous along the channel axis, so cont each before reshape.

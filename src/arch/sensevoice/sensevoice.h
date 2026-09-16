@@ -52,7 +52,8 @@ struct SenseVoiceSession final : public transcribe_session {
     // Reusable host scratch.
     std::vector<float>   frontend_buf;  // [T_lfr, d_input]
     std::vector<float>   pe_buf;        // [T, d_input]
-    std::vector<float>   logits_buf;    // [T, vocab] for greedy CTC
+    std::vector<float>   logits_buf;    // debug-only [T, vocab] CTC log-probs
+    std::vector<int32_t> argmax_buf;    // normal path [T] greedy CTC ids
     std::vector<int32_t> token_ids;     // post-collapse / post-blank-strip
 
     SenseVoiceSession() = default;

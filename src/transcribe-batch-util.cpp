@@ -197,6 +197,31 @@ transcribe_status decode_batch_slices(transcribe_session * session,
     return TRANSCRIBE_OK;
 }
 
+transcribe_status decode_batch_id_slices(
+    transcribe_session *                                                   session,
+    int                                                                    n,
+    const int32_t *                                                        host_buf,
+    std::size_t                                                            utt_elems,
+    int64_t                                                                total_encode_us,
+    int64_t                                                                total_mel_us,
+    const std::function<transcribe_status(int b, const int32_t * slice)> & decode_fn) {
+    const int64_t enc_per_utt = total_encode_us / std::max(1, n);
+    const int64_t mel_per_utt = total_mel_us / std::max(1, n);
+    for (int b = 0; b < n; ++b) {
+        if (session->poll_abort()) {
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+        session->clear_result();
+        const int32_t *         slice = host_buf + static_cast<size_t>(b) * utt_elems;
+        const transcribe_status st    = decode_fn(b, slice);
+        auto                    rs    = session->capture_result(st);
+        rs.t_mel_us                   = mel_per_utt;
+        rs.t_encode_us                = enc_per_utt;
+        session->batch_results.push_back(std::move(rs));
+    }
+    return TRANSCRIBE_OK;
+}
+
 transcribe_status run_batched_encdec_step_loop(transcribe_session *                session,
                                                ggml_backend_sched_t                sched,
                                                const EncDecRebuildFn &             rebuild,

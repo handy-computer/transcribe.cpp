@@ -48,6 +48,7 @@ struct EncoderBuild {
 EncoderBuild build_encoder_graph(ggml_context *            compute_ctx,
                                  const FunAsrNanoWeights & weights,
                                  const FunAsrNanoHParams & hp,
-                                 int                       n_lfr_frames);
+                                 int                       n_lfr_frames,
+                                 const char *              backend_name = nullptr);
 
 }  // namespace transcribe::funasr_nano

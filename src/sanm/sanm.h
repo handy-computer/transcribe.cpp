@@ -69,9 +69,11 @@ struct SanmBlockParams {
     int d_model = 0;
     int kernel  = 0;  // FSMN depthwise kernel width (sanm_shift=0)
 
-    ggml_tensor * attn_pad_mask = nullptr;
-    ggml_tensor * conv_pad_mask = nullptr;
-    bool          use_flash     = true;
+    ggml_tensor * attn_pad_mask     = nullptr;
+    ggml_tensor * conv_pad_mask     = nullptr;
+    bool          use_flash         = true;
+    bool          direct_depthwise  = false;
+    bool          bounded_depthwise = false;
 };
 
 // LayerNorm with kLayerNormEps. `beta` is optional (may be nullptr).
@@ -85,7 +87,9 @@ ggml_tensor * fsmn_branch(ggml_context * ctx,
                           ggml_tensor *  v_pre,
                           ggml_tensor *  fsmn_w,
                           int            kernel,
-                          ggml_tensor *  conv_pad_mask = nullptr);
+                          ggml_tensor *  conv_pad_mask,
+                          bool           direct_depthwise,
+                          bool           bounded_depthwise);
 
 // SAN-M attention sub-block: fused QKV, FSMN parallel branch on V,
 // SDPA over the QKV split. Returns ne=[d_model, T, B] (post-projection

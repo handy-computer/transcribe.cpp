@@ -59,7 +59,8 @@ void mark_dump(ggml_tensor *& slot, ggml_tensor * t, const char * name) {
 EncoderBuild build_encoder_graph(ggml_context *            ctx,
                                  const FunAsrNanoWeights & w,
                                  const FunAsrNanoHParams & hp,
-                                 int                       n_lfr_frames) {
+                                 int                       n_lfr_frames,
+                                 const char *              backend_name) {
     EncoderBuild eb{};
     if (ctx == nullptr || n_lfr_frames <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -73,11 +74,17 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     const int d_model = hp.enc_d_model;
     const int T       = n_lfr_frames;
 
-    const sanm::SanmBlockParams block_params{
+    sanm::SanmBlockParams block_params{
         /*n_heads=*/hp.enc_n_heads,
         /*d_model=*/d_model,
         /*kernel=*/hp.enc_kernel,
     };
+    const bool backend_direct = backend_name != nullptr && (std::strstr(backend_name, "Vulkan") != nullptr ||
+                                                            std::strstr(backend_name, "CUDA") != nullptr ||
+                                                            std::strstr(backend_name, "ROCm") != nullptr);
+    block_params.direct_depthwise =
+        conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW", backend_direct);
+    block_params.bounded_depthwise = true;
 
     eb.frontend_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_input, T);
     named(eb.frontend_in, "frontend.in");
@@ -147,7 +154,7 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     eb.out = x;
     ggml_set_output(eb.out);
 
-    eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
+    eb.graph = ggml_new_graph_custom(ctx, /*size=*/32768, /*grads=*/false);
     if (eb.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano encoder: ggml_new_graph_custom failed");
         return eb;

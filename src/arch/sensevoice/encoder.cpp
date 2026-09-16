@@ -22,9 +22,11 @@
 #include "transcribe-log.h"
 #include "weights.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace transcribe::sensevoice {
 
@@ -67,7 +69,8 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
                                  const SenseVoiceHParams & hp,
                                  int                       n_lfr_frames,
                                  int                       n_batch,
-                                 bool                      batch_var_len) {
+                                 bool                      batch_var_len,
+                                 const char *              backend_name) {
     EncoderBuild eb{};
 
     if (ctx == nullptr || n_lfr_frames <= 0 || n_batch <= 0) {
@@ -90,6 +93,12 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
         /*d_model=*/d_model,
         /*kernel=*/hp.enc_kernel,
     };
+    const bool backend_direct     = backend_name != nullptr && (std::strstr(backend_name, "Vulkan") != nullptr ||
+                                                                std::strstr(backend_name, "CUDA") != nullptr ||
+                                                                std::strstr(backend_name, "ROCm") != nullptr);
+    block_params.direct_depthwise = transcribe::conformer::resolve_conv_direct(
+        "TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW", backend_direct);
+    block_params.bounded_depthwise = true;
 
     // ----- inputs ----------------------------------------------------
     // Batch axis at ne[2]. B == 1 collapses to the pre-batch [d_input, T_in]
@@ -230,21 +239,47 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     mark_dump(eb.dumps.tp_norm_out, x, "enc.tp_norm.out");
 
     // ----- CTC head --------------------------------------------------
-    ggml_tensor * logits = ggml_mul_mat(ctx, w.ctc_head_w, x);
-    logits               = ggml_add(ctx, logits, w.ctc_head_b);
-    mark_dump(eb.dumps.ctc_logits, logits, "ctc.logits.raw");
+    if (transcribe::debug::enabled()) {
+        // Numerical validation retains the complete reference tensors.
+        ggml_tensor * logits = ggml_mul_mat(ctx, w.ctc_head_w, x);
+        logits               = ggml_add(ctx, logits, w.ctc_head_b);
+        mark_dump(eb.dumps.ctc_logits, logits, "ctc.logits.raw");
 
-    // log_softmax over the vocab axis (ne[0]).
-    ggml_tensor * log_probs = ggml_log(ctx, ggml_soft_max(ctx, logits));
-    mark_dump(eb.dumps.ctc_log_probs, log_probs, "ctc.log_probs");
-
-    eb.out = log_probs;
+        ggml_tensor * log_probs = ggml_log(ctx, ggml_soft_max(ctx, logits));
+        mark_dump(eb.dumps.ctc_log_probs, log_probs, "ctc.log_probs");
+        eb.out = log_probs;
+    } else {
+        // Greedy CTC needs only one id per frame. Project bounded groups of
+        // columns so neither the complete [vocab,T,B] logits nor log-softmax
+        // matrix becomes persistent backend workspace.
+        constexpr int64_t          kCtcColumnsPerChunk = 256;
+        const int64_t              n_columns           = x->ne[1] * x->ne[2];
+        ggml_tensor *              x_flat              = ggml_reshape_2d(ctx, ggml_cont(ctx, x), x->ne[0], n_columns);
+        std::vector<ggml_tensor *> chunks;
+        chunks.reserve(static_cast<size_t>((n_columns + kCtcColumnsPerChunk - 1) / kCtcColumnsPerChunk));
+        for (int64_t col = 0; col < n_columns; col += kCtcColumnsPerChunk) {
+            const int64_t n       = std::min<int64_t>(kCtcColumnsPerChunk, n_columns - col);
+            ggml_tensor * x_chunk = ggml_view_2d(ctx, x_flat, x_flat->ne[0], n, x_flat->nb[1], col * x_flat->nb[1]);
+            ggml_tensor * logits  = ggml_mul_mat(ctx, w.ctc_head_w, x_chunk);
+            logits                = ggml_add(ctx, logits, w.ctc_head_b);
+            chunks.push_back(ggml_argmax(ctx, logits));
+        }
+        while (chunks.size() > 1) {
+            std::vector<ggml_tensor *> next;
+            next.reserve((chunks.size() + 1) / 2);
+            for (size_t i = 0; i < chunks.size(); i += 2) {
+                next.push_back(i + 1 < chunks.size() ? ggml_concat(ctx, chunks[i], chunks[i + 1], /*dim=*/0) :
+                                                       chunks[i]);
+            }
+            chunks.swap(next);
+        }
+        eb.out = chunks.front();
+    }
     ggml_set_output(eb.out);
 
-    // 70 SAN-M blocks * ~30 ops/block + frontend/PE/CTC ≈ 2300 nodes; the
-    // variable-length batch path's manual SDPA adds a handful more per block.
-    // 8192 leaves ample headroom.
-    eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
+    // Long inputs split every FSMN convolution into bounded im2col chunks;
+    // reserve enough nodes for all 70 blocks without scaling workspace.
+    eb.graph = ggml_new_graph_custom(ctx, /*size=*/32768, /*grads=*/false);
     if (eb.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sensevoice encoder: ggml_new_graph_custom failed");
         return eb;

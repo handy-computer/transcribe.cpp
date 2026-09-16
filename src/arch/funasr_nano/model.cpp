@@ -425,24 +425,6 @@ transcribe_status init_context(transcribe_model *                model,
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
-    auto * cm = static_cast<FunAsrNanoModel *>(model);
-    {
-        ggml_type kv_type = GGML_TYPE_F16;
-        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
-            kv_type = GGML_TYPE_F32;
-        }
-        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
-                                            /*n_ctx=*/2048, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
-                                            cm->hparams.dec_n_layers, kv_type)) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "funasr_nano init_context: KV cache allocation failed "
-                                "(n_ctx=2048, %d kv-heads x %d head-dim x %d layers) — "
-                                "out of memory.",
-                                cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim, cm->hparams.dec_n_layers);
-            return TRANSCRIBE_ERR_OOM;
-        }
-    }
-
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
 }
@@ -512,14 +494,14 @@ transcribe_status run(transcribe_session *          session,
     }
 
     // ---- Build encoder graph ----
-    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_lfr);
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_lfr, cm->backend.c_str());
     if (eb.graph == nullptr || eb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
 
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, /*parallel=*/false,
+                                           static_cast<int>(cm->plan.scheduler_list.size()), 32768, /*parallel=*/false,
                                            /*op_offload=*/true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: ggml_backend_sched_new failed");
@@ -681,7 +663,7 @@ transcribe_status run(transcribe_session *          session,
     // power of two (the step graph's attention width wants pow2 for the fast
     // flash-attn path). The cache grows across runs as audio length demands;
     // a pre-allocated smaller cache is freed and re-allocated.
-    int want_n_ctx = 1024;
+    int want_n_ctx = 256;
     while (want_n_ctx < T_prompt + k_max_new) {
         want_n_ctx *= 2;
     }
@@ -978,13 +960,13 @@ transcribe_status audio_embed_one(FunAsrNanoSession *        cc,
     if (const transcribe_status st = reset_ctx(cc, 32); st != TRANSCRIBE_OK) {
         return st;
     }
-    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_lfr);
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_lfr, cm->backend.c_str());
     if (eb.graph == nullptr || eb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+                                           static_cast<int>(cm->plan.scheduler_list.size()), 32768, false, true);
         if (cc->sched == nullptr) {
             return TRANSCRIBE_ERR_GGUF;
         }
