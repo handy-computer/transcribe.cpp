@@ -47,9 +47,9 @@ extern "C" {
  *   min_decode_interval_ms
  *
  *     Minimum audio-time interval between tentative partial decodes while a
- *     stream is ACTIVE. Voxtral Realtime's partial decode reprocesses the
- *     accumulated buffer, so this knob bounds partial-decode compute at the
- *     cost of less frequent tentative transcripts. stream_finalize always
+ *     stream is ACTIVE. Voxtral Realtime advances its incremental encoder and
+ *     decoder when this interval elapses, so the knob trades partial-result
+ *     latency for larger compute batches. stream_finalize always
  *     performs the final decode regardless of this throttle, and that final
  *     decode is byte-identical to offline inference when both use delay 30.
  *

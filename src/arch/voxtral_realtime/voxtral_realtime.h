@@ -101,6 +101,7 @@ struct Session final : public transcribe_session {
     int                            stream_enc_slot        = 0;  // ring write head (slot units)
     int                            stream_enc_abs_base    = 0;  // absolute frame index of slot 0
     int                            stream_n_enc_committed = 0;  // enc frames committed (absolute)
+    int                            stream_dec_ring_ctx    = 0;  // active decoder ring width
     // Conv-stem padding cache: feed only new mel frames, carrying the conv
     // left-context. conv0 (k3 s1) ← last 2 mel frames; conv1 (k3 s2) ← last 1
     // conv0-output frame. Zeros on the first chunk == whole-buffer left-pad.

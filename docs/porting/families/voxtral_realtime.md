@@ -53,7 +53,9 @@ Pattern: **audio-llm**, streaming, ADDITIVE audio fusion.
   sliding-KV(8192) re-run incrementally; downsample_factor=4 enc frames per
   decode step (12.5 Hz); output length clamped to
   `ceil(mel_frames / audio_length_per_tok=8)`; configurable `num_delay_tokens`
-  (default 6 = 480 ms).
+  (default 6 = 480 ms). Long one-shot inference uses this same bounded
+  scheduler with the offline delay (30), while short clips retain the faster
+  whole-graph path.
 
 ## Family-specific requirements (do not flow through convert/validate)
 

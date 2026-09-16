@@ -88,6 +88,12 @@ constexpr const char k_default_variant[] = "voxtral-mini-4b-realtime-2602";
 // Offline inference has no latency tradeoff, so use the best evaluated delay.
 constexpr int k_offline_num_delay_tokens = 30;
 
+// Incremental encoder ring geometry. Keep the trained 750-frame window and
+// leave room for bounded batches of new frames before compacting the cache.
+constexpr int k_enc_ring_ctx                   = 1536;
+constexpr int k_enc_max_batch                  = 512;
+constexpr int k_offline_incremental_min_frames = 4096;
+
 // Resolve BOS / STREAMING_PAD / EOS against the loaded tokenizer.
 transcribe_status resolve_specials(const transcribe::Tokenizer & tok, const HParams & hp, PromptSpecials & out) {
     out.bos           = tok.bos_id();
@@ -462,9 +468,8 @@ transcribe_status compute_ada_scales(Session * cc, Model * cm, int num_delay) {
     return TRANSCRIBE_OK;
 }
 
-// Core forward: mel -> encoder/projector -> autoregressive decode -> detok.
-// Shared by the offline run() and the streaming hooks. `num_delay` drives the
-// audio right-pad, the prompt length, and the adaptive-norm scales (they MUST
+// Whole-graph forward for short offline inputs and numerical dumps. `num_delay`
+// drives the audio right-pad, prompt length, and adaptive-norm scales (they MUST
 // agree). On success out_text holds the trimmed transcript. Does not touch the
 // result snapshot (segments / full_text / has_result) — the caller owns that.
 transcribe_status forward_buffer(Session *     cc,
@@ -1137,8 +1142,10 @@ transcribe_status forward_buffer(Session *     cc,
     return TRANSCRIBE_OK;
 }
 
-// Offline one-shot entry point. Thin wrapper over forward_buffer that owns the
-// result snapshot (full_text + a single text-only segment).
+transcribe_status run_incremental(Session * cc, Model * cm, const float * pcm, int n_samples);
+
+// Offline one-shot entry point. Short clips retain the whole-graph path (and
+// its speculative decoder); longer clips use the bounded streaming scheduler.
 transcribe_status run(transcribe_session *          session,
                       const float *                 pcm,
                       int                           n_samples,
@@ -1157,6 +1164,16 @@ transcribe_status run(transcribe_session *          session,
 
     transcribe::debug::init();
     const bool dumps_on = transcribe::debug::enabled();
+
+    // For long clips, avoid constructing the quadratic mask and full-clip
+    // activation graph. Short clips keep the more efficient whole-graph path.
+    const int64_t raw_per_tok = static_cast<int64_t>(cm->hparams.audio_length_per_tok) * cm->hparams.fe_hop_length;
+    const int64_t raw_tokens  = (static_cast<int64_t>(n_samples) + raw_per_tok - 1) / raw_per_tok;
+    const int64_t n_audio     = cm->specials.n_left_pad + raw_tokens + k_offline_num_delay_tokens + 1 + 10;
+    const int64_t n_enc       = n_audio * cm->hparams.proj_downsample;
+    if (!dumps_on && n_enc > k_offline_incremental_min_frames) {
+        return run_incremental(cc, cm, pcm, n_samples);
+    }
 
     // params->spec_k_drafts: -1 = family default (=1), 0 = disabled,
     // 1..VOXTRAL_REALTIME_SPEC_K_MAX = explicit. Clamp into range so a
@@ -1327,14 +1344,8 @@ bool stream_run_graph(Session *                     cc,
     return ok;
 }
 
-// Encoder KV ring geometry. Keep the last `sliding_window`(750) frames: hold a
-// contiguous cache of k_enc_ring_ctx slots, append at the write head, and
-// periodically COMPACT (copy the last 750 frames to the front) so the ring never
-// overflows. k_enc_max_batch bounds frames per chunk (must be <= ring -
-// sliding_window and a multiple of proj_downsample).
-constexpr int k_enc_ring_ctx  = 1536;
-constexpr int k_enc_max_batch = 512;
-
+// Encoder KV ring: periodically compact the last sliding-window frames to the
+// front so the next bounded batch fits.
 // (decoder sliding-window ring size is read from the GGUF: hp.dec_sliding_window)
 
 // Compact the encoder KV ring: move the last `keep` frames (slots
@@ -1707,7 +1718,10 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     }
 
     if (cc->stream_prompt_done && !cc->stream_eos && cc->stream_dec_pos < cc->stream_n_tok_ready) {
-        const int max_n_kv = cc->kv_cache.n_ctx;
+        // Before the decoder ring fills, expose only the populated prefix. The
+        // remaining slots are all masked and needlessly widen every attention
+        // step on short and medium streams.
+        const int max_n_kv = std::min(cc->stream_dec_ring_ctx, cc->stream_n_tok_ready);
         if (cc->compute_ctx != nullptr) {
             ggml_free(cc->compute_ctx);
             cc->compute_ctx = nullptr;
@@ -1743,8 +1757,8 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
         }
         apply_threads(cc->sched, cc->n_threads);
 
-        const int                swin    = hp.dec_sliding_window;  // 8192
-        const int                kv_ring = max_n_kv;               // ring size == n_ctx (== swin here)
+        const int                swin    = hp.dec_sliding_window;    // 8192
+        const int                kv_ring = cc->stream_dec_ring_ctx;  // physical ring width
         // Hard absolute-position cap = dec_max_position; a streaming caller hits
         // memory/latency long before it (~2.9 h).
         const int                max_pos = voxtral_realtime_abs_position_cap(hp);
@@ -1775,8 +1789,8 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
             const int64_t kv_idx = cur % kv_ring;
             ggml_backend_tensor_set(sb.kv_idx_in, &kv_idx, 0, sizeof(int64_t));
             // Reveal keys [max(0,cur-swin+1) .. cur] at their ring slots (t % kv_ring).
-            // For cur < kv_ring this is the identity slot map (== the pre-ring path);
-            // once full, the `swin` in-window tokens occupy all `kv_ring` slots 1:1.
+            // Before the ring fills, max_n_kv covers the populated identity-mapped
+            // prefix. Once full, all in-window tokens occupy the ring slots 1:1.
             std::fill(step_mask.begin(), step_mask.end(), mn);
             for (int t = std::max(0, cur - swin + 1); t <= cur; ++t) {
                 step_mask[t % kv_ring] = mz;
@@ -1868,7 +1882,8 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     }
 
     // ---- 7. Publish transcript. ----
-    std::string   text     = detok_generated(cm, cc->stream_generated);
+    std::string text       = detok_generated(cm, cc->stream_generated);
+    cc->raw_text           = cm->tok.decode(cc->stream_generated.data(), static_cast<int>(cc->stream_generated.size()));
     const int     sr       = std::max(1, hp.fe_sample_rate);
     const int64_t audio_ms = static_cast<int64_t>(n_aud_total) * 1000 / sr;
     publish_stream_text(cc, cm, text, audio_ms);
@@ -1878,17 +1893,10 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     return TRANSCRIBE_OK;
 }
 
-transcribe_status stream_begin(transcribe_session * session,
-                               const transcribe_run_params * /*run_params*/,
-                               const transcribe_stream_params * stream_params) {
-    auto * cc = static_cast<Session *>(session);
-    auto * cm = static_cast<Model *>(cc->model);
-    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
+transcribe_status begin_stream_state(Session * cc, Model * cm, int nd, int md, int dec_ring, ggml_type enc_kv_type) {
+    if (cc == nullptr || cm == nullptr || cm->plan.scheduler_list.empty() || dec_ring <= 0 ||
+        dec_ring > cm->hparams.dec_sliding_window) {
         return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    int nd = 0, md = 0;
-    if (auto st = resolve_stream_ext(stream_params, cm, &nd, &md); st != TRANSCRIBE_OK) {
-        return st;
     }
 
     cc->stream_pcm.clear();
@@ -1900,6 +1908,7 @@ transcribe_status stream_begin(transcribe_session * session,
     cc->stream_n_enc_committed = 0;
     cc->stream_enc_slot        = 0;
     cc->stream_enc_abs_base    = 0;
+    cc->stream_dec_ring_ctx    = dec_ring;
     cc->stream_conv0_cache.assign(static_cast<size_t>(cm->hparams.enc_num_mel_bins) * 2, 0.0f);
     cc->stream_conv1_cache.assign(static_cast<size_t>(cm->hparams.enc_d_model), 0.0f);
     cc->stream_n_mel_committed = 0;
@@ -1915,13 +1924,16 @@ transcribe_status stream_begin(transcribe_session * session,
     cc->stream_eos         = false;
     cc->stream_generated.clear();
     cc->stream_n_audio_clamp = -1;
+    cc->stream_gen0_logits.clear();
+    cc->stream_gen8_logits.clear();
 
-    // Encoder StaticCache ring (F32; MHA so n_kv_heads == n_heads). Fixed
+    // Encoder StaticCache ring (MHA so n_kv_heads == n_heads). Fixed
     // k_enc_ring_ctx slots; compaction keeps the last sliding_window(750) frames
     // so any stream length runs in constant memory (the reference mechanism).
+    const ggml_type dec_kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
     cc->enc_kv.free();
     if (!transcribe::causal_lm::kv_init(cc->enc_kv, cm->plan.primary, /*n_ctx=*/k_enc_ring_ctx, cm->hparams.enc_n_heads,
-                                        cm->hparams.enc_head_dim, cm->hparams.enc_n_layers, GGML_TYPE_F32)) {
+                                        cm->hparams.enc_head_dim, cm->hparams.enc_n_layers, enc_kv_type)) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "voxtral_realtime stream_begin: encoder KV cache allocation failed — "
                             "out of memory.");
@@ -1931,18 +1943,14 @@ transcribe_status stream_begin(transcribe_session * session,
         ggml_backend_buffer_clear(cc->enc_kv.buffer, 0);
     }
 
-    // Decoder KV: a sliding-window RING sized to the model's own `sliding_window`
-    // (from the GGUF, 8192 here). The step loop writes token `cur` at slot
-    // `cur % n_ctx`, so the cache holds the last `swin` tokens for any stream
-    // length in constant memory. `sliding_window` is a trained-in constant, not
-    // an inference knob. Sized once per session; never shrinks a larger ctx a
-    // prior offline run may have left.
-    const int dec_ring = cm->hparams.dec_sliding_window;
+    // Decoder KV is a sliding ring. Public streams use the trained window;
+    // one-shot runs may use a smaller ring when the known horizon fits in it.
+    // The backing allocation only grows, while stream_dec_ring_ctx selects the
+    // active prefix so results do not depend on prior runs in this session.
     if (cc->kv_cache.n_ctx < dec_ring) {
-        const ggml_type kt = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
         cc->kv_cache.free();
         if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, dec_ring, cm->hparams.dec_n_kv_heads,
-                                            cm->hparams.dec_head_dim, cm->hparams.dec_n_layers, kt)) {
+                                            cm->hparams.dec_head_dim, cm->hparams.dec_n_layers, dec_kv_type)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime stream_begin: decoder KV cache allocation "
                                 "failed — out of memory.");
@@ -1962,6 +1970,21 @@ transcribe_status stream_begin(transcribe_session * session,
 
     transcribe::debug::init();
     return TRANSCRIBE_OK;
+}
+
+transcribe_status stream_begin(transcribe_session * session,
+                               const transcribe_run_params * /*run_params*/,
+                               const transcribe_stream_params * stream_params) {
+    auto * cc = static_cast<Session *>(session);
+    auto * cm = static_cast<Model *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    int nd = 0, md = 0;
+    if (auto st = resolve_stream_ext(stream_params, cm, &nd, &md); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    return begin_stream_state(cc, cm, nd, md, cm->hparams.dec_sliding_window, GGML_TYPE_F32);
 }
 
 transcribe_status stream_feed(transcribe_session *       session,
@@ -2019,8 +2042,12 @@ transcribe_status stream_finalize(transcribe_session * session, transcribe_strea
         return st;
     }
 
+    cc->t_mel_us    = cc->stream_t_mel_us;
+    cc->t_encode_us = cc->stream_t_conv_us + cc->stream_t_enc_us;
+    cc->t_decode_us = cc->stream_t_dec_us;
+
     const int     sr       = std::max(1, cm->hparams.fe_sample_rate);
-    const int64_t audio_ms = static_cast<int64_t>(cc->stream_pcm.size()) * 1000 / sr;
+    const int64_t audio_ms = (cc->stream_pcm_drop + static_cast<int64_t>(cc->stream_pcm.size())) * 1000 / sr;
     if (update != nullptr) {
         update->result_changed     = true;
         update->revision           = cc->stream_revision;
@@ -2029,6 +2056,44 @@ transcribe_status stream_finalize(transcribe_session * session, transcribe_strea
         update->buffered_ms        = 0;
     }
     return TRANSCRIBE_OK;
+}
+
+transcribe_status run_incremental(Session * cc, Model * cm, const float * pcm, int n_samples) {
+    const int64_t raw_per_tok = static_cast<int64_t>(cm->hparams.audio_length_per_tok) * cm->hparams.fe_hop_length;
+    const int64_t raw_tokens  = (static_cast<int64_t>(n_samples) + raw_per_tok - 1) / raw_per_tok;
+    const int64_t n_audio     = cm->specials.n_left_pad + raw_tokens + k_offline_num_delay_tokens + 1 + 10;
+    const int     abs_cap     = voxtral_realtime_abs_position_cap(cm->hparams);
+    if (n_audio + 1 > abs_cap) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                            "voxtral_realtime run: clip needs %lld positions > model max %d "
+                            "(dec_max_position, ~2.9 h). See transcribe_capabilities.max_audio_ms.",
+                            static_cast<long long>(n_audio + 1), abs_cap);
+        return TRANSCRIBE_ERR_INPUT_TOO_LONG;
+    }
+
+    int dec_ring = 2048;
+    while (dec_ring < n_audio + 1 && dec_ring < cm->hparams.dec_sliding_window) {
+        dec_ring *= 2;
+    }
+    dec_ring                    = std::min(dec_ring, cm->hparams.dec_sliding_window);
+    const ggml_type enc_kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
+    if (auto st = begin_stream_state(cc, cm, k_offline_num_delay_tokens, /*min_decode_ms=*/0, dec_ring, enc_kv_type);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    // Feed one maximum encoder batch of real audio at a time. Initial/final
+    // padding can spill into one additional bounded encoder graph.
+    const int chunk_samples = k_enc_max_batch * 2 * cm->hparams.fe_hop_length;
+    int       pos           = 0;
+    while (pos < n_samples) {
+        const int take = std::min(chunk_samples, n_samples - pos);
+        if (auto st = stream_feed(cc, pcm + pos, take, nullptr); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        pos += take;
+    }
+    return stream_finalize(cc, nullptr);
 }
 
 void stream_reset(transcribe_session * session) {
@@ -2040,6 +2105,7 @@ void stream_reset(transcribe_session * session) {
     cc->stream_n_enc_committed = 0;
     cc->stream_enc_slot        = 0;
     cc->stream_enc_abs_base    = 0;
+    cc->stream_dec_ring_ctx    = 0;
     cc->stream_conv0_cache.clear();
     cc->stream_conv1_cache.clear();
     cc->stream_n_mel_committed = 0;

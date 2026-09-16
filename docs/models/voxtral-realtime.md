@@ -26,7 +26,9 @@ Real-time and offline speech-to-text from a 16 kHz mono WAV.
 - **Configurable streaming delay** — `--stream-voxtral-delay <N>` (default 6 =
   480 ms; range 80 ms–2.4 s) sets the transcription delay.
 - **Accuracy-first offline default** — one-shot and batch inference use the
-  publisher's most accurate evaluated delay, 30 tokens (2.4 s).
+  publisher's most accurate evaluated delay, 30 tokens (2.4 s). Long one-shot
+  inputs are internally advanced through the bounded incremental encoder and
+  decoder instead of constructing a full-clip attention graph.
 - Auto language detection (the streaming processor is auto-detect only).
 
 ## Input limits
@@ -82,11 +84,10 @@ CLI flags:
 - `--stream-chunk-ms <N>` — incremental streaming at N-ms chunk granularity.
 - `--stream-voxtral-delay <N>` — transcription delay in audio slots (default
   6 = 480 ms).
-- `--spec-k-drafts <N>` — offline-path 1-gram-lookup speculative decoding
-  draft length. `-1` (default) uses the family default (`2`). `0` disables
-  spec (plain autoregression). `1..8` selects an explicit K. Speculation
-  applies to `transcribe_run` / `transcribe-cli` only — the streaming path
-  is unaffected.
+- `--spec-k-drafts <N>` — short-clip offline-path 1-gram-lookup speculative
+  decoding draft length. `-1` uses the family default (`1`), `0` disables
+  speculation, and `1..8` selects an explicit K. Long one-shot inputs switch
+  to the bounded incremental path, which currently uses plain greedy decoding.
 
 ## Performance
 
@@ -132,14 +133,15 @@ uv run scripts/bench/run.py \
 
 ## Speculative decoding
 
-The offline decoder runs 1-gram-lookup speculative decoding by default. Each
-verify pass processes K+1 positions in parallel: position 0 is the model's
-true next-token decision; positions 1..K verify K draft tokens read from the
-1-gram suffix lookup over the already-decoded prefix. Drafts are accepted as
-long as the model's argmax matches the drafted token; the first mismatch ends
-the accepted prefix. Because ~60–70% of audio slots emit `STREAMING_PAD` (id
-32), the 1-gram lookup hits high acceptance during silence and during repeated
-phrases.
+The short-clip offline decoder runs 1-gram-lookup speculative decoding by
+default. Each verify pass processes K+1 positions in parallel: position 0 is
+the model's true next-token decision; positions 1..K verify K draft tokens read
+from the 1-gram suffix lookup over the already-decoded prefix. Drafts are
+accepted as long as the model's argmax matches the drafted token; the first
+mismatch ends the accepted prefix. Because ~60–70% of audio slots emit
+`STREAMING_PAD` (id 32), the 1-gram lookup hits high acceptance during silence
+and during repeated phrases. Long one-shot inputs use the bounded incremental
+scheduler and plain greedy decoding so encoder and decoder memory stay bounded.
 
 The transcript is byte-identical to the K=0 (no-spec) path; only wall-clock
 time changes.

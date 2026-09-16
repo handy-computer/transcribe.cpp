@@ -20,9 +20,9 @@ void apply_family_invariants(transcribe_model & model) {
     // include/transcribe/voxtral_realtime.h.
     caps.supports_streaming = true;
 
-    // Offline path uses 1-gram-lookup speculative decode (verify graph at
-    // T = spec_k_drafts + 1). Streaming and batched paths are not yet
-    // spec-enabled.
+    // The short-clip offline path supports 1-gram-lookup speculative decode
+    // (verify graph at T = spec_k_drafts + 1). Long one-shot, streaming, and
+    // batched paths use plain greedy decoding.
     caps.supports_spec_decode = true;
 
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
