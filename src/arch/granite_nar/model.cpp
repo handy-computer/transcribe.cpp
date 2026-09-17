@@ -562,7 +562,8 @@ transcribe_status run(transcribe_session *          ctx_base,
     }
 
     // Encoder graph.
-    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams, t_enc, cc->encoder_use_flash);
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams, t_enc, cc->encoder_use_flash,
+                                          cm->backend.c_str());
     if (eb.graph == nullptr || eb.cat_out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
