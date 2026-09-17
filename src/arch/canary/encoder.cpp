@@ -102,10 +102,12 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
                                  bool                  use_flash,
                                  const char *          backend_name) {
     conf::ConvPolicy policy{};
-    policy.direct_pw               = conf::detect_direct_pw(backend_name);
-    const bool direct_dw           = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_block      = direct_dw;
-    policy.direct_dw_in_pre_encode = false;  // parakeet-style: im2col here
+    policy.direct_pw                = conf::detect_direct_pw(backend_name);
+    policy.promote_pw_in_graph      = backend_name != nullptr && std::strstr(backend_name, "CPU") != nullptr;
+    const bool direct_dw            = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_block       = direct_dw;
+    policy.direct_dw_in_pre_encode  = false;  // parakeet-style: im2col here
+    policy.pre_encode_dw_time_chunk = 256;
 
     EncoderBuild eb{};
 

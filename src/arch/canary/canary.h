@@ -110,10 +110,6 @@ struct CanaryModel final : public transcribe_model {
     ggml_context *        bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
-    // CPU-only F16 -> F32 promotion buffer for conformer 1x1 pointwise convs.
-    ggml_context *        conv_pw_f32_ctx    = nullptr;
-    ggml_backend_buffer_t conv_pw_f32_buffer = nullptr;
-
     std::optional<transcribe::MelFrontend> mel;
 
     CanaryModel() = default;

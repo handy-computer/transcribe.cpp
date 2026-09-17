@@ -182,14 +182,6 @@ CanaryModel::~CanaryModel() {
         safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
-    if (conv_pw_f32_ctx != nullptr) {
-        ggml_free(conv_pw_f32_ctx);
-        conv_pw_f32_ctx = nullptr;
-    }
-    if (conv_pw_f32_buffer != nullptr) {
-        safe_buffer_free(conv_pw_f32_buffer);
-        conv_pw_f32_buffer = nullptr;
-    }
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
@@ -320,23 +312,6 @@ transcribe_status fuse_batch_norm(CanaryModel & m) {
     }
 
     return TRANSCRIBE_OK;
-}
-
-// On CPU primary backend, dequantize 1x1 conformer pointwise convs
-// from F16 to F32. Same rationale as parakeet/cohere.
-transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryModel & m) {
-    std::vector<load_common::ConvPwF32Slot> slots;
-    slots.reserve(m.weights.blocks.size() * 2);
-    for (auto & b : m.weights.blocks) {
-        if (b.conv_pw1_w != nullptr && b.conv_pw1_w->type == GGML_TYPE_F16) {
-            slots.push_back({ &b.conv_pw1_w, b.conv_pw1_w });
-        }
-        if (b.conv_pw2_w != nullptr && b.conv_pw2_w->type == GGML_TYPE_F16) {
-            slots.push_back({ &b.conv_pw2_w, b.conv_pw2_w });
-        }
-    }
-    return load_common::promote_conv_pw_f16_to_f32_on_cpu(m.plan, slots, "canary", &m.conv_pw_f32_ctx,
-                                                          &m.conv_pw_f32_buffer);
 }
 
 constexpr const char k_default_variant[] = "canary";
@@ -505,10 +480,6 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (const transcribe_status st = fuse_batch_norm(*m); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (const transcribe_status st = promote_conv_pw_to_f32_on_cpu(*m); st != TRANSCRIBE_OK) {
-        return st;
-    }
-
     m->t_load_us = ggml_time_us() - t_load_start;
     *out_model   = m.release();
     return TRANSCRIBE_OK;

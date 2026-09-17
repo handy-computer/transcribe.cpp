@@ -366,8 +366,11 @@ ggml_tensor * conv_module(ggml_context * ctx, ggml_tensor * x, const BlockView &
         // causal_lm.cpp for the CUDA COMPUTE_16F saturation rationale).
         {
             ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w, d_model, 2 * d_model);
-            x                 = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T, B]
-            if (b.conv_pw1_w->type == GGML_TYPE_F16) {
+            if (policy.promote_pw_in_graph && pw1->type == GGML_TYPE_F16) {
+                pw1 = ggml_cast(ctx, pw1, GGML_TYPE_F32);
+            }
+            x = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T, B]
+            if (pw1->type == GGML_TYPE_F16) {
                 ggml_mul_mat_set_prec(x, GGML_PREC_F32);
             }
             if (b.conv_pw1_b != nullptr) {
@@ -518,8 +521,11 @@ ggml_tensor * conv_module(ggml_context * ctx, ggml_tensor * x, const BlockView &
         // Pointwise conv 2 as direct mul_mat in [d_model, T] layout. See
         // the pw1 comment above for the F16 / CUDA COMPUTE_16F rationale.
         ggml_tensor * pw2 = ggml_reshape_2d(ctx, b.conv_pw2_w, d_model, d_model);
-        x                 = ggml_mul_mat(ctx, pw2, x);
-        if (b.conv_pw2_w->type == GGML_TYPE_F16) {
+        if (policy.promote_pw_in_graph && pw2->type == GGML_TYPE_F16) {
+            pw2 = ggml_cast(ctx, pw2, GGML_TYPE_F32);
+        }
+        x = ggml_mul_mat(ctx, pw2, x);
+        if (pw2->type == GGML_TYPE_F16) {
             ggml_mul_mat_set_prec(x, GGML_PREC_F32);
         }
         if (b.conv_pw2_b != nullptr) {

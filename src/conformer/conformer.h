@@ -108,6 +108,7 @@ struct BlockView {
 // paths except for direct_pw; families opt into direct pre-encode ops.
 struct ConvPolicy {
     bool direct_pw                  = true;
+    bool promote_pw_in_graph        = false;
     bool direct_conv0_in_pre_encode = false;
     bool direct_dw_in_block         = false;
     bool direct_dw_in_pre_encode    = false;
