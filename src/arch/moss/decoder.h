@@ -2,7 +2,7 @@
 //
 // 28-layer Qwen3 causal decoder, identical block math to arch/qwen3_asr via
 // src/causal_lm/ (pre-LN RMSNorm, GQA with per-head q/k RMSNorm, NeoX RoPE
-// theta 1e6, SwiGLU on packed gate+up, tied lm_head).
+// theta 1e6, SwiGLU, tied lm_head).
 //
 // Audio injection differs from qwen3_asr: MOSS audio-pad positions are NOT
 // contiguous (the processor interleaves time-marker digit tokens into the

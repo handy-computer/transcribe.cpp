@@ -40,9 +40,11 @@ struct BlockView {
     // Voxtral's Ministral backbone); helpers skip the norm when null.
     ggml_tensor * attn_q_norm   = nullptr;  // [head_dim] per-head Q-norm, or null
     ggml_tensor * attn_k_norm   = nullptr;  // [head_dim] per-head K-norm, or null
-    // Packed gate+up filled by pack_gate_up at load time; the graph runs
-    // one mul_mat + ggml_swiglu instead of two mul_mats + manual silu·mul.
+    // Use the packed projection when available; otherwise run the original
+    // gate and up projections separately to avoid retaining a packed copy.
     ggml_tensor * ffn_gate_up_w = nullptr;  // [hidden, 2·intermediate]
+    ggml_tensor * ffn_gate_w    = nullptr;  // [hidden, intermediate]
+    ggml_tensor * ffn_up_w      = nullptr;  // [hidden, intermediate]
     ggml_tensor * ffn_down_w    = nullptr;  // [intermediate, hidden]
     // Optional per-layer FFN-branch scale (ff_norm *= ffn_scale, broadcast
     // over the token axis). Null for standard callers; voxtral_realtime's

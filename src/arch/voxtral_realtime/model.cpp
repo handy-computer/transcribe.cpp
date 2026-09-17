@@ -320,22 +320,11 @@ transcribe_status init_context(transcribe_model *                model,
     // decoder KV ring is constant-memory; the wall is dec_max_position).
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
-    auto * cm = static_cast<Model *>(model);
-
     // Encoder + decoder flash attention ON by default on every backend. Flash is
     // the numerical source-of-truth for the encoder. Override TRANSCRIBE_NO_FLASH=1.
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
-
-    ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
-    if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, /*n_ctx=*/2048, cm->hparams.dec_n_kv_heads,
-                                        cm->hparams.dec_head_dim, cm->hparams.dec_n_layers, kv_type)) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "voxtral_realtime init_context: KV cache allocation failed — "
-                            "out of memory.");
-        return TRANSCRIBE_ERR_OOM;
-    }
 
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
@@ -672,7 +661,7 @@ transcribe_status forward_buffer(Session *     cc,
     // Grow KV to fit n_audio positions.
     if (cc->kv_cache.n_ctx < n_audio + 1) {
         const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
-        int             want    = 2048;
+        int             want    = 256;
         while (want < n_audio + 1) {
             want *= 2;
         }

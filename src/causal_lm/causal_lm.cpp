@@ -41,6 +41,15 @@ ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * 
     return y;
 }
 
+ggml_tensor * ffn_swiglu(ggml_context * ctx, const BlockView & view, ggml_tensor * x) {
+    if (view.ffn_gate_up_w != nullptr) {
+        return ggml_swiglu(ctx, mul_mat_f32acc(ctx, view.ffn_gate_up_w, x));
+    }
+    ggml_tensor * gate = ggml_silu(ctx, mul_mat_f32acc(ctx, view.ffn_gate_w, x));
+    ggml_tensor * up   = mul_mat_f32acc(ctx, view.ffn_up_w, x);
+    return ggml_mul(ctx, gate, up);
+}
+
 }  // namespace
 
 void KvCache::free() {
@@ -343,9 +352,8 @@ ggml_tensor * block_prefill(ggml_context *      ctx,
     if (view.ffn_scale != nullptr) {
         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     }
-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+    ggml_tensor * ff = ffn_swiglu(ctx, view, ff_norm);
+    ff               = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
@@ -459,9 +467,8 @@ ggml_tensor * block_step(ggml_context *      ctx,
     if (view.ffn_scale != nullptr) {
         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     }
-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+    ggml_tensor * ff = ffn_swiglu(ctx, view, ff_norm);
+    ff               = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
@@ -573,9 +580,8 @@ ggml_tensor * block_step_n(ggml_context *      ctx,
     if (view.ffn_scale != nullptr) {
         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     }
-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+    ggml_tensor * ff = ffn_swiglu(ctx, view, ff_norm);
+    ff               = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
@@ -685,9 +691,8 @@ ggml_tensor * block_step_batched(ggml_context *      ctx,
     if (view.ffn_scale != nullptr) {
         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     }
-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+    ggml_tensor * ff = ffn_swiglu(ctx, view, ff_norm);
+    ff               = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
@@ -789,9 +794,8 @@ ggml_tensor * block_prefill_batched(ggml_context *      ctx,
     if (view.ffn_scale != nullptr) {
         ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     }
-    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
-    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff                    = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
+    ggml_tensor * ff = ffn_swiglu(ctx, view, ff_norm);
+    ff               = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;

@@ -330,7 +330,9 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
     gguf_free(gguf_data);
 
-    {
+    // Keep the established one-matmul SwiGLU path on accelerators. On CPU,
+    // use the original gate/up projections to avoid retaining a packed copy.
+    if (m->plan.primary_kind != transcribe::BackendKind::Cpu) {
         std::vector<transcribe::causal_lm::GateUpEntry> entries;
         entries.reserve(m->weights.dec_blocks.size());
         for (auto & b : m->weights.dec_blocks) {
@@ -365,15 +367,6 @@ transcribe_status init_context(transcribe_model *                model,
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
-    auto * cm = static_cast<MossModel *>(model);
-    {
-        ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
-        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, /*n_ctx=*/2048, cm->hparams.dec_n_kv_heads,
-                                            cm->hparams.dec_head_dim, cm->hparams.dec_n_layers, kv_type)) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss init_context: KV cache allocation failed");
-            return TRANSCRIBE_ERR_OOM;
-        }
-    }
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
 }

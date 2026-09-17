@@ -36,6 +36,8 @@ causal_lm::BlockView to_block_view(const MossDecBlock & b) {
     v.attn_q_norm   = b.attn_q_norm;
     v.attn_k_norm   = b.attn_k_norm;
     v.ffn_gate_up_w = b.ffn_gate_up_w;
+    v.ffn_gate_w    = b.ffn_gate_w;
+    v.ffn_up_w      = b.ffn_up_w;
     v.ffn_down_w    = b.ffn_down_w;
     return v;
 }

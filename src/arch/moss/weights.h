@@ -159,7 +159,7 @@ struct MossDecBlock {
     ggml_tensor * ffn_gate_w    = nullptr;
     ggml_tensor * ffn_up_w      = nullptr;
     ggml_tensor * ffn_down_w    = nullptr;
-    ggml_tensor * ffn_gate_up_w = nullptr;  // packed at load
+    ggml_tensor * ffn_gate_up_w = nullptr;  // packed on accelerator backends
 };
 
 struct MossDecFinal {

@@ -1,7 +1,7 @@
 // arch/voxtral/decoder.cpp - Voxtral LM prefill/step graph builders.
 //
 // Reference: VoxtralForConditionalGeneration's inner LlamaForCausalLM. The
-// per-block math (pre-LN RMSNorm, GQA, NEOX RoPE, SwiGLU on packed gate_up) is
+// per-block math (pre-LN RMSNorm, GQA, NEOX RoPE, SwiGLU) is
 // the shared causal_lm module with null Q/K-norm slots (Llama has no per-head
 // Q/K norm). This file owns graph allocation, audio injection (3-way concat),
 // dump naming, and the UNTIED lm_head.
@@ -40,6 +40,8 @@ causal_lm::BlockView to_block_view(const VoxtralDecBlock & b) {
     v.attn_q_norm   = nullptr;  // Llama: no Q-norm
     v.attn_k_norm   = nullptr;  // Llama: no K-norm
     v.ffn_gate_up_w = b.ffn_gate_up_w;
+    v.ffn_gate_w    = b.ffn_gate_w;
+    v.ffn_up_w      = b.ffn_up_w;
     v.ffn_down_w    = b.ffn_down_w;
     return v;
 }

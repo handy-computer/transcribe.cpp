@@ -713,24 +713,6 @@ transcribe_status init_context(transcribe_model *                model,
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
-    auto * cm = static_cast<CanaryQwenModel *>(model);
-    {
-        ggml_type kv_type = GGML_TYPE_F16;
-        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
-            kv_type = GGML_TYPE_F32;
-        }
-        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
-                                            /*n_ctx=*/2048, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
-                                            cm->hparams.dec_n_layers, kv_type)) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "canary_qwen init_context: KV cache allocation failed "
-                                "(n_ctx=2048, %d kv-heads x %d head-dim x %d layers) — "
-                                "out of memory.",
-                                cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim, cm->hparams.dec_n_layers);
-            return TRANSCRIBE_ERR_OOM;
-        }
-    }
-
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
 }
@@ -924,7 +906,7 @@ transcribe_status run(transcribe_session *          context,
     // hold prompt + generation budget, rounded up to a power of two (the step
     // graph's flash-attn path wants pow2 attention width). A pre-allocated
     // smaller cache is freed and re-allocated.
-    int want_n_ctx = 1024;
+    int want_n_ctx = 256;
     while (want_n_ctx < T_prompt + k_max_new) {
         want_n_ctx *= 2;
     }

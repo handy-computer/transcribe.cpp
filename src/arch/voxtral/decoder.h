@@ -4,7 +4,7 @@
 //   - pre-LN RMSNorm (eps 1e-5)
 //   - GQA (32 Q heads, 8 KV heads, head_dim 128), NO per-head Q/K norm
 //   - NEOX RoPE (rotate_half) at theta 1e8
-//   - SwiGLU MLP: down(silu(gate(x)) * up(x)) via packed gate+up
+//   - SwiGLU MLP: down(silu(gate(x)) * up(x))
 //   - UNTIED lm_head (dec.output.weight, separate from token_embd)
 //
 // The per-block math is the shared causal_lm module; this file owns graph

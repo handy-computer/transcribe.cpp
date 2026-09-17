@@ -300,27 +300,6 @@ transcribe_status init_context(transcribe_model *                model,
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
-    // Pre-allocate KV cache at context creation so the first run
-    // doesn't pay the allocation cost inside the decode phase.
-    auto * cm = static_cast<QwenAsrModel *>(model);
-    {
-        ggml_type kv_type = GGML_TYPE_F16;
-        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
-            kv_type = GGML_TYPE_F32;
-        }
-        const int initial_n_ctx = std::min(1024, qwen3_context_ceiling(cc->n_ctx, cm->hparams));
-        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, initial_n_ctx, cm->hparams.dec_n_kv_heads,
-                                            cm->hparams.dec_head_dim, cm->hparams.dec_n_layers, kv_type)) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "qwen3_asr init_context: KV cache allocation failed "
-                                "(n_ctx=%d, %d kv-heads x %d head-dim x %d layers) — "
-                                "out of memory.",
-                                initial_n_ctx, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
-                                cm->hparams.dec_n_layers);
-            return TRANSCRIBE_ERR_OOM;
-        }
-    }
-
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
 }
@@ -727,7 +706,7 @@ transcribe_status run(transcribe_session *          session,
     // hold prompt + generation budget, rounded up to a power of two (the step
     // graph's flash-attn path wants pow2 attention width). A pre-allocated
     // smaller cache is freed and re-allocated.
-    int want_n_ctx = 1024;
+    int want_n_ctx = 256;
     while (want_n_ctx < T_prompt + k_max_new) {
         want_n_ctx *= 2;
     }
