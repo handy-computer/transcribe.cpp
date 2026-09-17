@@ -192,14 +192,6 @@ CohereModel::~CohereModel() {
         safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
-    if (conv_pw_f32_ctx != nullptr) {
-        ggml_free(conv_pw_f32_ctx);
-        conv_pw_f32_ctx = nullptr;
-    }
-    if (conv_pw_f32_buffer != nullptr) {
-        safe_buffer_free(conv_pw_f32_buffer);
-        conv_pw_f32_buffer = nullptr;
-    }
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
@@ -395,25 +387,6 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// On a CPU primary backend, dequantize the conformer 1×1 pointwise conv
-// weights (pw1, pw2) from F16 back to F32: Zen 2 (and anything else without
-// native F16 compute) pays an F16->F32 upconvert per matmul that outweighs
-// the bandwidth win. GPU backends skip this and keep the F16 weights.
-transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
-    std::vector<load_common::ConvPwF32Slot> slots;
-    slots.reserve(m.weights.blocks.size() * 2);
-    for (auto & b : m.weights.blocks) {
-        if (b.conv_pw1_w != nullptr && b.conv_pw1_w->type == GGML_TYPE_F16) {
-            slots.push_back({ &b.conv_pw1_w, b.conv_pw1_w });
-        }
-        if (b.conv_pw2_w != nullptr && b.conv_pw2_w->type == GGML_TYPE_F16) {
-            slots.push_back({ &b.conv_pw2_w, b.conv_pw2_w });
-        }
-    }
-    return load_common::promote_conv_pw_f16_to_f32_on_cpu(m.plan, slots, "cohere", &m.conv_pw_f32_ctx,
-                                                          &m.conv_pw_f32_buffer);
-}
-
 constexpr const char k_default_variant[] = "cohere-asr";
 
 // Forward declarations for the Arch trait below.
@@ -592,11 +565,6 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     // Fuse encoder Q bias into pos_bias_u/v (drops one add per layer).
     if (const transcribe_status st = fuse_encoder_q_bias(*m); st != TRANSCRIBE_OK) {
-        return st;
-    }
-
-    // CPU only: dequantize conv pointwise weights to F32 (see function doc).
-    if (const transcribe_status st = promote_conv_pw_to_f32_on_cpu(*m); st != TRANSCRIBE_OK) {
         return st;
     }
 
