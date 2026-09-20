@@ -395,10 +395,17 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     // effective_max_audio_ms to the encoder bound regardless of n_ctx; the
     // decoder self-KV (which n_ctx does lower) only bounds transcript length.
     if (m->hparams.dec_max_position > 0) {
-        m->limits.has_context_cap        = true;
-        m->limits.audio_from_caps        = true;
-        m->limits.model_max_ctx          = m->hparams.dec_max_position;
-        m->limits.gen_reserve            = k_gen_reserve;
+        m->limits.has_context_cap = true;
+        m->limits.audio_from_caps = true;
+        m->limits.model_max_ctx   = m->hparams.dec_max_position;
+        m->limits.gen_reserve     = k_gen_reserve;
+        // Encoder rate, for the duration-derived decode budget. Not used for
+        // effective_max_audio_ms here (audio_from_caps pins that to the encoder
+        // bound), so publishing it changes no advertised limit.
+        if (m->hparams.enc_subsampling_factor > 0 && m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
+            m->limits.ms_per_audio_token = static_cast<double>(m->hparams.enc_subsampling_factor) *
+                                           m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
+        }
         // Whisper-style decoder self-KV: dec_d_model per layer, K and V, no GQA.
         m->limits.kv_elems_per_ctx_token = (int64_t) m->hparams.dec_d_model * m->hparams.dec_n_layers * 2;
     }
@@ -1096,8 +1103,10 @@ transcribe_status run(transcribe_session *          session,
 
         cc->clear_result();
 
-        const int eos_id     = cm->hparams.eos_token_id;
-        const int max_tokens = transcribe::pick_decode_budget(T_enc, k_gen_reserve, prompt_len, cc->kv_cache.n_ctx);
+        const int eos_id = cm->hparams.eos_token_id;
+        const int max_tokens =
+            transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token),
+                                           k_gen_reserve, prompt_len, cc->kv_cache.n_ctx);
 
         int next_token = 0;
         if (prompt_skip_softmax && db.argmax_out != nullptr) {
@@ -1621,8 +1630,10 @@ transcribe_status run_batch(transcribe_session *          session,
     const int n_ctx_cap = canary_context_ceiling(cc->n_ctx, hp);
     // One decode budget for the whole batch (the step loop runs every row in
     // lockstep), sized from the longest surviving utterance. Same rule as run().
-    const int max_new   = transcribe::pick_decode_budget(T_enc_max, k_gen_reserve, prompt_len, n_ctx_cap);
-    int       max_n_kv  = 1024;
+    const int max_new =
+        transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc_max, cm->limits.ms_per_audio_token),
+                                       k_gen_reserve, prompt_len, n_ctx_cap);
+    int max_n_kv = 1024;
     while (max_n_kv < prompt_len + max_new) {
         max_n_kv *= 2;
     }

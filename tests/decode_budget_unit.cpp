@@ -34,6 +34,15 @@ int g_failures = 0;
         }                                                                        \
     } while (0)
 
+void check_predict(const char * what, int audio_tokens, double ms_per_audio_token, int expected) {
+    const int got = transcribe::predict_transcript_tokens(audio_tokens, ms_per_audio_token);
+    if (got != expected) {
+        std::fprintf(stderr, "FAIL %s: predict_transcript_tokens(%d, %.3f) = %d, expected %d\n", what, audio_tokens,
+                     ms_per_audio_token, got, expected);
+        ++g_failures;
+    }
+}
+
 void check_budget(const char * what, int predicted, int floor_tokens, int t_prompt, int ceiling, int expected) {
     const int got = transcribe::pick_decode_budget(predicted, floor_tokens, t_prompt, ceiling);
     if (got != expected) {
@@ -46,6 +55,23 @@ void check_budget(const char * what, int predicted, int floor_tokens, int t_prom
 }  // namespace
 
 int main(void) {
+    // ---- Prediction is duration-based, not audio-token based. ----
+    // The whole point: encoder rates differ ~6x, so two families that heard the
+    // same 197 seconds of speech must predict the same transcript length even
+    // though one emitted 6x more audio tokens than the other.
+    check_predict("80 ms encoder, 197 s", /*audio_tokens=*/2463, /*ms_per_audio_token=*/80.0,
+                  /*expected=*/2364);
+    check_predict("480 ms LFR encoder, same 197 s", /*audio_tokens=*/410, /*ms_per_audio_token=*/480.0,
+                  /*expected=*/2361);
+    // funasr_nano's real regression: its raw audio-token count (410) predicts
+    // far below the ~700 tokens this clip's transcript actually needs.
+    CHECK(transcribe::predict_transcript_tokens(410, 480.0) > 700);
+
+    // An unpublished rate falls back to the audio-token count (prior behavior).
+    check_predict("unknown rate falls back", 2463, 0.0, 2463);
+    check_predict("negative rate falls back", 2463, -1.0, 2463);
+    check_predict("no audio", 0, 80.0, 0);
+
     // ---- Property 1: the floor holds for short audio. ----
     // A clip whose audio-token count is below the family's historical fixed
     // budget must still get that budget, so its decode is byte-identical to

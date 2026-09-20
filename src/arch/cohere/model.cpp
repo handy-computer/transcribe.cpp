@@ -1045,8 +1045,10 @@ transcribe_status run(transcribe_session *          session,
         // Load-time validation guarantees eos_token_id >= 0; no
         // fallback is needed here. See the tokenizer.eos_id() check
         // in cohere::load() at the top of this file.
-        const int eos_id     = cm->hparams.eos_token_id;
-        const int max_tokens = transcribe::pick_decode_budget(T_enc, k_gen_reserve, prompt_len, cc->kv_cache.n_ctx);
+        const int eos_id = cm->hparams.eos_token_id;
+        const int max_tokens =
+            transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token),
+                                           k_gen_reserve, prompt_len, cc->kv_cache.n_ctx);
 
         // Pick the first generated token. Fast path reads a single
         // int32 argmax that the GPU computed; debug path reads the
@@ -1575,8 +1577,10 @@ transcribe_status run_batch(transcribe_session *          session,
     const int n_ctx_cap = cohere_dec_ctx_ceiling(cc->n_ctx, hp);
     // One decode budget for the whole batch (the step loop runs every row in
     // lockstep), sized from the longest surviving utterance. Same rule as run().
-    const int max_new   = transcribe::pick_decode_budget(T_enc_max, k_gen_reserve, prompt_len, n_ctx_cap);
-    int       max_n_kv  = 1024;
+    const int max_new =
+        transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc_max, cm->limits.ms_per_audio_token),
+                                       k_gen_reserve, prompt_len, n_ctx_cap);
+    int max_n_kv = 1024;
     while (max_n_kv < prompt_len + max_new) {
         max_n_kv *= 2;
     }

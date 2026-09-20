@@ -927,7 +927,8 @@ transcribe_status run(transcribe_session *          context,
     // Per-run decode budget: scales with the audio, floored at the reserve the
     // gate above just guaranteed, clamped to the context left. Replaces a flat
     // 256-token cap that truncated long clips with context still free.
-    const int max_new = transcribe::pick_decode_budget(T_enc, k_gen_reserve, T_prompt, ceiling);
+    const int max_new = transcribe::pick_decode_budget(
+        transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token), k_gen_reserve, T_prompt, ceiling);
 
     // KV cache init (grow-to-fit, clamped to the context ceiling). Size to
     // hold prompt + decode budget, rounded up to a power of two (the step
@@ -1484,11 +1485,13 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         return TRANSCRIBE_OK;
     }
-    T_enc_max          = std::max(1, T_enc_max);
+    T_enc_max = std::max(1, T_enc_max);
     // One decode budget for the whole batch (the step loop runs every row in
     // lockstep), sized from the longest surviving utterance. Same rule as run().
-    const int max_new  = transcribe::pick_decode_budget(T_enc_max, k_gen_reserve, max_T_prompt, ceiling);
-    int       max_n_kv = 1024;
+    const int max_new =
+        transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc_max, cm->limits.ms_per_audio_token),
+                                       k_gen_reserve, max_T_prompt, ceiling);
+    int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) {
         max_n_kv *= 2;
     }

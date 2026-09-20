@@ -131,15 +131,19 @@ int main() {
     }
 
     // ---- Lowered n_ctx: the only caller-facing control over output length ----
-    // love-loss.wav is ~197 s. qwen3_asr emits one audio token per 80 ms, so
-    // the prompt is ~2465 audio tokens plus ~15 chat-affix tokens. A 2816-token
-    // ceiling therefore clears the input gate (which reserves k_gen_reserve =
-    // 256 on top of the prompt) while leaving only ~340 tokens of decode
-    // budget — well under the ~700 this clip's transcript needs, so the decode
-    // runs into the budget and must report it.
+    // Measured on love-loss.wav (~197 s): T_enc = 2563 audio tokens (the clip
+    // encodes at 76.9 ms/token), T_prompt = 2578 with the chat affixes, and the
+    // full transcript is 701-750 tokens. The input gate reserves k_gen_reserve
+    // (256) on top of the prompt, so the ceiling must be >= 2834 for the clip
+    // to be accepted at all.
+    //
+    // 3072 clears that gate by 238 tokens and leaves 494 tokens of decode
+    // budget, about 210 short of the full transcript. Both margins absorb small
+    // prompt-template drift; if this ever returns INPUT_TOO_LONG the prompt
+    // grew, and if it returns OK the transcript shrank.
     transcribe_session_params sp;
     transcribe_session_params_init(&sp);
-    sp.n_ctx                      = 2816;
+    sp.n_ctx                      = 3072;
     struct transcribe_session * s = nullptr;
     if (transcribe_session_init(model, &sp, &s) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "session init failed\n");

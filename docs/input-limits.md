@@ -101,12 +101,19 @@ budget = clamp(max(generation_reserve, predicted_transcript_tokens),
                0, ceiling - prompt_tokens)
 ```
 
-`predicted_transcript_tokens` is the encoder's audio-token count (speech never
-yields more text tokens than the encoder yields audio tokens, so it is a safe
-upper bound; moss scales it up because its output also carries speaker
-markers). `generation_reserve` is the per-family floor — the same constant the
-up-front gate reserves and `max_audio_ms` subtracts — so a short clip decodes
-exactly as it always has. `ceiling` is the decoder context, which
+`predicted_transcript_tokens` comes from the clip's **duration**, not its
+audio-token count: `seconds x 12 tokens/sec`, where `seconds` is recovered from
+the family's published encoder rate (`ms_per_audio_token`). The duration form
+matters because encoder rates differ about 6x — most emit one audio token per
+80 ms, but `funasr_nano`'s LFR frontend emits one per ~480 ms, which is *below*
+the text-token rate, so its audio-token count under-predicts. 12 tokens/sec is
+deliberately generous against a measured ~3.4 for English BPE, leaving room for
+denser scripts. (`moss` and `voxtral` pass their own estimates instead: moss
+scales up for the speaker markers its output carries.)
+
+`generation_reserve` is the per-family floor — the same constant the up-front
+gate reserves and `max_audio_ms` subtracts — so a short clip decodes exactly as
+it always has. `ceiling` is the decoder context, which
 `transcribe_session_params::n_ctx` lowers.
 
 **`n_ctx` is the only caller-facing control over output length.** There is
@@ -119,6 +126,14 @@ Historically these budgets were flat per-family constants (256 or 512 tokens)
 that ignored audio length entirely, so a clip well inside `max_audio_ms` could
 still truncate with most of the context unused. That is fixed; the reserve
 constants remain only as the floor.
+
+One consequence worth knowing: on long audio some families decode into
+degenerate repetition (the same phrase emitted until the budget runs out).
+That is upstream model behavior under greedy decoding, not a porting defect —
+the reference implementations do the same, and the old flat cap was only
+hiding it by stopping the decode early. A repetition guard is tracked
+separately; until it lands, a looping transcript on a long clip is expected
+and matches the reference.
 
 ### 3. Soft window — warn and proceed
 
