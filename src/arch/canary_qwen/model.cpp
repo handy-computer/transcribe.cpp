@@ -28,6 +28,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-decode-budget.h"
 #include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -116,9 +117,12 @@ constexpr float      kBnEps              = 1e-5f;
 // TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that fills the generation budget
 // before end-of-stream is flagged via transcribe_was_truncated().
 
-// Per-run generation budget. Keep in sync with the single-utterance and
-// batched step loops below.
-constexpr int k_max_new = 256;
+// Generation reserve, in tokens: the room the up-front input gate always
+// keeps free for output, the floor under the per-run decode budget, and the
+// value transcribe_capabilities::max_audio_ms subtracts. The actual per-run
+// budget scales with the audio (see transcribe-decode-budget.h); this is only
+// its lower bound, so a short clip decodes exactly as it always has.
+constexpr int k_gen_reserve = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum
 // (decoder.max_position_embeddings, e.g. 40960), optionally lowered — never
@@ -148,7 +152,7 @@ int64_t canary_qwen_max_audio_ms(const CanaryQwenHParams & hp) {
     // counts; ~14 for canary_qwen). Advisory headroom, generous enough to
     // cover small template drift.
     constexpr int k_prompt_overhead = 32;
-    const int     max_audio_tokens  = hp.dec_max_position - k_prompt_overhead - k_max_new;
+    const int     max_audio_tokens  = hp.dec_max_position - k_prompt_overhead - k_gen_reserve;
     if (max_audio_tokens <= 0) {
         return 0;
     }
@@ -554,7 +558,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         m->limits.has_context_cap    = true;
         m->limits.model_max_ctx      = m->hparams.dec_max_position;
         m->limits.prompt_overhead    = 32;
-        m->limits.gen_reserve        = k_max_new;
+        m->limits.gen_reserve        = k_gen_reserve;
         // audio_tokens ≈ mel_frames / subsampling_factor ;
         //   mel_frames = ms*sr/(hop*1000)
         m->limits.ms_per_audio_token = static_cast<double>(m->hparams.enc_subsampling_factor) *
@@ -910,22 +914,27 @@ transcribe_status run(transcribe_session *          context,
     // Input-length gate: audio + prompt + generation must fit the decoder
     // context window. Reject an over-length clip here, before prefill/decode.
     const int ceiling = canary_qwen_context_ceiling(cc->n_ctx, hp);
-    if (T_prompt + k_max_new > ceiling) {
+    if (T_prompt + k_gen_reserve > ceiling) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen run: input too long — %d audio + %d prompt tokens "
                             "leave no room for output within the %d-token context (need %d). "
                             "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
                             "split it into segments.",
-                            T_enc, prefix_len + suffix_len, ceiling, T_prompt + k_max_new);
+                            T_enc, prefix_len + suffix_len, ceiling, T_prompt + k_gen_reserve);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
+    // Per-run decode budget: scales with the audio, floored at the reserve the
+    // gate above just guaranteed, clamped to the context left. Replaces a flat
+    // 256-token cap that truncated long clips with context still free.
+    const int max_new = transcribe::pick_decode_budget(T_enc, k_gen_reserve, T_prompt, ceiling);
+
     // KV cache init (grow-to-fit, clamped to the context ceiling). Size to
-    // hold prompt + generation budget, rounded up to a power of two (the step
+    // hold prompt + decode budget, rounded up to a power of two (the step
     // graph's flash-attn path wants pow2 attention width). A pre-allocated
     // smaller cache is freed and re-allocated.
     int want_n_ctx = 1024;
-    while (want_n_ctx < T_prompt + k_max_new) {
+    while (want_n_ctx < T_prompt + max_new) {
         want_n_ctx *= 2;
     }
     if (want_n_ctx > ceiling) {
@@ -1073,7 +1082,6 @@ transcribe_status run(transcribe_session *          context,
 
     // Step loop.
     const int32_t eos_id   = hp.eos_token_id;
-    const int     max_new  = k_max_new;
     int           cur_past = T_prompt;
 
     int max_n_kv = 1024;
@@ -1448,13 +1456,13 @@ transcribe_status run_batch(transcribe_session *          session,
 
         // Input-length gate (same as single-shot run()); reject this utterance,
         // the rest of the batch still runs.
-        if (T_prompt[b] + k_max_new > ceiling) {
+        if (T_prompt[b] + k_gen_reserve > ceiling) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "canary_qwen run_batch: utterance %d input too long — %d audio "
                                 "+ %d prompt tokens leave no room for output within the "
                                 "%d-token context (need %d). Shorten the audio (see "
                                 "transcribe_capabilities.max_audio_ms) or split it.",
-                                b, T_enc[b], T_prompt[b] - T_enc[b], ceiling, T_prompt[b] + k_max_new);
+                                b, T_enc[b], T_prompt[b] - T_enc[b], ceiling, T_prompt[b] + k_gen_reserve);
             fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
             continue;
         }
@@ -1477,7 +1485,9 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
     T_enc_max          = std::max(1, T_enc_max);
-    const int max_new  = k_max_new;
+    // One decode budget for the whole batch (the step loop runs every row in
+    // lockstep), sized from the longest surviving utterance. Same rule as run().
+    const int max_new  = transcribe::pick_decode_budget(T_enc_max, k_gen_reserve, max_T_prompt, ceiling);
     int       max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) {
         max_n_kv *= 2;

@@ -19,6 +19,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-decode-budget.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -80,17 +81,13 @@ constexpr const char k_default_variant[] = "voxtral-mini-3b-2507";
 constexpr int k_decode_budget_min = 448;
 
 // Decode budget (max new text tokens) for an utterance with `n_audio` audio
-// embedding tokens. Speech yields fewer text tokens than audio frames, so the
-// audio token count is a safe upper bound; clamp to the context remaining under
-// the trained max so prompt+decode fits. Greedy decode stops at EOS well before
-// this, so a generous ceiling costs only its KV allocation.
+// embedding tokens. Thin wrapper over the shared rule every autoregressive
+// family now uses (transcribe-decode-budget.h): the audio-token count is a safe
+// upper bound on the transcript, floored at k_decode_budget_min and clamped to
+// the context remaining under the trained max. Greedy decode stops at EOS well
+// before this, so a generous ceiling costs only its KV allocation.
 int pick_decode_budget(int n_audio, int t_prompt, int model_max) {
-    int       budget = std::max(k_decode_budget_min, n_audio);
-    const int room   = model_max - t_prompt;
-    if (budget > room) {
-        budget = room;
-    }
-    return budget;
+    return transcribe::pick_decode_budget(n_audio, k_decode_budget_min, t_prompt, model_max);
 }
 
 // Chunked prefill — see decoder.h. Walks the prompt in blocks against the

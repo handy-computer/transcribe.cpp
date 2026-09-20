@@ -202,6 +202,22 @@ transcribe_apply_warnings(transcribe_prefill_chunk_mask_unit)
 add_test(NAME transcribe_prefill_chunk_mask_unit COMMAND transcribe_prefill_chunk_mask_unit)
 
 # -----------------------------------------------------------------------------
+# Per-run decode budget rule (pure host, no model)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_decode_budget_unit
+    decode_budget_unit.cpp)
+
+target_link_libraries(transcribe_decode_budget_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_decode_budget_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_decode_budget_unit)
+
+add_test(NAME transcribe_decode_budget_unit COMMAND transcribe_decode_budget_unit)
+
+# -----------------------------------------------------------------------------
 # MOSS diarized-transcript parser unit test (pure host, no model)
 # -----------------------------------------------------------------------------
 

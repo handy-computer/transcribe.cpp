@@ -11,6 +11,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-decode-budget.h"
 #include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -80,9 +81,12 @@ constexpr float      kBnEps              = 1e-5f;
 // Over-length input is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG
 // rather than silently aliasing RoPE past the trained range.
 
-// Generation budget reserved per run. Also the KV grow-to-fit step budget,
-// so an accepted clip always has room for up to this many output tokens.
-constexpr int k_gen_budget = 256;
+// Generation reserve, in tokens: the room the up-front input gate always
+// keeps free for output, the floor under the per-run decode budget, and the
+// value transcribe_capabilities::max_audio_ms subtracts. The actual per-run
+// budget scales with the audio (see transcribe-decode-budget.h); this is only
+// its lower bound, so a short clip decodes exactly as it always has.
+constexpr int k_gen_reserve = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
 // optionally lowered — never raised — by the caller's session n_ctx knob.
@@ -107,7 +111,7 @@ int granite_num_queries(const GraniteHParams & hp) {
 // audio tokens, a representative prompt, and the generation reserve still fit
 // the context ceiling. This is the input bound the gate enforces; transcripts
 // of long-but-fitting audio may still truncate (transcribe_was_truncated)
-// because the per-run output is bounded by k_gen_budget. Returns 0 ("unknown
+// because the per-run output is bounded by the decode budget. Returns 0 ("unknown
 // / unbounded") if the rate constants are missing, so a misconfigured model
 // is never advertised with a wrong finite number.
 int64_t granite_max_audio_ms(const GraniteHParams & hp) {
@@ -118,7 +122,7 @@ int64_t granite_max_audio_ms(const GraniteHParams & hp) {
     }
     // Representative non-audio prompt overhead (chat affixes); advisory.
     constexpr int k_prompt_overhead = 64;
-    const int     max_audio_tokens  = hp.dec_max_position_embeddings - k_prompt_overhead - k_gen_budget;
+    const int     max_audio_tokens  = hp.dec_max_position_embeddings - k_prompt_overhead - k_gen_reserve;
     if (max_audio_tokens <= 0) {
         return 0;
     }
@@ -305,7 +309,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
             m->limits.has_context_cap    = true;
             m->limits.model_max_ctx      = m->hparams.dec_max_position_embeddings;
             m->limits.prompt_overhead    = 64;  // match granite_max_audio_ms's k_prompt_overhead
-            m->limits.gen_reserve        = k_gen_budget;
+            m->limits.gen_reserve        = k_gen_reserve;
             // ms per audio token: granite emits num_queries tokens per
             // window_size encoder frames; t_enc = mel_frames/2;
             // mel_frames = ms*sr/(hop*1000). Inverting granite_max_audio_ms's
@@ -1039,15 +1043,20 @@ transcribe_status run(transcribe_session *          ctx_base,
     // aliasing RoPE past the trained range. Reserving the full generation
     // budget means an accepted clip always has room for a real transcript.
     const int ceiling = granite_context_ceiling(cc->n_ctx, cm->hparams);
-    if (T_prompt + k_gen_budget > ceiling) {
+    if (T_prompt + k_gen_reserve > ceiling) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite run: input too long — %d audio + %d prompt tokens leave "
                             "no room for output within the %d-token context (need %d). "
                             "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
                             "split it into segments.",
-                            n_audio_tokens, prefix_len + suffix_len, ceiling, T_prompt + k_gen_budget);
+                            n_audio_tokens, prefix_len + suffix_len, ceiling, T_prompt + k_gen_reserve);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
+
+    // Per-run decode budget: scales with the audio, floored at the reserve the
+    // gate above just guaranteed, clamped to the context left. Replaces a flat
+    // 256-token cap that truncated long clips with context still free.
+    const int gen_budget = transcribe::pick_decode_budget(n_audio_tokens, k_gen_reserve, T_prompt, ceiling);
 
     // Size the KV cache dynamically: T_prompt + room for the longest
     // generation we'll emit, clamped to the context ceiling. Matches the
@@ -1057,7 +1066,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     // so back-to-back runs of similar audio lengths don't keep
     // re-allocating.
     constexpr int kKvBucket    = 256;
-    const int     needed_raw   = std::min(T_prompt + k_gen_budget, ceiling);
+    const int     needed_raw   = std::min(T_prompt + gen_budget, ceiling);
     const int     needed_n_ctx = ((needed_raw + kKvBucket - 1) / kKvBucket) * kKvBucket;
 
     if (cc->kv.self_k != nullptr && cc->kv.n_ctx < needed_n_ctx) {
@@ -1196,10 +1205,10 @@ transcribe_status run(transcribe_session *          ctx_base,
     // n_ctx of the KV cache bounds the max generation length we can
     // attend over.
     const int max_n_kv  = cc->kv.n_ctx;
-    // Bound generation by the step budget, the allocated cache, AND the
-    // context ceiling (the gate guarantees ceiling - T_prompt >= k_gen_budget,
-    // so for in-spec input this stays k_gen_budget and decode is unchanged).
-    const int max_steps = std::min({ k_gen_budget, max_n_kv - T_prompt, ceiling - T_prompt });
+    // Bound generation by the decode budget, the allocated cache, AND the
+    // context ceiling. gen_budget is already clamped to ceiling - T_prompt;
+    // the other two terms guard the cache the bucket rounding actually gave us.
+    const int max_steps = std::min({ gen_budget, max_n_kv - T_prompt, ceiling - T_prompt });
 
     ggml_context * step_ctx = nullptr;
     {
@@ -1572,13 +1581,13 @@ transcribe_status run_batch(transcribe_session *          session,
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
 
         // Input-length gate, mirroring the single-shot run() gate.
-        if (T_prompt[b] + k_gen_budget > ceiling) {
+        if (T_prompt[b] + k_gen_reserve > ceiling) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "granite run_batch: utterance %d input too long — %d audio + %d "
                                 "prompt tokens leave no room for output within the %d-token "
                                 "context (need %d). Shorten the audio (see "
                                 "transcribe_capabilities.max_audio_ms) or split it.",
-                                b, n_audio[b], T_prompt[b] - n_audio[b], ceiling, T_prompt[b] + k_gen_budget);
+                                b, n_audio[b], T_prompt[b] - n_audio[b], ceiling, T_prompt[b] + k_gen_reserve);
             fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
             continue;
         }
@@ -1601,7 +1610,9 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
     n_audio_max        = std::max(1, n_audio_max);
-    const int max_new  = 256;
+    // One decode budget for the whole batch (the step loop runs every row in
+    // lockstep), sized from the longest surviving utterance. Same rule as run().
+    const int max_new  = transcribe::pick_decode_budget(n_audio_max, k_gen_reserve, max_T_prompt, ceiling);
     int       max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) {
         max_n_kv *= 2;

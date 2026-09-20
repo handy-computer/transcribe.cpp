@@ -82,14 +82,43 @@ over-length clip immediately — the caller never pays for a compute pass that
 cannot fit. The rejection goes through the log callback, not raw stderr.
 
 The one case that cannot be predicted up front is the transcript itself running
-long enough to exhaust the remaining budget mid-decode (rare — the output would
-have to be very large for the audio length). There, the run returns the hard
-status `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` while keeping the partial transcript
-readable (exactly like an aborted run); `transcribe_was_truncated(session)` is
-also set, and a `WARN` is logged. A truncated transcript is never returned as
-`TRANSCRIBE_OK` — a caller cannot mistake it for complete — and the partial
-output is never discarded. In `transcribe_run_batch` this is a per-utterance
-status (the whole-batch call still returns `TRANSCRIBE_OK`).
+long enough to exhaust the remaining budget mid-decode. There, the run returns
+the hard status `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` while keeping the partial
+transcript readable (exactly like an aborted run);
+`transcribe_was_truncated(session)` is also set, and a `WARN` is logged. A
+truncated transcript is never returned as `TRANSCRIBE_OK` — a caller cannot
+mistake it for complete — and the partial output is never discarded. In
+`transcribe_run_batch` this is a per-utterance status (the whole-batch call
+still returns `TRANSCRIBE_OK`).
+
+### The decode budget
+
+How much output an accepted clip may produce is **derived from the clip**, not
+fixed. Each autoregressive family resolves a per-run decode budget as:
+
+```text
+budget = clamp(max(generation_reserve, predicted_transcript_tokens),
+               0, ceiling - prompt_tokens)
+```
+
+`predicted_transcript_tokens` is the encoder's audio-token count (speech never
+yields more text tokens than the encoder yields audio tokens, so it is a safe
+upper bound; moss scales it up because its output also carries speaker
+markers). `generation_reserve` is the per-family floor — the same constant the
+up-front gate reserves and `max_audio_ms` subtracts — so a short clip decodes
+exactly as it always has. `ceiling` is the decoder context, which
+`transcribe_session_params::n_ctx` lowers.
+
+**`n_ctx` is the only caller-facing control over output length.** There is
+deliberately no per-run "max tokens" parameter: an ASR transcript's length is a
+property of the audio, so the library derives it rather than asking. Lowering
+`n_ctx` to bound memory also lowers the budget, and can turn a run that would
+have completed into `OUTPUT_TRUNCATED`.
+
+Historically these budgets were flat per-family constants (256 or 512 tokens)
+that ignored audio length entirely, so a clip well inside `max_audio_ms` could
+still truncate with most of the context unused. That is fixed; the reserve
+constants remain only as the floor.
 
 ### 3. Soft window — warn and proceed
 
@@ -192,6 +221,11 @@ detect truncation should check `transcribe_was_truncated()` after finalize.
 
 ## Design notes (for maintainers)
 
+- `generation_reserve` is a floor, not a cap. The gate and `max_audio_ms`
+  reserve it so an accepted clip is guaranteed at least that much output room;
+  the per-run budget then scales up with the audio (see "The decode budget").
+  Changing a family's reserve moves its published `max_audio_ms`, so it is not
+  a free knob — the budget rule is the thing to tune.
 - The upfront gate and `max_audio_ms` share a shape for decoder-context-bound
   families but differ in precision:
   `max_audio_ms ≈ (ceiling − representative_prompt − generation_reserve) / tokens_per_ms`,

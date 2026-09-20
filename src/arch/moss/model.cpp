@@ -16,6 +16,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-decode-budget.h"
 #include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -759,10 +760,12 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // Generation budget scales with audio length: the emergent transcript
-    // (text + [start]/[Sxx]/[end] markers) tracks the audio-token count, which
-    // for long-form far exceeds the k_max_new floor. Clamp to the context.
-    const int gen_budget = std::min(ceiling - T_prompt, std::max(k_max_new, 2 * T_enc + 128));
+    // Generation budget scales with audio length via the shared rule
+    // (transcribe-decode-budget.h). moss predicts higher than the plain
+    // audio-token count because the emergent transcript carries speaker
+    // markers ([start]/[Sxx]/[end]) on top of the text; for long-form that
+    // far exceeds the k_max_new floor. Clamped to the context left.
+    const int gen_budget = transcribe::pick_decode_budget(2 * T_enc + 128, k_max_new, T_prompt, ceiling);
 
     // KV cache (grow-to-fit, clamped to ceiling). Short inputs retain the old
     // 1K/2K/4K buckets; longer ones grow in 4K steps so crossing 32K does not

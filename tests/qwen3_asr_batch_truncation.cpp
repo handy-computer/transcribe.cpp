@@ -2,14 +2,20 @@
 // and batch decode paths both report mid-decode OUTPUT_TRUNCATED for a
 // causal_lm (LLM-decoder) family.
 //
-// qwen3_asr caps generation at max_new = 256 tokens. A long speech clip passes
-// the up-front input-length gate (its audio tokens fit the 65536-token decoder
-// context with room to spare) but its natural transcript exceeds 256 tokens, so
-// greedy decode hits the generation budget before EOS — the transcript is
-// truncated. Per docs/input-limits.md that must surface as the hard
-// TRANSCRIBE_ERR_OUTPUT_TRUNCATED status (partial transcript retained,
-// transcribe_was_truncated() set) in BOTH paths, while a short clip that
-// finishes under the budget stays OK and the whole-batch call still returns OK.
+// qwen3_asr's decode budget scales with the audio and is clamped to the
+// decoder context left after the prompt (transcribe-decode-budget.h). It used
+// to be a flat 256 tokens, which truncated any clip past ~75 s of speech even
+// with 65000 tokens of context free; that was the bug, and the first block
+// below is its regression guard — a 197 s clip must now decode to EOS.
+//
+// Truncation is still reachable, and still has to be reported: lowering
+// transcribe_session_params::n_ctx lowers the ceiling, which lowers the budget
+// with it. That is the only knob a caller has over the output length, so it is
+// also how this test forces the truncation path. Per docs/input-limits.md a
+// truncated decode must surface as the hard TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+// status (partial transcript retained, transcribe_was_truncated() set) in BOTH
+// the single-shot and batch paths, while a short clip that finishes under the
+// budget stays OK and the whole-batch call still returns OK.
 //
 // This is the causal_lm counterpart to moonshine_streaming_batch_truncation
 // (which exercises the encoder-decoder batch loop in transcribe-batch-util.cpp).
@@ -20,7 +26,7 @@
 // truncated batch row silently report TRANSCRIBE_OK with an incomplete
 // transcript — the exact failure this test catches.
 //
-// Batch makeup:
+// Batch makeup (under the lowered n_ctx):
 //   row 0 = jfk.wav (~11 s)        -> completes under the budget -> OK
 //   row 1 = love-loss.wav (~197 s) -> exceeds the budget         -> OUTPUT_TRUNCATED
 //
@@ -105,8 +111,35 @@ int main() {
         return 1;
     }
 
+    // ---- Regression guard for the flat-256 budget bug ----
+    // At the default (full) context the 197 s clip must decode all the way to
+    // EOS. Before the budget scaled with the audio this returned
+    // OUTPUT_TRUNCATED at 256 tokens with ~63000 tokens of context unused.
+    {
+        transcribe_session_params full_sp;
+        transcribe_session_params_init(&full_sp);
+        struct transcribe_session * full_s = nullptr;
+        if (transcribe_session_init(model, &full_sp, &full_s) != TRANSCRIBE_OK) {
+            std::fprintf(stderr, "session init failed\n");
+            transcribe_model_free(model);
+            return 1;
+        }
+        const transcribe_status rl = transcribe_run(full_s, pcm_long.data(), (int) pcm_long.size(), nullptr);
+        CHECK(rl == TRANSCRIBE_OK);
+        CHECK(transcribe_was_truncated(full_s) == false);
+        transcribe_session_free(full_s);
+    }
+
+    // ---- Lowered n_ctx: the only caller-facing control over output length ----
+    // love-loss.wav is ~197 s. qwen3_asr emits one audio token per 80 ms, so
+    // the prompt is ~2465 audio tokens plus ~15 chat-affix tokens. A 2816-token
+    // ceiling therefore clears the input gate (which reserves k_gen_reserve =
+    // 256 on top of the prompt) while leaving only ~340 tokens of decode
+    // budget — well under the ~700 this clip's transcript needs, so the decode
+    // runs into the budget and must report it.
     transcribe_session_params sp;
     transcribe_session_params_init(&sp);
+    sp.n_ctx                      = 2816;
     struct transcribe_session * s = nullptr;
     if (transcribe_session_init(model, &sp, &s) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "session init failed\n");
@@ -114,9 +147,7 @@ int main() {
         return 1;
     }
 
-    // ---- Single-shot baseline: the long clip truncates, the short one does not.
-    // Both pass the input-length gate at the default (full) context; the long
-    // clip simply runs the decoder into the 256-token generation budget.
+    // ---- Single-shot: the long clip truncates, the short one does not. ----
     {
         const transcribe_status rl = transcribe_run(s, pcm_long.data(), (int) pcm_long.size(), nullptr);
         CHECK(rl == TRANSCRIBE_ERR_OUTPUT_TRUNCATED);
