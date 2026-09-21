@@ -93,7 +93,7 @@ still returns `TRANSCRIBE_OK`).
 
 ### The decode budget
 
-How much output an accepted clip may produce is **derived from the clip**, not
+How much output an accepted clip may produce is derived from the clip, not
 fixed. Each autoregressive family resolves a per-run decode budget as:
 
 ```text
@@ -101,76 +101,40 @@ budget = clamp(max(generation_reserve, predicted_transcript_tokens),
                0, ceiling - prompt_tokens)
 ```
 
-`predicted_transcript_tokens` comes from the clip's **duration**, not its
-audio-token count: `seconds x 12 tokens/sec`, where `seconds` is recovered from
-the family's published encoder rate (`ms_per_audio_token`). The duration form
-matters because encoder rates differ about 6x — most emit one audio token per
-80 ms, but `funasr_nano`'s LFR frontend emits one per ~480 ms, which is *below*
-the text-token rate, so its audio-token count under-predicts. 12 tokens/sec is
-deliberately generous against a measured ~3.4 for English BPE, leaving room for
-denser scripts. (`moss` and `voxtral` pass their own estimates instead: moss
-scales up for the speaker markers its output carries.)
+`predicted_transcript_tokens` comes from the clip's duration (`seconds x 12`),
+recovered from the family's published `ms_per_audio_token` — not from the raw
+audio-token count, whose rate differs ~6x across encoders. `generation_reserve`
+is the per-family floor, the same constant the up-front gate reserves and
+`max_audio_ms` subtracts. `ceiling` is the decoder context, which
+`transcribe_session_params::n_ctx` lowers. `moss` and `voxtral` pass their own
+estimates instead.
 
-`generation_reserve` is the per-family floor — the same constant the up-front
-gate reserves and `max_audio_ms` subtracts — so a short clip decodes exactly as
-it always has. `ceiling` is the decoder context, which
-`transcribe_session_params::n_ctx` lowers.
-
-**`n_ctx` is the only caller-facing control over output length.** There is
-deliberately no per-run "max tokens" parameter: an ASR transcript's length is a
-property of the audio, so the library derives it rather than asking. Lowering
-`n_ctx` to bound memory also lowers the budget, and can turn a run that would
-have completed into `OUTPUT_TRUNCATED`.
-
-Historically these budgets were flat per-family constants (256 or 512 tokens)
-that ignored audio length entirely, so a clip well inside `max_audio_ms` could
-still truncate with most of the context unused. That is fixed; the reserve
-constants remain only as the floor.
-
-One consequence worth knowing: on long audio some families decode into
-degenerate repetition (the same phrase emitted until the budget runs out).
-That is upstream model behavior under greedy decoding, not a porting defect —
-the reference implementations do the same, and the old flat cap was only
-hiding it by stopping the decode early. A repetition guard is tracked
-separately; until it lands, a looping transcript on a long clip is expected
-and matches the reference.
+`n_ctx` is the only caller-facing control over output length; there is no
+per-run "max tokens" parameter. Lowering it to bound memory also lowers the
+budget, and can turn a run that would have completed into `OUTPUT_TRUNCATED`.
 
 ### Encoder-bound families: `cohere` and `canary`
 
 For most hard-cap families the decoder context bounds the input *and* the
-output, so the gate that accepts a clip also guarantees room for its
-transcript. `cohere` and `canary` are the exception, and it is worth stating
-plainly.
+output, so the gate that accepts a clip also guarantees room for its transcript.
+`cohere` and `canary` are the exception: their audio bound is the encoder
+relative-position table (`enc_pos_emb_max_len = 5000`, ~400 s) while their
+transcript bound is a separate 1024-token decoder self-KV (`dec_max_position` /
+`dec_max_seq`). Audio lives in the cross-attention cache and never consumes
+decoder context, so the up-front gate cannot predict whether the transcript
+fits. A clip accepted at ~400 s can still return
+`TRANSCRIBE_ERR_OUTPUT_TRUNCATED` past ~1018 tokens (measured on a 197 s English
+clip: canary 1015, cohere 1014).
 
-Their audio bound is the **encoder** relative-position table
-(`enc_pos_emb_max_len = 5000` on every shipped variant, ~400 s), while their
-transcript bound is a **separate** 1024-token decoder self-KV
-(`dec_max_position` / `dec_max_seq`). Audio lives in the cross-attention cache,
-so it never consumes decoder context — which means the up-front gate has no way
-to predict whether the transcript will fit. It cannot: transcript length is not
-a function of the input the way audio-token count is.
-
-The consequence: a clip is accepted at up to ~400 s and can still return
-`TRANSCRIBE_ERR_OUTPUT_TRUNCATED` once its transcript passes ~1018 tokens.
-Measured on a 197 s English clip, both families truncate — canary at 1015
-tokens, cohere at 1014. This is the one place where an accepted clip is not
-guaranteed a complete transcript, and it is a property of the checkpoints, not
-of the decode budget: the budget already hands these families 1018 of their
-1024 positions, which is everything there is.
-
-`max_audio_ms` is deliberately the **architectural** bound — the longest clip
-the encoder table can index without aliasing — not a quality recommendation.
-Upstream's recommended working window is much shorter:
+`max_audio_ms` here is the architectural bound — the longest clip the encoder
+table can index without aliasing — not a quality recommendation:
 
 | Family | Upstream recommended clip | Architectural gate | Transcript bound |
 | --- | --- | --- | --- |
-| `canary` | 40 s (>40 s is chunked upstream with 1 s overlap) | ~400 s | 1024 tokens |
+| `canary` | 40 s (chunked upstream with 1 s overlap) | ~400 s | 1024 tokens |
 | `cohere` | 35 s (`max_audio_clip_s`) | ~400 s | 1024 tokens |
 
-Those recommended windows are advisory and are **not** currently reported
-through the ABI. They belong in a future "recommended window" capability field,
-landing alongside chunked long-form support — not in `max_audio_ms`, which must
-keep meaning "the longest clip this model can physically accept".
+The recommended windows are advisory and are not reported through the ABI.
 
 ### 3. Soft window — warn and proceed
 
@@ -273,24 +237,17 @@ detect truncation should check `transcribe_was_truncated()` after finalize.
 
 ## Design notes (for maintainers)
 
-- `generation_reserve` is a floor, not a cap. The gate and `max_audio_ms`
-  reserve it so an accepted clip is guaranteed at least that much output room;
-  the per-run budget then scales up with the audio (see "The decode budget").
-  Changing a family's reserve moves its published `max_audio_ms`, so it is not
-  a free knob — the budget rule is the thing to tune.
-- For `cohere` / `canary`, `max_audio_ms` is the encoder bound and the decoder
-  self-KV separately bounds the transcript, so an accepted clip is *not*
-  guaranteed a complete transcript (see "Encoder-bound families"). Do not
-  "fix" this by lowering `max_audio_ms` to the upstream recommended window:
-  that field means the architectural maximum, and `audio_from_caps` exists
-  precisely to keep the encoder bound from shrinking when `n_ctx` drops. The
-  fix is chunked long-form plus a separate recommended-window field.
+- `generation_reserve` is a floor, not a cap: changing a family's reserve moves
+  its published `max_audio_ms`, so tune the budget rule instead.
+- For `cohere` / `canary`, do not "fix" the transcript bound by lowering
+  `max_audio_ms` to the upstream recommended window — that field means the
+  architectural maximum, and `audio_from_caps` exists to keep the encoder bound
+  from shrinking when `n_ctx` drops. The fix is chunked long-form plus a
+  separate recommended-window field.
 - The decoder positional encoding on both is sinusoidal, not learned (canary's
-  GGUF publishes `learn_positional_encodings = false`; cohere's upstream config
-  records the same), so the 1024-entry table is a conversion-time artifact
-  rather than a trained weight. Regenerating it longer is technically possible
-  and is still the wrong move — it would run an AED an order of magnitude past
-  its supported window. Upstream's own answer to long audio here is chunking.
+  GGUF publishes `learn_positional_encodings = false`), so the 1024-entry table
+  is a conversion-time artifact, not a trained weight. Regenerating it longer
+  would still run an AED an order of magnitude past its supported window.
 - The upfront gate and `max_audio_ms` share a shape for decoder-context-bound
   families but differ in precision:
   `max_audio_ms ≈ (ceiling − representative_prompt − generation_reserve) / tokens_per_ms`,

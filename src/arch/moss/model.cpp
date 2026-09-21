@@ -760,8 +760,7 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // Predicts above the plain audio-token count: the transcript carries
-    // speaker markers ([start]/[Sxx]/[end]) on top of the text.
+    // Above the plain audio-token count: the transcript carries [start]/[Sxx]/[end] markers.
     const int gen_budget = transcribe::pick_decode_budget(2 * T_enc + 128, k_max_new, T_prompt, ceiling);
 
     // KV cache (grow-to-fit, clamped to ceiling). Short inputs retain the old
@@ -1170,9 +1169,6 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
 
-    // One budget for the whole batch, sized from the longest surviving row.
-    // Same prediction as run(): above the plain audio-token count, because the
-    // transcript carries speaker markers on top of the text.
     const int batch_budget = transcribe::pick_decode_budget(2 * max_T_enc + 128, k_max_new, max_T_prompt, ceiling);
 
     int max_n_kv = 1024;

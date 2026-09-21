@@ -77,15 +77,8 @@ namespace {
 constexpr const char k_default_variant[] = "voxtral-mini-3b-2507";
 
 // Floor on the decoder text budget for short clips (also Whisper's per-chunk
-// cap). Long audio scales the budget up with the audio length — see run().
+// cap); longer audio scales the budget up. See transcribe-decode-budget.h.
 constexpr int k_decode_budget_min = 448;
-
-// Decode budget (max new text tokens) for an utterance with `n_audio` audio
-// embedding tokens. Thin wrapper over transcribe-decode-budget.h. Greedy decode
-// stops at EOS well before this, so a generous ceiling costs only its KV.
-int pick_decode_budget(int n_audio, int t_prompt, int model_max) {
-    return transcribe::pick_decode_budget(n_audio, k_decode_budget_min, t_prompt, model_max);
-}
 
 // Chunked prefill — see decoder.h. Walks the prompt in blocks against the
 // growing KV cache and returns the final position's logits. The prompt is
@@ -768,7 +761,7 @@ transcribe_status run(transcribe_session *          session,
                             n_audio_total, T_prompt - n_audio_total, model_max, T_prompt + k_gen_reserve);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
-    const int max_new  = pick_decode_budget(n_audio_total, T_prompt, model_max);
+    const int max_new  = transcribe::pick_decode_budget(n_audio_total, k_decode_budget_min, T_prompt, model_max);
     const int want_ctx = causal_lm::pick_kv_cache_context(T_prompt + max_new, model_max);
     if (cc->kv_cache.n_ctx < want_ctx) {
         const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
@@ -1333,7 +1326,7 @@ transcribe_status run_batch(transcribe_session *          session,
     // Size the batched KV cache to the longest prompt plus the decode budget,
     // clamped to the context ceiling. kv_init_batched grows the cache on demand.
     const int model_max = ctx_ceiling;
-    const int max_new   = pick_decode_budget(T_audio_max, max_T_prompt, model_max);
+    const int max_new   = transcribe::pick_decode_budget(T_audio_max, k_decode_budget_min, max_T_prompt, model_max);
     int       max_n_kv  = 1024;
     while (max_n_kv < max_T_prompt + max_new) {
         max_n_kv *= 2;

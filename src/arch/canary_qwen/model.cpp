@@ -117,9 +117,7 @@ constexpr float      kBnEps              = 1e-5f;
 // TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that fills the generation budget
 // before end-of-stream is flagged via transcribe_was_truncated().
 
-// Generation reserve: what the input gate keeps free, what max_audio_ms
-// subtracts, and the floor under the per-run budget. See
-// transcribe-decode-budget.h.
+// Generation reserve: what the input gate keeps free, and the decode-budget floor.
 constexpr int k_gen_reserve = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum
@@ -922,8 +920,6 @@ transcribe_status run(transcribe_session *          context,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // Per-run budget: duration-derived, floored at the reserve the gate above
-    // just guaranteed, clamped to the context left.
     const int max_new = transcribe::pick_decode_budget(
         transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token), k_gen_reserve, T_prompt, ceiling);
 
@@ -1483,7 +1479,6 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
     T_enc_max = std::max(1, T_enc_max);
-    // One budget for the whole batch, sized from the longest surviving row.
     const int max_new =
         transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc_max, cm->limits.ms_per_audio_token),
                                        k_gen_reserve, max_T_prompt, ceiling);

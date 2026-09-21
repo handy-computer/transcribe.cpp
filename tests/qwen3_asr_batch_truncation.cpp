@@ -2,20 +2,11 @@
 // and batch decode paths both report mid-decode OUTPUT_TRUNCATED for a
 // causal_lm (LLM-decoder) family.
 //
-// qwen3_asr's decode budget scales with the audio and is clamped to the
-// decoder context left after the prompt (transcribe-decode-budget.h). It used
-// to be a flat 256 tokens, which truncated any clip past ~75 s of speech even
-// with 65000 tokens of context free; that was the bug, and the first block
-// below is its regression guard — a 197 s clip must now decode to EOS.
-//
-// Truncation is still reachable, and still has to be reported: lowering
-// transcribe_session_params::n_ctx lowers the ceiling, which lowers the budget
-// with it. That is the only knob a caller has over the output length, so it is
-// also how this test forces the truncation path. Per docs/input-limits.md a
-// truncated decode must surface as the hard TRANSCRIBE_ERR_OUTPUT_TRUNCATED
-// status (partial transcript retained, transcribe_was_truncated() set) in BOTH
-// the single-shot and batch paths, while a short clip that finishes under the
-// budget stays OK and the whole-batch call still returns OK.
+// The budget scales with the audio (transcribe-decode-budget.h), so the 197 s
+// clip decodes to EOS at the default context and truncation has to be forced
+// with a lowered n_ctx. Per docs/input-limits.md it must then surface as the
+// hard TRANSCRIBE_ERR_OUTPUT_TRUNCATED status in BOTH paths, while a short clip
+// stays OK and the whole-batch call still returns OK.
 //
 // This is the causal_lm counterpart to moonshine_streaming_batch_truncation
 // (which exercises the encoder-decoder batch loop in transcribe-batch-util.cpp).
@@ -111,10 +102,8 @@ int main() {
         return 1;
     }
 
-    // ---- Regression guard for the flat-256 budget bug ----
-    // At the default (full) context the 197 s clip must decode all the way to
-    // EOS. Before the budget scaled with the audio this returned
-    // OUTPUT_TRUNCATED at 256 tokens with ~63000 tokens of context unused.
+    // ---- Regression guard: at full context the 197 s clip decodes to EOS ----
+    // The flat 256-token budget returned OUTPUT_TRUNCATED here.
     {
         transcribe_session_params full_sp;
         transcribe_session_params_init(&full_sp);
@@ -131,16 +120,9 @@ int main() {
     }
 
     // ---- Lowered n_ctx: the only caller-facing control over output length ----
-    // Measured on love-loss.wav (~197 s): T_enc = 2563 audio tokens (the clip
-    // encodes at 76.9 ms/token), T_prompt = 2578 with the chat affixes, and the
-    // full transcript is 701-750 tokens. The input gate reserves k_gen_reserve
-    // (256) on top of the prompt, so the ceiling must be >= 2834 for the clip
-    // to be accepted at all.
-    //
-    // 3072 clears that gate by 238 tokens and leaves 494 tokens of decode
-    // budget, about 210 short of the full transcript. Both margins absorb small
-    // prompt-template drift; if this ever returns INPUT_TOO_LONG the prompt
-    // grew, and if it returns OK the transcript shrank.
+    // love-loss.wav (~197 s): T_prompt = 2578, transcript 701-750 tokens, gate
+    // needs ceiling >= 2834. So 3072 is accepted and leaves a 494-token budget,
+    // ~210 short. INPUT_TOO_LONG here means the prompt grew; OK means it shrank.
     transcribe_session_params sp;
     transcribe_session_params_init(&sp);
     sp.n_ctx                      = 3072;

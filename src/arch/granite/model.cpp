@@ -81,9 +81,7 @@ constexpr float      kBnEps              = 1e-5f;
 // Over-length input is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG
 // rather than silently aliasing RoPE past the trained range.
 
-// Generation reserve: what the input gate keeps free, what max_audio_ms
-// subtracts, and the floor under the per-run budget. See
-// transcribe-decode-budget.h.
+// Generation reserve: what the input gate keeps free, and the decode-budget floor.
 constexpr int k_gen_reserve = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
@@ -1051,8 +1049,6 @@ transcribe_status run(transcribe_session *          ctx_base,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // Per-run budget: duration-derived, floored at the reserve the gate above
-    // just guaranteed, clamped to the context left.
     const int gen_budget = transcribe::pick_decode_budget(
         transcribe::predict_transcript_tokens(n_audio_tokens, cm->limits.ms_per_audio_token), k_gen_reserve, T_prompt,
         ceiling);
@@ -1204,9 +1200,8 @@ transcribe_status run(transcribe_session *          ctx_base,
     // n_ctx of the KV cache bounds the max generation length we can
     // attend over.
     const int max_n_kv  = cc->kv.n_ctx;
-    // Bound generation by the decode budget, the allocated cache, AND the
-    // context ceiling. gen_budget is already clamped to ceiling - T_prompt;
-    // the other two terms guard the cache the bucket rounding actually gave us.
+    // gen_budget is already clamped to ceiling - T_prompt; the other two terms
+    // guard the cache the bucket rounding actually gave us.
     const int max_steps = std::min({ gen_budget, max_n_kv - T_prompt, ceiling - T_prompt });
 
     ggml_context * step_ctx = nullptr;
@@ -1609,7 +1604,6 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
     n_audio_max       = std::max(1, n_audio_max);
-    // One budget for the whole batch, sized from the longest surviving row.
     const int max_new = transcribe::pick_decode_budget(
         transcribe::predict_transcript_tokens(n_audio_max, cm->limits.ms_per_audio_token), k_gen_reserve, max_T_prompt,
         ceiling);

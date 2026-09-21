@@ -219,8 +219,7 @@ constexpr float kBnEps = 1e-5f;
 //       overrun is kept as a partial and flagged via
 //       transcribe_was_truncated(), not rejected.
 
-// Generation reserve: floor under the per-run budget, which scales with the
-// audio and clamps to the decoder self-KV. See transcribe-decode-budget.h.
+// Generation reserve: floor under the per-run decode budget.
 constexpr int k_gen_reserve = 512;
 
 // Predicted encoder frame count T_enc for a given mel frame count. The
@@ -397,9 +396,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         m->limits.audio_from_caps = true;
         m->limits.model_max_ctx   = m->hparams.dec_max_position;
         m->limits.gen_reserve     = k_gen_reserve;
-        // Encoder rate, for the duration-derived decode budget. Not used for
-        // effective_max_audio_ms here (audio_from_caps pins that to the encoder
-        // bound), so publishing it changes no advertised limit.
+        // Encoder rate, for the decode budget only: audio_from_caps pins
+        // effective_max_audio_ms to the encoder bound, so this moves no limit.
         if (m->hparams.enc_subsampling_factor > 0 && m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
             m->limits.ms_per_audio_token = static_cast<double>(m->hparams.enc_subsampling_factor) *
                                            m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
@@ -1626,7 +1624,6 @@ transcribe_status run_batch(transcribe_session *          session,
     // raised) by the caller's n_ctx knob. Default knob (0) leaves it at
     // dec_max_position, so in-spec batched decode is unchanged.
     const int n_ctx_cap = canary_context_ceiling(cc->n_ctx, hp);
-    // One budget for the whole batch, sized from the longest surviving row.
     const int max_new =
         transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc_max, cm->limits.ms_per_audio_token),
                                        k_gen_reserve, prompt_len, n_ctx_cap);

@@ -17,15 +17,11 @@ native Transformers. C++ CPU validation passes locally.
 
 ## Audio length contract
 
-- Upstream recommended clip length: **35 s** (`max_audio_clip_s` in the
-  upstream config). Longer audio is expected to be segmented by the caller.
-- Architectural bounds, both read from the GGUF: the encoder relative-position
-  table `enc_pos_emb_max_len = 5000` (~400 s) is the input gate, and the
-  decoder self-KV `dec_max_seq = 1024` separately bounds the transcript.
-- Audio lives in the cross-attention cache and never consumes decoder context,
-  so a clip well inside the ~400 s gate can still exhaust the 1024-token
-  transcript budget and return `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` (measured: a
-  197 s English clip truncates at 1014 tokens). See `docs/input-limits.md`.
+Upstream recommends **35 s** clips (`max_audio_clip_s`); longer audio is
+expected to be segmented by the caller. The port gates on the encoder
+(`enc_pos_emb_max_len = 5000`, ~400 s) and bounds the transcript separately on
+the decoder self-KV (`dec_max_seq = 1024`), so an accepted clip is not
+guaranteed a complete transcript. See `docs/input-limits.md`.
 
 ## References
 
