@@ -81,11 +81,8 @@ constexpr const char k_default_variant[] = "voxtral-mini-3b-2507";
 constexpr int k_decode_budget_min = 448;
 
 // Decode budget (max new text tokens) for an utterance with `n_audio` audio
-// embedding tokens. Thin wrapper over the shared rule every autoregressive
-// family now uses (transcribe-decode-budget.h): the audio-token count is a safe
-// upper bound on the transcript, floored at k_decode_budget_min and clamped to
-// the context remaining under the trained max. Greedy decode stops at EOS well
-// before this, so a generous ceiling costs only its KV allocation.
+// embedding tokens. Thin wrapper over transcribe-decode-budget.h. Greedy decode
+// stops at EOS well before this, so a generous ceiling costs only its KV.
 int pick_decode_budget(int n_audio, int t_prompt, int model_max) {
     return transcribe::pick_decode_budget(n_audio, k_decode_budget_min, t_prompt, model_max);
 }

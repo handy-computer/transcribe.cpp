@@ -75,11 +75,9 @@ constexpr const char k_default_variant[] = "qwen3-asr";
 // transcript that fills the generation budget before end-of-stream is flagged
 // via transcribe_was_truncated().
 
-// Generation reserve, in tokens: the room the up-front input gate always
-// keeps free for output, the floor under the per-run decode budget, and the
-// value transcribe_capabilities::max_audio_ms subtracts. The actual per-run
-// budget scales with the audio (see transcribe-decode-budget.h); this is only
-// its lower bound, so a short clip decodes exactly as it always has.
+// Generation reserve: what the input gate keeps free, what max_audio_ms
+// subtracts, and the floor under the per-run budget. See
+// transcribe-decode-budget.h.
 constexpr int k_gen_reserve = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
@@ -741,11 +739,9 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // Per-run decode budget. Scales with the audio (a transcript never needs
-    // more text tokens than the encoder produced audio tokens), floored at the
-    // reserve the gate above just guaranteed and clamped to the context left.
-    // This replaces a flat 256-token cap that truncated every clip past ~75 s
-    // of speech regardless of how much context was still free.
+    // Per-run budget: duration-derived, floored at the reserve the gate above
+    // just guaranteed, clamped to the context left. The old flat 256 truncated
+    // every clip past ~75 s of speech with the context still mostly free.
     const int max_new = transcribe::pick_decode_budget(
         transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token), k_gen_reserve, T_prompt, ceiling);
 
@@ -1595,9 +1591,7 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         return TRANSCRIBE_OK;
     }
-    // One decode budget for the whole batch (the step loop runs every row in
-    // lockstep), sized from the longest surviving utterance so no row is cut
-    // short. Same rule as single-shot run().
+    // One budget for the whole batch, sized from the longest surviving row.
     const int max_new =
         transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(max_T_enc, cm->limits.ms_per_audio_token),
                                        k_gen_reserve, max_T_prompt, ceiling);

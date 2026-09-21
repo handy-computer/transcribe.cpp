@@ -760,11 +760,8 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // Generation budget scales with audio length via the shared rule
-    // (transcribe-decode-budget.h). moss predicts higher than the plain
-    // audio-token count because the emergent transcript carries speaker
-    // markers ([start]/[Sxx]/[end]) on top of the text; for long-form that
-    // far exceeds the k_max_new floor. Clamped to the context left.
+    // Predicts above the plain audio-token count: the transcript carries
+    // speaker markers ([start]/[Sxx]/[end]) on top of the text.
     const int gen_budget = transcribe::pick_decode_budget(2 * T_enc + 128, k_max_new, T_prompt, ceiling);
 
     // KV cache (grow-to-fit, clamped to ceiling). Short inputs retain the old

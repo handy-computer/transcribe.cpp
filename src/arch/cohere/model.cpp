@@ -417,10 +417,8 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
 
 constexpr const char k_default_variant[] = "cohere-asr";
 
-// Generation reserve, in tokens: the floor under the per-run decode budget.
-// The budget itself scales with the audio and is clamped to the decoder
-// self-KV ceiling (see transcribe-decode-budget.h), so a short clip decodes
-// exactly as it always has while a long one is no longer cut at a flat 512.
+// Generation reserve: floor under the per-run budget, which scales with the
+// audio and clamps to the decoder self-KV. See transcribe-decode-budget.h.
 constexpr int k_gen_reserve = 512;
 
 // Forward declarations for the Arch trait below.
@@ -1575,8 +1573,7 @@ transcribe_status run_batch(transcribe_session *          session,
     // Honor the session context cap (same ceiling the single-shot path uses),
     // not the raw model max — so a lowered n_ctx bounds batch decoder KV too.
     const int n_ctx_cap = cohere_dec_ctx_ceiling(cc->n_ctx, hp);
-    // One decode budget for the whole batch (the step loop runs every row in
-    // lockstep), sized from the longest surviving utterance. Same rule as run().
+    // One budget for the whole batch, sized from the longest surviving row.
     const int max_new =
         transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc_max, cm->limits.ms_per_audio_token),
                                        k_gen_reserve, prompt_len, n_ctx_cap);
