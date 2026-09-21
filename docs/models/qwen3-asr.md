@@ -47,13 +47,7 @@ family. That ceiling is there to bound memory and sits far beyond any normal
 clip; audio past it is rejected up front with `TRANSCRIBE_ERR_INPUT_TOO_LONG`
 rather than silently truncated. Lowering `--n-ctx` lowers the limit (and the
 KV-cache footprint), and `transcribe_session_get_limits()` reports the exact
-per-session value.
-
-Output length is not separately capped: the decode budget scales with the audio
-and is bounded only by the context left after the prompt, so a clip inside the
-input limit transcribes in full. `--n-ctx` bounds both — lowering it far enough
-will truncate a long transcript (`TRANSCRIBE_ERR_OUTPUT_TRUNCATED`, partial text
-retained). See the [input-length contract](../input-limits.md).
+per-session value. See the [input-length contract](../input-limits.md).
 
 ## Quick start
 

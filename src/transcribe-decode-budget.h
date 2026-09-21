@@ -1,9 +1,4 @@
-// transcribe-decode-budget.h - shared per-run autoregressive decode budget.
-//
-// The budget has to track the input: a flat per-family constant returns
-// TRANSCRIBE_ERR_OUTPUT_TRUNCATED on a long clip with the decoder context still
-// mostly free. Deliberately not a public run parameter — the only caller-facing
-// knob is transcribe_session_params::n_ctx. See docs/input-limits.md.
+// Shared helpers for sizing autoregressive decode budgets.
 
 #pragma once
 
@@ -11,16 +6,10 @@
 
 namespace transcribe {
 
-// Speech-rate bound on transcript length, in text tokens per second of audio.
-// Generous on purpose: English BPE measures ~3.4/sec and CJK is denser.
+// Conservative multilingual transcript estimate, in tokens per second.
 constexpr int k_transcript_tokens_per_sec = 12;
 
-// Predicted transcript length for `audio_tokens` encoder outputs at
-// `ms_per_audio_token` each. Going via seconds is required, not cosmetic:
-// encoder rates differ ~6x, and funasr_nano's LFR frontend emits one token per
-// ~480 ms — below the text-token rate, so its raw count under-predicts.
-//
-// A non-positive rate means the family published none; fall back to the count.
+// Fall back to the encoder-token count when its duration is unknown.
 inline int predict_transcript_tokens(int audio_tokens, double ms_per_audio_token) {
     if (audio_tokens <= 0) {
         return 0;
@@ -37,10 +26,7 @@ inline int predict_transcript_tokens(int audio_tokens, double ms_per_audio_token
     return predicted >= k_int_max ? 2147483647 : static_cast<int>(predicted);
 }
 
-// Per-run decode budget: `predicted` raised to `floor_tokens` and clamped to the
-// context left under `ceiling`. `floor_tokens` is the family's historical fixed
-// budget, so short clips decode byte-identically and the reserve max_audio_ms
-// subtracts (transcribe_model::LimitsBasis::gen_reserve) stays exact.
+// Apply the family floor without exceeding the available context.
 inline int pick_decode_budget(int predicted, int floor_tokens, int t_prompt, int ceiling) {
     int       budget = std::max(floor_tokens, predicted);
     const int room   = ceiling - t_prompt;

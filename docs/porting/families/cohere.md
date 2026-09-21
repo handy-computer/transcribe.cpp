@@ -15,13 +15,8 @@ native Transformers. C++ CPU validation passes locally.
   `[en, ar]`; config omits top-level `vocab_size` — the converter falls
   back to `head.num_classes`; upstream repo is gated)
 
-## Audio length contract
-
-Upstream recommends **35 s** clips (`max_audio_clip_s`); longer audio is
-expected to be segmented by the caller. The port gates on the encoder
-(`enc_pos_emb_max_len = 5000`, ~400 s) and bounds the transcript separately on
-the decoder self-KV (`dec_max_seq = 1024`), so an accepted clip is not
-guaranteed a complete transcript. See `docs/input-limits.md`.
+Upstream recommends segmenting audio into 35 s clips; the port enforces the
+encoder's larger architectural limit. See `docs/input-limits.md`.
 
 ## References
 
