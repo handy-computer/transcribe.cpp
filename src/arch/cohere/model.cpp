@@ -1219,7 +1219,7 @@ transcribe_status run(transcribe_session *          session,
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
                     if (transcribe::stop_on_repetition(generated_ids, "cohere run")) {
-                        cc->was_truncated = true;
+                        cc->mark_repetition_stop();
                         break;
                     }
                 }
@@ -1294,7 +1294,7 @@ transcribe_status run(transcribe_session *          session,
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
                     if (transcribe::stop_on_repetition(generated_ids, "cohere run")) {
-                        cc->was_truncated = true;
+                        cc->mark_repetition_stop();
                         break;
                     }
                 }
@@ -1313,6 +1313,9 @@ transcribe_status run(transcribe_session *          session,
                                 "incomplete.",
                                 static_cast<int>(generated_ids.size()));
         }
+        if (cc->was_truncated && !cc->stopped_on_repetition) {
+            transcribe::trim_repetition_at_budget_stop(generated_ids, "cohere run");
+        }
 
         // Build the result. max_timestamp_kind == NONE means text but no
         // alignment data: full_text plus one segment (text == full_text,
@@ -1323,7 +1326,7 @@ transcribe_status run(transcribe_session *          session,
     // Output truncation is a hard status: the partial transcript is committed
     // and stays readable (like an aborted run), but we surface the truncation
     // rather than reporting a clean OK.
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // ===========================================================================
@@ -1732,7 +1735,7 @@ transcribe_status run_batch(transcribe_session *          session,
         // otherwise-OK status, never a worse one.
         if (rs.status == TRANSCRIBE_OK && b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;

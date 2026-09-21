@@ -269,12 +269,11 @@ typedef enum {
     /*
      * Returned by transcribe_run when the decode stopped because it hit
      * the model's context / generation budget BEFORE the model emitted
-     * end-of-stream — i.e. the transcript is incomplete. A greedy decode
-     * that falls into repeating itself is also stopped early and reported
-     * here, with the repeats dropped from the partial. This is the
-     * "started, couldn't finish" counterpart to INPUT_TOO_LONG, and it is
-     * a hard non-OK status by design: a truncated transcript must not be
-     * mistaken for a complete one.
+     * end-of-stream — i.e. the transcript is incomplete. If the partial
+     * ends in a phrase repeating itself, the repeats are dropped (one
+     * copy kept). This is the "started, couldn't finish" counterpart to
+     * INPUT_TOO_LONG, and it is a hard non-OK status by design: a
+     * truncated transcript must not be mistaken for a complete one.
      *
      * The partial transcript IS preserved and readable through the normal
      * result accessors (transcribe_full_text, segments, words, tokens),
@@ -295,6 +294,25 @@ typedef enum {
      * See docs/input-limits.md for the full contract.
      */
     TRANSCRIBE_ERR_OUTPUT_TRUNCATED       = 18,
+    /*
+     * Returned by transcribe_run when a greedy decode fell into repeating
+     * the same block of tokens over and over and was stopped early,
+     * BEFORE the model emitted end-of-stream. The repeats are dropped
+     * (one copy kept), but whatever the audio said after the loop was
+     * never decoded, so the transcript is incomplete.
+     *
+     * Result-bearing exactly like OUTPUT_TRUNCATED: the partial transcript
+     * is readable through the normal result accessors, and
+     * transcribe_was_truncated() is true. The two codes differ only in why
+     * the decode stopped: the budget ran out (OUTPUT_TRUNCATED) versus the
+     * output started looping (this code). Re-running the same audio gives
+     * the same result; splitting it at a different point may not loop.
+     *
+     * Per-utterance in transcribe_run_batch, like OUTPUT_TRUNCATED. Not
+     * used by streaming. Set TRANSCRIBE_NO_REPETITION_GUARD=1 to disable
+     * the check. See docs/input-limits.md.
+     */
+    TRANSCRIBE_ERR_OUTPUT_REPETITION      = 19,
 } transcribe_status;
 
 /*
@@ -1680,8 +1698,9 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * ses
 
 /*
  * Supplemental flag for output truncation. True if the most recent decode
- * stopped at the model's context / generation cap before end-of-stream,
- * leaving the transcript incomplete. The partial transcript is preserved
+ * stopped before end-of-stream, at the model's context / generation cap or
+ * because the output started repeating itself, leaving the transcript
+ * incomplete. The partial transcript is preserved
  * and readable through the normal result accessors. Reset to false at the
  * start of each new decode — transcribe_run, transcribe_run_batch, and
  * transcribe_stream_begin (the same lifecycle as transcribe_was_aborted).
@@ -1690,10 +1709,10 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * ses
  * Two paths set it, and they differ in whether a status also reports it:
  *
  *   - Offline (transcribe_run / transcribe_run_batch): the flag is true
- *     exactly when the run returned TRANSCRIBE_ERR_OUTPUT_TRUNCATED (or, in
- *     a batch, when a per-utterance status is OUTPUT_TRUNCATED), so the run
- *     status is the authoritative signal and this accessor is a convenience
- *     for a caller that has lost it.
+ *     exactly when the run returned TRANSCRIBE_ERR_OUTPUT_TRUNCATED or
+ *     TRANSCRIBE_ERR_OUTPUT_REPETITION (or, in a batch, when a per-utterance
+ *     status is one of those), so the run status is the authoritative signal
+ *     and this accessor is a convenience for a caller that has lost it.
  *
  *   - Streaming (transcribe_stream_*): OUTPUT_TRUNCATED is NOT used. An
  *     active stream has its own terminal-state machine, and stream_feed /

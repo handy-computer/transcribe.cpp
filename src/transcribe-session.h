@@ -244,6 +244,24 @@ struct transcribe_session {
     // couldn't start). See docs/input-limits.md.
     bool was_truncated = false;
 
+    // Set with was_truncated when the repetition guard stopped the decode
+    // (transcribe-repetition-guard.h) rather than the budget, so the run
+    // reports TRANSCRIBE_ERR_OUTPUT_REPETITION. Cleared with was_truncated.
+    bool stopped_on_repetition = false;
+
+    void mark_repetition_stop() {
+        was_truncated         = true;
+        stopped_on_repetition = true;
+    }
+
+    // Status of a run() whose decode finished: OK, or the stop that cut it short.
+    transcribe_status truncation_status() const {
+        if (stopped_on_repetition) {
+            return TRANSCRIBE_ERR_OUTPUT_REPETITION;
+        }
+        return was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    }
+
     // Streaming state. Lifecycle (stream_state) is separated from the
     // result snapshot so clear_result() can wipe per-call data without
     // churning the IDLE/ACTIVE/FINISHED/FAILED machine, which the

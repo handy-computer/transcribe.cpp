@@ -106,9 +106,10 @@ transcribe_status decode_batch_slices(transcribe_session * session,
 // single-utterance run()) and snapshots it into session->batch_results. The
 // per-run state transcribe_run resets (result slot, timings, truncation flag)
 // is reset before every utterance, so one truncated utterance cannot mark the
-// rest. A truncated or aborted utterance keeps its partial result, as it does
-// from transcribe_run; a null pcm or n_samples <= 0 is recorded as
-// INVALID_ARG. session->was_truncated ends true if any utterance truncated.
+// rest. A truncated, repetition-stopped, or aborted utterance keeps its partial
+// result, as it does from transcribe_run; a null pcm or n_samples <= 0 is
+// recorded as INVALID_ARG. session->was_truncated ends true if any utterance
+// truncated or stopped on repetition.
 // Returns TRANSCRIBE_ERR_ABORTED once an utterance aborts, else OK.
 using RunOneFn = std::function<transcribe_status(const float * pcm, int n_samples)>;
 transcribe_status run_batch_serial(transcribe_session *  session,
@@ -157,11 +158,13 @@ using EncDecRebuildFn = std::function<bool(int win, EncDecStepIO & io)>;
 // step. Returns TRANSCRIBE_ERR_ABORTED / TRANSCRIBE_ERR_GGUF / TRANSCRIBE_OK;
 // *n_steps_out (if non-null) receives the number of compute steps run.
 //
-// truncated_out (if non-null) is sized to n_batch and set per row: 1 when that
-// (valid) row hit the generation budget (max_new), the context window
-// (max_n_kv) or the repetition guard BEFORE emitting eos_id (transcript
-// truncated), else 0. Lets a
-// family report per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED from run_batch.
+// truncated_out (if non-null) is sized to n_batch and set per row to why that
+// row stopped (transcribe::DecodeStop): k_stop_budget when a valid row hit the
+// generation budget (max_new) or the context window (max_n_kv) before eos_id,
+// k_stop_repetition when the repetition guard stopped it, else k_stop_eos.
+// Non-zero means the transcript was cut off; decode_stop_status maps it to the
+// per-utterance status. A budget-stopped row has its repeating tail trimmed
+// (trim_repetition_at_budget_stop).
 transcribe_status run_batched_encdec_step_loop(transcribe_session *                session,
                                                ggml_backend_sched_t                sched,
                                                const EncDecRebuildFn &             rebuild,

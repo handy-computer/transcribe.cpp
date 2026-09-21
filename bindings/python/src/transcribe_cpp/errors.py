@@ -22,6 +22,7 @@ from ._generated import (
     TRANSCRIBE_ERR_INVALID_ARG as ERR_INVALID_ARG,
     TRANSCRIBE_ERR_NOT_IMPLEMENTED as ERR_NOT_IMPLEMENTED,
     TRANSCRIBE_ERR_OOM as ERR_OOM,
+    TRANSCRIBE_ERR_OUTPUT_REPETITION as ERR_OUTPUT_REPETITION,
     TRANSCRIBE_ERR_OUTPUT_TRUNCATED as ERR_OUTPUT_TRUNCATED,
     TRANSCRIBE_ERR_SAMPLE_RATE as ERR_SAMPLE_RATE,
     TRANSCRIBE_ERR_UNSUPPORTED_ARCH as ERR_UNSUPPORTED_ARCH,
@@ -113,6 +114,17 @@ class OutputTruncated(TranscribeError):
     partial_result: "Optional[Result]" = None
 
 
+class OutputRepetition(OutputTruncated):
+    """The decode was stopped because the output began repeating itself —
+    the transcript is incomplete by contract.
+
+    A subclass of :class:`OutputTruncated`, so a handler for incomplete
+    transcripts catches both. ``partial_result`` holds the partial transcript
+    with the repeats dropped (one copy kept), or None when the status surfaced
+    outside a result-bearing call.
+    """
+
+
 _STATUS_TO_EXC = {
     ERR_INVALID_ARG: InvalidArgument,
     ERR_NOT_IMPLEMENTED: NotImplementedByModel,
@@ -132,6 +144,7 @@ _STATUS_TO_EXC = {
     ERR_UNSUPPORTED_ITN: UnsupportedRequest,
     ERR_INPUT_TOO_LONG: InputTooLong,
     ERR_OUTPUT_TRUNCATED: OutputTruncated,
+    ERR_OUTPUT_REPETITION: OutputRepetition,
 }
 
 

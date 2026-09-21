@@ -105,6 +105,9 @@ public final class Session {
                 case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
                     return .failure(TranscribeError.outputTruncated(
                         message: TranscribeError.message(s, context), partial: batchTranscript(i)))
+                case TRANSCRIBE_ERR_OUTPUT_REPETITION:
+                    return .failure(TranscribeError.outputRepetition(
+                        message: TranscribeError.message(s, context), partial: batchTranscript(i)))
                 default:
                     return .failure(TranscribeError.make(s, context: context))
                 }
@@ -175,6 +178,9 @@ public final class Session {
                 message: TranscribeError.message(status, context), partial: readTranscript())
         case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
             throw TranscribeError.outputTruncated(
+                message: TranscribeError.message(status, context), partial: readTranscript())
+        case TRANSCRIBE_ERR_OUTPUT_REPETITION:
+            throw TranscribeError.outputRepetition(
                 message: TranscribeError.message(status, context), partial: readTranscript())
         default:
             throw TranscribeError.make(status, context: context)

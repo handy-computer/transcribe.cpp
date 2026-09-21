@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "7df72bf9e667b8c2"
+PUBLIC_HEADER_HASH = "9866413f80138057"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -35,6 +35,7 @@ TRANSCRIBE_ERR_UNSUPPORTED_PNC = 15
 TRANSCRIBE_ERR_UNSUPPORTED_ITN = 16
 TRANSCRIBE_ERR_INPUT_TOO_LONG = 17
 TRANSCRIBE_ERR_OUTPUT_TRUNCATED = 18
+TRANSCRIBE_ERR_OUTPUT_REPETITION = 19
 TRANSCRIBE_ABI_MODEL_LOAD_PARAMS = 0
 TRANSCRIBE_ABI_SESSION_PARAMS = 1
 TRANSCRIBE_ABI_RUN_PARAMS = 2

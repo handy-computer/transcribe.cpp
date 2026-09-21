@@ -8,7 +8,7 @@ export class TranscribeError extends Error {
   readonly status: number;
   /** Set on per-utterance failures from a batch run. */
   utteranceIndex?: number;
-  /** Any partial transcript recovered before the error (set on Aborted / OutputTruncated). */
+  /** Any partial transcript recovered before the error (set on Aborted / OutputTruncated / OutputRepetition). */
   partialResult?: TranscriptionResult;
 
   constructor(message: string, status: number = g.TRANSCRIBE_OK) {
@@ -43,6 +43,13 @@ export class Aborted extends TranscribeError {}
 /** Raised when decode hits the context/generation cap; carries the partial in `partialResult`. */
 export class OutputTruncated extends TranscribeError {}
 
+/**
+ * Raised when decode is stopped because the output began repeating itself; carries
+ * the partial (repeats dropped) in `partialResult`. Extends OutputTruncated, so a
+ * handler for incomplete transcripts catches both.
+ */
+export class OutputRepetition extends OutputTruncated {}
+
 const STATUS_TO_EXC: Record<number, new (m: string, s?: number) => TranscribeError> = {
   [g.TRANSCRIBE_ERR_INVALID_ARG]: InvalidArgument,
   [g.TRANSCRIBE_ERR_NOT_IMPLEMENTED]: NotImplementedByModel,
@@ -62,6 +69,7 @@ const STATUS_TO_EXC: Record<number, new (m: string, s?: number) => TranscribeErr
   [g.TRANSCRIBE_ERR_UNSUPPORTED_ITN]: UnsupportedRequest,
   [g.TRANSCRIBE_ERR_INPUT_TOO_LONG]: InputTooLong,
   [g.TRANSCRIBE_ERR_OUTPUT_TRUNCATED]: OutputTruncated,
+  [g.TRANSCRIBE_ERR_OUTPUT_REPETITION]: OutputRepetition,
 };
 
 /** Build (do not throw) the mapped exception for a status. */

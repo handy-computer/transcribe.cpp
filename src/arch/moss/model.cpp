@@ -971,8 +971,8 @@ transcribe_status run(transcribe_session *          session,
         cc->kv_cache.n    = cur_past + 1;
         cc->kv_cache.head = cur_past + 1;
         if (next_tok != eos_id && transcribe::stop_on_repetition(generated_ids, "moss run")) {
-            cc->was_truncated = true;
-            repeating         = true;
+            cc->mark_repetition_stop();
+            repeating = true;
             break;
         }
         if (cc->poll_abort()) {
@@ -984,6 +984,7 @@ transcribe_status run(transcribe_session *          session,
         cc->was_truncated = true;
         log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "moss run: output truncated at %d tokens",
                 static_cast<int>(generated_ids.size()));
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "moss run");
     }
     if (!generated_ids.empty() && generated_ids.back() == eos_id) {
         generated_ids.pop_back();
@@ -1029,7 +1030,7 @@ transcribe_status run(transcribe_session *          session,
     install_transcript(*cc, params, raw_text, audio_ms);
     cc->has_result = true;
 
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,7 +1325,7 @@ transcribe_status run_batch(transcribe_session *          session,
         transcribe_session::ResultSet rs = finalize_utterance(cm, params, generated[b], n_samples[b]);
         if (b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         cc->batch_results.push_back(std::move(rs));
     }

@@ -137,16 +137,18 @@ impl Session {
         unsafe { sys::transcribe_was_aborted(self.ptr) }
     }
 
-    /// Whether the most recent decode stopped at the generation budget before
-    /// end-of-stream (the transcript is incomplete).
+    /// Whether the most recent decode stopped before end-of-stream, at the
+    /// generation budget or because the output began repeating (the transcript
+    /// is incomplete).
     pub fn was_truncated(&self) -> bool {
         unsafe { sys::transcribe_was_truncated(self.ptr) }
     }
 
     /// Transcribe one buffer of 16 kHz mono float32 PCM in `[-1, 1]`.
     ///
-    /// On an aborted or truncated decode the partial transcript is preserved
-    /// on the returned [`Error::Aborted`] / [`Error::OutputTruncated`].
+    /// On an aborted, truncated, or repetition-stopped decode the partial
+    /// transcript is preserved on the returned [`Error::Aborted`] /
+    /// [`Error::OutputTruncated`] / [`Error::OutputRepetition`].
     pub fn run(&mut self, pcm: &[f32], options: &RunOptions) -> Result<Transcript> {
         let (params, _lang, _target, _family) = build_run_params(options)?;
         let n = clamp_len(pcm.len())?;
@@ -171,9 +173,10 @@ impl Session {
         match status {
             s if s == sys::transcribe_status::TRANSCRIBE_OK => Ok(self.materialize_run()),
             s if s == sys::transcribe_status::TRANSCRIBE_ERR_ABORTED
-                || s == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_TRUNCATED =>
+                || s == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                || s == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_REPETITION =>
             {
-                // Partial transcript is preserved by the C API for both.
+                // Partial transcript is preserved by the C API for all three.
                 let partial = Box::new(self.materialize_run());
                 Err(attach_partial(error_for_status(s, "run"), partial))
             }
@@ -229,6 +232,7 @@ impl Session {
                 results.push(Ok(self.materialize_batch(i)));
             } else if st == sys::transcribe_status::TRANSCRIBE_ERR_ABORTED
                 || st == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                || st == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_REPETITION
             {
                 let partial = Box::new(self.materialize_batch(i));
                 let err = attach_partial(error_for_status(st, "run_batch utterance"), partial);
@@ -460,8 +464,8 @@ fn clamp_len(len: usize) -> Result<i32> {
     i32::try_from(len).map_err(|_| Error::InvalidArgument(format!("length {len} exceeds i32::MAX")))
 }
 
-/// Replace the (partial-less) Aborted/OutputTruncated error with one carrying
-/// the materialized partial transcript.
+/// Replace the (partial-less) Aborted/OutputTruncated/OutputRepetition error
+/// with one carrying the materialized partial transcript.
 fn attach_partial(err: Error, partial: Box<Transcript>) -> Error {
     match err {
         Error::Aborted { message, .. } => Error::Aborted {
@@ -469,6 +473,10 @@ fn attach_partial(err: Error, partial: Box<Transcript>) -> Error {
             partial: Some(partial),
         },
         Error::OutputTruncated { message, .. } => Error::OutputTruncated {
+            message,
+            partial: Some(partial),
+        },
+        Error::OutputRepetition { message, .. } => Error::OutputRepetition {
             message,
             partial: Some(partial),
         },

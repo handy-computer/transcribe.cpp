@@ -151,6 +151,16 @@ std::string raw_text_json(const char * raw, const char * clean) {
     return out;
 }
 
+// A decode cut short before end-of-stream (budget or repetition stop): non-OK,
+// but the partial transcript is preserved (see docs/input-limits.md).
+bool is_cut_short(transcribe_status st) {
+    return st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED || st == TRANSCRIBE_ERR_OUTPUT_REPETITION;
+}
+
+const char * cut_short_label(transcribe_status st) {
+    return st == TRANSCRIBE_ERR_OUTPUT_REPETITION ? "stopped repeating" : "truncated";
+}
+
 // ",\"speakers\":[...]" fragment: the "who spoke when" rows. Emitted only
 // when the run produced speaker segments. p is omitted unless finite
 // (NaN — "model provides no confidence" — is not representable in JSON).
@@ -899,6 +909,7 @@ int main(int argc, char ** argv) {
 
         int n_ok        = 0;
         int n_truncated = 0;  // result-bearing: hit the generation cap, partial hyp emitted
+        int n_repeating = 0;  // result-bearing: stopped when the output looped, partial hyp emitted
         int n_fail      = 0;  // no usable result (wav load / backend / unsupported / whole-batch)
 
         // Offline batched path: group up to batch_size utterances into one
@@ -968,15 +979,16 @@ int main(int argc, char ** argv) {
                 }
 
                 for (size_t k = 0; k < src_index.size(); ++k) {
-                    const std::string &     wav = wav_paths[src_index[k]];
-                    const transcribe_status ust = transcribe_batch_status(ctx, static_cast<int>(k));
-                    // OUTPUT_TRUNCATED is result-bearing: the partial transcript is
-                    // preserved and readable via transcribe_batch_full_text (see
-                    // transcribe.h). Emit it as the hyp so downstream tooling scores
-                    // the partial rather than an empty string; the error field below
-                    // still tags it so the truncation stays visible.
-                    const bool   result_present = ust == TRANSCRIBE_OK || ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
-                    const char * text           = "";
+                    const std::string &     wav            = wav_paths[src_index[k]];
+                    const transcribe_status ust            = transcribe_batch_status(ctx, static_cast<int>(k));
+                    // OUTPUT_TRUNCATED / OUTPUT_REPETITION are result-bearing: the
+                    // partial transcript is preserved and readable via
+                    // transcribe_batch_full_text (see transcribe.h). Emit it as the hyp
+                    // so downstream tooling scores the partial rather than an empty
+                    // string; the error field below still tags it so the stop stays
+                    // visible.
+                    const bool              result_present = ust == TRANSCRIBE_OK || is_cut_short(ust);
+                    const char *            text           = "";
                     if (result_present) {
                         const char * t = transcribe_batch_full_text(ctx, static_cast<int>(k));
                         if (t && *t) {
@@ -987,6 +999,8 @@ int main(int argc, char ** argv) {
                         ++n_ok;
                     } else if (ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
                         ++n_truncated;
+                    } else if (ust == TRANSCRIBE_ERR_OUTPUT_REPETITION) {
+                        ++n_repeating;
                     } else {
                         ++n_fail;
                     }
@@ -1019,8 +1033,8 @@ int main(int argc, char ** argv) {
                         std::printf("[%zu/%zu] %s", src_index[k] + 1, total, wav.c_str());
                         if (ust == TRANSCRIBE_OK) {
                             std::printf("\n  text: %s\n", text);
-                        } else if (ust == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
-                            std::printf("  (truncated)\n  text: %s\n", text);
+                        } else if (is_cut_short(ust)) {
+                            std::printf("  (%s)\n  text: %s\n", cut_short_label(ust), text);
                         } else {
                             std::printf("  ERROR: %s\n", transcribe_status_string(ust));
                         }
@@ -1107,12 +1121,12 @@ int main(int argc, char ** argv) {
                     run_st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
                 }
 
-                // OUTPUT_TRUNCATED is result-bearing: the partial transcript is
-                // preserved and readable via transcribe_full_text (see transcribe.h).
-                // Emit it as the hyp so downstream tooling scores the partial rather
-                // than an empty string; the error field below still tags it so the
-                // truncation stays visible.
-                const bool   result_present = run_st == TRANSCRIBE_OK || run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+                // OUTPUT_TRUNCATED / OUTPUT_REPETITION are result-bearing: the partial
+                // transcript is preserved and readable via transcribe_full_text (see
+                // transcribe.h). Emit it as the hyp so downstream tooling scores the
+                // partial rather than an empty string; the error field below still
+                // tags it so the stop stays visible.
+                const bool   result_present = run_st == TRANSCRIBE_OK || is_cut_short(run_st);
                 const char * text           = "";
                 if (result_present) {
                     const char * t = transcribe_full_text(ctx);
@@ -1124,6 +1138,8 @@ int main(int argc, char ** argv) {
                     ++n_ok;
                 } else if (run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
                     ++n_truncated;
+                } else if (run_st == TRANSCRIBE_ERR_OUTPUT_REPETITION) {
+                    ++n_repeating;
                 } else {
                     ++n_fail;
                 }
@@ -1160,8 +1176,8 @@ int main(int argc, char ** argv) {
                     std::printf("[%zu/%zu] %s", i + 1, wav_paths.size(), wav.c_str());
                     if (run_st == TRANSCRIBE_OK) {
                         std::printf("\n  text: %s\n", text);
-                    } else if (run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
-                        std::printf("  (truncated)\n  text: %s\n", text);
+                    } else if (is_cut_short(run_st)) {
+                        std::printf("  (%s)\n  text: %s\n", cut_short_label(run_st), text);
                     } else {
                         std::printf("  ERROR: %s\n", transcribe_status_string(run_st));
                     }
@@ -1172,13 +1188,13 @@ int main(int argc, char ** argv) {
         }
 
         if (!args.batch_jsonl) {
-            std::fprintf(stderr, "batch: %d ok, %d truncated, %d failed out of %zu\n", n_ok, n_truncated, n_fail,
-                         wav_paths.size());
+            std::fprintf(stderr, "batch: %d ok, %d truncated, %d stopped repeating, %d failed out of %zu\n", n_ok,
+                         n_truncated, n_repeating, n_fail, wav_paths.size());
         }
 
         transcribe_session_free(ctx);
         transcribe_model_free(model);
-        // OUTPUT_TRUNCATED is result-bearing and does not fail the batch, but
+        // OUTPUT_TRUNCATED / OUTPUT_REPETITION are result-bearing and do not fail the batch, but
         // hard per-utterance failures must remain visible to automation.
         return n_fail > 0 || !output_ok ? EXIT_FAILURE : EXIT_SUCCESS;
     }
@@ -1416,19 +1432,22 @@ int main(int argc, char ** argv) {
             }
         }
         std::printf("run: %s\n", transcribe_status_string(run_st));
-        // OUTPUT_TRUNCATED and ABORTED are non-OK but preserve the partial
-        // transcript (see docs/input-limits.md), so show the result for them
-        // too — just flagged.
-        const bool result_present =
-            run_st == TRANSCRIBE_OK || run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED || run_st == TRANSCRIBE_ERR_ABORTED;
+        // OUTPUT_TRUNCATED, OUTPUT_REPETITION and ABORTED are non-OK but
+        // preserve the partial transcript (see docs/input-limits.md), so show
+        // the result for them too — just flagged.
+        const bool result_present = run_st == TRANSCRIBE_OK || is_cut_short(run_st) || run_st == TRANSCRIBE_ERR_ABORTED;
         if (result_present) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
             output_ok = write_output_file(output, args.output_path, text) && output_ok;
 
-            // A truncated decode hit the model's context/output budget before
-            // end-of-stream; the text above is incomplete.
-            if (transcribe_was_truncated(ctx)) {
+            // A decode cut short before end-of-stream; the text above is
+            // incomplete.
+            if (run_st == TRANSCRIBE_ERR_OUTPUT_REPETITION) {
+                std::printf(
+                    "  note:      decode stopped when the output began repeating "
+                    "itself (repeats dropped); transcript is incomplete\n");
+            } else if (transcribe_was_truncated(ctx)) {
                 std::printf(
                     "  note:      output truncated (hit the model's "
                     "context/generation cap before end-of-stream); "

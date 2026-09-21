@@ -340,6 +340,10 @@ struct StepLoopStats {
 // session->poll_abort() once per step. The step graph must already be built
 // and allocated on `sched`. Returns TRANSCRIBE_ERR_ABORTED on abort,
 // TRANSCRIBE_ERR_GGUF on a compute failure, else TRANSCRIBE_OK.
+//
+// truncated_out (if non-null) receives each row's transcribe::DecodeStop, as
+// in run_batched_encdec_step_loop; a budget-stopped row has its repeating tail
+// trimmed.
 transcribe_status run_batched_step_loop(transcribe_session *                session,
                                         ggml_backend_sched_t                sched,
                                         const StepBatchedIO &               io,

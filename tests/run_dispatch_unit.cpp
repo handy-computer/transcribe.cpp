@@ -510,10 +510,10 @@ void test_release_scratch_after_run_and_batch() {
 }
 
 // ---------------------------------------------------------------------------
-// Serial batch fallback truncation: one truncated utterance must not mark the
-// rest (the flag is per-run state), and its partial transcript must survive.
-// fake_family_run derives its status from the session flag, as every
-// autoregressive family's run() does.
+// Serial batch fallback truncation: one truncated or repetition-stopped
+// utterance must not mark the rest (the flags are per-run state), and its
+// partial transcript must survive. fake_family_run derives its status from the
+// session flags, as every autoregressive family's run() does.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -524,14 +524,17 @@ transcribe_status fake_family_run(transcribe_session *          session,
                                   const transcribe_run_params * params) {
     (void) n_samples;
     (void) params;
-    const bool truncate = pcm[0] > 0.5f;
+    const bool repeat   = pcm[0] > 1.5f;
+    const bool truncate = pcm[0] > 0.5f && !repeat;
     session->clear_result();
-    session->full_text  = truncate ? "partial" : "complete";
+    session->full_text  = repeat ? "looped" : truncate ? "partial" : "complete";
     session->has_result = true;
-    if (truncate) {
+    if (repeat) {
+        session->mark_repetition_stop();
+    } else if (truncate) {
         session->was_truncated = true;
     }
-    return session->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return session->truncation_status();
 }
 
 transcribe_status fake_family_run_batch(transcribe_session *          session,
@@ -553,18 +556,28 @@ void check_truncated_then_clean(const transcribe::Arch & arch) {
     transcribe_run_params params;
     transcribe_run_params_init(&params);
 
-    const float   truncating = 1.0f, clean = 0.0f;
-    const float * pcm[3] = { &truncating, &clean, &clean };
-    const int     ns[3]  = { 1, 1, 1 };
-    CHECK(transcribe_run_batch(&session, pcm, ns, 3, &params) == TRANSCRIBE_OK);
-    CHECK(transcribe_batch_n_results(&session) == 3);
-    CHECK(transcribe_batch_status(&session, 0) == TRANSCRIBE_ERR_OUTPUT_TRUNCATED);
-    CHECK(std::strcmp(transcribe_batch_full_text(&session, 0), "partial") == 0);
+    const float   repeating = 2.0f, truncating = 1.0f, clean = 0.0f;
+    const float * pcm[4] = { &repeating, &clean, &truncating, &clean };
+    const int     ns[4]  = { 1, 1, 1, 1 };
+    CHECK(transcribe_run_batch(&session, pcm, ns, 4, &params) == TRANSCRIBE_OK);
+    CHECK(transcribe_batch_n_results(&session) == 4);
+    CHECK(transcribe_batch_status(&session, 0) == TRANSCRIBE_ERR_OUTPUT_REPETITION);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 0), "looped") == 0);
     CHECK(transcribe_batch_status(&session, 1) == TRANSCRIBE_OK);
     CHECK(std::strcmp(transcribe_batch_full_text(&session, 1), "complete") == 0);
-    CHECK(transcribe_batch_status(&session, 2) == TRANSCRIBE_OK);
-    CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "complete") == 0);
+    CHECK(transcribe_batch_status(&session, 2) == TRANSCRIBE_ERR_OUTPUT_TRUNCATED);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "partial") == 0);
+    CHECK(transcribe_batch_status(&session, 3) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 3), "complete") == 0);
     CHECK(transcribe_was_truncated(&session));
+
+    // Single-shot: the repetition stop is its own status, keeps its partial,
+    // and does not leak into the next run.
+    CHECK(transcribe_run(&session, &repeating, 1, &params) == TRANSCRIBE_ERR_OUTPUT_REPETITION);
+    CHECK(std::strcmp(transcribe_full_text(&session), "looped") == 0);
+    CHECK(transcribe_was_truncated(&session));
+    CHECK(transcribe_run(&session, &clean, 1, &params) == TRANSCRIBE_OK);
+    CHECK(!transcribe_was_truncated(&session));
 }
 
 void test_batch_serial_truncation_is_per_utterance() {

@@ -3,14 +3,18 @@
 //
 // Moonshine's cap is on output (max_length decode tokens), not input, so a
 // long clip runs the decoder into the cap before end-of-stream. In a batch,
-// that must surface as a per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED on the
-// affected row (with its partial text retained), while a short row that
-// finishes normally stays TRANSCRIBE_OK and the whole-batch call still returns
-// OK. transcribe_was_truncated() is also set. See docs/input-limits.md.
+// that must surface as a per-utterance cut-short status on the affected row
+// (with its partial text retained), while a short row that finishes normally
+// stays TRANSCRIBE_OK and the whole-batch call still returns OK.
+// transcribe_was_truncated() is also set. See docs/input-limits.md.
+//
+// Past its window the tiny model can fall into a loop before it reaches the
+// cap, and then the repetition guard stops it first. Which stop fires depends
+// on the model's output, so row 1 accepts either cut-short status.
 //
 // Batch makeup:
 //   row 0 = jfk.wav (~11 s)  -> completes under the cap   -> OK
-//   row 1 = love-loss.wav (~197 s) -> exceeds the cap     -> OUTPUT_TRUNCATED
+//   row 1 = love-loss.wav (~197 s) -> exceeds the cap     -> OUTPUT_TRUNCATED / OUTPUT_REPETITION
 //
 // Gating:
 //   - TRANSCRIBE_BUILD_REAL_MODEL_TESTS (CMake, default OFF) builds it.
@@ -111,9 +115,11 @@ int main() {
     CHECK(transcribe_run_batch(s, pcms, lens, 2, nullptr) == TRANSCRIBE_OK);
     CHECK_EQ_INT(transcribe_batch_n_results(s), 2);
 
-    // Row 0 (short) completes; row 1 (long) hits the output cap.
+    // Row 0 (short) completes; row 1 (long) is cut short at the output cap or
+    // by the repetition guard.
     CHECK(transcribe_batch_status(s, 0) == TRANSCRIBE_OK);
-    CHECK(transcribe_batch_status(s, 1) == TRANSCRIBE_ERR_OUTPUT_TRUNCATED);
+    const transcribe_status st1 = transcribe_batch_status(s, 1);
+    CHECK(st1 == TRANSCRIBE_ERR_OUTPUT_TRUNCATED || st1 == TRANSCRIBE_ERR_OUTPUT_REPETITION);
 
     // Both rows keep their (partial, for row 1) transcript.
     for (int i = 0; i < 2; ++i) {

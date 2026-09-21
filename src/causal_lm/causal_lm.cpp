@@ -900,6 +900,7 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
     std::vector<int>          n_past   = state.n_past;
     const std::vector<char> & valid    = state.valid;
     std::vector<char>         finished(n, 1);
+    std::vector<char>         repeating(n, 0);
     for (int b = 0; b < n; ++b) {
         if (valid[b]) {
             finished[b] = (next_tok[b] == eos_id);
@@ -964,8 +965,12 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
             if (n_past[b] < max_n_kv) {
                 mask_buf[base + n_past[b]] = mz;
             }
-            if (tok == eos_id || stop_on_repetition(generated[b], "batched decode") ||
-                static_cast<int>(generated[b].size()) >= max_new || n_past[b] + 1 > max_n_kv) {
+            if (tok == eos_id) {
+                finished[b] = 1;
+            } else if (stop_on_repetition(generated[b], "batched decode")) {
+                finished[b]  = 1;
+                repeating[b] = 1;
+            } else if (static_cast<int>(generated[b].size()) >= max_new || n_past[b] + 1 > max_n_kv) {
                 finished[b] = 1;
             } else {
                 all_done = false;
@@ -978,16 +983,25 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
         stats->step_us = ggml_time_us() - t_step0;
     }
 
-    // A valid row was truncated if it stopped for a reason OTHER than eos
+    // A valid row was cut off if it stopped for a reason OTHER than eos
     // (generation budget, KV window, repetition guard). `finished` is set on
     // every stop reason, so it can't discriminate; the signal is the last sampled token:
     // `next_tok[b] != eos_id` means the row was cut off mid-transcript (it is
     // frozen once the row finishes). See docs/input-limits.md.
-    if (truncated_out != nullptr) {
-        truncated_out->assign(n, 0);
-        for (int b = 0; b < n; ++b) {
-            (*truncated_out)[b] = (valid[b] && next_tok[b] != eos_id) ? 1 : 0;
+    std::vector<char> stop(n, k_stop_eos);
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b] || next_tok[b] == eos_id) {
+            continue;
         }
+        if (repeating[b]) {
+            stop[b] = k_stop_repetition;
+        } else {
+            stop[b] = k_stop_budget;
+            trim_repetition_at_budget_stop(generated[b], "batched decode");
+        }
+    }
+    if (truncated_out != nullptr) {
+        *truncated_out = std::move(stop);
     }
     return TRANSCRIBE_OK;
 }

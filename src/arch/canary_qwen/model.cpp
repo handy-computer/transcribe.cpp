@@ -1201,8 +1201,8 @@ transcribe_status run(transcribe_session *          context,
         cur_past += 1;
         n_steps += 1;
         if (next_tok != eos_id && transcribe::stop_on_repetition(generated_ids, "canary_qwen run")) {
-            cc->was_truncated = true;
-            repeating         = true;
+            cc->mark_repetition_stop();
+            repeating = true;
             break;
         }
     }
@@ -1217,6 +1217,7 @@ transcribe_status run(transcribe_session *          context,
                             "the generation budget before end-of-stream; the transcript may "
                             "be incomplete.",
                             static_cast<int>(generated_ids.size()));
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "canary_qwen run");
     }
 
     if (profile_decode) {
@@ -1270,7 +1271,7 @@ transcribe_status run(transcribe_session *          context,
 
     // A truncated decode returns OUTPUT_TRUNCATED; the partial transcript above
     // stays readable (like an aborted run).
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 }  // namespace
@@ -1659,7 +1660,7 @@ transcribe_status run_batch(transcribe_session *          session,
         // a TRANSCRIBE_OK status, never a worse one.
         if (b < static_cast<int>(truncated.size()) && truncated[b] && rs.status == TRANSCRIBE_OK) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;

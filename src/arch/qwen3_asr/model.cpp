@@ -971,8 +971,8 @@ transcribe_status run(transcribe_session *          session,
         cc->kv_cache.head = cur_past + 1;
         t_step_get_us += ggml_time_us() - t_comp1;
         if (next_tok != eos_id && transcribe::stop_on_repetition(generated_ids, "qwen3_asr run")) {
-            cc->was_truncated = true;
-            repeating         = true;
+            cc->mark_repetition_stop();
+            repeating = true;
             break;
         }
     }
@@ -989,6 +989,7 @@ transcribe_status run(transcribe_session *          session,
                             "generation budget before end-of-stream; the transcript may be "
                             "incomplete.",
                             static_cast<int>(generated_ids.size()));
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "qwen3_asr run");
     }
 
     // Map granular counters to the debug-print shape. With graph reuse all
@@ -1088,7 +1089,7 @@ transcribe_status run(transcribe_session *          session,
 
     // A truncated decode returns OUTPUT_TRUNCATED; the partial transcript above
     // stays readable (like an aborted run).
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // ===========================================================================
@@ -1685,7 +1686,7 @@ transcribe_status run_batch(transcribe_session *          session,
         // Per-utterance truncation parity with the single-shot path.
         if (b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;

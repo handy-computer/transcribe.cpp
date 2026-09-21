@@ -5,7 +5,7 @@ import CTranscribe
 /// failures stay distinct (requirements §3): "no such provider" is not
 /// "provider can't satisfy this request".
 ///
-/// `.aborted` / `.outputTruncated` carry the preserved partial `Transcript`
+/// `.aborted` / `.outputTruncated` / `.outputRepetition` carry the preserved partial `Transcript`
 /// (the C side keeps partial output readable after those statuses); it is `nil`
 /// when the error is built outside a run (e.g. by `check`).
 ///
@@ -25,6 +25,9 @@ public enum TranscribeError: Error {
     case inputTooLong(String)
     case aborted(message: String, partial: Transcript?)
     case outputTruncated(message: String, partial: Transcript?)
+    /// The decode was stopped because the output began repeating itself; the
+    /// repeats are dropped from `partial`, which is incomplete.
+    case outputRepetition(message: String, partial: Transcript?)
     case versionMismatch(String)
     case busy(String)
     case other(status: Int32, message: String)
@@ -64,6 +67,8 @@ public enum TranscribeError: Error {
             return .aborted(message: message, partial: nil)
         case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
             return .outputTruncated(message: message, partial: nil)
+        case TRANSCRIBE_ERR_OUTPUT_REPETITION:
+            return .outputRepetition(message: message, partial: nil)
         default:
             return .other(status: raw, message: message)
         }

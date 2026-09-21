@@ -1280,8 +1280,8 @@ transcribe_status run(transcribe_session *          session,
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
                     if (transcribe::stop_on_repetition(generated_ids, "canary run")) {
-                        cc->was_truncated = true;
-                        repeating         = true;
+                        cc->mark_repetition_stop();
+                        repeating = true;
                         break;
                     }
                 }
@@ -1347,8 +1347,8 @@ transcribe_status run(transcribe_session *          session,
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
                     if (transcribe::stop_on_repetition(generated_ids, "canary run")) {
-                        cc->was_truncated = true;
-                        repeating         = true;
+                        cc->mark_repetition_stop();
+                        repeating = true;
                         break;
                     }
                 }
@@ -1367,6 +1367,7 @@ transcribe_status run(transcribe_session *          session,
                                 "generation budget / decoder context (%d) before end-of-stream; "
                                 "the transcript may be incomplete.",
                                 static_cast<int>(generated_ids.size()), cc->kv_cache.n_ctx);
+            transcribe::trim_repetition_at_budget_stop(generated_ids, "canary run");
         }
 
         commit_result();
@@ -1374,7 +1375,7 @@ transcribe_status run(transcribe_session *          session,
 
     // Partial transcript committed above; a truncated decode returns the hard
     // OUTPUT_TRUNCATED status (the result stays readable, like an aborted run).
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // ===========================================================================
@@ -1802,11 +1803,12 @@ transcribe_status run_batch(transcribe_session *          session,
         rs.status      = TRANSCRIBE_OK;
         // Per-utterance truncation parity with the single-shot path: a valid row
         // that hit the generation budget / context window before eos reports
-        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
-        // override an otherwise-OK status — never a worse one.
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED, and one the repetition guard stopped
+        // reports TRANSCRIBE_ERR_OUTPUT_REPETITION (partial transcript retained
+        // either way). Only override an otherwise-OK status — never a worse one.
         if (rs.status == TRANSCRIBE_OK && b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;

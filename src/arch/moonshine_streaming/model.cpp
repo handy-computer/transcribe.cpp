@@ -997,8 +997,8 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         if (next_token != eos) {
             generated_ids.push_back(next_token);
             if (transcribe::stop_on_repetition(generated_ids, "moonshine_streaming run")) {
-                cc->was_truncated = true;
-                repeating         = true;
+                cc->mark_repetition_stop();
+                repeating = true;
                 break;
             }
         }
@@ -1015,6 +1015,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
                             "See transcribe_capabilities.max_audio_ms.",
                             static_cast<int>(generated_ids.size()),
                             hit_duration_budget ? "generation budget" : "position cap", gen_cap);
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "moonshine_streaming run");
     }
 
     cc->t_decode_us += ggml_time_us() - t_decode_start;
@@ -1200,7 +1201,7 @@ transcribe_status run(transcribe_session *          session,
     // Remap truncation to a hard status only at this offline entry:
     // decode_from_kv_cache returns OK (it's shared with the streaming finalize
     // path, which must NOT surface OUTPUT_TRUNCATED). Partial text stays readable.
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // Streaming hooks.
@@ -2119,12 +2120,13 @@ transcribe_status run_batch(transcribe_session *          session,
 
     // Batched truncation: a valid row that never reached eos exhausted the
     // output budget (n_ctx_cap = position cap clamped to cache capacity).
-    // Mirror the serial path (WARN + flag).
+    // Mirror the serial path (WARN + flag + repeating-tail trim).
     {
         int n_truncated = 0;
         for (int b = 0; b < n; ++b) {
             if (valid[b] && !finished[b]) {
                 ++n_truncated;
+                transcribe::trim_repetition_at_budget_stop(generated[b], "moonshine_streaming run_batch");
             }
         }
         if (n_truncated > 0) {
@@ -2160,7 +2162,9 @@ transcribe_status run_batch(transcribe_session *          session,
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result  = true;
         // Per-utterance truncation parity (offline run_batch, not streaming).
-        rs.status      = (!finished[b] || repeating[b]) ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+        rs.status      = repeating[b] ? TRANSCRIBE_ERR_OUTPUT_REPETITION :
+                         !finished[b] ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED :
+                                        TRANSCRIBE_OK;
         rs.t_mel_us    = 0;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = dec_us / valid_count;

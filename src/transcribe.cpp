@@ -156,6 +156,8 @@ extern "C" const char * transcribe_status_string(int status) {
             return "input audio too long for model context";
         case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
             return "output truncated: decode hit the context/generation cap before end-of-stream";
+        case TRANSCRIBE_ERR_OUTPUT_REPETITION:
+            return "output repetition: decode stopped when the output began repeating itself";
         default:
             return "unknown status";
     }
@@ -1827,6 +1829,7 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     session->t_decode_us                      = 0;
     session->was_aborted                      = false;
     session->was_truncated                    = false;
+    session->stopped_on_repetition            = false;
     session->stream_state                     = TRANSCRIBE_STREAM_ACTIVE;
     session->stream_commit_policy             = commit_policy;
     session->stream_stable_prefix_agreement_n = stable_prefix_agreement_n;
@@ -2212,16 +2215,17 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
         *committed = true;
     }
     session->clear_result();
-    session->t_mel_us      = 0;
-    session->t_encode_us   = 0;
-    session->t_decode_us   = 0;
-    session->was_aborted   = false;
-    session->was_truncated = false;
+    session->t_mel_us              = 0;
+    session->t_encode_us           = 0;
+    session->t_decode_us           = 0;
+    session->was_aborted           = false;
+    session->was_truncated         = false;
+    session->stopped_on_repetition = false;
     // Force stream_state to IDLE: clear_result deliberately preserves
     // lifecycle state, but a well-formed transcribe_run subsumes any
     // prior FINISHED/FAILED stream — after a one-shot run the context
     // is no longer meaningfully in a streaming lifecycle.
-    session->stream_state  = TRANSCRIBE_STREAM_IDLE;
+    session->stream_state          = TRANSCRIBE_STREAM_IDLE;
 
     if (session->model == nullptr || session->model->arch == nullptr || session->model->arch->run == nullptr) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
@@ -2353,12 +2357,13 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
 
     // Past this point we commit to producing a fresh batch result.
     session->clear_result();
-    session->t_mel_us      = 0;
-    session->t_encode_us   = 0;
-    session->t_decode_us   = 0;
-    session->was_aborted   = false;
-    session->was_truncated = false;
-    session->stream_state  = TRANSCRIBE_STREAM_IDLE;
+    session->t_mel_us              = 0;
+    session->t_encode_us           = 0;
+    session->t_decode_us           = 0;
+    session->was_aborted           = false;
+    session->was_truncated         = false;
+    session->stopped_on_repetition = false;
+    session->stream_state          = TRANSCRIBE_STREAM_IDLE;
     session->batch_results.clear();
 
     // Release the compute scratch once the batch has run, whichever path it

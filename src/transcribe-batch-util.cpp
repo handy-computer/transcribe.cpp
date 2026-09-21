@@ -210,14 +210,16 @@ transcribe_status run_batch_serial(transcribe_session *  session,
             return TRANSCRIBE_ERR_ABORTED;
         }
         session->clear_result();
-        session->t_mel_us      = 0;
-        session->t_encode_us   = 0;
-        session->t_decode_us   = 0;
-        session->was_truncated = false;
+        session->t_mel_us              = 0;
+        session->t_encode_us           = 0;
+        session->t_decode_us           = 0;
+        session->was_truncated         = false;
+        session->stopped_on_repetition = false;
 
         const transcribe_status st =
             (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG : run_one(pcm[i], n_samples[i]);
-        any_truncated = any_truncated || st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        any_truncated =
+            any_truncated || st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED || st == TRANSCRIBE_ERR_OUTPUT_REPETITION;
         // The slot was cleared above, so has_result means this utterance wrote
         // it: keep partials (truncated, aborted), never a stale snapshot.
         if (st == TRANSCRIBE_OK || session->has_result) {
@@ -396,15 +398,23 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         *n_steps_out = n_steps;
     }
 
-    // A valid row that never reached eos was cut off at the generation budget,
-    // the context window, or the repetition guard — report it as truncated so
-    // the family can return per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED. See
-    // docs/input-limits.md.
-    if (truncated_out != nullptr) {
-        truncated_out->assign(n, 0);
-        for (int b = 0; b < n; ++b) {
-            (*truncated_out)[b] = (valid[b] && (!finished[b] || repeating[b])) ? 1 : 0;
+    // A valid row that never reached eos was cut off at the generation budget
+    // or context window, or by the repetition guard. Report why, so the family
+    // can return the per-utterance status. See docs/input-limits.md.
+    std::vector<char> stop(n, k_stop_eos);
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) {
+            continue;
         }
+        if (repeating[b]) {
+            stop[b] = k_stop_repetition;
+        } else if (!finished[b]) {
+            stop[b] = k_stop_budget;
+            trim_repetition_at_budget_stop(generated[b], "batched decode");
+        }
+    }
+    if (truncated_out != nullptr) {
+        *truncated_out = std::move(stop);
     }
     return TRANSCRIBE_OK;
 }

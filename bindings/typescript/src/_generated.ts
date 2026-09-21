@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "7df72bf9e667b8c2";
+export const PUBLIC_HEADER_HASH = "9866413f80138057";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -33,6 +33,7 @@ export const TRANSCRIBE_ERR_UNSUPPORTED_PNC = 15;
 export const TRANSCRIBE_ERR_UNSUPPORTED_ITN = 16;
 export const TRANSCRIBE_ERR_INPUT_TOO_LONG = 17;
 export const TRANSCRIBE_ERR_OUTPUT_TRUNCATED = 18;
+export const TRANSCRIBE_ERR_OUTPUT_REPETITION = 19;
 export const TRANSCRIBE_ABI_MODEL_LOAD_PARAMS = 0;
 export const TRANSCRIBE_ABI_SESSION_PARAMS = 1;
 export const TRANSCRIBE_ABI_RUN_PARAMS = 2;

@@ -66,6 +66,15 @@ pub enum Error {
         /// The (incomplete) transcript produced before truncation.
         partial: Option<Box<Transcript>>,
     },
+    /// `TRANSCRIBE_ERR_OUTPUT_REPETITION` — the decode was stopped because the
+    /// output began repeating itself; the transcript is incomplete by contract.
+    /// The partial transcript, with the repeats dropped, is always preserved.
+    #[error("output began repeating before end-of-stream: {message}")]
+    OutputRepetition {
+        message: String,
+        /// The (incomplete) transcript produced before the loop, one copy kept.
+        partial: Option<Box<Transcript>>,
+    },
     /// The loaded library's base version disagrees with the headers this crate
     /// was generated against (the pre-1.0 version lock). Raised on first use.
     #[error("native library version mismatch: {0}")]
@@ -103,18 +112,20 @@ impl Error {
             Error::InputTooLong(_) => S::TRANSCRIBE_ERR_INPUT_TOO_LONG,
             Error::Aborted { .. } => S::TRANSCRIBE_ERR_ABORTED,
             Error::OutputTruncated { .. } => S::TRANSCRIBE_ERR_OUTPUT_TRUNCATED,
+            Error::OutputRepetition { .. } => S::TRANSCRIBE_ERR_OUTPUT_REPETITION,
             _ => S::TRANSCRIBE_OK,
         };
         s.0 as i32
     }
 
     /// The partial transcript carried by [`Error::Aborted`] /
-    /// [`Error::OutputTruncated`], if any. `None` for every other variant.
+    /// [`Error::OutputTruncated`] / [`Error::OutputRepetition`], if any. `None`
+    /// for every other variant.
     pub fn partial(&self) -> Option<&Transcript> {
         match self {
-            Error::Aborted { partial, .. } | Error::OutputTruncated { partial, .. } => {
-                partial.as_deref()
-            }
+            Error::Aborted { partial, .. }
+            | Error::OutputTruncated { partial, .. }
+            | Error::OutputRepetition { partial, .. } => partial.as_deref(),
             _ => None,
         }
     }
@@ -168,6 +179,10 @@ pub(crate) fn error_for_status(status: sys::transcribe_status, context: &str) ->
             partial: None,
         },
         S::TRANSCRIBE_ERR_OUTPUT_TRUNCATED => Error::OutputTruncated {
+            message: msg,
+            partial: None,
+        },
+        S::TRANSCRIBE_ERR_OUTPUT_REPETITION => Error::OutputRepetition {
             message: msg,
             partial: None,
         },

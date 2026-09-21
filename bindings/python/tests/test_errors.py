@@ -41,6 +41,7 @@ def test_every_status_maps_to_documented_subclass():
         errors.ERR_UNSUPPORTED_ITN: t.UnsupportedRequest,
         errors.ERR_INPUT_TOO_LONG: t.InputTooLong,
         errors.ERR_OUTPUT_TRUNCATED: t.OutputTruncated,
+        errors.ERR_OUTPUT_REPETITION: t.OutputRepetition,
     }
     # The mapping table covers every non-OK status the header defines, and
     # nothing else (a new C status must be mapped deliberately, not by
@@ -62,6 +63,14 @@ def test_unknown_status_degrades_to_base_class():
     exc = errors.exception_for_status(999, "mystery")
     assert type(exc) is t.TranscribeError
     assert exc.status == 999
+
+
+def test_output_repetition_is_an_output_truncated():
+    # A handler that keeps the partial of an incomplete transcript catches both.
+    exc = errors.exception_for_status(errors.ERR_OUTPUT_REPETITION, "looped", "run")
+    assert isinstance(exc, t.OutputRepetition)
+    assert isinstance(exc, t.OutputTruncated)
+    assert exc.partial_result is None
 
 
 def test_exception_for_status_builds_without_raising():
