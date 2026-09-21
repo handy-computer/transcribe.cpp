@@ -1170,9 +1170,10 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
 
-    // Batch-wide generation budget: covers the longest utterance's transcript
-    // (scales with its audio tokens), clamped to the context.
-    const int batch_budget = std::min(ceiling - max_T_prompt, std::max(k_max_new, 2 * max_T_enc + 128));
+    // One budget for the whole batch, sized from the longest surviving row.
+    // Same prediction as run(): above the plain audio-token count, because the
+    // transcript carries speaker markers on top of the text.
+    const int batch_budget = transcribe::pick_decode_budget(2 * max_T_enc + 128, k_max_new, max_T_prompt, ceiling);
 
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + batch_budget) {

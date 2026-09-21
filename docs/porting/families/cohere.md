@@ -15,6 +15,18 @@ native Transformers. C++ CPU validation passes locally.
   `[en, ar]`; config omits top-level `vocab_size` — the converter falls
   back to `head.num_classes`; upstream repo is gated)
 
+## Audio length contract
+
+- Upstream recommended clip length: **35 s** (`max_audio_clip_s` in the
+  upstream config). Longer audio is expected to be segmented by the caller.
+- Architectural bounds, both read from the GGUF: the encoder relative-position
+  table `enc_pos_emb_max_len = 5000` (~400 s) is the input gate, and the
+  decoder self-KV `dec_max_seq = 1024` separately bounds the transcript.
+- Audio lives in the cross-attention cache and never consumes decoder context,
+  so a clip well inside the ~400 s gate can still exhaust the 1024-token
+  transcript budget and return `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` (measured: a
+  197 s English clip truncates at 1014 tokens). See `docs/input-limits.md`.
+
 ## References
 
 - Canonical reference: native Hugging Face Transformers

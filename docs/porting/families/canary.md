@@ -141,6 +141,12 @@ uv run scripts/bench/run.py \
 - Output head: LM head over the concatenated SP vocabulary. Decoding is beam search by default for the original canary-1b (beam=5, length_penalty=1.0) and greedy by default for the flash variants (beam=1).
 - Tokenizer: concatenated SentencePiece — one SP model per language concatenated into a single vocabulary. canary-1b-v2 is 16,384 pieces; flash/180m-flash/1b vocab sizes are not stated on model cards (Stage 2 fills from .nemo).
 - Audio length contract: native ≤40 s direct inference. <1 s is symmetrically zero-padded to 1 s. >40 s is handled by an external chunked inference script with 1 s overlap (canary-1b-v2 chunk len defaults to 40 s; canary-1b-flash 10 s; canary-180m-flash 10 s). **Long-form / streaming is out of scope for the v1 port.**
+- Port limits (see `docs/input-limits.md`): the input gate is the encoder
+  relative-position table (`enc_pos_emb_max_len = 5000`, ~400 s), not the 40 s
+  upstream window, while the decoder self-KV (`dec_max_position = 1024`)
+  separately bounds the transcript. A clip inside the gate is therefore not
+  guaranteed a complete transcript — measured, a 197 s English clip truncates
+  at 1015 tokens with `TRANSCRIBE_ERR_OUTPUT_TRUNCATED`.
 
 ## Capabilities (from intake)
 
