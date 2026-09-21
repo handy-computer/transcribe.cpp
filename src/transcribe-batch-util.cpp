@@ -5,6 +5,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe-log.h"
+#include "transcribe-repetition-guard.h"
 #include "transcribe-session.h"
 
 #include <algorithm>
@@ -197,6 +198,44 @@ transcribe_status decode_batch_slices(transcribe_session * session,
     return TRANSCRIBE_OK;
 }
 
+transcribe_status run_batch_serial(transcribe_session *  session,
+                                   const float * const * pcm,
+                                   const int *           n_samples,
+                                   int                   n,
+                                   const RunOneFn &      run_one) {
+    bool any_truncated = false;
+    for (int i = 0; i < n; ++i) {
+        if (session->poll_abort()) {
+            session->was_truncated = any_truncated;
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+        session->clear_result();
+        session->t_mel_us      = 0;
+        session->t_encode_us   = 0;
+        session->t_decode_us   = 0;
+        session->was_truncated = false;
+
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG : run_one(pcm[i], n_samples[i]);
+        any_truncated = any_truncated || st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        // The slot was cleared above, so has_result means this utterance wrote
+        // it: keep partials (truncated, aborted), never a stale snapshot.
+        if (st == TRANSCRIBE_OK || session->has_result) {
+            session->batch_results.push_back(session->capture_result(st));
+        } else {
+            transcribe_session::ResultSet rs;
+            rs.status = st;
+            session->batch_results.push_back(std::move(rs));
+        }
+        if (st == TRANSCRIBE_ERR_ABORTED) {
+            session->was_truncated = any_truncated;
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+    }
+    session->was_truncated = any_truncated;
+    return TRANSCRIBE_OK;
+}
+
 transcribe_status run_batched_encdec_step_loop(transcribe_session *                session,
                                                ggml_backend_sched_t                sched,
                                                const EncDecRebuildFn &             rebuild,
@@ -225,6 +264,7 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
     std::vector<int32_t>     tok_buf(n, 0), pos_buf(n, 0), argmax_buf(n, 0);
     std::vector<int64_t>     kvidx_buf(n, 0);
     std::vector<char>        finished(n, 0);
+    std::vector<char>        repeating(n, 0);
     std::vector<int32_t>     next_tok(n, 0);
     for (int b = 0; b < n; ++b) {
         if (!valid[b]) {
@@ -344,6 +384,10 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
                 finished[b] = 1;
             } else {
                 generated[b].push_back(next_tok[b]);
+                if (stop_on_repetition(generated[b], "batched decode")) {
+                    finished[b]  = 1;
+                    repeating[b] = 1;
+                }
             }
         }
     }
@@ -352,13 +396,14 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         *n_steps_out = n_steps;
     }
 
-    // A valid row that never reached eos was cut off at the generation budget
-    // or the context window — report it as truncated so the family can return
-    // per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED. See docs/input-limits.md.
+    // A valid row that never reached eos was cut off at the generation budget,
+    // the context window, or the repetition guard — report it as truncated so
+    // the family can return per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED. See
+    // docs/input-limits.md.
     if (truncated_out != nullptr) {
         truncated_out->assign(n, 0);
         for (int b = 0; b < n; ++b) {
-            (*truncated_out)[b] = (valid[b] && !finished[b]) ? 1 : 0;
+            (*truncated_out)[b] = (valid[b] && (!finished[b] || repeating[b])) ? 1 : 0;
         }
     }
     return TRANSCRIBE_OK;

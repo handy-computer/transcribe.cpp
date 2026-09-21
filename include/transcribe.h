@@ -269,7 +269,9 @@ typedef enum {
     /*
      * Returned by transcribe_run when the decode stopped because it hit
      * the model's context / generation budget BEFORE the model emitted
-     * end-of-stream — i.e. the transcript is incomplete. This is the
+     * end-of-stream — i.e. the transcript is incomplete. A greedy decode
+     * that falls into repeating itself is also stopped early and reported
+     * here, with the repeats dropped from the partial. This is the
      * "started, couldn't finish" counterpart to INPUT_TOO_LONG, and it is
      * a hard non-OK status by design: a truncated transcript must not be
      * mistaken for a complete one.

@@ -28,6 +28,7 @@ of tests.
 | `TRANSCRIBE_FORCE_FLASH` | Force flash attention on. Wins over `TRANSCRIBE_NO_FLASH` if both are set. |
 | `TRANSCRIBE_CONV_DIRECT_DW` / `TRANSCRIBE_CONV_NO_DIRECT_DW` | Force the depthwise-conv dispatch to the direct `conv_2d_dw` path / the im2col path, overriding the per-family backend default. |
 | `TRANSCRIBE_CONV_DIRECT_PW` / `TRANSCRIBE_CONV_NO_DIRECT_PW` | Force the pointwise-conv dispatch to direct `mul_mat` / im2col, overriding the backend default. |
+| `TRANSCRIBE_NO_REPETITION_GUARD` | Turn off the stop for greedy decodes that start repeating themselves (see [`input-limits.md`](input-limits.md)). For byte-exact reference parity; a looping decode then runs to its budget. Read once per process. |
 | `TRANSCRIBE_DUMP_DIR=<dir>` | Enable the per-stage tensor dumper; writes `<name>.f32` + `<name>.json` per dumped tensor into `<dir>`. The basis for the numerical-comparison harness (`scripts/compare_tensors.py`). |
 | `TRANSCRIBE_PERF_DEBUG` | Print a per-stage timing breakdown to stderr (DEBUG log) on the families that profile (`cohere`, `granite`, `canary`, `canary_qwen`, `moonshine`, `moonshine_streaming`, `moss`, `qwen3_asr`, `whisper`). For whisper, a value containing `cpu` or `all` additionally prints the CPU sub-section breakdown. |
 | `TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING` | Print a per-component streaming wall-time breakdown at stream finalize (voxtral_realtime). |

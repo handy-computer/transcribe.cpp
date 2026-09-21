@@ -333,7 +333,8 @@ struct StepLoopStats {
 };
 
 // Run the lockstep batched greedy decode. Each row steps until it emits
-// `eos_id`, accumulates `max_new` generated tokens, or fills the KV window;
+// `eos_id`, starts repeating (transcribe-repetition-guard.h), accumulates
+// `max_new` generated tokens, or fills the KV window;
 // each emitted token is appended to generated[b]. Finished / invalid rows keep
 // stepping into their own KV slab (a no-op for live rows). Polls
 // session->poll_abort() once per step. The step graph must already be built

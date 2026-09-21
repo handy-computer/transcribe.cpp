@@ -26,6 +26,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-repetition-guard.h"
 #include "voxtral.h"
 #include "weights.h"
 
@@ -945,6 +946,7 @@ transcribe_status run(transcribe_session *          session,
     const ggml_fp16_t        mz = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t        mn = ggml_fp32_to_fp16(-INFINITY);
     std::vector<ggml_fp16_t> step_mask(max_n_kv, mn);
+    bool                     repeating = false;
     while (next_tok != eos_id && static_cast<int32_t>(generated_ids.size()) < max_new && cur_past + 1 <= max_n_kv) {
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
@@ -978,12 +980,18 @@ transcribe_status run(transcribe_session *          session,
         cur_past += 1;
         cc->kv_cache.n    = cur_past + 1;
         cc->kv_cache.head = cur_past + 1;
+        if (next_tok != eos_id && transcribe::stop_on_repetition(generated_ids, "voxtral run")) {
+            cc->was_truncated = true;
+            repeating         = true;
+            break;
+        }
     }
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 
     // Decode stopped at EOS (complete) or at the generation budget / context
-    // width (truncated). Surface the latter via transcribe_was_truncated() + WARN.
-    if (next_tok != eos_id) {
+    // width (truncated). Surface the latter via transcribe_was_truncated() + WARN;
+    // a repetition stop has already done both.
+    if (!repeating && next_tok != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                             "voxtral run: output truncated at %d tokens — decode reached the "
@@ -1037,21 +1045,8 @@ transcribe_status run_batch_serial(VoxtralSession *              cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 transcribe_status run_batch(transcribe_session *          session,

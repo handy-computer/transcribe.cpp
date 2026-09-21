@@ -94,6 +94,19 @@ more likely. For `canary` and `cohere`, input and output have separate encoder
 and decoder limits; `max_audio_ms` reports the encoder limit, not a recommended
 chunk size.
 
+A greedy decode can also fall into repeating one phrase until the budget runs
+out. The greedy families (`canary`, `canary_qwen`, `cohere`, `funasr_nano`,
+`granite`, `moonshine`, `moonshine_streaming`, `moss`, `qwen3_asr`, `voxtral`)
+stop as soon as a block of up to 64 tokens has repeated at least 4 times and
+the copies cover at least 32 tokens. The repeats are dropped, leaving one copy.
+Whatever the audio said after the loop was never decoded, so the run reports
+the same `OUTPUT_TRUNCATED` status and `WARN` as a budget stop. `whisper` is
+excluded because it recovers from loops with its own temperature fallback.
+`voxtral_realtime` is excluded because it emits one token per audio frame, so
+its padding tokens repeat through any silence. Set
+`TRANSCRIBE_NO_REPETITION_GUARD=1` to turn the guard off, e.g. for
+byte-exact reference parity.
+
 ### 3. Soft window — warn and proceed
 
 | Families | Window | Behavior |
@@ -165,6 +178,7 @@ with `TRANSCRIBE_ERR_INPUT_TOO_LONG` (one-shot and batch) or surfaced via
 | Input within limit and decode completes | `TRANSCRIBE_OK` | — | full transcript |
 | Over-length, hard-cap family | `TRANSCRIBE_ERR_INPUT_TOO_LONG` | `ERROR` via callback | no transcript (rejected before the decode) |
 | Generation ran long mid-decode | `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` | `WARN` via callback | partial transcript readable; `transcribe_was_truncated() == true` |
+| Greedy decode started repeating | `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` | `WARN` via callback | partial transcript readable, repeats dropped; `transcribe_was_truncated() == true` |
 | Over-window, soft-window family | `TRANSCRIBE_OK` | `WARN` via callback | full transcript (accuracy may be degraded) |
 | Chunked / unbounded family | `TRANSCRIBE_OK` | — | full transcript |
 | Cache/graph allocation failed | `TRANSCRIBE_ERR_OOM` | `ERROR` via callback | no transcript (no silent context shrink) |

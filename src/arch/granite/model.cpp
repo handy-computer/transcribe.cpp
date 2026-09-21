@@ -19,6 +19,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-repetition-guard.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -1234,11 +1235,17 @@ transcribe_status run(transcribe_session *          ctx_base,
     // valid positions get zeroed per step.
     std::vector<uint16_t> step_mask(max_n_kv, 0xFC00);
 
+    bool repeating = false;
     for (int step_i = 0; step_i < max_steps; ++step_i) {
         if (next_id == eos_id) {
             break;
         }
         gen_ids.push_back(next_id);
+        if (transcribe::stop_on_repetition(gen_ids, "granite run")) {
+            cc->was_truncated = true;
+            repeating         = true;
+            break;
+        }
 
         const int32_t pos      = T_prompt + step_i;  // RoPE position
         const int64_t kv_idx   = pos;                // KV write row
@@ -1274,8 +1281,8 @@ transcribe_status run(transcribe_session *          ctx_base,
     // The decode stopped either at EOS (complete) or at the generation
     // budget / context ceiling (truncated). Surface the latter via
     // transcribe_was_truncated() and a WARN rather than handing back a
-    // silently shortened transcript.
-    if (next_id != eos_id) {
+    // silently shortened transcript; a repetition stop has already done both.
+    if (!repeating && next_id != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                             "granite run: output truncated at %d tokens — decode reached the "
@@ -1450,21 +1457,8 @@ transcribe_status run_batch_serial(GraniteSession *              cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 }  // namespace

@@ -8,6 +8,7 @@
 #include "transcribe-backend.h"
 #include "transcribe-env.h"
 #include "transcribe-log.h"
+#include "transcribe-repetition-guard.h"
 #include "transcribe-session.h"
 
 #include <algorithm>
@@ -963,7 +964,8 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
             if (n_past[b] < max_n_kv) {
                 mask_buf[base + n_past[b]] = mz;
             }
-            if (tok == eos_id || static_cast<int>(generated[b].size()) >= max_new || n_past[b] + 1 > max_n_kv) {
+            if (tok == eos_id || stop_on_repetition(generated[b], "batched decode") ||
+                static_cast<int>(generated[b].size()) >= max_new || n_past[b] + 1 > max_n_kv) {
                 finished[b] = 1;
             } else {
                 all_done = false;
@@ -977,8 +979,8 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
     }
 
     // A valid row was truncated if it stopped for a reason OTHER than eos
-    // (generation budget or KV window). `finished` is set on every stop
-    // reason, so it can't discriminate; the signal is the last sampled token:
+    // (generation budget, KV window, repetition guard). `finished` is set on
+    // every stop reason, so it can't discriminate; the signal is the last sampled token:
     // `next_tok[b] != eos_id` means the row was cut off mid-transcript (it is
     // frozen once the row finishes). See docs/input-limits.md.
     if (truncated_out != nullptr) {

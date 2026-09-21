@@ -102,6 +102,21 @@ transcribe_status decode_batch_slices(transcribe_session * session,
                                       int64_t              total_mel_us,
                                       const std::function<transcribe_status(int b, const float * slice)> & decode_fn);
 
+// Serial run_batch fallback: runs each utterance through `run_one` (a family's
+// single-utterance run()) and snapshots it into session->batch_results. The
+// per-run state transcribe_run resets (result slot, timings, truncation flag)
+// is reset before every utterance, so one truncated utterance cannot mark the
+// rest. A truncated or aborted utterance keeps its partial result, as it does
+// from transcribe_run; a null pcm or n_samples <= 0 is recorded as
+// INVALID_ARG. session->was_truncated ends true if any utterance truncated.
+// Returns TRANSCRIBE_ERR_ABORTED once an utterance aborts, else OK.
+using RunOneFn = std::function<transcribe_status(const float * pcm, int n_samples)>;
+transcribe_status run_batch_serial(transcribe_session *  session,
+                                   const float * const * pcm,
+                                   const int *           n_samples,
+                                   int                   n,
+                                   const RunOneFn &      run_one);
+
 // ---------------------------------------------------------------------------
 // Batched encoder-decoder greedy step loop (cohere / canary / moonshine)
 //
@@ -133,8 +148,9 @@ struct EncDecStepIO {
 using EncDecRebuildFn = std::function<bool(int win, EncDecStepIO & io)>;
 
 // Run the shared greedy enc-dec step loop. Feeds `prompt_ids[0..prompt_len)` as
-// uniform lockstep tokens, then generates until each row emits eos_id, the batch
-// reaches `max_new` produced tokens, or the position fills `max_n_kv`. Manages
+// uniform lockstep tokens, then generates until each row emits eos_id or starts
+// repeating (transcribe-repetition-guard.h), the batch reaches `max_new`
+// produced tokens, or the position fills `max_n_kv`. Manages
 // the self-attention key mask and dynamic window growth (via `rebuild`), and
 // appends generated tokens to generated[b] (invalid rows are skipped, finished
 // rows keep stepping into their own KV slab). Polls session->poll_abort() each
@@ -142,8 +158,9 @@ using EncDecRebuildFn = std::function<bool(int win, EncDecStepIO & io)>;
 // *n_steps_out (if non-null) receives the number of compute steps run.
 //
 // truncated_out (if non-null) is sized to n_batch and set per row: 1 when that
-// (valid) row hit the generation budget (max_new) or the context window
-// (max_n_kv) BEFORE emitting eos_id (transcript truncated), else 0. Lets a
+// (valid) row hit the generation budget (max_new), the context window
+// (max_n_kv) or the repetition guard BEFORE emitting eos_id (transcript
+// truncated), else 0. Lets a
 // family report per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED from run_batch.
 transcribe_status run_batched_encdec_step_loop(transcribe_session *                session,
                                                ggml_backend_sched_t                sched,

@@ -1,6 +1,7 @@
 // run_dispatch_unit.cpp - dispatcher-level transcribe_run behavior tests.
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
 #include "transcribe.h"
@@ -508,8 +509,105 @@ void test_release_scratch_after_run_and_batch() {
     g_run_throw = false;
 }
 
+// ---------------------------------------------------------------------------
+// Serial batch fallback truncation: one truncated utterance must not mark the
+// rest (the flag is per-run state), and its partial transcript must survive.
+// fake_family_run derives its status from the session flag, as every
+// autoregressive family's run() does.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+transcribe_status fake_family_run(transcribe_session *          session,
+                                  const float *                 pcm,
+                                  int                           n_samples,
+                                  const transcribe_run_params * params) {
+    (void) n_samples;
+    (void) params;
+    const bool truncate = pcm[0] > 0.5f;
+    session->clear_result();
+    session->full_text  = truncate ? "partial" : "complete";
+    session->has_result = true;
+    if (truncate) {
+        session->was_truncated = true;
+    }
+    return session->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+}
+
+transcribe_status fake_family_run_batch(transcribe_session *          session,
+                                        const float * const *         pcm,
+                                        const int *                   n_samples,
+                                        int                           n,
+                                        const transcribe_run_params * params) {
+    return transcribe::run_batch_serial(
+        session, pcm, n_samples, n, [&](const float * p, int ns) { return fake_family_run(session, p, ns, params); });
+}
+
+void check_truncated_then_clean(const transcribe::Arch & arch) {
+    transcribe_model model;
+    model.arch = &arch;
+
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+
+    const float   truncating = 1.0f, clean = 0.0f;
+    const float * pcm[3] = { &truncating, &clean, &clean };
+    const int     ns[3]  = { 1, 1, 1 };
+    CHECK(transcribe_run_batch(&session, pcm, ns, 3, &params) == TRANSCRIBE_OK);
+    CHECK(transcribe_batch_n_results(&session) == 3);
+    CHECK(transcribe_batch_status(&session, 0) == TRANSCRIBE_ERR_OUTPUT_TRUNCATED);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 0), "partial") == 0);
+    CHECK(transcribe_batch_status(&session, 1) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 1), "complete") == 0);
+    CHECK(transcribe_batch_status(&session, 2) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "complete") == 0);
+    CHECK(transcribe_was_truncated(&session));
+}
+
+void test_batch_serial_truncation_is_per_utterance() {
+    // Family run_batch hook falling back to its serial path.
+    const transcribe::Arch family_arch = {
+        "fake-family-serial",
+        nullptr,
+        nullptr,
+        fake_family_run,
+        fake_family_run_batch,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+    };
+    check_truncated_then_clean(family_arch);
+
+    // No run_batch hook: the dispatcher's generic serial fallback.
+    const transcribe::Arch dispatcher_arch = {
+        "fake-dispatcher-serial",
+        nullptr,
+        nullptr,
+        fake_family_run,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+    };
+    check_truncated_then_clean(dispatcher_arch);
+}
+
+}  // namespace
+
 int main() {
     test_no_run_hook_clears_and_not_implemented();
+    test_batch_serial_truncation_is_per_utterance();
     test_release_scratch_after_run_and_batch();
     test_run_validate_failure_preserves_snapshot();
     test_run_validate_success_clears_and_runs();

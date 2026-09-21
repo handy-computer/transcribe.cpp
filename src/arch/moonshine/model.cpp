@@ -21,6 +21,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
+#include "transcribe-repetition-guard.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -630,6 +631,7 @@ transcribe_status run(transcribe_session *          session,
                                    cm->plan.primary_kind != transcribe::BackendKind::Accel &&
                                    cm->plan.primary_kind != transcribe::BackendKind::Unknown;
     const bool    use_step_graph = primary_is_gpu && !transcribe::debug::enabled();
+    bool          repeating      = false;
 
     if (use_step_graph) {
         // ---------- Static-graph step path (GPU) ----------
@@ -708,6 +710,11 @@ transcribe_status run(transcribe_session *          session,
 
             if (next_token != eos) {
                 generated_ids.push_back(next_token);
+                if (transcribe::stop_on_repetition(generated_ids, "moonshine run")) {
+                    cc->was_truncated = true;
+                    repeating         = true;
+                    break;
+                }
             }
         }
     } else {
@@ -733,14 +740,19 @@ transcribe_status run(transcribe_session *          session,
             }
             if (next_token != eos) {
                 generated_ids.push_back(next_token);
+                if (transcribe::stop_on_repetition(generated_ids, "moonshine run")) {
+                    cc->was_truncated = true;
+                    repeating         = true;
+                    break;
+                }
             }
         }
     }
 
     // A non-eos last token means the decode hit the position cap before
     // end-of-stream (see the input-length contract above): flag truncation
-    // and WARN.
-    if (next_token != eos) {
+    // and WARN. A repetition stop has already done both.
+    if (!repeating && next_token != eos) {
         cc->was_truncated = true;
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                             "moonshine run: output truncated at %d tokens — decode reached the "
@@ -856,21 +868,8 @@ transcribe_status run_batch_serial(MoonshineSession *            cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 transcribe_status run_batch(transcribe_session *          session,
@@ -1056,7 +1055,8 @@ transcribe_status run_batch(transcribe_session *          session,
     const int64_t dec_us = ggml_time_us() - t_dec0;
 
     // Batched truncation: the shared step loop marks each valid row that hit
-    // the output cap before end-of-stream. Mirror the serial path (WARN + flag).
+    // the output cap, or started repeating, before end-of-stream. Mirror the
+    // serial path (WARN + flag).
     {
         int n_truncated = 0;
         for (int b = 0; b < n; ++b) {
@@ -1068,8 +1068,8 @@ transcribe_status run_batch(transcribe_session *          session,
             cc->was_truncated = true;
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                                 "moonshine run_batch: %d of %d utterances truncated — decode "
-                                "reached the position cap (%d) before end-of-stream; those "
-                                "transcripts may be incomplete. This model is intended for "
+                                "reached the position cap (%d) or began repeating before "
+                                "end-of-stream; those transcripts may be incomplete. This model is intended for "
                                 "short utterances. See transcribe_capabilities.max_audio_ms.",
                                 n_truncated, n, max_pos);
         }

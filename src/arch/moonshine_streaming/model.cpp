@@ -36,6 +36,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
+#include "transcribe-repetition-guard.h"
 #include "transcribe/moonshine_streaming.h"
 #include "weights.h"
 
@@ -977,6 +978,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
     // dec.logits_raw.gen20 dumps the logits that predict the 20th
     // emitted token (n_past == 20 at that step). Matches moonshine.
     constexpr int k_mid_gen_step = 20;
+    bool          repeating      = false;
     while (next_token != eos && n_past < gen_cap) {
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
@@ -994,12 +996,17 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         }
         if (next_token != eos) {
             generated_ids.push_back(next_token);
+            if (transcribe::stop_on_repetition(generated_ids, "moonshine_streaming run")) {
+                cc->was_truncated = true;
+                repeating         = true;
+                break;
+            }
         }
     }
 
     // Non-EOS after the loop means gen_cap stopped decode before EOS. gen_cap
     // is either the position cap or the tighter duration budget.
-    if (next_token != eos) {
+    if (!repeating && next_token != eos) {
         cc->was_truncated              = true;
         const bool hit_duration_budget = (gen_cap < max_pos) || (max_pos <= 0);
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
@@ -1801,21 +1808,8 @@ transcribe_status run_batch_serial(MoonshineStreamingSession *   cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 transcribe_status run_batch(transcribe_session *          session,
@@ -2011,6 +2005,7 @@ transcribe_status run_batch(transcribe_session *          session,
     std::vector<int32_t>              tok_buf(n, 0), pos_buf(n, 0), argmax_buf(n, 0);
     std::vector<int64_t>              kvidx_buf(n, 0);
     std::vector<char>                 finished(n, 0);
+    std::vector<char>                 repeating(n, 0);
     std::vector<std::vector<int32_t>> generated(n);
     std::vector<int32_t>              next_tok(n, 0);
     for (int b = 0; b < n; ++b) {
@@ -2112,6 +2107,11 @@ transcribe_status run_batch(transcribe_session *          session,
                 finished[b] = 1;
             } else {
                 generated[b].push_back(next_tok[b]);
+                if (transcribe::stop_on_repetition(generated[b], "moonshine_streaming run_batch")) {
+                    cc->was_truncated = true;
+                    finished[b]       = 1;
+                    repeating[b]      = 1;
+                }
             }
         }
     }
@@ -2160,7 +2160,7 @@ transcribe_status run_batch(transcribe_session *          session,
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result  = true;
         // Per-utterance truncation parity (offline run_batch, not streaming).
-        rs.status      = !finished[b] ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+        rs.status      = (!finished[b] || repeating[b]) ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
         rs.t_mel_us    = 0;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = dec_us / valid_count;

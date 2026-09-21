@@ -21,6 +21,7 @@
 #include "transcribe-abi.h"
 #include "transcribe-arch.h"
 #include "transcribe-backend.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-model.h"
@@ -2384,36 +2385,11 @@ static transcribe_status transcribe_run_batch_impl(struct transcribe_session *  
 
     // Generic serial fallback: run each utterance in turn and snapshot it.
     // Correct for every family; only the per-dispatch device throughput of
-    // a real run_batch() is forgone.
+    // a real run_batch() is forgone. run_one_inner re-validates the shared
+    // params (idempotent) before the family run().
     session->batch_results.reserve(static_cast<size_t>(n));
-    transcribe_status batch_status = TRANSCRIBE_OK;
-    for (int i = 0; i < n; ++i) {
-        if (session->poll_abort()) {
-            batch_status = TRANSCRIBE_ERR_ABORTED;
-            break;
-        }
-        // run_one_inner clears the scratch slot and writes this utterance's
-        // result; it re-validates the shared params (idempotent) and
-        // validates this utterance's pcm[i] / n_samples[i].
-        const transcribe_status st = run_one_inner(session, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            // capture_result (not a local field-copy) so every result field —
-            // including per-utterance timings and raw_text — reaches the
-            // batch snapshot without a second list to keep in sync.
-            session->batch_results.push_back(session->capture_result(st));
-        } else {
-            // Malformed-input early returns preserve the previous scratch
-            // slot, so do NOT snapshot it — record an explicit empty
-            // failure for this utterance instead.
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            session->batch_results.push_back(std::move(rs));
-            if (st == TRANSCRIBE_ERR_ABORTED) {
-                batch_status = TRANSCRIBE_ERR_ABORTED;
-                break;
-            }
-        }
-    }
+    const transcribe_status batch_status = transcribe::run_batch_serial(
+        session, pcm, n_samples, n, [&](const float * p, int ns) { return run_one_inner(session, p, ns, params); });
 
     // On abort the loop can break early, leaving fewer than n entries;
     // synthesize any missing slots so the result-set view always exposes n

@@ -23,6 +23,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-repetition-guard.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -1217,6 +1218,10 @@ transcribe_status run(transcribe_session *          session,
 
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
+                    if (transcribe::stop_on_repetition(generated_ids, "cohere run")) {
+                        cc->was_truncated = true;
+                        break;
+                    }
                 }
             }
         } else {
@@ -1288,6 +1293,10 @@ transcribe_status run(transcribe_session *          session,
 
                 if (next_token != eos_id) {
                     generated_ids.push_back(next_token);
+                    if (transcribe::stop_on_repetition(generated_ids, "cohere run")) {
+                        cc->was_truncated = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1436,21 +1445,8 @@ transcribe_status run_batch_serial(CohereSession *               cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 transcribe_status run_batch(transcribe_session *          session,
