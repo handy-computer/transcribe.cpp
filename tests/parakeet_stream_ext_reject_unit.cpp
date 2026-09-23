@@ -133,6 +133,25 @@ void test_cache_aware_rejects_sub_sentinel() {
     transcribe_model_free(model);
 }
 
+void test_stream_allowlist_rejects_model_without_language_tags() {
+    struct transcribe_model *   model = nullptr;
+    struct transcribe_session * ctx   = nullptr;
+    if (!load_and_init("tokenizer_minimal_streaming_cache_aware.gguf", &model, &ctx)) {
+        return;
+    }
+
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    const char * allowed[] = { "en-US", "de-DE" };
+    rp.allowed_languages   = allowed;
+    rp.n_allowed_languages = 2;
+    CHECK(transcribe_stream_begin(ctx, &rp, nullptr) == TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE);
+    CHECK(transcribe_stream_get_state(ctx) == TRANSCRIBE_STREAM_IDLE);
+
+    transcribe_session_free(ctx);
+    transcribe_model_free(model);
+}
+
 // Buffered path. Each of {left,chunk,right}_ms < -1 must return
 // INVALID_ARG. Tests each field independently so a bug that misses one
 // of the three rejects is caught.
@@ -225,6 +244,7 @@ void test_buffered_zero_is_real_value() {
 
 int main() {
     test_cache_aware_rejects_sub_sentinel();
+    test_stream_allowlist_rejects_model_without_language_tags();
     test_buffered_rejects_sub_sentinel();
     test_buffered_zero_is_real_value();
 

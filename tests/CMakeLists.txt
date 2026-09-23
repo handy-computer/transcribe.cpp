@@ -170,6 +170,12 @@ transcribe_apply_warnings(transcribe_parakeet_chunked_limited_with_rc_mask_unit)
 add_test(NAME transcribe_parakeet_chunked_limited_with_rc_mask_unit
     COMMAND transcribe_parakeet_chunked_limited_with_rc_mask_unit)
 
+add_executable(transcribe_parakeet_language_mask_unit parakeet_language_mask_unit.cpp)
+target_link_libraries(transcribe_parakeet_language_mask_unit PRIVATE transcribe ggml)
+target_include_directories(transcribe_parakeet_language_mask_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+transcribe_apply_warnings(transcribe_parakeet_language_mask_unit)
+add_test(NAME transcribe_parakeet_language_mask_unit COMMAND transcribe_parakeet_language_mask_unit)
+
 # -----------------------------------------------------------------------------
 # Variable-length batch mask and causal subsampling unit test
 # -----------------------------------------------------------------------------
@@ -709,6 +715,18 @@ endif()
 # of failing the suite).
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_nemotron_allowlist_real_stream
+        nemotron_allowlist_real_stream.cpp
+        ${CMAKE_SOURCE_DIR}/examples/common/wav.cpp)
+    target_link_libraries(transcribe_nemotron_allowlist_real_stream PRIVATE transcribe)
+    target_include_directories(transcribe_nemotron_allowlist_real_stream PRIVATE
+        ${CMAKE_SOURCE_DIR}/examples/common)
+    target_compile_definitions(transcribe_nemotron_allowlist_real_stream PRIVATE
+        "TRANSCRIBE_TEST_WAV_FILE=\"${CMAKE_SOURCE_DIR}/samples/jfk.wav\"")
+    transcribe_apply_warnings(transcribe_nemotron_allowlist_real_stream)
+    add_test(NAME transcribe_nemotron_allowlist_real_stream COMMAND transcribe_nemotron_allowlist_real_stream)
+    set_tests_properties(transcribe_nemotron_allowlist_real_stream PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(transcribe_parakeet_real_smoke
         parakeet_real_smoke.cpp)
 

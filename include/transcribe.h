@@ -1118,6 +1118,14 @@ struct transcribe_run_params {
      *   to know whether the field will take effect.
      */
     int32_t spec_k_drafts;
+
+    /* Optional language allowlist for automatic detection. Codes must match
+     * model-advertised languages; unknown codes return UNSUPPORTED_LANGUAGE.
+     * An empty list leaves detection unrestricted. Currently used by
+     * Nemotron streaming. Ignored when language is explicitly set. The
+     * library copies strings for the duration of a streaming run. */
+    int32_t              n_allowed_languages;
+    const char * const * allowed_languages;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);

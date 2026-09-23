@@ -135,6 +135,10 @@ struct ParakeetModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
+transcribe_status resolve_language_block_mask(const ParakeetModel *         pm,
+                                              const transcribe_run_params * params,
+                                              std::vector<uint8_t> &        mask);
+
 // Per-context streaming encoder state, allocated lazily on the first
 // stream_begin for ChunkedLimited variants. Mirrors NeMo's
 // get_initial_cache_state tuple. Layout cheat sheet:
@@ -264,6 +268,7 @@ struct ParakeetSession final : public transcribe_session {
     // clear_result (the family owns its per-utterance audio scratch).
     std::vector<float>    stream_pcm_buffer;
     transcribe_run_params stream_run_params{};
+    std::vector<uint8_t>  stream_language_block_mask;
     // Convert from cumulative samples so odd feed sizes do not lose fractions.
     int64_t               stream_audio_input_samples = 0;
 

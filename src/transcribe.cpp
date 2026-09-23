@@ -298,6 +298,18 @@ int timestamp_rank(transcribe_timestamp_kind k) {
 // streaming-begin rejects unconditionally in v1), so each caller
 // applies its own translate check before reaching this helper.
 transcribe_status validate_run_params_common(const transcribe_session * session, const transcribe_run_params * params) {
+    if (params->language == nullptr &&
+        params->struct_size >= offsetof(transcribe_run_params, allowed_languages) + sizeof(params->allowed_languages)) {
+        if (params->n_allowed_languages < 0 ||
+            (params->n_allowed_languages > 0 && params->allowed_languages == nullptr)) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        for (int i = 0; i < params->n_allowed_languages; ++i) {
+            if (params->allowed_languages[i] == nullptr || *params->allowed_languages[i] == '\0') {
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
+        }
+    }
     // Raw-validate every enum field before its first enum-typed load (see
     // enum_field_raw). Once a field passes here, downstream typed reads —
     // including the per-family handlers' — are defined.
@@ -578,11 +590,13 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
         return;
     }
     std::memset(p, 0, sizeof(*p));
-    p->struct_size   = sizeof(*p);
-    p->spec_k_drafts = -1;  // family default
+    p->struct_size         = sizeof(*p);
+    p->spec_k_drafts       = -1;  // family default
+    p->n_allowed_languages = 0;
+    p->allowed_languages   = nullptr;
     // Default to AUTO (richest output compatible with the model and selected
     // run tasks, resolved per-family) rather than the memset NONE.
-    p->timestamps    = TRANSCRIBE_TIMESTAMPS_AUTO;
+    p->timestamps          = TRANSCRIBE_TIMESTAMPS_AUTO;
 }
 
 extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {
@@ -735,8 +749,8 @@ namespace {
 // library-side prefix do NOT raise this value.
 #define TRANSCRIBE_FIELD_END(type, field) (offsetof(type, field) + sizeof(((type *) 0)->field))
 
-constexpr size_t k_min_model_params_size            = TRANSCRIBE_FIELD_END(transcribe_model_load_params, device);
-constexpr size_t k_min_context_params_size          = TRANSCRIBE_FIELD_END(transcribe_session_params, kv_type);
+constexpr size_t k_min_model_params_size             = TRANSCRIBE_FIELD_END(transcribe_model_load_params, device);
+constexpr size_t k_min_context_params_size           = TRANSCRIBE_FIELD_END(transcribe_session_params, kv_type);
 // run_params is the one 0.2.0 exception to the append-only rule: `diarize`
 // was inserted mid-struct, shifting every field from `language` on by 8
 // bytes. A 0.1-layout caller's sizeof (64) equals FIELD_END(family) in the
@@ -744,9 +758,10 @@ constexpr size_t k_min_context_params_size          = TRANSCRIBE_FIELD_END(trans
 // read their pointers as enums. Require through spec_k_drafts so every
 // pre-0.2 caller that bypasses the SONAME/abihash checks (dlopen by path,
 // stale static link, hand-rolled FFI) gets BAD_STRUCT_SIZE instead.
-constexpr size_t k_min_run_params_size              = TRANSCRIBE_FIELD_END(transcribe_run_params, spec_k_drafts);
-constexpr size_t k_min_stream_params_size           = TRANSCRIBE_FIELD_END(transcribe_stream_params, family);
-constexpr size_t k_stream_params_commit_policy_size = TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_policy);
+constexpr size_t k_min_run_params_size               = TRANSCRIBE_FIELD_END(transcribe_run_params, spec_k_drafts);
+constexpr size_t k_run_params_allowed_languages_size = TRANSCRIBE_FIELD_END(transcribe_run_params, allowed_languages);
+constexpr size_t k_min_stream_params_size            = TRANSCRIBE_FIELD_END(transcribe_stream_params, family);
+constexpr size_t k_stream_params_commit_policy_size  = TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_policy);
 constexpr size_t k_stream_params_agreement_n_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_params, stable_prefix_agreement_n);
 constexpr size_t k_min_stream_update_size = TRANSCRIBE_FIELD_END(transcribe_stream_update, buffered_ms);
@@ -1841,6 +1856,14 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     // wants a run-slot ext at stream begin must plumb it deliberately.
     session->stream_language_owned        = run_params->language != nullptr ? run_params->language : "";
     session->stream_target_language_owned = run_params->target_language != nullptr ? run_params->target_language : "";
+    session->stream_allowed_languages_owned.clear();
+    if (run_params->language == nullptr && has_field(run_params->struct_size, k_run_params_allowed_languages_size) &&
+        run_params->n_allowed_languages > 0 && run_params->allowed_languages != nullptr) {
+        session->stream_allowed_languages_owned.reserve(static_cast<size_t>(run_params->n_allowed_languages));
+        for (int i = 0; i < run_params->n_allowed_languages; ++i) {
+            session->stream_allowed_languages_owned.emplace_back(run_params->allowed_languages[i]);
+        }
+    }
     // PREFIX copy, not struct assignment: the size gate above admits any
     // struct_size >= k_min_run_params_size, so a conforming caller's
     // allocation may be SHORTER than sizeof (fields past `family`, e.g.
@@ -1855,7 +1878,15 @@ static transcribe_status transcribe_stream_begin_impl(struct transcribe_session 
     run_params_owned.language = run_params->language != nullptr ? session->stream_language_owned.c_str() : nullptr;
     run_params_owned.target_language =
         run_params->target_language != nullptr ? session->stream_target_language_owned.c_str() : nullptr;
-    run_params_owned.family = nullptr;
+    auto & allowed_language_ptrs = session->stream_allowed_language_ptrs_owned;
+    allowed_language_ptrs.clear();
+    allowed_language_ptrs.reserve(session->stream_allowed_languages_owned.size());
+    for (const auto & lang : session->stream_allowed_languages_owned) {
+        allowed_language_ptrs.push_back(lang.c_str());
+    }
+    run_params_owned.n_allowed_languages = static_cast<int32_t>(allowed_language_ptrs.size());
+    run_params_owned.allowed_languages   = allowed_language_ptrs.empty() ? nullptr : allowed_language_ptrs.data();
+    run_params_owned.family              = nullptr;
 
     const transcribe_status st = session->model->arch->stream_begin(session, &run_params_owned, stream_params);
     if (st != TRANSCRIBE_OK) {

@@ -237,6 +237,8 @@ static void test_init_macros(void) {
     CHECK(rp_macro.itn == TRANSCRIBE_ITN_MODE_DEFAULT);
     CHECK(rp_macro.language == NULL);
     CHECK(rp_macro.target_language == NULL);
+    CHECK(rp_macro.n_allowed_languages == 0);
+    CHECK(rp_macro.allowed_languages == NULL);
     CHECK(rp_macro.keep_special_tags == false);
     CHECK(rp_macro.family == NULL);
 
