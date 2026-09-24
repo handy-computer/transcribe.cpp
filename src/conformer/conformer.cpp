@@ -143,7 +143,7 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
         ggml_tensor * result = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[1]),
                                             kernel_2d);  // [OW, OC]
         if (kernel_needs_f32_acc) {
-            ggml_mul_mat_set_prec(result, GGML_PREC_F32);
+            ggml_prec_set_acc(result, GGML_PREC_F32);
         }
         result = ggml_reshape_3d(ctx, result, im2col->ne[1], kernel->ne[2], 1);
         return result;
@@ -156,7 +156,7 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
     // permute to the [OW, OC, N] = [time, channels, batch] convention.
     ggml_tensor * result = ggml_mul_mat(ctx, kernel_2d, im2col);  // [OC, OW, N]
     if (kernel_needs_f32_acc) {
-        ggml_mul_mat_set_prec(result, GGML_PREC_F32);
+        ggml_prec_set_acc(result, GGML_PREC_F32);
     }
     result = ggml_cont(ctx, ggml_permute(ctx, result, 1, 0, 2, 3));
     return result;  // [OW, OC, N]
@@ -357,7 +357,7 @@ ggml_tensor * conv_module(ggml_context * ctx, ggml_tensor * x, const BlockView &
             ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w, d_model, 2 * d_model);
             x                 = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T, B]
             if (b.conv_pw1_w->type == GGML_TYPE_F16) {
-                ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+                ggml_prec_set_acc(x, GGML_PREC_F32);
             }
             if (b.conv_pw1_b != nullptr) {
                 x = ggml_add(ctx, x, b.conv_pw1_b);
@@ -509,7 +509,7 @@ ggml_tensor * conv_module(ggml_context * ctx, ggml_tensor * x, const BlockView &
         ggml_tensor * pw2 = ggml_reshape_2d(ctx, b.conv_pw2_w, d_model, d_model);
         x                 = ggml_mul_mat(ctx, pw2, x);
         if (b.conv_pw2_w->type == GGML_TYPE_F16) {
-            ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+            ggml_prec_set_acc(x, GGML_PREC_F32);
         }
         if (b.conv_pw2_b != nullptr) {
             x = ggml_add(ctx, x, b.conv_pw2_b);

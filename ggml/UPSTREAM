@@ -1,5 +1,5 @@
 repo: git@github.com:ggml-org/ggml.git
-sha:  8c63e70982c95ceb862e3a1073a2c1beef75d60a
+sha:  e565a8f4ce2e462c4973a24c51098dd3c81c0256
 patches:
   patches/ggml/0001-fix-threadpool-oversubscription.patch
 

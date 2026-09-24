@@ -18,7 +18,7 @@ namespace transcribe::sanm {
 static ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
     if (w->type == GGML_TYPE_F16) {
-        ggml_mul_mat_set_prec(y, GGML_PREC_F32);
+        ggml_prec_set_acc(y, GGML_PREC_F32);
     }
     return y;
 }
