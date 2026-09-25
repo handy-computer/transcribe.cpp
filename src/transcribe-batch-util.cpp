@@ -217,8 +217,8 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
 
     int          kv_window = init_window;
     EncDecStepIO io{};
-    if (!rebuild(kv_window, io)) {
-        return TRANSCRIBE_ERR_GGUF;
+    if (const transcribe_status st = rebuild(kv_window, io); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     std::vector<ggml_fp16_t> smask(static_cast<size_t>(kv_window) * n, f16_ninf);
@@ -243,8 +243,10 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         ggml_backend_tensor_set(io.pos_ids, pos_buf.data(), 0, n * sizeof(int32_t));
         ggml_backend_tensor_set(io.kv_idx, kvidx_buf.data(), 0, n * sizeof(int64_t));
         ggml_backend_tensor_set(io.self_mask, smask.data(), 0, smask.size() * sizeof(ggml_fp16_t));
-        if (ggml_backend_sched_graph_compute(sched, io.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const ggml_status gs = ggml_backend_sched_graph_compute(sched, io.graph); gs != GGML_STATUS_SUCCESS) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "batched decode: step compute failed (%d)",
+                                static_cast<int>(gs));
+            return TRANSCRIBE_ERR_BACKEND;
         }
         ggml_backend_tensor_get(io.argmax, argmax_buf.data(), 0, n * sizeof(int32_t));
         ++n_steps;
@@ -252,9 +254,9 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
     };
 
     // Grow the read window (rebuild graph + widen mask) so position `posv` fits.
-    auto ensure_window = [&](int posv) -> bool {
+    auto ensure_window = [&](int posv) -> transcribe_status {
         if (posv + 1 <= kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         int win = kv_window;
         while (win < posv + 1 && win < max_n_kv) {
@@ -264,7 +266,7 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
             win = max_n_kv;
         }
         if (win == kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * n, f16_ninf);
         for (int b = 0; b < n; ++b) {
@@ -282,17 +284,19 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         if (session->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
-        if (!ensure_window(pos)) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "batched decode: step graph allocation failed — out of memory. "
-                                "Lower transcribe_session_params.n_ctx or the batch size.");
-            return TRANSCRIBE_ERR_OOM;
+        if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+            if (st == TRANSCRIBE_ERR_OOM) {
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                    "batched decode: step graph allocation failed — out of memory. "
+                                    "Lower transcribe_session_params.n_ctx or the batch size.");
+            }
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             tok_buf[b] = prompt_ids[static_cast<size_t>(pos)];
         }
-        if (run_step(pos) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
     }
     // argmax from the last prompt position = first generated token.
@@ -323,17 +327,19 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         if (all_done || pos + 1 > max_n_kv) {
             break;
         }
-        if (!ensure_window(pos)) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "batched decode: step graph allocation failed — out of memory. "
-                                "Lower transcribe_session_params.n_ctx or the batch size.");
-            return TRANSCRIBE_ERR_OOM;
+        if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+            if (st == TRANSCRIBE_ERR_OOM) {
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                    "batched decode: step graph allocation failed — out of memory. "
+                                    "Lower transcribe_session_params.n_ctx or the batch size.");
+            }
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             tok_buf[b] = finished[b] ? eos_id : next_tok[b];
         }
-        if (run_step(pos) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             if (finished[b]) {

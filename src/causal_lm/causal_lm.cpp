@@ -808,16 +808,16 @@ void PackedGateUpHandles::free() {
     }
 }
 
-bool pack_gate_up(ggml_backend_t                   backend,
-                  int                              hidden,
-                  int                              intermediate,
-                  const std::vector<GateUpEntry> & entries,
-                  PackedGateUpHandles &            out_handles,
-                  const char *                     error_tag) {
+transcribe_status pack_gate_up(ggml_backend_t                   backend,
+                               int                              hidden,
+                               int                              intermediate,
+                               const std::vector<GateUpEntry> & entries,
+                               PackedGateUpHandles &            out_handles,
+                               const char *                     error_tag) {
     if (backend == nullptr || hidden <= 0 || intermediate <= 0 || entries.empty()) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: pack_gate_up invalid args (hidden=%d intermediate=%d n=%zu)",
                 error_tag, hidden, intermediate, entries.size());
-        return false;
+        return TRANSCRIBE_ERR_GGUF;
     }
 
     const size_t     ctx_size = entries.size() * ggml_tensor_overhead() + 1024;
@@ -829,7 +829,7 @@ bool pack_gate_up(ggml_backend_t                   backend,
     out_handles.ctx = ggml_init(packed_params);
     if (out_handles.ctx == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: pack_gate_up ggml_init failed", error_tag);
-        return false;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // One packed tensor per block, same dtype as gate_w (gate and up share
@@ -838,17 +838,17 @@ bool pack_gate_up(ggml_backend_t                   backend,
         const auto & e = entries[i];
         if (e.gate_w == nullptr || e.up_w == nullptr || e.gate_up_w_out == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: pack_gate_up entry %zu has null member", error_tag, i);
-            return false;
+            return TRANSCRIBE_ERR_GGUF;
         }
         if (e.gate_w->type != e.up_w->type) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: pack_gate_up entry %zu gate/up type mismatch (%d vs %d)",
                     error_tag, i, static_cast<int>(e.gate_w->type), static_cast<int>(e.up_w->type));
-            return false;
+            return TRANSCRIBE_ERR_GGUF;
         }
         ggml_tensor * t = ggml_new_tensor_2d(out_handles.ctx, e.gate_w->type, hidden, 2 * intermediate);
         if (t == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: pack_gate_up new_tensor_2d failed at %zu", error_tag, i);
-            return false;
+            return TRANSCRIBE_ERR_OOM;
         }
         *e.gate_up_w_out = t;
     }
@@ -856,7 +856,7 @@ bool pack_gate_up(ggml_backend_t                   backend,
     out_handles.buffer = ggml_backend_alloc_ctx_tensors(out_handles.ctx, backend);
     if (out_handles.buffer == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: pack_gate_up backend buffer alloc failed", error_tag);
-        return false;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_buffer_set_usage(out_handles.buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
@@ -870,7 +870,7 @@ bool pack_gate_up(ggml_backend_t                   backend,
         if (ggml_nbytes(gate_up) != gate_bytes + up_bytes) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: pack_gate_up size mismatch (%zu vs %zu + %zu)", error_tag,
                     ggml_nbytes(gate_up), gate_bytes, up_bytes);
-            return false;
+            return TRANSCRIBE_ERR_GGUF;
         }
         buf.resize(std::max(gate_bytes, up_bytes));
         ggml_backend_tensor_get(e.gate_w, buf.data(), 0, gate_bytes);
@@ -878,7 +878,7 @@ bool pack_gate_up(ggml_backend_t                   backend,
         ggml_backend_tensor_get(e.up_w, buf.data(), 0, up_bytes);
         ggml_backend_tensor_set(gate_up, buf.data(), gate_bytes, up_bytes);
     }
-    return true;
+    return TRANSCRIBE_OK;
 }
 
 transcribe_status run_batched_step_loop(transcribe_session *                session,
@@ -944,7 +944,7 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
         ggml_backend_tensor_set(io.mask, mask_buf.data(), 0, mask_buf.size() * sizeof(ggml_fp16_t));
 
         if (ggml_backend_sched_graph_compute(sched, io.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         ggml_backend_tensor_get(io.argmax, out_buf.data(), 0, out_buf.size() * sizeof(int32_t));
         ++n_steps;

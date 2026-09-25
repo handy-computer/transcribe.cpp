@@ -128,9 +128,10 @@ struct EncDecStepIO {
 
 // Build (or rebuild) the step graph for self-attention window `win`: allocate a
 // fresh compute graph, build it, reset+alloc the scheduler, upload the static
-// cross-attention mask, and fill `io`. Returns false on any failure. Called once
-// at the initial window and again whenever the window must grow.
-using EncDecRebuildFn = std::function<bool(int win, EncDecStepIO & io)>;
+// cross-attention mask, and fill `io`. Returns the failure status (OOM for an
+// allocation failure) or TRANSCRIBE_OK. Called once at the initial window and
+// again whenever the window must grow.
+using EncDecRebuildFn = std::function<transcribe_status(int win, EncDecStepIO & io)>;
 
 // Run the shared greedy enc-dec step loop. Feeds `prompt_ids[0..prompt_len)` as
 // uniform lockstep tokens, then generates until each row emits eos_id, the batch

@@ -520,7 +520,7 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(const BackendPlan &         
     ggml_init_params params   = { ctx_size, nullptr, true };
     ggml_context *   ctx      = ggml_init(params);
     if (ctx == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Allocate F32 replacements in the new ctx, matching each source's
@@ -531,7 +531,7 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(const BackendPlan &         
         ggml_tensor * r = ggml_new_tensor(ctx, GGML_TYPE_F32, ggml_n_dims(s.src), s.src->ne);
         if (r == nullptr) {
             ggml_free(ctx);
-            return TRANSCRIBE_ERR_BACKEND;
+            return TRANSCRIBE_ERR_OOM;
         }
         ggml_set_name(r, s.src->name);
         replacements.push_back(r);
@@ -541,7 +541,7 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(const BackendPlan &         
     if (buffer == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: conv_pw f32 promotion buffer alloc failed", error_tag);
         ggml_free(ctx);
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 

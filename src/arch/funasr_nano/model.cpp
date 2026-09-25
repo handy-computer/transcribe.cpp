@@ -360,7 +360,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -380,10 +380,12 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({ b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w });
         }
-        if (!transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
-                                                 entries, m->packed_gate_up, "funasr_nano")) {
+        if (const transcribe_status st =
+                transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
+                                                    entries, m->packed_gate_up, "funasr_nano");
+            st != TRANSCRIBE_OK) {
             m->packed_gate_up.free();
-            return TRANSCRIBE_ERR_GGUF;
+            return st;
         }
     }
 
@@ -508,7 +510,7 @@ transcribe_status run(transcribe_session *          session,
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: ggml_init for compute_ctx failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -524,7 +526,7 @@ transcribe_status run(transcribe_session *          session,
                                            /*op_offload=*/true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: ggml_backend_sched_new failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
@@ -544,7 +546,7 @@ transcribe_status run(transcribe_session *          session,
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: encoder graph compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->t_encode_us = ggml_time_us() - t_enc_start;
 
@@ -596,6 +598,9 @@ transcribe_status run(transcribe_session *          session,
         ip.mem_buffer   = nullptr;
         ip.no_alloc     = true;
         cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) {
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
 
     AdaptorBuild ab = build_adaptor_graph(cc->compute_ctx, cm->weights, hp, T_lfr);
@@ -612,7 +617,7 @@ transcribe_status run(transcribe_session *          session,
 
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, ab.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: adaptor graph compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     try_dump("adaptor.linear1.out", ab.dumps.linear1_out, "adaptor.linear1");
@@ -783,7 +788,7 @@ transcribe_status run(transcribe_session *          session,
 
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: prefill graph compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     cc->kv_cache.n    = T_prompt;
@@ -845,6 +850,9 @@ transcribe_status run(transcribe_session *          session,
         ip.mem_buffer   = nullptr;
         ip.no_alloc     = true;
         cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) {
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
     StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights, hp, cc->kv_cache, max_n_kv, cc->decoder_use_flash);
     if (sb.graph == nullptr || sb.out == nullptr) {
@@ -883,7 +891,7 @@ transcribe_status run(transcribe_session *          session,
         if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, sb.graph); gs != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: step graph compute failed (%d)",
                     static_cast<int>(gs));
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
 
         int32_t argmax_tok = 0;
@@ -960,7 +968,7 @@ transcribe_status reset_ctx(FunAsrNanoSession * cc, int mb) {
     ip.mem_buffer   = nullptr;
     ip.no_alloc     = true;
     cc->compute_ctx = ggml_init(ip);
-    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_GGUF;
+    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_OOM;
 }
 
 // encoder + adaptor for one utterance from a PRECOMPUTED frontend buffer
@@ -990,12 +998,12 @@ transcribe_status audio_embed_one(FunAsrNanoSession *        cc,
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
                                            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
         if (cc->sched == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(eb.frontend_in, frontend_buf.data(), 0, frontend_buf.size() * sizeof(float));
     transcribe::sanm::build_sinusoidal_pe(cc->pe_buf, hp.enc_d_input, T_lfr);
@@ -1003,7 +1011,7 @@ transcribe_status audio_embed_one(FunAsrNanoSession *        cc,
     apply_thread_policy(cc);
     const int64_t t_enc0 = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     enc_us += ggml_time_us() - t_enc0;
     cc->enc_host.resize(static_cast<size_t>(hp.enc_d_model) * T_lfr);
@@ -1019,12 +1027,12 @@ transcribe_status audio_embed_one(FunAsrNanoSession *        cc,
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, ab.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(ab.enc_in, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
     const int64_t t_enc1 = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, ab.graph) != GGML_STATUS_SUCCESS) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     enc_us += ggml_time_us() - t_enc1;
     cc->adaptor_host.resize(static_cast<size_t>(hp.adaptor_llm_dim) * T_lfr);
@@ -1221,7 +1229,7 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         T_audio_max = std::max(1, T_audio_max);
         if (reset_ctx(cc, 32) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
         PrefillBuildBatched pb = build_prefill_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
                                                              max_T_prompt, T_audio_max, n, cc->decoder_use_flash);
@@ -1230,7 +1238,7 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
 
         const int            hidden = hp.dec_hidden;
@@ -1287,7 +1295,7 @@ transcribe_status run_batch(transcribe_session *          session,
         ggml_backend_tensor_set(pb.last_idx_in, lidx.data(), 0, lidx.size() * sizeof(int32_t));
         apply_thread_policy(cc);
         if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         std::vector<int32_t> amax(n, 0);
         ggml_backend_tensor_get(pb.out, amax.data(), 0, amax.size() * sizeof(int32_t));
@@ -1305,7 +1313,7 @@ transcribe_status run_batch(transcribe_session *          session,
     const int32_t eos_id = cm->hparams.eos_token_id;
 
     if (reset_ctx(cc, 16) != TRANSCRIBE_OK) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     StepBuildBatched sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch, max_n_kv, n,
                                                    cc->decoder_use_flash);
@@ -1314,7 +1322,7 @@ transcribe_status run_batch(transcribe_session *          session,
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     transcribe::causal_lm::StepBatchedIO io{};

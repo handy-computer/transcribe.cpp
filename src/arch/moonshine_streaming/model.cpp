@@ -271,7 +271,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -364,7 +364,7 @@ transcribe_status ensure_sched(MoonshineStreamingSession * cc, MoonshineStreamin
                                        static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
     if (cc->sched == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming: ggml_backend_sched_new failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     return TRANSCRIBE_OK;
 }
@@ -503,7 +503,7 @@ transcribe_status encode_window_to_host(MoonshineStreamingSession * cc,
 
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming encode_window: encoder compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     if (emit_dumps) {
@@ -598,7 +598,7 @@ transcribe_status apply_adapter_window(MoonshineStreamingSession * cc,
 
     if (ggml_backend_sched_graph_compute(cc->sched, ab.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming adapter: compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     if (emit_dumps) {
@@ -681,7 +681,7 @@ transcribe_status project_cross_kv_window(MoonshineStreamingSession *       cc,
 
     if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv_proj: compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     const size_t       per_slice_floats = static_cast<size_t>(dec_h) * static_cast<size_t>(n_frames);
@@ -807,7 +807,7 @@ transcribe_status commit_cross_kv_from_host(MoonshineStreamingSession *         
 
     if (ggml_backend_sched_graph_compute(cc->sched, cb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv_commit: compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->kv_cache.cross_populated = true;
 
@@ -914,7 +914,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         if (ggml_backend_sched_graph_compute(cc->sched, db.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming decode: decoder compute failed (n_past=%d)",
                     n_past_in);
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
 
         if (dump_prompt) {
@@ -1119,7 +1119,7 @@ transcribe_status decode_from_committed_enc(MoonshineStreamingSession *   cc,
         ggml_backend_tensor_set(cross_db.encoder_out_in, adapter_host.data(), 0, adapter_host.size() * sizeof(float));
         if (ggml_backend_sched_graph_compute(cc->sched, cross_db.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming decode: cross_kv compute failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         cc->kv_cache.cross_populated = true;
         cc->t_decode_us += ggml_time_us() - t_xkv_start;
@@ -1950,7 +1950,7 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         ggml_backend_tensor_set(cross.encoder_out_in, packed.data(), 0, packed.size() * sizeof(float));
         if (ggml_backend_sched_graph_compute(cc->sched, cross.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         cc->kv_cache.cross_populated = true;
     }
@@ -1981,30 +1981,30 @@ transcribe_status run_batch(transcribe_session *          session,
     }
 
     StepBuildBatched sb{};
-    auto             rebuild_step = [&](int win) -> bool {
+    auto             rebuild_step = [&](int win) -> transcribe_status {
         if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming run_batch: compute context allocation "
                                 "failed (step) — out of memory.");
-            return false;
+            return TRANSCRIBE_ERR_OOM;
         }
         sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache, win, T_enc_max, n,
                                       /*use_flash=*/true);
         if (sb.graph == nullptr || sb.argmax_out == nullptr) {
-            return false;
+            return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming run_batch: step graph allocation failed — "
                                 "out of memory.");
-            return false;
+            return TRANSCRIBE_ERR_OOM;
         }
         ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0, cmask.size() * sizeof(ggml_fp16_t));
-        return true;
+        return TRANSCRIBE_OK;
     };
-    if (!rebuild_step(kv_window)) {
-        return TRANSCRIBE_ERR_GGUF;
+    if (const transcribe_status st = rebuild_step(kv_window); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     std::vector<ggml_fp16_t>          smask(static_cast<size_t>(kv_window) * n, f16_ninf);
@@ -2030,16 +2030,16 @@ transcribe_status run_batch(transcribe_session *          session,
         ggml_backend_tensor_set(sb.kv_idx_in, kvidx_buf.data(), 0, n * sizeof(int64_t));
         ggml_backend_tensor_set(sb.self_mask_in, smask.data(), 0, smask.size() * sizeof(ggml_fp16_t));
         if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         ggml_backend_tensor_get(sb.argmax_out, argmax_buf.data(), 0, n * sizeof(int32_t));
         return TRANSCRIBE_OK;
     };
 
     // Grow the window (and rebuild the graph + mask) so position `pos` fits.
-    auto ensure_window = [&](int pos) -> bool {
+    auto ensure_window = [&](int pos) -> transcribe_status {
         if (pos + 1 <= kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         int win = kv_window;
         while (win < pos + 1 && win < n_ctx_cap) {
@@ -2049,7 +2049,7 @@ transcribe_status run_batch(transcribe_session *          session,
             win = n_ctx_cap;
         }
         if (win == kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         // Re-fill a wider mask: positions [0, pos) already written for all b.
         std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * n, f16_ninf);
@@ -2066,8 +2066,8 @@ transcribe_status run_batch(transcribe_session *          session,
     for (int b = 0; b < n; ++b) {
         tok_buf[b] = decoder_start;
     }
-    if (run_step(0) != TRANSCRIBE_OK) {
-        return TRANSCRIBE_ERR_GGUF;
+    if (const transcribe_status st = run_step(0); st != TRANSCRIBE_OK) {
+        return st;
     }
     for (int b = 0; b < n; ++b) {
         if (finished[b]) {
@@ -2094,14 +2094,14 @@ transcribe_status run_batch(transcribe_session *          session,
         if (all_done || pos + 1 > n_ctx_cap) {
             break;
         }
-        if (!ensure_window(pos)) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             tok_buf[b] = finished[b] ? eos : next_tok[b];
         }
-        if (run_step(pos) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             if (finished[b]) {
