@@ -228,12 +228,16 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
 // rule is "blank → advance one frame, non-blank → emit + stay, capped by
 // tdt_max_symbols". Per-emit duration_frames is fixed at 1. Same I/O
 // contract and TdtToken result type as decode_tdt_greedy.
-transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
-                                     const float *              enc_out,
-                                     int                        T_enc,
-                                     int                        d_enc,
-                                     int                        n_threads,
-                                     std::vector<TdtToken> &    out_tokens);
+transcribe_status decode_rnnt_greedy(const HostDecoderWeights &   w,
+                                     const float *                enc_out,
+                                     int                          T_enc,
+                                     int                          d_enc,
+                                     int                          n_threads,
+                                     const std::vector<uint8_t> & blocked_language_tokens,
+                                     std::vector<TdtToken> &      out_tokens);
+
+// The mask marks only disallowed locale-tag IDs; every other score is unchanged.
+int argmax_language_masked(const float * data, int n, const std::vector<uint8_t> & blocked_language_tokens);
 
 // Streaming variant of RNN-T greedy decode. Consumes T_enc_new encoder
 // frames (the chunk just produced) and APPENDS emitted tokens to
@@ -242,15 +246,16 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 // index of this chunk's first frame (so step_at_emit lands in
 // stream-wide coordinates). state_io must have been reset to a fresh
 // start-of-sequence state at stream_begin (last_token_io = -1).
-transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
-                                               const float *              enc_out,
-                                               int                        T_enc_new,
-                                               int                        d_enc,
-                                               LstmState &                state_io,
-                                               int &                      last_token_io,
-                                               int                        frame_offset,
-                                               int                        n_threads,
-                                               std::vector<TdtToken> &    out_tokens);
+transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights &   w,
+                                               const float *                enc_out,
+                                               int                          T_enc_new,
+                                               int                          d_enc,
+                                               LstmState &                  state_io,
+                                               int &                        last_token_io,
+                                               int                          frame_offset,
+                                               int                          n_threads,
+                                               const std::vector<uint8_t> & blocked_language_tokens,
+                                               std::vector<TdtToken> &      out_tokens);
 
 // Run CTC greedy decode end-to-end. Per-frame: logits = W @ enc[t] + b,
 // argmax; collapse rule "drop adjacent duplicates, then drop blanks"

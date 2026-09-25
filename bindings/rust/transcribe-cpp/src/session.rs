@@ -35,6 +35,8 @@ pub struct RunOptions {
     pub diarize: Diarize,
     /// Source language hint (ISO code), or `None` to autodetect.
     pub language: Option<String>,
+    /// Limit decoded language tags in automatic mode. Empty is unrestricted.
+    pub allowed_languages: Vec<String>,
     /// Target language for translation, or `None`.
     pub target_language: Option<String>,
     /// Keep special vocab tags (e.g. `<|...|>`) in the returned text.
@@ -54,6 +56,7 @@ impl Default for RunOptions {
             itn: Itn::Default,
             diarize: Diarize::Default,
             language: None,
+            allowed_languages: Vec::new(),
             target_language: None,
             keep_special_tags: false,
             spec_k_drafts: -1,
@@ -148,7 +151,7 @@ impl Session {
     /// On an aborted or truncated decode the partial transcript is preserved
     /// on the returned [`Error::Aborted`] / [`Error::OutputTruncated`].
     pub fn run(&mut self, pcm: &[f32], options: &RunOptions) -> Result<Transcript> {
-        let (params, _lang, _target, _family) = build_run_params(options)?;
+        let (params, _lang, _target, _family, _allowed, _allowed_ptrs) = build_run_params(options)?;
         let n = clamp_len(pcm.len())?;
 
         // The compute path is serialized per model; hold the lock for the native
@@ -191,7 +194,7 @@ impl Session {
         pcms: &[&[f32]],
         options: &RunOptions,
     ) -> Result<Vec<Result<Transcript>>> {
-        let (params, _lang, _target, _family) = build_run_params(options)?;
+        let (params, _lang, _target, _family, _allowed, _allowed_ptrs) = build_run_params(options)?;
         let ptrs: Vec<*const f32> = pcms.iter().map(|p| p.as_ptr()).collect();
         let lens: Vec<i32> = pcms
             .iter()
@@ -267,7 +270,7 @@ impl Session {
     /// Dropping the returned `Stream` abandons it and returns the session to
     /// idle.
     pub fn stream(&mut self, run: &RunOptions, stream: &StreamOptions) -> Result<Stream<'_>> {
-        let (run_params, _lang, _target, _family) = build_run_params(run)?;
+        let (run_params, _lang, _target, _family, _allowed, _allowed_ptrs) = build_run_params(run)?;
         let (stream_params, _stream_family) = build_stream_params(stream);
         {
             // Claim the model's compute lease for the whole stream lifetime: a
@@ -423,6 +426,8 @@ type RunParamsBundle = (
     Option<CString>,
     Option<CString>,
     Option<RunExtRaw>,
+    Vec<CString>,
+    Vec<*const std::os::raw::c_char>,
 );
 
 /// Build `transcribe_run_params` from options. The returned keepalives own the
@@ -444,6 +449,20 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
     let target = o.target_language.as_deref().map(CString::new).transpose()?;
     params.language = lang.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
     params.target_language = target.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let allowed: Vec<CString> = o
+        .allowed_languages
+        .iter()
+        .map(|code| CString::new(code.as_str()))
+        .collect::<std::result::Result<_, _>>()?;
+    let allowed_ptrs: Vec<*const std::os::raw::c_char> =
+        allowed.iter().map(|code| code.as_ptr()).collect();
+    params.n_allowed_languages = i32::try_from(allowed_ptrs.len())
+        .map_err(|_| Error::InvalidArgument("too many allowed languages".into()))?;
+    params.allowed_languages = if allowed_ptrs.is_empty() {
+        std::ptr::null()
+    } else {
+        allowed_ptrs.as_ptr()
+    };
 
     let family = o
         .family
@@ -452,7 +471,29 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
         .transpose()?;
     params.family = family.as_ref().map_or(std::ptr::null(), |f| f.ext_ptr());
 
-    Ok((params, lang, target, family))
+    Ok((params, lang, target, family, allowed, allowed_ptrs))
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+
+    #[test]
+    fn run_options_keep_allowed_language_strings_alive() {
+        let options = RunOptions {
+            allowed_languages: vec!["en-US".into(), "de-DE".into()],
+            ..Default::default()
+        };
+        let (params, _, _, _, codes, pointers) = build_run_params(&options).unwrap();
+        assert_eq!(params.n_allowed_languages, 2);
+        assert_eq!(params.allowed_languages, pointers.as_ptr());
+        assert_eq!(codes[0].to_str().unwrap(), "en-US");
+        assert_eq!(codes[1].to_str().unwrap(), "de-DE");
+
+        let (empty, _, _, _, _, _) = build_run_params(&RunOptions::default()).unwrap();
+        assert_eq!(empty.n_allowed_languages, 0);
+        assert!(empty.allowed_languages.is_null());
+    }
 }
 
 /// PCM/utterance lengths cross the ABI as `int`; reject anything that overflows.

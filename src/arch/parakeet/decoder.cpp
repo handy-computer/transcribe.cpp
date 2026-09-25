@@ -965,6 +965,26 @@ int argmax_range(const float * data, int n) {
     return best_i;
 }
 
+}  // namespace
+
+int argmax_language_masked(const float * data, int n, const std::vector<uint8_t> & blocked_language_tokens) {
+    if (blocked_language_tokens.empty()) {
+        return argmax_range(data, n);
+    }
+    int best = -1;
+    for (int i = 0; i < n; ++i) {
+        if (i < static_cast<int>(blocked_language_tokens.size()) && blocked_language_tokens[i]) {
+            continue;
+        }
+        if (best < 0 || data[i] > data[best]) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+namespace {
+
 // Entropy-based confidence over a token-logit slice. Mirrors the
 // reference ParakeetTDT.decode_greedy path:
 //
@@ -1238,12 +1258,13 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
 // duration). Matches the reference dump points (`dec.embed.0`,
 // `dec.lstm.{layer}.{h,c}.0`, `dec.joint.0`) emitted on iter 1.
 
-transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
-                                     const float *              enc_out,
-                                     int                        T_enc,
-                                     int                        d_enc,
-                                     int                        n_threads,
-                                     std::vector<TdtToken> &    out_tokens) {
+transcribe_status decode_rnnt_greedy(const HostDecoderWeights &   w,
+                                     const float *                enc_out,
+                                     int                          T_enc,
+                                     int                          d_enc,
+                                     int                          n_threads,
+                                     const std::vector<uint8_t> & blocked_language_tokens,
+                                     std::vector<TdtToken> &      out_tokens) {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1331,7 +1352,10 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 
         // RNNT joint output is just `n_token_cls` floats (no duration extras).
         const float * token_logits = logits.data();
-        const int     pred_token   = argmax_range(token_logits, n_token_cls);
+        const int     pred_token   = argmax_language_masked(token_logits, n_token_cls, blocked_language_tokens);
+        if (pred_token < 0) {
+            return TRANSCRIBE_ERR_BACKEND;
+        }
 
         if (iter == 1 && transcribe::debug::enabled()) {
             const long long s_h = H;
@@ -1400,15 +1424,16 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 // LSTM state (state_io) and previous token (last_token_io). The
 // chunk's encoder frames are decoded in stream-wide coordinates
 // (step_at_emit = frame_offset + local_step). No timing log.
-transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
-                                               const float *              enc_out,
-                                               int                        T_enc_new,
-                                               int                        d_enc,
-                                               LstmState &                state_io,
-                                               int &                      last_token_io,
-                                               int                        frame_offset,
-                                               int                        n_threads,
-                                               std::vector<TdtToken> &    out_tokens) {
+transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights &   w,
+                                               const float *                enc_out,
+                                               int                          T_enc_new,
+                                               int                          d_enc,
+                                               LstmState &                  state_io,
+                                               int &                        last_token_io,
+                                               int                          frame_offset,
+                                               int                          n_threads,
+                                               const std::vector<uint8_t> & blocked_language_tokens,
+                                               std::vector<TdtToken> &      out_tokens) {
     if (enc_out == nullptr || T_enc_new <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1509,7 +1534,10 @@ transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
         }
 
         const float * token_logits = logits.data();
-        const int     pred_token   = argmax_range(token_logits, n_token_cls);
+        const int     pred_token   = argmax_language_masked(token_logits, n_token_cls, blocked_language_tokens);
+        if (pred_token < 0) {
+            return TRANSCRIBE_ERR_BACKEND;
+        }
 
         const bool is_blank = (pred_token == blank_id);
         if (is_blank) {

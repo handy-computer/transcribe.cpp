@@ -678,6 +678,54 @@ static bool is_lang_tag_piece(const std::string & p) {
     return i == end;  // interior consumed exactly up to '>'
 }
 
+}  // namespace
+
+transcribe_status resolve_language_block_mask(const ParakeetModel *         pm,
+                                              const transcribe_run_params * params,
+                                              std::vector<uint8_t> &        mask) {
+    mask.clear();
+    if (params == nullptr || params->language != nullptr ||
+        params->struct_size < offsetof(transcribe_run_params, allowed_languages) + sizeof(params->allowed_languages) ||
+        params->n_allowed_languages == 0) {
+        return TRANSCRIBE_OK;
+    }
+    if (params->n_allowed_languages < 0 || params->allowed_languages == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (!pm->hparams.has_prompt || pm->host_decoder.head_kind != HostHeadKind::RNNT) {
+        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    }
+    std::vector<int> allowed_ids;
+    for (int i = 0; i < params->n_allowed_languages; ++i) {
+        const char * code = params->allowed_languages[i];
+        if (code == nullptr || *code == '\0') {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        bool supported = false;
+        for (int j = 0; pm->caps.languages != nullptr && j < pm->caps.n_languages; ++j) {
+            if (pm->caps.languages[j] != nullptr && std::strcmp(code, pm->caps.languages[j]) == 0) {
+                supported = true;
+                break;
+            }
+        }
+        const int id = pm->tok.find("<" + std::string(code) + ">");
+        if (!supported || id < 0 || id >= pm->host_decoder.n_vocab || !is_lang_tag_piece(pm->tok.token(id))) {
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+        allowed_ids.push_back(id);
+    }
+    mask.resize(static_cast<size_t>(pm->tok.n_tokens()), 0);
+    for (int id = 0; id < pm->tok.n_tokens(); ++id) {
+        if (is_lang_tag_piece(pm->tok.token(id)) &&
+            std::find(allowed_ids.begin(), allowed_ids.end(), id) == allowed_ids.end()) {
+            mask[static_cast<size_t>(id)] = 1;
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+namespace {
+
 // Drop this piece from the public result when keep_special_tags is off:
 // stripped if CONTROL-typed or matching the <ll-RR> locale-tag pattern
 // (transitional fallback). Shared by the offline and streaming builders.
@@ -730,6 +778,11 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
                                              int                           d_enc,
                                              int                           utt_index,
                                              const char *                  enc_dump_name_override = nullptr) {
+    std::vector<uint8_t> language_block_mask;
+    if (const transcribe_status st = resolve_language_block_mask(pm, params, language_block_mask);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
     // Default dump name is "dec.enc_out"; the prompt-conditioned path
     // overrides to "dec.enc_out_prompted" so the comparator sees the
     // post-prompt tensor under its expected filename.
@@ -758,7 +811,8 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
                 st = decode_tdt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
                 break;
             case HostHeadKind::RNNT:
-                st = decode_rnnt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
+                st = decode_rnnt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, language_block_mask,
+                                        pc->raw_tokens);
                 break;
             case HostHeadKind::CTC:
                 st = decode_ctc_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
@@ -2217,7 +2271,7 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
     if (const transcribe_status st = decode_rnnt_greedy_streaming(
             pm->host_decoder, pc->enc_host.data(), T_q_new, d_enc, pc->stream_dec_state.lstm_state,
             pc->stream_dec_state.prev_token_id, static_cast<int>(pc->stream_dec_state.frame_offset), pc->n_threads,
-            pc->raw_tokens);
+            pc->stream_language_block_mask, pc->raw_tokens);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -2610,7 +2664,7 @@ transcribe_status emit_buffered_chunk(ParakeetSession * pc,
     if (const transcribe_status st = decode_rnnt_greedy_streaming(
             pm->host_decoder, enc_chunk, T_to_decode, d_enc, pc->stream_dec_state.lstm_state,
             pc->stream_dec_state.prev_token_id, static_cast<int>(pc->stream_dec_state.frame_offset), pc->n_threads,
-            pc->raw_tokens);
+            pc->stream_language_block_mask, pc->raw_tokens);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -2784,13 +2838,18 @@ transcribe_status resolve_cache_aware_stream_geom(const ParakeetModel *         
 // Pre-flight: validate caller extension fields without mutating state.
 // Called by the dispatcher before clear_result, so a rejection leaves the
 // previous snapshot intact. stream_begin re-runs the same resolvers.
-transcribe_status stream_validate(const transcribe_session * session,
-                                  const transcribe_run_params * /*run_params*/,
+transcribe_status stream_validate(const transcribe_session *       session,
+                                  const transcribe_run_params *    run_params,
                                   const transcribe_stream_params * stream_params) {
     const auto * pc = static_cast<const ParakeetSession *>(session);
     const auto * pm = static_cast<const ParakeetModel *>(pc->model);
     if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    std::vector<uint8_t> language_block_mask;
+    if (const transcribe_status st = resolve_language_block_mask(pm, run_params, language_block_mask);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
 
     const bool is_chunked_limited =
@@ -2817,6 +2876,10 @@ transcribe_status stream_begin(transcribe_session *             session,
     auto * pm = static_cast<ParakeetModel *>(pc->model);
     if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const transcribe_status st = resolve_language_block_mask(pm, run_params, pc->stream_language_block_mask);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
 
     // Streaming may run without going through run(), so init the dumper here.
