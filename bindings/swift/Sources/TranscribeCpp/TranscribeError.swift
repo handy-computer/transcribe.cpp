@@ -74,6 +74,30 @@ public enum TranscribeError: Error {
         }
     }
 
+    /// The partial transcript carried by `.aborted` / `.outputTruncated` /
+    /// `.outputRepetition`, if any; `nil` for every other case.
+    public var partial: Transcript? {
+        switch self {
+        case .aborted(_, let partial), .outputTruncated(_, let partial), .outputRepetition(_, let partial):
+            return partial
+        default:
+            return nil
+        }
+    }
+
+    /// True when the decode stopped before end-of-stream, at the generation
+    /// budget (`.outputTruncated`) or because the output began repeating
+    /// (`.outputRepetition`), as `transcribe_was_truncated` reports it. The
+    /// transcript in `partial` is incomplete.
+    public var isTruncated: Bool {
+        switch self {
+        case .outputTruncated, .outputRepetition:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Throw the mapped error unless `status` is `TRANSCRIBE_OK`.
     static func check(_ status: transcribe_status, context: String = "") throws {
         guard status != TRANSCRIBE_OK else { return }

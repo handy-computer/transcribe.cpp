@@ -64,8 +64,7 @@ int tail_block(const std::vector<int32_t> & ids) {
 }
 
 int budget_tail_block(const std::vector<int32_t> & ids) {
-    return transcribe::repeating_tail_block(ids.data(), static_cast<int>(ids.size()),
-                                            transcribe::k_budget_trim_min_copies, transcribe::k_budget_trim_min_tokens);
+    return transcribe::repeating_tail_block(ids.data(), static_cast<int>(ids.size()), transcribe::k_budget_trim_bar);
 }
 
 std::vector<int32_t> budget_trimmed(std::vector<int32_t> ids) {
@@ -78,7 +77,8 @@ std::vector<int32_t> budget_trimmed(std::vector<int32_t> ids) {
 int main(void) {
     const std::vector<int32_t> prefix = seq(1000, 10);
 
-    // Stop thresholds: 8 copies covering at least 64 tokens.
+    // Stop thresholds: 8 copies covering at least 64 tokens, tapering to 4
+    // copies once the copies cover 192 tokens.
     expect("empty is not a loop", tail_block({}) == 0);
     expect("distinct tokens are not a loop", tail_block(seq(1, 200)) == 0);
     expect("1-token block x63 is not a loop", tail_block(repeat({ 7 }, 63)) == 0);
@@ -92,8 +92,29 @@ int main(void) {
     expect("20-token block x4 is not a loop", tail_block(repeat(seq(1, 20), 4)) == 0);
     expect("20-token block x7 is not a loop", tail_block(repeat(seq(1, 20), 7)) == 0);
     expect("20-token block x8 is a loop", tail_block(repeat(seq(1, 20), 8)) == 20);
-    expect("64-token block x8 is a loop", tail_block(repeat(seq(1, 64), 8)) == 64);
-    expect("65-token block is past the limit", tail_block(repeat(seq(1, 65), 10)) == 0);
+    expect("30-token block x6 is not a loop", tail_block(repeat(seq(1, 30), 6)) == 0);
+    expect("30-token block x7 is a loop", tail_block(repeat(seq(1, 30), 7)) == 30);
+    expect("47-token block x4 is not a loop", tail_block(repeat(seq(1, 47), 4)) == 0);
+    expect("47-token block x5 is a loop", tail_block(repeat(seq(1, 47), 5)) == 47);
+    expect("48-token block x3 is not a loop", tail_block(repeat(seq(1, 48), 3)) == 0);
+    expect("48-token block x4 is a loop", tail_block(repeat(seq(1, 48), 4)) == 48);
+    expect("64-token block x4 is a loop", tail_block(repeat(seq(1, 64), 4)) == 64);
+    expect("128-token block x3 is not a loop", tail_block(repeat(seq(1, 128), 3)) == 0);
+    expect("128-token block x4 is a loop", tail_block(repeat(seq(1, 128), 4)) == 128);
+    expect("129-token block is past the limit", tail_block(repeat(seq(1, 129), 10)) == 0);
+    {
+        // Longer blocks never need more copies, and past the taper the copies
+        // always span at least 192 tokens.
+        bool monotonic = true;
+        bool spans_192 = true;
+        for (int block = 2; block <= transcribe::k_stop_bar.max_block; ++block) {
+            const int copies = transcribe::repeat_copies_needed(transcribe::k_stop_bar, block);
+            monotonic = monotonic && copies <= transcribe::repeat_copies_needed(transcribe::k_stop_bar, block - 1);
+            spans_192 = spans_192 && (block < 24 || copies * block >= 192);
+        }
+        expect("copies needed never grow with the block", monotonic);
+        expect("tapered copies span at least 192 tokens", spans_192);
+    }
     expect("smallest period wins", tail_block(repeat({ 7, 8 }, 64)) == 2);
     expect("loop after a prefix", tail_block(cat(prefix, repeat(seq(1, 10), 8))) == 10);
     expect("a broken final copy is not a loop", tail_block(cat(repeat(seq(1, 10), 9), { 99 })) == 0);
@@ -105,6 +126,10 @@ int main(void) {
     expect("budget: 8-token block x4 is a loop", budget_tail_block(repeat(seq(1, 8), 4)) == 8);
     expect("budget: 1-token block x31 is not a loop", budget_tail_block(repeat({ 7 }, 31)) == 0);
     expect("budget: 1-token block x32 is a loop", budget_tail_block(repeat({ 7 }, 32)) == 1);
+    expect("budget: 100-token block x2 is not a loop", budget_tail_block(repeat(seq(1, 100), 2)) == 0);
+    expect("budget: 100-token block x3 is a loop", budget_tail_block(repeat(seq(1, 100), 3)) == 100);
+    expect("budget: 256-token block x3 is a loop", budget_tail_block(repeat(seq(1, 256), 3)) == 256);
+    expect("budget: 257-token block is past the limit", budget_tail_block(repeat(seq(1, 257), 3)) == 0);
 
     // Trimming keeps the prefix and one copy.
     {
@@ -149,6 +174,12 @@ int main(void) {
         const Decoded              d      = decode(stream);
         expect("12-token line x7 keeps decoding", d.stopped_at == -1 && d.ids == stream);
     }
+    {
+        // A long passage repeated a few times, then more speech.
+        const std::vector<int32_t> stream = cat(cat(prefix, repeat(seq(1, 40), 4)), seq(2000, 40));
+        const Decoded              d      = decode(stream);
+        expect("40-token passage x4 keeps decoding", d.stopped_at == -1 && d.ids == stream);
+    }
 
     // A runaway loop stops as soon as it qualifies, keeping prefix + one copy.
     {
@@ -160,8 +191,15 @@ int main(void) {
     {
         const std::vector<int32_t> loop = seq(1, 30);
         const Decoded              d    = decode(cat(prefix, repeat(loop, 10)));
-        expect("30-token sentence loop stops", d.stopped_at == 10 + 8 * 30);
+        expect("30-token sentence loop stops after 7 copies", d.stopped_at == 10 + 7 * 30);
         expect("30-token sentence loop keeps prefix + one copy", d.ids == cat(prefix, loop));
+    }
+    {
+        // A paragraph loop, past the old 64-token block limit.
+        const std::vector<int32_t> loop = seq(1, 100);
+        const Decoded              d    = decode(cat(prefix, repeat(loop, 10)));
+        expect("100-token paragraph loop stops after 4 copies", d.stopped_at == 10 + 4 * 100);
+        expect("100-token paragraph loop keeps prefix + one copy", d.ids == cat(prefix, loop));
     }
     {
         const Decoded d = decode(repeat({ 5 }, 100));
@@ -176,6 +214,9 @@ int main(void) {
         expect("budget stop drops a 3-copy tail", budget_trimmed(cat(prefix, repeat(loop, 3))) == cat(prefix, loop));
         const std::vector<int32_t> twice = cat(prefix, repeat(loop, 2));
         expect("budget stop keeps a 2-copy tail", budget_trimmed(twice) == twice);
+        const std::vector<int32_t> paragraph = seq(3000, 150);
+        expect("budget stop drops a 3-copy 150-token tail",
+               budget_trimmed(cat(prefix, repeat(paragraph, 3))) == cat(prefix, paragraph));
         const std::vector<int32_t> no_no = cat(prefix, repeat({ 42, 43 }, 6));
         expect("budget stop keeps 'no, no, no, no, no, no'", budget_trimmed(no_no) == no_no);
         const std::vector<int32_t> clean = cat(prefix, seq(2000, 40));

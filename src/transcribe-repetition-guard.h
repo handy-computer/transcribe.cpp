@@ -21,22 +21,37 @@
 
 namespace transcribe {
 
-// A block repeating at the tail is a loop once it has min_copies copies
-// covering at least min_tokens. Short blocks need many more copies (a 1-token
-// block needs 64 to stop), so emphatic and sung repetition survives.
-constexpr int k_repeat_max_block       = 64;
-constexpr int k_repeat_min_copies      = 8;
-constexpr int k_repeat_min_tokens      = 64;
-constexpr int k_budget_trim_min_copies = 3;
-constexpr int k_budget_trim_min_tokens = 32;
+// When a block repeating at the tail counts as a loop. The evidence is how
+// many tokens repeat verbatim, so a block needs `copies` copies spanning at
+// least `min_tokens`, but once that span passes `max_tokens` it only has to
+// cover `max_tokens`, with at least `min_copies` copies. Short blocks need many
+// more copies (a 1-token block needs 64 to stop), so emphatic and sung
+// repetition survives; a paragraph-length loop stops before the budget.
+struct RepeatBar {
+    int max_block;   // longest block looked for
+    int copies;      // copies a block needs...
+    int min_tokens;  // ...spanning at least this many tokens...
+    int max_tokens;  // ...or at most this many...
+    int min_copies;  // ...in no fewer than this many copies
+};
+
+// Stop mid-decode: 8 copies of a block up to 27 tokens, tapering to 4 copies
+// of a 48-128-token block (192-512 tokens), which fits the decode budgets.
+constexpr RepeatBar k_stop_bar        = { 128, 8, 64, 192, 4 };
+// Trim at a budget stop: 3 copies spanning at least 32 tokens (max_tokens
+// never binds). The trim runs once per decode, so it looks for longer blocks.
+constexpr RepeatBar k_budget_trim_bar = { 256, 3, 32, 256 * 3, 3 };
+
+// Copies of a `block`-token block that make a loop under `bar`.
+constexpr int repeat_copies_needed(const RepeatBar & bar, int block) {
+    const int span = std::min(std::max(bar.copies * block, bar.min_tokens), bar.max_tokens);
+    return std::max(bar.min_copies, (span + block - 1) / block);
+}
 
 // Length of the block repeating at the end of ids[0, n), or 0.
-inline int repeating_tail_block(const int32_t * ids,
-                                int             n,
-                                int             min_copies = k_repeat_min_copies,
-                                int             min_tokens = k_repeat_min_tokens) {
-    for (int block = 1; block <= k_repeat_max_block; ++block) {
-        const int copies = std::max(min_copies, (min_tokens + block - 1) / block);
+inline int repeating_tail_block(const int32_t * ids, int n, const RepeatBar & bar = k_stop_bar) {
+    for (int block = 1; block <= bar.max_block; ++block) {
+        const int copies = repeat_copies_needed(bar, block);
         const int span   = block * copies;
         if (span > n) {
             continue;
@@ -69,11 +84,14 @@ inline bool repetition_guard_enabled() {
     return enabled;
 }
 
-// Call after appending a token. On a loop, trims `ids` to one copy, logs a WARN
-// tagged `who`, and returns true: the caller stops decoding and reports
+// Call after appending a token. On a loop, trims `ids` to one copy, logs at
+// `level` (a WARN unless the decode is an interim one) tagged `who`, and
+// returns true: the caller stops decoding and reports
 // TRANSCRIBE_ERR_OUTPUT_REPETITION, since whatever the audio said after the
 // loop was never decoded.
-inline bool stop_on_repetition(std::vector<int32_t> & ids, const char * who) {
+inline bool stop_on_repetition(std::vector<int32_t> & ids,
+                               const char *           who,
+                               transcribe_log_level   level = TRANSCRIBE_LOG_LEVEL_WARN) {
     if (!repetition_guard_enabled()) {
         return false;
     }
@@ -83,7 +101,7 @@ inline bool stop_on_repetition(std::vector<int32_t> & ids, const char * who) {
         return false;
     }
     ids.resize(static_cast<size_t>(trim_repeating_tail(ids.data(), n, block)));
-    log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+    log_msg(level,
             "%s: output began repeating a %d-token block; decode stopped with the repeats dropped (%d tokens "
             "kept). The transcript may be incomplete.",
             who, block, static_cast<int>(ids.size()));
@@ -92,23 +110,25 @@ inline bool stop_on_repetition(std::vector<int32_t> & ids, const char * who) {
 
 // Call once when a decode stopped at its budget or context window before eos.
 // Drops the repeats of a block repeating at the tail, at the lower budget-stop
-// bar, and logs what it dropped.
-inline void trim_repetition_at_budget_stop(std::vector<int32_t> & ids, const char * who) {
+// bar, and logs what it dropped at `level`.
+inline void trim_repetition_at_budget_stop(std::vector<int32_t> & ids,
+                                           const char *           who,
+                                           transcribe_log_level   level = TRANSCRIBE_LOG_LEVEL_WARN) {
     if (!repetition_guard_enabled()) {
         return;
     }
     const int n     = static_cast<int>(ids.size());
-    const int block = repeating_tail_block(ids.data(), n, k_budget_trim_min_copies, k_budget_trim_min_tokens);
+    const int block = repeating_tail_block(ids.data(), n, k_budget_trim_bar);
     if (block == 0) {
         return;
     }
     ids.resize(static_cast<size_t>(trim_repeating_tail(ids.data(), n, block)));
-    log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: dropped %d tokens of a repeating %d-token block at the budget stop", who,
+    log_msg(level, "%s: dropped %d tokens of a repeating %d-token block at the budget stop", who,
             n - static_cast<int>(ids.size()), block);
 }
 
 // Why a batched decode row stopped, as reported through a shared step loop's
-// truncated_out. Non-zero means the row never reached eos.
+// stop_out. Non-zero means the row never reached eos.
 enum DecodeStop : char {
     k_stop_eos        = 0,
     k_stop_budget     = 1,  // generation budget or context window

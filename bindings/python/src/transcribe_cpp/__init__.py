@@ -1130,7 +1130,8 @@ class Session:
                    "transcribe_run")
         except (Aborted, OutputTruncated) as exc:
             # The C API preserves the partial transcript on the session for
-            # exactly these two statuses; surface it rather than discard it.
+            # these statuses (OutputRepetition included, as an OutputTruncated
+            # subclass); surface it rather than discard it.
             exc.partial_result = self._materialize()
             raise
         return self._materialize()

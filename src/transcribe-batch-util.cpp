@@ -251,7 +251,7 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
                                                const std::vector<char> &           valid,
                                                std::vector<std::vector<int32_t>> & generated,
                                                int *                               n_steps_out,
-                                               std::vector<char> *                 truncated_out) {
+                                               std::vector<char> *                 stop_out) {
     const int         n        = n_batch;
     const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity());
@@ -419,8 +419,8 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
             trim_repetition_at_budget_stop(generated[b], "batched decode");
         }
     }
-    if (truncated_out != nullptr) {
-        *truncated_out = std::move(stop);
+    if (stop_out != nullptr) {
+        *stop_out = std::move(stop);
     }
     return TRANSCRIBE_OK;
 }

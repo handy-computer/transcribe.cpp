@@ -76,6 +76,7 @@ static void test_status_string(void) {
         TRANSCRIBE_ERR_UNSUPPORTED_ITN,
         TRANSCRIBE_ERR_INPUT_TOO_LONG,
         TRANSCRIBE_ERR_OUTPUT_TRUNCATED,
+        TRANSCRIBE_ERR_OUTPUT_REPETITION,
     };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
         const char * s = transcribe_status_string(all[i]);

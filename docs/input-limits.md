@@ -98,9 +98,11 @@ chunk size.
 A greedy decode can also fall into repeating one phrase until the budget runs
 out. The greedy families (`canary`, `canary_qwen`, `cohere`, `funasr_nano`,
 `granite`, `moonshine`, `moonshine_streaming`, `moss`, `qwen3_asr`, `voxtral`)
-stop as soon as a block of up to 64 tokens has repeated at least 8 times and
-the copies cover at least 64 tokens (a single repeated token needs 64 copies,
-a sentence-length block 8). The bar is high on purpose: stopping early loses
+stop as soon as a block of up to 128 tokens has repeated verbatim enough
+times: 8 copies covering at least 64 tokens, but never more than 192 tokens'
+worth, and never fewer than 4 copies. A single repeated token needs 64
+copies, a sentence-length block (up to 27 tokens) 8, and a paragraph-length
+block of 48 tokens or more 4. The bar is high on purpose: stopping early loses
 whatever the audio said after the loop, so a line sung or chanted a few times
 must not trigger it. The repeats are dropped, leaving one copy, and the run
 returns `TRANSCRIBE_ERR_OUTPUT_REPETITION` with a `WARN`. Like
@@ -108,8 +110,8 @@ returns `TRANSCRIBE_ERR_OUTPUT_REPETITION` with a `WARN`. Like
 and `transcribe_was_truncated()` is true.
 
 A decode that runs out of budget has already failed, so the cleanup bar there
-is lower: if the partial ends in a block repeated at least 3 times over at
-least 32 tokens, the repeats are dropped before the transcript is returned
+is lower: if the partial ends in a block of up to 256 tokens repeated at
+least 3 times over at least 32 tokens, the repeats are dropped before the transcript is returned
 (still `OUTPUT_TRUNCATED`, with a `WARN` saying how many tokens were dropped).
 
 `whisper` is excluded because it recovers from loops with its own temperature

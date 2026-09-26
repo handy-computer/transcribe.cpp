@@ -1721,7 +1721,9 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * ses
  *     reached its absolute position cap (forcing the stream to FAILED would
  *     discard the committed text the caller has been consuming). There, this
  *     flag is the ONLY signal of truncation: a streaming caller must check
- *     it after finalize.
+ *     it after finalize. A family that re-decodes the stream from the start
+ *     on each feed (moonshine_streaming) sets it from its latest decode, so
+ *     after finalize it describes the final transcript.
  *
  * Distinct from the "couldn't start" rejection: input that cannot fit at
  * all is rejected before the decode with TRANSCRIBE_ERR_INPUT_TOO_LONG;

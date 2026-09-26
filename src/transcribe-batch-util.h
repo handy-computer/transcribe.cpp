@@ -159,7 +159,7 @@ using EncDecRebuildFn = std::function<transcribe_status(int win, EncDecStepIO & 
 // step. Returns TRANSCRIBE_ERR_ABORTED / TRANSCRIBE_ERR_GGUF / TRANSCRIBE_OK;
 // *n_steps_out (if non-null) receives the number of compute steps run.
 //
-// truncated_out (if non-null) is sized to n_batch and set per row to why that
+// stop_out (if non-null) is sized to n_batch and set per row to why that
 // row stopped (transcribe::DecodeStop): k_stop_budget when a valid row hit the
 // generation budget (max_new) or the context window (max_n_kv) before eos_id,
 // k_stop_repetition when the repetition guard stopped it, else k_stop_eos.
@@ -178,7 +178,7 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
                                                int                                 n_batch,
                                                const std::vector<char> &           valid,
                                                std::vector<std::vector<int32_t>> & generated,
-                                               int *                               n_steps_out   = nullptr,
-                                               std::vector<char> *                 truncated_out = nullptr);
+                                               int *                               n_steps_out = nullptr,
+                                               std::vector<char> *                 stop_out    = nullptr);
 
 }  // namespace transcribe

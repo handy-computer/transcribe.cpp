@@ -38,6 +38,16 @@ final class NoModelTests: XCTestCase {
         XCTAssertFalse(Transcribe.statusString(3).isEmpty)  // ERR_FILE_NOT_FOUND
     }
 
+    func testTruncationStatusesShareOneCheck() {
+        // A handler for incomplete transcripts covers both cut-short statuses.
+        XCTAssertTrue(TranscribeError.outputTruncated(message: "", partial: nil).isTruncated)
+        XCTAssertTrue(TranscribeError.outputRepetition(message: "", partial: nil).isTruncated)
+        XCTAssertFalse(TranscribeError.aborted(message: "", partial: nil).isTruncated)
+        XCTAssertFalse(TranscribeError.inputTooLong("").isTruncated)
+        XCTAssertNil(TranscribeError.outputRepetition(message: "", partial: nil).partial)
+        XCTAssertNil(TranscribeError.inputTooLong("").partial)
+    }
+
     func testAtLeastOneDevice() {
         XCTAssertGreaterThanOrEqual(Transcribe.devices().count, 1)
     }

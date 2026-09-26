@@ -892,7 +892,7 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
                                         const StepBatchedState &            state,
                                         std::vector<std::vector<int32_t>> & generated,
                                         StepLoopStats *                     stats,
-                                        std::vector<char> *                 truncated_out) {
+                                        std::vector<char> *                 stop_out) {
     const int n = n_batch;
 
     // Per-row working state.
@@ -1000,8 +1000,8 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
             trim_repetition_at_budget_stop(generated[b], "batched decode");
         }
     }
-    if (truncated_out != nullptr) {
-        *truncated_out = std::move(stop);
+    if (stop_out != nullptr) {
+        *stop_out = std::move(stop);
     }
     return TRANSCRIBE_OK;
 }

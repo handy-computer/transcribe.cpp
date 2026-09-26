@@ -341,7 +341,7 @@ struct StepLoopStats {
 // and allocated on `sched`. Returns TRANSCRIBE_ERR_ABORTED on abort,
 // TRANSCRIBE_ERR_GGUF on a compute failure, else TRANSCRIBE_OK.
 //
-// truncated_out (if non-null) receives each row's transcribe::DecodeStop, as
+// stop_out (if non-null) receives each row's transcribe::DecodeStop, as
 // in run_batched_encdec_step_loop; a budget-stopped row has its repeating tail
 // trimmed.
 transcribe_status run_batched_step_loop(transcribe_session *                session,
@@ -353,7 +353,7 @@ transcribe_status run_batched_step_loop(transcribe_session *                sess
                                         int                                 max_new,
                                         const StepBatchedState &            state,
                                         std::vector<std::vector<int32_t>> & generated,
-                                        StepLoopStats *                     stats         = nullptr,
-                                        std::vector<char> *                 truncated_out = nullptr);
+                                        StepLoopStats *                     stats    = nullptr,
+                                        std::vector<char> *                 stop_out = nullptr);
 
 }  // namespace transcribe::causal_lm

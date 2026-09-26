@@ -824,7 +824,8 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
                                        MoonshineStreamingModel *     cm,
                                        int                           T_enc,
                                        const transcribe_run_params * params,
-                                       bool                          emit_dumps) {
+                                       bool                          emit_dumps,
+                                       bool                          interim) {
     (void) params;
 
     if (cc->poll_abort()) {
@@ -843,6 +844,15 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
 
     const auto &  hp             = cm->hparams;
     const int64_t t_decode_start = ggml_time_us();
+
+    // The truncation flags describe the transcript this decode produces: a
+    // stream re-decodes from BOS on each feed, and after finalize the flags
+    // must reflect the final transcript, not an earlier partial. An interim
+    // (per-feed) decode logs its stop at DEBUG; stream_finalize warns once
+    // for the transcript it keeps.
+    cc->was_truncated                         = false;
+    cc->stopped_on_repetition                 = false;
+    const transcribe_log_level stop_log_level = interim ? TRANSCRIBE_LOG_LEVEL_DEBUG : TRANSCRIBE_LOG_LEVEL_WARN;
 
     auto try_dump = [emit_dumps](const char * name, ggml_tensor * t, const char * stage) {
         if (!emit_dumps || t == nullptr) {
@@ -996,7 +1006,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         }
         if (next_token != eos) {
             generated_ids.push_back(next_token);
-            if (transcribe::stop_on_repetition(generated_ids, "moonshine_streaming run")) {
+            if (transcribe::stop_on_repetition(generated_ids, "moonshine_streaming run", stop_log_level)) {
                 cc->mark_repetition_stop();
                 repeating = true;
                 break;
@@ -1009,13 +1019,13 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
     if (!repeating && next_token != eos) {
         cc->was_truncated              = true;
         const bool hit_duration_budget = (gen_cap < max_pos) || (max_pos <= 0);
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+        transcribe::log_msg(stop_log_level,
                             "moonshine run: output truncated at %d tokens — decode reached the "
                             "%s (%d) before end-of-stream; the transcript may be incomplete. "
                             "See transcribe_capabilities.max_audio_ms.",
                             static_cast<int>(generated_ids.size()),
                             hit_duration_budget ? "generation budget" : "position cap", gen_cap);
-        transcribe::trim_repetition_at_budget_stop(generated_ids, "moonshine_streaming run");
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "moonshine_streaming run", stop_log_level);
     }
 
     cc->t_decode_us += ggml_time_us() - t_decode_start;
@@ -1134,7 +1144,7 @@ transcribe_status decode_from_committed_enc(MoonshineStreamingSession *   cc,
     }
 
     // 4. AR decoder loop.
-    return decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps);
+    return decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, /*interim=*/false);
 }
 
 // Internal one-shot inference helper. Encoder over the full PCM, then
@@ -1260,7 +1270,8 @@ void reset_result_text_only(MoonshineStreamingSession * cc) {
 transcribe_status decode_partial(MoonshineStreamingSession *   cc,
                                  MoonshineStreamingModel *     cm,
                                  const transcribe_run_params * params,
-                                 bool                          emit_dumps) {
+                                 bool                          emit_dumps,
+                                 bool                          interim) {
     const int T_enc = cc->stream_T_emitted;
     if (T_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1275,7 +1286,7 @@ transcribe_status decode_partial(MoonshineStreamingSession *   cc,
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps); st != TRANSCRIBE_OK) {
+    if (auto st = decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, interim); st != TRANSCRIBE_OK) {
         return st;
     }
     cc->stream_last_decoded_T = T_enc;
@@ -1624,7 +1635,7 @@ transcribe_status stream_feed(transcribe_session *       session,
             const std::string prev_full_text = cc->full_text;
 
             if (auto st = decode_partial(cc, cm, &cc->stream_run_params,
-                                         /*emit_dumps=*/false);
+                                         /*emit_dumps=*/false, /*interim=*/true);
                 st != TRANSCRIBE_OK) {
                 return st;
             }
@@ -1742,11 +1753,19 @@ transcribe_status stream_finalize(transcribe_session * session, transcribe_strea
     const std::string prev_full_text = cc->full_text;
     if (T_enc > cc->stream_last_decoded_T || !cc->has_result) {
         if (auto st = decode_partial(cc, cm, &cc->stream_run_params,
-                                     /*emit_dumps=*/true);
+                                     /*emit_dumps=*/true, /*interim=*/false);
             st != TRANSCRIBE_OK) {
             write_update(st);
             return st;
         }
+    } else if (cc->was_truncated) {
+        // The last feed's interim decode is the final transcript, and it only
+        // logged its stop at DEBUG.
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_WARN,
+            "moonshine_streaming stream: the final transcript %s before end-of-stream; it may be "
+            "incomplete.",
+            cc->stopped_on_repetition ? "stopped when the output began repeating" : "reached the generation budget");
     }
 
     // Commit the entire result at finalize: tokens, words, and
