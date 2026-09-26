@@ -8,8 +8,7 @@ Offline multilingual speech-to-text. Same audio-LLM architecture as the
 audio-token injection), wider: encoder `d_model=1024` (16 heads), LM
 `hidden_size=2048`, `intermediate_size=6144`. Auto-detects the audio's
 language across 30 languages and emits the transcript in that language.
-Takes a 16 kHz mono WAV; explicit language hints are not supported at
-this time.
+Takes a 16 kHz mono WAV and produces a transcript.
 <!-- /catalog -->
 
 ## What it's for
@@ -106,13 +105,6 @@ If your audio is not already 16 kHz mono WAV, convert it first:
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
-
-## Public API caveat — language hints
-
-Same contract as the 0.6B: `params.language == NULL` runs auto-detect;
-any explicit hint returns `TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE`. See the
-0.6B doc and the family note at `docs/porting/families/qwen3_asr.md` for
-the rationale and the planned follow-up.
 
 ## Performance
 

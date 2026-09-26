@@ -7,7 +7,7 @@ Offline multilingual speech-to-text. An 18-layer bidirectional audio encoder
 feeds a 28-layer Qwen3 causal LM with audio-token injection (fused
 audio+text sequence, no cross-attention). Auto-detects the audio's language
 across 30 languages and emits the transcript in that language. Takes a
-16 kHz mono WAV; explicit language hints are not supported at this time.
+16 kHz mono WAV and produces a transcript.
 <!-- /catalog -->
 
 ## What it's for
@@ -112,16 +112,6 @@ If your audio is not already 16 kHz mono WAV, convert it first:
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
-
-## Public API caveat — language hints
-
-This port accepts `params.language == NULL` (auto-detect) and
-**rejects any explicit language hint** with
-`TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE`. The `capabilities.languages`
-list documents the 30 languages the model can auto-detect, not a set
-of caller-settable hints. Rendering caller-supplied hints into the
-chat template is tracked as follow-up work; see the family note at
-`docs/porting/families/qwen3_asr.md` for details.
 
 ## Performance
 

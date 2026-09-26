@@ -1757,11 +1757,7 @@ def emit_fixtures(out_dir: Path) -> None:
                 _pack_kv_string("stt.variant",          "qwen3-asr-toy"),
                 _pack_kv_string("tokenizer.chat_template",
                                 QWEN3_ASR_CHAT_TEMPLATE),
-                # Capabilities: match the family note. The loader reads
-                # general.languages as factual detection coverage; the
-                # run() handler rejects any explicit language hint with
-                # TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE until the prompt
-                # renderer honors them (Phase 1.1 Option A).
+                # Capabilities: match the family note.
                 _pack_kv_bool("stt.capability.lang_detect", True),
                 _pack_kv_array_string(
                     "general.languages",

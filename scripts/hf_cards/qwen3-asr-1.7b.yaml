@@ -26,8 +26,7 @@ summary: |
   audio-token injection), wider: encoder `d_model=1024` (16 heads), LM
   `hidden_size=2048`, `intermediate_size=6144`. Auto-detects the audio's
   language across 30 languages and emits the transcript in that language.
-  Takes a 16 kHz mono WAV; explicit language hints are not supported at
-  this time.
+  Takes a 16 kHz mono WAV and produces a transcript.
 
 wer:
   notes: |

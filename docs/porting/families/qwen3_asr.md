@@ -132,14 +132,6 @@ Bridge validation:
 Things the first port intentionally does not do; tracked as follow-
 up work rather than shipped-and-broken.
 
-- **Language hinting is rejected.** `transcribe_run_params.language == NULL`
-  is the supported mode and triggers the model's built-in auto-detect
-  (it prefixes the transcript with `language X`, which we strip before
-  returning). Any non-null hint, including a language in the
-  capability list, returns `TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE`. The
-  `caps.languages` list documents the model's auto-detect coverage,
-  not what callers may hint — rendering caller-supplied hints into the
-  chat template is a future change.
 - **Streaming** (`stream_transcribe` / chunk rollback) is out of scope
   for this port. Upstream Qwen3-ASR may be architecturally usable in a
   streaming mode, but the transcribe.cpp library does not expose or

@@ -25,7 +25,7 @@ summary: |
   feeds a 28-layer Qwen3 causal LM with audio-token injection (fused
   audio+text sequence, no cross-attention). Auto-detects the audio's language
   across 30 languages and emits the transcript in that language. Takes a
-  16 kHz mono WAV; explicit language hints are not supported at this time.
+  16 kHz mono WAV and produces a transcript.
 
 wer:
   notes: |
