@@ -150,31 +150,26 @@ ggml_tensor * build_block(ggml_context *               ctx,
     ggml_tensor * qkv = ggml_mul_mat(ctx, b.attn_qkv_w, h);  // [3d, T, B], rows [q | k | v]
 
     // NeMo: w_qkv(x).view(B, T, 3, H, D) -> q/k/v each head-major [D, H, T, B].
-    auto slice = [&](int which) {
-        ggml_tensor * v = ggml_view_4d(ctx, qkv, D, H, T, Bn, D * ggml_element_size(qkv), qkv->nb[1], qkv->nb[2],
-                                       static_cast<size_t>(which) * d * ggml_element_size(qkv));
-        return ggml_cont(ctx, v);
-    };
-    ggml_tensor * q = slice(0);
-    ggml_tensor * k = slice(1);
-    ggml_tensor * v = slice(2);
-
-    // RotaryPositionalEncoding: rotate_half (NEOX) over all D dims, positions
-    // 0..T-1 over the concat (t_q == t_k, no cache offset), theta rope_base.
-    q = ggml_rope_ext(ctx, q, positions, nullptr, static_cast<int>(D), GGML_ROPE_TYPE_NEOX, 0, hp.enc_rope_base, 1.0f,
-                      0.0f, 1.0f, 0.0f, 0.0f);
-    k = ggml_rope_ext(ctx, k, positions, nullptr, static_cast<int>(D), GGML_ROPE_TYPE_NEOX, 0, hp.enc_rope_base, 1.0f,
-                      0.0f, 1.0f, 0.0f, 0.0f);
-
-    // [D, H, T, B] -> [D, T, H, B]
-    q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
-    k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
-    v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+    // q and k are adjacent in every qkv row, so one strided view covers both
+    // ([D, 2H, T, B]) and a single RoPE rotates them: rotate_half (NEOX) over
+    // all D dims, positions 0..T-1 over the concat (t_q == t_k, no cache
+    // offset), theta rope_base. Reading strided views instead of contiguous
+    // copies is value-identical (same per-element math, same dot products).
+    const size_t  es = ggml_element_size(qkv);
+    ggml_tensor * qk = ggml_view_4d(ctx, qkv, D, 2 * H, T, Bn, D * es, qkv->nb[1], qkv->nb[2], 0);
+    qk = ggml_rope_ext(ctx, qk, positions, nullptr, static_cast<int>(D), GGML_ROPE_TYPE_NEOX, 0, hp.enc_rope_base, 1.0f,
+                       0.0f, 1.0f, 0.0f, 0.0f);  // contiguous [D, 2H, T, B]
+    // [D, T, H, B] views into the rotated q|k (heads 0..H-1 = q, H..2H-1 = k).
+    ggml_tensor * q = ggml_view_4d(ctx, qk, D, T, H, Bn, qk->nb[2], qk->nb[1], qk->nb[3], 0);
+    ggml_tensor * k = ggml_view_4d(ctx, qk, D, T, H, Bn, qk->nb[2], qk->nb[1], qk->nb[3], H * qk->nb[1]);
 
     // Full attention (sync batch 1: no padding mask), scale 1/sqrt(D).
-    ggml_tensor * kq  = ggml_mul_mat(ctx, k, q);                           // [T_k, T_q, H, B]
-    kq                = ggml_soft_max_ext(ctx, kq, nullptr, 1.0f / std::sqrt(static_cast<float>(D)), 0.0f);
-    ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));  // [T, D, H, B]
+    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);  // [T_k, T_q, H, B]
+    kq               = ggml_soft_max_ext(ctx, kq, nullptr, 1.0f / std::sqrt(static_cast<float>(D)), 0.0f);
+    // v^T [T, D, H, B] straight from the qkv view in one copy.
+    ggml_tensor * v =
+        ggml_view_4d(ctx, qkv, D, H, T, Bn, D * es, qkv->nb[1], qkv->nb[2], static_cast<size_t>(2) * d * es);
+    ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [T, D, H, B]
     ggml_tensor * o   = ggml_mul_mat(ctx, v_t, kq);                        // [D, T_q, H, B]
     o                 = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));  // [D, H, T, B]
     o                 = ggml_reshape_3d(ctx, o, d, T, Bn);
@@ -662,9 +657,12 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->sil_emb_host.resize(static_cast<size_t>(hp.enc_d_model));
     ggml_backend_tensor_get(m->weights.sil_emb, m->sil_emb_host.data(), 0, m->sil_emb_host.size() * sizeof(float));
 
-    // F32 promotion of every matmul weight on CPU (exact upcast of the BF16 /
-    // F16 values). ggml-cpu rounds the F32 activations to the weight's dtype
-    // inside each BF16 / F16 dot product; the reference computes in fp32 over
+    // F32 promotion of the BF16 / F16 matmul weights on CPU (exact upcast).
+    // Quantized weights (Q8_0, Q*_K) are left alone: they are lossy by design
+    // and run on ggml's native quantized kernels, so an upcast would only
+    // discard their memory / speed benefit. ggml-cpu rounds the F32
+    // activations to the weight's dtype inside each BF16 / F16 dot product;
+    // the reference computes in fp32 over
     // the same BF16-exact weights. That rounding is not benign here: the AOSC
     // cache compression is a top-k selection, so a 1e-3 probability shift
     // flips picks and every later chunk diverges (measured on the 8-speaker
@@ -683,7 +681,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         }
         if (promote) {
             auto add = [&](ggml_tensor ** t) {
-                if ((*t)->type != GGML_TYPE_F32 && std::find(slots.begin(), slots.end(), t) == slots.end()) {
+                const bool half = (*t)->type == GGML_TYPE_BF16 || (*t)->type == GGML_TYPE_F16;
+                if (half && std::find(slots.begin(), slots.end(), t) == slots.end()) {
                     slots.push_back(t);
                 }
             };
