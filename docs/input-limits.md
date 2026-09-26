@@ -98,27 +98,8 @@ chunk size.
 A greedy decode can also fall into repeating one phrase until the budget runs
 out. The greedy families (`canary`, `canary_qwen`, `cohere`, `funasr_nano`,
 `granite`, `moonshine`, `moonshine_streaming`, `moss`, `qwen3_asr`, `voxtral`)
-stop as soon as a block of up to 128 tokens has repeated verbatim enough
-times: 8 copies covering at least 64 tokens, but never more than 192 tokens'
-worth, and never fewer than 4 copies. A single repeated token needs 64
-copies, a sentence-length block (up to 27 tokens) 8, and a paragraph-length
-block of 48 tokens or more 4. The bar is high on purpose: stopping early loses
-whatever the audio said after the loop, so a line sung or chanted a few times
-must not trigger it. The repeats are dropped, leaving one copy, and the run
-returns `TRANSCRIBE_ERR_OUTPUT_REPETITION` with a `WARN`. Like
-`OUTPUT_TRUNCATED` it is result-bearing: the partial transcript is readable
-and `transcribe_was_truncated()` is true.
-
-A decode that runs out of budget has already failed, so the cleanup bar there
-is lower: if the partial ends in a block of up to 256 tokens repeated at
-least 3 times over at least 32 tokens, the repeats are dropped before the transcript is returned
-(still `OUTPUT_TRUNCATED`, with a `WARN` saying how many tokens were dropped).
-
-`whisper` is excluded because it recovers from loops with its own temperature
-fallback. `voxtral_realtime` is excluded because it emits one token per audio
-frame, so its padding tokens repeat through any silence. Set
-`TRANSCRIBE_NO_REPETITION_GUARD=1` to turn off both the stop and the
-budget-stop cleanup, e.g. for byte-exact reference parity.
+have some protection against this, so that you don't infinitely decode
+on sequences which are identical and are obviously looping
 
 ### 3. Soft window — warn and proceed
 
