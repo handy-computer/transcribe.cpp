@@ -96,6 +96,28 @@ sdist.exclude = [
   "/.github/",
   "/.claude/",
   "/bindings/python/dist/",
+  # Python porting/converter tooling and the model catalog are not build
+  # inputs. ggml's own tests/examples and the backends our CMake never exposes
+  # are pruned too (ggml only enters ggml-<name>/ when GGML_<NAME> is ON);
+  # cpu/vulkan/metal/cuda/hip stay (hip compiles ../ggml-cuda sources).
+  # New backend dirs from a ggml bump land in the sdist until listed here.
+  "/scripts/",
+  "/catalog/",
+  "/ggml/examples/",
+  "/ggml/tests/",
+  "/ggml/src/ggml-blas/",
+  "/ggml/src/ggml-cann/",
+  "/ggml/src/ggml-et/",
+  "/ggml/src/ggml-hexagon/",
+  "/ggml/src/ggml-musa/",
+  "/ggml/src/ggml-opencl/",
+  "/ggml/src/ggml-openvino/",
+  "/ggml/src/ggml-rpc/",
+  "/ggml/src/ggml-sycl/",
+  "/ggml/src/ggml-virtgpu/",
+  "/ggml/src/ggml-webgpu/",
+  "/ggml/src/ggml-zdnn/",
+  "/ggml/src/ggml-zendnn/",
   "**/__pycache__/",
   "**/.venv/",
 ]

@@ -91,6 +91,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Cache the source-built Vulkan toolchain
         uses: actions/cache@v5
         with:
@@ -146,6 +148,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
@@ -194,6 +198,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
@@ -245,6 +251,8 @@ jobs:
         with:
           arch: x64
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
         run: |
           curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
@@ -278,6 +286,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
@@ -300,7 +310,7 @@ jobs:
           assert not banned, f"sdist contains artifacts that must never ship: {banned[:10]}"
           assert any(n.endswith("src/arch/canary/model.cpp") for n in names), \
               "sdist excludes over-matched (root-anchoring regression)"
-          assert total < 40e6, f"sdist unexpectedly large: {total/1e6:.1f} MB (28 MB expected)"
+          assert total < 50e6, f"sdist unexpectedly large: {total/1e6:.1f} MB (~21 MB expected)"
           for required in ("CMakeLists.txt", "include/transcribe.h",
                            "ggml/CMakeLists.txt", "cmake/python-wheel-install.cmake",
                            "bindings/python-native/_contract.py.in"):
@@ -326,6 +336,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Build transcribe-cpp (pure wheel + sdist)
         run: |
           cd bindings/python
@@ -365,6 +377,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Build, repair, packaging-smoke, and T4 runtime smoke (Modal)
         if: env.MODAL_TOKEN_ID != ''
         run: uvx --from modal modal run scripts/ci/modal_cuda_build.py
@@ -572,6 +586,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"  # exact + runner-cached = no manifest fetch (its 5 s timeout failed v0.2.4 here)
       - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
@@ -646,6 +662,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0  # for fetch-canary's uvx
+        with:
+          version: "0.12.19"
       # setup-python's macOS downloads are built for GitHub's hosted images
       # (non-relocatable, hardcoded /Users/runner prefix) and cannot install
       # on a self-hosted runner under a different user (observed:

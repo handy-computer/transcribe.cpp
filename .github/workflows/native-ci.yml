@@ -87,6 +87,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
+        with:
+          version: "0.12.19"
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
@@ -144,6 +146,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
+        with:
+          version: "0.12.19"
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
@@ -194,6 +198,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Install build deps (Vulkan SDK pieces + patchelf)
         run: |
           sudo apt-get update
@@ -277,5 +283,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Lane/preset mirror gate
         run: uv run --no-project python scripts/ci/check_lane_mirror.py

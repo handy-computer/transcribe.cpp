@@ -66,6 +66,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Install clang (libclang resource-dir headers)
         # Idempotent for the persistent self-hosted box: install once, no-op
         # after (and no sudo needed when clang is already present).
@@ -88,6 +90,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)

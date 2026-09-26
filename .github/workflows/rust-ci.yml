@@ -78,6 +78,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0  # for the python gate scripts
+        with:
+          version: "0.12.19"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -164,6 +166,8 @@ jobs:
         with:
           components: clippy
       - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary fetches via uvx
+        with:
+          version: "0.12.19"
       - name: Enable ccache compiler launcher (non-Windows)
         # CMake reads these at first configure, so build.rs's cmake-crate build
         # picks up ccache with no -D plumbing. NOT set on Windows: ccache isn't

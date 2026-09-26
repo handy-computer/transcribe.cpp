@@ -223,7 +223,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite5_ctc: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -302,10 +302,8 @@ transcribe_status run_encoder(Granite5CtcSession *     cc,
                                            static_cast<int>(cm->plan.scheduler_list.size()),
                                            /*graph_size=*/16384, /*parallel=*/false, /*op_offload=*/true);
         if (cc->sched == nullptr) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                    "granite5_ctc: scheduler allocation failed — out of memory. "
-                    "Split long audio into shorter segments, or use a smaller batch.");
-            return TRANSCRIBE_ERR_OOM;
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite5_ctc: ggml_backend_sched_new failed");
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
@@ -353,7 +351,7 @@ transcribe_status run_encoder(Granite5CtcSession *     cc,
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, out_eb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite5_ctc: graph_compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->t_encode_us = ggml_time_us() - t_enc_start;
 
