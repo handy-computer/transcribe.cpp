@@ -6,6 +6,7 @@
 // Run with --help for the full option list.
 
 #include "transcribe.h"
+#include "transcribe/nemotron3_diar.h"
 #include "transcribe/parakeet.h"
 #include "transcribe/voxtral_realtime.h"
 #include "transcribe/whisper.h"
@@ -281,6 +282,11 @@ struct cli_args {
     // --stream-voxtral-delay N. Ignored when stream_chunk_ms == 0 or when
     // the model is not voxtral_realtime.
     int stream_voxtral_delay = -1;
+    // Nemotron-3-Diarization operating point (transcribe_nemotron3_diar_preset;
+    // 0 = model default). Applied as the RUN-slot extension for a whole-file
+    // run and as the STREAM-slot extension with --stream-chunk-ms. Set by
+    // --diar-preset NAME.
+    int diar_preset          = 0;
     // Speculative-decode draft length passed through to
     // transcribe_run_params::spec_k_drafts on the offline path. -1 = family
     // default (each family picks its tuned K). 0 = explicitly off. >0 =
@@ -344,6 +350,9 @@ void print_usage(const char * argv0) {
                  "  --stream-buf-right-ms N (parakeet-unified buffered streaming)\n"
                  "                        right-context (lookahead) size in ms;\n"
                  "                        -1 = model default\n"
+                 "  --diar-preset NAME    (nemotron3_diar) streaming operating point:\n"
+                 "                        very_high_latency | low_latency |\n"
+                 "                        very_low_latency | ultra_low_latency\n"
                  "  --stream-voxtral-delay N (voxtral_realtime streaming) transcription\n"
                  "                        delay in 12.5 Hz tokens (80 ms each); valid\n"
                  "                        N = 1..15 (80..1200 ms) or 30 (2400 ms);\n"
@@ -648,6 +657,24 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 return false;
             }
             out.stream_buf_right_ms = std::atoi(v);
+        } else if (a == "--diar-preset") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            const std::string name = v;
+            if (name == "very_high_latency") {
+                out.diar_preset = TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_HIGH_LATENCY;
+            } else if (name == "low_latency") {
+                out.diar_preset = TRANSCRIBE_NEMOTRON3_DIAR_PRESET_LOW_LATENCY;
+            } else if (name == "very_low_latency") {
+                out.diar_preset = TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_LOW_LATENCY;
+            } else if (name == "ultra_low_latency") {
+                out.diar_preset = TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY;
+            } else {
+                std::fprintf(stderr, "error: unknown --diar-preset '%s'\n", v);
+                return false;
+            }
         } else if (a == "--stream-voxtral-delay") {
             const char * v = take_value(a.c_str());
             if (!v) {
@@ -882,6 +909,16 @@ int main(int argc, char ** argv) {
             }
         }
 
+        // Nemotron-3-Diarization operating point (whole-file runs only; the
+        // streaming path passes the STREAM-slot twin below).
+        struct transcribe_nemotron3_diar_run_ext n3d_rx;
+        transcribe_nemotron3_diar_run_ext_init(&n3d_rx);
+        if (args.diar_preset != 0 && args.stream_chunk_ms <= 0 &&
+            transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN)) {
+            n3d_rx.preset = static_cast<transcribe_nemotron3_diar_preset>(args.diar_preset);
+            rp.family     = &n3d_rx.ext;
+        }
+
         if (args.keep_special_tags) {
             rp.keep_special_tags = true;
         }
@@ -1063,6 +1100,8 @@ int main(int argc, char ** argv) {
                     transcribe_parakeet_buffered_stream_ext_init(&pkt_buf_sp);
                     struct transcribe_voxtral_realtime_stream_ext vx_sp;
                     transcribe_voxtral_realtime_stream_ext_init(&vx_sp);
+                    struct transcribe_nemotron3_diar_stream_ext n3d_sx;
+                    transcribe_nemotron3_diar_stream_ext_init(&n3d_sx);
                     const bool want_cache_aware = (args.stream_att_right >= 0);
                     const bool want_buffered =
                         args.stream_buf_left_ms >= 0 || args.stream_buf_chunk_ms >= 0 || args.stream_buf_right_ms >= 0;
@@ -1082,6 +1121,11 @@ int main(int argc, char ** argv) {
                                                                  TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM)) {
                         vx_sp.num_delay_tokens = args.stream_voxtral_delay;
                         sp.family              = &vx_sp.ext;
+                    } else if (args.diar_preset != 0 &&
+                               transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
+                                                                 TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM)) {
+                        n3d_sx.preset = static_cast<transcribe_nemotron3_diar_preset>(args.diar_preset);
+                        sp.family     = &n3d_sx.ext;
                     }
                     run_st = transcribe_stream_begin(ctx, &rp, &sp);
                     if (run_st == TRANSCRIBE_OK) {
@@ -1308,6 +1352,16 @@ int main(int argc, char ** argv) {
             }
         }
 
+        // Nemotron-3-Diarization operating point (whole-file runs only; the
+        // streaming path passes the STREAM-slot twin below).
+        struct transcribe_nemotron3_diar_run_ext n3d_rx;
+        transcribe_nemotron3_diar_run_ext_init(&n3d_rx);
+        if (args.diar_preset != 0 && args.stream_chunk_ms <= 0 &&
+            transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN)) {
+            n3d_rx.preset = static_cast<transcribe_nemotron3_diar_preset>(args.diar_preset);
+            rp.family     = &n3d_rx.ext;
+        }
+
         if (args.keep_special_tags) {
             rp.keep_special_tags = true;
         }
@@ -1345,6 +1399,8 @@ int main(int argc, char ** argv) {
             transcribe_parakeet_buffered_stream_ext_init(&pkt_buf_sp);
             struct transcribe_voxtral_realtime_stream_ext vx_sp;
             transcribe_voxtral_realtime_stream_ext_init(&vx_sp);
+            struct transcribe_nemotron3_diar_stream_ext n3d_sx;
+            transcribe_nemotron3_diar_stream_ext_init(&n3d_sx);
             const bool want_cache_aware = (args.stream_att_right >= 0);
             const bool want_buffered =
                 args.stream_buf_left_ms >= 0 || args.stream_buf_chunk_ms >= 0 || args.stream_buf_right_ms >= 0;
@@ -1368,6 +1424,12 @@ int main(int argc, char ** argv) {
                 vx_sp.num_delay_tokens = args.stream_voxtral_delay;
                 sp.family              = &vx_sp.ext;
                 std::printf("stream: voxtral num_delay_tokens=%d\n", args.stream_voxtral_delay);
+            } else if (args.diar_preset != 0 &&
+                       transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_STREAM,
+                                                         TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM)) {
+                n3d_sx.preset = static_cast<transcribe_nemotron3_diar_preset>(args.diar_preset);
+                sp.family     = &n3d_sx.ext;
+                std::printf("stream: nemotron3_diar preset=%d\n", args.diar_preset);
             }
             run_st = transcribe_stream_begin(ctx, &rp, &sp);
             if (run_st != TRANSCRIBE_OK) {

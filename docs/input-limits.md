@@ -67,6 +67,15 @@ constant-memory caches (`cache_last_channel` / `cache_last_time` + the decoder
 LSTM state) rather than a growing KV, so it is unbounded. These families do not
 need and do not have a length gate.
 
+nemotron3_diar (Nemotron-3-Diarization) is also unbounded (`max_audio_ms = 0`,
+**ignores `n_ctx`**). Every streaming step re-encodes a bounded window: speaker
+cache + FIFO + chunk + lookahead (at most 264 + 264 + 13 = 541 encoder frames at
+`low_latency`; 264 + 40 + 380 = 684 at `very_high_latency`), so per-step compute
+and graph memory are constant in audio length. Only the stored mel and the
+10 ms output probabilities (8 floats per 10 ms, ~11.5 MB per hour) grow with the
+input. Input shorter than one hop (160 samples) returns `TRANSCRIBE_OK` with an
+empty result (0 frames, no speaker rows), matching NeMo's floor(n / 160) framing.
+
 ### 2. Hard context cap — reject up front
 
 | Families | Limit source | Behavior |

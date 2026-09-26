@@ -103,12 +103,58 @@ pub struct SortformerStreamOptions {
     pub preset: Option<SortformerPreset>,
 }
 
+/// Nemotron-3-Diarization operating point (model-card latency / accuracy
+/// bundle). `Default` keeps the GGUF-shipped configuration (= `VeryHighLatency`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Nemotron3DiarPreset {
+    #[default]
+    Default,
+    /// 30.4 s (chunk 340 + lookahead 40 frames); the offline point.
+    VeryHighLatency,
+    /// 1.04 s (chunk 9 + lookahead 4).
+    LowLatency,
+    /// 0.64 s (chunk 6 + lookahead 2).
+    VeryLowLatency,
+    /// 0.32 s (chunk 3 + lookahead 1). Most compute per audio second.
+    UltraLowLatency,
+}
+
+impl Nemotron3DiarPreset {
+    fn to_sys(self) -> sys::transcribe_nemotron3_diar_preset {
+        use sys::transcribe_nemotron3_diar_preset as P;
+        match self {
+            Nemotron3DiarPreset::Default => P::TRANSCRIBE_NEMOTRON3_DIAR_PRESET_DEFAULT,
+            Nemotron3DiarPreset::VeryHighLatency => {
+                P::TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_HIGH_LATENCY
+            }
+            Nemotron3DiarPreset::LowLatency => P::TRANSCRIBE_NEMOTRON3_DIAR_PRESET_LOW_LATENCY,
+            Nemotron3DiarPreset::VeryLowLatency => {
+                P::TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_LOW_LATENCY
+            }
+            Nemotron3DiarPreset::UltraLowLatency => {
+                P::TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY
+            }
+        }
+    }
+}
+
+/// Nemotron-3-Diarization knobs, used on both slots: as
+/// [`RunExtension::Nemotron3Diar`] for a whole-file run and as
+/// [`StreamExtension::Nemotron3Diar`] for push-audio streaming (segments cover
+/// all audio processed so far; finalize equals a whole-file run). A run
+/// produces speaker segments (up to 8 speakers), no text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Nemotron3DiarOptions {
+    pub preset: Option<Nemotron3DiarPreset>,
+}
+
 /// A family extension for the run slot (offline `run`/`run_batch`).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RunExtension {
     Whisper(WhisperRunOptions),
     Sortformer(SortformerStreamOptions),
+    Nemotron3Diar(Nemotron3DiarOptions),
 }
 
 /// A family extension for the stream slot.
@@ -119,6 +165,7 @@ pub enum StreamExtension {
     ParakeetBuffered(ParakeetBufferedStreamOptions),
     MoonshineStreaming(MoonshineStreamingOptions),
     VoxtralRealtime(VoxtralRealtimeStreamOptions),
+    Nemotron3Diar(Nemotron3DiarOptions),
 }
 
 /// Owns a materialized run-slot C extension struct (and any strings it points
@@ -131,6 +178,7 @@ pub(crate) enum RunExtRaw {
         _prompt: Option<CString>,
     },
     Sortformer(Box<sys::transcribe_sortformer_stream_ext>),
+    Nemotron3Diar(Box<sys::transcribe_nemotron3_diar_run_ext>),
 }
 
 impl RunExtRaw {
@@ -142,6 +190,10 @@ impl RunExtRaw {
             }
             RunExtRaw::Sortformer(e) => {
                 (&**e) as *const sys::transcribe_sortformer_stream_ext as *const sys::transcribe_ext
+            }
+            RunExtRaw::Nemotron3Diar(e) => {
+                (&**e) as *const sys::transcribe_nemotron3_diar_run_ext
+                    as *const sys::transcribe_ext
             }
         }
     }
@@ -182,6 +234,12 @@ impl RunExtension {
                 set(&mut ext.preset, o.preset.map(SortformerPreset::to_sys));
                 Ok(RunExtRaw::Sortformer(Box::new(ext)))
             }
+            RunExtension::Nemotron3Diar(o) => {
+                let mut ext: sys::transcribe_nemotron3_diar_run_ext = unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_nemotron3_diar_run_ext_init(&mut ext) };
+                set(&mut ext.preset, o.preset.map(Nemotron3DiarPreset::to_sys));
+                Ok(RunExtRaw::Nemotron3Diar(Box::new(ext)))
+            }
         }
     }
 }
@@ -192,6 +250,7 @@ pub(crate) enum StreamExtRaw {
     ParakeetBuffered(Box<sys::transcribe_parakeet_buffered_stream_ext>),
     MoonshineStreaming(Box<sys::transcribe_moonshine_streaming_stream_ext>),
     VoxtralRealtime(Box<sys::transcribe_voxtral_realtime_stream_ext>),
+    Nemotron3Diar(Box<sys::transcribe_nemotron3_diar_stream_ext>),
 }
 
 impl StreamExtRaw {
@@ -210,6 +269,10 @@ impl StreamExtRaw {
             }
             StreamExtRaw::VoxtralRealtime(e) => {
                 (&**e) as *const sys::transcribe_voxtral_realtime_stream_ext
+                    as *const sys::transcribe_ext
+            }
+            StreamExtRaw::Nemotron3Diar(e) => {
+                (&**e) as *const sys::transcribe_nemotron3_diar_stream_ext
                     as *const sys::transcribe_ext
             }
         }
@@ -248,6 +311,13 @@ impl StreamExtension {
                 set(&mut e.num_delay_tokens, o.num_delay_tokens);
                 set(&mut e.min_decode_interval_ms, o.min_decode_interval_ms);
                 StreamExtRaw::VoxtralRealtime(Box::new(e))
+            }
+            StreamExtension::Nemotron3Diar(o) => {
+                let mut e: sys::transcribe_nemotron3_diar_stream_ext =
+                    unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_nemotron3_diar_stream_ext_init(&mut e) };
+                set(&mut e.preset, o.preset.map(Nemotron3DiarPreset::to_sys));
+                StreamExtRaw::Nemotron3Diar(Box::new(e))
             }
         }
     }

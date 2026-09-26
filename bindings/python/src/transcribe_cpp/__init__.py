@@ -57,6 +57,8 @@ Pnc = Literal["default", "off", "on"]
 Itn = Literal["default", "off", "on"]
 Diarize = Literal["default", "off", "on"]
 SortformerPreset = Literal["default", "very_high_latency", "high_latency", "low_latency"]
+Nemotron3DiarPreset = Literal["default", "very_high_latency", "low_latency",
+                              "very_low_latency", "ultra_low_latency"]
 CommitPolicy = Literal["auto", "on_finalize", "stable_prefix"]
 Feature = Literal[
     "initial_prompt", "temperature_fallback", "long_form",
@@ -85,9 +87,12 @@ __all__ = [
     "ParakeetStreamOptions",
     "ParakeetBufferedStreamOptions",
     "SortformerStreamOptions",
+    "Nemotron3DiarRunOptions",
+    "Nemotron3DiarStreamOptions",
     "VoxtralRealtimeStreamOptions",
     "Backend",
     "SortformerPreset",
+    "Nemotron3DiarPreset",
     "KVType",
     "Task",
     "Timestamps",
@@ -868,6 +873,57 @@ class SortformerStreamOptions(FamilyExtension):
     def _apply(self, ext) -> None:
         if self.preset is not None:
             ext.preset = self._presets[self.preset]
+
+
+class _Nemotron3DiarPresetOptions(FamilyExtension):
+    """Shared preset mapping for the two Nemotron-3-Diarization slots."""
+
+    _presets = {
+        "default": _generated.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_DEFAULT,
+        "very_high_latency": _generated.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_HIGH_LATENCY,
+        "low_latency": _generated.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_LOW_LATENCY,
+        "very_low_latency": _generated.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_LOW_LATENCY,
+        "ultra_low_latency": _generated.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY,
+    }
+
+    def __init__(self, *, preset: Nemotron3DiarPreset | None = None):
+        if preset is not None and preset not in self._presets:
+            raise ValueError(f"unknown nemotron3_diar preset {preset!r}; "
+                             f"expected one of {sorted(self._presets)}")
+        self.preset = preset
+
+    def _apply(self, ext) -> None:
+        if self.preset is not None:
+            ext.preset = self._presets[self.preset]
+
+
+class Nemotron3DiarRunOptions(_Nemotron3DiarPresetOptions):
+    """Nemotron-3-Diarization operating point for a whole-file run (run slot).
+
+    A diarizer: a run produces speaker segments (up to 8 speakers), no text.
+    ``preset`` picks the model card's latency / accuracy bundle:
+    ``"very_high_latency"`` (30.4 s, the offline point; also ``"default"``),
+    ``"low_latency"`` (1.04 s), ``"very_low_latency"`` (0.64 s),
+    ``"ultra_low_latency"`` (0.32 s). Smaller chunks cost more compute per
+    audio second."""
+
+    _slot = "run"
+    _kind = _generated.TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN
+    _struct = _generated.transcribe_nemotron3_diar_run_ext
+    _init = "transcribe_nemotron3_diar_run_ext_init"
+
+
+class Nemotron3DiarStreamOptions(_Nemotron3DiarPresetOptions):
+    """Nemotron-3-Diarization operating point for push-audio streaming
+    (stream slot). After each feed the speaker segments cover all audio
+    processed so far (a turn still in progress is open-ended and may extend);
+    finalize equals a whole-file run at the same preset. Presets as for
+    :class:`Nemotron3DiarRunOptions`."""
+
+    _slot = "stream"
+    _kind = _generated.TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM
+    _struct = _generated.transcribe_nemotron3_diar_stream_ext
+    _init = "transcribe_nemotron3_diar_stream_ext_init"
 
 
 # --- high-level handles ---------------------------------------------------

@@ -1265,6 +1265,27 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_sortformer_stream_ext_unit)
     set_tests_properties(transcribe_sortformer_stream_ext_unit PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Nemotron-3-Diarization operating-point exts (N3DR RUN / N3DS STREAM)
+    # and push-audio live diarization: kind/slot probe, pre-clear
+    # rejection, push-audio == whole-file run on the 8-speaker oracle (and
+    # its non-aligned truncation). Gated by TRANSCRIBE_NEMOTRON3_DIAR_GGUF
+    # (RC 77 skip).
+    add_executable(transcribe_nemotron3_diar_stream_unit
+        nemotron3_diar_stream_unit.cpp)
+
+    target_link_libraries(transcribe_nemotron3_diar_stream_unit
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_nemotron3_diar_stream_unit PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_nemotron3_diar_stream_unit)
+
+    add_test(NAME transcribe_nemotron3_diar_stream_unit
+        COMMAND transcribe_nemotron3_diar_stream_unit)
+    set_tests_properties(transcribe_nemotron3_diar_stream_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------

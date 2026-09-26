@@ -136,3 +136,11 @@ fn load_wav(path: &std::path::Path) -> Vec<f32> {
         .map(|s| s.expect("wav sample") as f32 / 32768.0)
         .collect()
 }
+
+/// Nemotron-3-Diarization (accepts NEMOTRON3_DIAR_RUN / _STREAM). Local-only.
+pub fn smoke_nemotron3_diar_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_NEMOTRON3_DIAR_MODEL",
+        "models/Nemotron-3-Diarization/Nemotron-3-Diarization-BF16.gguf",
+    )
+}

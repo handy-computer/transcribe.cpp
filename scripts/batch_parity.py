@@ -14,7 +14,10 @@ in two modes over the SAME wav list:
   - batched  : --batch <list> --batch-size N    (transcribe_run_batch groups)
 
 and asserts the per-file hypothesis text is identical between them, for every
-requested batch size. Because the serial path is the established source of
+requested batch size. With --speakers, the CLI's "who spoke when" rows (the
+`speakers` array) are part of the compared value too, so batched speaker
+segments must equal serial ones exactly; use it for text-less diarizers
+(nemotron3_diar), whose hypothesis text is always empty. Because the serial path is the established source of
 truth, "batched == serial in the same build" catches any regression the
 batched encoder/dispatch introduces, with no stale fixture to maintain.
 
@@ -59,8 +62,9 @@ def find_repo_root(start: Path) -> Path:
 
 
 def run_cli(cli: Path, model: Path, list_file: Path, backend: str,
-            language: str | None, batch_size: int) -> dict[str, str]:
-    """Run transcribe-cli in batch JSONL mode; return {file: text}."""
+            language: str | None, batch_size: int,
+            speakers: bool = False) -> dict[str, str]:
+    """Run transcribe-cli in batch JSONL mode; return {file: text[+speakers]}."""
     cmd = [
         str(cli), "-m", str(model),
         "--batch", str(list_file), "--batch-jsonl",
@@ -82,7 +86,10 @@ def run_cli(cli: Path, model: Path, list_file: Path, backend: str,
         d = json.loads(line)
         if d.get("type") == "batch_header":
             continue
-        out[d["file"]] = d.get("text", "")
+        value = d.get("text", "")
+        if speakers and d.get("speakers"):
+            value += " |speakers=" + json.dumps(d["speakers"], sort_keys=True)
+        out[d["file"]] = value
     return out
 
 
@@ -125,6 +132,8 @@ def main() -> int:
                     help="cpu (default, deterministic) / auto / metal / ...")
     ap.add_argument("--language", default=None,
                     help="optional BCP-47 hint passed to every utterance")
+    ap.add_argument("--speakers", action="store_true",
+                    help="also compare the speaker-segment rows (diarizers)")
     ap.add_argument("--golden-out", type=Path,
                     help="capture the serial baseline to this JSON and exit")
     ap.add_argument("--golden-in", type=Path,
@@ -154,7 +163,7 @@ def main() -> int:
 
     # Serial baseline (source of truth for same-build parity).
     serial = run_cli(args.cli, args.model, list_file, args.backend,
-                     args.language, batch_size=1)
+                     args.language, batch_size=1, speakers=args.speakers)
     print(f"serial:  {len(serial)} utterances")
 
     # Golden capture mode: freeze serial and exit.
@@ -184,7 +193,7 @@ def main() -> int:
     # Batched vs serial (same build) for each requested batch size.
     for n in sizes:
         batched = run_cli(args.cli, args.model, list_file, args.backend,
-                          args.language, batch_size=n)
+                          args.language, batch_size=n, speakers=args.speakers)
         ok &= report(f"batch-size {n} vs serial", serial, batched)
         if args.golden_in:
             golden = json.loads(Path(args.golden_in).read_text())["texts"]

@@ -57,3 +57,46 @@ fn tokenize_round_trips_nonempty() {
     let short = model.tokenize("ask").unwrap();
     assert!(tokens.len() >= short.len());
 }
+
+#[test]
+fn nemotron3_diar_run_and_stream_extensions() {
+    use transcribe_cpp::sys::{
+        TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN, TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM,
+    };
+    use transcribe_cpp::{
+        Nemotron3DiarOptions, Nemotron3DiarPreset, StreamExtension, StreamOptions,
+    };
+    let (Some(model_path), Some(pcm)) =
+        (common::smoke_nemotron3_diar_model(), common::smoke_audio())
+    else {
+        eprintln!("skip nemotron3_diar_run_and_stream_extensions: model not present");
+        return;
+    };
+    let model = Model::load(&model_path).unwrap();
+    assert!(model.accepts_ext(ExtSlot::Run, TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN));
+    assert!(model.accepts_ext(ExtSlot::Stream, TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM));
+    assert!(!model.accepts_ext(ExtSlot::Stream, TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN));
+    let opts = Nemotron3DiarOptions {
+        preset: Some(Nemotron3DiarPreset::LowLatency),
+    };
+    let mut session = model.session().unwrap();
+    let run = RunOptions {
+        family: Some(RunExtension::Nemotron3Diar(opts.clone())),
+        ..Default::default()
+    };
+    let result = session.run(&pcm, &run).unwrap();
+    assert!(!result.speaker_segments.is_empty());
+
+    let stream_opts = StreamOptions {
+        family: Some(StreamExtension::Nemotron3Diar(opts)),
+        ..Default::default()
+    };
+    let mut stream = session
+        .stream(&RunOptions::default(), &stream_opts)
+        .unwrap();
+    for piece in pcm.chunks(2768) {
+        stream.feed(piece).unwrap();
+    }
+    let fin = stream.finalize().unwrap();
+    assert!(fin.is_final);
+}

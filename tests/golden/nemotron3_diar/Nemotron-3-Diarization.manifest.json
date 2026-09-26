@@ -1,0 +1,118 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "nemotron3_diar",
+  "variant": "Nemotron-3-Diarization",
+  "source_model": {
+    "hf_repo": "nvidia/Nemotron-3-Diarization",
+    "hf_revision": "f667ed73aee57d40cc39428eb768b4fd87a0a29e"
+  },
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA-NeMo/Speech",
+    "revision": "cf724ac337d1ebc7d0dda1e23fb80916f52927a5",
+    "entrypoint": "scripts/dump_reference_nemotron3_diar_nemo.py",
+    "dump_args": [
+      "--revision",
+      "f667ed73aee57d40cc39428eb768b4fd87a0a29e"
+    ],
+    "cross_check": {
+      "kind": "transformers",
+      "source": "https://github.com/huggingface/transformers",
+      "revision": "4b28d51d0d5f17ec20c23a187d0475a8e68810c8",
+      "entrypoint": "scripts/dump_reference_nemotron3_diar_nemo.py hf-offline | hf-stream"
+    }
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_symmetric",
+    "normalization": "none",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": "slaney",
+    "_notes": "Window and mel filterbank are the checkpoint's BF16-stored buffers (preprocessor.featurizer.{window,fb}), which NeMo uses; fp32-recomputed values differ by up to 1.9e-3. Config dither=1e-5 is training-only (NeMo applies it only when self.training), so inference dither is 0."
+  },
+  "tokenizer_summary": {
+    "type": "other",
+    "vocab_size": 0,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": true,
+    "speaker_diarization": true
+  },
+  "diarization": {
+    "max_speakers": 8,
+    "encoder_frame_period_seconds": 0.08,
+    "output_frame_period_seconds": 0.01,
+    "output": "T_mel x 8 sigmoid speaker-activity probabilities at 10 ms (arrival-order columns)",
+    "presets": {
+      "very_high_latency": {
+        "spkcache_len": 264,
+        "fifo_len": 40,
+        "chunk_len": 340,
+        "chunk_right_context": 40,
+        "spkcache_update_period": 300
+      },
+      "low_latency": {
+        "spkcache_len": 264,
+        "fifo_len": 264,
+        "chunk_len": 9,
+        "chunk_right_context": 4,
+        "spkcache_update_period": 222
+      },
+      "very_low_latency": {
+        "spkcache_len": 264,
+        "fifo_len": 264,
+        "chunk_len": 6,
+        "chunk_right_context": 2,
+        "spkcache_update_period": 222
+      },
+      "ultra_low_latency": {
+        "spkcache_len": 264,
+        "fifo_len": 264,
+        "chunk_len": 3,
+        "chunk_right_context": 1,
+        "spkcache_update_period": 222
+      },
+      "small": {
+        "spkcache_len": 24,
+        "fifo_len": 10,
+        "chunk_len": 20,
+        "chunk_right_context": 2,
+        "spkcache_update_period": 20,
+        "_diagnostic_only": true
+      }
+    },
+    "default_preset": "very_high_latency",
+    "stage_dirs": {
+      "encoder": "first streaming step at very_high_latency (380 enc frames, empty cache) + full-clip mel",
+      "diarize": "very_high_latency (offline preset)",
+      "diarize-low_latency": "low_latency",
+      "diarize-very_low_latency": "very_low_latency",
+      "diarize-ultra_low_latency": "ultra_low_latency",
+      "diarize-small": "small (diagnostic: 56 compressions; tiny cache, not an accuracy preset)"
+    },
+    "compress_dumps": "<case>/<stage>/compress/compress.NNN.{topk_indices,is_disabled,input_preds,spkcache_preds}.npy",
+    "oracle_rttm": "tests/golden/nemotron3_diar/nemotron3-diar-8spk-mix.rttm",
+    "oracle_expectation": "very_high_latency / low_latency / very_low_latency / ultra_low_latency: 8 active channels, authored spk_A..spk_H -> channels 0..7 in arrival order, returning speakers keep their channel"
+  },
+  "tolerance_file": "tests/tolerances/nemotron3_diar.json",
+  "cases": [
+    "nemotron3-diar-8spk-mix",
+    "nemotron3-diar-8spk-mix-trunc"
+  ]
+}

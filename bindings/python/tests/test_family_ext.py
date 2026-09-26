@@ -23,6 +23,8 @@ ALL_OPTION_TYPES = [
     t.ParakeetStreamOptions,
     t.ParakeetBufferedStreamOptions,
     t.SortformerStreamOptions,
+    t.Nemotron3DiarRunOptions,
+    t.Nemotron3DiarStreamOptions,
     t.VoxtralRealtimeStreamOptions,
 ]
 
@@ -85,6 +87,22 @@ def test_sortformer_preset_maps_to_enum_value():
 def test_sortformer_unknown_preset_rejected():
     with pytest.raises(ValueError, match="preset"):
         t.SortformerStreamOptions(preset="ultra_low_latency")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("cls,slot,kind", [
+    (t.Nemotron3DiarRunOptions, "run", _generated.TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN),
+    (t.Nemotron3DiarStreamOptions, "stream", _generated.TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM),
+])
+def test_nemotron3_diar_preset_maps_to_enum_value(cls, slot, kind):
+    assert cls._slot == slot and cls._kind == kind
+    built = cls(preset="ultra_low_latency")._build()
+    assert built.preset == _generated.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY
+    assert cls()._build().preset == _generated.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_DEFAULT
+
+
+def test_nemotron3_diar_unknown_preset_rejected():
+    with pytest.raises(ValueError, match="preset"):
+        t.Nemotron3DiarRunOptions(preset="high_latency")  # type: ignore[arg-type]
 
 
 # --- model-gated: resolve_family validation + a real extension run ----------

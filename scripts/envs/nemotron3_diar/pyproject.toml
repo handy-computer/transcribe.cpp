@@ -1,0 +1,37 @@
+[project]
+name = "transcribe-nemotron3-diar-env"
+version = "0.1.0"
+description = "Python env for Nemotron-3-Diarization reference dumps via NeMo Speech (SortformerEncLabelModel) + HF transformers cross-check"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.7",
+    # NeMo moved to NVIDIA-NeMo/Speech (nemo 3.x). The NeMo 2.x pin used by
+    # scripts/envs/sortformer cannot load this checkpoint (TransformerEncoder
+    # with rope + feature_stacking, subpixel head, learnable silence emb).
+    "nemo-toolkit[asr] @ git+https://github.com/NVIDIA-NeMo/Speech.git@cf724ac337d1ebc7d0dda1e23fb80916f52927a5",
+    # Cross-check / push-audio reference: Nemotron3Diarization is only on
+    # transformers main (5.18.0.dev0) at intake time.
+    "transformers @ git+https://github.com/huggingface/transformers.git@4b28d51d0d5f17ec20c23a187d0475a8e68810c8",
+    "huggingface-hub>=0.20",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "gguf>=0.10.0",
+    "meeteval>=0.4.3",
+]
+
+[tool.uv]
+environments = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'linux'",
+]
+
+# NeMo Speech declares per-platform/per-extra torch indexes in its own
+# [tool.uv.sources]; pin torch to PyPI here so the resolver sees a single
+# torch source (uv 0.5.x otherwise reports a duplicate torch package).
+[tool.uv.sources]
+torch = { index = "pypi-torch" }
+
+[[tool.uv.index]]
+name = "pypi-torch"
+url = "https://pypi.org/simple"
+explicit = true

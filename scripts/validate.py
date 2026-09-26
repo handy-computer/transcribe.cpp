@@ -337,6 +337,159 @@ def write_cpp_transcript(
     print(f"  wrote {path}", file=sys.stderr)
 
 
+# ---------------------------------------------------------------------------
+# nemotron3_diar: per-stage oracle layout.
+#
+# The diarizer's oracle is organised per stage rather than as one flat
+# <case>/ref directory (see the manifest's diarization.stage_dirs):
+#   <case>/encoder/{ref,cpp}          first streaming step at the default
+#                                     preset (+ full-clip mel)
+#   <case>/diarize/{ref,cpp}          diar.probs at the default preset
+#   <case>/diarize-<preset>/{ref,cpp} diar.probs at each other preset
+# One C++ run per stage; the preset is pinned on both sides (dumper
+# --preset, C++ TRANSCRIBE_NEMOTRON3_DIAR_PRESET). VALIDATE_NEMOTRON3_DIAR_PRESETS
+# (comma list) restricts the preset set; default = every manifest preset.
+#
+# Push-audio: each preset also gets a C++-only stage
+#   <case>/stream-<preset>/cpp
+# that drives transcribe_stream_begin/feed/finalize (CLI --stream-chunk-ms,
+# VALIDATE_NEMOTRON3_DIAR_STREAM_MS, default 173 ms = not hop-aligned) and is
+# compared against the SAME reference diar.probs as the whole-file stage.
+# VALIDATE_NEMOTRON3_DIAR_STREAM_MS=0 skips the push-audio stages.
+#
+# Forced picks (default; VALIDATE_NEMOTRON3_DIAR_FORCE_PICKS=0 disables): the
+# diarize / stream C++ runs take each speaker-cache compression's selected
+# frames from the reference's compress/ dumps
+# (TRANSCRIBE_NEMOTRON3_DIAR_COMPRESS_FROM_REF), like reference-mel injection:
+# the top-k selection is discontinuous, so fp32 GEMM noise can flip a
+# near-tied pick. diar.probs then gates the graph + bookkeeping tightly; the
+# unforced selection is gated by scripts/diar/check_nemotron3_diar_compress.py
+# and end to end by DER/JER. Each stream-<preset>/cpp is also compared to
+# diarize-<preset>/cpp at zero tolerance (push-audio must be bit-identical).
+# ---------------------------------------------------------------------------
+
+N3D_FAMILY = "nemotron3_diar"
+
+
+def n3d_stages(manifest: dict[str, Any]) -> list[tuple[str, str | None]]:
+    """[(stage_dir, preset)]; the encoder stage has preset None (default)."""
+    diar = manifest.get("diarization") or {}
+    presets = list((diar.get("presets") or {}).keys())
+    default = diar.get("default_preset", "very_high_latency")
+    only = os.environ.get("VALIDATE_NEMOTRON3_DIAR_PRESETS")
+    if only:
+        wanted = [x.strip() for x in only.split(",") if x.strip()]
+        unknown = [x for x in wanted if x not in presets]
+        if unknown:
+            raise SystemExit(f"error: VALIDATE_NEMOTRON3_DIAR_PRESETS has unknown preset(s) {unknown}")
+        presets = [x for x in presets if x in wanted]
+    stages: list[tuple[str, str | None]] = [("encoder", None)]
+    for pr in presets:
+        stages.append(("diarize" if pr == default else f"diarize-{pr}", pr))
+    return stages
+
+
+def n3d_stream_stages(manifest: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """[(stream_stage_dir, preset, reference_stage_dir)] for push-audio."""
+    if os.environ.get("VALIDATE_NEMOTRON3_DIAR_STREAM_MS", "173") == "0":
+        return []
+    return [(f"stream-{preset}", preset, stage) for stage, preset in n3d_stages(manifest) if preset is not None]
+
+
+def n3d_force_picks(env: dict[str, str], ref_compress: Path) -> None:
+    if os.environ.get("VALIDATE_NEMOTRON3_DIAR_FORCE_PICKS", "1") == "0":
+        return
+    if not ref_compress.is_dir():
+        raise SystemExit(f"error: forced picks need the reference compress dumps at {ref_compress} "
+                         "(run `validate.py ref`, or set VALIDATE_NEMOTRON3_DIAR_FORCE_PICKS=0)")
+    env["TRANSCRIBE_NEMOTRON3_DIAR_COMPRESS_FROM_REF"] = str(ref_compress)
+
+
+def n3d_cmd_ref(repo: Path, manifest: dict[str, Any], base_args: list[str], common_args: list[str],
+                case_dir: Path, label: str) -> None:
+    for stage, preset in n3d_stages(manifest):
+        out_dir = case_dir / stage / "ref"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
+        args = list(common_args)
+        args[args.index("--out") + 1] = str(out_dir)
+        if preset is None:
+            cmd = base_args + ["encoder"] + args
+        else:
+            comp = case_dir / stage / "compress"
+            if comp.exists():
+                shutil.rmtree(comp)
+            cmd = base_args + ["diarize", "--preset", preset, "--dump-compress", str(comp)] + args
+        run_cmd(cmd, repo, f"ref {stage} [{label}]")
+
+
+def n3d_cmd_cpp(repo: Path, manifest: dict[str, Any], base_cmd: list[str], audio: Path,
+                case_dir: Path, label: str) -> str:
+    """Run one C++ pass per stage; returns the last CLI transcript line."""
+    transcript = ""
+    for stage, preset in n3d_stages(manifest):
+        out_dir = case_dir / stage / "cpp"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
+        env = os.environ.copy()
+        env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        if preset is None:
+            env["TRANSCRIBE_NEMOTRON3_DIAR_ENCODER_DUMP"] = "1"
+        else:
+            env["TRANSCRIBE_NEMOTRON3_DIAR_PRESET"] = preset
+            n3d_force_picks(env, case_dir / stage / "compress")
+        cmd = base_cmd + [str(audio)]
+        print(f"\n  cpp {stage} [{label}] TRANSCRIBE_DUMP_DIR={out_dir}", file=sys.stderr)
+        result = subprocess.run(cmd, cwd=repo, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors="replace")
+        if result.returncode != 0:
+            print(result.stdout or "", end="")
+            raise SystemExit(f"error: cpp {stage} [{label}] failed with exit code {result.returncode}")
+        # The encoder stage gates the first streaming step (+ mel); diar.probs
+        # belongs to the diarize stages. Drop each stage's out-of-scope dumps
+        # so they are not reported as missing on the reference side.
+        for pat in (["diar.probs.*"] if preset is None else ["enc.mel.in.*"]):
+            for f in out_dir.glob(pat):
+                f.unlink()
+        transcript = parse_cli_transcript(result.stdout or "") or transcript
+    stream_ms = os.environ.get("VALIDATE_NEMOTRON3_DIAR_STREAM_MS", "173")
+    for stage, preset, ref_stage in n3d_stream_stages(manifest):
+        out_dir = case_dir / stage / "cpp"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
+        env = os.environ.copy()
+        env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        env["TRANSCRIBE_NEMOTRON3_DIAR_PRESET"] = preset
+        n3d_force_picks(env, case_dir / ref_stage / "compress")
+        cmd = base_cmd + ["--stream-chunk-ms", stream_ms, str(audio)]
+        print(f"\n  cpp {stage} [{label}] push-audio {stream_ms} ms pieces", file=sys.stderr)
+        result = subprocess.run(cmd, cwd=repo, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors="replace")
+        if result.returncode != 0:
+            print(result.stdout or "", end="")
+            raise SystemExit(f"error: cpp {stage} [{label}] failed with exit code {result.returncode}")
+        for f in out_dir.glob("enc.mel.in.*"):
+            f.unlink()
+    return transcript
+
+
+def n3d_compare_pairs(repo: Path, family: str, variant: str, case_name: str,
+                      manifest: dict[str, Any]) -> list[tuple[str, Path, Path]]:
+    case_dir = repo / "build" / "validate" / family / variant / case_name
+    pairs = [(f"{case_name}/{stage}", case_dir / stage / "cpp", case_dir / stage / "ref")
+             for stage, _ in n3d_stages(manifest)]
+    pairs += [(f"{case_name}/{stage}", case_dir / stage / "cpp", case_dir / ref_stage / "ref")
+              for stage, _, ref_stage in n3d_stream_stages(manifest)]
+    # Push-audio vs whole-file, C++ vs C++: must be bit-identical ("exact:"
+    # label prefix -> zero tolerance, no tolerance file).
+    pairs += [(f"exact:{case_name}/{stage}-vs-{ref_stage}", case_dir / stage / "cpp", case_dir / ref_stage / "cpp")
+              for stage, _, ref_stage in n3d_stream_stages(manifest)]
+    return pairs
+
+
 def cmd_ref(args: argparse.Namespace) -> int:
     repo = find_repo_root(Path(__file__).parent)
     manifest = load_manifest(repo, args.family, getattr(args, "variant", None))
@@ -358,9 +511,10 @@ def cmd_ref(args: argparse.Namespace) -> int:
             raise SystemExit(f"error: audio not found: {audio}")
 
         out_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.mkdir(parents=True)
+        if args.family != N3D_FAMILY:
+            if out_dir.exists():
+                shutil.rmtree(out_dir)
+            out_dir.mkdir(parents=True)
 
         base_args = [
             "uv", "run", "--project", str(env_dir),
@@ -411,6 +565,10 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # (--preset) and the C++ side (TRANSCRIBE_SORTFORMER_STREAM_PRESET in
         # cmd_cpp); unset -> the checkpoint-shipped cfg (single chunk on the
         # short oracle, i.e. diar.probs == diar.preds_offline).
+        if args.family == N3D_FAMILY:
+            n3d_cmd_ref(repo, manifest, base_args, common_args, out_dir.parent,
+                        f"{args.family}/{variant}/{case_name}/{reference['kind']}")
+            continue
         if args.family == "sortformer":
             stages = ["encoder", "diarize"]
         else:
@@ -446,6 +604,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         audio = repo / "samples" / f"{case_name}.wav"
         if not audio.exists():
             raise SystemExit(f"error: audio not found: {audio}")
+
+        if args.family == N3D_FAMILY:
+            base_cmd = [str(cli), "--backend", args.backend,
+                        "--threads", os.environ.get("VALIDATE_CPP_THREADS", "1"), "-m", str(gguf)]
+            case_dir = repo / "build" / "validate" / args.family / variant / case_name
+            n3d_cmd_cpp(repo, manifest, base_cmd, audio, case_dir, f"{args.family}/{case_name}")
+            continue
 
         out_dir = repo / "build" / "validate" / args.family / variant / case_name / "cpp"
         if out_dir.exists():
@@ -595,10 +760,17 @@ def cmd_compare(args: argparse.Namespace) -> int:
     transcript_results: list[dict[str, Any]] = []
     cmd_log: list[dict[str, Any]] = []
 
+    pairs: list[tuple[Any, str, Path, Path]] = []
     for case in cases:
         case_name = case_audio(case)
-        cpp_dir = repo / "build" / "validate" / args.family / variant / case_name / "cpp"
-        ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
+        if args.family == N3D_FAMILY:
+            for label, cdir, rdir in n3d_compare_pairs(repo, args.family, variant, case_name, manifest):
+                pairs.append((case, label, cdir, rdir))
+        else:
+            base = repo / "build" / "validate" / args.family / variant / case_name
+            pairs.append((case, case_name, base / "cpp", base / "ref"))
+
+    for case, case_name, cpp_dir, ref_dir in pairs:
 
         if not cpp_dir.exists():
             print(f"SKIP {case_name}: no C++ dumps at {cpp_dir}", file=sys.stderr)
@@ -613,7 +785,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
             "uv", "run", str(compare_script),
             str(cpp_dir), str(ref_dir),
         ]
-        if tolerances:
+        if case_name.startswith("exact:"):
+            cmd += ["--max-abs", "0", "--mean-abs", "0"]
+        elif tolerances:
             cmd += ["--tolerances", str(tolerances)]
 
         print(f"\n{'=' * 60}", file=sys.stderr)
@@ -647,7 +821,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         # diar.probs tensor, gated above; the `diarize` stage's segment lines
         # are informational only, so skip the text-transcript comparison.
         ref_transcript = ref_dir / "transcript.json"
-        if ref_transcript.exists() and args.family != "sortformer":
+        if ref_transcript.exists() and args.family not in ("sortformer", N3D_FAMILY):
             transcript_compare = case_transcript_compare(manifest, case)
             ref_data = json.loads(ref_transcript.read_text())
             ref_text = str(ref_data.get("text", ""))

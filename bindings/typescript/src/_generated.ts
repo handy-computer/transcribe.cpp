@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "7df72bf9e667b8c2";
+export const PUBLIC_HEADER_HASH = "ae25d09c2b7b325b";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -100,6 +100,11 @@ export const TRANSCRIBE_STREAM_FAILED = 3;
 export const TRANSCRIBE_STREAM_COMMIT_AUTO = 0;
 export const TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE = 1;
 export const TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX = 2;
+export const TRANSCRIBE_NEMOTRON3_DIAR_PRESET_DEFAULT = 0;
+export const TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_HIGH_LATENCY = 1;
+export const TRANSCRIBE_NEMOTRON3_DIAR_PRESET_LOW_LATENCY = 2;
+export const TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_LOW_LATENCY = 3;
+export const TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY = 4;
 export const TRANSCRIBE_SORTFORMER_PRESET_DEFAULT = 0;
 export const TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY = 1;
 export const TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY = 2;
@@ -109,6 +114,8 @@ export const TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS = 1;
 
 // === macro constants (integer object-like macros) ===
 export const TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM = 1414746957;
+export const TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN = 1380201294;
+export const TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM = 1396978510;
 export const TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM = 1396853584;
 export const TRANSCRIBE_EXT_KIND_PARAKEET_STREAM = 1414744912;
 export const TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM = 1414743635;
@@ -133,6 +140,8 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_token': { size: 48, align: 8, offsets: {'struct_size': 0, 'id': 8, 'p': 12, 't0_ms': 16, 't1_ms': 24, 'seg_index': 32, 'word_index': 36, 'text': 40} },
   'transcribe_speaker_segment': { size: 32, align: 8, offsets: {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'speaker_id': 24, 'p': 28} },
   'transcribe_moonshine_streaming_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'min_decode_interval_ms': 16} },
+  'transcribe_nemotron3_diar_run_ext': { size: 24, align: 8, offsets: {'ext': 0, 'preset': 16} },
+  'transcribe_nemotron3_diar_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'preset': 16} },
   'transcribe_parakeet_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'att_context_right': 16} },
   'transcribe_parakeet_buffered_stream_ext': { size: 32, align: 8, offsets: {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24} },
   'transcribe_sortformer_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'preset': 16} },
@@ -178,6 +187,8 @@ export function defineTypes(koffi: any): Record<string, any> {
   T['transcribe_token'] = koffi.struct({ struct_size: 'uint64_t', id: 'int', p: 'float', t0_ms: 'int64_t', t1_ms: 'int64_t', seg_index: 'int', word_index: 'int', text: 'char *' });
   T['transcribe_speaker_segment'] = koffi.struct({ struct_size: 'uint64_t', t0_ms: 'int64_t', t1_ms: 'int64_t', speaker_id: 'int32_t', p: 'float' });
   T['transcribe_moonshine_streaming_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], min_decode_interval_ms: 'int32_t' });
+  T['transcribe_nemotron3_diar_run_ext'] = koffi.struct({ ext: T['transcribe_ext'], preset: 'int' });
+  T['transcribe_nemotron3_diar_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], preset: 'int' });
   T['transcribe_parakeet_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], att_context_right: 'int32_t' });
   T['transcribe_parakeet_buffered_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], left_ms: 'int32_t', chunk_ms: 'int32_t', right_ms: 'int32_t' });
   T['transcribe_sortformer_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], preset: 'int' });
@@ -243,6 +254,8 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_n_speaker_segments': { ret: 'int', args: ['const struct transcribe_session *'] },
   'transcribe_n_tokens': { ret: 'int', args: ['const struct transcribe_session *'] },
   'transcribe_n_words': { ret: 'int', args: ['const struct transcribe_session *'] },
+  'transcribe_nemotron3_diar_run_ext_init': { ret: 'void', args: ['struct transcribe_nemotron3_diar_run_ext *'] },
+  'transcribe_nemotron3_diar_stream_ext_init': { ret: 'void', args: ['struct transcribe_nemotron3_diar_stream_ext *'] },
   'transcribe_open': { ret: 'transcribe_status', args: ['const char *', 'const struct transcribe_model_load_params *', 'const struct transcribe_session_params *', 'struct transcribe_session **'] },
   'transcribe_parakeet_buffered_stream_ext_init': { ret: 'void', args: ['struct transcribe_parakeet_buffered_stream_ext *'] },
   'transcribe_parakeet_stream_ext_init': { ret: 'void', args: ['struct transcribe_parakeet_stream_ext *'] },

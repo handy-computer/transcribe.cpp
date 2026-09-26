@@ -30,6 +30,11 @@ of tests.
 | `TRANSCRIBE_CONV_DIRECT_PW` / `TRANSCRIBE_CONV_NO_DIRECT_PW` | Force the pointwise-conv dispatch to direct `mul_mat` / im2col, overriding the backend default. |
 | `TRANSCRIBE_DUMP_DIR=<dir>` | Enable the per-stage tensor dumper; writes `<name>.f32` + `<name>.json` per dumped tensor into `<dir>`. The basis for the numerical-comparison harness (`scripts/compare_tensors.py`). |
 | `TRANSCRIBE_PERF_DEBUG` | Print a per-stage timing breakdown to stderr (DEBUG log) on the families that profile (`cohere`, `granite`, `canary`, `canary_qwen`, `moonshine`, `moonshine_streaming`, `moss`, `qwen3_asr`, `whisper`). For whisper, a value containing `cpu` or `all` additionally prints the CPU sub-section breakdown. |
+| `TRANSCRIBE_NEMOTRON3_DIAR_PRESET=<name>` | nemotron3_diar: force the streaming operating point (`very_high_latency`, `low_latency`, `very_low_latency`, `ultra_low_latency`, or the validation-only `small`) over the run/stream extension. Used by `scripts/validate.py` and `scripts/diar/run_cpp_nemotron3_diar.py`. |
+| `TRANSCRIBE_NEMOTRON3_DIAR_NATIVE_BF16` | nemotron3_diar on CPU: keep the BF16 matmul weights instead of the default load-time F32 upcast. ggml-cpu then rounds activations to BF16, which flips speaker-cache selections vs the fp32 reference (see `tests/tolerances/nemotron3_diar.json`). Diagnostic. |
+| `TRANSCRIBE_NEMOTRON3_DIAR_F32_WEIGHTS` | nemotron3_diar: force the F32 weight upcast on non-CPU backends too. |
+| `TRANSCRIBE_NEMOTRON3_DIAR_COMPRESS_FROM_REF=<dir>` | nemotron3_diar, only with `TRANSCRIBE_DUMP_DIR`: take each speaker-cache compression's selected frames from the reference dumper's `compress.NNN.{topk_indices,is_disabled}.npy` in `<dir>` (validation isolation of the discontinuous top-k; set by `scripts/validate.py`). |
+| `TRANSCRIBE_NEMOTRON3_DIAR_ENCODER_DUMP` / `TRANSCRIBE_NEMOTRON3_DIAR_COMPRESS_DUMP` | nemotron3_diar, only with `TRANSCRIBE_DUMP_DIR`: dump the first streaming step's encoder-stage tensors / every speaker-cache compression (`compress.NNN.*`) for parity with the reference dumper. |
 | `TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING` | Print a per-component streaming wall-time breakdown at stream finalize (voxtral_realtime). |
 | `TRANSCRIBE_TEST_DEV_INIT_THROW=<match>` | Fault injection: backend device init (`ggml_backend_dev_init`) throws for devices whose name contains `<match>` (`*` matches every device). Exercises throw → skip → CPU-fallback in backend probing; an explicit backend request fails with `TRANSCRIBE_ERR_BACKEND`. Used by `backend_init_throw_unit` and `scripts/ci/vulkan_degradation_check.py`. |
 | `TRANSCRIBE_TEST_TEARDOWN_THROW` | Fault injection: any non-empty value injects a throw after each real free inside the `transcribe::safe_*` teardown wrappers, proving containment without leaking the handle. Used by `teardown_safety_unit`. |
@@ -85,6 +90,7 @@ its var is unset. Convention: `TRANSCRIBE_<FAMILY>_GGUF`.
 | `TRANSCRIBE_GIGAAM_GGUF` | `gigaam_workspace_release_smoke` |
 | `TRANSCRIBE_MULTITALKER_BUNDLE_GGUF` | `parakeet_multitalker_e2e_smoke` |
 | `TRANSCRIBE_SORTFORMER_GGUF` | `sortformer_stream_ext_unit` |
+| `TRANSCRIBE_NEMOTRON3_DIAR_GGUF` | `nemotron3_diar_stream_unit` |
 | `TRANSCRIBE_COHERE_GGUF` | `cohere_real_smoke`, `cohere_e2e_smoke` |
 | `TRANSCRIBE_GRANITE5_CTC_GGUF` | `granite5_ctc_real_smoke`, `granite5_ctc_e2e_smoke` |
 | `TRANSCRIBE_WHISPER_GGUF` | `whisper_e2e_smoke`, `whisper_tokenize_parity` |

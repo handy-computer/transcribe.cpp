@@ -7,7 +7,7 @@ import CTranscribe
 // `transcribe_ext` pointer is handed to the run/begin call; the library copies
 // what it needs before returning.
 
-// MARK: - Run-slot extensions (whisper, sortformer)
+// MARK: - Run-slot extensions (whisper, sortformer, nemotron3_diar)
 
 public struct WhisperRunOptions: Sendable {
     public var initialPrompt: String?
@@ -74,14 +74,48 @@ public struct SortformerStreamOptions: Sendable {
     public init(preset: SortformerPreset? = nil) { self.preset = preset }
 }
 
+/// Nemotron-3-Diarization operating point (model-card latency / accuracy
+/// bundle). `.default` keeps the GGUF-shipped configuration
+/// (= `.veryHighLatency`, 30.4 s, the offline point); `.lowLatency` 1.04 s,
+/// `.veryLowLatency` 0.64 s, `.ultraLowLatency` 0.32 s. Smaller chunks cost
+/// more compute per audio second.
+public enum Nemotron3DiarPreset: Sendable {
+    case `default`
+    case veryHighLatency
+    case lowLatency
+    case veryLowLatency
+    case ultraLowLatency
+
+    var cValue: transcribe_nemotron3_diar_preset {
+        switch self {
+        case .default: return TRANSCRIBE_NEMOTRON3_DIAR_PRESET_DEFAULT
+        case .veryHighLatency: return TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_HIGH_LATENCY
+        case .lowLatency: return TRANSCRIBE_NEMOTRON3_DIAR_PRESET_LOW_LATENCY
+        case .veryLowLatency: return TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_LOW_LATENCY
+        case .ultraLowLatency: return TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY
+        }
+    }
+}
+
+/// Nemotron-3-Diarization options, used on both slots: `RunExtension.nemotron3Diar`
+/// for a whole-file run, `StreamExtension.nemotron3Diar` for push-audio
+/// streaming (segments cover all audio processed so far; finalize equals a
+/// whole-file run). A run produces speaker segments (up to 8 speakers), no text.
+public struct Nemotron3DiarOptions: Sendable {
+    public var preset: Nemotron3DiarPreset?
+    public init(preset: Nemotron3DiarPreset? = nil) { self.preset = preset }
+}
+
 public enum RunExtension: Sendable {
     case whisper(WhisperRunOptions)
     case sortformer(SortformerStreamOptions)
+    case nemotron3Diar(Nemotron3DiarOptions)
 
     var kind: UInt32 {
         switch self {
         case .whisper: return TRANSCRIBE_EXT_KIND_WHISPER_RUN
         case .sortformer: return TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM
+        case .nemotron3Diar: return TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN
         }
     }
 }
@@ -112,6 +146,11 @@ func withRunExtension<R>(
     case .sortformer(let o):
         var c = transcribe_sortformer_stream_ext()
         transcribe_sortformer_stream_ext_init(&c)
+        if let v = o.preset { c.preset = v.cValue }
+        return try withUnsafePointer(to: &c.ext) { try body($0) }
+    case .nemotron3Diar(let o):
+        var c = transcribe_nemotron3_diar_run_ext()
+        transcribe_nemotron3_diar_run_ext_init(&c)
         if let v = o.preset { c.preset = v.cValue }
         return try withUnsafePointer(to: &c.ext) { try body($0) }
     }
@@ -151,6 +190,7 @@ public enum StreamExtension: Sendable {
     case parakeetBuffered(ParakeetBufferedStreamOptions)
     case moonshineStreaming(MoonshineStreamingOptions)
     case voxtralRealtime(VoxtralRealtimeStreamOptions)
+    case nemotron3Diar(Nemotron3DiarOptions)
 
     var kind: UInt32 {
         switch self {
@@ -158,6 +198,7 @@ public enum StreamExtension: Sendable {
         case .parakeetBuffered: return TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM
         case .moonshineStreaming: return TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM
         case .voxtralRealtime: return TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM
+        case .nemotron3Diar: return TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM
         }
     }
 }
@@ -189,6 +230,11 @@ func withStreamExtension<R>(
         transcribe_voxtral_realtime_stream_ext_init(&c)
         if let v = o.numDelayTokens { c.num_delay_tokens = v }
         if let v = o.minDecodeIntervalMs { c.min_decode_interval_ms = v }
+        return try withUnsafePointer(to: &c.ext) { try body($0) }
+    case .nemotron3Diar(let o):
+        var c = transcribe_nemotron3_diar_stream_ext()
+        transcribe_nemotron3_diar_stream_ext_init(&c)
+        if let v = o.preset { c.preset = v.cValue }
         return try withUnsafePointer(to: &c.ext) { try body($0) }
     }
 }

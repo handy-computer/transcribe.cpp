@@ -85,6 +85,9 @@ NORM = [
     "dec.pos_emb.weight",                   # whisper decoder pos_emb
     "frontend.mel_filterbank",              # mel frontend buffer
     "frontend.window",                      # window frontend buffer
+    "diar.sil_emb",                         # nemotron3_diar AOSC silence embedding
+    "enc.embed.norm.weight",                # nemotron3_diar pre-block LN (dot separator)
+    "enc.blocks.0.norm_1.weight",           # nemotron3_diar pre-LN block norm (norm_ prefix)
 ]
 
 # Conv bucket: 2D / depthwise / 1x1 pointwise conv kernels. The loader has no
@@ -104,6 +107,7 @@ CONV = [
     "enc.blocks.3.conv.pointwise2.weight",  # conformer 1x1 pointwise
     "enc.pre_encode.conv.0.weight",         # pre-encode subsampling conv
     "enc.blocks.3.conv.depthwise.weight",   # conformer depthwise conv
+    "diar.upsample.conv.weight",            # nemotron3_diar subpixel Conv1d (k=3)
 ]
 
 # Linear / Embed: ggml_mul_mat operands and the decoder token embedding.
@@ -128,6 +132,8 @@ LINEAR = [
     "enc.blocks.3.attn.rel_pos_emb.weight",
     "enc.blocks.3.attn.kv.weight",          # granite5_ctc fused K|V projection
     "enc.ctc_proj.weight",                  # granite5_ctc tied CTC head
+    "enc.blocks.0.attn.qkv.weight",         # nemotron3_diar fused q|k|v projection
+    "enc.pre_encode.proj.weight",           # nemotron3_diar feature-stacking projection
 ]
 
 # KNOWN DRIFT — policy.cpp::classify_tensor places these in the Norm (F32) or

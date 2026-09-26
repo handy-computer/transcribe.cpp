@@ -1,0 +1,329 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "nemotron3_diar",
+  "hf_repo": "nvidia/Nemotron-3-Diarization",
+  "hf_revision": "f667ed73aee57d40cc39428eb768b4fd87a0a29e",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "processor_config.json::feature_extractor",
+      "status": "found",
+      "detail": "HF processor_config.json nests the feature extractor (NemotronAsrStreamingFeatureExtractor: 128 mels, n_fft=512, win=400, hop=160, preemphasis=0.97, 16 kHz); intake.py did not look inside the nested block. Canonical values are the .nemo model_config.yaml preprocessor block (AudioToMelSpectrogramPreprocessor, normalize=NA, dither=1e-5, window=hann), which agrees."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "No tokenizer. Diarizer: output is a T x 8 speaker-activity probability matrix, not text."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "N/A for a diarizer."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "N/A; no autoregressive decoding."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "HF model.safetensors: 417 F32 tensors. Verified in-session that every value is exactly representable in BF16 and matches the .nemo BF16 state_dict (e.g. q_proj = w_qkv[:512], silence_embeds, upsampler conv): the F32 file is a lossless upcast made by the HF converter (dtype='float32'), not the authors' storage dtype."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/Nemotron-3-Diarization",
+      "status": "found",
+      "detail": "Nemotron 3 Diarization, released 2026-09-23, ~100M params, up to 8 speakers, streaming Sortformer (AOSC+FIFO), 10 ms output frames. DER published per dataset at 30.4 s / 1.04 s / 0.64 s / 0.32 s input-buffer latency, measured with NeMo e2e_diarize_speech.py at BF16 on an RTX PRO 5000."
+    },
+    "nemo_model_config": {
+      "kind": "reference_code",
+      "path": "Nemotron-3-Diarization.nemo::model_config.yaml",
+      "status": "found",
+      "detail": "target: nemo.collections.asr.models.sortformer_diar_models.SortformerEncLabelModel, nemo_version 3.0.0. encoder: nemo.collections.asr.modules.TransformerEncoder (31L, d=512, 8 heads, feature_stacking x8, rope, pre_block_norm, qkv_bias=false). high_resolution=true, output_subsampling_factor=1, max_num_of_spks=8, use_learnable_sil_emb=true. Its sortformer_modules streaming values (fifo_len=0, chunk_len=264, rc=0, update=264) are training-time settings, not an inference preset."
+    },
+    "nemo_state_dict": {
+      "kind": "reference_code",
+      "path": "Nemotron-3-Diarization.nemo::model_weights.ckpt",
+      "status": "found",
+      "detail": "363 tensors, all torch.bfloat16 (99,263,843 elements). Includes tensors unused at inference: preprocessor.featurizer.{window,fb}, sortformer_modules.hidden_to_spks.* (legacy 384->8 head, frozen, never called), sortformer_modules.activity_head.* (training-only aux 3-class head)."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "refs/NVIDIA-NeMo/Speech @ cf724ac337d1 (nemo 3.1.0): nemo/collections/asr/models/sortformer_diar_models.py, modules/sortformer_modules.py, modules/transformer_encoder.py",
+      "status": "found",
+      "detail": "NeMo moved to github.com/NVIDIA-NeMo/Speech; the older refs/NVIDIA-NeMo/NeMo checkout (Apr 2026) and the scripts/envs/sortformer pin cannot load this encoder (no TransformerEncoder rope/feature_stacking, no subpixel head / learnable silence emb). Freshly cloned into refs/ for this intake."
+    },
+    "hf_transformers_code": {
+      "kind": "reference_code",
+      "path": "refs/huggingface/transformers origin/main @ 4b28d51d0d5f: src/transformers/models/nemotron3_diarization/{modular,processing,convert}_nemotron3_diarization.py",
+      "status": "found",
+      "detail": "Clean single-file HF port (transformers 5.18.0.dev0, main only; not in a release at intake time). Strict-load converter from the .nemo. Used as the instrumented cross-check, not the source of truth."
+    },
+    "nvidia_gguf": {
+      "kind": "hf_file",
+      "path": "Nemotron-3-Diarization.q8_0.gguf",
+      "status": "found",
+      "detail": "NVIDIA ships a Q8_0 GGUF for their NeMo-Speech.cpp runtime with general.architecture='sortformer'. Not consumed by this port (different loader contract; Q8_0 is not the reference dtype). Our GGUF must NOT reuse arch string 'sortformer' or it would route into the v2.1 loader."
+    }
+  },
+  "variants": [
+    {
+      "name": "Nemotron-3-Diarization",
+      "memory_gb": 1,
+      "files": [
+        "Nemotron-3-Diarization.nemo"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-diarizer"
+    ],
+    "key_fields": {
+      "architectures": [
+        "Nemotron3DiarizationForAudioFrameClassification"
+      ],
+      "model_type": "nemotron3_diarization",
+      "target": "nemo.collections.asr.models.sortformer_diar_models.SortformerEncLabelModel",
+      "max_num_of_spks": 8,
+      "streaming_mode": true,
+      "high_resolution": true,
+      "output_subsampling_factor": 1,
+      "encoder_frame_period_seconds": 0.08,
+      "output_frame_period_seconds": 0.01,
+      "output_shape": "T x 8 sigmoid speaker-activity probabilities at 10 ms (arrival-order columns)",
+      "encoder.type": "nemo TransformerEncoder",
+      "encoder.n_layers": 31,
+      "encoder.d_model": 512,
+      "encoder.n_heads": 8,
+      "encoder.head_dim": 64,
+      "encoder.ff_expansion": 4.0,
+      "encoder.ffn_activation": "GELU (exact, erf; nn.GELU())",
+      "encoder.subsampling": "feature_stacking (stack 8 x 128 mels -> Linear 1024->512, no bias; zero-pad last partial group)",
+      "encoder.self_attention_model": "rope (full rotary, theta 10000, rotate_half/NeoX layout)",
+      "encoder.pre_block_norm": true,
+      "encoder.embed_norm": "LayerNorm after feature stacking",
+      "encoder.final_norm": true,
+      "encoder.qkv_bias": false,
+      "encoder.out_proj_bias": true,
+      "encoder.xscaling": false,
+      "encoder.attn_mode": "full",
+      "head.encoder_proj": "Linear 512->192",
+      "head.subpixel_upsample": "Conv1d 192 -> 192*8, k=3, pad=1, reshape to 8x frames (80 ms -> 10 ms)",
+      "head.classifier": "ReLU -> Linear 192->192 -> ReLU -> Linear 192->8 -> sigmoid",
+      "sortformer_modules.use_learnable_sil_emb": true,
+      "sortformer_modules.spkcache_sil_frames_per_spk": 1,
+      "sortformer_modules.pred_score_threshold": 0.25,
+      "sortformer_modules.scores_boost_latest": 0.05,
+      "sortformer_modules.strong_boost_rate": 0.75,
+      "sortformer_modules.weak_boost_rate": 1.5,
+      "sortformer_modules.min_pos_scores_rate": 0.5,
+      "sortformer_modules.sil_threshold": 0.2,
+      "presets (spkcache/fifo/chunk/rc/update, 80 ms frames)": {
+        "very_high_latency_30.4s (offline)": [
+          264,
+          40,
+          340,
+          40,
+          300
+        ],
+        "low_latency_1.04s": [
+          264,
+          264,
+          9,
+          4,
+          222
+        ],
+        "very_low_latency_0.64s": [
+          264,
+          264,
+          6,
+          2,
+          222
+        ],
+        "ultra_low_latency_0.32s": [
+          264,
+          264,
+          3,
+          1,
+          222
+        ]
+      }
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "manual",
+    "evidence": "Authors' canonical checkpoint (.nemo model_weights.ckpt) stores all 363 tensors as torch.bfloat16. HF config.json dtype=float32 and model.safetensors F32 are a lossless upcast by the HF converter (verified bit-exact vs the BF16 state_dict). Policy 2 => reference-dtype GGUF is BF16. Oracle compute is fp32 on CPU over the BF16 weights (Policy 1), unlike the card's BF16-autocast GPU eval.",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "F32": 417
+      },
+      "nemo_state_dict_distribution": {
+        "BF16": 363
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_symmetric",
+    "normalization": "none",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "other",
+    "vocab_size": 0,
+    "special_tokens": {},
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": true,
+    "speaker_diarization": true
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "AMI Test MHM (forced-alignment RTTM, nttcslab-sp)",
+      "language": "en",
+      "metric": "other",
+      "score": 9.25,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0 s, overlap included, NeMo e2e_diarize_speech.py, BF16 GPU. 30.4 s latency (very_high_latency). 1.04 s: 9.48; 0.64 s: 9.62; 0.32 s: 10.05. PROPOSED PRIMARY ACCEPTANCE SET (freely downloadable; the AMI forced-alignment pipeline already exists from the sortformer v2.1 port, whose card-reported v2.1 MHM 30.4 s DER 15.81 matches our measured 15.96, confirming MHM == our ingested condition). 3-4 speakers only. Publisher score is context; gate = measured Oracle reference."
+    },
+    {
+      "dataset": "AMI Test SDM (forced-alignment RTTM)",
+      "language": "en",
+      "metric": "other",
+      "score": 11.14,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0 s, overlap included, NeMo e2e_diarize_speech.py, BF16 GPU. 30.4 s. 1.04 s: 12.80; 0.32 s: 12.95."
+    },
+    {
+      "dataset": "NOTSOFAR1 Eval MHM (forced-alignment RTTM, FastMSS)",
+      "language": "en",
+      "metric": "other",
+      "score": 6.77,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0 s, overlap included, NeMo e2e_diarize_speech.py, BF16 GPU. full set, 30.4 s. 5-7 spk subset: 7.86 (30.4 s), 9.02 (1.04 s). PROPOSED SECONDARY ACCEPTANCE SET covering >4 speakers (AMI never exercises channels 5-8); availability of eval audio to be confirmed at Stage 2."
+    },
+    {
+      "dataset": "NOTSOFAR1 Eval SC (forced-alignment RTTM)",
+      "language": "en",
+      "metric": "other",
+      "score": 11.0,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0 s, overlap included, NeMo e2e_diarize_speech.py, BF16 GPU. full set, 30.4 s."
+    },
+    {
+      "dataset": "DIHARD III Eval full (1-9 spk)",
+      "language": null,
+      "metric": "other",
+      "score": 12.73,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0 s, overlap included, NeMo e2e_diarize_speech.py, BF16 GPU. 30.4 s. Context only: LDC-gated."
+    },
+    {
+      "dataset": "CALLHOME-Part2 full (2-6 spk)",
+      "language": null,
+      "metric": "other",
+      "score": 9.1,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.25 s, 30.4 s latency. Context only: LDC-gated."
+    },
+    {
+      "dataset": "AliMeeting Test Near (forced-alignment RTTM)",
+      "language": "zh",
+      "metric": "other",
+      "score": 6.4,
+      "score_unit": "percent DER",
+      "source": "model card",
+      "notes": "DER, collar 0.0 s, overlap included, NeMo e2e_diarize_speech.py, BF16 GPU. 30.4 s. Mandarin; context only."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "The authors' canonical checkpoint is the BF16 .nemo, loaded by nemo.collections.asr.models.SortformerEncLabelModel (NeMo Speech 3.x; the card names NeMo Framework v3.0 as the runtime), and every published DER comes from NeMo's e2e_diarize_speech.py. The HF transformers Nemotron3Diarization class is a derived port: its weights come from the .nemo via a strict-load converter and it is only on transformers main (5.18.0.dev0). NeMo is therefore the source of truth, matching the sortformer v2.1 precedent. HF transformers is the instrumented cross-check: it is a compact single-file implementation of the same forward and AOSC cache, useful for layer dumps and for arbitrating NeMo-vs-C++ disagreements. The existing scripts/envs/sortformer NeMo pin (2.x) cannot load this encoder, so Stage 2 needs a new env pinned to NVIDIA-NeMo/Speech 3.x. NeMo's TransformerEncoder has an explicit CPU math-attention path (non-CUDA inputs avoid the fused kernels); fp32-on-CPU execution is confirmed empirically at Stage 2.",
+  "architecture_pattern": "encoder-diarizer",
+  "known_risks": [
+    "NEW FAMILY, NOT A SORTFORMER VARIANT. Same Sortformer/AOSC lineage as sortformer v2.1, but the encoder (31L RoPE Transformer vs 17L FastConformer + 18L post-LN Transformer), head (subpixel upsampler, 10 ms output), speaker count (8 vs 4) and silence handling (learned embedding) all differ. src/arch/sortformer hardcodes max_speakers=4 and an 80 ms output grid. The AOSC/FIFO streaming logic is algorithmically shared and may be reused or mirrored, but the forward graph is new. The GGUF arch string must differ from 'sortformer' (NVIDIA's own Q8_0 GGUF uses 'sortformer').",
+    "ENCODER FRONT: feature stacking reshapes 8 consecutive 128-mel frames into 1024 features (frame-major order), Linear 1024->512 with no bias, zero-padding the final partial group; then an input LayerNorm (embed_norm) before layer 0. Stacking order and the padded tail frame both affect the first/last encoder frame.",
+    "ATTENTION: fused w_qkv [1536,512] with no bias, rows ordered [q|k|v]; out_proj has a bias. Pre-LN blocks (norm1 -> attn -> residual, norm2 -> FFN -> residual), final LayerNorm. Full bidirectional attention within each step, with a padding mask only.",
+    "FRONTEND BUFFERS STORED IN BF16: the .nemo carries preprocessor.featurizer.window [400] and .fb [1,128,257] as persistent BF16 buffers, which restore_from loads, so the NeMo reference computes mel with BF16-rounded window/filterbank (window max |diff| vs fp32 symmetric Hann = 1.9e-3). HF recomputes both in fp32, so NeMo and HF will not agree bit-for-bit at the mel stage; C++ follows NeMo. Stage 3 decision: embed the stored buffers in the GGUF (cohere/canary-qwen converter pattern) vs recompute in C++ (sortformer converter skips preprocessor.*). The window is SYMMETRIC Hann (stored buffer == torch.hann_window(400, periodic=False) in BF16, bit-exact; NeMo features.py builds it with periodic=False) and the STFT uses center=True with pad_mode='constant' (zero). The sortformer v2.1 intake's 'hann_periodic'/'reflect' values were not carried over.",
+    "ROPE: full rotary (rotary_fraction 1.0, head_dim 64), theta 10000, rotate_half (NeoX) layout => ggml_rope with GGML_ROPE_TYPE_NEOX, not the default interleaved mode. Positions restart at 0 at every streaming step and span the concatenated [speaker cache | FIFO | chunk | right context] sequence, so cache frames get new positions each step.",
+    "GELU: FFN uses nn.GELU() (exact erf). ggml_gelu is the tanh approximation; use ggml_gelu_erf or accept and document a tolerance.",
+    "SUBPIXEL UPSAMPLER: Conv1d 192 -> 1536 (k=3, pad=1) over encoder frames, then reshape [T, 1536] -> [8T, 192]; channel c*... ordering after reshape must match exactly (sub-frame index is the slow axis of the 1536 channels). Output rate is 10 ms (high_resolution=true, output_subsampling_factor=1); T_out = n_mel_frames (trimmed), not ceil(n/8).",
+    "AOSC SCORING AT 80 ms: cache/FIFO bookkeeping stays at the encoder rate. Speaker-cache frame scores use sigmoid probs average-pooled (factor 8) back to 80 ms, zeroed on padding frames. Streaming and cache-compression parity therefore depend on the pooled probs, not the 10 ms output.",
+    "LEARNED SILENCE EMBEDDING: use_learnable_sil_emb=true, so compressed-cache silence slots are filled with the learned sortformer_modules.learnable_sil_emb vector (BF16 [512]), not v2.1's running mean of silence frames. sil_threshold / mean-silence update code paths are inactive for this checkpoint.",
+    "CACHE GEOMETRY: 8 speakers x 264-frame cache => per-speaker budget 264/8 - 1 = 32 frames (v2.1: 188/4 - 1 = 46). min_positive_scores = 16, strong boost = 24, weak boost = 48 frames. Top-k near-ties in compression can permute arrival-order labels, the same chaotic-quant hazard that withdrew k-quants for sortformer v2.1.",
+    "PRESETS: offline and streaming use different cache sizes (offline fifo 40 / update 300; streaming fifo 264 / update 222; spkcache 264 for all). The .nemo's sortformer_modules values (fifo 0, chunk 264, rc 0, update 264) are training-time settings, so runtime defaults must come from the card's preset table (30.4 / 1.04 / 0.64 / 0.32 s), not from the checkpoint config. HF config.json encodes the offline preset at top level and the streaming sizes under streaming_config.",
+    "DTYPE: authors' storage is BF16 (.nemo), while the HF safetensors is an F32 upcast. The reference GGUF is BF16. The card's DER was measured under BF16 autocast on GPU, but the Oracle measures fp32 compute on CPU over the BF16 weights, so small DER drift vs the card is expected; gate against the measured Oracle.",
+    "REFERENCE ENV: NeMo moved to NVIDIA-NeMo/Speech (3.x). scripts/envs/sortformer pins NeMo 2.x at 6967f48fda2a, which lacks this encoder. Stage 2 needs a new scripts/envs/nemotron3_diar env; the card asks for Python >= 3.12.",
+    "OUTPUT IS PROBABILITIES. DER/JER need thresholding plus optional post-processing. Parity gate = raw 10 ms prob-tensor parity vs the NeMo reference (arrival-order columns directly comparable). DER is compared to the reference model on the same audio/RTTMs/post-processing, not to card numbers.",
+    "ACCEPTANCE DATA: LibriSpeech is single-speaker and degenerate for diarization. AMI MHM forced-alignment (3-4 spk) reuses the existing pipeline but never exercises speaker channels 5-8, the headline capability. A >4-speaker set (NOTSOFAR1 eval, 3-7 spk, FA RTTMs) and a >4-speaker oracle clip are needed to cover it.",
+    "MULTITALKER INTEROP: NVIDIA's ASR integration guide pairs this model with multitalker-parakeet-streaming-0.6b-v1 (max_num_of_spks=8, fifo_len=264, spkcache_update_period=222) and nemotron-3.5-asr-streaming-0.6b (masked_asr). src/arch/parakeet/multitalker.cpp hard-binds sortformer::SortformerEmbedded, 80 ms indexing and hp.max_speakers (4). Feeding it this diarizer needs 10 ms -> 80 ms pooling and an 8-speaker path.",
+    "LICENSE: openmdw-1.1 (differs from v2.1's NVIDIA Open Model License). Needs human interpretation before shipping; not interpreted here.",
+    "PUSH-AUDIO LIVE DIARIZATION IS IN SCOPE (user decision 2026-09-24), and no diarizer has it today. The transcribe_stream_* API reports progress as text (committed/tentative text, words, tokens), and sortformer registers nullptr stream hooks. It needs: (1) public-API design for exposing speaker segments mid-stream (a committed vs still-open segment boundary, revision semantics while the last segment's end moves, arrival-order ids stable across feeds); (2) a STREAM-slot ext kind carrying the preset; (3) incremental mel frontend state. API/ABI shape is a human decision.",
+    "STREAMING FRONTEND CONVENTION (resolved at Stage 2): the push-audio parity reference is NeMo diarize() at the same preset (whole-utterance mel). C++ push-audio output must match the C++ run-level output at that preset. Evidence (92 s 8-speaker oracle): within HF, the per-chunk streaming mel (center only on the first chunk, cut exactly as the processor streams it) is bit-identical to the whole-utterance mel on every shared frame in all three streaming modes (method: concatenate the processor's per-chunk features [:num_mel_frames_per_step], plus the whole last chunk, and compare with proc(audio)), so incremental mel costs no accuracy. HF vs NeMo diar.probs differ by mean|d| ~3e-4 regardless of streaming because of framework differences (NeMo uses the BF16-stored window/fb, HF recomputes them in fp32). FRAME-COUNT EDGE for Stage 4: NeMo emits floor(n_samples/160) frames (9200 for 92 s), HF offline 9201, HF stream 9199. C++ must emit NeMo's count in both paths, i.e. push-audio finalize must flush the tail frames that HF streaming drops."
+  ],
+  "intake_gaps": [
+    {
+      "field": "frontend",
+      "reason": "RESOLVED from primary sources: .nemo model_config.yaml preprocessor block (canonical), NeMo Speech features.py (window built with periodic=False, stft pad_mode='constant', center=True unless exact_pad), and the stored BF16 window buffer (bit-exact vs symmetric Hann). Cross-checked against HF processor_config.json feature_extractor (intake.py missed the nested block). mel_filterbank_norm slaney = FilterbankFeatures default mel_norm. Stage 2 frontend dump re-confirms. Stage 2: inference dither is 0 (NeMo applies the config dither=1e-5 only when self.training); the reference is bit-deterministic across runs. The loaded window/fb buffers carry the checkpoint's BF16-rounded values."
+    },
+    {
+      "field": "dtype.expected",
+      "reason": "RESOLVED and user-signed 2026-09-24: bfloat16 (the .nemo state_dict, i.e. the authors' storage). HF float32 is a verified lossless upcast."
+    },
+    {
+      "field": "capabilities.languages",
+      "reason": "Set to ['en'] (acceptance language). Diarization is largely language-independent and training/eval include Mandarin, Hindi and multilingual sets (DIHARD III, CALLHOME); card makes no language restriction claim. No language knob exists."
+    },
+    {
+      "field": "capabilities.timestamps",
+      "reason": "Left empty: diarization segment times are intrinsic, not a transcript-timestamp capability (no transcript is emitted)."
+    },
+    {
+      "field": "upstream_benchmarks.acceptance_dataset",
+      "reason": "RESOLVED and user-signed 2026-09-24: AMI Test MHM forced-alignment RTTMs (primary) + NOTSOFAR1 Eval MHM forced-alignment (secondary, covers 5-8 speakers). Gate = DER + JER vs the measured NeMo reference on the same audio/RTTMs/post-processing, plus prob-tensor parity. Not LibriSpeech. Stage 2 confirms that the NOTSOFAR1 eval audio is available."
+    },
+    {
+      "field": "family/variant naming",
+      "reason": "RESOLVED and user-signed 2026-09-24: family 'nemotron3_diar', variant 'Nemotron-3-Diarization'."
+    },
+    {
+      "field": "license",
+      "reason": "OPEN: openmdw-1.1 needs human interpretation before ship (Stage 8). Does not block Stages 2-4."
+    }
+  ]
+}
