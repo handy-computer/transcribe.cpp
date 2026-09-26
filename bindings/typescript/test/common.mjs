@@ -22,6 +22,8 @@ export const ITN_MODEL =
 // Voxtral realtime is local-only (~2.5 GB+, too heavy for the CI canary set):
 // its env var is NOT exported by fetch-canary, so this skips cleanly in CI.
 export const VOXTRAL_MODEL = process.env.TRANSCRIBE_SMOKE_VOXTRAL_MODEL || "";
+// Nemotron-3-Diarization (not exported by fetch-canary; skips in CI).
+export const NEMOTRON3_DIAR_MODEL = process.env.TRANSCRIBE_SMOKE_NEMOTRON3_DIAR_MODEL || "";
 
 // jfk.wav ships in-repo; fetch-canary exports only the model paths.
 export const AUDIO =

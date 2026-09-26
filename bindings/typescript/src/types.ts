@@ -261,6 +261,24 @@ export type SortformerPreset =
 export interface SortformerStreamOptions {
   preset?: SortformerPreset;
 }
+/** Nemotron-3-Diarization operating point (model-card latency / accuracy
+ *  bundle): "very_high_latency" 30.4 s (offline point, = "default"),
+ *  "low_latency" 1.04 s, "very_low_latency" 0.64 s, "ultra_low_latency"
+ *  0.32 s. Smaller chunks cost more compute per audio second. */
+export type Nemotron3DiarPreset =
+  | "default"
+  | "very_high_latency"
+  | "low_latency"
+  | "very_low_latency"
+  | "ultra_low_latency";
+/** Nemotron-3-Diarization options. `kind: "nemotron3_diar"` is the run slot
+ *  (whole file); `kind: "nemotron3_diar_stream"` is the stream slot
+ *  (push-audio: segments cover all audio processed so far, finalize equals a
+ *  whole-file run). A run produces speaker segments (up to 8 speakers), no
+ *  text. */
+export interface Nemotron3DiarOptions {
+  preset?: Nemotron3DiarPreset;
+}
 
 export type FamilyExtension =
   | ({ kind: "whisper" } & WhisperRunOptions)
@@ -268,4 +286,6 @@ export type FamilyExtension =
   | ({ kind: "parakeet" } & ParakeetStreamOptions)
   | ({ kind: "parakeet_buffered" } & ParakeetBufferedStreamOptions)
   | ({ kind: "voxtral" } & VoxtralRealtimeStreamOptions)
-  | ({ kind: "sortformer" } & SortformerStreamOptions);
+  | ({ kind: "sortformer" } & SortformerStreamOptions)
+  | ({ kind: "nemotron3_diar" } & Nemotron3DiarOptions)
+  | ({ kind: "nemotron3_diar_stream" } & Nemotron3DiarOptions);

@@ -176,6 +176,12 @@ export function bindLibrary(libraryPath: string): Bound {
     sortformerStreamExtInit: lib.func("transcribe_sortformer_stream_ext_init", "void", [
       outp(T.transcribe_sortformer_stream_ext),
     ]),
+    nemotron3DiarRunExtInit: lib.func("transcribe_nemotron3_diar_run_ext_init", "void", [
+      outp(T.transcribe_nemotron3_diar_run_ext),
+    ]),
+    nemotron3DiarStreamExtInit: lib.func("transcribe_nemotron3_diar_stream_ext_init", "void", [
+      outp(T.transcribe_nemotron3_diar_stream_ext),
+    ]),
 
     // batch (offline)
     runBatch: lib.func("transcribe_run_batch", "int", [

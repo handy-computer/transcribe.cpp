@@ -1,0 +1,99 @@
+{
+  "_comment": [
+    "Nemotron-3-Diarization per-tensor tolerances for compare_tensors.py. FINALIZED at Stage 4 (2026-09-25).",
+    "",
+    "CORRECTNESS REGIME",
+    "- Reference: NeMo Speech cf724ac337d1 SortformerEncLabelModel, BF16 .nemo weights upcast to fp32, fp32 compute on CPU, bit-deterministic (scripts/dump_reference_nemotron3_diar_nemo.py).",
+    "- C++: BF16 reference GGUF (models/Nemotron-3-Diarization/Nemotron-3-Diarization-BF16.gguf), --backend cpu. On CPU the loader upcasts every BF16/F16 matmul weight to exact F32 copies (the default CPU regime, see src/arch/nemotron3_diar/model.cpp load()), so all compute is fp32 like the reference. No KV cache (full attention over [spkcache|fifo|chunk] each step).",
+    "- Mel: the production C++ MelFrontend on real PCM (no reference-mel injection) with the checkpoint's BF16-stored window + filterbank from the GGUF; enc.mel.in is therefore the frontend-parity gate.",
+    "- Threads: measured with VALIDATE_CPP_THREADS=6/8; all 40 dumped tensors (encoder stage + a 56-compression small-preset run) verified bit-identical between --threads 1 and 8, so this equals the default --threads 1 regime.",
+    "- Coverage: 2 cases (8-speaker 92 s oracle; its non-aligned 91.337 s truncation) x stages encoder (streaming step 0 at very_high_latency, 380 encoder frames, empty cache), diarize-<preset> for very_high_latency / low_latency / very_low_latency / ultra_low_latency / small, and stream-<preset> (push-audio, 173 ms pieces) compared against the same reference diar.probs. Each stream-<preset>/cpp is additionally required to equal diarize-<preset>/cpp exactly (zero tolerance).",
+    "- FORCED PICKS: diarize/stream stages run with the reference's speaker-cache selections injected (TRANSCRIBE_NEMOTRON3_DIAR_COMPRESS_FROM_REF, set by validate.py; VALIDATE_NEMOTRON3_DIAR_FORCE_PICKS=0 disables) - an isolation tool like reference-mel injection. Reason: the AOSC compression is a top-k whose boundary scores are routinely 1e-7..1e-5 apart, so fp32 GEMM noise (~3e-6 on the inputs) can flip a near-tied pick and every later chunk differs (observed unforced: 0.64 s preset on the oracle, 1 pick at compression #1 -> diar.probs 2.1e-2; 6 of 96 acceptance meetings at 30.4 s). diar.probs here therefore gates the graph + bookkeeping; it is NOT widened to absorb flips. The selection is gated separately and exactly: scripts/diar/check_nemotron3_diar_compress.py replays NeMo's _compress_spkcache on the port's own inputs (370/370 compressions identical over every oracle preset + ES2004c at 30.4 s + TS3003d at 1.04 s), and end to end by DER/JER (+-0.01pp gate; 0.00pp at 30.4 s on AMI + NOTSOFAR).",
+    "",
+    "RECIPE: finalized = max(1.5 x observed, Stage-2 magnitude budget [1e-4 x p99_abs / 1e-5 x rms], 1e-6). Observed drift is 5-30x below the magnitude budget on every tensor, so every entry keeps its Stage-2 budget (tightening needs user sign-off). No entry was widened. Observed values are recorded per entry (_observed_max_abs / _observed_mean_abs, worst over cases/stages).",
+    "",
+    "DOMINANT DRIFT SOURCE: fp32 accumulation order (ggml vs ATen GEMM / softmax / LayerNorm) growing through 31 layers; largest at the un-normalized enc.layers.30.out (4.2e-3 on |x| up to ~470), removed again by final_norm. Frontend: FFT precision (enc.mel.in 3.0e-4 on log-mel values up to ~16).",
+    "",
+    "WHY F32 COMPUTE (measured, not assumed): with native BF16 matmuls ggml-cpu rounds the fp32 activations to BF16 inside each dot product. enc.pre_encode.out then drifts 2.6e-1 max / 2.7e-2 mean, compression #1 selects 43 different cache frames and diar.probs drifts 3.2e-2 on the 92 s oracle - a discontinuous divergence (top-k cache selection), not absorbable drift. TRANSCRIBE_NEMOTRON3_DIAR_NATIVE_BF16=1 reproduces that regime; it is outside these tolerances.",
+    "",
+    "For context only: the HF transformers cross-check (fp32-recomputed window/fb) differs from NeMo on diar.probs by mean|d| ~1e-3, max|d| 8e-2 (offline) to 2.5e-1 (ultra_low_latency). The C++ tracks NeMo, not HF."
+  ],
+  "diar.encoder_proj.out": {
+    "max_abs": 0.0007163617610931413,
+    "mean_abs": 2.014040443507882e-05,
+    "_observed_max_abs": 0.0001183,
+    "_observed_mean_abs": 2.16e-06
+  },
+  "diar.logits": {
+    "max_abs": 0.0029657003059387343,
+    "mean_abs": 9.897325499107615e-05,
+    "_observed_max_abs": 0.000104,
+    "_observed_mean_abs": 5.77e-06
+  },
+  "diar.probs": {
+    "max_abs": 9.912681931257248e-05,
+    "mean_abs": 3.0405652021332573e-06,
+    "_observed_max_abs": 1.764e-05,
+    "_observed_mean_abs": 1.383e-07
+  },
+  "diar.subpixel_conv.out": {
+    "max_abs": 0.0010900764598846425,
+    "mean_abs": 2.819843288384341e-05,
+    "_observed_max_abs": 0.0001411,
+    "_observed_mean_abs": 2.69e-06
+  },
+  "diar.upsample.out": {
+    "max_abs": 0.0010900764598846425,
+    "mean_abs": 2.819843288384341e-05,
+    "_observed_max_abs": 0.0001411,
+    "_observed_mean_abs": 2.69e-06
+  },
+  "enc.embed_norm.out": {
+    "max_abs": 0.0009864868354797374,
+    "mean_abs": 2.5216983740198924e-05,
+    "_observed_max_abs": 6.995e-05,
+    "_observed_mean_abs": 2.529e-06
+  },
+  "enc.final_norm.out": {
+    "max_abs": 0.00028977825140953076,
+    "mean_abs": 8.932525577091465e-06,
+    "_observed_max_abs": 6.485e-05,
+    "_observed_mean_abs": 1.3e-06
+  },
+  "enc.layers.0.out": {
+    "max_abs": 0.0011261121091842654,
+    "mean_abs": 3.517366193862893e-05,
+    "_observed_max_abs": 7.82e-05,
+    "_observed_mean_abs": 2.879e-06
+  },
+  "enc.layers.1.out": {
+    "max_abs": 0.0011609788312912002,
+    "mean_abs": 4.431690256720955e-05,
+    "_observed_max_abs": 7.629e-05,
+    "_observed_mean_abs": 3.171e-06
+  },
+  "enc.layers.15.out": {
+    "max_abs": 0.0021360501537323008,
+    "mean_abs": 8.956734723381705e-05,
+    "_observed_max_abs": 0.0001907,
+    "_observed_mean_abs": 6.681e-06
+  },
+  "enc.layers.30.out": {
+    "max_abs": 0.04666371978759768,
+    "mean_abs": 0.0007077871037846011,
+    "_observed_max_abs": 0.004211,
+    "_observed_mean_abs": 4.486e-05
+  },
+  "enc.mel.in": {
+    "max_abs": 0.0016635532379150391,
+    "mean_abs": 0.00010526379603602358,
+    "_observed_max_abs": 0.0003033,
+    "_observed_mean_abs": 8.216e-07
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 0.0032059184112548907,
+    "mean_abs": 7.515863409117101e-05,
+    "_observed_max_abs": 0.0002813,
+    "_observed_mean_abs": 8.671e-06
+  }
+}

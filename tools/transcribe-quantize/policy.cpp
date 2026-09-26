@@ -141,6 +141,12 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
     if (name == "frontend.mel_filterbank" || name == "frontend.window") {
         return Bucket::Norm;
     }
+    // Nemotron-3-Diarization: learned AOSC silence embedding (1D, d_model).
+    // Written into the speaker cache's silence slots in F32; too small to
+    // benefit from quantization.
+    if (name == "diar.sil_emb") {
+        return Bucket::Norm;
+    }
     // SenseVoice: per-feature CMVN shift/scale (1D, d_input). Applied
     // additively/multiplicatively to the LFR-stacked mel frame; loader
     // requires F32, and the tensors are too small (560 elements) to

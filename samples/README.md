@@ -65,3 +65,10 @@ resolve, not as a statement that the files are unencumbered.
 The bare `ja.wav`, `ko.wav`, `zh.wav`, `yue.wav` and `ru.wav` clips are
 referenced by family-doc smoke tests and by gigaam's profile override; they stay
 where they are. The `-short` / `-long` pairs above are the bench fixtures.
+
+## Generated diarization fixtures
+
+| file | duration | generator | sources |
+| --- | ---: | --- | --- |
+| `nemotron3-diar-8spk-mix.wav` | 92.0 s | `scripts/gen_nemotron3_diar_oracle_audio.py` (deterministic; RTTM in `tests/golden/nemotron3_diar/`) | `jfk.wav`, `product-names.wav` (provenance unrecorded, see above) and the FLEURS clips `zh-long`, `ru-long`, `ja-long`, `ko-long`, `vi-long`, `ar-long` (CC-BY-4.0, ids in the table above), each trimmed of leading/trailing silence and laid on an authored 8-speaker timeline |
+| `nemotron3-diar-8spk-mix-trunc.wav` | 91.337 s | `scripts/gen_nemotron3_diar_oracle_audio.py` (first 1,461,392 samples of the mix above) | same as `nemotron3-diar-8spk-mix.wav`; a non-hop-aligned length (9133 mel frames) that exercises floor(n/160) framing and the partial final chunk |

@@ -15,6 +15,7 @@
 
 #include "transcribe.h"
 #include "transcribe/moonshine_streaming.h"
+#include "transcribe/nemotron3_diar.h"
 #include "transcribe/parakeet.h"
 #include "transcribe/sortformer.h"
 #include "transcribe/voxtral_realtime.h"

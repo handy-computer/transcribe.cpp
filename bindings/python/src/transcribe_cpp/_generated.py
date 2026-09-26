@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "7df72bf9e667b8c2"
+PUBLIC_HEADER_HASH = "ae25d09c2b7b325b"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -102,6 +102,11 @@ TRANSCRIBE_STREAM_FAILED = 3
 TRANSCRIBE_STREAM_COMMIT_AUTO = 0
 TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE = 1
 TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX = 2
+TRANSCRIBE_NEMOTRON3_DIAR_PRESET_DEFAULT = 0
+TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_HIGH_LATENCY = 1
+TRANSCRIBE_NEMOTRON3_DIAR_PRESET_LOW_LATENCY = 2
+TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_LOW_LATENCY = 3
+TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY = 4
 TRANSCRIBE_SORTFORMER_PRESET_DEFAULT = 0
 TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY = 1
 TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY = 2
@@ -111,6 +116,8 @@ TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS = 1
 
 # === macro constants (integer object-like macros) ===
 TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM = 1414746957
+TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN = 1380201294
+TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM = 1396978510
 TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM = 1396853584
 TRANSCRIBE_EXT_KIND_PARAKEET_STREAM = 1414744912
 TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM = 1414743635
@@ -150,6 +157,10 @@ class transcribe_speaker_segment(_c.Structure):
     pass
 class transcribe_moonshine_streaming_stream_ext(_c.Structure):
     pass
+class transcribe_nemotron3_diar_run_ext(_c.Structure):
+    pass
+class transcribe_nemotron3_diar_stream_ext(_c.Structure):
+    pass
 class transcribe_parakeet_stream_ext(_c.Structure):
     pass
 class transcribe_parakeet_buffered_stream_ext(_c.Structure):
@@ -179,6 +190,8 @@ transcribe_word._fields_ = [("struct_size", _c.c_uint64), ("t0_ms", _c.c_int64),
 transcribe_token._fields_ = [("struct_size", _c.c_uint64), ("id", _c.c_int), ("p", _c.c_float), ("t0_ms", _c.c_int64), ("t1_ms", _c.c_int64), ("seg_index", _c.c_int), ("word_index", _c.c_int), ("text", _c.c_char_p)]
 transcribe_speaker_segment._fields_ = [("struct_size", _c.c_uint64), ("t0_ms", _c.c_int64), ("t1_ms", _c.c_int64), ("speaker_id", _c.c_int32), ("p", _c.c_float)]
 transcribe_moonshine_streaming_stream_ext._fields_ = [("ext", transcribe_ext), ("min_decode_interval_ms", _c.c_int32)]
+transcribe_nemotron3_diar_run_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
+transcribe_nemotron3_diar_stream_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
 transcribe_parakeet_stream_ext._fields_ = [("ext", transcribe_ext), ("att_context_right", _c.c_int32)]
 transcribe_parakeet_buffered_stream_ext._fields_ = [("ext", transcribe_ext), ("left_ms", _c.c_int32), ("chunk_ms", _c.c_int32), ("right_ms", _c.c_int32)]
 transcribe_sortformer_stream_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
@@ -224,6 +237,8 @@ STRUCT_LAYOUT = {
     'transcribe_token': {'size': 48, 'align': 8, 'offsets': {'struct_size': 0, 'id': 8, 'p': 12, 't0_ms': 16, 't1_ms': 24, 'seg_index': 32, 'word_index': 36, 'text': 40}},
     'transcribe_speaker_segment': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'speaker_id': 24, 'p': 28}},
     'transcribe_moonshine_streaming_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'min_decode_interval_ms': 16}},
+    'transcribe_nemotron3_diar_run_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
+    'transcribe_nemotron3_diar_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
     'transcribe_parakeet_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'att_context_right': 16}},
     'transcribe_parakeet_buffered_stream_ext': {'size': 32, 'align': 8, 'offsets': {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24}},
     'transcribe_sortformer_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
@@ -343,6 +358,10 @@ def configure(lib):
     lib.transcribe_n_tokens.argtypes = [_c.c_void_p]
     lib.transcribe_n_words.restype = _c.c_int
     lib.transcribe_n_words.argtypes = [_c.c_void_p]
+    lib.transcribe_nemotron3_diar_run_ext_init.restype = None
+    lib.transcribe_nemotron3_diar_run_ext_init.argtypes = [_c.POINTER(transcribe_nemotron3_diar_run_ext)]
+    lib.transcribe_nemotron3_diar_stream_ext_init.restype = None
+    lib.transcribe_nemotron3_diar_stream_ext_init.argtypes = [_c.POINTER(transcribe_nemotron3_diar_stream_ext)]
     lib.transcribe_open.restype = _c.c_int
     lib.transcribe_open.argtypes = [_c.c_char_p, _c.POINTER(transcribe_model_load_params), _c.POINTER(transcribe_session_params), _c.POINTER(_c.c_void_p)]
     lib.transcribe_parakeet_buffered_stream_ext_init.restype = None

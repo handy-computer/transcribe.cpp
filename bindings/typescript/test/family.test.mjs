@@ -5,6 +5,7 @@ import {
   PARAKEET_STREAM_MODEL,
   PARAKEET_BUFFERED_MODEL,
   VOXTRAL_MODEL,
+  NEMOTRON3_DIAR_MODEL,
   jfk,
   feedChunks,
 } from "./common.mjs";
@@ -85,6 +86,25 @@ modelTest("voxtral realtime stream extension", VOXTRAL_MODEL, async () => {
     await feedChunks(stream, jfk());
     await stream.finalize();
     assert.ok((stream.text.committed + stream.text.full).trim().length > 0);
+    stream.reset();
+    s.dispose();
+  } finally {
+    m.dispose();
+  }
+});
+
+modelTest("nemotron3_diar run + stream preset extensions", NEMOTRON3_DIAR_MODEL, async () => {
+  const m = await TranscribeModel.load(NEMOTRON3_DIAR_MODEL);
+  try {
+    assert.equal(m.accepts({ kind: "nemotron3_diar" }), true);
+    assert.equal(m.accepts({ kind: "nemotron3_diar_stream" }), true);
+    assert.equal(m.accepts({ kind: "sortformer" }), false);
+    const r = await m.transcribe(jfk(), { family: { kind: "nemotron3_diar", preset: "low_latency" } });
+    assert.ok(r.speakerSegments.length > 0);
+    const s = m.createSession();
+    const stream = await s.stream({ family: { kind: "nemotron3_diar_stream", preset: "low_latency" } });
+    await feedChunks(stream, jfk());
+    await stream.finalize();
     stream.reset();
     s.dispose();
   } finally {

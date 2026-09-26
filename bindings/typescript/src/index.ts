@@ -616,6 +616,28 @@ const FAMILY: Record<string, FamilyReg> = {
     init: "sortformerStreamExtInit",
     map: (o) => ({ preset: SORTFORMER_PRESET[o.preset as string] }),
   },
+  nemotron3_diar: {
+    slot: "run",
+    kind: g.TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_RUN,
+    type: "transcribe_nemotron3_diar_run_ext",
+    init: "nemotron3DiarRunExtInit",
+    map: (o) => ({ preset: NEMOTRON3_DIAR_PRESET[o.preset as string] }),
+  },
+  nemotron3_diar_stream: {
+    slot: "stream",
+    kind: g.TRANSCRIBE_EXT_KIND_NEMOTRON3_DIAR_STREAM,
+    type: "transcribe_nemotron3_diar_stream_ext",
+    init: "nemotron3DiarStreamExtInit",
+    map: (o) => ({ preset: NEMOTRON3_DIAR_PRESET[o.preset as string] }),
+  },
+};
+
+const NEMOTRON3_DIAR_PRESET: Record<string, number> = {
+  default: g.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_DEFAULT,
+  very_high_latency: g.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_HIGH_LATENCY,
+  low_latency: g.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_LOW_LATENCY,
+  very_low_latency: g.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_VERY_LOW_LATENCY,
+  ultra_low_latency: g.TRANSCRIBE_NEMOTRON3_DIAR_PRESET_ULTRA_LOW_LATENCY,
 };
 
 const SORTFORMER_PRESET: Record<string, number> = {

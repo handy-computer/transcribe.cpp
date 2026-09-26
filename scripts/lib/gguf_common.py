@@ -204,6 +204,9 @@ def reference_dtype_for(
         return GGMLQuantizationType.F32
     if name in ("frontend.mel_filterbank", "frontend.window"):
         return GGMLQuantizationType.F32
+    # Nemotron-3-Diarization learned AOSC silence embedding (1-D, d_model).
+    if name == "diar.sil_emb":
+        return GGMLQuantizationType.F32
 
     # Conv bucket (pointwise + depthwise + 2D).
     is_convpw = (

@@ -45,21 +45,6 @@ dependency of the Parakeet multitalker speaker-attributed ASR path
   - `diar_streaming_sortformer_4spk-v2.1` — this port (best meeting DER; multitalker's named dependency).
   - `streaming-4spk-v2` — architecturally identical, CC-BY-4.0. Deferred; add by dropping in weights once v2.1 is validated.
 
-### Diarization scope policy
-
-Sortformer is the repo's first diarization-only family. transcribe.cpp
-remains a transcription library; diarization-only models are in scope only
-when they (a) feed a transcription pipeline in-repo (here: the named
-`spk_supervision='diar'` dependency of parakeet multitalker speaker-
-attributed ASR), or (b) reuse an encoder family the repo already maintains
-(here: the NEST FastConformer is parakeet's ConformerEncoder, reused
-verbatim). A diarizer meeting neither clause (e.g. a pyannote
-segmentation+clustering port: new architecture, new dependency surface, no
-in-repo ASR consumer) is out of scope. Standalone diarization output is
-exposed because it falls out of the multitalker dependency for free, via
-the pre-existing transcript-independent `transcribe_speaker_segment` ABI —
-no diarizer-specific output surface was added.
-
 ## Public API (run extension)
 
 `include/transcribe/sortformer.h` — `TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM`

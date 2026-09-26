@@ -64,9 +64,9 @@ pub use backend::{
 pub use cancel::CancelToken;
 pub use error::{Error, Result};
 pub use family::{
-    MoonshineStreamingOptions, ParakeetBufferedStreamOptions, ParakeetStreamOptions, RunExtension,
-    SortformerPreset, SortformerStreamOptions, StreamExtension, VoxtralRealtimeStreamOptions,
-    WhisperRunOptions,
+    MoonshineStreamingOptions, Nemotron3DiarOptions, Nemotron3DiarPreset,
+    ParakeetBufferedStreamOptions, ParakeetStreamOptions, RunExtension, SortformerPreset,
+    SortformerStreamOptions, StreamExtension, VoxtralRealtimeStreamOptions, WhisperRunOptions,
 };
 pub use logging::{disable_logging, init_logging};
 pub use model::{Capabilities, Model, ModelOptions, SessionLimits, SessionOptions};
