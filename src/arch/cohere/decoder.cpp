@@ -536,7 +536,7 @@ DecoderBuild build_decoder_graph(ggml_context *        ctx,
 
     // Head: tied weight (the [hidden, vocab_size] token embedding) + bias +
     // log-softmax. mul_mat(token_w, x[hidden,seq]) -> [vocab_size, seq_len].
-    ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_embed.token_w, x);
+    ggml_tensor * logits = ggml_mul_mat(ctx, w.head.logits_w(w.dec_embed.token_w), x);
     if (w.head.bias != nullptr) {
         logits = ggml_add(ctx, logits, w.head.bias);
     }
@@ -745,7 +745,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *        ctx,
     db.dumps.out_before_head = x;
 
     // Head: tied weight + bias + optional log-softmax.
-    ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_embed.token_w, x);
+    ggml_tensor * logits = ggml_mul_mat(ctx, w.head.logits_w(w.dec_embed.token_w), x);
     if (w.head.bias != nullptr) {
         logits = ggml_add(ctx, logits, w.head.bias);
     }
@@ -883,7 +883,7 @@ StepBuild build_step_graph(ggml_context *        ctx,
     x = layer_norm(ctx, x, w.dec_final.norm_w, w.dec_final.norm_b);
 
     // Tied LM head: token embedding transposed.
-    ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_embed.token_w, x);
+    ggml_tensor * logits = ggml_mul_mat(ctx, w.head.logits_w(w.dec_embed.token_w), x);
     if (w.head.bias != nullptr) {
         logits = ggml_add(ctx, logits, w.head.bias);
     }
@@ -1156,7 +1156,7 @@ StepBuildBatched build_step_graph_batched(ggml_context *        ctx,
     }
 
     x                    = layer_norm(ctx, x, w.dec_final.norm_w, w.dec_final.norm_b);
-    ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_embed.token_w, x);  // [vocab, B]
+    ggml_tensor * logits = ggml_mul_mat(ctx, w.head.logits_w(w.dec_embed.token_w), x);  // [vocab, B]
     if (w.head.bias != nullptr) {
         logits = ggml_add(ctx, logits, w.head.bias);
     }
