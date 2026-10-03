@@ -30,11 +30,17 @@ import koffi from "koffi";
 const RUNTIME_LIBS: ReadonlyArray<readonly [string, string, string]> =
   process.platform === "win32"
     ? [
+        ["cuda_runtime", "bin", "cudart64_13.dll"],
+        ["cublas", "bin", "cublasLt64_13.dll"],
+        ["cublas", "bin", "cublas64_13.dll"],
         ["cuda_runtime", "bin", "cudart64_12.dll"],
         ["cublas", "bin", "cublasLt64_12.dll"],
         ["cublas", "bin", "cublas64_12.dll"],
       ]
     : [
+        ["cuda_runtime", "lib", "libcudart.so.13"],
+        ["cublas", "lib", "libcublasLt.so.13"],
+        ["cublas", "lib", "libcublas.so.13"],
         ["cuda_runtime", "lib", "libcudart.so.12"],
         ["cublas", "lib", "libcublasLt.so.12"],
         ["cublas", "lib", "libcublas.so.12"],
