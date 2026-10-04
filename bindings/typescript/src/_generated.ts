@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "30ec88d3b51fc344";
+export const PUBLIC_HEADER_HASH = "bd3273dabb25a1fe";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -50,9 +50,10 @@ export const TRANSCRIBE_ABI_SESSION_LIMITS = 11;
 export const TRANSCRIBE_ABI_EXT = 12;
 export const TRANSCRIBE_ABI_DEVICE_INFO = 13;
 export const TRANSCRIBE_ABI_SPEAKER_SEGMENT = 14;
-export const TRANSCRIBE_ABI_DIARIZE_INFO = 15;
-export const TRANSCRIBE_ABI_DIARIZE_SESSION_PARAMS = 16;
-export const TRANSCRIBE_ABI_DIARIZE_PARAMS = 17;
+export const TRANSCRIBE_ABI_BACKEND_INIT_PARAMS = 15;
+export const TRANSCRIBE_ABI_DIARIZE_INFO = 16;
+export const TRANSCRIBE_ABI_DIARIZE_SESSION_PARAMS = 17;
+export const TRANSCRIBE_ABI_DIARIZE_PARAMS = 18;
 export const TRANSCRIBE_LOG_LEVEL_NONE = 0;
 export const TRANSCRIBE_LOG_LEVEL_INFO = 1;
 export const TRANSCRIBE_LOG_LEVEL_WARN = 2;
@@ -121,6 +122,13 @@ export const TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT = 0;
 export const TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS = 1;
 
 // === macro constants (integer object-like macros) ===
+export const TRANSCRIBE_BACKEND_MASK_ALL = 4294967295;
+export const TRANSCRIBE_BACKEND_MASK_CPU = 1;
+export const TRANSCRIBE_BACKEND_MASK_CUDA = 8;
+export const TRANSCRIBE_BACKEND_MASK_METAL = 2;
+export const TRANSCRIBE_BACKEND_MASK_OTHER = 2147483648;
+export const TRANSCRIBE_BACKEND_MASK_ROCM = 16;
+export const TRANSCRIBE_BACKEND_MASK_VULKAN = 4;
 export const TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM = 1414746957;
 export const TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM = 1396853584;
 export const TRANSCRIBE_EXT_KIND_PARAKEET_STREAM = 1414744912;
@@ -131,6 +139,7 @@ export const TRANSCRIBE_EXT_KIND_WHISPER_RUN = 1314015319;
 export interface StructLayout { size: number; align: number; offsets: Record<string, number>; }
 export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_ext': { size: 16, align: 8, offsets: {'size': 0, 'kind': 8} },
+  'transcribe_backend_init_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'artifact_dir': 8, 'allowed_backends': 16} },
   'transcribe_device_info': { size: 64, align: 8, offsets: {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24, 'device_id': 32, 'memory_total': 40, 'memory_free': 48, 'device_type': 56} },
   'transcribe_model_load_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'backend': 8, 'device': 16} },
   'transcribe_session_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'n_threads': 8, 'kv_type': 12, 'n_ctx': 16} },
@@ -159,6 +168,7 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
 
 export const ABI_STRUCT_IDS: Record<string, number> = {
   'transcribe_ext': 12,
+  'transcribe_backend_init_params': 15,
   'transcribe_device_info': 13,
   'transcribe_model_load_params': 0,
   'transcribe_session_params': 1,
@@ -173,15 +183,16 @@ export const ABI_STRUCT_IDS: Record<string, number> = {
   'transcribe_word': 7,
   'transcribe_token': 8,
   'transcribe_speaker_segment': 14,
-  'transcribe_diarize_info': 15,
-  'transcribe_diarize_session_params': 16,
-  'transcribe_diarize_params': 17,
+  'transcribe_diarize_info': 16,
+  'transcribe_diarize_session_params': 17,
+  'transcribe_diarize_params': 18,
 };
 
 // Build koffi struct types; returns a name -> koffi.IKoffiCType map.
 export function defineTypes(koffi: any): Record<string, any> {
   const T: Record<string, any> = {};
   T['transcribe_ext'] = koffi.struct({ size: 'uint64_t', kind: 'uint32_t' });
+  T['transcribe_backend_init_params'] = koffi.struct({ struct_size: 'uint64_t', artifact_dir: 'char *', allowed_backends: 'uint32_t' });
   T['transcribe_device_info'] = koffi.struct({ struct_size: 'uint64_t', name: 'char *', description: 'char *', kind: 'char *', device_id: 'char *', memory_total: 'uint64_t', memory_free: 'uint64_t', device_type: 'int' });
   T['transcribe_model_load_params'] = koffi.struct({ struct_size: 'uint64_t', backend: 'int', device: 'void *' });
   T['transcribe_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int', kv_type: 'int', n_ctx: 'int32_t' });
@@ -213,7 +224,9 @@ export interface FnSig { ret: string; args: string[]; }
 export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_abi_struct_align': { ret: 'size_t', args: ['transcribe_abi_struct'] },
   'transcribe_abi_struct_size': { ret: 'size_t', args: ['transcribe_abi_struct'] },
+  'transcribe_allowed_backends': { ret: 'uint32_t', args: [] },
   'transcribe_backend_available': { ret: '_Bool', args: ['transcribe_backend_request'] },
+  'transcribe_backend_init_params_init': { ret: 'void', args: ['struct transcribe_backend_init_params *'] },
   'transcribe_batch_detected_language': { ret: 'const char *', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_full_text': { ret: 'const char *', args: ['const struct transcribe_session *', 'int'] },
   'transcribe_batch_get_segment': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'int', 'struct transcribe_segment *'] },
@@ -259,6 +272,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_get_word': { ret: 'transcribe_status', args: ['const struct transcribe_session *', 'int', 'struct transcribe_word *'] },
   'transcribe_init_backends': { ret: 'transcribe_status', args: ['const char *'] },
   'transcribe_init_backends_default': { ret: 'transcribe_status', args: [] },
+  'transcribe_init_backends_ex': { ret: 'transcribe_status', args: ['const struct transcribe_backend_init_params *'] },
   'transcribe_log_set': { ret: 'void', args: ['transcribe_log_callback', 'void *'] },
   'transcribe_model_accepts_ext_kind': { ret: '_Bool', args: ['const struct transcribe_model *', 'transcribe_ext_slot', 'uint32_t'] },
   'transcribe_model_arch_string': { ret: 'const char *', args: ['const struct transcribe_model *'] },

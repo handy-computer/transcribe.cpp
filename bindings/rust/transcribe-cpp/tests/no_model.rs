@@ -34,6 +34,7 @@ fn abi_struct_sizes_are_live() {
         AbiStruct::Segment,
         AbiStruct::SpeakerSegment,
         AbiStruct::SessionLimits,
+        AbiStruct::BackendInitParams,
         AbiStruct::DiarizeInfo,
         AbiStruct::DiarizeSessionParams,
         AbiStruct::DiarizeParams,

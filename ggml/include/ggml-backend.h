@@ -259,6 +259,13 @@ extern "C" {
     GGML_API void               ggml_backend_load_all(void);
     GGML_API void               ggml_backend_load_all_from_path(const char * dir_path);
 
+    // Registration filter (transcribe.cpp patch): consulted with the module
+    // name ("cpu", "vulkan", "hip", ...; "external" for GGML_BACKEND_PATH)
+    // before registering a compiled-in backend or opening a module. Install
+    // before first registry access. ggml_backend_load(path) is not filtered.
+    typedef bool (*ggml_backend_reg_filter_t)(const char * name);
+    GGML_API void               ggml_backend_set_reg_filter(ggml_backend_reg_filter_t filter);
+
     //
     // Backend scheduler
     //

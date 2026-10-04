@@ -53,7 +53,7 @@ from .errors import (
     raise_for_status,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # String-enum types, exported so callers (and type checkers) can name them.
 Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda", "rocm"]

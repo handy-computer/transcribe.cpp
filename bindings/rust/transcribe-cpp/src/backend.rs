@@ -157,6 +157,113 @@ pub fn init_backends_default() -> Result<()> {
     check(status, "init_backends_default")
 }
 
+/// Backend kinds allowed to register in this process. A backend outside the
+/// mask never runs any code, so a broken GPU driver can be kept out of a
+/// worker entirely. CPU is always allowed; `TRANSCRIBE_BACKENDS` can only
+/// narrow the mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BackendMask(u32);
+
+impl BackendMask {
+    /// CPU plus host-memory accelerators (BLAS). Always implied.
+    pub const CPU: BackendMask = BackendMask(sys::TRANSCRIBE_BACKEND_MASK_CPU);
+    /// Apple Metal.
+    pub const METAL: BackendMask = BackendMask(sys::TRANSCRIBE_BACKEND_MASK_METAL);
+    /// Vulkan.
+    pub const VULKAN: BackendMask = BackendMask(sys::TRANSCRIBE_BACKEND_MASK_VULKAN);
+    /// NVIDIA CUDA.
+    pub const CUDA: BackendMask = BackendMask(sys::TRANSCRIBE_BACKEND_MASK_CUDA);
+    /// AMD ROCm / HIP.
+    pub const ROCM: BackendMask = BackendMask(sys::TRANSCRIBE_BACKEND_MASK_ROCM);
+    /// Every backend without a dedicated bit (SYCL, OpenCL, RPC, ...).
+    pub const OTHER: BackendMask = BackendMask(sys::TRANSCRIBE_BACKEND_MASK_OTHER);
+    /// Everything. The default.
+    pub const ALL: BackendMask = BackendMask(sys::TRANSCRIBE_BACKEND_MASK_ALL);
+
+    /// The smallest mask that can serve a model-load `backend` request
+    /// ([`Backend::Auto`] needs everything).
+    pub const fn for_backend(backend: Backend) -> BackendMask {
+        match backend {
+            Backend::Auto => BackendMask::ALL,
+            Backend::Cpu | Backend::CpuAccel => BackendMask::CPU,
+            Backend::Metal => BackendMask::METAL.union(BackendMask::CPU),
+            Backend::Vulkan => BackendMask::VULKAN.union(BackendMask::CPU),
+            Backend::Cuda => BackendMask::CUDA.union(BackendMask::CPU),
+            Backend::Rocm => BackendMask::ROCM.union(BackendMask::CPU),
+        }
+    }
+
+    /// The raw `TRANSCRIBE_BACKEND_MASK_*` bits.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    /// A mask from raw `TRANSCRIBE_BACKEND_MASK_*` bits.
+    pub const fn from_bits(bits: u32) -> BackendMask {
+        BackendMask(bits)
+    }
+
+    /// Both masks' backends.
+    pub const fn union(self, other: BackendMask) -> BackendMask {
+        BackendMask(self.0 | other.0)
+    }
+
+    /// Whether every backend in `other` is in `self`.
+    pub const fn contains(self, other: BackendMask) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl Default for BackendMask {
+    fn default() -> Self {
+        BackendMask::ALL
+    }
+}
+
+impl std::ops::BitOr for BackendMask {
+    type Output = BackendMask;
+    fn bitor(self, rhs: BackendMask) -> BackendMask {
+        self.union(rhs)
+    }
+}
+
+impl std::ops::BitOrAssign for BackendMask {
+    fn bitor_assign(&mut self, rhs: BackendMask) {
+        *self = self.union(rhs);
+    }
+}
+
+/// [`init_backends`] / [`init_backends_default`] (`dir` = `None`) with an
+/// allowed-backend mask. The mask is fixed at first backend registration;
+/// call this first, once per process. A later call with a different
+/// effective mask returns [`crate::Error::Backend`].
+///
+/// ```no_run
+/// use transcribe_cpp::{init_backends_with, Backend, BackendMask};
+/// // A CPU fallback worker: never let the GPU driver load.
+/// init_backends_with(None::<&std::path::Path>, BackendMask::for_backend(Backend::Cpu))?;
+/// # Ok::<(), transcribe_cpp::Error>(())
+/// ```
+pub fn init_backends_with(dir: Option<impl AsRef<Path>>, allowed: BackendMask) -> Result<()> {
+    let c_dir = match dir {
+        Some(dir) => Some(CString::new(crate::model::path_bytes(dir.as_ref())?)?),
+        None => None,
+    };
+    let mut params: sys::transcribe_backend_init_params = unsafe { std::mem::zeroed() };
+    unsafe { sys::transcribe_backend_init_params_init(&mut params) };
+    params.artifact_dir = c_dir.as_ref().map_or(std::ptr::null(), |d| d.as_ptr());
+    params.allowed_backends = allowed.bits();
+    let status = unsafe { sys::transcribe_init_backends_ex(&params) };
+    check(status, "init_backends_with")
+}
+
+/// The effective mask: [`init_backends_with`]'s (ALL until then) narrowed
+/// by `TRANSCRIBE_BACKENDS`.
+pub fn allowed_backends() -> BackendMask {
+    BackendMask(unsafe { sys::transcribe_allowed_backends() })
+}
+
 /// The number of compute devices currently registered.
 ///
 /// Do not race this query with [`init_backends`] or [`init_backends_default`].

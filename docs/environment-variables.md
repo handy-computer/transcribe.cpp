@@ -24,6 +24,7 @@ of tests.
 
 | Variable | Effect |
 | --- | --- |
+| `TRANSCRIBE_BACKENDS=<list>` | Restrict which backends may register: a comma-separated list of `cpu`, `metal`, `vulkan`, `cuda`, `rocm`, `other`, `all` (case-insensitive). An excluded backend never runs any code (no module load, no driver init). It can only narrow the mask a host passes to `transcribe_init_backends_ex()`, applies even if the host never calls it, and CPU is always kept. Unknown names are dropped and logged as an error naming what is still allowed, so a typo narrows rather than widens (`vulcan` means CPU-only). Unset or empty means `all`. Read once per process. |
 | `TRANSCRIBE_NO_FLASH` | Disable flash attention on encoder and decoder (forces the manual F32 path). |
 | `TRANSCRIBE_FORCE_FLASH` | Force flash attention on. Wins over `TRANSCRIBE_NO_FLASH` if both are set. |
 | `TRANSCRIBE_CONV_DIRECT_DW` / `TRANSCRIBE_CONV_NO_DIRECT_DW` | Force the depthwise-conv dispatch to the direct `conv_2d_dw` path / the im2col path, overriding the per-family backend default. |

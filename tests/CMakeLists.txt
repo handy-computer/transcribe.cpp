@@ -54,6 +54,29 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
 
 add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
 
+# Allowed-backend mask (transcribe_init_backends_ex). The mask is fixed per
+# process, so each scenario is its own test invocation.
+add_executable(transcribe_backend_mask_unit
+    backend_mask_unit.c
+)
+
+set_target_properties(transcribe_backend_mask_unit PROPERTIES
+    C_STANDARD          11
+    C_STANDARD_REQUIRED ON
+    LINKER_LANGUAGE     C
+)
+
+target_link_libraries(transcribe_backend_mask_unit PRIVATE transcribe)
+
+foreach(mode cpu default env-cpu late)
+    add_test(NAME transcribe_backend_mask_unit_${mode}
+        COMMAND transcribe_backend_mask_unit ${mode})
+    set_tests_properties(transcribe_backend_mask_unit_${mode} PROPERTIES
+        ENVIRONMENT "TRANSCRIBE_TEST_BACKEND_DIR=$<TARGET_FILE_DIR:transcribe_backend_mask_unit>")
+endforeach()
+set_tests_properties(transcribe_backend_mask_unit_env-cpu PROPERTIES
+    ENVIRONMENT "TRANSCRIBE_TEST_BACKEND_DIR=$<TARGET_FILE_DIR:transcribe_backend_mask_unit>;TRANSCRIBE_BACKENDS=cpu")
+
 add_test(
     NAME transcribe_extension_umbrella_check
     COMMAND ${CMAKE_COMMAND}

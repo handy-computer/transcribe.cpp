@@ -63,6 +63,8 @@ if (MUSAToolkit_FOUND)
     # TODO: do not use CUDA definitions for MUSA
     if (NOT GGML_BACKEND_DL)
         target_compile_definitions(ggml PUBLIC GGML_USE_CUDA)
+        # transcribe.cpp: reg filter name
+        target_compile_definitions(ggml PRIVATE GGML_USE_MUSA)
     endif()
 
     add_compile_definitions(GGML_USE_MUSA)

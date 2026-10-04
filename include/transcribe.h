@@ -153,7 +153,7 @@
  */
 #define TRANSCRIBE_VERSION_MAJOR 0
 #define TRANSCRIBE_VERSION_MINOR 3
-#define TRANSCRIBE_VERSION_PATCH 0
+#define TRANSCRIBE_VERSION_PATCH 1
 
 #define TRANSCRIBE_VERSION_STRINGIZE_(x) #x
 #define TRANSCRIBE_VERSION_STRINGIZE(x)  TRANSCRIBE_VERSION_STRINGIZE_(x)
@@ -386,10 +386,11 @@ typedef enum {
     TRANSCRIBE_ABI_EXT                    = 12,
     TRANSCRIBE_ABI_DEVICE_INFO            = 13,
     TRANSCRIBE_ABI_SPEAKER_SEGMENT        = 14,
+    TRANSCRIBE_ABI_BACKEND_INIT_PARAMS    = 15,
     /* include/transcribe/diarize.h */
-    TRANSCRIBE_ABI_DIARIZE_INFO           = 15,
-    TRANSCRIBE_ABI_DIARIZE_SESSION_PARAMS = 16,
-    TRANSCRIBE_ABI_DIARIZE_PARAMS         = 17,
+    TRANSCRIBE_ABI_DIARIZE_INFO           = 16,
+    TRANSCRIBE_ABI_DIARIZE_SESSION_PARAMS = 17,
+    TRANSCRIBE_ABI_DIARIZE_PARAMS         = 18,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.
@@ -832,6 +833,47 @@ TRANSCRIBE_API transcribe_status transcribe_init_backends(const char * artifact_
  * no-op returning TRANSCRIBE_OK.
  */
 TRANSCRIBE_API transcribe_status transcribe_init_backends_default(void);
+
+/*
+ * Allowed-backend mask. Registering a GPU backend runs driver code, so a
+ * broken driver can crash the process before any model loads. A backend
+ * outside the mask is never registered: its module is never opened and its
+ * registration function never runs. CPU (incl. BLAS/ZenDNN) is always
+ * allowed; OTHER covers backends without a bit (SYCL, OpenCL, RPC, ...).
+ *
+ * TRANSCRIBE_BACKENDS=cpu,vulkan,... (also metal, cuda, rocm, other, all)
+ * can only narrow the mask, and applies even if _ex() is never called.
+ *
+ * The mask is fixed at first backend registration (first init call, or in
+ * static builds the first device query / model load). A later call with a
+ * different effective mask returns TRANSCRIBE_ERR_BACKEND. Call once, first.
+ */
+#define TRANSCRIBE_BACKEND_MASK_CPU    0x00000001u
+#define TRANSCRIBE_BACKEND_MASK_METAL  0x00000002u
+#define TRANSCRIBE_BACKEND_MASK_VULKAN 0x00000004u
+#define TRANSCRIBE_BACKEND_MASK_CUDA   0x00000008u
+#define TRANSCRIBE_BACKEND_MASK_ROCM   0x00000010u
+#define TRANSCRIBE_BACKEND_MASK_OTHER  0x80000000u
+#define TRANSCRIBE_BACKEND_MASK_ALL    0xFFFFFFFFu
+
+struct transcribe_backend_init_params {
+    uint64_t     struct_size;      /* sizeof(*this); set by _init() */
+    const char * artifact_dir;     /* NULL: package-local default */
+    uint32_t     allowed_backends; /* TRANSCRIBE_BACKEND_MASK_*; default ALL */
+};
+
+TRANSCRIBE_API void transcribe_backend_init_params_init(struct transcribe_backend_init_params * p);
+
+/*
+ * Fix the mask, then behave as transcribe_init_backends(artifact_dir), or
+ * _default() when artifact_dir is NULL. NULL params means all defaults.
+ * Also returns TRANSCRIBE_ERR_BACKEND if the mask was already fixed to a
+ * different value or no device is registered afterwards.
+ */
+TRANSCRIBE_API transcribe_status transcribe_init_backends_ex(const struct transcribe_backend_init_params * params);
+
+/* The effective mask: the host's (ALL until _ex()) narrowed by the env. */
+TRANSCRIBE_API uint32_t transcribe_allowed_backends(void);
 
 /*
  * Opaque process-local compute-device handle. Handles are owned by the
