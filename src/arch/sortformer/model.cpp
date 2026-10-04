@@ -12,6 +12,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "sortformer.h"
+#include "transcribe-abi.h"
 #include "transcribe-arch.h"
 #include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
@@ -610,7 +611,9 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    m->roles     = TRANSCRIBE_ROLE_DIARIZE;
+    m->roles = TRANSCRIBE_ROLE_DIARIZE;
+    // The abort callback is honored (transcribe_diarize_set_abort_callback).
+    transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_CANCELLATION, true);
     m->t_load_us = ggml_time_us() - t_load_start;
     *out_model   = m.release();
     return TRANSCRIBE_OK;
@@ -1002,15 +1005,23 @@ static bool accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot
            kind == TRANSCRIBE_EXT_KIND_SORTFORMER_DIARIZE;
 }
 
-static transcribe_status check_preset(transcribe_sortformer_preset preset) {
+// The caller's preset, read as a raw int (see transcribe::enum_field_raw):
+// an out-of-range value must be rejected before it is loaded as the enum.
+static int ext_preset_raw(const transcribe_diarize_params * params) {
+    return transcribe::enum_field_raw(
+        &reinterpret_cast<const transcribe_sortformer_diarize_ext *>(params->family)->preset);
+}
+
+static transcribe_status check_preset(int preset) {
     switch (preset) {
         case TRANSCRIBE_SORTFORMER_PRESET_DEFAULT:
         case TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY:
         case TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY:
         case TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY:
             return TRANSCRIBE_OK;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    return TRANSCRIBE_ERR_INVALID_ARG;
 }
 
 // ---- DIARIZE role ----
@@ -1029,7 +1040,7 @@ static transcribe_status diarize_run_validate(const transcribe_diarize_params * 
         st != TRANSCRIBE_OK) {
         return st;
     }
-    return check_preset(reinterpret_cast<const transcribe_sortformer_diarize_ext *>(params->family)->preset);
+    return check_preset(ext_preset_raw(params));
 }
 
 static transcribe_status diarize_run(transcribe_diarize_session *      session,
@@ -1041,10 +1052,10 @@ static transcribe_status diarize_run(transcribe_diarize_session *      session,
     if (pc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
-    const transcribe_sortformer_preset preset =
-        params->family != nullptr ?
-            reinterpret_cast<const transcribe_sortformer_diarize_ext *>(params->family)->preset :
-            TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
+    // Range-checked by diarize_run_validate before the dispatcher got here.
+    const transcribe_sortformer_preset preset = params->family != nullptr ?
+                                                    static_cast<transcribe_sortformer_preset>(ext_preset_raw(params)) :
+                                                    TRANSCRIBE_SORTFORMER_PRESET_DEFAULT;
     return diarize_pcm(pc, static_cast<SortformerModel *>(session->model), pcm, n_samples, preset, out);
 }
 

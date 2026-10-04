@@ -294,7 +294,7 @@ modelTest("a feed that fails inside the native hook releases the stream lease", 
     // feed() has no signal option, so install it on the native session
     // directly (test-only; the same library instance the binding loaded).
     const lib = koffi.load(libraryPath());
-    const proto = koffi.proto("bool ComputeRulesTestAbortCb(void *udata)");
+    const proto = koffi.proto("bool StreamingTestAbortCb(void *udata)");
     const setAbort = lib.func("transcribe_set_abort_callback", "void", [
       "void *",
       koffi.pointer(proto),

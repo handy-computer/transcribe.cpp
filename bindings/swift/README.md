@@ -5,12 +5,15 @@ a C/C++ speech-to-text library built on ggml. Native code ships as a prebuilt
 `.xcframework` SwiftPM `binaryTarget`, with Metal embedded on supported Apple
 slices.
 
-> Status: in development (0.2.0). Core model, session, run, stream,
+> Status: in development (0.3.0). Core model, session, run, stream,
 > cancellation, backend, and family-extension APIs are implemented and tested.
 
 Upgrading from 0.1? See the
 [0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
-including the replacement of `gpuDevice` with exact `Device` values.
+including the replacement of `gpuDevice` with exact `Device` values. From 0.3,
+see the
+[0.4 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.4.md)
+(roles, `DiarizeSession`, throwing `capabilities`).
 
 ## Install
 
@@ -23,7 +26,7 @@ custom artifact path through `TRANSCRIBE_XCFRAMEWORK_PATH`.
 The standalone SwiftPM mirror is planned but not published yet:
 
 ```swift
-.package(url: "https://github.com/handy-computer/transcribe-cpp-swift.git", from: "0.2.0")
+.package(url: "https://github.com/handy-computer/transcribe-cpp-swift.git", from: "0.3.0")
 ```
 
 Until that mirror repo and tag exist, use the release xcframework directly when
@@ -32,7 +35,7 @@ you only need the raw C module:
 ```swift
 .binaryTarget(
     name: "CTranscribe",
-    url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.2.0/TranscribeCpp.xcframework.zip",
+    url: "https://github.com/handy-computer/transcribe.cpp/releases/download/v0.3.0/TranscribeCpp.xcframework.zip",
     checksum: "<published with the release>"
 )
 ```
@@ -134,7 +137,8 @@ back to another primary device.
   runs queue; load one `Model` per worker for true parallelism.
 - `Session` is single-threaded. Use one session from one thread at a time.
 - An active `Stream` holds the model's compute lease until `finalize`, `reset`,
-  or drop. Other runs/streams on that model fail with `TranscribeError.busy`.
+  drop, or a `feed` that fails the stream. Other runs/streams on that model
+  fail with `TranscribeError.busy`.
 - `Transcribe.setLogHandler` is best installed at startup. Repeated calls are
   safe; they swap the Swift handler behind one native trampoline.
 - On Metal, do not keep models in globals in short-lived programs. Scope models

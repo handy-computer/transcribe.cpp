@@ -562,10 +562,23 @@ impl Stream<'_> {
         let mut update: sys::transcribe_stream_update = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_stream_update_init(&mut update) };
         // This stream already holds the model's compute lease (it is in
-        // flight); the lock here just serializes the native call.
-        let status = self.session.model.with_compute(None, |_| unsafe {
-            sys::transcribe_stream_feed(self.session.ptr, pcm.as_ptr(), n, &mut update)
+        // flight); the lock here just serializes the native call. A feed that
+        // ends the stream (FAILED) frees the lease, as finalize does; a feed
+        // rejected before the native hook (e.g. NaN) leaves it ACTIVE and keeps it.
+        let ptr = self.session.ptr;
+        let held = self.holds_lease;
+        let (status, ended) = self.session.model.with_compute(None, |lease| {
+            let st = unsafe { sys::transcribe_stream_feed(ptr, pcm.as_ptr(), n, &mut update) };
+            let ended = unsafe { sys::transcribe_stream_get_state(ptr) }
+                == sys::transcribe_stream_state::TRANSCRIBE_STREAM_FAILED;
+            if held && ended {
+                *lease = false;
+            }
+            (st, ended)
         })?;
+        if ended {
+            self.holds_lease = false;
+        }
         check(status, "stream feed")?;
         Ok(StreamUpdate::from_raw(&update))
     }

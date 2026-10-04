@@ -98,11 +98,12 @@ public struct StreamUpdate: Sendable, Equatable {
 public final class Stream {
     private let session: Session
     /// True while this stream holds the model's compute lease (set at begin,
-    /// cleared at finalize/reset/deinit). Tracked per-stream so `deinit` never
-    /// releases a lease a *different* session has since acquired — mirrors the
-    /// Rust binding's `holds_lease`. Mutated only inside `model.withCompute`; the
-    /// `deinit` guard reads it on the deallocating thread, where no other
-    /// reference to this `Stream` can exist (so no concurrent mutation).
+    /// cleared at a failing feed, finalize, reset, or deinit). Tracked
+    /// per-stream so `deinit` never releases a lease a *different* session has
+    /// since acquired — mirrors the Rust binding's `holds_lease`. Mutated only
+    /// inside `model.withCompute`; the `deinit` guard reads it on the
+    /// deallocating thread, where no other reference to this `Stream` can exist
+    /// (so no concurrent mutation).
     var holdsLease = true
 
     init(_ session: Session) { self.session = session }
@@ -120,12 +121,18 @@ public final class Stream {
     }
 
     /// Feed a PCM frame (16 kHz mono float32). Returns per-call change metadata.
+    /// A feed that ends the stream (FAILED) releases the model's compute lease;
+    /// one rejected before the model saw it (e.g. NaN/Inf) leaves it ACTIVE
+    /// and keeps the lease.
     public func feed(_ frame: [Float]) throws -> StreamUpdate {
         try session.model.withCompute {
             var update = transcribe_stream_update()
             transcribe_stream_update_init(&update)
             let status = frame.withUnsafeBufferPointer {
                 transcribe_stream_feed(session.ptr, $0.baseAddress, Int32($0.count), &update)
+            }
+            if holdsLease && transcribe_stream_get_state(session.ptr) == TRANSCRIBE_STREAM_FAILED {
+                session.model.streamActive = false; holdsLease = false
             }
             try TranscribeError.check(status, context: "stream_feed")
             return StreamUpdate(update)
@@ -187,7 +194,7 @@ extension Session {
     /// `.notImplemented`) and be idle/finished/failed (not already streaming).
     /// Claims the model's compute lease for the whole stream lifetime: a second
     /// stream — or an offline run — on ANY session of the same model is refused
-    /// with `.busy` until this stream finalizes, resets, or is dropped.
+    /// with `.busy` until this stream finalizes, fails, resets, or is dropped.
     public func stream(
         _ runOptions: RunOptions = .init(), _ streamOptions: StreamOptions = .init()
     ) throws -> Stream {

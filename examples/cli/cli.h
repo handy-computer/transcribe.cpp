@@ -1,8 +1,9 @@
 // cli.h - shared declarations for the transcribe-cli example.
 //
-// main.cpp parses arguments and owns process setup (log sink, output file);
-// the per-role drivers (asr.cpp, diarize.cpp) do the work. Shared helpers live in
-// namespace transcribe_cli next to the WAV loader in examples/common.
+// main.cpp parses arguments, owns process setup (log sink, output file), and
+// routes each model to its role's driver (asr.cpp, diarize.cpp). Shared
+// helpers live in namespace transcribe_cli next to the WAV loader in
+// examples/common.
 
 #pragma once
 
@@ -108,13 +109,20 @@ struct cli_args {
 // Returns false (after an error message naming `path`) on a write failure.
 bool write_output_file(std::ofstream * output, const std::string & path, const char * text);
 
-// ASR drivers (asr.cpp). Each loads the model, runs, prints, and returns the
-// process exit code.
+// ASR batch driver (asr.cpp): loads the model, runs every listed file, prints,
+// and returns the process exit code.
 int run_asr_batch(const cli_args & args, std::ofstream * output);
-int run_asr_file(const cli_args & args, std::ofstream * output);
 
-// DIARIZE driver (diarize.cpp): runs on a model run_asr_file already loaded
-// and printed. Takes ownership of the model. With -o, writes the segment lines.
+// Single-file drivers, one per role. main.cpp loads the audio and the model,
+// prints them, and dispatches on transcribe_model_roles(); the driver takes
+// ownership of the model and returns the process exit code.
+int run_asr_file(const cli_args &           args,
+                 transcribe_model *         model,
+                 const std::vector<float> & pcm,
+                 double                     duration_s,
+                 std::ofstream *            output);
+
+// With -o, writes the segment lines.
 int run_diarize_file(const cli_args &           args,
                      transcribe_model *         model,
                      const std::vector<float> & pcm,

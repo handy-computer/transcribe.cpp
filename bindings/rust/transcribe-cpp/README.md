@@ -215,6 +215,7 @@ fn main() {
 - `Session` is `Send` but not `Sync`; mutating calls take `&mut self`.
 - In 0.x the C library allows at most one in-flight run across all sessions of a
   model; this crate enforces it with a per-model mutex, so concurrent calls
-  queue rather than race. For real parallelism, use one `Model` per worker.
+  queue rather than race. `DiarizeSession`s share the same lock. For real
+  parallelism, use one `Model` per worker.
 
 - License: MIT

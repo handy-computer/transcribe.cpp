@@ -98,6 +98,22 @@ objects own copies of every row and remain valid after the next run.
 
 That contract is for ASR models that attribute speakers inside a transcript.
 
+## Compute lock and stream lease
+
+The C library allows one compute in flight per model and leaves enforcing it
+to the caller. Every first-class binding enforces it with a model-wide lock
+shared by every session of every role: a call waits behind any other compute
+on the same model.
+
+The bindings are also stricter than C about streams. `transcribe.h` lets
+several sessions of one model each hold an active stream and interleave
+their feeds; a binding allows one active stream per model. Starting a stream
+takes the model's stream lease, and ending it (finalize, reset, a feed that
+leaves the stream FAILED, or dropping / closing the stream) releases it.
+While the lease is held, `run`, `run_batch`, a new stream and a diarize run
+on any session of that model raise `Busy` instead of waiting. A feed
+rejected before the native call (e.g. NaN input) keeps the lease.
+
 ## Roles and the DIARIZE session
 
 Each binding exposes the role mask as `Model.roles` (Python `frozenset[Role]`,

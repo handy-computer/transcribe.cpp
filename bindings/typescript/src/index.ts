@@ -658,7 +658,7 @@ const SORTFORMER_PRESET: Record<string, number> = {
  * Build a native ext-struct buffer for a family extension and return the koffi
  * pointer to assign to `params.family`. Validates the slot and that the model
  * accepts the kind. The returned buffer must be kept alive (held via the params
- * object) until the native call returns.
+ * object) until the native call returns, then freed by freeRunParams.
  */
 function buildFamily(
   n: Native,
@@ -687,7 +687,12 @@ function buildFamily(
     if (v !== undefined) ext[k] = v;
   }
   const buf = n.koffi.alloc(n.T[reg.type], 1);
-  n.koffi.encode(buf, n.T[reg.type], ext);
+  try {
+    n.koffi.encode(buf, n.T[reg.type], ext);
+  } catch (e) {
+    n.koffi.free(buf);
+    throw e;
+  }
   return buf;
 }
 
@@ -698,12 +703,19 @@ function cstr(value: string, name: string): string {
   return value;
 }
 
-/** Free what #buildRunParams allocated; call once the native call returns. */
+/**
+ * Free what #buildRunParams / buildFamily allocated into a params struct; call
+ * only once the native call has returned (never while a worker reads it).
+ */
 function freeRunParams(n: Native, p: any): void {
   if (p.vocabulary) {
     n.koffi.free(p.vocabulary);
     p.vocabulary = null;
     p.n_vocabulary = 0;
+  }
+  if (p.family) {
+    n.koffi.free(p.family);
+    p.family = null;
   }
 }
 
@@ -987,8 +999,6 @@ export class Session {
     if (opts.keepSpecialTags !== undefined)
       p.keep_special_tags = opts.keepSpecialTags;
     if (opts.specKDrafts !== undefined) p.spec_k_drafts = opts.specKDrafts;
-    if (opts.family)
-      p.family = buildFamily(n, this.#model.handle, opts.family, "run");
     if (opts.vocabulary !== undefined) {
       const terms = opts.vocabulary;
       if (!Array.isArray(terms) || !terms.every((t) => typeof t === "string"))
@@ -1005,6 +1015,9 @@ export class Session {
     }
     if (opts.prompt !== undefined) p.prompt = cstr(opts.prompt, "prompt");
     if (opts.prefix !== undefined) p.prefix = cstr(opts.prefix, "prefix");
+    // Last, so no later validation throw can strand the allocation.
+    if (opts.family)
+      p.family = buildFamily(n, this.#model.handle, opts.family, "run");
     return p;
   }
 
@@ -1116,7 +1129,11 @@ export class Session {
       if (!control) throw new TranscribeError("session control is missing");
       control.replaceCurrentStream(stream);
       return stream;
-    }).finally(() => freeRunParams(n, rp)); // begin copied the prompting strings
+    }).finally(() => {
+      // begin copied the prompting strings and the family extension
+      freeRunParams(n, rp);
+      freeRunParams(n, sp);
+    });
   }
 
   get wasAborted(): boolean {
@@ -1383,7 +1400,7 @@ export class DiarizeSession {
       return readSpeakerSegments(n, F.diarizeNSegments(h), (i, o) =>
         F.diarizeGetSegment(h, i, o),
       );
-    });
+    }).finally(() => freeRunParams(n, p));
   }
 
   /** load_ms plus the last run's mel / encode time. */

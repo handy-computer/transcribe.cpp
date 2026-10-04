@@ -80,6 +80,7 @@ def fake(monkeypatch):
         s._handle = ctypes.c_void_p(next(ids))
         s._cancel = threading.Event()
         s._abort_trampoline = None
+        m._track(s._handle, cls._free_fn)  # as _arm_abort does
         m._sessions.add(s)
         if track:
             made.append(s)
@@ -116,6 +117,12 @@ class _LockSpy:
 
     def release(self):
         self._lock.release()
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, *exc):
+        self.release()
 
     def locked(self):
         return self._lock.locked()
@@ -175,6 +182,7 @@ def test_calls_on_two_sessions_never_overlap(fake, monkeypatch):
 def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     m = fake.model()
     s = fake.session(m)
+    d = fake.session(m, cls=t.DiarizeSession)
     seen: list = []
 
     def holds(name, ret=0):
@@ -187,7 +195,8 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     for name in ("transcribe_run", "transcribe_run_batch",
                  "transcribe_stream_begin", "transcribe_stream_feed",
                  "transcribe_stream_finalize", "transcribe_stream_reset",
-                 "transcribe_batch_status"):
+                 "transcribe_batch_status", "transcribe_diarize_run",
+                 "transcribe_diarize_n_segments"):
         monkeypatch.setattr(t._lib, name, holds(name))
     monkeypatch.setattr(t._lib, "transcribe_batch_n_results",
                         holds("transcribe_batch_n_results", ret=1))
@@ -205,12 +214,14 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     stream.feed(PCM)
     stream.finalize()
     stream.reset()
+    assert d.run(PCM) == []
 
     names = [n for n, _ in seen]
     for site in ("transcribe_run", "transcribe_run_batch",
                  "transcribe_batch_n_results", "transcribe_batch_status",
                  "transcribe_stream_begin", "transcribe_stream_feed",
                  "transcribe_stream_finalize", "transcribe_stream_reset",
+                 "transcribe_diarize_run", "transcribe_diarize_n_segments",
                  "copy-out"):
         assert site in names, f"{site} never reached"
     assert all(ok for _, ok in seen), [n for n, ok in seen if not ok]
@@ -368,13 +379,21 @@ BEGIN_BUSY = "a stream is already active on this model"
 def native(fake, monkeypatch):
     """Probes for the native compute entry points. ``calls`` records
     (name, session handle) for every native compute call that ran;
-    ``status`` sets what each one returns."""
+    ``status`` sets what each one returns. A successful begin makes the
+    stream ACTIVE; finalize ends it (FINISHED, or FAILED on error)."""
     calls: list = []
     status = {"run": 0, "begin": 0, "feed": 0, "finalize": 0}
+    ends = {"begin": (_generated.TRANSCRIBE_STREAM_ACTIVE, None),
+            "finalize": (_generated.TRANSCRIBE_STREAM_FINISHED,
+                         _generated.TRANSCRIBE_STREAM_FAILED)}
 
     def probe(name, key):
         def fn(h, *rest):
             calls.append((name, h.value))
+            ok, failed = ends.get(key, (None, None))
+            new = ok if status[key] == 0 else failed
+            if new is not None:
+                fake.state["value"] = new
             return status[key]
         return fn
 

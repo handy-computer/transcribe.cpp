@@ -123,8 +123,9 @@ const turns = await diarizer.run(pcm, {
 for (const t of turns) console.log(t.speakerId, t.t0Ms, t.t1Ms);
 ```
 
-`run` takes a `signal` like `Session.run`; `diarizer.timings` reports the last
-run. Diarize runs share the model's one-at-a-time rule and `Busy` refusal below.
+`run` accepts a `signal`; cancelling throws `Aborted` (with no partial result).
+`diarizer.timings` reports the last run. Diarize runs wait on the same
+model-wide lock as other compute calls (see below).
 
 ### Resource management
 
@@ -189,17 +190,18 @@ the lease held; a failure inside the model makes it `"failed"` and frees the lea
 Because the compute is genuinely on another thread, **do not touch a session
 while a call against it is in flight** — it is single-threaded in the C library:
 
-- Reading a stream's `text`/`snapshot`/`state`/`revision`/`lastStatus`, or a
-  session's `limits`/`wasAborted`, during an un-awaited
-  `feed`/`finalize`/`run`/`runBatch` **throws**.
+- Reading a stream's `text`/`snapshot`/`state`/`revision`/`lastStatus`, a
+  session's `limits`/`wasAborted`, or a `DiarizeSession`'s `timings`, during an
+  un-awaited `feed`/`finalize`/`run`/`runBatch` **throws**.
 - `reset()` and `dispose()` are safe to call any time: the native teardown is
   deferred behind any in-flight call, so it never frees a session mid-compute.
 - Disposing a `Session` or `TranscribeModel` while a stream is still active
   releases the lease and invalidates the stream — its later calls throw rather
   than touch the freed handle.
-- The **input PCM is borrowed, not copied**: `run`/`runBatch`/`feed` hand the
-  buffer to native code that reads it on the worker thread, so do not mutate it
-  (e.g. reuse a scratch/capture buffer) until the returned promise resolves.
+- The **input PCM is borrowed, not copied**: `run`/`runBatch`/`feed` (and
+  `DiarizeSession.run`) hand the buffer to native code that reads it on the
+  worker thread, so do not mutate it (e.g. reuse a scratch/capture buffer)
+  until the returned promise resolves.
   Pass a fresh buffer per call, or `await` before overwriting.
 
 The normal pattern is safe — `await` first, then read:

@@ -953,8 +953,9 @@ class Model:
     of a model, so ``Session.run()`` / ``run_batch()`` / ``stream()``,
     ``Stream.feed()`` / ``finalize()`` / ``reset()`` and ``DiarizeSession.run()``
     hold a model-wide lock for the native call and its copy-out. Calls from
-    other threads wait (still cancellable via ``cancel()``); load one Model
-    per worker for parallelism. An active stream holds the model's stream
+    other threads wait; a ``cancel()`` on a queued call is kept, and it
+    aborts at its first poll after acquiring the lock. Load one Model per
+    worker for parallelism. An active stream holds the model's stream
     lease from ``stream()`` until it is finalized, reset, fails, is
     garbage-collected or its session/model is closed. Meanwhile ``run()``,
     ``run_batch()``, ``stream()`` and diarize ``run()`` on any session raise
@@ -1008,8 +1009,10 @@ class Model:
     # One plain Lock per model serializes native compute calls and copy-out.
     # Not reentrant: the log callback can fire inside a native call, so a
     # nested compute is detected via _compute_owner and raises instead.
-    # Native frees never wait: they queue FIFO on _deferred (sessions before
-    # their model) and the lock holder runs them before releasing.
+    # Native frees never wait: they queue FIFO on _deferred and the lock
+    # holder runs them before releasing. close() queues every live session's
+    # free before the model's, from _live (strong records, not the weak
+    # _sessions, which the cycle collector clears before finalizers run).
     # _stream_owner (the active stream's _StreamLease) is written only under it.
 
     def _init_compute_state(self) -> None:
@@ -1017,6 +1020,8 @@ class Model:
         self._compute_owner: Optional[int] = None  # thread ident while held
         self._deferred: collections.deque = collections.deque()
         self._stream_owner: Optional[_StreamLease] = None
+        # id(handle) -> (handle, native free name, pin) per open session.
+        self._live: dict = {}
 
     @contextmanager
     def _exclusive(self, kind: str, busy: Optional[str] = None):
@@ -1029,21 +1034,25 @@ class Model:
                 f"cannot start {kind}: this thread is already inside a "
                 "compute call on this model (a re-entrant call from a "
                 "callback?)")
-        self._compute_lock.acquire()
-        self._compute_owner = me
         try:
-            self._h  # raises if the model is closed
-            if busy is not None and self._stream_owner is not None:
-                raise Busy(busy)
-            yield
+            # `with`: no gap between acquire and the release guard in which
+            # a KeyboardInterrupt could leak the lock.
+            with self._compute_lock:
+                try:
+                    self._compute_owner = me
+                    self._h  # raises if the model is closed
+                    if busy is not None and self._stream_owner is not None:
+                        raise Busy(busy)
+                    yield
+                finally:
+                    try:
+                        self._drain_deferred_locked()
+                    finally:
+                        # Owner stays set while draining: a native free can
+                        # log, and the re-entrancy check must still see this
+                        # thread.
+                        self._compute_owner = None
         finally:
-            try:
-                self._drain_deferred_locked()
-            finally:
-                # Owner stays set while draining: a native free can log, and
-                # the re-entrancy check must still see this thread.
-                self._compute_owner = None
-                self._compute_lock.release()
             self._try_drain()
 
     def _drain_deferred_locked(self) -> None:
@@ -1058,20 +1067,48 @@ class Model:
         """Run queued frees now if the lock is free, else leave them to the
         holder. Never blocks; loops so a free queued during release is run."""
         while self._deferred:
-            if not self._compute_lock.acquire(blocking=False):
-                return
-            self._compute_owner = threading.get_ident()
+            got = False
             try:
+                # Acquired inside the try, so the release guard covers all but
+                # the call's own return (no non-blocking `with` exists).
+                got = self._compute_lock.acquire(False)
+                if not got:
+                    return
+                self._compute_owner = threading.get_ident()
                 self._drain_deferred_locked()
             finally:
-                self._compute_owner = None
-                self._compute_lock.release()
+                if got:
+                    self._compute_owner = None
+                    self._compute_lock.release()
 
     def _free_or_defer(self, free) -> None:
         """Run *free* behind any in-flight compute call without waiting for
         it. *free* must not reference the Session (it may already be gone)."""
         self._deferred.append(free)
         self._try_drain()
+
+    def _track(self, handle: ctypes.c_void_p, free_fn: str, pin=None) -> None:
+        """Record an open session's native handle (and *pin*, kept alive
+        until its free) so close() frees it even if its wrapper is gone."""
+        self._live[id(handle)] = (handle, free_fn, pin)
+
+    def _free_session(self, handle: ctypes.c_void_p) -> None:
+        """Free a tracked session behind any in-flight call. The record is
+        popped first, so the session's own close() and the model's close()
+        free it exactly once, whichever runs first."""
+        record = self._live.pop(id(handle), None)
+        if record is None:
+            return
+        handle, free_fn, pin = record
+
+        def free(_pin=pin):
+            getattr(_lib, free_fn)(handle)
+            # Release this session's stream lease only after the free, in the
+            # same locked step, so a queued run cannot start before it.
+            if getattr(self._stream_owner, "handle", None) is handle:
+                self._stream_owner = None
+
+        self._free_or_defer(free)
 
     @property
     def arch(self) -> str:
@@ -1192,6 +1229,8 @@ class Model:
         self._handle = None
         for session in list(getattr(self, "_sessions", ()) or ()):
             session.close()
+        for record in list(getattr(self, "_live", {}).values()):
+            self._free_session(record[0])  # wrappers already collected
         self._free_or_defer(lambda: _lib.transcribe_model_free(handle))
 
     def __enter__(self) -> "Model":
@@ -1223,6 +1262,8 @@ class _SessionBase:
         self._cancel = threading.Event()
         event = self._cancel
         self._abort_trampoline = _ABORT_CFUNC(lambda _ud: event.is_set())
+        # The record pins the trampoline the native session points at.
+        self._model._track(self._handle, self._free_fn, self._abort_trampoline)
         set_cb(self._handle, self._abort_trampoline, None)
         # Registered last, once fully constructed: Model.close() closes any
         # session still tracked here before freeing the model.
@@ -1273,19 +1314,7 @@ class _SessionBase:
         if handle is None:
             return
         self._handle = None
-        # The deferred free pins the abort trampoline the native session
-        # points at, and never references self (close() may run from __del__).
-        trampoline = getattr(self, "_abort_trampoline", None)
-        free_fn, model = self._free_fn, self._model
-
-        def free(_pin=trampoline):
-            getattr(_lib, free_fn)(handle)
-            # Release this session's stream lease only after the free, in the
-            # same locked step, so a queued run cannot start before it.
-            if getattr(model._stream_owner, "handle", None) is handle:
-                model._stream_owner = None
-
-        model._free_or_defer(free)
+        self._model._free_session(handle)  # a no-op if the model freed it
 
     def __enter__(self: _S) -> _S:
         return self
@@ -1539,11 +1568,13 @@ class Session(_SessionBase):
             return Stream(self, _keepalive=(run_params, sp), _lease=lease)
 
     def _materialize(self, h: ctypes.c_void_p, utt: int | None = None) -> Result:
-        """Copy out one result from session handle *h* (captured under the
-        compute lock, so a concurrent close() cannot pull it away mid-copy).
-        utt is None for the single-result accessors, or an utterance index for
-        the batch accessors (index 0 aliases the single result after a plain
-        run, so both paths share this code)."""
+        """Copy out one result from session handle *h*. The run paths call
+        this under the compute lock with *h* captured there, so a concurrent
+        close() cannot pull it away mid-copy; ``Stream.snapshot()`` is an
+        unlocked read (see ``Session``). utt is None for the single-result
+        accessors, or an utterance index for the batch accessors (index 0
+        aliases the single result after a plain run, so both paths share
+        this code)."""
         if utt is None:
             n_seg = lambda: _lib.transcribe_n_segments(h)
             get_seg = lambda j, out: _lib.transcribe_get_segment(h, j, out)
@@ -1664,6 +1695,13 @@ class Stream:
         if model._stream_owner is self._lease:
             model._stream_owner = None
 
+    def _release_lease_if_ended_locked(self, h: ctypes.c_void_p) -> None:
+        """After a feed/finalize: release the lease once the native stream
+        is no longer ACTIVE (FINISHED or FAILED). A call rejected before the
+        model saw it (e.g. NaN/Inf samples) leaves it ACTIVE and keeps it."""
+        if _lib.transcribe_stream_get_state(h) != _generated.TRANSCRIBE_STREAM_ACTIVE:
+            self._release_lease_locked()
+
     @property
     def _h(self) -> ctypes.c_void_p:
         if not self._active:
@@ -1680,12 +1718,7 @@ class Stream:
         with self._session._model._exclusive("stream_feed"):  # no busy check
             h = self._h
             status = _lib.transcribe_stream_feed(h, array, n_samples, _byref(update))
-            # A failure that leaves the stream no longer ACTIVE ends it: release
-            # the lease. A pre-hook rejection (e.g. NaN) keeps it ACTIVE.
-            if (status != _generated.TRANSCRIBE_OK
-                    and _lib.transcribe_stream_get_state(h)
-                    != _generated.TRANSCRIBE_STREAM_ACTIVE):
-                self._release_lease_locked()
+            self._release_lease_if_ended_locked(h)
             _check(status, "transcribe_stream_feed")
             return _stream_update_from(update)
 
@@ -1695,12 +1728,8 @@ class Stream:
         _lib.transcribe_stream_update_init(_byref(update))
         with self._session._model._exclusive("stream_finalize"):
             h = self._h
-            try:
-                status = _lib.transcribe_stream_finalize(h, _byref(update))
-            finally:
-                # Finalize ends the active stream (FINISHED, or FAILED on
-                # error): release the lease either way.
-                self._release_lease_locked()
+            status = _lib.transcribe_stream_finalize(h, _byref(update))
+            self._release_lease_if_ended_locked(h)
             _check(status, "transcribe_stream_finalize")
             return _stream_update_from(update)
 
@@ -1756,8 +1785,14 @@ class Stream:
     def __enter__(self) -> "Stream":
         return self
 
-    def __exit__(self, *exc) -> None:
-        self.reset()
+    def __exit__(self, exc_type, *exc) -> None:
+        try:
+            self.reset()
+        except TranscribeError:
+            # e.g. the session or model was closed in the block: never mask
+            # the exception that is already propagating.
+            if exc_type is None:
+                raise
 
     def __del__(self):
         # Abandoned while holding the lease: reset and release it behind any

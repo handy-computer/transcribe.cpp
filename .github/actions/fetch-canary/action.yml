@@ -68,8 +68,8 @@ runs:
           uvx --from huggingface_hub hf download \
             handy-computer/parakeet-unified-en-0.6b-gguf \
             parakeet-unified-en-0.6b-Q4_K_M.gguf --local-dir canary
-        # Sortformer DIARIZE canary. Q8_0 (~140 MB) reproduces the F32 CPU
-        # golden segments the binding diarize tests assert.
+        # Sortformer DIARIZE canary (Q8_0, ~140 MB) for the binding diarize
+        # tests.
         [ -f canary/diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf ] || \
           uvx --from huggingface_hub hf download \
             handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf \

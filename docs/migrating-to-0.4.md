@@ -49,7 +49,23 @@ from the role's own query (`transcribe_diarize_get_info`).
 - New `Model.roles`, `DiarizeSession` and an `UnsupportedRole` error for
   status 20 (`.unsupportedRole` in Swift); see `docs/bindings.md`. The
   Sortformer ASR-path extension (`SortformerStreamOptions` and equivalents)
-  is removed.
+  is removed. Sortformer runs through a diarize session instead:
+
+  | Binding | 0.3 | 0.4 |
+  | --- | --- | --- |
+  | Python | `model.session()` + `SortformerStreamOptions` | `model.diarize_session()` + `SortformerDiarizeOptions` |
+  | Rust | `RunExtension::Sortformer(SortformerStreamOptions)` | `model.diarize_session()` + `DiarizeOptions` with `DiarizeExtension::Sortformer(SortformerDiarizeOptions)` |
+  | Swift | `RunExtension.sortformer(SortformerStreamOptions)` | `model.diarizeSession()` + `DiarizeOptions(family: .sortformer(SortformerDiarizeOptions(...)))` |
+  | TypeScript | `{ kind: "sortformer" }` on the `run` slot | `model.createDiarizeSession()` + `{ kind: "sortformer_diarize" }` on the new `"diarize_run"` slot |
+
+  In every binding, `capabilities` on a model without ASR (Sortformer)
+  raises / throws / returns `UnsupportedRole` instead of reporting a zeroed
+  struct, and `supports(diarization)` is false for Sortformer; use
+  `Model.roles`.
+- A stream that ends FAILED inside a feed (abort, or a native error)
+  releases the model's stream lease in every binding, so other sessions on
+  the model can run without `Busy`. A feed rejected before the native call
+  (e.g. NaN) keeps the lease and the stream stays usable.
 - **Rust:** `Model::capabilities()` returns `Result<Capabilities>`
   (`Err(Error::UnsupportedRole)` on a model without ASR). `ExtSlot` gains
   `DiarizeRun` and `AbiStruct` gains the three diarize structs; both are now
@@ -59,6 +75,5 @@ from the role's own query (`transcribe_diarize_get_info`).
   run / run_batch / second stream on any session of a model with an active
   stream raises `transcribe_cpp.Busy`, matching the other bindings. On the
   stream's own session these raised `InvalidArgument` in 0.3.
-- **TypeScript:** a feed rejected before the native hook (e.g. NaN) keeps the
-  model's stream lease; the stream stays usable. An unknown Sortformer preset
-  string is rejected instead of silently using the default.
+- **TypeScript:** an unknown Sortformer preset string is rejected instead of
+  silently using the default.

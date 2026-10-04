@@ -88,6 +88,7 @@ int main() {
     // 1. Roles, info, extension probe.
     CHECK(transcribe_model_roles(model) == TRANSCRIBE_ROLE_DIARIZE);
     CHECK(!transcribe_model_supports(model, TRANSCRIBE_FEATURE_DIARIZATION));
+    CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_CANCELLATION));
     transcribe_diarize_info info;
     transcribe_diarize_info_init(&info);
     CHECK(transcribe_diarize_get_info(model, &info) == TRANSCRIBE_OK);

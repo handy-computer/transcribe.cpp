@@ -16,6 +16,7 @@ use crate::session::clamp_len;
 
 /// Static facts about a diarization model ([`Model::diarize_info`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DiarizeInfo {
     /// Input PCM rate (16000).

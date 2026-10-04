@@ -6,6 +6,7 @@
 // Run with --help for the full option list.
 
 #include "cli.h"
+#include "wav.h"
 
 #include <cctype>
 #include <charconv>
@@ -539,6 +540,55 @@ void log_cb(transcribe_log_level level, const char * msg, void * userdata) {
     std::fprintf(stderr, "%s %s%s", prefix, msg, (msg && *msg && msg[std::strlen(msg) - 1] == '\n') ? "" : "\n");
 }
 
+// One file: load the audio and (with -m) the model, print both, then hand the
+// model to the driver for its role. The driver takes ownership of the model.
+int run_file(const cli_args & args, std::ofstream * output) {
+    std::vector<float> pcm;
+    std::string        load_err;
+    if (!transcribe_cli::load_wav_mono_16k(args.wav_path, pcm, load_err)) {
+        std::fprintf(stderr, "wav: %s\n", load_err.c_str());
+        return EXIT_FAILURE;
+    }
+
+    const double duration_s = static_cast<double>(pcm.size()) / 16000.0;
+    std::printf("audio: %s\n", args.wav_path.c_str());
+    std::printf("  samples:    %zu\n", pcm.size());
+    std::printf("  duration:   %.3f s\n", duration_s);
+    std::printf("  sample rate 16000 Hz mono float32\n");
+
+    if (args.model_path.empty()) {
+        std::printf("model: (none specified, skipping load)\n");
+        return EXIT_SUCCESS;
+    }
+
+    struct transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    mp.backend = args.backend;
+    mp.device  = args.device_index >= 0 ? transcribe_device_get(args.device_index) : nullptr;
+    if (args.device_index >= 0 && mp.device == nullptr) {
+        std::fprintf(stderr, "error: --device index %d is not available\n", args.device_index);
+        return EXIT_FAILURE;
+    }
+    struct transcribe_model * model = nullptr;
+    const transcribe_status   st    = transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
+    std::printf("model: %s -> %s\n", args.model_path.c_str(), transcribe_status_string(st));
+    if (st != TRANSCRIBE_OK) {
+        return EXIT_FAILURE;
+    }
+    std::printf("  backend:    %s\n", transcribe_model_backend(model));
+    if (const char * dn = transcribe_model_meta_val_str(model, "general.name"); dn[0]) {
+        std::printf("  name:       %s\n", dn);
+    }
+    if (const char * lic = transcribe_model_meta_val_str(model, "general.license"); lic[0]) {
+        std::printf("  license:    %s\n", lic);
+    }
+
+    if ((transcribe_model_roles(model) & TRANSCRIBE_ROLE_ASR) != 0) {
+        return transcribe_cli::run_asr_file(args, model, pcm, duration_s, output);
+    }
+    return transcribe_cli::run_diarize_file(args, model, pcm, duration_s, output);
+}
+
 }  // namespace
 
 int main(int argc, char ** argv) {
@@ -579,5 +629,5 @@ int main(int argc, char ** argv) {
         return transcribe_cli::run_asr_batch(args, output);
     }
 
-    return transcribe_cli::run_asr_file(args, output);
+    return run_file(args, output);
 }

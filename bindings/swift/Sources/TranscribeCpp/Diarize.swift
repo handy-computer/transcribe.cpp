@@ -1,4 +1,5 @@
 import CTranscribe
+import Foundation
 
 /// Static facts about a diarization model.
 public struct DiarizeInfo: Sendable, Equatable {
@@ -76,6 +77,27 @@ public final class DiarizeSession {
                 _ = transcribe_diarize_get_segment(ptr, i, &s)
                 return SpeakerSegment(s)
             }
+        }
+    }
+
+    /// `run` hopped off the caller's thread/actor onto a background queue, with
+    /// Swift task cancellation bridged to the native abort. Same contract as
+    /// `Session.run(_:options:) async`: a caller-installed token takes
+    /// precedence, and the bridged token is removed when the call returns.
+    public func run(_ pcm: [Float], options: DiarizeOptions = .init()) async throws -> [SpeakerSegment] {
+        nonisolated(unsafe) let this = self
+        let bridged = (cancelToken == nil) ? CancellationToken() : nil
+        if let bridged { setCancellationToken(bridged) }
+        defer { if bridged != nil { clearCancellationToken() } }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (cont: CheckedContinuation<[SpeakerSegment], Error>) in
+                DispatchQueue.global().async {
+                    cont.resume(with: Result { try this.run(pcm, options: options) })
+                }
+            }
+        } onCancel: {
+            bridged?.cancel()
         }
     }
 
