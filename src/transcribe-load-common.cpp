@@ -4,6 +4,12 @@
 // common backend-init and tensor-stream logic shared by per-family load().
 
 #include "transcribe-load-common.h"
+#if !defined(_WIN32)
+#    include <fcntl.h>
+#    include <sys/mman.h>
+#    include <sys/stat.h>
+#    include <unistd.h>
+#endif
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -438,6 +444,121 @@ transcribe_status init_backends(transcribe_backend_request requested,
     // to AUTO — that hides bugs.
     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: invalid transcribe_backend_request value %d", error_tag, requested_raw);
     return TRANSCRIBE_ERR_INVALID_ARG;
+}
+
+
+void MappedWeights::reset() {
+#if !defined(_WIN32)
+    if (addr != nullptr) {
+        munmap(addr, len);
+    }
+#endif
+    addr = nullptr;
+    len  = 0;
+}
+
+bool map_tensor_data_cpu(const std::string &     path,
+                         const gguf_context *    gguf_data,
+                         ggml_context *          ctx_meta,
+                         const BackendPlan &     plan,
+                         ggml_backend_buffer_t * out_buffer,
+                         MappedWeights *         out_map,
+                         const char *            error_tag) {
+#if defined(_WIN32)
+    (void) path; (void) gguf_data; (void) ctx_meta; (void) plan;
+    (void) out_buffer; (void) out_map; (void) error_tag;
+    return false;
+#else
+    if (plan.primary_kind != BackendKind::Cpu || plan.primary == nullptr) {
+        return false;
+    }
+
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: mmap open failed; streaming instead", error_tag);
+        return false;
+    }
+    struct stat sb {};
+    if (::fstat(fd, &sb) != 0 || sb.st_size <= 0) {
+        ::close(fd);
+        return false;
+    }
+    const size_t file_size = static_cast<size_t>(sb.st_size);
+
+    void * base = ::mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);  // the mapping holds its own reference
+    if (base == MAP_FAILED) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: mmap failed; streaming instead", error_tag);
+        return false;
+    }
+
+    const size_t data_offset = gguf_get_data_offset(gguf_data);
+    if (data_offset >= file_size) {
+        ::munmap(base, file_size);
+        return false;
+    }
+
+    // Weights are touched in essentially random order during a run, and we do
+    // not want readahead pulling in pages that may never be used.
+    (void) ::madvise(static_cast<char *>(base) + data_offset, file_size - data_offset, MADV_RANDOM);
+
+    ggml_backend_buffer_t buffer =
+        ggml_backend_cpu_buffer_from_ptr(static_cast<char *>(base) + data_offset, file_size - data_offset);
+    if (buffer == nullptr) {
+        ::munmap(base, file_size);
+        return false;
+    }
+    const size_t alignment = ggml_backend_buffer_get_alignment(buffer);
+
+    // Validate every tensor before allocating any: a half-mapped ctx_meta would
+    // be worse than falling back cleanly.
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        const int64_t idx = gguf_find_tensor(gguf_data, t->name);
+        if (idx < 0) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: tensor \"%s\" not in gguf data; streaming instead", error_tag,
+                    t->name);
+            safe_buffer_free(buffer);
+            ::munmap(base, file_size);
+            return false;
+        }
+        const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
+        if (data_offset + toffset + ggml_nbytes(t) > file_size) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: tensor \"%s\" runs past EOF; streaming instead", error_tag,
+                    t->name);
+            safe_buffer_free(buffer);
+            ::munmap(base, file_size);
+            return false;
+        }
+        const auto addr_val = reinterpret_cast<uintptr_t>(static_cast<char *>(base) + data_offset + toffset);
+        if (alignment > 1 && (addr_val % alignment) != 0) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: tensor \"%s\" misaligned for mmap; streaming instead", error_tag,
+                    t->name);
+            safe_buffer_free(buffer);
+            ::munmap(base, file_size);
+            return false;
+        }
+    }
+
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        const int64_t idx     = gguf_find_tensor(gguf_data, t->name);
+        const size_t  toffset = gguf_get_tensor_offset(gguf_data, idx);
+        if (ggml_backend_tensor_alloc(buffer, t, static_cast<char *>(base) + data_offset + toffset) !=
+            GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor_alloc failed for \"%s\"", error_tag, t->name);
+            safe_buffer_free(buffer);
+            ::munmap(base, file_size);
+            return false;
+        }
+    }
+
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    *out_buffer   = buffer;
+    out_map->addr = base;
+    out_map->len  = file_size;
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: weights mapped (%zu MiB file-backed)", error_tag,
+            (file_size - data_offset) / (1024 * 1024));
+    return true;
+#endif
 }
 
 transcribe_status stream_tensor_data(const std::string &  path,

@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "transcribe-load-common.h"
 
 struct ggml_context;
 struct ggml_tensor;
@@ -86,6 +87,9 @@ struct ParakeetModel final : public transcribe_model {
     // reverse order.
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
+    // Owns the weight mmap when backend_buffer is a cpu-buffer-from-ptr over it.
+    // Must outlive backend_buffer and ctx_meta: both point into these pages.
+    transcribe::load_common::MappedWeights weights_map;
 
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.
