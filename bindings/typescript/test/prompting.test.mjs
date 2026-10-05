@@ -2,6 +2,7 @@
 // streaming canaries. Mirrors bindings/python/tests/test_prompting.py.
 
 import assert from "node:assert/strict";
+import koffi from "koffi";
 import { modelTest, MODEL, STREAMING_MODEL, jfk, feedChunks } from "./common.mjs";
 import { TranscribeModel, InvalidArgument, UnsupportedRequest } from "../dist/index.js";
 
@@ -30,6 +31,23 @@ modelTest("vocabulary and prompt reach run and runBatch", MODEL, async () => {
     assert.match(r.text, /ask not/i);
     const items = await s.runBatch([jfk(), jfk()], { vocabulary: TERMS });
     assert.ok(items.every((i) => i.ok));
+  });
+});
+
+modelTest("a rejected family option frees the vocabulary it followed", MODEL, async () => {
+  await withSession(MODEL, async (_m, s) => {
+    const { alloc, free } = koffi;
+    let live = 0;
+    koffi.alloc = (...a) => (live++, alloc(...a));
+    koffi.free = (...a) => (live--, free(...a));
+    try {
+      await assert.rejects(s.run(jfk(), { vocabulary: TERMS, family: { kind: "nope" } }));
+      await assert.rejects(s.stream({ vocabulary: TERMS, commitPolicy: "nope" }));
+    } finally {
+      koffi.alloc = alloc;
+      koffi.free = free;
+    }
+    assert.equal(live, 0, "koffi allocations leaked");
   });
 });
 

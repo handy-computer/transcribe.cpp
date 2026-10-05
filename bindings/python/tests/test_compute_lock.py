@@ -318,6 +318,29 @@ def test_model_close_during_in_flight_call_defers_frees(fake, monkeypatch):
     assert fake.frees[2:] == [("model", hm)]
 
 
+def test_model_close_racing_session_close_frees_session_first(fake):
+    # Model.close() on another thread lands between a session close() popping
+    # its _live record and queuing its free: the model free must still queue
+    # behind the session's.
+    m = fake.model()
+    s = fake.session(m)
+    hs, hm = s._handle.value, m._handle.value
+    closer: dict = {}
+
+    class _RacingLive(dict):
+        def pop(self, key, *default):
+            record = super().pop(key, *default)
+            if not closer:
+                closer["thread"], _ = _in_thread(m.close)
+                closer["thread"].join(0.2)  # let it run as far as it can
+            return record
+
+    m._live = _RacingLive(m._live)
+    s.close()
+    _join(closer["thread"], "model.close() racing session.close()")
+    assert fake.frees == [("session", hs), ("model", hm)]
+
+
 def test_gc_on_holder_thread_defers_free(fake, monkeypatch):
     # A finalizer can run on the thread that holds the lock (GC mid copy-out).
     # It must neither deadlock nor free under the in-flight call.

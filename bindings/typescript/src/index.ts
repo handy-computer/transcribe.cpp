@@ -985,6 +985,16 @@ export class Session {
     const n = this.#n;
     const p: any = {};
     n.F.runParamsInit(p);
+    try {
+      this.#fillRunParams(n, p, opts);
+    } catch (e) {
+      freeRunParams(n, p); // the caller never gets p, so free what was allocated
+      throw e;
+    }
+    return p;
+  }
+
+  #fillRunParams(n: Native, p: any, opts: TranscribeOptions): void {
     p.task = lookup(TASKS, opts.task ?? "transcribe", "task");
     // Default "auto" mirrors the C transcribe_run_params_init default:
     // whisper resolves it to "segment" (its robust path), no-timestamp
@@ -1015,10 +1025,8 @@ export class Session {
     }
     if (opts.prompt !== undefined) p.prompt = cstr(opts.prompt, "prompt");
     if (opts.prefix !== undefined) p.prefix = cstr(opts.prefix, "prefix");
-    // Last, so no later validation throw can strand the allocation.
     if (opts.family)
       p.family = buildFamily(n, this.#model.handle, opts.family, "run");
-    return p;
   }
 
   /**
@@ -1107,16 +1115,21 @@ export class Session {
     });
     const sp: any = {};
     F.streamParamsInit(sp);
-    sp.commit_policy = lookup(
-      COMMIT_POLICIES,
-      opts.commitPolicy ?? "auto",
-      "commitPolicy",
-    );
-    if (opts.stablePrefixAgreementN !== undefined) {
-      sp.stable_prefix_agreement_n = opts.stablePrefixAgreementN;
+    try {
+      sp.commit_policy = lookup(
+        COMMIT_POLICIES,
+        opts.commitPolicy ?? "auto",
+        "commitPolicy",
+      );
+      if (opts.stablePrefixAgreementN !== undefined) {
+        sp.stable_prefix_agreement_n = opts.stablePrefixAgreementN;
+      }
+      if (opts.family)
+        sp.family = buildFamily(n, this.#model.handle, opts.family, "stream");
+    } catch (e) {
+      freeRunParams(n, rp); // sp holds nothing yet: buildFamily frees on throw
+      throw e;
     }
-    if (opts.family)
-      sp.family = buildFamily(n, this.#model.handle, opts.family, "stream");
 
     // Begin is a synchronous native call, so no in-flight window (no call()).
     return this.#core.exclusive("begin a stream", async () => {

@@ -16,6 +16,14 @@ int transcribe_cli::run_diarize_file(const cli_args &           args,
                                      const std::vector<float> & pcm,
                                      double                     duration_s,
                                      std::ofstream *            output) {
+    // The DIARIZE role has no push-audio entry point yet; refuse rather than
+    // silently diarizing the whole file.
+    if (args.stream_chunk_ms > 0) {
+        std::fprintf(stderr, "stream: the diarize path has no streaming entry point; drop --stream-chunk-ms\n");
+        transcribe_model_free(model);
+        return EXIT_FAILURE;
+    }
+
     transcribe_diarize_session_params sp;
     transcribe_diarize_session_params_init(&sp);
     sp.n_threads                         = args.n_threads;
@@ -27,7 +35,14 @@ int transcribe_cli::run_diarize_file(const cli_args &           args,
         return EXIT_FAILURE;
     }
 
-    st = transcribe_diarize_run(session, pcm.data(), static_cast<int>(pcm.size()), nullptr);
+    // --repeat N runs transcribe_diarize_run() N times for steady-state perf
+    // measurements.
+    for (int r = 0; r < args.repeat; ++r) {
+        st = transcribe_diarize_run(session, pcm.data(), static_cast<int>(pcm.size()), nullptr);
+        if (st != TRANSCRIBE_OK) {
+            break;
+        }
+    }
     std::printf("run: %s\n", transcribe_status_string(st));
     bool output_ok = true;
     if (st == TRANSCRIBE_OK) {

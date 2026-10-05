@@ -1013,6 +1013,10 @@ class Model:
     # holder runs them before releasing. close() queues every live session's
     # free before the model's, from _live (strong records, not the weak
     # _sessions, which the cycle collector clears before finalizers run).
+    # _free_order makes "pop a session's _live record + queue its free" one
+    # step against close() queuing the model's free, so a session closed on
+    # another thread can never land behind the model free. An RLock: a GC
+    # finalizer can close a session on the thread already holding it.
     # _stream_owner (the active stream's _StreamLease) is written only under it.
 
     def _init_compute_state(self) -> None:
@@ -1022,6 +1026,7 @@ class Model:
         self._stream_owner: Optional[_StreamLease] = None
         # id(handle) -> (handle, native free name, pin) per open session.
         self._live: dict = {}
+        self._free_order = threading.RLock()
 
     @contextmanager
     def _exclusive(self, kind: str, busy: Optional[str] = None):
@@ -1096,6 +1101,12 @@ class Model:
         """Free a tracked session behind any in-flight call. The record is
         popped first, so the session's own close() and the model's close()
         free it exactly once, whichever runs first."""
+        with self._free_order:
+            self._queue_session_free(handle)
+        self._try_drain()
+
+    def _queue_session_free(self, handle: ctypes.c_void_p) -> None:
+        """Pop *handle*'s record and queue its free. Caller holds _free_order."""
         record = self._live.pop(id(handle), None)
         if record is None:
             return
@@ -1108,7 +1119,7 @@ class Model:
             if getattr(self._stream_owner, "handle", None) is handle:
                 self._stream_owner = None
 
-        self._free_or_defer(free)
+        self._deferred.append(free)
 
     @property
     def arch(self) -> str:
@@ -1229,9 +1240,14 @@ class Model:
         self._handle = None
         for session in list(getattr(self, "_sessions", ()) or ()):
             session.close()
-        for record in list(getattr(self, "_live", {}).values()):
-            self._free_session(record[0])  # wrappers already collected
-        self._free_or_defer(lambda: _lib.transcribe_model_free(handle))
+        # One step under _free_order: every session free still pending
+        # (wrappers already collected, or a close() racing on another thread)
+        # is queued ahead of the model's.
+        with self._free_order:
+            for record in list(self._live.values()):
+                self._queue_session_free(record[0])
+            self._deferred.append(lambda: _lib.transcribe_model_free(handle))
+        self._try_drain()
 
     def __enter__(self) -> "Model":
         return self
