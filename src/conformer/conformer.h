@@ -120,19 +120,14 @@ struct ConvPolicy {
     // offline variant; true on nemotron-speech-streaming-en.
     bool causal_pre_encode = false;
 
-    // Where the pre_encode valid-length masks apply. false (NeMo-style
-    // variable-length batches): after each stage's ReLU. true (kestrel /
-    // HF transformers Subsampling, parakeet-ultra): right after each
-    // strided conv, before the following pointwise conv + ReLU, so the
-    // padded tail carries ReLU(pointwise bias) into the next strided conv
-    // exactly as the reference does. Stage 1 is the same either way
-    // (ReLU commutes with a 0/1 mask).
+    // Where the pre_encode valid-length masks apply. false (NeMo): after each
+    // stage's ReLU. true (kestrel / HF Subsampling): right after each strided
+    // conv, so the padded tail carries ReLU(pointwise bias) into the next
+    // strided conv as the reference does. Stage 1 is the same either way.
     bool pre_encode_mask_after_stride = false;
 
-    // Run the pre_encode 1x1 pointwise convs (conv3, conv6) with an F32
-    // im2col (conv_2d_f32) instead of ggml_conv_2d's F16 one. Enabled for
-    // parakeet-ultra; the other parakeet variants were validated on the F16
-    // im2col and keep it until they are re-validated.
+    // Run the pre_encode pointwise convs (conv3, conv6) via conv_2d_f32.
+    // Other variants were validated on the F16 im2col and keep it.
     bool pre_encode_f32_pointwise = false;
 };
 
@@ -299,8 +294,8 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
 // matrix rotated so column k holds the score for relative offset k.
 ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x);
 
-// ggml_conv_2d with an F32 im2col (the vendored op rounds the activations
-// to F16 in im2col unless the kernel is BF16).
+// ggml_conv_2d with an F32 im2col. The vendored op rounds the activations to
+// F16 in im2col unless the kernel is BF16 (~5e-4 rel on parakeet pre_encode).
 ggml_tensor *
 conv_2d_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1, int d0, int d1);
 
@@ -449,11 +444,9 @@ struct PreEncodeValidMasks {
     ggml_tensor * mask_s1        = nullptr;  // after relu0
     ggml_tensor * mask_s2        = nullptr;  // after relu3 (after conv2 with pre_encode_mask_after_stride)
     ggml_tensor * mask_s3        = nullptr;  // after relu6 (after conv5 with pre_encode_mask_after_stride)
-    // pre_encode_mask_after_stride only: zero each utterance's positions past
-    // its own single-run stage length after relu3 / relu6. With the stride-
-    // placed masks the padded tail holds ReLU(pointwise bias), which a single
-    // run never has past its tensor end (the next strided conv zero-pads
-    // there); these keep a padded batch bit-identical to single runs.
+    // pre_encode_mask_after_stride only: zero positions past each utterance's
+    // single-run extent after relu3 / relu6, so a padded batch stays
+    // bit-identical to single runs (which never see the ReLU(bias) tail).
     ggml_tensor * mask_s2_extent = nullptr;
     ggml_tensor * mask_s3_extent = nullptr;
 };

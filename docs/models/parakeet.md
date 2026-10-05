@@ -4,8 +4,8 @@ NVIDIA's [Parakeet](https://huggingface.co/collections/nvidia/parakeet)
 family ported to transcribe.cpp. A FastConformer encoder paired with one
 of three decoder heads — TDT (transducer with a duration prediction
 head), classical RNN-T, or CTC — and a TDT+CTC hybrid that ships both
-heads in one checkpoint. All variants take 16 kHz mono PCM through an
-80-bin mel frontend; English-only across the family, except
+heads in one checkpoint. All variants take 16 kHz mono PCM through a
+mel frontend; English-only across the family, except
 `parakeet-tdt-0.6b-v3`, Moondream's post-trained `parakeet-ultra` and the
 German fine-tune `parakeet-primeline`, which cover 25 European languages.
 
@@ -20,8 +20,8 @@ Most users want one of three:
 - **English transcription → `parakeet-tdt-0.6b-v2`.** The default pick:
   small, fast, near top-of-family accuracy on English.
 - **Multilingual (25 European languages) → `parakeet-ultra`.** Moondream's
-  post-trained v3: same size, languages and API, more accurate on English,
-  on every FLEURS language and on long recordings. A drop-in replacement for
+  post-trained v3: same size, languages and API, more accurate on English
+  and on every FLEURS language. A drop-in replacement for
   `parakeet-tdt-0.6b-v3`, which remains available.
   See [parakeet-ultra.md](parakeet-ultra.md) for how it segments long audio.
 - **German → `parakeet-primeline`.** primeLine's German fine-tune of

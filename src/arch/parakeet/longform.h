@@ -1,10 +1,5 @@
 // Long-form pause segmentation for parakeet checkpoints that carry a VAD
-// head (parakeet-ultra). A line-for-line port of kestrel 0.9.1:
-//
-//   kestrel/models/parakeet_tdt/vad.py      speech_regions, head_speech
-//   kestrel/models/parakeet_tdt/segment.py  pauses_from_speech, next_cut,
-//                                           fits_one_segment, pause_segments
-//   kestrel/models/asr/audio.py             AudioChunks.chunks (scan blocks)
+// head. Port of kestrel 0.9.1 segment.py / vad.py.
 //
 // Audio longer than max_segment_seconds is cut at the midpoint of the last
 // pause (a gap of at least min_pause_seconds between speech regions) that
@@ -41,8 +36,8 @@ struct Params {
     double min_segment_seconds  = 1.0;
     double min_pause_seconds    = 0.2;
     double scan_block_seconds   = 120.0;
-    // AudioChunks constants (kestrel/models/asr/audio.py): a block is never
-    // followed by a tail shorter than max(window, 0.5 s).
+    // AudioChunks constants: a block is never followed by a tail shorter
+    // than max(window, 0.5 s).
     double boundary_window_secs = 0.1;
     double min_tail_seconds     = 0.5;
     // parakeet_features refuses to normalize anything shorter (samples).

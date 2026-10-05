@@ -323,8 +323,6 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     if (n_batch < 1) {
         n_batch = 1;
     }
-    // kestrel length masking applies the valid-length masks at every batch
-    // size, batch 1 included (see ParakeetHParams::kestrel_length_masking).
     const bool       var_len_masks = batch_var_len && (n_batch > 1 || hp.kestrel_length_masking);
     conf::ConvPolicy policy{};
     policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
@@ -1037,8 +1035,7 @@ VadBuild build_vad_graph(ggml_context *          ctx,
     h               = ggml_silu(ctx, h);
     vb.proj_out     = conf::named(h, "vad.proj");
 
-    // ctx: Conv1d(H -> H, k=K, pad K/2) over time, F32 im2col. conv_1d_f32
-    // takes [T, IC] data and returns [T, OC].
+    // conv_1d_f32 takes [T, IC] data and returns [T, OC].
     ggml_tensor * t = ggml_cont(ctx, ggml_transpose(ctx, h));                                     // [T, H]
     t = conf::conv_1d_f32(ctx, w.vad.ctx_w, t, /*stride=*/1, /*padding=*/K / 2, /*dilation=*/1);  // [T, H]
     t = ggml_add(ctx, t, ggml_reshape_2d(ctx, w.vad.ctx_b, 1, H));
@@ -1046,7 +1043,6 @@ VadBuild build_vad_graph(ggml_context *          ctx,
     ggml_tensor * c = ggml_cont(ctx, ggml_transpose(ctx, t));  // [H, T]
     vb.ctx_out      = conf::named(c, "vad.ctx");
 
-    // out: Conv1d(H -> 1, k=1), then sigmoid.
     ggml_tensor * o = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, w.vad.out_w, H, 1), c);  // [1, T]
     o               = ggml_add(ctx, o, w.vad.out_b);
     vb.prob         = conf::named(ggml_sigmoid(ctx, o), "vad.prob");

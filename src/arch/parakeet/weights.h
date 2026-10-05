@@ -168,27 +168,22 @@ struct ParakeetHParams {
     // frame, forces a +1 advance. 0 disables.
     int32_t tdt_max_symbols = 10;
 
-    // tdt_global_symbol_budget: kestrel's greedy loop (parakeet-ultra). No
-    // per-frame cap; instead every decode step, blank or not, spends from
-    // one budget of tdt_max_symbols * T_valid, and a blank with duration 0
-    // advances one frame. KV stt.parakeet.tdt.symbol_budget = "global";
-    // absent / "per_frame" keeps the NeMo loop above.
+    // tdt_global_symbol_budget: kestrel's greedy loop. No per-frame cap;
+    // every decode step, blank or not, spends from one budget of
+    // tdt_max_symbols * T_valid, and a blank with duration 0 advances one
+    // frame. KV stt.parakeet.tdt.symbol_budget = "global"; absent /
+    // "per_frame" keeps the NeMo loop above.
     bool tdt_global_symbol_budget = false;
 
-    // kestrel_length_masking: lengths follow kestrel's Subsampling (valid
-    // mel frames = n_samples / hop, then (L-1)/2+1 per strided conv) and
-    // are always applied, at batch 1 too: the subsampler zeroes the padded
-    // time tail right after each strided conv (before the pointwise conv /
-    // ReLU), attention keys and conv rows past the valid length are masked,
-    // and decode stops at the valid length. KV
-    // stt.parakeet.encoder.length_masking = "kestrel"; absent / "none"
-    // keeps the NeMo behavior (masks only in variable-length batches).
+    // kestrel_length_masking: valid lengths from n_samples / hop, masks at
+    // every batch size (see ConvPolicy::pre_encode_mask_after_stride). KV
+    // stt.parakeet.encoder.length_masking = "kestrel"; absent / "none" keeps
+    // the NeMo behavior (masks only in variable-length batches).
     bool kestrel_length_masking = false;
 
-    // Speech head on the subsampler output (parakeet-ultra) and the
-    // long-form pause segmenter it drives. has_vad_head is set when
-    // stt.parakeet.vad.hidden is present; the segmenter constants are
-    // kestrel 0.9.1's (see scripts/convert-parakeet.py).
+    // Speech head on the subsampler output and the long-form pause
+    // segmenter it drives. has_vad_head is set when stt.parakeet.vad.hidden
+    // is present.
     bool    has_vad_head            = false;
     int32_t vad_hidden              = 0;
     int32_t vad_context_kernel      = 0;
@@ -405,7 +400,7 @@ struct ParakeetSpkKernel {
     ParakeetSpkKernelFF bg;   // enc.bg_spk_kernel.<L>.* (add_bg_spk_kernel)
 };
 
-// Speech head (parakeet-ultra). PyTorch Conv1d [out, in, k] -> ggml ne
+// Speech head. PyTorch Conv1d [out, in, k] -> ggml ne
 // [k, in, out]: proj [1, d_model, H], ctx [K, H, H], out [1, H, 1].
 struct ParakeetVadHead {
     ggml_tensor * proj_w = nullptr;

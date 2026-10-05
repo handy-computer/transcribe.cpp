@@ -2,11 +2,9 @@
 """
 run_reference_parakeet_kestrel.py — parakeet-ultra reference WER via kestrel.
 
-Loads moondream/parakeet-ultra with kestrel (Photon's engine, the publisher's
-runtime) once and transcribes a WER manifest through ParakeetTdtRuntime, the
-same entry Photon uses: clips over 30 s are cut by the checkpoint's VAD head
-into pause-aligned segments of at most 30 s and stitched. Writes
-run.py-compatible JSONL for scripts/wer/score.py.
+Transcribes a WER manifest through kestrel's ParakeetTdtRuntime (clips over
+30 s are VAD-segmented and stitched). Writes run.py-compatible JSONL for
+scripts/wer/score.py.
 
 Mirrors scripts/dump_reference_parakeet_kestrel.py: float32 weights, no
 language hint (kestrel rejects language forcing).
@@ -28,6 +26,7 @@ import json
 import sys
 import time
 import types
+from importlib.metadata import version
 from pathlib import Path
 
 ULTRA_REVISION = "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"
@@ -97,7 +96,7 @@ def main() -> int:
             "type": "batch_header",
             "load_ms": round(load_ms, 1),
             "framework": "kestrel",
-            "framework_version": "kestrel==0.9.1, kestrel-kernels==0.7.4",
+            "framework_version": f"kestrel=={version('kestrel')}, kestrel-kernels=={version('kestrel-kernels')}",
             "model": args.model,
             "model_revision": args.revision,
             "device": args.device,

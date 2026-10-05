@@ -37,12 +37,8 @@ wer:
     own runtime (kestrel 0.9.1, the engine behind Photon), not transformers.
     On this manifest kestrel scores 1.80% and the C++ F32 build matches it.
 
-    Moondream's card reports 1.41% on the same split. That figure uses the
-    Open ASR Leaderboard normalizers with compound-merging alignment; kestrel
-    run through this repo's scorer reproduces the numbers here, not the card's.
-    The same scoring difference explains the higher FLEURS figures below,
-    largest on compounding languages: kestrel scored by this pipeline gives
-    14.37% on Estonian and 13.09% on Hungarian, matching the C++ build.
+    Moondream's card reports 1.41% on the same split, scored with the Open
+    ASR Leaderboard normalizer.
 
     Long-form: on 11 full TED-LIUM 3 talks, segmented by the model's
     voice-activity head exactly as kestrel does it, F32 scores 2.22%, identical

@@ -325,11 +325,8 @@ def ingest_eka_medical_asr(repo: Path, args: argparse.Namespace) -> int:
 # -------- TED-LIUM 3 long-form (11 full test talks) -----------------------
 #
 # https://huggingface.co/datasets/distil-whisper/tedlium-long-form
-# The eleven TED-LIUM 3 test talks, each one full recording (10-20 min) with
-# its concatenated, lowercased reference. This is the long-form set the
-# parakeet-ultra card reports (and the one distil-whisper / the Open ASR
-# long-form evals use). Schema: `audio`, `text`, `speaker_id`. Exercises a
-# runtime's long-audio path (segmentation, chunking); no clip is under 30 s.
+# Full recordings (10-20 min) with concatenated, lowercased references.
+# Schema: `audio`, `text`, `speaker_id`. No clip is under 30 s.
 
 def ingest_tedlium_longform(repo: Path, args: argparse.Namespace) -> int:
     out_dir = repo / "samples/wer/tedlium-longform"
@@ -341,10 +338,10 @@ def ingest_tedlium_longform(repo: Path, args: argparse.Namespace) -> int:
               f"Pass --force to regenerate.")
         return 0
 
-    print(f"loading distil-whisper/tedlium-long-form split={args.split}")
+    print("loading distil-whisper/tedlium-long-form split=test")
     from datasets import load_dataset
 
-    ds = load_dataset("distil-whisper/tedlium-long-form", split=args.split)
+    ds = load_dataset("distil-whisper/tedlium-long-form", split="test")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     entries: list[dict] = []
@@ -365,7 +362,7 @@ def ingest_tedlium_longform(repo: Path, args: argparse.Namespace) -> int:
     entries.sort(key=lambda e: e["id"])
     write_manifest(entries, manifest)
     print(f"manifest: {manifest}")
-    print(f"  {len(entries)} talks ({args.split} split)")
+    print(f"  {len(entries)} talks")
     return 0
 
 
@@ -420,8 +417,6 @@ def main() -> int:
     p_tl = sub.add_parser("tedlium-longform",
                           help="distil-whisper/tedlium-long-form: the 11 full "
                                "TED-LIUM 3 test talks (long-form).")
-    p_tl.add_argument("--split", default="test", choices=("test", "validation"),
-                      help="dataset split (default: test)")
     p_tl.add_argument("--force", action="store_true",
                       help="Regenerate even if manifest already exists.")
 

@@ -229,11 +229,8 @@ EncoderBuild build_encoder_graph(ggml_context *                     compute_ctx,
                                  // the conformer blocks. 0 = no gather.
                                  int                                mt_keep_frames  = 0);
 
-// Speech-head graph (parakeet-ultra VAD): the pre_encode subsampler only,
-// then vad_head (proj 1x1 + SiLU, ctx k-tap + SiLU, out 1x1, sigmoid).
-// kestrel's ParakeetTdt.speech_probabilities. One utterance (a scan block);
-// the subsampler masks (kestrel length masking) are graph inputs the
-// driver fills like build_encoder_graph's.
+// Speech-head graph: pre_encode subsampler, then the VAD head. One utterance
+// (a scan block); the driver fills the subsampler masks like the encoder's.
 struct VadBuild {
     ggml_tensor * mel_in          = nullptr;  // ne=[T_mel, n_mels, 1, 1]
     ggml_tensor * pe_mask_s1_in   = nullptr;

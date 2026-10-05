@@ -501,8 +501,7 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         }
     }
 
-    // kestrel-runtime semantics (parakeet-ultra). Both optional; absent keeps
-    // the NeMo behavior every other variant was validated against.
+    // kestrel-runtime semantics. Both optional; absent keeps the NeMo behavior.
     {
         std::string masking;
         if (auto st = read_optional_string_kv(gguf, "stt.parakeet.encoder.length_masking", kFamilyTag, "none", masking);
@@ -571,6 +570,16 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
                     activation.c_str(), hp.vad_hidden, hp.vad_context_kernel);
             return TRANSCRIBE_ERR_GGUF;
         }
+    }
+
+    if ((hp.kestrel_length_masking || hp.has_vad_head) &&
+        hp.enc_att_context_style != ParakeetHParams::AttContextStyle::Regular) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: kestrel masking / VAD head require regular attention");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.tdt_global_symbol_budget && hp.head_kind != HeadKind::TDT) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: tdt.symbol_budget=global requires a TDT head");
+        return TRANSCRIBE_ERR_GGUF;
     }
 
     // Speaker-kernel metadata is optional; absent means no injection.

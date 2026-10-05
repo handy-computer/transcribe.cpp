@@ -28,6 +28,8 @@
     "- seg.6.enc.final: 9.29e-06 -> 3.38e-05 (observed 2.25e-05). Mechanism: float32 accumulation order (see encoder above); localized to a few rows, mean_abs ~5e-8.",
     "- vad.b0.mel: 0.00026 -> 0.000511 (observed 0.00034). Mechanism: reference float32 STFT noise (see frontend above).",
     "",
+    "TIGHTENED (1.5 x observed): dec.joint.0 (observed 8.4e-5 / 4.0e-5); dec.lstm.* to the family 1e-6/1e-7 (observed <= 1.8e-7).",
+    "",
     "EXACT ENTRIES",
     "- dec.embed.0: blank-row embedding lookup (zeros on both sides).",
     "- longform.segments: segment cut points (start sample, count); the segmenter must match kestrel",
@@ -48,24 +50,24 @@
     "mean_abs": 1e-06
   },
   "dec.joint.0": {
-    "max_abs": 0.01024,
-    "mean_abs": 0.0006749
+    "max_abs": 0.00013,
+    "mean_abs": 6.1e-05
   },
   "dec.lstm.0.c.0": {
-    "max_abs": 8.053e-05,
-    "mean_abs": 3.529e-06
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
   },
   "dec.lstm.0.h.0": {
-    "max_abs": 5.212e-05,
-    "mean_abs": 1.867e-06
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
   },
   "dec.lstm.1.c.0": {
-    "max_abs": 9.966e-05,
-    "mean_abs": 4.454e-06
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
   },
   "dec.lstm.1.h.0": {
-    "max_abs": 2.142e-05,
-    "mean_abs": 1e-06
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
   },
   "enc.block.0.attn": {
     "max_abs": 0.1345,
@@ -215,10 +217,6 @@
     "max_abs": 0.1404,
     "mean_abs": 0.003832
   },
-  "vad.b0.prob": {
-    "max_abs": 0.0001,
-    "mean_abs": 9.161e-06
-  },
   "vad.b0.proj": {
     "max_abs": 0.06315,
     "mean_abs": 0.001473
@@ -235,10 +233,6 @@
     "max_abs": 0.1379,
     "mean_abs": 0.003835
   },
-  "vad.b1.prob": {
-    "max_abs": 0.0001,
-    "mean_abs": 8.965e-06
-  },
   "vad.b1.proj": {
     "max_abs": 0.06226,
     "mean_abs": 0.001481
@@ -254,10 +248,6 @@
   "vad.b2.pre_encode": {
     "max_abs": 0.1386,
     "mean_abs": 0.003776
-  },
-  "vad.b2.prob": {
-    "max_abs": 0.0001,
-    "mean_abs": 9.025e-06
   },
   "vad.b2.proj": {
     "max_abs": 0.05961,

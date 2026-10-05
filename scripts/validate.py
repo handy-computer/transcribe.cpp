@@ -154,9 +154,8 @@ def case_language(case) -> str | None:
 
 
 def case_stages(case, default: list[str]) -> list[str]:
-    """Per-case dumper subcommands. Dict cases may set `stages` (used today
-    by parakeet-ultra, whose >30 s cases run the `longform` VAD-segmenter
-    path instead of a whole-clip encoder/decode)."""
+    """Per-case dumper subcommands. Dict cases may set `stages` (e.g. a
+    `longform` path instead of whole-clip encoder/decode)."""
     if isinstance(case, dict) and "stages" in case:
         stages = case["stages"]
         if not isinstance(stages, list) or not all(isinstance(s, str) for s in stages):
@@ -167,8 +166,7 @@ def case_stages(case, default: list[str]) -> list[str]:
 
 def manifest_env_dir(repo: Path, manifest: dict[str, Any], family: str) -> Path:
     """Reference env: scripts/envs/<reference.env>, else scripts/envs/<family>.
-    A variant whose reference framework differs from the family's (parakeet-ultra
-    uses kestrel, not NeMo) names its own env."""
+    A variant whose reference framework differs from the family's names its own."""
     env = (manifest.get("reference") or {}).get("env") or family
     return repo / "scripts" / "envs" / str(env)
 
@@ -474,10 +472,7 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
-        # Manifest-declared C++ env for the correctness regime (e.g.
-        # parakeet-ultra pins TRANSCRIBE_NO_FLASH=1: the flash path casts the
-        # rel-pos score bias to F16, a production speed path whose drift is
-        # gated by WER, not by the tensor tolerances).
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
         for key, value in (manifest.get("cpp_env") or {}).items():
             env[str(key)] = str(value)
 
@@ -501,7 +496,7 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         # originates in the C++ mel or downstream in the graph. Defaulting
         # to ref-mel hid a base.en regression once (the mel-precision
         # change in 4613129); we don't want that blind spot back.
-        if args.family in ("whisper", "parakeet") and getattr(args, "mel_from_ref", False):
+        if args.family == "whisper" and getattr(args, "mel_from_ref", False):
             if not validation_hooks_enabled(repo):
                 raise SystemExit(
                     "error: --mel-from-ref requires validation hooks compiled "
@@ -762,10 +757,7 @@ def cmd_mel(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
-        # Manifest-declared C++ env for the correctness regime (e.g.
-        # parakeet-ultra pins TRANSCRIBE_NO_FLASH=1: the flash path casts the
-        # rel-pos score bias to F16, a production speed path whose drift is
-        # gated by WER, not by the tensor tolerances).
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
         for key, value in (manifest.get("cpp_env") or {}).items():
             env[str(key)] = str(value)
         env.pop("TRANSCRIBE_MEL_FROM_REF", None)

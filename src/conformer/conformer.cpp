@@ -112,10 +112,7 @@ ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
     return y;
 }
 
-// f32 Conv2D: ggml_conv_2d with an F32 im2col. Vendored ggml_conv_2d writes
-// the im2col (i.e. the activations) as F16 unless the kernel is BF16, which
-// rounds every input of the conv to F16 (~5e-4 relative on the parakeet
-// pre_encode pointwise convs).
+// f32 Conv2D (see conformer.h).
 ggml_tensor *
 conv_2d_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1, int d0, int d1) {
     ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, s1, p0, p1, d0, d1, /*is_2D=*/true,

@@ -196,7 +196,7 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
         contains(name, "enc.blocks.")) {
         return ne0 == 1 || ne0 < 0 ? Bucket::ConvPw : Bucket::Linear;
     }
-    // Parakeet-ultra VAD head: three Conv1d kernels on the subsampler
+    // Parakeet VAD head: three Conv1d kernels on the subsampler
     // output (vad.{proj,ctx,out}.weight). Conv keeps them F32 in every
     // preset: the head is 0.2M params, and a quantized head could move
     // speech-threshold crossings and with them the long-form cut points.

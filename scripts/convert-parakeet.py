@@ -406,11 +406,8 @@ VARIANT_PROFILES: dict[str, dict] = {
         "license_name": "nvidia-open-model-license",
         "license_link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
     },
-    # Moondream's post-trained parakeet-tdt-0.6b-v3: same architecture,
-    # tokenizer and frontend, plus a three-conv `vad_head` on the
-    # subsampler that drives long-form pause segmentation. Published as
-    # HF-transformers safetensors only (no .nemo), weights F16 at rest;
-    # loaded by load_hf_safetensors_model() and upcast to F32 (lossless).
+    # Post-trained parakeet-tdt-0.6b-v3 plus a `vad_head`. HF safetensors
+    # only (F16 at rest, upcast to F32); see load_hf_safetensors_model().
     "parakeet-ultra": {
         "variant": "tdt-0.6b-ultra",
         "display_name": "Parakeet Ultra",
@@ -424,8 +421,7 @@ VARIANT_PROFILES: dict[str, dict] = {
         "source_format": "hf_safetensors",
         "hf_revision": "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b",
         "has_vad_head": True,
-        # Validated against kestrel (Photon's engine), not NeMo: kestrel's
-        # length masking and global TDT symbol budget (see the KV notes).
+        # kestrel length masking + global TDT symbol budget (see the KV notes).
         "kestrel_runtime": True,
         "author": "Moondream",
         "organization": "moondream",
@@ -605,14 +601,10 @@ def load_nemo_model(model_spec: str, prefer_direct: bool = False):
 
 
 # ---------------------------------------------------------------------------
-# HF-transformers safetensors loading (parakeet-ultra)
+# HF-transformers safetensors loading
 # ---------------------------------------------------------------------------
-#
-# A ParakeetForTDT checkpoint (config.json + model.safetensors +
-# tokenizer.json, no .nemo) is mapped onto the same surface
-# _DirectNemoArchive exposes: a NeMo-shaped cfg, a NeMo-named fp32
-# state_dict, and the GGUF tokenizer payload. Everything after loading
-# is the shared NeMo write path.
+# A ParakeetForTDT checkpoint is mapped onto _DirectNemoArchive's surface
+# (NeMo-shaped cfg, NeMo-named fp32 state_dict, GGUF tokenizer payload).
 
 # HF name -> NeMo name. Anything not matched is an error, so a new
 # tensor in a future checkpoint fails loudly instead of being dropped.
@@ -653,10 +645,8 @@ class _HfBpeAsSpm:
 
     SPM BPE scores are 0 for the user-defined pieces at the front of the
     vocab and -(rank) for merged pieces after them; tokenizer.json drops
-    scores but keeps both orders, so they are reconstructed exactly. On
-    parakeet-ultra this reproduces parakeet-tdt-0.6b-v3's tokenizer.model
-    piece-for-piece and score-for-score (checked against the v3 .nemo at
-    port time). Every non-unk piece is NORMAL, as in that SPM model.
+    scores but keeps both orders, so they are reconstructed exactly. Every
+    non-unk piece is NORMAL, as in that SPM model.
     """
 
     def __init__(self, tok: dict, blank_id: int):
@@ -726,12 +716,9 @@ class _HfSafetensorsModel:
 
 
 def _nemo_cfg_from_hf_config(hf: dict) -> dict:
-    """NeMo-shaped cfg for read_hparams()/resolve_runtime_hparams() from a
-    ParakeetForTDT config.json. Every structural field the C++ port
-    hard-codes is asserted, not assumed. The frontend block is the NeMo
-    AudioToMelSpectrogramPreprocessor that kestrel's parakeet_features
-    reproduces (25 ms Hann window, 10 ms hop, 512-point FFT, per-feature
-    normalization); dither is 0 because kestrel never dithers."""
+    """NeMo-shaped cfg for read_hparams() from a ParakeetForTDT config.json.
+    Structural fields the C++ port hard-codes are asserted. The frontend is
+    the NeMo mel preprocessor kestrel reproduces; dither 0 (kestrel never dithers)."""
     enc = hf["encoder_config"]
     checks = {
         "model_type": (hf.get("model_type"), "parakeet_tdt"),
@@ -1481,11 +1468,9 @@ PROMPT_MLP_TABLE: list[tuple[str, str]] = [
 ]
 
 
-# Speech head on the subsampler output (parakeet-ultra):
+# Speech head on the subsampler output:
 # proj Conv1d(d_model->H, k=1) + SiLU, ctx Conv1d(H->H, k, pad k//2) + SiLU,
-# out Conv1d(H->1, k=1), sigmoid. Kept at F32 in every quant preset
-# (policy.cpp routes vad.*.weight to the Conv bucket): it is 0.2M params,
-# and a quantized head could move threshold crossings, i.e. cut points.
+# out Conv1d(H->1, k=1), sigmoid. F32 in every preset (see policy.cpp).
 VAD_HEAD_TABLE: list[tuple[str, str]] = [
     ("vad_head.proj.weight", "vad.proj.weight"),
     ("vad_head.proj.bias",   "vad.proj.bias"),
@@ -1973,17 +1958,13 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     writer.add_float32("stt.frontend.f_min",        hp["fe_f_min"])
     writer.add_float32("stt.frontend.f_max",        hp["fe_f_max"])
 
-    # VAD head + long-form segmenter (parakeet-ultra). The head's shape
-    # comes from the checkpoint; the segmenter constants are kestrel's
-    # (kestrel/models/parakeet_tdt/{vad,segment}.py, kestrel 0.9.1), the
-    # publisher runtime this variant is validated against. They are
-    # runtime policy, not weights, and are written here so the C++
-    # segmenter reads them instead of hard-coding a second copy.
     # kestrel-runtime semantics. Absent on every NeMo-validated variant.
     if profile.get("kestrel_runtime"):
         writer.add_string("stt.parakeet.encoder.length_masking", "kestrel")
         writer.add_string("stt.parakeet.tdt.symbol_budget", "global")
 
+    # VAD head shape from the checkpoint; segmenter constants are kestrel's
+    # runtime policy, written here so the C++ does not hard-code a copy.
     if has_vad_head:
         vad_proj = sd["vad_head.proj.weight"]
         vad_ctx = sd["vad_head.ctx.weight"]

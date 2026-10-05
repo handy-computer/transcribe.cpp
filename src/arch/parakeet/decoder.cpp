@@ -1097,9 +1097,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     // the unconditional path.
     bool predictor_dirty = true;
 
-    // kestrel's loop (ParakeetTdt.generate_encoded): every step spends one
-    // unit of a tdt_max_symbols * T_enc budget, a blank with duration 0
-    // advances one frame, and there is no per-frame cap.
+    // See ParakeetHParams::tdt_global_symbol_budget.
     const bool global_budget   = w.tdt_global_symbol_budget;
     int64_t    steps_remaining = static_cast<int64_t>(w.tdt_max_symbols) * T_enc;
 

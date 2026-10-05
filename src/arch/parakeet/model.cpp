@@ -454,7 +454,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    // A VAD head (parakeet-ultra) means transcribe_run segments long audio
+    // A VAD head means transcribe_run segments long audio
     // itself (run_longform): advertise the long-form chunker.
     if (m->hparams.has_vad_head) {
         transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_LONG_FORM, true);
@@ -720,10 +720,8 @@ static void normalize_transcript_whitespace(std::string & s) {
     s.swap(norm);
 }
 
-// Valid length of each pre_encode stage for one utterance: [0] = mel
-// frames, [1..3] = after each stride-2 conv. kestrel length masking takes
-// mel frames = n_samples / hop (kestrel's parakeet_features); the NeMo
-// path keeps the MelFrontend frame count it was validated with.
+// Valid length of each pre_encode stage: [0] = mel frames (n_samples / hop
+// under kestrel masking), [1..3] = after each stride-2 conv.
 static std::array<int, 4> pre_encode_stage_lengths(const ParakeetHParams & hp, int n_samples, int mel_frames) {
     const bool         causal = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
     std::array<int, 4> len{};
@@ -734,9 +732,7 @@ static std::array<int, 4> pre_encode_stage_lengths(const ParakeetHParams & hp, i
     return len;
 }
 
-// Fill the valid-length masks build_encoder_graph created for a
-// variable-length (or kestrel-masked) graph: attention key padding, conv
-// valid frames, and the three pre_encode stages. Returns each utterance's
+// Fill build_encoder_graph's valid-length masks. Returns each utterance's
 // valid encoder length (clamped to T_enc) in real_tenc.
 static void fill_length_masks(const EncoderBuild &                    eb,
                               const std::vector<std::array<int, 4>> & lens,
@@ -1070,40 +1066,12 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     const int64_t t_mel_start  = ggml_time_us();
     int           mel_n_mels   = 0;
     int           mel_n_frames = 0;
-    bool          mel_from_ref = false;
-#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
-    // Validation hook: inject the reference mel (<dir>/enc.mel.in.f32, row-major
-    // [n_mels, T] — the mel_buf layout) to isolate encoder drift from the
-    // frontend. Never compiled into release builds.
-    if (const char * ref_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
-        std::string   path = std::string(ref_dir) + "/enc.mel.in.f32";
-        std::ifstream f(path, std::ios::binary | std::ios::ate);
-        const int     n_mels = pm->hparams.fe_num_mels;
-        if (!f) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: cannot open mel ref '%s'", path.c_str());
-            return TRANSCRIBE_ERR_FILE_NOT_FOUND;
-        }
-        const std::streamsize bytes = f.tellg();
-        if (bytes <= 0 || (static_cast<size_t>(bytes) % (sizeof(float) * static_cast<size_t>(n_mels))) != 0) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: mel ref '%s' is not [%d, T] f32", path.c_str(), n_mels);
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        f.seekg(0, std::ios::beg);
-        pc->mel_buf.assign(static_cast<size_t>(bytes) / sizeof(float), 0.0f);
-        f.read(reinterpret_cast<char *>(pc->mel_buf.data()), bytes);
-        mel_n_mels   = n_mels;
-        mel_n_frames = static_cast<int>(pc->mel_buf.size() / static_cast<size_t>(n_mels));
-        mel_from_ref = true;
-    }
-#endif
-    if (!mel_from_ref) {
-        if (const transcribe_status mst =
-                pm->mel->compute(pcm, static_cast<size_t>(n_samples), pc->mel_buf, mel_n_mels, mel_n_frames);
-            mst != TRANSCRIBE_OK) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet run: MelFrontend::compute failed (%s)",
-                    transcribe_status_string(mst));
-            return mst;
-        }
+    if (const transcribe_status mst =
+            pm->mel->compute(pcm, static_cast<size_t>(n_samples), pc->mel_buf, mel_n_mels, mel_n_frames);
+        mst != TRANSCRIBE_OK) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet run: MelFrontend::compute failed (%s)",
+                transcribe_status_string(mst));
+        return mst;
     }
     pc->t_mel_us = ggml_time_us() - t_mel_start;
 
@@ -1217,7 +1185,6 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
 
     transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
 
-    // kestrel length masking: valid lengths from n_samples, masks at batch 1.
     int T_valid = -1;
     if (kestrel_masks) {
         std::vector<int> real_tenc;
@@ -1460,9 +1427,6 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
                                              static_cast<long long>(T_valid) * static_cast<long long>(d_enc), shape, 2,
                                              "encoder.final");
         }
-        if (T_valid <= 0) {
-            return TRANSCRIBE_ERR_GGUF;
-        }
         const char * enc_dump_name = pm->hparams.has_prompt ? "dec.enc_out_prompted" : nullptr;
         return decode_and_populate(pc, pm, params, pc->enc_host.data(), T_valid, d_enc, /*utt_index=*/-1,
                                    enc_dump_name);
@@ -1486,9 +1450,7 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// Long-form (parakeet-ultra): VAD-head pause segmentation, per-segment decode
-// ---------------------------------------------------------------------------
+// ----- Long-form: VAD-head pause segmentation, per-segment decode -----
 
 // GGUF stores the segmenter constants as float32; kestrel's are Python
 // float literals. Recover the literal (0.1f -> 0.1) so every float64
@@ -1528,8 +1490,7 @@ void fill_pe_masks(ggml_tensor * s1, ggml_tensor * s2, ggml_tensor * s3, const s
     }
 }
 
-// Speech probability per valid encoder frame of one scan block
-// (kestrel head_speech -> ParakeetTdt.speech_probabilities).
+// Speech probability per valid encoder frame of one scan block.
 transcribe_status run_vad_block(ParakeetSession *    pc,
                                 ParakeetModel *      pm,
                                 const float *        pcm,
@@ -1641,11 +1602,8 @@ void elide_timestamps(ParakeetSession * pc, const ParakeetModel * pm, const tran
     pc->result_kind = eff;
 }
 
-// kestrel ParakeetTdtRuntime on audio longer than one segment: the VAD head
-// cuts it at pauses (longform::pause_segments), each segment is decoded on
-// its own exactly like a short clip, and the results are stitched: texts
-// joined with one space, timestamps shifted by the segment start and
-// clamped to its end. One result segment per decoded segment.
+// Audio longer than one segment: decode each pause segment like a short clip,
+// then stitch (texts joined with a space, timestamps offset and clamped).
 transcribe_status run_longform(ParakeetSession *             pc,
                                ParakeetModel *               pm,
                                const float *                 pcm,
@@ -1664,6 +1622,9 @@ transcribe_status run_longform(ParakeetSession *             pc,
         if (len < lp.min_feature_samples) {
             regions.emplace_back(0.0, duration);
             return TRANSCRIBE_OK;
+        }
+        if (pc->poll_abort()) {
+            return TRANSCRIBE_ERR_ABORTED;
         }
         std::vector<float> probs;
         if (const transcribe_status st = run_vad_block(pc, pm, pcm + start, len, block_index++, probs);
@@ -1851,9 +1812,7 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
                                           int64_t                                 total_mel_us,
                                           const transcribe_run_params *           params) {
     const int n       = static_cast<int>(mels.size());
-    // kestrel length masking masks every batch (its valid lengths come from
-    // n_samples, which can trail the padded mel by a frame even when every
-    // utterance has the same length).
+    // kestrel masking masks every batch: n_samples / hop can trail the mel.
     bool      var_len = pm->hparams.kestrel_length_masking;
     for (int b = 0; b < n; ++b) {
         if (nf[b] != T_max) {
@@ -1918,7 +1877,6 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Each utterance's valid length through the three subsampling convs.
     std::vector<int> real_tenc(static_cast<size_t>(n), T_enc);
     if (var_len) {
         std::vector<std::array<int, 4>> lens(static_cast<size_t>(n));
@@ -2086,10 +2044,8 @@ transcribe_status run_batch(transcribe_session *          session,
                 "utterances are decoded single-speaker (use transcribe_run for multitalker)");
     }
 
-    // A batch with a clip that needs long-form segmentation runs per
-    // utterance through the same paths transcribe_run takes, so batched and
-    // serial results are identical; all-short batches take the parallel
-    // encoder below.
+    // Any long-form clip sends the batch through transcribe_run's per-utterance
+    // paths, so batched and serial results match.
     bool any_longform = false;
     for (int i = 0; i < n; ++i) {
         any_longform = any_longform || (pcm[i] != nullptr && n_samples[i] > 0 && needs_longform(pm, n_samples[i]));

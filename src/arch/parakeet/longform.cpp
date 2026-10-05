@@ -1,4 +1,4 @@
-// Port of kestrel 0.9.1's parakeet long-form segmenter. See longform.h.
+// Parakeet long-form segmenter. See longform.h.
 
 #include "longform.h"
 
@@ -82,9 +82,8 @@ Regions pauses_from_speech(Regions speech, double duration, const Params & p) {
 }
 
 double next_cut(const Regions & pauses, const Params & p) {
-    // The last pause lying fully inside (min_segment, max_segment) wins;
-    // failing that, any pause whose midpoint lands in that window; failing
-    // that, the cap.
+    // Last pause fully inside (min_segment, max_segment), else any pause whose
+    // midpoint lands there, else the cap.
     const std::pair<double, double> * last = nullptr;
     for (const auto & r : pauses) {
         if (r.first >= p.min_segment_seconds && r.second <= p.max_segment_seconds) {

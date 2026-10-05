@@ -1,7 +1,5 @@
-// Unit test for the parakeet long-form segmenter (src/arch/parakeet/longform.cpp).
-// Expected values come from kestrel 0.9.1 itself (vad.speech_regions,
-// segment.pause_segments over a real AudioChunks, AudioChunks.chunks) run on
-// the synthetic inputs below; the port must reproduce them exactly.
+// Unit test for the parakeet long-form segmenter. Expected values come from
+// kestrel run on the synthetic inputs below; the port must match exactly.
 
 #include "arch/parakeet/longform.h"
 

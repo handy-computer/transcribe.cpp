@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Reference dumps for parakeet-ultra from kestrel, Photon's inference engine.
-
-moondream/parakeet-ultra is a post-trained parakeet-tdt-0.6b-v3 plus a
-`vad_head` on the subsampler. The publisher's runtime (kestrel, PyPI) is the
-oracle for everything: frontend, FastConformer + TDT greedy decode, the VAD
-head, and the long-form pause segmenter. NeMo cannot load the checkpoint
-(no .nemo) and transformers drops vad_head, so neither is used.
+"""Reference dumps for parakeet-ultra from kestrel (the publisher's runtime).
 
 Tensor names match scripts/dump_reference_parakeet_nemo.py wherever the
 quantity is the same, so the C++ parakeet observer points compare as-is:
@@ -52,6 +46,7 @@ import json
 import sys
 import types
 from functools import partial
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -114,11 +109,9 @@ def load_audio(path: Path) -> np.ndarray:
 
 
 def make_source(args: argparse.Namespace, audio: Path, n_samples: int) -> dict[str, Any]:
-    import kestrel
-
     return {
         "framework": "kestrel",
-        "kestrel_version": getattr(kestrel, "__version__", "0.9.1"),
+        "kestrel_version": version("kestrel"),
         "model": args.model,
         "revision": args.revision,
         "audio": audio.name,
@@ -397,9 +390,7 @@ def cmd_longform(args: argparse.Namespace) -> int:
         j = seg["index"]
         n_valid = int(valid[0].sum())
         seg["valid_frames"] = n_valid
-        # Same names the C++ emits under its "seg.<j>." dump prefix. Only the
-        # valid encoder rows: a frame past the valid length is masked out of
-        # attention as a query too, so its value is unspecified and never decoded.
+        # C++ "seg.<j>." names; valid rows only (padded rows are unspecified).
         dump(f"seg.{j}.enc.mel.in", features[0].transpose(0, 1), "segment.mel")
         dump(f"seg.{j}.enc.final", encoded[0, :n_valid], "segment.encoder.final")
         n = int(out.lengths[0])

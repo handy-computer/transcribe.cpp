@@ -19,9 +19,7 @@ translate.
 Offline multilingual speech-to-text, and the default pick over
 `parakeet-tdt-0.6b-v3` for new work. Moondream post-trained v3 without
 changing its architecture, tokenizer or frontend, so it covers the same 25
-European languages and drops into any v3 setup by swapping the GGUF. It is
-more accurate than v3 on English, on all 25 FLEURS languages, and on
-long recordings.
+European languages and drops into any v3 setup by swapping the GGUF.
 
 The one addition is a small voice-activity head on the encoder's input
 layers. The model uses it to segment long audio, described below. It is not
@@ -48,8 +46,7 @@ audio is segmented the way Moondream's runtime does it:
 The thresholds are stored in the GGUF, not hard-coded. Cut points match
 Moondream's runtime sample for sample. Two consequences when moving from v3:
 segment boundaries and timestamps on long files differ from v3's output,
-and audio over 30 s pays for one extra voice-activity pass (see
-[Performance](#performance)).
+and audio over 30 s pays for one extra voice-activity pass.
 
 <!-- catalog:pin -->
 Licensed CC-BY-4.0. Ported from upstream commit [`73175eb`](https://huggingface.co/moondream/parakeet-ultra/commit/73175eb), pinned 2026-10-04. Validated against the kestrel 0.9.1 (Photon) reference at transcribe.cpp commit [`08f9e6f0`](https://github.com/handy-computer/transcribe.cpp/tree/08f9e6f0) on 2026-10-05.
@@ -77,12 +74,8 @@ Greedy transducer decoding, no external LM. The reference is Moondream's
 own runtime (kestrel 0.9.1, the engine behind Photon), not transformers.
 On this manifest kestrel scores 1.80% and the C++ F32 build matches it.
 
-Moondream's card reports 1.41% on the same split. That figure uses the
-Open ASR Leaderboard normalizers with compound-merging alignment; kestrel
-run through this repo's scorer reproduces the numbers here, not the card's.
-The same scoring difference explains the higher FLEURS figures below,
-largest on compounding languages: kestrel scored by this pipeline gives
-14.37% on Estonian and 13.09% on Hungarian, matching the C++ build.
+Moondream's card reports 1.41% on the same split, scored with the Open
+ASR Leaderboard normalizer.
 
 Long-form: on 11 full TED-LIUM 3 talks, segmented by the model's
 voice-activity head exactly as kestrel does it, F32 scores 2.22%, identical
@@ -125,7 +118,7 @@ The voice-activity head is kept at F32 in every quant. Lower quants can still
 move a cut point, because the head reads the quantized input layers' output:
 on a 306 s test file, F16, Q8_0 and Q6_K cut exactly where F32 does, Q5_K_M
 differs at one segment boundary and Q4_K_M produces 12 segments instead of
-11. The TED-LIUM figures above show what that costs.
+11.
 
 ## Quick Start
 
@@ -175,11 +168,6 @@ Compute latency (mel + encode + decode), speedup over realtime in parentheses; p
 
 AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `08f90613` on 2026-10-05.
 <!-- /catalog -->
-
-On `jfk` (11 s, one segment) throughput matches `parakeet-tdt-0.6b-v3`. On
-`dots` (35 s) the voice-activity scan and the two segment encodes cost
-5 to 20% against v3, most on GPU backends where per-pass overhead weighs
-most. Decode time is unchanged.
 
 Benchmark reproduction:
 
