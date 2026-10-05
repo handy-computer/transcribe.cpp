@@ -96,6 +96,25 @@ enum Fixtures {
         return (model, try loadWav(audio))
     }
 
+    /// VoxLingua107 ECAPA-TDNN (LANGID only), or `XCTSkip` when absent.
+    static func langIdModelPath() throws -> String {
+        guard let model = familyModel(
+            "TRANSCRIBE_SMOKE_LANGID_MODEL",
+            "models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-Q8_0.gguf")
+        else { throw XCTSkip("no language ID model (set TRANSCRIBE_SMOKE_LANGID_MODEL)") }
+        return model
+    }
+
+    /// The toy ecapa_tdnn GGUF the C++ build generates under tests/fixtures/,
+    /// or `XCTSkip` before the C++ test fixtures have been built.
+    static func langIdToyModelPath() throws -> String {
+        let path = repoRoot().appendingPathComponent("tests/fixtures/arch_ecapa_tdnn_minimal.gguf").path
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("no toy ecapa_tdnn fixture (build the C++ `fixtures` target)")
+        }
+        return path
+    }
+
     /// The model path + decoded PCM, or `XCTSkip` when either is absent.
     static func modelAndAudio() throws -> (model: String, pcm: [Float]) {
         guard let model = modelPath() else {

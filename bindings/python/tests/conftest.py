@@ -64,6 +64,9 @@ SORTFORMER_MODEL = (
     / "models/diar_streaming_sortformer_4spk-v2.1"
     / "diar_streaming_sortformer_4spk-v2.1-F32.gguf"
 )
+LANGID_MODEL = (
+    REPO / "models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-Q8_0.gguf"
+)
 PNC_MODEL = REPO / "models/canary-180m-flash/canary-180m-flash-Q8_0.gguf"
 ITN_MODEL = REPO / "models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf"
 
@@ -170,6 +173,28 @@ def voxtral_model_path() -> Path:
 def sortformer_model_path() -> Path:
     """Sortformer diarizer (serves only the DIARIZE role)."""
     return _family_model("TRANSCRIBE_SMOKE_SORTFORMER_MODEL", SORTFORMER_MODEL)
+
+
+@pytest.fixture(scope="session")
+def langid_model_path() -> Path:
+    """VoxLingua107 ECAPA-TDNN (serves only the LANGID role)."""
+    return _family_model("TRANSCRIBE_SMOKE_LANGID_MODEL", LANGID_MODEL)
+
+
+@pytest.fixture(scope="session")
+def langid_toy_model_path(tmp_path_factory) -> Path:
+    """The toy ecapa_tdnn GGUF from tests/fixtures/make_gguf_fixtures.py
+    (5 labels aa..ee, alias xx=aa, random weights). The generator is
+    dependency-free, so this always runs; results are structural only."""
+    import importlib.util
+
+    gen = REPO / "tests/fixtures/make_gguf_fixtures.py"
+    spec = importlib.util.spec_from_file_location("make_gguf_fixtures", gen)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    path = tmp_path_factory.mktemp("langid") / "ecapa_tdnn_toy.gguf"
+    path.write_bytes(mod._ecapa_tdnn_gguf(mod.ECAPA_LABEL_CODES, mod.ECAPA_LABEL_NAMES, ["xx=aa"]))
+    return path
 
 
 @pytest.fixture(scope="session")

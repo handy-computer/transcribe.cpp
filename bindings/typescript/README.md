@@ -127,9 +127,22 @@ for (const t of turns) console.log(t.speakerId, t.t0Ms, t.t1Ms);
 `diarizer.timings` reports the last run. Diarize runs wait on the same
 model-wide lock as other compute calls (see below).
 
+### Language ID (LANGID role)
+
+A `"langid"` model (VoxLingua107 ECAPA-TDNN) ranks its own label codes; match
+`result.code` against an ASR model's `capabilities.languages` yourself.
+Omitting `allowed` scores every label, `[]` throws `InvalidArgument`, and
+clips under `model.langidInfo.minAudioMs` throw `InputTooShort`.
+
+```ts
+using lid = model.createLangIdSession();
+const result = await lid.run(pcm, { allowed: ["en", "de", "fr"], topK: 3 });
+console.log(result.code, result.candidates[0].p, result.allowedMass);
+```
+
 ### Resource management
 
-`TranscribeModel`, `Session`, `DiarizeSession`, and `Stream` all implement
+`TranscribeModel`, `Session`, `DiarizeSession`, `LangIdSession`, and `Stream` all implement
 `Symbol.dispose`, so `using` works (TypeScript 5.2+ / Node 22+):
 
 ```ts

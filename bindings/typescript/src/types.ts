@@ -291,8 +291,8 @@ export type FamilyExtension =
 
 // ---- roles -----------------------------------------------------------------
 
-/** What a model serves: "asr" (transcription) and/or "diarize" (speaker turns). */
-export type Role = "asr" | "diarize";
+/** What a model serves: "asr" (transcription), "diarize" (speaker turns), "langid" (language). */
+export type Role = "asr" | "diarize" | "langid";
 
 export interface DiarizeInfo {
   /** Input PCM rate. */
@@ -311,4 +311,58 @@ export interface DiarizeOptions {
   signal?: AbortSignal;
   /** A diarize_run-slot family extension (e.g. sortformer_diarize). */
   family?: FamilyExtension;
+}
+
+export interface LangIdInfo {
+  /** Input PCM rate. */
+  sampleRate: number;
+  /** Label indices are [0, nLabels). */
+  nLabels: number;
+  /** Shorter scored audio throws InputTooShort. */
+  minAudioMs: number;
+}
+
+export interface LangIdSessionOptions {
+  /** CPU threads for CPU-side ops; 0 = library default. */
+  nThreads?: number;
+  /** Longer input is scored on its last maxAudioMs; 0 = 30000. */
+  maxAudioMs?: number;
+}
+
+export interface LangIdOptions {
+  /** Cancel the run cooperatively. */
+  signal?: AbortSignal;
+  /**
+   * Restrict the decision to these codes or aliases. Omitted (or undefined /
+   * null) means every label; an empty array throws InvalidArgument; an
+   * unknown code throws UnsupportedRequest.
+   */
+  allowed?: readonly string[] | null;
+  /** Keep the best topK candidates; 0 = every allowed label. */
+  topK?: number;
+}
+
+/** One ranked label; `code` is the model's own label ("en", "iw"). */
+export interface LangIdCandidate {
+  index: number;
+  code: string;
+  name: string;
+  /** Softmax renormalized over the allowed set. */
+  p: number;
+  /** Softmax over every label. */
+  pUnrestricted: number;
+  logit: number;
+}
+
+export interface LangIdResult {
+  /** Ranked by p, descending; ties keep label order. */
+  candidates: LangIdCandidate[];
+  /** The top candidate's code, or null with no candidates. */
+  code: string | null;
+  /** Labels in the allowed set (before topK). */
+  nAllowed: number;
+  /** Unrestricted probability inside the allowed set (1 when unrestricted). */
+  allowedMass: number;
+  /** Audio actually scored, after the crop. */
+  audioMs: number;
 }

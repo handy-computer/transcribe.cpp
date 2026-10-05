@@ -35,9 +35,11 @@ export class BackendError extends TranscribeError {}
 export class UnsupportedRequest extends TranscribeError {}
 export class AbiError extends TranscribeError {}
 export class InputTooLong extends TranscribeError {}
+/** Raised when the audio is shorter than the role's minimum (e.g. language ID's minAudioMs). */
+export class InputTooShort extends TranscribeError {}
 export class VersionMismatch extends TranscribeError {}
 
-/** Raised when the model does not serve the role (ASR, diarize) the call needs. */
+/** Raised when the model does not serve the role (ASR, diarize, langid) the call needs. */
 export class UnsupportedRole extends TranscribeError {}
 
 /** Raised when a run is cancelled; carries any partial transcript in `partialResult`. */
@@ -74,6 +76,7 @@ const STATUS_TO_EXC: Record<number, new (m: string, s?: number) => TranscribeErr
   [g.TRANSCRIBE_ERR_OUTPUT_TRUNCATED]: OutputTruncated,
   [g.TRANSCRIBE_ERR_OUTPUT_REPETITION]: OutputRepetition,
   [g.TRANSCRIBE_ERR_UNSUPPORTED_ROLE]: UnsupportedRole,
+  [g.TRANSCRIBE_ERR_INPUT_TOO_SHORT]: InputTooShort,
 };
 
 /** Build (do not throw) the mapped exception for a status. */

@@ -2,12 +2,13 @@ import CTranscribe
 import Foundation
 
 /// The kinds of work a model serves (`transcribe_model_roles`). ASR is
-/// `Session`; DIARIZE is `DiarizeSession`.
+/// `Session`; DIARIZE is `DiarizeSession`; LANGID is `LangIdSession`.
 public struct Roles: OptionSet, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }
     public static let asr = Roles(rawValue: TRANSCRIBE_ROLE_ASR.rawValue)
     public static let diarize = Roles(rawValue: TRANSCRIBE_ROLE_DIARIZE.rawValue)
+    public static let langId = Roles(rawValue: TRANSCRIBE_ROLE_LANGID.rawValue)
 }
 
 /// A loaded model. Safe to share across threads (`@unchecked Sendable`): the C

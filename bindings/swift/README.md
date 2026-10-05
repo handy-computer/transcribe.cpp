@@ -115,6 +115,20 @@ for t in turns { print(t.speakerId, t.t0Ms, t.t1Ms) }
 
 `capabilities` and `session()` throw `.unsupportedRole` on a model without `.asr`.
 
+## Language ID
+
+Language ID models (`.langId`, e.g. VoxLingua107 ECAPA-TDNN) rank the model's
+own label codes from a `LangIdSession`; match `result.code` against an ASR
+model's `capabilities.languages` yourself. `allowed: nil` scores every label,
+an empty array throws `.invalidArgument`, and clips under
+`langIdInfo.minAudioMs` throw `.inputTooShort`.
+
+```swift
+let model = try Model(path: "lang-id-voxlingua107-ecapa-Q8_0.gguf")
+let result = try model.langIdSession().run(pcm, options: LangIdOptions(allowed: ["en", "de"], topK: 3))
+print(result.code ?? "-", result.allowedMass)
+```
+
 ## Backends
 
 Backends are compiled into the xcframework per Apple slice:

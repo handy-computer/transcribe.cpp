@@ -43,6 +43,7 @@ def test_every_status_maps_to_documented_subclass():
         errors.ERR_OUTPUT_TRUNCATED: t.OutputTruncated,
         errors.ERR_OUTPUT_REPETITION: t.OutputRepetition,
         errors.ERR_UNSUPPORTED_ROLE: t.UnsupportedRole,
+        errors.ERR_INPUT_TOO_SHORT: t.InputTooShort,
     }
     # The mapping table covers every non-OK status the header defines, and
     # nothing else (a new C status must be mapped deliberately, not by

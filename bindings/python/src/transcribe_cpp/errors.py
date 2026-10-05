@@ -19,6 +19,7 @@ from ._generated import (
     TRANSCRIBE_ERR_FILE_NOT_FOUND as ERR_FILE_NOT_FOUND,
     TRANSCRIBE_ERR_GGUF as ERR_GGUF,
     TRANSCRIBE_ERR_INPUT_TOO_LONG as ERR_INPUT_TOO_LONG,
+    TRANSCRIBE_ERR_INPUT_TOO_SHORT as ERR_INPUT_TOO_SHORT,
     TRANSCRIBE_ERR_INVALID_ARG as ERR_INVALID_ARG,
     TRANSCRIBE_ERR_NOT_IMPLEMENTED as ERR_NOT_IMPLEMENTED,
     TRANSCRIBE_ERR_OOM as ERR_OOM,
@@ -99,6 +100,11 @@ class InputTooLong(TranscribeError):
     pass
 
 
+class InputTooShort(TranscribeError):
+    """The audio is shorter than the role's minimum (e.g. language ID scores
+    at least ``LangIdInfo.min_audio_ms``). Nothing was computed."""
+
+
 class Busy(TranscribeError):
     """A stream is active on this model, so the call was refused instead of
     started (see ``Model``). Finalize or reset the stream first, or use one
@@ -160,6 +166,7 @@ _STATUS_TO_EXC = {
     ERR_OUTPUT_TRUNCATED: OutputTruncated,
     ERR_OUTPUT_REPETITION: OutputRepetition,
     ERR_UNSUPPORTED_ROLE: UnsupportedRole,
+    ERR_INPUT_TOO_SHORT: InputTooShort,
 }
 
 

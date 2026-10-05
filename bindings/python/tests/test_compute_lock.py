@@ -55,6 +55,8 @@ def fake(monkeypatch):
                         lambda h: frees.append(("model", h.value)))
     monkeypatch.setattr(t._lib, "transcribe_diarize_session_free",
                         lambda h: frees.append(("diarize", h.value)))
+    monkeypatch.setattr(t._lib, "transcribe_langid_session_free",
+                        lambda h: frees.append(("langid", h.value)))
     resets: list = []  # session handles transcribe_stream_reset was given
     monkeypatch.setattr(t._lib, "transcribe_stream_reset",
                         lambda h: resets.append(h.value))
@@ -183,6 +185,7 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     m = fake.model()
     s = fake.session(m)
     d = fake.session(m, cls=t.DiarizeSession)
+    lid = fake.session(m, cls=t.LangIdSession)
     seen: list = []
 
     def holds(name, ret=0):
@@ -196,7 +199,8 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
                  "transcribe_stream_begin", "transcribe_stream_feed",
                  "transcribe_stream_finalize", "transcribe_stream_reset",
                  "transcribe_batch_status", "transcribe_diarize_run",
-                 "transcribe_diarize_n_segments"):
+                 "transcribe_diarize_n_segments", "transcribe_langid_run",
+                 "transcribe_langid_get_result"):
         monkeypatch.setattr(t._lib, name, holds(name))
     monkeypatch.setattr(t._lib, "transcribe_batch_n_results",
                         holds("transcribe_batch_n_results", ret=1))
@@ -215,6 +219,7 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     stream.finalize()
     stream.reset()
     assert d.run(PCM) == []
+    assert lid.run(PCM).candidates == ()
 
     names = [n for n, _ in seen]
     for site in ("transcribe_run", "transcribe_run_batch",
@@ -222,6 +227,7 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
                  "transcribe_stream_begin", "transcribe_stream_feed",
                  "transcribe_stream_finalize", "transcribe_stream_reset",
                  "transcribe_diarize_run", "transcribe_diarize_n_segments",
+                 "transcribe_langid_run", "transcribe_langid_get_result",
                  "copy-out"):
         assert site in names, f"{site} never reached"
     assert all(ok for _, ok in seen), [n for n, ok in seen if not ok]
@@ -571,3 +577,45 @@ def test_diarize_run_busy_while_stream_active(fake, native, monkeypatch):
     assert calls == [] and not m._compute_lock.locked()
     stream.finalize()
     assert d.run(PCM) == [] and calls == ["run"]
+
+
+# --- LangIdSession --------------------------------------------------------------
+
+LANGID_BUSY = ("a stream is active on this model; "
+               "finish or drop it before langid run()")
+
+
+def test_langid_run_busy_while_stream_active(fake, native, monkeypatch):
+    m = fake.model()
+    s, lid = fake.session(m), fake.session(m, cls=t.LangIdSession)
+    calls: list = []
+    monkeypatch.setattr(t._lib, "transcribe_langid_run",
+                        lambda *a: calls.append("run") or 0)
+    monkeypatch.setattr(t._lib, "transcribe_langid_get_result", lambda h, out: 0)
+    stream = s.stream()
+    with pytest.raises(t.Busy) as ei:
+        lid.run(PCM)
+    assert str(ei.value) == LANGID_BUSY
+    assert calls == [] and not m._compute_lock.locked()
+    stream.finalize()
+    assert lid.run(PCM).candidates == () and calls == ["run"]
+
+
+def test_langid_allowed_kept_alive_and_empty_rejected(fake, monkeypatch):
+    m = fake.model()
+    lid = fake.session(m, cls=t.LangIdSession)
+    seen: list = []
+
+    def run(h, pcm, n, params):
+        p = params._obj
+        seen.append([p.allowed[i].decode() for i in range(p.n_allowed)])
+        return 0
+
+    monkeypatch.setattr(t._lib, "transcribe_langid_run", run)
+    monkeypatch.setattr(t._lib, "transcribe_langid_get_result", lambda h, out: 0)
+    lid.run(PCM, allowed=["en", "de"])
+    lid.run(PCM, allowed=None)
+    assert seen == [["en", "de"], []]
+    with pytest.raises(t.InvalidArgument):
+        lid.run(PCM, allowed=[])
+    assert len(seen) == 2  # rejected before the native call

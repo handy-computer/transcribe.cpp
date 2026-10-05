@@ -78,6 +78,10 @@ pub enum Error {
     /// `TRANSCRIBE_ERR_UNSUPPORTED_ROLE` — see [`Model::roles`](crate::Model::roles).
     #[error("unsupported role: {0}")]
     UnsupportedRole(String),
+    /// `TRANSCRIBE_ERR_INPUT_TOO_SHORT` — the audio is shorter than the role's
+    /// minimum (e.g. [`LangIdInfo::min_audio_ms`](crate::LangIdInfo)).
+    #[error("input too short: {0}")]
+    InputTooShort(String),
     /// The loaded library's base version disagrees with the headers this crate
     /// was generated against (the pre-1.0 version lock). Raised on first use.
     #[error("native library version mismatch: {0}")]
@@ -117,6 +121,7 @@ impl Error {
             Error::OutputTruncated { .. } => S::TRANSCRIBE_ERR_OUTPUT_TRUNCATED,
             Error::OutputRepetition { .. } => S::TRANSCRIBE_ERR_OUTPUT_REPETITION,
             Error::UnsupportedRole(_) => S::TRANSCRIBE_ERR_UNSUPPORTED_ROLE,
+            Error::InputTooShort(_) => S::TRANSCRIBE_ERR_INPUT_TOO_SHORT,
             _ => S::TRANSCRIBE_OK,
         };
         s.0 as i32
@@ -191,6 +196,7 @@ pub(crate) fn error_for_status(status: sys::transcribe_status, context: &str) ->
             partial: None,
         },
         S::TRANSCRIBE_ERR_UNSUPPORTED_ROLE => Error::UnsupportedRole(msg),
+        S::TRANSCRIBE_ERR_INPUT_TOO_SHORT => Error::InputTooShort(msg),
         _ => Error::Other(msg),
     }
 }

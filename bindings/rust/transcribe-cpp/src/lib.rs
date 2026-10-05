@@ -51,6 +51,7 @@ mod cancel;
 mod diarize;
 mod error;
 mod family;
+mod langid;
 mod logging;
 mod model;
 mod result;
@@ -70,6 +71,9 @@ pub use family::{
     DiarizeExtension, MoonshineStreamingOptions, ParakeetBufferedStreamOptions,
     ParakeetStreamOptions, RunExtension, SortformerDiarizeOptions, SortformerPreset,
     StreamExtension, VoxtralRealtimeStreamOptions, WhisperRunOptions,
+};
+pub use langid::{
+    LangIdCandidate, LangIdInfo, LangIdOptions, LangIdResult, LangIdSession, LangIdSessionOptions,
 };
 pub use logging::{disable_logging, init_logging};
 pub use model::{Capabilities, Model, ModelOptions, SessionLimits, SessionOptions};

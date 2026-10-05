@@ -21,7 +21,7 @@ final class NoModelTests: XCTestCase {
 
     func testAbiStructSizesAreLive() {
         // A real layout is non-zero; a garbage/empty one would be 0.
-        for s in [AbiStruct.runParams, .capabilities, .segment, .sessionLimits] {
+        for s in [AbiStruct.runParams, .capabilities, .segment, .sessionLimits, .langIdResult, .langIdCandidate] {
             XCTAssertGreaterThan(Transcribe.abiStructSize(s), 0, "\(s)")
         }
     }
@@ -60,15 +60,15 @@ final class NoModelTests: XCTestCase {
             10: "unsupported", 11: "unsupported", 12: "unsupported",
             13: "aborted", 14: "badStructSize", 15: "unsupported",
             16: "unsupported", 17: "inputTooLong", 18: "outputTruncated",
-            19: "outputRepetition", 20: "unsupportedRole",
+            19: "outputRepetition", 20: "unsupportedRole", 21: "inputTooShort",
         ]
-        for raw in 1...20 {
+        for raw in 1...21 {
             let status = transcribe_status(rawValue: UInt32(raw))
             XCTAssertNotEqual(Transcribe.statusString(Int32(raw)), "unknown status", "status \(raw)")
             let name = String(describing: TranscribeError.make(status)).prefix { $0 != "(" }
             XCTAssertEqual(String(name), expected[Int32(raw)], "status \(raw)")
         }
-        XCTAssertEqual(Transcribe.statusString(21), "unknown status",
+        XCTAssertEqual(Transcribe.statusString(22), "unknown status",
                        "a new status was appended; map it in TranscribeError.make")
     }
 

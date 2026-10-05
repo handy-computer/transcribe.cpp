@@ -128,6 +128,34 @@ pub fn smoke_sortformer_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
     }
 }
 
+/// VoxLingua107 ECAPA-TDNN (LANGID role only), or `None` (with a skip note).
+pub fn smoke_langid_model(test: &str) -> Option<PathBuf> {
+    let model = family_model(
+        "TRANSCRIBE_SMOKE_LANGID_MODEL",
+        "models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-Q8_0.gguf",
+    );
+    if model.is_none() {
+        eprintln!("skip {test}: langid model absent (set TRANSCRIBE_SMOKE_LANGID_MODEL)");
+    }
+    model
+}
+
+/// The toy ecapa_tdnn GGUF the C++ build generates under tests/fixtures/
+/// (5 labels aa..ee, alias xx=aa, random weights), or `None` (with a skip
+/// note) before the C++ test fixtures have been built.
+pub fn langid_toy_model(test: &str) -> Option<PathBuf> {
+    ensure_backends();
+    let path = repo_root().join("tests/fixtures/arch_ecapa_tdnn_minimal.gguf");
+    if !path.is_file() {
+        eprintln!(
+            "skip {test}: {} absent (build the C++ `fixtures` target)",
+            path.display()
+        );
+        return None;
+    }
+    Some(path)
+}
+
 /// Both fixtures together; prints a skip note and returns `None` if either is
 /// missing (so the caller can `return` early — the Rust equivalent of skip).
 pub fn smoke_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
@@ -142,7 +170,7 @@ pub fn smoke_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
     }
 }
 
-fn load_wav(path: &std::path::Path) -> Vec<f32> {
+pub fn load_wav(path: &std::path::Path) -> Vec<f32> {
     let mut reader = hound::WavReader::open(path).expect("open wav");
     let spec = reader.spec();
     assert_eq!(spec.channels, 1, "{path:?} must be mono");

@@ -25,6 +25,7 @@ use transcribe_cpp_sys as sys;
 use crate::backend::Device;
 use crate::diarize::{DiarizeInfo, DiarizeSession, DiarizeSessionOptions};
 use crate::error::{check, Error, Result};
+use crate::langid::{LangIdInfo, LangIdSession, LangIdSessionOptions};
 use crate::result::owned_str;
 use crate::session::Session;
 use crate::types::{Backend, ExtSlot, Feature, Roles, TimestampKind};
@@ -198,6 +199,55 @@ impl Model {
             sample_rate: raw.sample_rate,
             max_speakers: raw.max_speakers,
         })
+    }
+
+    /// Open a language ID session with default options. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::LangId`](crate::Role).
+    pub fn langid_session(&self) -> Result<LangIdSession> {
+        self.langid_session_with(&LangIdSessionOptions::default())
+    }
+
+    /// Open a language ID session with explicit options.
+    pub fn langid_session_with(&self, options: &LangIdSessionOptions) -> Result<LangIdSession> {
+        LangIdSession::new(self, options)
+    }
+
+    /// Static facts about a language ID model. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::LangId`](crate::Role).
+    pub fn langid_info(&self) -> Result<LangIdInfo> {
+        let mut raw: sys::transcribe_langid_info = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_langid_info_init(&mut raw) };
+        check(
+            unsafe { sys::transcribe_langid_get_info(self.inner.ptr, &mut raw) },
+            "langid info",
+        )?;
+        Ok(LangIdInfo {
+            sample_rate: raw.sample_rate,
+            n_labels: raw.n_labels,
+            min_audio_ms: raw.min_audio_ms,
+        })
+    }
+
+    /// `(code, name)` per label index. Errors with [`Error::UnsupportedRole`]
+    /// unless the model serves [`Role::LangId`](crate::Role).
+    pub fn langid_labels(&self) -> Result<Vec<(String, String)>> {
+        let n = self.langid_info()?.n_labels;
+        Ok((0..n)
+            .map(|i| unsafe {
+                (
+                    owned_str(sys::transcribe_langid_label_code(self.inner.ptr, i)),
+                    owned_str(sys::transcribe_langid_label_name(self.inner.ptr, i)),
+                )
+            })
+            .collect())
+    }
+
+    /// Label index of a code or alias (`"he"` and `"iw"` name the same label);
+    /// `None` when unknown or the model does not serve the LANGID role.
+    pub fn langid_label_index(&self, code: &str) -> Option<i32> {
+        let c = CString::new(code).ok()?;
+        let i = unsafe { sys::transcribe_langid_label_index(self.inner.ptr, c.as_ptr()) };
+        (i >= 0).then_some(i)
     }
 
     /// The roles (kinds of work) this model serves.

@@ -42,6 +42,11 @@ import type {
   Feature,
   Itn,
   KvType,
+  LangIdCandidate,
+  LangIdInfo,
+  LangIdOptions,
+  LangIdResult,
+  LangIdSessionOptions,
   ModelOptions,
   PcmLike,
   Pnc,
@@ -129,6 +134,7 @@ const FEATURES: Record<Feature, number> = {
 const ROLES: Record<Role, number> = {
   asr: g.TRANSCRIBE_ROLE_ASR,
   diarize: g.TRANSCRIBE_ROLE_DIARIZE,
+  langid: g.TRANSCRIBE_ROLE_LANGID,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -1434,13 +1440,118 @@ export class DiarizeSession {
   }
 }
 
+// ---- LangIdSession ---------------------------------------------------------
+
+/** A LANGID-role session: which language is spoken. Same compute rules as Session. */
+export class LangIdSession {
+  #n: Native;
+  #core: SessionCore;
+  #model: TranscribeModel; // keep the model alive while this session lives
+  #untrack: (self: LangIdSession) => void;
+
+  /** @internal */
+  constructor(
+    n: Native,
+    model: TranscribeModel,
+    handle: any,
+    lock: Mutex,
+    untrack: (self: LangIdSession) => void,
+  ) {
+    this.#n = n;
+    this.#model = model;
+    this.#core = new SessionCore(n, handle, lock, n.F.langidSetAbortCallback);
+    this.#untrack = untrack;
+  }
+
+  /**
+   * Identify the language of one clip; input longer than the session's
+   * maxAudioMs is scored on its tail. The input PCM is borrowed, not copied
+   * (see Session.run).
+   */
+  async run(pcm: PcmLike, opts: LangIdOptions = {}): Promise<LangIdResult> {
+    const n = this.#n;
+    const F = n.F;
+    const h = this.#core.handle;
+    const samples = toFloat32(pcm);
+    const p: any = {};
+    F.langidParamsInit(p);
+    if (opts.topK !== undefined) p.top_k = opts.topK;
+    if (opts.allowed !== undefined && opts.allowed !== null) {
+      const codes = opts.allowed;
+      if (!Array.isArray(codes) || !codes.every((c) => typeof c === "string"))
+        throw new InvalidArgument("allowed must be an array of strings");
+      // NULL would mean "every label", the opposite of an empty list.
+      if (codes.length === 0)
+        throw new InvalidArgument("allowed is empty; omit it for every label");
+      codes.forEach((c) => cstr(c, "allowed"));
+      // Freed after the call returns (including async worker calls).
+      const type = n.koffi.array("char *", codes.length);
+      const arr = n.koffi.alloc(type, 1);
+      n.koffi.encode(arr, type, codes);
+      p.allowed = arr;
+      p.n_allowed = codes.length;
+    }
+
+    return this.#core.exclusive("langid", async (call) => {
+      const status = await call("run()", opts.signal, F.langidRun, h, samples, samples.length, p);
+      check(n, status, "transcribe_langid_run");
+      const res: any = {};
+      F.langidResultInit(res);
+      check(n, F.langidGetResult(h, res), "transcribe_langid_get_result");
+      const candidates: LangIdCandidate[] = [];
+      for (let i = 0; i < res.n_candidates; i++) {
+        const c: any = {};
+        F.langidCandidateInit(c);
+        check(n, F.langidGetCandidate(h, i, c), "transcribe_langid_get_candidate");
+        candidates.push({
+          index: c.index,
+          code: c.code ?? "",
+          name: c.name ?? "",
+          p: c.p,
+          pUnrestricted: c.p_unrestricted,
+          logit: c.logit,
+        });
+      }
+      return {
+        candidates,
+        code: candidates.length > 0 ? candidates[0].code : null,
+        nAllowed: res.n_allowed,
+        allowedMass: res.allowed_mass,
+        audioMs: Number(res.audio_ms),
+      };
+    }).finally(() => {
+      if (p.allowed) {
+        n.koffi.free(p.allowed);
+        p.allowed = null;
+      }
+    });
+  }
+
+  /** load_ms plus the last run's mel / encode time. */
+  get timings(): Timings {
+    this.#core.assertNotComputing("session timings");
+    const h = this.#core.handle;
+    return readTimings(this.#n, (o) => this.#n.F.langidGetTimings(h, o));
+  }
+
+  dispose(): void {
+    if (this.#core.disposed) return;
+    this.#untrack(this);
+    this.#core.dispose(this.#n.F.langidSessionFree);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+}
+
 // ---- Model -----------------------------------------------------------------
 
 export class TranscribeModel {
   #n: Native;
   #h: any;
   #disposed = false;
-  #sessions = new Set<Session | DiarizeSession>();
+  #sessions = new Set<Session | DiarizeSession | LangIdSession>();
   #lock = new Mutex(); // serializes compute across all sessions of this model
 
   private constructor(n: Native, handle: any) {
@@ -1548,6 +1659,49 @@ export class TranscribeModel {
     if (!out[0])
       throw new TranscribeError("diarize session init returned a null handle");
     const session = new DiarizeSession(n, this, out[0], this.#lock, (s) =>
+      this.#sessions.delete(s),
+    );
+    this.#sessions.add(session);
+    return session;
+  }
+
+  /** Static facts of a "langid" model; UnsupportedRole otherwise. */
+  get langidInfo(): LangIdInfo {
+    const n = this.#n;
+    const info: any = {};
+    n.F.langidInfoInit(info);
+    check(n, n.F.langidGetInfo(this.handle, info), "reading langid info");
+    return { sampleRate: info.sample_rate, nLabels: info.n_labels, minAudioMs: info.min_audio_ms };
+  }
+
+  /** [code, name] per label index of a "langid" model; UnsupportedRole otherwise. */
+  get langidLabels(): Array<[string, string]> {
+    const n = this.langidInfo.nLabels;
+    const F = this.#n.F;
+    const out: Array<[string, string]> = [];
+    for (let i = 0; i < n; i++)
+      out.push([F.langidLabelCode(this.handle, i) ?? "", F.langidLabelName(this.handle, i) ?? ""]);
+    return out;
+  }
+
+  /** Label index of a code or alias ("he" and "iw" name the same label), or null. */
+  langidLabelIndex(code: string): number | null {
+    const i = this.#n.F.langidLabelIndex(this.handle, cstr(code, "code"));
+    return i >= 0 ? i : null;
+  }
+
+  /** Open a LANGID-role session; UnsupportedRole on a model without "langid". */
+  createLangIdSession(opts: LangIdSessionOptions = {}): LangIdSession {
+    const n = this.#n;
+    const p: any = {};
+    n.F.langidSessionParamsInit(p);
+    if (opts.nThreads !== undefined) p.n_threads = opts.nThreads;
+    if (opts.maxAudioMs !== undefined) p.max_audio_ms = opts.maxAudioMs;
+    const out: any[] = [null];
+    check(n, n.F.langidSessionInit(this.handle, p, out), "opening langid session");
+    if (!out[0])
+      throw new TranscribeError("langid session init returned a null handle");
+    const session = new LangIdSession(n, this, out[0], this.#lock, (s) =>
       this.#sessions.delete(s),
     );
     this.#sessions.add(session);

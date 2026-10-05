@@ -20,6 +20,7 @@ import {
   InputTooLong,
   OutputTruncated,
   OutputRepetition,
+  InputTooShort,
 } from "../dist/index.js";
 
 const EXPECTED = {
@@ -43,6 +44,7 @@ const EXPECTED = {
   TRANSCRIBE_ERR_OUTPUT_TRUNCATED: OutputTruncated,
   TRANSCRIBE_ERR_OUTPUT_REPETITION: OutputRepetition,
   TRANSCRIBE_ERR_UNSUPPORTED_ROLE: UnsupportedRole,
+  TRANSCRIBE_ERR_INPUT_TOO_SHORT: InputTooShort,
 };
 
 test("every transcribe_status maps to its documented error class", () => {

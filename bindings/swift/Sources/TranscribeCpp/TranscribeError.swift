@@ -30,6 +30,9 @@ public enum TranscribeError: Error {
     case outputRepetition(message: String, partial: Transcript?)
     /// The model's `roles` lack the one the call needs (`TRANSCRIBE_ERR_UNSUPPORTED_ROLE`).
     case unsupportedRole(String)
+    /// The audio is shorter than the role's minimum (`TRANSCRIBE_ERR_INPUT_TOO_SHORT`,
+    /// e.g. `LangIdInfo.minAudioMs`).
+    case inputTooShort(String)
     case versionMismatch(String)
     case busy(String)
     case other(status: Int32, message: String)
@@ -73,6 +76,8 @@ public enum TranscribeError: Error {
             return .outputRepetition(message: message, partial: nil)
         case TRANSCRIBE_ERR_UNSUPPORTED_ROLE:
             return .unsupportedRole(message)
+        case TRANSCRIBE_ERR_INPUT_TOO_SHORT:
+            return .inputTooShort(message)
         default:
             return .other(status: raw, message: message)
         }

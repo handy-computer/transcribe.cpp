@@ -110,16 +110,17 @@ several sessions of one model each hold an active stream and interleave
 their feeds; a binding allows one active stream per model. Starting a stream
 takes the model's stream lease, and ending it (finalize, reset, a feed that
 leaves the stream FAILED, or dropping / closing the stream) releases it.
-While the lease is held, `run`, `run_batch`, a new stream and a diarize run
-on any session of that model raise `Busy` instead of waiting. A feed
+While the lease is held, `run`, `run_batch`, a new stream, a diarize run and
+a langid run on any session of that model raise `Busy` instead of waiting. A feed
 rejected before the native call (e.g. NaN input) keeps the lease.
 
 ## Roles and the DIARIZE session
 
 Each binding exposes the role mask as `Model.roles` (Python `frozenset[Role]`,
-TypeScript `readonly ('asr' | 'diarize')[]`, Rust `Roles`, Swift `Roles`
-option set). Status 20 surfaces as `UnsupportedRole` (`.unsupportedRole` in
-Swift), including from capabilities on a model without ASR.
+TypeScript `readonly ('asr' | 'diarize' | 'langid')[]`, Rust `Roles`, Swift
+`Roles` option set). Status 20 surfaces as `UnsupportedRole`
+(`.unsupportedRole` in Swift), including from capabilities on a model without
+ASR. Status 21 surfaces as `InputTooShort` (`.inputTooShort` in Swift).
 
 A DIARIZE model (`docs/roles.md`) gets its own session type: `DiarizeSession`
 from `model.diarize_session()` (Python, Rust), `model.diarizeSession()`
@@ -133,6 +134,29 @@ model-wide compute lock, waits behind other compute on the model, raises
 `Busy` while a stream on any session of the model holds the stream lease,
 keeps its model alive, honours cancellation, and defers native frees that
 race an in-flight call.
+
+## The LANGID session
+
+A LANGID model gets `LangIdSession` from `model.langid_session()` (Python,
+Rust), `model.langIdSession()` (Swift) or `model.createLangIdSession()`
+(TypeScript), with `max_audio_ms` / `maxAudioMs` as a session option, plus
+`langid_info` / `langIdInfo` / `langidInfo` (sample rate, label count,
+minimum audio) and the label table (codes, names, and alias lookup).
+`run(pcm, allowed=…, top_k=…)` returns a copied-out result: candidates ranked
+by `p` (index, code, name, `p`, `p_unrestricted`, `logit`), `n_allowed`,
+`allowed_mass` and the scored `audio_ms`.
+
+`allowed` is the first caller-owned `const char * const *` input. Every
+binding keeps the array and each encoded string alive until the native call
+returns (TypeScript frees them only after its async worker call settles).
+Omitted / `None` / `nil` / `null` passes NULL, meaning every label. An empty
+list is rejected by the binding itself with `InvalidArgument`: many
+marshallers turn an empty array into NULL, which would silently flip the
+meaning to "all labels".
+
+A langid run follows the same execution rules as an ASR or diarize run:
+model-wide compute lock, `Busy` under a stream lease, results copied out
+under the lock, cancellation, and deferred frees.
 
 ## Raw text
 

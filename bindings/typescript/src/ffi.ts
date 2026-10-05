@@ -220,6 +220,60 @@ export function bindLibrary(libraryPath: string): Bound {
       iop(T.transcribe_timings),
     ]),
 
+    // langid role
+    langidInfoInit: lib.func("transcribe_langid_info_init", "void", [
+      outp(T.transcribe_langid_info),
+    ]),
+    langidGetInfo: lib.func("transcribe_langid_get_info", "int", [
+      "void *",
+      iop(T.transcribe_langid_info),
+    ]),
+    langidLabelCode: lib.func("transcribe_langid_label_code", "const char *", ["void *", "int32_t"]),
+    langidLabelName: lib.func("transcribe_langid_label_name", "const char *", ["void *", "int32_t"]),
+    langidLabelIndex: lib.func("transcribe_langid_label_index", "int32_t", ["void *", "const char *"]),
+    langidSessionParamsInit: lib.func("transcribe_langid_session_params_init", "void", [
+      outp(T.transcribe_langid_session_params),
+    ]),
+    langidSessionInit: lib.func("transcribe_langid_session_init", "int", [
+      "void *",
+      inp(T.transcribe_langid_session_params),
+      handleOut,
+    ]),
+    langidSessionFree: lib.func("transcribe_langid_session_free", "void", ["void *"]),
+    langidSetAbortCallback: lib.func("transcribe_langid_set_abort_callback", "void", [
+      "void *",
+      "void *",
+      "void *",
+    ]),
+    langidParamsInit: lib.func("transcribe_langid_params_init", "void", [
+      outp(T.transcribe_langid_params),
+    ]),
+    langidRun: lib.func("transcribe_langid_run", "int", [
+      "void *",
+      inp("float"),
+      "int",
+      inp(T.transcribe_langid_params),
+    ]),
+    langidResultInit: lib.func("transcribe_langid_result_init", "void", [
+      outp(T.transcribe_langid_result),
+    ]),
+    langidGetResult: lib.func("transcribe_langid_get_result", "int", [
+      "void *",
+      iop(T.transcribe_langid_result),
+    ]),
+    langidCandidateInit: lib.func("transcribe_langid_candidate_init", "void", [
+      outp(T.transcribe_langid_candidate),
+    ]),
+    langidGetCandidate: lib.func("transcribe_langid_get_candidate", "int", [
+      "void *",
+      "int",
+      iop(T.transcribe_langid_candidate),
+    ]),
+    langidGetTimings: lib.func("transcribe_langid_get_timings", "int", [
+      "void *",
+      iop(T.transcribe_timings),
+    ]),
+
     // batch (offline)
     runBatch: lib.func("transcribe_run_batch", "int", [
       "void *",

@@ -39,6 +39,7 @@ from .errors import (
     BackendError,
     Busy,
     InputTooLong,
+    InputTooShort,
     InvalidArgument,
     ModelFileNotFound,
     ModelLoadError,
@@ -78,6 +79,10 @@ __all__ = [
     "Session",
     "DiarizeSession",
     "DiarizeInfo",
+    "LangIdSession",
+    "LangIdInfo",
+    "LangIdResult",
+    "LangIdCandidate",
     "Role",
     "Result",
     "Segment",
@@ -120,6 +125,7 @@ __all__ = [
     "Aborted",
     "Busy",
     "InputTooLong",
+    "InputTooShort",
     "OutputTruncated",
     "OutputRepetition",
     "native_version",
@@ -190,6 +196,8 @@ _Capabilities = _generated.transcribe_capabilities
 _Timings = _generated.transcribe_timings
 _Segment = _generated.transcribe_segment
 _SpeakerSegment = _generated.transcribe_speaker_segment
+_LangIdCandidate = _generated.transcribe_langid_candidate
+_LangIdResult = _generated.transcribe_langid_result
 _Word = _generated.transcribe_word
 _Token = _generated.transcribe_token
 _StreamParams = _generated.transcribe_stream_params
@@ -558,16 +566,57 @@ class Capabilities:
 
 class Role(enum.Enum):
     """What a model serves (``Model.roles``): ASR is ``Model.session()``,
-    DIARIZE is ``Model.diarize_session()``."""
+    DIARIZE is ``Model.diarize_session()``, LANGID is
+    ``Model.langid_session()``."""
 
     ASR = _generated.TRANSCRIBE_ROLE_ASR
     DIARIZE = _generated.TRANSCRIBE_ROLE_DIARIZE
+    LANGID = _generated.TRANSCRIBE_ROLE_LANGID
 
 
 @dataclass(frozen=True)
 class DiarizeInfo:
     sample_rate: int
     max_speakers: int  # speaker_id is in [1, max_speakers]
+
+
+@dataclass(frozen=True)
+class LangIdInfo:
+    sample_rate: int
+    n_labels: int      # label indices are [0, n_labels)
+    min_audio_ms: int  # shorter scored audio raises InputTooShort
+
+
+@dataclass(frozen=True)
+class LangIdCandidate:
+    """One ranked label. ``code`` is the model's own label ("en", "iw");
+    ``p`` is renormalized over the allowed set, ``p_unrestricted`` is over
+    every label."""
+
+    index: int
+    code: str
+    name: str
+    p: float
+    p_unrestricted: float
+    logit: float
+
+
+@dataclass(frozen=True)
+class LangIdResult:
+    """``candidates`` are ranked by ``p`` (ties keep label order).
+    ``allowed_mass`` is the unrestricted probability inside the allowed set
+    (1.0 when unrestricted); a low value means the speech is probably outside
+    it. ``audio_ms`` is what was scored, after the crop."""
+
+    candidates: tuple[LangIdCandidate, ...]
+    n_allowed: int
+    allowed_mass: float
+    audio_ms: int
+
+    @property
+    def code(self) -> str | None:
+        """The top candidate's code, or None when there are no candidates."""
+        return self.candidates[0].code if self.candidates else None
 
 
 @dataclass(frozen=True)
@@ -1227,6 +1276,38 @@ class Model:
         """Raises :class:`UnsupportedRole` without the DIARIZE role."""
         return DiarizeSession(self, n_threads=n_threads)
 
+    @property
+    def langid_info(self) -> LangIdInfo:
+        """Raises :class:`UnsupportedRole` without the LANGID role."""
+        info = _generated.transcribe_langid_info()
+        _lib.transcribe_langid_info_init(_byref(info))
+        _check(_lib.transcribe_langid_get_info(self._h, _byref(info)),
+               "reading langid info")
+        return LangIdInfo(sample_rate=info.sample_rate, n_labels=info.n_labels,
+                          min_audio_ms=info.min_audio_ms)
+
+    @property
+    def langid_labels(self) -> tuple[tuple[str, str], ...]:
+        """``(code, name)`` per label index. Raises :class:`UnsupportedRole`
+        without the LANGID role."""
+        n = self.langid_info.n_labels
+        return tuple((_lib.transcribe_langid_label_code(self._h, i).decode("utf-8"),
+                      _lib.transcribe_langid_label_name(self._h, i).decode("utf-8"))
+                     for i in range(n))
+
+    def langid_label_index(self, code: str) -> int | None:
+        """Label index of a code or alias ("he" and "iw" name the same
+        label), or None. None as well on a model without the LANGID role."""
+        i = _lib.transcribe_langid_label_index(self._h, code.encode("utf-8"))
+        return i if i >= 0 else None
+
+    def langid_session(self, *, n_threads: int = 0,
+                       max_audio_ms: int = 0) -> "LangIdSession":
+        """``max_audio_ms``: longer input is scored on its last
+        ``max_audio_ms`` (0 = 30000). Raises :class:`UnsupportedRole`
+        without the LANGID role."""
+        return LangIdSession(self, n_threads=n_threads, max_audio_ms=max_audio_ms)
+
     def close(self) -> None:
         """Free the model. Any session still open on it is closed first —
         the C contract forbids freeing a model before its sessions, so this
@@ -1885,6 +1966,91 @@ class DiarizeSession(_SessionBase):
         _lib.transcribe_timings_init(_byref(tm))
         _check(_lib.transcribe_diarize_get_timings(self._h, _byref(tm)),
                "transcribe_diarize_get_timings")
+        return _timings_from(tm)
+
+
+class LangIdSession(_SessionBase):
+    """A language ID context on a model with the LANGID role. Compute
+    locking and ``Busy`` rules: see ``Model``."""
+
+    _free_fn = "transcribe_langid_session_free"
+
+    def __init__(self, model: Model, *, n_threads: int = 0, max_audio_ms: int = 0):
+        self._model = model  # keep the model alive for the session's lifetime
+        params = _generated.transcribe_langid_session_params()
+        _lib.transcribe_langid_session_params_init(_byref(params))
+        params.n_threads = n_threads
+        params.max_audio_ms = max_audio_ms
+
+        handle = ctypes.c_void_p()
+        _check(_lib.transcribe_langid_session_init(model._h, _byref(params), _byref(handle)),
+               "opening langid session")
+        if not handle.value:
+            raise TranscribeError("langid session init returned a null handle")
+        self._handle = handle
+        self._arm_abort(_lib.transcribe_langid_set_abort_callback)
+
+    def run(self, pcm: PCMLike, *, allowed: "Sequence[str] | None" = None,
+            top_k: int = 0) -> LangIdResult:
+        """Identify the language of one clip (16 kHz mono float32 PCM).
+        Longer input than the session's ``max_audio_ms`` is scored on its
+        tail. ``allowed`` restricts the decision to those codes or aliases;
+        None means every label, and an empty list is rejected. ``top_k``
+        keeps the best candidates (0 = every allowed label).
+
+        Raises :class:`InputTooShort` below ``LangIdInfo.min_audio_ms``,
+        :class:`UnsupportedRequest` for an unknown code, :class:`Aborted`
+        after :meth:`cancel`, and :class:`Busy` if a stream is active on this
+        model."""
+        self._cancel.clear()  # before the lock wait, as in Session.run()
+        array, n_samples = _pcm_to_carray(pcm)
+        params = _generated.transcribe_langid_params()
+        _lib.transcribe_langid_params_init(_byref(params))
+        params.top_k = top_k
+        if allowed is not None:
+            if isinstance(allowed, (str, bytes)):
+                raise InvalidArgument("allowed must be a sequence of codes, not a string")
+            codes = list(allowed)
+            # An empty list must not reach native as NULL, which means "all".
+            if not codes:
+                raise InvalidArgument("allowed is empty; pass None for every label")
+            if not all(isinstance(c, str) for c in codes):
+                raise InvalidArgument("allowed entries must be str")
+            encoded = [c.encode("utf-8") for c in codes]
+            arr = (ctypes.c_char_p * len(encoded))(*encoded)
+            params.allowed = ctypes.cast(arr, type(params.allowed))
+            params.n_allowed = len(encoded)
+            params._allowed_keepalive = (encoded, arr)
+        with self._model._exclusive(
+                "langid_run", busy="a stream is active on this model; "
+                                   "finish or drop it before langid run()"):
+            h = self._h  # captured under the lock; close() defers its free
+            _check(_lib.transcribe_langid_run(h, array, n_samples, _byref(params)),
+                   "transcribe_langid_run")
+            res = _LangIdResult()
+            _lib.transcribe_langid_result_init(_byref(res))
+            _check(_lib.transcribe_langid_get_result(h, _byref(res)),
+                   "transcribe_langid_get_result")
+            rows = []
+            for i in range(res.n_candidates):
+                c = _LangIdCandidate()
+                _lib.transcribe_langid_candidate_init(_byref(c))
+                _check(_lib.transcribe_langid_get_candidate(h, i, _byref(c)),
+                       "transcribe_langid_get_candidate")
+                rows.append(LangIdCandidate(
+                    index=c.index, code=c.code.decode("utf-8"), name=c.name.decode("utf-8"),
+                    p=c.p, p_unrestricted=c.p_unrestricted, logit=c.logit))
+            return LangIdResult(candidates=tuple(rows), n_allowed=res.n_allowed,
+                                allowed_mass=res.allowed_mass, audio_ms=res.audio_ms)
+
+    @property
+    def timings(self) -> Timings:
+        """Load time plus the last run's mel / encode time. Not locked, like
+        ``Session.limits``."""
+        tm = _Timings()
+        _lib.transcribe_timings_init(_byref(tm))
+        _check(_lib.transcribe_langid_get_timings(self._h, _byref(tm)),
+               "transcribe_langid_get_timings")
         return _timings_from(tm)
 
 

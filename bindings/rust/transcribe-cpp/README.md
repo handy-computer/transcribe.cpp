@@ -93,6 +93,25 @@ for turn in diarize.run(&pcm, &DiarizeOptions::default())? {
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+### Language ID
+
+A model whose `roles()` contain `Role::LangId` (VoxLingua107 ECAPA-TDNN)
+opens a `LangIdSession`. Codes are the model's own labels; match them against
+an ASR model's `capabilities().languages` yourself. `allowed: None` scores
+every label, `Some(vec![])` is `Error::InvalidArgument`, and clips under
+`langid_info()?.min_audio_ms` are `Error::InputTooShort`. A low
+`allowed_mass` means the speech is probably outside the allowed set.
+
+```rust
+use transcribe_cpp::{LangIdOptions, Model};
+let model = Model::load("lang-id-voxlingua107-ecapa-Q8_0.gguf")?;
+let mut lid = model.langid_session()?;
+let opts = LangIdOptions { allowed: Some(vec!["en".into(), "de".into()]), top_k: 3 };
+let result = lid.run(&pcm, &opts)?;
+println!("{:?} (mass {})", result.code(), result.allowed_mass);
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Runnable examples:
 
 ```sh
