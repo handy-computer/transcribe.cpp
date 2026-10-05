@@ -160,6 +160,27 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | multitalker-parakeet-streaming-0.6b-v1 | Speaker diarization (produce speaker turns) | diarization | same bundle smoke; inspect `transcribe_n_speaker_segments` | non-empty 1-based speaker turns, independent of transcript rows | PASS on bundle GGUFs — embedded Sortformer predictions populate speaker segments; plain GGUFs intentionally retain the single-speaker capability surface. |
 | all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |
 
+### parakeet-ultra (moondream/parakeet-ultra)
+
+Post-trained v3 (same arch/tokenizer/frontend) plus a `vad_head` on the
+subsampler that the publisher's runtime (Photon/kestrel) uses to cut long
+audio at pauses into <=30 s segments. Reference is kestrel 0.9.1 for
+everything (frontend, ASR, VAD head, segmenter); transformers is not used. Intake:
+`reports/porting/parakeet/parakeet-ultra/intake.json`.
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|---|---|---|---|---|---|
+| Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf --language en samples/jfk.wav` | English transcript with PnC; LibriSpeech test-clean WER within Stage 7 band of the kestrel oracle | MUST PASS | TODO |
+| Transcribe | auto | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf samples/jfk.wav` | English transcript, no hint | MUST PASS | TODO |
+| Transcribe | explicit non-English (de/es FLEURS clip) | `… --language de <fleurs-de clip>` | transcript in source language | MUST PASS | TODO |
+| Offline batch | batch | `transcribe_run_batch` over the jfk + LibriSpeech subset | per-item transcripts equal to serial | MUST PASS | TODO |
+| Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | TODO |
+| VAD head (`vad_head.*`) speech probabilities | tensor parity | dump `vad.prob` per 80 ms frame vs kestrel `ParakeetTdt.speech_probabilities` (120 s block scan) on long clips | per-frame parity; identical speech regions after threshold 0.5 / 0.1 s bridge / 0.1 s min run | MUST PASS | TODO |
+| Long-form pause segmentation (>30 s) | long audio | TED-LIUM 3 eleven-talk set, one `transcribe_run` per talk | segment boundaries (sample indices) identical to kestrel `pause_segments` with the VAD head as pause source; stitched text and shifted timestamps match kestrel; WER within Stage 7 band of the kestrel oracle | MUST PASS | TODO |
+| Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE — no streaming training; publisher's live mode is window re-decoding, not cache-aware | TODO |
+| Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | TODO |
+| Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | TODO |
+
 ## Open decisions before Stage 3 (convert)
 
 These decisions block converter design for the new variants and should

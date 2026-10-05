@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "parakeet-ultra",
+  "source_model": {
+    "hf_repo": "moondream/parakeet-ultra",
+    "hf_revision": "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "config",
+  "_skeleton": true
+}
