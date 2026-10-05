@@ -8,6 +8,7 @@ add_executable(transcribe-cli
     main.cpp
     asr.cpp
     diarize.cpp
+    langid.cpp
 )
 
 target_link_libraries(transcribe-cli

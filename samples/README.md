@@ -40,6 +40,36 @@ and is recorded here so each clip can be traced back.
 Regenerate the source pool, not the clips themselves, with
 `uv run scripts/wer/ingest.py fleurs <lang>`.
 
+## Language ID clips (FLEURS)
+
+Fixtures for the ecapa_tdnn (LANGID) family, carried over byte-for-byte from
+langid.cpp (`handy-computer/langid.cpp@96af3a5`, `scripts/make_samples_fleurs.py`)
+so its measured parity and tolerances still apply. Rule for the eight
+`fleurs-<code>` clips: the first test-split utterance of 4-12 s, in parquet
+order, that the SpeechBrain reference (`speechbrain/lang-id-voxlingua107-ecapa`
+@ `0253049a`) classifies as the expected VoxLingua107 code. They back
+`tests/golden/ecapa_tdnn/`, `transcribe_ecapa_tdnn_real_smoke` and
+`transcribe_cli_langid_smoke`.
+
+Source: [google/fleurs](https://huggingface.co/datasets/google/fleurs), test
+split, licensed **CC-BY-4.0**.
+
+| file | duration | config | FLEURS id |
+| --- | ---: | --- | --- |
+| `fleurs-en.wav` | 10.56 s | `en_us` | 1904 |
+| `fleurs-de.wav` | 11.16 s | `de_de` | 1738 |
+| `fleurs-fr.wav` | 10.20 s | `fr_fr` | 1987 |
+| `fleurs-es.wav` | 9.72 s | `es_419` | 1764 |
+| `fleurs-ja.wav` | 10.44 s | `ja_jp` | 1828 |
+| `fleurs-zh.wav` | 10.38 s | `cmn_hans_cn` | 1906 |
+| `fleurs-ru.wav` | 7.92 s | `ru_ru` | 1917 |
+| `fleurs-id.wav` | 8.58 s | `id_id` | 1909 |
+| `short-800ms.wav` | 0.80 s | `en_us` | 1904 (first 800 ms) |
+| `long-45s.wav` | 52.28 s | `en_us` | 1904, 1675, 1950, 1728, 1972, 1938 (concatenated) |
+
+`long-45s.wav` is longer than its name says; it only has to exceed the 30 s
+language ID window, and the name is kept so it matches langid.cpp's records.
+
 ## Everything else
 
 These predate this file and arrived inside unrelated commits, so their source

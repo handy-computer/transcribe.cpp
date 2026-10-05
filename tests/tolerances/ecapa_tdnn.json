@@ -1,0 +1,131 @@
+{
+  "_comment": [
+    "ECAPA-TDNN / VoxLingua107 per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Carried over unchanged from langid.cpp: on the port, every stage tensor the",
+    "transcribe.cpp ecapa_tdnn family dumps was bit-identical to langid.cpp's",
+    "(CPU, 1 thread, F32), so the measured drift below still holds.",
+    "",
+    "Measured in langid.cpp (handy-computer/langid.cpp @ 96af3a5) against C++ vs",
+    "reference drift. Every Stage-2 provisional flag has been removed.",
+    "",
+    "Regime, identical for every number below:",
+    "  model     models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-F32.gguf",
+    "            (ALL_F32; no quantised tensor takes part in these numbers)",
+    "  runtime   build/bin/transcribe-cli --backend cpu --threads 1",
+    "  front end the production C++ log-mel front end (src/arch/ecapa_tdnn/mel.cpp),",
+    "            not a reference feature dump -- fe.mel is measured, not injected",
+    "  host      macOS / arm64 (Apple Silicon), ggml CPU backend",
+    "  reference speechbrain 1.1.1 on torch 2.13.0, fp32, CPU, 1 thread,",
+    "            checkpoint speechbrain/lang-id-voxlingua107-ecapa @",
+    "            0253049ae131d6a4be1c4f0d8b0ff483a0f8c8e9",
+    "  cases     all 8 in tests/golden/ecapa_tdnn/lang-id-voxlingua107-ecapa.manifest.json",
+    "            (fleurs-{en,de,fr,es,ja,zh,ru,id}, 7.9 s .. 11.2 s)",
+    "",
+    "F16 / Q8_0 / Metal are production variants measured separately and were",
+    "never used to set these numbers.",
+    "",
+    "Recipe, per tensor, over all 8 cases:",
+    "  max_abs  = max(1.5 * max_over_cases(observed max_abs),  provisional, 1e-6)",
+    "  mean_abs = max(1.5 * max_over_cases(observed mean_abs), provisional, 1e-6)",
+    "The Stage-2 provisional budgets were max(1e-4*p99_abs, 1e-6) and",
+    "max(1e-5*rms, 1e-6) from the reference dumps alone.",
+    "",
+    "WIDENED ENTRIES: none. Measured drift came in below the provisional",
+    "budget for every tensor on both metrics, so 1.5*observed never exceeded",
+    "it and every value below is the unchanged Stage-2 number. Nothing was",
+    "loosened to make a case pass.",
+    "",
+    "Dominant drift source: fp32 summation ORDER, not algorithm. Two",
+    "contributors, in order of size:",
+    "  1. fe.mel -- the C++ mixed-radix 400-point FFT (src/arch/ecapa_tdnn/mel.cpp)",
+    "     accumulates the STFT differently from torch.stft's FFT, and the",
+    "     difference is then amplified by 10*log10 on near-floor bins. This",
+    "     is the only stage whose drift is not inherited.",
+    "  2. every matmul -- ggml's blocked/SIMD reduction order over the 1024-",
+    "     and 3072-wide contractions differs from PyTorch's BLAS. The graph",
+    "     itself is exact: an independent fp64 NumPy re-derivation of the",
+    "     forward pass agrees with the ggml graph to 4.5e-07 relative on a",
+    "     synthetic fixture, so no term of the ECAPA algebra is approximated.",
+    "The residual-add topology means block drift accumulates roughly linearly",
+    "(blk.0 5.2e-05 -> blk.3 1.5e-04), then the attention softmax and the",
+    "1/T statistics CONTRACT it again (enc.asp.out 9.5e-06), which is why the",
+    "downstream vectors sit two orders of magnitude inside their budgets.",
+    "",
+    "Tightest entries, i.e. where a slower-drifting host would first complain:",
+    "  enc.blk.0.out  1.5*observed is 99% of the budget",
+    "  enc.mfa.out    1.5*observed is 94% of the budget",
+    "Both are max_abs on wide [T, C] activations; a re-measure on different",
+    "CPU SIMD width may need a fresh Stage-4 pass rather than a hand edit.",
+    "",
+    "cls.logits_raw is the gate; cls.log_probs is informational (it is",
+    "recomputed host-side from the logits, so it carries the logits' drift",
+    "plus one log-sum-exp). SpeechBrain's log_softmax is finite everywhere",
+    "here (no masked positions), so no inf-tolerance escape hatch is needed.",
+    "",
+    "fe.window [400] and fe.filters [201, 60] are dumped by the reference but",
+    "deliberately absent from this file: the C++ runtime recomputes the window",
+    "and reads the filterbank from the GGUF, so it never dumps them.",
+    "compare_tensors reports them MISSING without failing."
+  ],
+  "fe.mel": {
+    "max_abs": 0.004079,
+    "mean_abs": 0.0001782
+  },
+  "enc.blk.0.out": {
+    "max_abs": 7.896e-05,
+    "mean_abs": 1.897e-06
+  },
+  "enc.blk.1.tdnn1.out": {
+    "max_abs": 0.0004054,
+    "mean_abs": 1.008e-05
+  },
+  "enc.blk.1.res2.out": {
+    "max_abs": 0.0003865,
+    "mean_abs": 9.456e-06
+  },
+  "enc.blk.1.se.out": {
+    "max_abs": 0.0001077,
+    "mean_abs": 2.4e-06
+  },
+  "enc.blk.1.out": {
+    "max_abs": 0.0001297,
+    "mean_abs": 2.952e-06
+  },
+  "enc.blk.2.out": {
+    "max_abs": 0.0002627,
+    "mean_abs": 5.964e-06
+  },
+  "enc.blk.3.out": {
+    "max_abs": 0.0006391,
+    "mean_abs": 1.412e-05
+  },
+  "enc.mfa.out": {
+    "max_abs": 0.0001262,
+    "mean_abs": 4.163e-06
+  },
+  "enc.asp.attn_logits": {
+    "max_abs": 0.0003274,
+    "mean_abs": 1.19e-05
+  },
+  "enc.asp.out": {
+    "max_abs": 0.0001753,
+    "mean_abs": 4.176e-06
+  },
+  "enc.emb": {
+    "max_abs": 0.006139,
+    "mean_abs": 0.0002736
+  },
+  "cls.hidden": {
+    "max_abs": 0.002295,
+    "mean_abs": 8.541e-05
+  },
+  "cls.logits_raw": {
+    "max_abs": 0.001809,
+    "mean_abs": 0.0001014
+  },
+  "cls.log_probs": {
+    "max_abs": 0.003533,
+    "mean_abs": 0.0002712
+  }
+}

@@ -83,6 +83,9 @@ void print_usage(const char * argv0) {
                  "  --diarize             (moss/granite-plus) speaker attribution: segments carry\n"
                  "                        speaker ids; granite-plus requests its speaker task\n"
                  "  --no-diarize          disable speaker attribution (the library default)\n"
+                 "  --allow CODES         (language ID) comma-separated labels to choose from\n"
+                 "  --top N               (language ID) print the best N candidates (0 = all)\n"
+                 "  --max-audio-ms N      (language ID) score the last N ms (0 = 30000)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
                  "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
                  "                        N-ms PCM slices; requires model to advertise\n"
@@ -418,6 +421,41 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
         } else if (a == "--no-pnc") {
             out.canary_pnc     = false;
             out.canary_pnc_set = true;
+        } else if (a == "--allow") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            const std::string list = v;
+            size_t            pos  = 0;
+            while (pos <= list.size()) {
+                const size_t comma = list.find(',', pos);
+                const size_t end   = comma == std::string::npos ? list.size() : comma;
+                if (end > pos) {
+                    out.langid_allow.push_back(list.substr(pos, end - pos));
+                }
+                pos = end + 1;
+            }
+            if (out.langid_allow.empty()) {
+                std::fprintf(stderr, "error: --allow needs at least one label\n");
+                return false;
+            }
+        } else if (a == "--top") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.langid_top_k = std::atoi(v);
+            if (out.langid_top_k < 0) {
+                std::fprintf(stderr, "error: --top must be >= 0\n");
+                return false;
+            }
+        } else if (a == "--max-audio-ms") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.langid_max_audio_ms = std::atoi(v);
         } else if (a == "--diarize") {
             out.diarize     = true;
             out.diarize_set = true;
@@ -583,8 +621,12 @@ int run_file(const cli_args & args, std::ofstream * output) {
         std::printf("  license:    %s\n", lic);
     }
 
-    if ((transcribe_model_roles(model) & TRANSCRIBE_ROLE_ASR) != 0) {
+    const uint32_t roles = transcribe_model_roles(model);
+    if ((roles & TRANSCRIBE_ROLE_ASR) != 0) {
         return transcribe_cli::run_asr_file(args, model, pcm, duration_s, output);
+    }
+    if ((roles & TRANSCRIBE_ROLE_LANGID) != 0) {
+        return transcribe_cli::run_langid_file(args, model, pcm, duration_s, output);
     }
     return transcribe_cli::run_diarize_file(args, model, pcm, duration_s, output);
 }

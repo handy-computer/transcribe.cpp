@@ -309,6 +309,16 @@ def parse_cli_transcript(output: str) -> str | None:
     return None
 
 
+def parse_cli_language(output: str) -> dict[str, Any] | None:
+    """The LANGID CLI's `language: <code> index=<i> p=<p>` line."""
+    for line in output.splitlines():
+        if line.startswith("language: "):
+            parts = line[len("language: "):].split()
+            fields = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+            return {"code": parts[0], "label_index": int(fields["index"]), "p": float(fields["p"])}
+    return None
+
+
 def write_cpp_transcript(
     out_dir: Path,
     *,
@@ -379,7 +389,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # family's dumper accepts --revision. The dumper itself ignores
         # --revision when --model resolves to a local directory.
         hf_revision = (manifest.get("source_model") or {}).get("hf_revision")
-        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc"):
+        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc", "ecapa_tdnn"):
             common_args += ["--revision", str(hf_revision)]
 
         # Forward any manifest-declared dumper args verbatim. Used today
@@ -411,8 +421,14 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # (--preset) and the C++ side (TRANSCRIBE_SORTFORMER_STREAM_PRESET in
         # cmd_cpp); unset -> the checkpoint-shipped cfg (single chunk on the
         # short oracle, i.e. diar.probs == diar.preds_offline).
+        #
+        # ecapa_tdnn (language ID) is one forward pass: the `encoder`
+        # subcommand dumps the front end, encoder, classifier and
+        # prediction.json from a single classify_batch call.
         if args.family == "sortformer":
             stages = ["encoder", "diarize"]
+        elif args.family == "ecapa_tdnn":
+            stages = ["encoder"]
         else:
             stages = ["encoder", "decode"]
         sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
@@ -550,6 +566,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         transcript = parse_cli_transcript(result.stdout or "")
         if transcript is None and "speaker segments:" in (result.stdout or ""):
             continue  # a diarizer has no transcript
+        prediction = parse_cli_language(result.stdout or "") if transcript is None else None
+        if prediction is not None:
+            # A language ID model: its behavioural artifact is the top-1
+            # label, compared against the reference's prediction.json.
+            (out_dir / "prediction.json").write_text(json.dumps(prediction, indent=2) + "\n")
+            print(f"  wrote {out_dir / 'prediction.json'}", file=sys.stderr)
+            continue
         if transcript is None:
             raise SystemExit(
                 f"error: cpp dump [{args.family}/{case_name}] did not emit a transcript line"
@@ -648,6 +671,33 @@ def cmd_compare(args: argparse.Namespace) -> int:
         # emits speaker segments, not `text`). Its behavioral artifact is the
         # diar.probs tensor, gated above; the `diarize` stage's segment lines
         # are informational only, so skip the text-transcript comparison.
+        # Language ID: the gate is the top-1 label index, C++ vs reference.
+        # The case's expected_language is informational (the reference itself
+        # may miss it); it is reported, never gated.
+        ref_prediction = ref_dir / "prediction.json"
+        if ref_prediction.exists():
+            cpp_prediction = cpp_dir / "prediction.json"
+            ref_pred = json.loads(ref_prediction.read_text())
+            if not cpp_prediction.exists():
+                print(f"FAIL prediction: missing C++ artifact: {cpp_prediction}", file=sys.stderr)
+                all_passed = False
+                transcript_results.append({"case": case_name, "match": False,
+                                           "reason": "missing C++ prediction artifact"})
+                continue
+            cpp_pred = json.loads(cpp_prediction.read_text())
+            match = int(cpp_pred["label_index"]) == int(ref_pred["label_index"])
+            expected = case.get("expected_language") if isinstance(case, dict) else None
+            transcript_results.append({"case": case_name, "match": match,
+                                       "reference": ref_pred.get("code"), "cpp": cpp_pred.get("code"),
+                                       "expected": expected, "mode": "label"})
+            if not match:
+                print(f"\nFAIL prediction mismatch: reference {ref_pred.get('code')!r} "
+                      f"vs c++ {cpp_pred.get('code')!r}")
+                all_passed = False
+            else:
+                note = "" if expected in (None, cpp_pred.get("code")) else f" (expected {expected!r})"
+                print(f"\n  Prediction: ok {cpp_pred.get('code')!r}{note}")
+
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists() and args.family != "sortformer":
             transcript_compare = case_transcript_compare(manifest, case)
@@ -860,7 +910,11 @@ def write_report_bundle(
         for tr in transcript_results:
             summary.append(f"### {tr['case']}")
             summary.append("")
-            if tr["match"]:
+            if tr["match"] and tr.get("mode") == "label":
+                summary.append(f"- Match: **yes**")
+                summary.append(f"- Mode: `label` (top-1, C++ vs reference)")
+                summary.append(f"- label: `{tr.get('cpp', '')}` (expected `{tr.get('expected')}`)")
+            elif tr["match"]:
                 summary.append(f"- Match: **yes**")
                 summary.append(f"- Mode: `{tr.get('mode', 'exact')}`")
                 summary.append(f"- text: `{tr.get('cpp', '')!r}`")

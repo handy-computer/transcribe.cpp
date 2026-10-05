@@ -85,7 +85,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", "encoder-diarizer"]
+            "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", "encoder-diarizer", "encoder-classifier"]
           },
           "description": "Heuristic matches against known patterns. Human selects one in architecture_pattern."
         },
@@ -147,12 +147,12 @@
         "fft_size": {"type": ["integer", "null"]},
         "window": {
           "type": ["string", "null"],
-          "enum": ["hann_periodic", "hann_symmetric", "hamming", "blackman", null],
+          "enum": ["hann_periodic", "hann_symmetric", "hamming", "hamming_periodic", "blackman", null],
           "description": "Window type. 'hann_periodic' and 'hann_symmetric' are a classic mismatch source."
         },
         "normalization": {
           "type": ["string", "null"],
-          "enum": ["per_feature", "global", "per_utterance", "none", null]
+          "enum": ["per_feature", "global", "per_utterance", "sentence_mean", "none", null]
         },
         "preemphasis": {
           "type": ["number", "null"],
@@ -257,7 +257,7 @@
           },
           "metric": {
             "type": "string",
-            "enum": ["wer", "cer", "bleu", "other"]
+            "enum": ["wer", "cer", "bleu", "accuracy", "other"]
           },
           "score": {
             "type": ["number", "null"],
@@ -288,7 +288,7 @@
     },
     "architecture_pattern": {
       "type": ["string", "null"],
-      "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", "encoder-diarizer", null]
+      "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", "encoder-diarizer", "encoder-classifier", null]
     },
     "known_risks": {
       "type": "array",

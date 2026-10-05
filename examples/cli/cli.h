@@ -1,7 +1,7 @@
 // cli.h - shared declarations for the transcribe-cli example.
 //
 // main.cpp parses arguments, owns process setup (log sink, output file), and
-// routes each model to its role's driver (asr.cpp, diarize.cpp). Shared
+// routes each model to its role's driver (asr.cpp, diarize.cpp, langid.cpp). Shared
 // helpers live in namespace transcribe_cli next to the WAV loader in
 // examples/common.
 
@@ -103,6 +103,14 @@ struct cli_args {
     // explicit K. Silently ignored by families without
     // supports_spec_decode. Set by --spec-k-drafts N.
     int spec_k_drafts        = -1;
+
+    // LANGID role (language ID models). --allow restricts the decision to
+    // these labels (codes or aliases); --top keeps the best N candidates
+    // (0 = every allowed label); --max-audio-ms scores the last N ms
+    // (0 = library default, 30000).
+    std::vector<std::string> langid_allow;
+    int                      langid_top_k        = 0;
+    int                      langid_max_audio_ms = 0;
 };
 
 // -o/--output: write `text` (newline-terminated) to `output` if non-null.
@@ -128,5 +136,12 @@ int run_diarize_file(const cli_args &           args,
                      const std::vector<float> & pcm,
                      double                     duration_s,
                      std::ofstream *            output);
+
+// With -o, writes the candidate lines.
+int run_langid_file(const cli_args &           args,
+                    transcribe_model *         model,
+                    const std::vector<float> & pcm,
+                    double                     duration_s,
+                    std::ofstream *            output);
 
 }  // namespace transcribe_cli
