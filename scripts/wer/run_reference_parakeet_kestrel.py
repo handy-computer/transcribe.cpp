@@ -84,6 +84,10 @@ def main() -> int:
     total = len(manifest)
     print(f"manifest: {args.manifest} ({total} utterances)")
     print(f"output:   {args.out}")
+    # Kestrel takes no language hint; the manifest's language is recorded
+    # only so score.py picks the right normalizer (absent means English).
+    languages = {entry.get("language") for entry in manifest}
+    language = languages.pop() if len(languages) == 1 else None
 
     n_done = n_errors = 0
     audio_s = 0.0
@@ -98,6 +102,7 @@ def main() -> int:
             "model_revision": args.revision,
             "device": args.device,
             "batch_size": args.batch_size,
+            "language": language,
         }) + "\n")
         fout.flush()
 
