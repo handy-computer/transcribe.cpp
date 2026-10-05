@@ -108,8 +108,16 @@ DATASET_LABELS = {
 
 def dataset_label(dataset: str, split: str, language: str) -> str:
     if dataset == "fleurs":
-        return f"FLEURS {language}"
+        # "mul": a multilingual pool (language ID scores several FLEURS
+        # languages as one result set).
+        return "FLEURS multilingual" if language == "mul" else f"FLEURS {language}"
     return DATASET_LABELS.get((dataset, split), f"{dataset} {split}")
+
+
+def metric_label(metric: str) -> str:
+    """A metric as a column header prints it: WER / CER / DER / CPWER, or
+    "Top-1 accuracy" for language ID."""
+    return "Top-1 accuracy" if metric == "accuracy" else metric.upper()
 
 
 def headline(record: dict) -> dict | None:
@@ -156,20 +164,24 @@ def headline_recipe(record: dict) -> str:
     sample = measured[0]
     n_utts = max(row["n_utts"] for row in rows)
     unit = "meetings" if target["metric"] in ("der", "cpwer") else "utterances"
-    parts = [f"{target['metric'].upper()} on the full {headline_label(record)} split "
-             f"({n_utts:,} {unit})"]
+    # Language ID scores a pooled, cropped subset (the row's notes say which),
+    # and has no batch size or timestamps.
+    lid = target["metric"] == "accuracy"
+    scope = "" if lid else "the full "
+    parts = [f"{metric_label(target['metric'])} on {scope}{headline_label(record)} "
+             f"{'' if lid else 'split '}({n_utts:,} {unit})"]
     batch_sizes = sorted({row["batch_size"] for row in rows
-                          if row.get("batch_size") is not None})
+                          if row.get("batch_size") is not None and not lid})
     if len(batch_sizes) == 1:
         parts.append(f"batch size {batch_sizes[0]}")
     elif batch_sizes:
         parts.append("batch sizes " + " and ".join(str(size) for size in batch_sizes))
-    if sample.get("timestamps"):
+    if sample.get("timestamps") and not lid:
         parts.append(f"timestamps {sample['timestamps']}")
     if sample.get("language_hint"):
         parts.append(f"language hint `{sample['language_hint']}`")
     if sample.get("backend"):
-        parts.append(f"decoded on {sample['backend']}")
+        parts.append(f"{'scored' if lid else 'decoded'} on {sample['backend']}")
     text = ", ".join(parts) + "."
     shas = sorted({(row["engine_sha"], row.get("measured_on") or "")
                    for row in rows if row.get("engine_sha")})
@@ -181,11 +193,18 @@ def headline_recipe(record: dict) -> str:
     return text
 
 
+def row_pct(row: dict) -> float:
+    """A row's percentage: the error rate, or the accuracy on metric=accuracy
+    (language ID) rows, which carry acc_pct instead of err_pct."""
+    return row["acc_pct"] if row.get("metric") == "accuracy" else row["err_pct"]
+
+
 def fmt_err(row: dict | None, dp: int = 2) -> str:
-    """An error rate as a card prints it. `-` when the cell was not measured."""
+    """An error rate (or, for accuracy rows, the accuracy) as a card prints
+    it. `-` when the cell was not measured."""
     if row is None:
         return "-"
-    return f"{row['err_pct']:.{dp}f}%"
+    return f"{row_pct(row):.{dp}f}%"
 
 
 # --------------------------------------------------------------------------
@@ -243,6 +262,8 @@ def capabilities_summary(record: dict) -> str:
     """The extras beyond plain transcription, as a short comma list."""
     caps = record.get("capabilities", {})
     out = []
+    if record.get("role") == "langid":
+        out.append(f"language ID ({len(record.get('languages', []))} languages)")
     for name, label in (("translate", "translate"), ("streaming", "streaming"),
                         ("diarize", "diarize")):
         if caps.get(name, {}).get("supported"):

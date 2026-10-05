@@ -39,6 +39,14 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Streaming Sortformer Diarizer 4spk v2.1 | `diar_streaming_sortformer_4spk-v2.1` | diarize, streaming | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
 <!-- /catalog -->
 
+**Language ID models** (no transcription; verified by top-1 decision parity on FLEURS; see [`docs/langid.md`](docs/langid.md)):
+
+<!-- catalog:family-index role=langid -->
+| Family | Variants | Available capabilities | Docs |
+| --- | --- | --- | --- |
+| VoxLingua107 ECAPA-TDNN (language ID) | `lang-id-voxlingua107-ecapa` | language ID (107 languages) | [docs/models/lang-id-voxlingua107-ecapa.md](docs/models/lang-id-voxlingua107-ecapa.md) |
+<!-- /catalog -->
+
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
 ## Model catalog

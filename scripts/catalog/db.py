@@ -101,7 +101,8 @@ CREATE TABLE accuracy(
     metric TEXT NOT NULL,
     language_hint TEXT,
     backend TEXT,
-    err_pct REAL NOT NULL CHECK(err_pct >= 0),
+    err_pct REAL CHECK(err_pct >= 0),
+    acc_pct REAL CHECK(acc_pct BETWEEN 0 AND 100),
     ci_lo REAL,
     ci_hi REAL,
     n_utts INTEGER NOT NULL CHECK(n_utts > 0),
@@ -153,7 +154,7 @@ CREATE TABLE speed(
 -- The per-quant column a model card and its doc print.
 CREATE VIEW headline AS
 SELECT a.variant, d.dataset, d.split, d.language,
-       a.quant, a.metric, a.err_pct, a.ci_lo, a.ci_hi, a.n_utts
+       a.quant, a.metric, a.err_pct, a.acc_pct, a.ci_lo, a.ci_hi, a.n_utts
 FROM accuracy a
 JOIN models m ON m.variant = a.variant
 JOIN datasets d ON d.dataset_id = a.dataset_id
@@ -237,9 +238,10 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                 (variant, item["quant"], item["filename"], item["size_bytes"])
                 for item in record.get("downloads", [])])
             con.executemany(
-                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (dataset_id(row), variant, row["quant"], row["metric"],
-                     row.get("language_hint"), row.get("backend"), row["err_pct"],
+                     row.get("language_hint"), row.get("backend"), row.get("err_pct"),
+                     row.get("acc_pct"),
                      (row.get("ci95") or [None, None])[0],
                      (row.get("ci95") or [None, None])[1], row["n_utts"],
                      row.get("batch_size"), row.get("timestamps"), row.get("engine_sha"),

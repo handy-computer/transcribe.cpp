@@ -25,7 +25,7 @@
       "description": "Loader family (the GGUF's general.architecture)"
     },
     "role": {
-      "enum": ["asr", "diarize"],
+      "enum": ["asr", "diarize", "langid"],
       "description": "The role the model is published for (transcribe_model_roles). Absent means asr."
     },
     "display_name": {
@@ -286,7 +286,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "dataset", "split", "language", "quant", "metric", "err_pct",
+          "dataset", "split", "language", "quant", "metric",
           "ci95", "n_utts", "batch_size", "timestamps", "engine_sha"
         ],
         "properties": {
@@ -320,7 +320,14 @@
           },
           "err_pct": {
             "type": "number",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Error rate in percent (wer / cer / der / cpwer rows). Accuracy rows carry acc_pct instead."
+          },
+          "acc_pct": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Top-1 accuracy in percent; only on metric=accuracy rows (language ID), in place of err_pct."
           },
           "ci95": {
             "type": "array",
@@ -392,7 +399,14 @@
             "type": "string",
             "description": "Decoding mode for models that publish one metric under several modes (multitalker \"kernel\" / \"masked\" cpWER). Rows with a mode are a separate result set."
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"metric": {"const": "accuracy"}}},
+            "then": {"required": ["acc_pct"], "not": {"required": ["err_pct"]}},
+            "else": {"required": ["err_pct"], "not": {"required": ["acc_pct"]}}
+          }
+        ]
       }
     },
     "headline_benchmark": {

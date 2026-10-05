@@ -53,13 +53,20 @@ field semantics.
 
 1. **Reference framework choice.**: The reference implementation should always be the source of truth. If there is not one, this is a red flag and must immediately be told to the human.
 
-2. **Architecture pattern.** One of `encoder-transducer`, `encoder-decoder`, `audio-llm`, `encoder-ctc`. The script's `config.architecture_candidates` is a heuristic starting point. If it doesn't fit, propose a new pattern and have the user accept it based on your research of the architecture.
+2. **Architecture pattern.** One of `encoder-transducer`, `encoder-decoder`, `audio-llm`, `encoder-ctc` (`encoder-diarizer` / `encoder-classifier` for the DIARIZE / LANGID roles). The script's `config.architecture_candidates` is a heuristic starting point. If it doesn't fit, propose a new pattern and have the user accept it based on your research of the architecture.
 
    **Role.** ASR (the product is a transcript) or DIARIZE (the product is
    who spoke when; see `docs/roles.md`). A DIARIZE port implements
    `DiarizeOps` (`src/transcribe-diarize.h`) instead of the ASR hooks, sets
    `"role": "diarize"` in its catalog record, and is accepted on DER
-   (`scripts/diar/`), not WER.
+   (`scripts/diar/`), not WER. A LANGID port (the product is a language
+   decision; `docs/langid.md`) implements `LangidOps`
+   (`src/transcribe-langid.h`) and only returns logits over its label table,
+   sets `"role": "langid"` with `metric: "accuracy"` / `acc_pct` rows, and
+   is accepted on top-1 decision parity with the reference over FLEURS
+   (`scripts/langid/`), not WER. Its golden cases set `"language": null`
+   and carry the expected label as `expected_language`, so validate.py never
+   hands the answer to the model.
 
 3. **Acceptance dataset.** Default: LibriSpeech test-clean. Capture any
    publisher-reported score in `upstream_benchmarks` when available for

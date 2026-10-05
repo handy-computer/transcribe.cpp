@@ -1,0 +1,71 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "lang-id-voxlingua107-ecapa",
+  "family": "ecapa_tdnn",
+  "role": "langid",
+  "display_name": "VoxLingua107 ECAPA-TDNN",
+  "params": 21244679,
+  "license": {
+    "spdx": "apache-2.0",
+    "display": "Apache-2.0"
+  },
+  "upstream_repo": "speechbrain/lang-id-voxlingua107-ecapa",
+  "upstream_commit": "0253049",
+  "published_repo": "handy-computer/lang-id-voxlingua107-ecapa-gguf",
+  "docs_page": "lang-id-voxlingua107-ecapa.md",
+  "languages": [
+    "ab", "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br",
+    "bs", "ca", "ceb", "cs", "cy", "da", "de", "el", "en", "eo", "es", "et",
+    "eu", "fa", "fi", "fo", "fr", "gl", "gn", "gu", "gv", "ha", "haw", "hi",
+    "hr", "ht", "hu", "hy", "ia", "id", "is", "it", "iw", "ja", "jw", "ka",
+    "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi",
+    "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc",
+    "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sco", "sd", "si", "sk", "sl",
+    "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk",
+    "tl", "tr", "tt", "uk", "ur", "uz", "vi", "war", "yi", "yo", "zh"
+  ],
+  "language_tag_form": "bare-bcp47",
+  "long_form_strategy": "hard-cap",
+  "max_audio_s": 30,
+  "capabilities": {
+    "transcribe": {"supported":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":false}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"lang-id-voxlingua107-ecapa-F32.gguf","size_bytes":84993248},
+    {"quant":"F16","filename":"lang-id-voxlingua107-ecapa-F16.gguf","size_bytes":45299936},
+    {"quant":"Q8_0","filename":"lang-id-voxlingua107-ecapa-Q8_0.gguf","size_bytes":26693696}
+  ],
+  "accuracy_benchmarks": [
+    {"dataset":"fleurs","split":"test","language":"mul","backend":"cpu","quant":"F32","metric":"accuracy","acc_pct":85.2,"ci95":[84.1,86.5],"n_utts":3000,"batch_size":1,"timestamps":"none","engine_sha":"62522202","measured_on":"2026-10-05"},
+    {"dataset":"fleurs","split":"test","language":"mul","backend":"cpu","quant":"F16","metric":"accuracy","acc_pct":85.2,"ci95":[84.0,86.4],"n_utts":3000,"batch_size":1,"timestamps":"none","engine_sha":"62522202","measured_on":"2026-10-05"},
+    {"dataset":"fleurs","split":"test","language":"mul","backend":"cpu","quant":"Q8_0","metric":"accuracy","acc_pct":84.3,"ci95":[83.0,85.5],"n_utts":3000,"batch_size":1,"timestamps":"none","engine_sha":"62522202","measured_on":"2026-10-05"}
+  ],
+  "headline_benchmark": {
+    "dataset": "fleurs",
+    "split": "test",
+    "language": "mul",
+    "metric": "accuracy",
+    "batch_size": 1,
+    "timestamps": "none"
+  },
+  "speed_benchmarks": [
+    {"machine":"m4-max","backend":"cpu","quant":"F32","sample":"long-45s-10s","sample_duration_s":10.0,"total_ms":147.12,"xrt_compute":67.97,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"F32","sample":"long-45s-30s","sample_duration_s":30.0,"total_ms":450.9,"xrt_compute":66.53,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"F32","sample":"long-45s-10s","sample_duration_s":10.0,"total_ms":14.29,"xrt_compute":699.79,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"F32","sample":"long-45s-30s","sample_duration_s":30.0,"total_ms":37.11,"xrt_compute":808.41,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"F16","sample":"long-45s-10s","sample_duration_s":10.0,"total_ms":82.47,"xrt_compute":121.26,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"F16","sample":"long-45s-30s","sample_duration_s":30.0,"total_ms":251.53,"xrt_compute":119.27,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"F16","sample":"long-45s-10s","sample_duration_s":10.0,"total_ms":14.09,"xrt_compute":709.72,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"F16","sample":"long-45s-30s","sample_duration_s":30.0,"total_ms":35.65,"xrt_compute":841.51,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"long-45s-10s","sample_duration_s":10.0,"total_ms":74.86,"xrt_compute":133.58,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"long-45s-30s","sample_duration_s":30.0,"total_ms":229.53,"xrt_compute":130.7,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"long-45s-10s","sample_duration_s":10.0,"total_ms":14.22,"xrt_compute":703.23,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"long-45s-30s","sample_duration_s":30.0,"total_ms":36.23,"xrt_compute":828.04,"engine_sha":"62522202","measured_on":"2026-10-05","thermal_gated":null}
+  ]
+}

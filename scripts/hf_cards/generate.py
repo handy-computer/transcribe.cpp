@@ -134,7 +134,7 @@ def derive_metric_blocks(record: dict) -> dict[str, dict[str, float]]:
             chosen[cell] = row
     blocks: dict[str, dict[str, float]] = {}
     for (key, quant), row in chosen.items():
-        blocks.setdefault(key, {})[quant] = row["err_pct"]
+        blocks.setdefault(key, {})[quant] = common.row_pct(row)
     return blocks
 
 
@@ -233,7 +233,7 @@ def build_context(record: dict, spec: dict) -> dict:
         "transcribe_docs_url": docs_url(record),
     }
     if headline.get("metric"):
-        ctx["metric"] = headline["metric"].upper()
+        ctx["metric"] = common.metric_label(headline["metric"])
     for key in ("name", "link"):
         if record["license"].get(key):
             ctx[f"license_{key}"] = record["license"][key]

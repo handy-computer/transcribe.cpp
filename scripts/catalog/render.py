@@ -84,7 +84,7 @@ def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
     aligns = ["l", "l", "r"]
     if want_metric:
         label = attrs.get("label") or common.headline_label(record)
-        metric = attrs.get("metric_name") or target["metric"].upper()
+        metric = attrs.get("metric_name") or common.metric_label(target["metric"])
         header.append(f"{metric} ({label})")
         aligns.append("r")
 
@@ -352,7 +352,7 @@ def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
         body.append([
             f"`{name}`", common.fmt_params(record["params"]), common.languages_summary(record),
             common.fmt_size(download["size_bytes"]) if download else "-",
-            (f"{common.headline_label(record)} ({headline['metric'].upper()})"
+            (f"{common.headline_label(record)} ({common.metric_label(headline['metric'])})"
              if headline else "-"),
             common.fmt_err(common.headline_rows(record).get(quant)),
             common.capabilities_summary(record), link])
