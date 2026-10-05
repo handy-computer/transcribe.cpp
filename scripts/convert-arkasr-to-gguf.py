@@ -12,6 +12,14 @@
 # ///
 """Convert ARK-ASR 0.6B or 3B to GGUF format for transcribe.cpp.
 
+Original model: ARK-ASR / AutoArk, by Yu Lin, Yiming Wang, Runyuan Cai,
+and Xiaodong Zeng. https://github.com/AutoArk/open-audio-opd
+Reused GGUF converter: harshav, published with ARK-ASR-3B-GGUF.
+https://huggingface.co/harshav/ARK-ASR-3B-GGUF
+Native engine: The transcribe.cpp authors (MIT).
+0.6B conversion/metadata adaptation: maxffarrell, with Codex assistance.
+This converter is MIT licensed; original model weights are Apache-2.0.
+
 Architecture (see PLAN.md §ARK):
   * Audio encoder: Whisper-large-v3 (128 mel, d_model 1280, 32 layers, 20 heads)
     with *partial interleaved RoPE* (rot_dim 32 of head_dim 64, theta 10000,
@@ -200,6 +208,21 @@ def main():
 
     w = GGUFWriter(args.output, "arkasr")
     w.add_name(args.variant.upper())
+    source_repo = "Edge0/ARK-ASR-0.6B" if args.variant == "ark-asr-0.6b" else "Edge0/ARK-ASR-3B"
+    w.add_string("general.author", "ARK-ASR / AutoArk: Yu Lin, Yiming Wang, Runyuan Cai, Xiaodong Zeng")
+    w.add_string("general.license", "apache-2.0")
+    w.add_string("general.license.link", "https://www.apache.org/licenses/LICENSE-2.0")
+    w.add_string("general.source.url", "https://huggingface.co/" + source_repo)
+    w.add_string("general.source.huggingface.repository", source_repo)
+    w.add_string("arkasr.attribution.original_project", "https://github.com/AutoArk/open-audio-opd")
+    w.add_string("arkasr.attribution.paper", "https://arxiv.org/abs/2605.28139")
+    w.add_string("arkasr.attribution.reused_converter_author", "harshav")
+    w.add_string("arkasr.attribution.reused_converter_url", "https://huggingface.co/harshav/ARK-ASR-3B-GGUF")
+    w.add_string("arkasr.attribution.native_engine", "The transcribe.cpp authors; https://github.com/handy-computer/transcribe.cpp; MIT")
+    w.add_string("arkasr.attribution.community_conversion", "maxffarrell: 0.6B adaptation, quantization, validation and packaging; Codex assistance")
+    w.add_string("arkasr.attribution.notice", "Community format conversion only; no model retraining; no original-author endorsement. See accompanying NOTICE and ATTRIBUTION.md.")
+    if args.revision:
+        w.add_string("general.source.huggingface.revision", args.revision)
     w.add_string("stt.variant", args.variant)
     w.add_bool("stt.capability.lang_detect", True)
     w.add_array("general.languages", ["zh", "en", "de", "ja", "fr", "ko", "es", "pl", "it", "ro", "hu", "cs", "nl", "fi", "hr", "sk", "sl", "et", "lt"] if args.variant == "ark-asr-0.6b" else ["zh", "en", "de", "ja", "fr", "ko", "es"])
