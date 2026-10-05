@@ -186,16 +186,16 @@ uv run --project scripts/envs/parakeet-kestrel scripts/wer/run_reference_parakee
 
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |---|---|---|---|---|---|
-| Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf --language en samples/jfk.wav` | English transcript with PnC; LibriSpeech test-clean WER within Stage 7 band of the kestrel oracle | MUST PASS | TODO |
-| Transcribe | auto | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf samples/jfk.wav` | English transcript, no hint | MUST PASS | TODO |
-| Transcribe | explicit non-English (de/es FLEURS clip) | `… --language de <fleurs-de clip>` | transcript in source language | MUST PASS | TODO |
-| Offline batch | batch | `transcribe_run_batch` over the jfk + LibriSpeech subset | per-item transcripts equal to serial | MUST PASS | TODO |
-| Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | TODO |
-| VAD head (`vad_head.*`) speech probabilities | tensor parity | dump `vad.prob` per 80 ms frame vs kestrel `ParakeetTdt.speech_probabilities` (120 s block scan) on long clips | per-frame parity; identical speech regions after threshold 0.5 / 0.1 s bridge / 0.1 s min run | MUST PASS | TODO |
-| Long-form pause segmentation (>30 s) | long audio | TED-LIUM 3 eleven-talk set, one `transcribe_run` per talk | segment boundaries (sample indices) identical to kestrel `pause_segments` with the VAD head as pause source; stitched text and shifted timestamps match kestrel; WER within Stage 7 band of the kestrel oracle | MUST PASS | TODO |
-| Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE — no streaming training; publisher's live mode is window re-decoding, not cache-aware | TODO |
-| Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | TODO |
-| Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | TODO |
+| Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf --language en samples/jfk.wav` | English transcript with PnC; LibriSpeech test-clean WER within Stage 7 band of the kestrel oracle | MUST PASS | PASS — jfk byte-equal to kestrel; LibriSpeech test-clean 1.8028% = kestrel REF 1.8028% (2620 utts) |
+| Transcribe | auto | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf samples/jfk.wav` | English transcript, no hint | MUST PASS | PASS — no-hint jfk byte-equal to kestrel |
+| Transcribe | explicit non-English (de/es FLEURS clip) | `… --language de <fleurs-de clip>` | transcript in source language | MUST PASS | PASS — german.wav and fleurs-es-1001146817223348054 byte-equal to kestrel, with and without --language |
+| Offline batch | batch | `transcribe_run_batch` over the jfk + LibriSpeech subset | per-item transcripts equal to serial | MUST PASS | PASS — run_batch parallel encoder (kestrel masks + per-utterance extent masks); text byte-equal serial vs 2/4/8 on 13 clips incl. 5 long-form (golden tests/golden/batch/parakeet-ultra.cpu.json); same-length CPU tensor parity bit-exact; batch-8 LibriSpeech hyps identical to batch-1 (1.8028%). Batches containing a >30 s clip run per utterance |
+| Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | PASS — word times identical to kestrel (jfk 22, dots 103, dots-full 809 words, 10 ms print precision), monotonic, shifted by segment start on long-form |
+| VAD head (`vad_head.*`) speech probabilities | tensor parity | dump `vad.prob` per 80 ms frame vs kestrel `ParakeetTdt.speech_probabilities` (120 s block scan) on long clips | per-frame parity; identical speech regions after threshold 0.5 / 0.1 s bridge / 0.1 s min run | MUST PASS | PASS — vad.b<k>.{mel,pre_encode,proj,ctx,prob} within finalized tolerances on 4 blocks; vad.prob max_abs 1.9e-6 |
+| Long-form pause segmentation (>30 s) | long audio | TED-LIUM 3 eleven-talk set, one `transcribe_run` per talk | segment boundaries (sample indices) identical to kestrel `pause_segments` with the VAD head as pause source; stitched text and shifted timestamps match kestrel; WER within Stage 7 band of the kestrel oracle | MUST PASS | PASS — longform.segments exact (0.0) on dots (2 segs) and dots-full (11 segs, 3 scan blocks); stitched transcripts exact; TED-LIUM long-form 2.2195% = kestrel REF 2.2195% (11/11 hyps identical); segmenter unit test vs kestrel fixtures |
+| Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE — no streaming training; publisher's live mode is window re-decoding, not cache-aware | SKIP — not exposed by runtime (offline-only model) |
+| Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | SKIP — not exposed by runtime |
+| Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | SKIP — not exposed by runtime |
 
 ## Open decisions before Stage 3 (convert)
 

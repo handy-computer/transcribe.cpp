@@ -323,8 +323,12 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     if (n_batch < 1) {
         n_batch = 1;
     }
-    const bool       var_len_masks = batch_var_len && n_batch > 1;
+    // kestrel length masking applies the valid-length masks at every batch
+    // size, batch 1 included (see ParakeetHParams::kestrel_length_masking).
+    const bool       var_len_masks = batch_var_len && (n_batch > 1 || hp.kestrel_length_masking);
     conf::ConvPolicy policy{};
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
     policy.direct_pw                  = conf::detect_direct_pw(backend_name);
     policy.direct_conv0_in_pre_encode = true;
     policy.direct_dw_in_block         = detect_direct_dw_in_block(backend_name);
@@ -388,6 +392,8 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         eb.pre_encode_mask_s1_in = pe_masks.mask_s1;
         eb.pre_encode_mask_s2_in = pe_masks.mask_s2;
         eb.pre_encode_mask_s3_in = pe_masks.mask_s3;
+        eb.pre_encode_extent_s2_in = pe_masks.mask_s2_extent;
+        eb.pre_encode_extent_s3_in = pe_masks.mask_s3_extent;
     }
     if (x == nullptr) {
         // build_pre_encode already logged the diagnostic.
@@ -980,6 +986,81 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
         ggml_build_forward_expand(eb.graph, eb.dumps.final_out);
     }
     return eb;
+}
+
+VadBuild build_vad_graph(ggml_context *          ctx,
+                         const ParakeetWeights & w,
+                         const ParakeetHParams & hp,
+                         int                     n_mel_frames,
+                         const char *            backend_name) {
+    VadBuild vb{};
+    if (ctx == nullptr || n_mel_frames <= 0 || !hp.has_vad_head || w.vad.proj_w == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet vad: invalid arg (no vad head or empty mel)");
+        return vb;
+    }
+    // Same subsampler policy as build_encoder_graph on this model, so the
+    // head sees exactly the pre_encode output the encoder would.
+    conf::ConvPolicy policy{};
+    policy.direct_pw                    = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode   = true;
+    policy.direct_dw_in_block           = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode      = detect_direct_dw_in_pre_encode(backend_name);
+    policy.causal_pre_encode            = false;
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
+
+    vb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_mel_frames, hp.fe_num_mels, 1, 1);
+    ggml_set_name(vb.mel_in, "vad.mel.in");
+    ggml_set_input(vb.mel_in);
+
+    conf::PreEncodeValidMasks pe_masks;
+    ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode), vb.mel_in, policy, /*name_prefix=*/"vad.pre_encode",
+                                             /*error_tag=*/"parakeet vad",
+                                             hp.kestrel_length_masking ? &pe_masks : nullptr);
+    if (x == nullptr) {
+        return vb;
+    }
+    vb.pe_mask_s1_in  = pe_masks.mask_s1;
+    vb.pe_mask_s2_in  = pe_masks.mask_s2;
+    vb.pe_mask_s3_in  = pe_masks.mask_s3;
+    vb.pe_extent_s2_in = pe_masks.mask_s2_extent;
+    vb.pe_extent_s3_in = pe_masks.mask_s3_extent;
+    vb.pre_encode_out = x;  // [d_model, T]
+
+    const int64_t d_model = x->ne[0];
+    const int64_t H       = hp.vad_hidden;
+    const int     K       = hp.vad_context_kernel;
+
+    // proj: Conv1d(d_model -> H, k=1) == mul_mat over channels. [1, d, H] -> [d, H].
+    ggml_tensor * h = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, w.vad.proj_w, d_model, H), x);  // [H, T]
+    h               = ggml_add(ctx, h, w.vad.proj_b);
+    h               = ggml_silu(ctx, h);
+    vb.proj_out     = conf::named(h, "vad.proj");
+
+    // ctx: Conv1d(H -> H, k=K, pad K/2) over time, F32 im2col. conv_1d_f32
+    // takes [T, IC] data and returns [T, OC].
+    ggml_tensor * t = ggml_cont(ctx, ggml_transpose(ctx, h));                                // [T, H]
+    t               = conf::conv_1d_f32(ctx, w.vad.ctx_w, t, /*stride=*/1, /*padding=*/K / 2, /*dilation=*/1);  // [T, H]
+    t               = ggml_add(ctx, t, ggml_reshape_2d(ctx, w.vad.ctx_b, 1, H));
+    t               = ggml_silu(ctx, t);
+    ggml_tensor * c = ggml_cont(ctx, ggml_transpose(ctx, t));                                // [H, T]
+    vb.ctx_out      = conf::named(c, "vad.ctx");
+
+    // out: Conv1d(H -> 1, k=1), then sigmoid.
+    ggml_tensor * o = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, w.vad.out_w, H, 1), c);  // [1, T]
+    o               = ggml_add(ctx, o, w.vad.out_b);
+    vb.prob         = conf::named(ggml_sigmoid(ctx, o), "vad.prob");
+
+    vb.graph = ggml_new_graph_custom(ctx, /*size=*/1024, /*grads=*/false);
+    if (vb.graph == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet vad: ggml_new_graph_custom failed");
+        return vb;
+    }
+    ggml_build_forward_expand(vb.graph, vb.prob);
+    for (ggml_tensor * keep : { vb.pre_encode_out, vb.proj_out, vb.ctx_out }) {
+        transcribe::debug::mark_tensor_for_dump(keep);
+    }
+    return vb;
 }
 
 }  // namespace transcribe::parakeet

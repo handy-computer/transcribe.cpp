@@ -112,6 +112,28 @@ ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
     return y;
 }
 
+// f32 Conv2D: ggml_conv_2d with an F32 im2col. Vendored ggml_conv_2d writes
+// the im2col (i.e. the activations) as F16 unless the kernel is BF16, which
+// rounds every input of the conv to F16 (~5e-4 relative on the parakeet
+// pre_encode pointwise convs).
+ggml_tensor * conv_2d_f32(ggml_context * ctx,
+                          ggml_tensor *  a,
+                          ggml_tensor *  b,
+                          int            s0,
+                          int            s1,
+                          int            p0,
+                          int            p1,
+                          int            d0,
+                          int            d1) {
+    ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, s1, p0, p1, d0, d1, /*is_2D=*/true,
+                                       GGML_TYPE_F32);  // [N, OH, OW, IC * KH * KW]
+    ggml_tensor * result =
+        ggml_mul_mat(ctx, ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]),
+                     ggml_reshape_2d(ctx, a, a->ne[0] * a->ne[1] * a->ne[2], a->ne[3]));
+    result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], im2col->ne[3], a->ne[3]);  // [OC, N, OH, OW]
+    return ggml_cont(ctx, ggml_permute(ctx, result, 0, 1, 3, 2));                              // [N, OC, OH, OW]
+}
+
 // f32-friendly Conv1D (mirrors ggml_conv_1d but passes the kernel's real
 // type to im2col instead of forcing f16). Vendored ggml's ggml_conv_1d
 // hardcodes GGML_TYPE_F16 for the im2col output and asserts on an f32 kernel.
@@ -1076,17 +1098,27 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     }
     x = add_conv_bias(ctx, x, pe.conv2_b);
     x = name_prefixed(x, name_prefix, "conv2");
+    const bool after_stride = policy.pre_encode_mask_after_stride;
+    if (after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+    }
 
     // conv3 (pointwise: channels -> channels, k=1 s=1 p=0)
-    x = ggml_conv_2d(ctx, pe.conv3_w, x,
-                     /*s0=*/1, /*s1=*/1,
-                     /*p0=*/0, /*p1=*/0,
-                     /*d0=*/1, /*d1=*/1);
+    x = policy.pre_encode_f32_pointwise ?
+            conv_2d_f32(ctx, pe.conv3_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
+            ggml_conv_2d(ctx, pe.conv3_w, x,
+                         /*s0=*/1, /*s1=*/1,
+                         /*p0=*/0, /*p1=*/0,
+                         /*d0=*/1, /*d1=*/1);
     x = add_conv_bias(ctx, x, pe.conv3_b);
     x = name_prefixed(x, name_prefix, "conv3");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu3");
-    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+    if (!after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+    } else {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2_extent : nullptr, "pre_encode.extent_mask.s2");
+    }
 
     // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
     x = pad_causal(x);
@@ -1103,16 +1135,25 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     }
     x = add_conv_bias(ctx, x, pe.conv5_b);
     x = name_prefixed(x, name_prefix, "conv5");
+    if (after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+    }
 
-    x = ggml_conv_2d(ctx, pe.conv6_w, x,
-                     /*s0=*/1, /*s1=*/1,
-                     /*p0=*/0, /*p1=*/0,
-                     /*d0=*/1, /*d1=*/1);
+    x = policy.pre_encode_f32_pointwise ?
+            conv_2d_f32(ctx, pe.conv6_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
+            ggml_conv_2d(ctx, pe.conv6_w, x,
+                         /*s0=*/1, /*s1=*/1,
+                         /*p0=*/0, /*p1=*/0,
+                         /*d0=*/1, /*d1=*/1);
     x = add_conv_bias(ctx, x, pe.conv6_b);
     x = name_prefixed(x, name_prefix, "conv6");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu6");
-    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+    if (!after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+    } else {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3_extent : nullptr, "pre_encode.extent_mask.s3");
+    }
 
     // At this point ne = [F'=16, T_enc, channels=256, 1] where
     // T_enc = floor(T_mel / 8). Flatten (F', C) into one feature axis

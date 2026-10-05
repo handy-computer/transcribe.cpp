@@ -63,6 +63,8 @@ transcribe::parakeet::read_parakeet_hparams):
                     min_speech_seconds,min_gap_seconds}       (vad_head variants)
   stt.parakeet.segmenter.{max_segment_seconds,min_segment_seconds,
                           min_pause_seconds,scan_block_seconds} (vad_head variants)
+  stt.parakeet.encoder.length_masking = "kestrel",
+  stt.parakeet.tdt.symbol_budget      = "global"            (kestrel_runtime variants)
 
 parakeet-ultra is the one HF-safetensors source (no .nemo); see
 load_hf_safetensors_model().
@@ -422,6 +424,9 @@ VARIANT_PROFILES: dict[str, dict] = {
         "source_format": "hf_safetensors",
         "hf_revision": "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b",
         "has_vad_head": True,
+        # Validated against kestrel (Photon's engine), not NeMo: kestrel's
+        # length masking and global TDT symbol budget (see the KV notes).
+        "kestrel_runtime": True,
         "author": "Moondream",
         "organization": "moondream",
         "license": "cc-by-4.0",
@@ -1974,6 +1979,11 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     # publisher runtime this variant is validated against. They are
     # runtime policy, not weights, and are written here so the C++
     # segmenter reads them instead of hard-coding a second copy.
+    # kestrel-runtime semantics. Absent on every NeMo-validated variant.
+    if profile.get("kestrel_runtime"):
+        writer.add_string("stt.parakeet.encoder.length_masking", "kestrel")
+        writer.add_string("stt.parakeet.tdt.symbol_budget", "global")
+
     if has_vad_head:
         vad_proj = sd["vad_head.proj.weight"]
         vad_ctx = sd["vad_head.ctx.weight"]

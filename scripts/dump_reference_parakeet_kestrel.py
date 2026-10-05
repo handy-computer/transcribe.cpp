@@ -31,8 +31,9 @@ quantity is the same, so the C++ parakeet observer points compare as-is:
             vad.b<k>.ctx [Tb', 128]         SiLU(ctx)
             vad.b<k>.prob [Tb']             sigmoid(out), valid frames only
             vad.prob [N]                    all blocks' valid-frame probabilities, in order
-            seg.<j>.mel.in [n_mels, T]      features of decoded segment j
-            seg.<j>.enc.final [T', d]       encoder output for segment j
+            seg.<j>.enc.mel.in [n_mels, T]  features of decoded segment j
+            seg.<j>.enc.final [T'v, d]      encoder output for segment j, valid rows only
+            longform.segments [n, 2]        (start sample, sample count) per segment, exact
             segments.json                   blocks, speech regions, cut points (sample
                                             indices), per-segment tokens/durations/text
             transcript.json                 kestrel runtime text + word-timestamped segments
@@ -362,6 +363,14 @@ def cmd_longform(args: argparse.Namespace) -> int:
             })
     model.speech_probabilities = original
 
+    # Cut points as an exact-compare tensor: [n_segments, 2] = (start sample,
+    # sample count). Integer-valued f32 is exact below 2^24 samples (17 min).
+    if segments:
+        cuts = np.array([[sg["start_sample"], sg["n_samples"]] for sg in segments], dtype=np.float64)
+        if cuts.max() >= 2**24:
+            raise SystemExit("error: longform.segments needs samples < 2^24 to be exact in f32")
+        dump("longform.segments", torch.from_numpy(cuts.astype(np.float32)), "longform.segments")
+
     # The segmenter is contiguous: every segment is a slice of the file.
     for seg in segments:
         s, n = seg["start_sample"], seg["n_samples"]
@@ -383,11 +392,16 @@ def cmd_longform(args: argparse.Namespace) -> int:
         wav = seg.pop("_waveform")
         features, mask = features_for(wav)
         with torch.inference_mode():
-            encoded, _valid = model.encoder(features, mask)
+            encoded, valid = model.encoder(features, mask)
             out = model.generate(features, mask)
         j = seg["index"]
-        dump(f"seg.{j}.mel.in", features[0].transpose(0, 1), "segment.mel")
-        dump(f"seg.{j}.enc.final", encoded[0], "segment.encoder.final")
+        n_valid = int(valid[0].sum())
+        seg["valid_frames"] = n_valid
+        # Same names the C++ emits under its "seg.<j>." dump prefix. Only the
+        # valid encoder rows: a frame past the valid length is masked out of
+        # attention as a query too, so its value is unspecified and never decoded.
+        dump(f"seg.{j}.enc.mel.in", features[0].transpose(0, 1), "segment.mel")
+        dump(f"seg.{j}.enc.final", encoded[0, :n_valid], "segment.encoder.final")
         n = int(out.lengths[0])
         seg["token_ids"] = out.sequences[0, :n].tolist()
         seg["durations"] = out.durations[0, :n].tolist()

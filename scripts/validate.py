@@ -474,6 +474,12 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g.
+        # parakeet-ultra pins TRANSCRIBE_NO_FLASH=1: the flash path casts the
+        # rel-pos score bias to F16, a production speed path whose drift is
+        # gated by WER, not by the tensor tolerances).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
 
         # Sortformer: keep the C++ streaming operating point in lockstep with
         # the reference `diarize --preset` (see cmd_ref) so the diar.probs
@@ -495,7 +501,7 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         # originates in the C++ mel or downstream in the graph. Defaulting
         # to ref-mel hid a base.en regression once (the mel-precision
         # change in 4613129); we don't want that blind spot back.
-        if args.family == "whisper" and getattr(args, "mel_from_ref", False):
+        if args.family in ("whisper", "parakeet") and getattr(args, "mel_from_ref", False):
             if not validation_hooks_enabled(repo):
                 raise SystemExit(
                     "error: --mel-from-ref requires validation hooks compiled "
@@ -756,6 +762,12 @@ def cmd_mel(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g.
+        # parakeet-ultra pins TRANSCRIBE_NO_FLASH=1: the flash path casts the
+        # rel-pos score bias to F16, a production speed path whose drift is
+        # gated by WER, not by the tensor tolerances).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
         env.pop("TRANSCRIBE_MEL_FROM_REF", None)
 
         cmd = [

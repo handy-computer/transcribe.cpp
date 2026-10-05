@@ -100,5 +100,8 @@
         "longform"
       ]
     }
-  ]
+  ],
+  "cpp_env": {
+    "TRANSCRIBE_NO_FLASH": "1"
+  }
 }
