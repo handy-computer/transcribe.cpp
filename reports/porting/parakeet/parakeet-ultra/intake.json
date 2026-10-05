@@ -107,12 +107,12 @@
     "n_mels": 128,
     "hop_length": 160,
     "fft_size": 512,
-    "window": "hann_periodic",
+    "window": "hann_symmetric",
     "normalization": "per_feature",
     "preemphasis": 0.97,
-    "dither": 1e-05,
+    "dither": 0.0,
     "center": true,
-    "padding_mode": "reflect",
+    "padding_mode": "constant",
     "mel_filterbank_norm": "slaney"
   },
   "tokenizer": {

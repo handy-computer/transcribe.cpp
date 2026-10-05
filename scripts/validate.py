@@ -153,6 +153,26 @@ def case_language(case) -> str | None:
     return "en"
 
 
+def case_stages(case, default: list[str]) -> list[str]:
+    """Per-case dumper subcommands. Dict cases may set `stages` (used today
+    by parakeet-ultra, whose >30 s cases run the `longform` VAD-segmenter
+    path instead of a whole-clip encoder/decode)."""
+    if isinstance(case, dict) and "stages" in case:
+        stages = case["stages"]
+        if not isinstance(stages, list) or not all(isinstance(s, str) for s in stages):
+            raise SystemExit(f"error: case stages must be a list of strings: {case!r}")
+        return list(stages)
+    return list(default)
+
+
+def manifest_env_dir(repo: Path, manifest: dict[str, Any], family: str) -> Path:
+    """Reference env: scripts/envs/<reference.env>, else scripts/envs/<family>.
+    A variant whose reference framework differs from the family's (parakeet-ultra
+    uses kestrel, not NeMo) names its own env."""
+    env = (manifest.get("reference") or {}).get("env") or family
+    return repo / "scripts" / "envs" / str(env)
+
+
 def case_transcript_compare(manifest: dict[str, Any], case) -> str:
     value = manifest.get("transcript_compare", "exact")
     if isinstance(case, dict) and "transcript_compare" in case:
@@ -347,7 +367,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         raise SystemExit("error: no model specified and none in manifest")
 
     dump_script = manifest_dump_script(repo, manifest)
-    env_dir = repo / "scripts" / "envs" / args.family
+    env_dir = manifest_env_dir(repo, manifest, args.family)
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
@@ -414,7 +434,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         if args.family == "sortformer":
             stages = ["encoder", "diarize"]
         else:
-            stages = ["encoder", "decode"]
+            stages = case_stages(case, ["encoder", "decode"])
         sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
         for stage in stages:
             stage_args = list(common_args)

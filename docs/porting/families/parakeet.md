@@ -168,6 +168,22 @@ audio at pauses into <=30 s segments. Reference is kestrel 0.9.1 for
 everything (frontend, ASR, VAD head, segmenter); transformers is not used. Intake:
 `reports/porting/parakeet/parakeet-ultra/intake.json`.
 
+Oracle (env `scripts/envs/parakeet-kestrel`, selected by the manifest's
+`reference.env`). jfk runs `encoder` + `decode`; `dots` (35 s) and
+`dots-full` (306 s) run `longform`, which records every VAD scan block,
+cut point and per-segment decode in `segments.json`:
+
+```bash
+uv run scripts/validate.py ref --family parakeet --variant parakeet-ultra
+uv run --project scripts/envs/parakeet-kestrel scripts/wer/run_reference_parakeet_kestrel.py \
+  --manifest samples/wer/librispeech-test-clean.manifest.jsonl \
+  --out reports/wer/parakeet-ultra-REF.librispeech-test-clean.jsonl
+uv run scripts/wer/ingest.py tedlium-longform   # 11 TED-LIUM 3 talks
+uv run --project scripts/envs/parakeet-kestrel scripts/wer/run_reference_parakeet_kestrel.py \
+  --manifest samples/wer/tedlium-longform.manifest.jsonl \
+  --out reports/wer/parakeet-ultra-REF.tedlium-longform.jsonl
+```
+
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |---|---|---|---|---|---|
 | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf --language en samples/jfk.wav` | English transcript with PnC; LibriSpeech test-clean WER within Stage 7 band of the kestrel oracle | MUST PASS | TODO |
