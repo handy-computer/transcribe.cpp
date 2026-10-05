@@ -67,6 +67,7 @@ FLEURS_LANGUAGES: list[tuple[str, str]] = [
     ("da_dk", "da"),
     ("id_id", "id"),
     ("ms_my", "ms"),
+    ("it_it", "it"),
 ]
 
 CODE_TO_CONFIG = {code: config for config, code in FLEURS_LANGUAGES}

@@ -232,6 +232,34 @@ void test_bad_labels() {
     CHECK(m == nullptr);
 }
 
+// Q8_0 weights are widened to F16 at load: a Q8_0 model must give exactly
+// the logits of the same model stored as F16 holding the dequantized values.
+void test_q8_0_widened_to_f16() {
+    transcribe_model * q8  = load_cpu("arch_ecapa_tdnn_q8_0.gguf");
+    transcribe_model * ref = load_cpu("arch_ecapa_tdnn_q8_0_as_f16.gguf");
+    CHECK(q8 != nullptr && ref != nullptr);
+    if (q8 == nullptr || ref == nullptr) {
+        transcribe_model_free(q8);
+        transcribe_model_free(ref);
+        return;
+    }
+    const std::vector<float>    pcm = noise(16000 * 2, 5);
+    transcribe_langid_session * sq  = open_session(q8, 2);
+    transcribe_langid_session * sr  = open_session(ref, 2);
+    CHECK(transcribe_langid_run(sq, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
+    CHECK(transcribe_langid_run(sr, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
+    const auto a = candidates_of(sq);
+    const auto b = candidates_of(sr);
+    CHECK(a.size() == 5 && a.size() == b.size());
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i) {
+        CHECK(a[i].index == b[i].index && a[i].logit == b[i].logit);
+    }
+    transcribe_langid_session_free(sq);
+    transcribe_langid_session_free(sr);
+    transcribe_model_free(q8);
+    transcribe_model_free(ref);
+}
+
 }  // namespace
 
 int main() {
@@ -249,6 +277,7 @@ int main() {
     transcribe_model_free(m);
 
     test_bad_labels();
+    test_q8_0_widened_to_f16();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

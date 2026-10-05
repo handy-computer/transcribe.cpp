@@ -35,7 +35,7 @@ Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface
 | --- | --- | ---: | ---: |
 | F32          | [lang-id-voxlingua107-ecapa-F32.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F32.gguf) | 85 MB | 85.20% |
 | F16          | [lang-id-voxlingua107-ecapa-F16.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F16.gguf) | 45 MB | 85.20% |
-| Q8_0         | [lang-id-voxlingua107-ecapa-Q8_0.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-Q8_0.gguf) | 27 MB | 84.30% |
+| Q8_0         | [lang-id-voxlingua107-ecapa-Q8_0.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-Q8_0.gguf) | 27 MB | 86.30% |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
@@ -77,13 +77,15 @@ Agreement with the SpeechBrain reference (top-1, the same 12000 decisions:
 |---|---|---|---|
 | F32 | 12000 / 12000 | 6.5e-05 | 67.0 / 85.2 / 91.1 / 91.4 |
 | F16 | 11991 / 12000 | 0.098 | 67.0 / 85.2 / 91.1 / 91.5 |
-| Q8_0 | 11175 / 12000 | 7.5 | 65.4 / 84.3 / 90.9 / 91.4 |
+| Q8_0 | 11703 / 12000 | 2.8 | 67.2 / 86.3 / 92.0 / 92.3 |
 
 F16's nine flips are all near-ties (top-two margin under 0.025 logit). Q8_0
-also quantizes the activations of every large matmul inside ggml, which moves
-6.9% of decisions, almost all on uncertain 3-5 s crops: it costs 1.6 points
-open-set at 3 s, 0.9 at 5 s and nothing on full clips. langid.cpp measured the
-same on its own Q8_0 (93.19% agreement, 65.3 / 84.1 / 90.8 / 91.4).
+is a download format: transcribe.cpp widens its weights to F16 at load, so it
+computes like F16 (45 MB resident) and its accuracy matches F32 within the
+confidence interval. Its flips are the 8-bit weights alone, on decisions F32
+also finds uncertain. Computed in Q8_0, as langid.cpp does, ggml also rounds
+the activations to 8 bits; that moves 6.9% of decisions (93.1% agreement,
+65.4 / 84.3 / 90.9 / 91.4).
 
 ## Quick Start
 
@@ -171,9 +173,9 @@ dataset gate is the FLEURS decision parity above.
   answers under ~3 s of speech are weak.
 - **Scores at most the last 30 s** by default
   (`transcribe_langid_session_params::max_audio_ms`).
-- **Q8_0 on an ARM CPU is slower than langid.cpp** (about 1.7x): its CPU
-  weight-repacking buffer is not ported yet. F16 and the other backends are
-  at parity.
+- **Q8_0 runs at F16 speed.** langid.cpp computes Q8_0 with ggml's ARM
+  weight-repacking kernels, about 1.3x faster than F16 on an Apple CPU, at
+  the accuracy cost above; transcribe.cpp widens Q8_0 to F16 instead.
 
 ## Reproduction
 

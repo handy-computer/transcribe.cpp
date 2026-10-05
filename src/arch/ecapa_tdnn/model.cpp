@@ -22,6 +22,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
+#include "transcribe-path.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -29,6 +30,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
+#include <ios>
 #include <memory>
 #include <string>
 #include <vector>
@@ -108,6 +111,98 @@ transcribe_status read_labels(const gguf_context * gguf, LangidLabels & out) {
         return TRANSCRIBE_ERR_GGUF;
     }
     return build_langid_labels(std::move(codes), std::move(names), aliases, kTag, out);
+}
+
+// Q8_0 is a download format here, not a compute format: every Q8_0 weight is
+// widened to F16 at load. ggml's Q8_0 matmuls also quantize the ACTIVATIONS
+// to 8 bits, and on FLEURS that, not the 8-bit weights, is what moves the
+// decision: computed in Q8_0 the published file agrees with SpeechBrain on
+// 93.1% of 12000 top-1 decisions; the same weights computed in F16 agree on
+// 97.5% and score at F32's accuracy. The cost is F16 memory for those weights
+// (45 MB instead of 27 MB resident) and F16 speed, which is no slower than
+// Q8_0 on any backend measured without the CPU repack path.
+//
+// Retype in place: the tensors come from the no_alloc gguf context and have
+// no data or views yet, so only type and strides change. Returns the count.
+int widen_q8_0_weights(ggml_context * ctx_meta) {
+    int n = 0;
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        if (t->type != GGML_TYPE_Q8_0) {
+            continue;
+        }
+        t->type  = GGML_TYPE_F16;
+        t->nb[0] = ggml_type_size(GGML_TYPE_F16);
+        for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+            t->nb[i] = t->nb[i - 1] * static_cast<size_t>(t->ne[i - 1]);
+        }
+        ++n;
+    }
+    return n;
+}
+
+// load_common::stream_tensor_data, plus the Q8_0 -> F16 widening: a tensor
+// whose file type is Q8_0 and whose bound type is F16 is dequantized with
+// ggml's own Q8_0 reference and rounded to F16 on the way in. Every other
+// tensor must be bound with its file type and is copied as-is.
+transcribe_status stream_weights(const std::string & path, const gguf_context * gguf, ggml_context * ctx_meta) {
+    std::ifstream fin(path_from_utf8(path), std::ios::binary);
+    if (!fin) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen %s for tensor data", kTag, path.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    const size_t             data_offset = gguf_get_data_offset(gguf);
+    const ggml_to_float_t    q8_to_f32   = ggml_get_type_traits(GGML_TYPE_Q8_0)->to_float;
+    std::vector<uint8_t>     staging;
+    std::vector<float>       f32;
+    std::vector<ggml_fp16_t> f16;
+
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        const int64_t idx = gguf_find_tensor(gguf, t->name);
+        if (idx < 0) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" not in gguf data", kTag, t->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        const ggml_type file_type = gguf_get_tensor_type(gguf, idx);
+        const bool      widen     = file_type == GGML_TYPE_Q8_0 && t->type == GGML_TYPE_F16;
+        if (file_type != t->type && !widen) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" is %s in the file but bound as %s", kTag, t->name,
+                    ggml_type_name(file_type), ggml_type_name(t->type));
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        const size_t nbytes = gguf_get_tensor_size(gguf, idx);
+        if (!widen && nbytes != ggml_nbytes(t)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" size mismatch", kTag, t->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        fin.seekg(static_cast<std::streamoff>(data_offset) +
+                  static_cast<std::streamoff>(gguf_get_tensor_offset(gguf, idx)));
+        if (staging.size() < nbytes) {
+            staging.resize(nbytes);
+        }
+        fin.read(reinterpret_cast<char *>(staging.data()), static_cast<std::streamsize>(nbytes));
+        if (!fin) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", kTag, t->name, nbytes);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        if (!widen) {
+            ggml_backend_tensor_set(t, staging.data(), 0, nbytes);
+            continue;
+        }
+        const int64_t n = ggml_nelements(t);
+        if (nbytes != ggml_row_size(GGML_TYPE_Q8_0, n)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: Q8_0 tensor \"%s\" size mismatch", kTag, t->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        f32.resize(static_cast<size_t>(n));
+        f16.resize(static_cast<size_t>(n));
+        q8_to_f32(staging.data(), f32.data(), n);
+        ggml_fp32_to_fp16_row(f32.data(), f16.data(), n);
+        ggml_backend_tensor_set(t, f16.data(), 0, ggml_nbytes(t));
+    }
+    return TRANSCRIBE_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +285,11 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
+    // After build_weights, which validated each weight's file type.
+    if (const int n_widened = widen_q8_0_weights(m->ctx_meta); n_widened > 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: %d Q8_0 weights widened to F16 at load", kTag, n_widened);
+    }
+
     const transcribe_backend_request backend_req = params != nullptr ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (auto st = load_common::init_backends(backend_req, params != nullptr ? params->device : nullptr, kTag, m->plan);
         st != TRANSCRIBE_OK) {
@@ -205,7 +305,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
     ggml_backend_buffer_set_usage(m->backend_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    if (auto st = load_common::stream_tensor_data(loader.path(), guard.ctx, m->ctx_meta, kTag); st != TRANSCRIBE_OK) {
+    if (auto st = stream_weights(loader.path(), guard.ctx, m->ctx_meta); st != TRANSCRIBE_OK) {
         return st;
     }
 

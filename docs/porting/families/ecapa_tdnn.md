@@ -17,9 +17,11 @@ Acceptance: tensor parity on eight FLEURS clips (`validate.py`), and top-1
 decision parity with SpeechBrain on FLEURS (15 languages x 200 utterances x
 3 / 5 / 10 s / full = 12000 decisions): **12000 / 12000**, max abs logit
 difference 6.5e-05 (C++ F32, CPU). Shipped matrix: F32 + F16 + Q8_0;
-F16 agrees on 11991 / 12000 (near-ties only), Q8_0 on 11175 / 12000 (the
-activation quantization inside ggml's Q8_0 matmul; langid.cpp's Q8_0 measured
-the same 93.2%).
+F16 agrees on 11991 / 12000 (near-ties only), Q8_0 on 11703 / 12000 at F32
+accuracy. The loader widens Q8_0 weights to F16 (`widen_q8_0_weights` in
+`src/arch/ecapa_tdnn/model.cpp`): computed in Q8_0, ggml also rounds the
+activations to 8 bits and agreement drops to 11175 / 12000 (langid.cpp's
+Q8_0 measured the same 93.2%), 1.6 points open-set at 3 s.
 
 ## Identity
 
@@ -120,14 +122,14 @@ Benchmarks: `scripts/langid/bench.py` (`tools/transcribe-bench` is ASR-only).
   tables fail the load. H4 (no leak when label metadata is bad) is covered by
   `arch_ecapa_tdnn_bad_labels.gguf` in `transcribe_ecapa_tdnn_smoke`
   (`leaks --atExit`: 0 leaks).
-- Performance follow-up (not ported): langid.cpp's CPU weight-repacking
-  buffer. On the M4 Max CPU (10 s, Q8_0, median of three interleaved rounds)
-  it takes 76-81 ms to about 45-51 ms here and 36-39 ms in langid.cpp;
-  without it the two are at parity, as is F16 and Metal (14 ms). ARM only:
-  ggml has no Q8_0 repack on x86. `cls.out.weight` (107 rows) cannot be
-  repacked, so the candidate filter must check the row count or langid.cpp's
-  abandon path disables repacking for the whole file. The performance-core
-  thread default did not help here (8 threads ties or beats 12).
+- Not ported: langid.cpp's CPU weight-repacking buffer. It only speeds up
+  Q8_0 compute (ARM only; ggml has no Q8_0 repack on x86), which the Q8_0
+  widening replaces. Measured on the M4 Max CPU at 10 s, generic build
+  flags: Q8_0 widened 49 ms, Q8_0 computed 56 ms, Q8_0 + repack 36 ms;
+  Metal 14 ms for all. `cls.out.weight` (107 rows) cannot be repacked, so a
+  future repack path must filter on the row count or langid.cpp's abandon
+  path disables repacking for the whole file. The performance-core thread
+  default did not help (8 threads ties or beats 12).
 - `AUTO` placement is unchanged (GPU first). Metal is 5-10x faster than CPU
   on the M4 Max; CPU stays well under real time.
 - Q8_0 conv kernels stay F32 (the quantizer's Conv bucket is F32 in every

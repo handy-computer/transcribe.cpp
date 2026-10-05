@@ -110,6 +110,7 @@ a local `cmake --build build --target fixtures` regenerates the files.
 
 from __future__ import annotations
 
+import math
 import struct
 import sys
 from pathlib import Path
@@ -132,11 +133,16 @@ GGUF_TYPE_ARRAY   = 9
 # ggml_type enum values used for tensor data. Pinned here so we are not
 # at the mercy of upstream renumbering — a mismatch would surface as a
 # loader test failure (the most useful possible signal).
-GGML_TYPE_F32 = 0
+GGML_TYPE_F32  = 0
+GGML_TYPE_F16  = 1
+GGML_TYPE_Q8_0 = 8
 
-# Bytes per element for each ggml_type we emit.
+# (bytes per block, elements per block) for each ggml_type we emit. Q8_0 is
+# 32 int8 quants behind one fp16 scale, blocked along ne[0].
 GGML_TYPE_SIZE = {
-    GGML_TYPE_F32: 4,
+    GGML_TYPE_F32:  (4, 1),
+    GGML_TYPE_F16:  (2, 1),
+    GGML_TYPE_Q8_0: (34, 32),
 }
 
 
@@ -262,7 +268,7 @@ def _string_kvs(pairs: list[tuple[str, str]]) -> list[bytes]:
 # A "Tensor" here is just a (name, ne, dtype, data_bytes) tuple. ne is
 # fast-to-slow dim order matching ggml_tensor::ne[]. data_bytes is the
 # raw little-endian bytes of the tensor's elements, length must equal
-# product(ne) * GGML_TYPE_SIZE[dtype].
+# product(ne) / block * block_bytes (GGML_TYPE_SIZE[dtype]).
 #
 # _build_full_gguf assembles header + KV section + tensor info section
 # + aligned tensor data blob in one pass. The layout follows
@@ -276,10 +282,13 @@ class Tensor:
     def __init__(
         self, name: str, ne: list[int], dtype: int, data: bytes
     ) -> None:
+        block_bytes, block = GGML_TYPE_SIZE[dtype]
+        if ne[0] % block != 0:
+            raise ValueError(f"tensor {name!r}: ne[0]={ne[0]} is not a multiple of {block}")
         nbytes = 1
         for d in ne:
             nbytes *= d
-        nbytes *= GGML_TYPE_SIZE[dtype]
+        nbytes = nbytes // block * block_bytes
         if len(data) != nbytes:
             raise ValueError(
                 f"tensor {name!r}: ne={ne} dtype={dtype} expects "
@@ -1482,7 +1491,44 @@ def _ecapa_tdnn_tensors(n_labels: int) -> list[Tensor]:
     return out
 
 
-def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str]) -> bytes:
+def _q8_0_blocks(values: list[float]) -> tuple[bytes, list[float]]:
+    """ggml's quantize_row_q8_0_ref, plus the values its dequantize_row_q8_0
+    gives back (fp16 scale times int8, exact in float)."""
+    data = bytearray()
+    deq: list[float] = []
+    for b in range(0, len(values), 32):
+        x = values[b:b + 32]
+        d = max(abs(v) for v in x) / 127.0
+        inv = 1.0 / d if d else 0.0
+        q = [int(math.copysign(math.floor(abs(v * inv) + 0.5), v)) for v in x]
+        d16 = struct.pack("<e", d)
+        data += d16 + struct.pack("<32b", *q)
+        deq += [struct.unpack("<e", d16)[0] * qi for qi in q]
+    return bytes(data), deq
+
+
+def _ecapa_tdnn_q8_0(tensors: list[Tensor], as_f16: bool) -> list[Tensor]:
+    """Every 2-D weight the quantizer would make Q8_0 (ne[0] % 32 == 0), as
+    Q8_0, or (as_f16) as F16 holding exactly the dequantized Q8_0 values:
+    what the ecapa_tdnn loader must produce when it widens Q8_0 to F16."""
+    out = []
+    for t in tensors:
+        if len(t.ne) != 2 or not t.name.endswith(".weight") or t.ne[0] % 32 != 0 or t.name.startswith("frontend."):
+            out.append(t)
+            continue
+        values = list(struct.unpack(f"<{len(t.data) // 4}f", t.data))
+        q8, deq = _q8_0_blocks(values)
+        if as_f16:
+            out.append(Tensor(t.name, t.ne, GGML_TYPE_F16, struct.pack(f"<{len(deq)}e", *deq)))
+        else:
+            out.append(Tensor(t.name, t.ne, GGML_TYPE_Q8_0, q8))
+    return out
+
+
+def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_0: str = "") -> bytes:
+    tensors = _ecapa_tdnn_tensors(len(codes))
+    if q8_0:
+        tensors = _ecapa_tdnn_q8_0(tensors, as_f16=(q8_0 == "as_f16"))
     return _build_full_gguf(
         GGUF_MAGIC,
         [
@@ -1490,7 +1536,7 @@ def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str]) -> 
             _pack_kv_string("stt.variant", "ecapa-tdnn-toy"),
             *_ecapa_tdnn_hparams_kv(codes, names, aliases),
         ],
-        _ecapa_tdnn_tensors(len(codes)),
+        tensors,
     )
 
 
@@ -1915,6 +1961,13 @@ def emit_fixtures(out_dir: Path) -> None:
            _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"]))
     _write(out_dir / "arch_ecapa_tdnn_bad_labels.gguf",
            _ecapa_tdnn_gguf(["aa", "bb", "cc", "bb", "ee"], ECAPA_LABEL_NAMES, ["xx=aa"]))
+    # The toy model with its Q8_0-eligible weights in Q8_0, and the same
+    # weights as F16 holding the dequantized values. The loader widens Q8_0
+    # to F16, so the two must give bit-identical logits on the CPU.
+    _write(out_dir / "arch_ecapa_tdnn_q8_0.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="q8_0"))
+    _write(out_dir / "arch_ecapa_tdnn_q8_0_as_f16.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="as_f16"))
 
 
 def main(argv: list[str]) -> int:
