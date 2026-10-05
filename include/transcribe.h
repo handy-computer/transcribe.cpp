@@ -315,6 +315,9 @@ typedef enum {
     TRANSCRIBE_ERR_OUTPUT_REPETITION      = 19,
     /* The model does not serve the role this call needs; see transcribe_model_roles(). */
     TRANSCRIBE_ERR_UNSUPPORTED_ROLE       = 20,
+    /* The audio is shorter than the role's minimum (e.g. language ID's
+     * transcribe_langid_info::min_audio_ms). Nothing was computed. */
+    TRANSCRIBE_ERR_INPUT_TOO_SHORT        = 21,
 } transcribe_status;
 
 /*
@@ -391,6 +394,12 @@ typedef enum {
     TRANSCRIBE_ABI_DIARIZE_INFO           = 16,
     TRANSCRIBE_ABI_DIARIZE_SESSION_PARAMS = 17,
     TRANSCRIBE_ABI_DIARIZE_PARAMS         = 18,
+    /* include/transcribe/langid.h */
+    TRANSCRIBE_ABI_LANGID_INFO            = 19,
+    TRANSCRIBE_ABI_LANGID_SESSION_PARAMS  = 20,
+    TRANSCRIBE_ABI_LANGID_PARAMS          = 21,
+    TRANSCRIBE_ABI_LANGID_RESULT          = 22,
+    TRANSCRIBE_ABI_LANGID_CANDIDATE       = 23,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.
@@ -1362,6 +1371,7 @@ TRANSCRIBE_API void transcribe_capabilities_init(struct transcribe_capabilities 
 typedef enum {
     TRANSCRIBE_ROLE_ASR     = 1u << 0,
     TRANSCRIBE_ROLE_DIARIZE = 1u << 1,
+    TRANSCRIBE_ROLE_LANGID  = 1u << 2,
 } transcribe_role;
 
 /*

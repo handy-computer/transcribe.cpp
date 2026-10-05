@@ -123,12 +123,13 @@ transcribe_status resolve_roles(transcribe_model * model) {
     const char * name        = arch.name != nullptr ? arch.name : "(unknown)";
     const bool   has_asr     = arch.init_context != nullptr && arch.run != nullptr;
     const bool   has_diarize = arch.diarize != nullptr;
+    const bool   has_langid  = arch.langid != nullptr;
 
     if (model->roles == 0 && has_asr) {
         model->roles = TRANSCRIBE_ROLE_ASR;
     }
 
-    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE;
+    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_LANGID;
     const char *   why   = nullptr;
     if (model->roles == 0) {
         why = "serves no role";
@@ -138,6 +139,8 @@ transcribe_status resolve_roles(transcribe_model * model) {
         why = "sets the ASR role without init_context / run hooks";
     } else if ((model->roles & TRANSCRIBE_ROLE_DIARIZE) != 0 && !has_diarize) {
         why = "sets the DIARIZE role without a diarize ops table";
+    } else if ((model->roles & TRANSCRIBE_ROLE_LANGID) != 0 && !has_langid) {
+        why = "sets the LANGID role without a langid ops table";
     }
     if (why != nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: arch '%s' %s (roles 0x%x)", name, why,

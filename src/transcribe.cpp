@@ -29,6 +29,7 @@
 #include "transcribe-model.h"
 #include "transcribe-path.h"
 #include "transcribe/diarize.h"
+#include "transcribe/langid.h"
 
 #if defined(TRANSCRIBE_GGML_BACKEND_DL) && defined(_WIN32)
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -112,6 +113,8 @@ extern "C" const char * transcribe_status_string(int status) {
             return "output repetition: decode stopped when the output began repeating itself";
         case TRANSCRIBE_ERR_UNSUPPORTED_ROLE:
             return "model does not serve the requested role";
+        case TRANSCRIBE_ERR_INPUT_TOO_SHORT:
+            return "input audio too short";
         default:
             return "unknown status";
     }
@@ -178,6 +181,16 @@ extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
             return sizeof(struct transcribe_diarize_session_params);
         case TRANSCRIBE_ABI_DIARIZE_PARAMS:
             return sizeof(struct transcribe_diarize_params);
+        case TRANSCRIBE_ABI_LANGID_INFO:
+            return sizeof(struct transcribe_langid_info);
+        case TRANSCRIBE_ABI_LANGID_SESSION_PARAMS:
+            return sizeof(struct transcribe_langid_session_params);
+        case TRANSCRIBE_ABI_LANGID_PARAMS:
+            return sizeof(struct transcribe_langid_params);
+        case TRANSCRIBE_ABI_LANGID_RESULT:
+            return sizeof(struct transcribe_langid_result);
+        case TRANSCRIBE_ABI_LANGID_CANDIDATE:
+            return sizeof(struct transcribe_langid_candidate);
     }
     return 0;  // unknown id: "cannot verify", never a real size
 }
@@ -222,6 +235,16 @@ extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
             return alignof(struct transcribe_diarize_session_params);
         case TRANSCRIBE_ABI_DIARIZE_PARAMS:
             return alignof(struct transcribe_diarize_params);
+        case TRANSCRIBE_ABI_LANGID_INFO:
+            return alignof(struct transcribe_langid_info);
+        case TRANSCRIBE_ABI_LANGID_SESSION_PARAMS:
+            return alignof(struct transcribe_langid_session_params);
+        case TRANSCRIBE_ABI_LANGID_PARAMS:
+            return alignof(struct transcribe_langid_params);
+        case TRANSCRIBE_ABI_LANGID_RESULT:
+            return alignof(struct transcribe_langid_result);
+        case TRANSCRIBE_ABI_LANGID_CANDIDATE:
+            return alignof(struct transcribe_langid_candidate);
     }
     return 0;
 }
