@@ -11,11 +11,11 @@
 
 #include "decoder.h"
 #include "encoder.h"
-#include "longform.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf.h"
+#include "longform.h"
 #include "parakeet.h"
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
@@ -738,11 +738,11 @@ static std::array<int, 4> pre_encode_stage_lengths(const ParakeetHParams & hp, i
 // variable-length (or kestrel-masked) graph: attention key padding, conv
 // valid frames, and the three pre_encode stages. Returns each utterance's
 // valid encoder length (clamped to T_enc) in real_tenc.
-static void fill_length_masks(const EncoderBuild &                     eb,
+static void fill_length_masks(const EncoderBuild &                    eb,
                               const std::vector<std::array<int, 4>> & lens,
-                              const std::vector<int> &                 mel_frames,
-                              int                                      T_enc,
-                              std::vector<int> &                       real_tenc) {
+                              const std::vector<int> &                mel_frames,
+                              int                                     T_enc,
+                              std::vector<int> &                      real_tenc) {
     const int n = static_cast<int>(lens.size());
     real_tenc.assign(static_cast<size_t>(n), T_enc);
     for (int b = 0; b < n; ++b) {
@@ -1182,7 +1182,7 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         }
     }
     const int    mt_keep_frames = static_cast<int>(mt_keep.size());
-    const bool   kestrel_masks = pm->hparams.kestrel_length_masking;
+    const bool   kestrel_masks  = pm->hparams.kestrel_length_masking;
     EncoderBuild eb = build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames, resolved_kv,
                                           pm->backend.c_str(), /*buf_mask=*/nullptr, /*n_batch=*/1,
                                           /*batch_var_len=*/kestrel_masks, spk_supervision, mt_keep_frames);
@@ -1504,7 +1504,7 @@ longform::Params longform_params(const ParakeetHParams & hp) {
     lp.sample_rate         = hp.fe_sample_rate;
     // kestrel: 160 / 16_000 * subsampling_factor.
     lp.frame_seconds       = static_cast<double>(hp.fe_hop_length) / static_cast<double>(hp.fe_sample_rate) *
-                       static_cast<double>(hp.enc_subsampling_factor);
+                             static_cast<double>(hp.enc_subsampling_factor);
     lp.speech_threshold    = hp.vad_speech_threshold;
     lp.min_speech_seconds  = as_decimal(hp.vad_min_speech_seconds);
     lp.min_gap_seconds     = as_decimal(hp.vad_min_gap_seconds);
@@ -1550,6 +1550,7 @@ transcribe_status run_vad_block(ParakeetSession *    pc,
     if (ctx == nullptr) {
         return TRANSCRIBE_ERR_OOM;
     }
+
     struct CtxGuard {
         ggml_context * c;
 
@@ -1654,10 +1655,10 @@ transcribe_status run_longform(ParakeetSession *             pc,
     const longform::Params lp   = longform_params(pm->hparams);
     const double           rate = static_cast<double>(lp.sample_rate);
 
-    const int64_t      t_vad_start = ggml_time_us();
-    std::vector<float> all_probs;
-    int                block_index = 0;
-    const longform::SpeechFn speech = [&](int64_t start, int64_t len, longform::Regions & regions) {
+    const int64_t            t_vad_start = ggml_time_us();
+    std::vector<float>       all_probs;
+    int                      block_index = 0;
+    const longform::SpeechFn speech      = [&](int64_t start, int64_t len, longform::Regions & regions) {
         const double duration = static_cast<double>(len) / rate;
         regions.clear();
         if (len < lp.min_feature_samples) {
@@ -1849,11 +1850,11 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
                                           int                                     T_max,
                                           int64_t                                 total_mel_us,
                                           const transcribe_run_params *           params) {
-    const int n = static_cast<int>(mels.size());
+    const int n       = static_cast<int>(mels.size());
     // kestrel length masking masks every batch (its valid lengths come from
     // n_samples, which can trail the padded mel by a frame even when every
     // utterance has the same length).
-    bool var_len = pm->hparams.kestrel_length_masking;
+    bool      var_len = pm->hparams.kestrel_length_masking;
     for (int b = 0; b < n; ++b) {
         if (nf[b] != T_max) {
             var_len = true;

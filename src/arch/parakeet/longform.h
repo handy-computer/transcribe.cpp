@@ -32,21 +32,21 @@ namespace transcribe::parakeet::longform {
 using Regions = std::vector<std::pair<double, double>>;
 
 struct Params {
-    int    sample_rate           = 16000;
-    double frame_seconds         = 0.08;  // hop / sample_rate * subsampling_factor
-    float  speech_threshold      = 0.5f;
-    double min_speech_seconds    = 0.1;
-    double min_gap_seconds       = 0.1;
-    double max_segment_seconds   = 30.0;
-    double min_segment_seconds   = 1.0;
-    double min_pause_seconds     = 0.2;
-    double scan_block_seconds    = 120.0;
+    int    sample_rate          = 16000;
+    double frame_seconds        = 0.08;  // hop / sample_rate * subsampling_factor
+    float  speech_threshold     = 0.5f;
+    double min_speech_seconds   = 0.1;
+    double min_gap_seconds      = 0.1;
+    double max_segment_seconds  = 30.0;
+    double min_segment_seconds  = 1.0;
+    double min_pause_seconds    = 0.2;
+    double scan_block_seconds   = 120.0;
     // AudioChunks constants (kestrel/models/asr/audio.py): a block is never
     // followed by a tail shorter than max(window, 0.5 s).
-    double boundary_window_secs  = 0.1;
-    double min_tail_seconds      = 0.5;
+    double boundary_window_secs = 0.1;
+    double min_tail_seconds     = 0.5;
     // parakeet_features refuses to normalize anything shorter (samples).
-    int    min_feature_samples   = 320;
+    int    min_feature_samples  = 320;
 };
 
 struct Segment {
@@ -81,7 +81,9 @@ using SpeechFn = std::function<transcribe_status(int64_t block_start, int64_t bl
 
 // segment.pause_segments. A clip that fits one segment is returned whole
 // without calling `speech`.
-transcribe_status pause_segments(int64_t n_samples, const Params & p, const SpeechFn & speech,
+transcribe_status pause_segments(int64_t                n_samples,
+                                 const Params &         p,
+                                 const SpeechFn &       speech,
                                  std::vector<Segment> & out);
 
 }  // namespace transcribe::parakeet::longform

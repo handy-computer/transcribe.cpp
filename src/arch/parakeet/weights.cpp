@@ -505,14 +505,12 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
     // the NeMo behavior every other variant was validated against.
     {
         std::string masking;
-        if (auto st = read_optional_string_kv(gguf, "stt.parakeet.encoder.length_masking", kFamilyTag, "none",
-                                              masking);
+        if (auto st = read_optional_string_kv(gguf, "stt.parakeet.encoder.length_masking", kFamilyTag, "none", masking);
             st != TRANSCRIBE_OK) {
             return st;
         }
         if (masking != "none" && masking != "kestrel") {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: unsupported encoder.length_masking \"%s\"",
-                    masking.c_str());
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: unsupported encoder.length_masking \"%s\"", masking.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
         hp.kestrel_length_masking = (masking == "kestrel");
@@ -534,18 +532,20 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
     if (gguf_find_key(gguf, "stt.parakeet.vad.hidden") >= 0) {
         hp.has_vad_head = true;
         std::string activation;
+
         const struct {
             const char * key;
             float *      out;
         } f32_keys[] = {
-            { "stt.parakeet.vad.speech_threshold", &hp.vad_speech_threshold },
-            { "stt.parakeet.vad.min_speech_seconds", &hp.vad_min_speech_seconds },
-            { "stt.parakeet.vad.min_gap_seconds", &hp.vad_min_gap_seconds },
+            { "stt.parakeet.vad.speech_threshold",          &hp.vad_speech_threshold    },
+            { "stt.parakeet.vad.min_speech_seconds",        &hp.vad_min_speech_seconds  },
+            { "stt.parakeet.vad.min_gap_seconds",           &hp.vad_min_gap_seconds     },
             { "stt.parakeet.segmenter.max_segment_seconds", &hp.seg_max_segment_seconds },
             { "stt.parakeet.segmenter.min_segment_seconds", &hp.seg_min_segment_seconds },
-            { "stt.parakeet.segmenter.min_pause_seconds", &hp.seg_min_pause_seconds },
-            { "stt.parakeet.segmenter.scan_block_seconds", &hp.seg_scan_block_seconds },
+            { "stt.parakeet.segmenter.min_pause_seconds",   &hp.seg_min_pause_seconds   },
+            { "stt.parakeet.segmenter.scan_block_seconds",  &hp.seg_scan_block_seconds  },
         };
+
         if (auto st = read_required_u32_kv(gguf, "stt.parakeet.vad.hidden", kFamilyTag, hp.vad_hidden);
             st != TRANSCRIBE_OK) {
             return st;

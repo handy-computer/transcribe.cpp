@@ -116,22 +116,15 @@ ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
 // the im2col (i.e. the activations) as F16 unless the kernel is BF16, which
 // rounds every input of the conv to F16 (~5e-4 relative on the parakeet
 // pre_encode pointwise convs).
-ggml_tensor * conv_2d_f32(ggml_context * ctx,
-                          ggml_tensor *  a,
-                          ggml_tensor *  b,
-                          int            s0,
-                          int            s1,
-                          int            p0,
-                          int            p1,
-                          int            d0,
-                          int            d1) {
+ggml_tensor *
+conv_2d_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1, int d0, int d1) {
     ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, s1, p0, p1, d0, d1, /*is_2D=*/true,
                                        GGML_TYPE_F32);  // [N, OH, OW, IC * KH * KW]
     ggml_tensor * result =
         ggml_mul_mat(ctx, ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]),
                      ggml_reshape_2d(ctx, a, a->ne[0] * a->ne[1] * a->ne[2], a->ne[3]));
     result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], im2col->ne[3], a->ne[3]);  // [OC, N, OH, OW]
-    return ggml_cont(ctx, ggml_permute(ctx, result, 0, 1, 3, 2));                              // [N, OC, OH, OW]
+    return ggml_cont(ctx, ggml_permute(ctx, result, 0, 1, 3, 2));                                  // [N, OC, OH, OW]
 }
 
 // f32-friendly Conv1D (mirrors ggml_conv_1d but passes the kernel's real
@@ -1096,8 +1089,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                            /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                            /*d0=*/1, /*d1=*/1);
     }
-    x = add_conv_bias(ctx, x, pe.conv2_b);
-    x = name_prefixed(x, name_prefix, "conv2");
+    x                       = add_conv_bias(ctx, x, pe.conv2_b);
+    x                       = name_prefixed(x, name_prefix, "conv2");
     const bool after_stride = policy.pre_encode_mask_after_stride;
     if (after_stride) {
         x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");

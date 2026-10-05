@@ -766,11 +766,11 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model, HostDe
     }
 
     // ----- TDT params -----
-    out.tdt_durations   = hp.tdt_durations;
-    out.tdt_max_symbols = hp.tdt_max_symbols;
+    out.tdt_durations            = hp.tdt_durations;
+    out.tdt_max_symbols          = hp.tdt_max_symbols;
     out.tdt_global_symbol_budget = hp.tdt_global_symbol_budget;
-    out.n_vocab         = hp.pred_vocab - 1;  // raw SP vocab size
-    out.blank_id        = hp.pred_vocab - 1;  // blank lives at vocab_size
+    out.n_vocab                  = hp.pred_vocab - 1;  // raw SP vocab size
+    out.blank_id                 = hp.pred_vocab - 1;  // blank lives at vocab_size
 
     return TRANSCRIBE_OK;
 }

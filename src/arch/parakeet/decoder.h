@@ -162,16 +162,16 @@ enum class HostHeadKind { TDT, RNNT, CTC };
 // cap is reused.
 struct HostDecoderWeights {
     HostHeadKind         head_kind = HostHeadKind::TDT;
-    HostPredictor        predictor;            // empty for CTC
-    HostJoint            joint;                // empty for CTC
-    HostCtcHead          ctc_head;             // empty for TDT/RNNT
-    std::vector<int32_t> tdt_durations;        // empty for RNNT/CTC
-    int                  tdt_max_symbols = 0;
+    HostPredictor        predictor;      // empty for CTC
+    HostJoint            joint;          // empty for CTC
+    HostCtcHead          ctc_head;       // empty for TDT/RNNT
+    std::vector<int32_t> tdt_durations;  // empty for RNNT/CTC
+    int                  tdt_max_symbols          = 0;
     // kestrel's budget (parakeet-ultra): tdt_max_symbols * T_enc steps for
     // the whole clip, no per-frame cap. See ParakeetHParams.
     bool                 tdt_global_symbol_budget = false;
-    int                  blank_id        = 0;  // unified: TDT/RNNT == pred_vocab - 1; CTC == ctc_head.blank_id
-    int                  n_vocab         = 0;  // raw SP vocab size (excludes blank)
+    int                  blank_id                 = 0;  // unified: TDT/RNNT == pred_vocab - 1; CTC == ctc_head.blank_id
+    int                  n_vocab                  = 0;  // raw SP vocab size (excludes blank)
 };
 
 // Build host mirrors from a loaded ParakeetModel. Reads tensor bytes

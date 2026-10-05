@@ -110,23 +110,26 @@ bool fits_one_segment(int64_t n_samples, const Params & p) {
 }
 
 std::vector<int64_t> scan_block_sizes(int64_t n_samples, const Params & p) {
-    const int64_t max_frames      = samples_for(p.scan_block_seconds, p.sample_rate);
-    const int64_t window_frames   = std::max<int64_t>(4, samples_for(p.boundary_window_secs, p.sample_rate));
-    const int64_t min_tail_frames = std::max(window_frames, samples_for(p.min_tail_seconds, p.sample_rate));
+    const int64_t        max_frames      = samples_for(p.scan_block_seconds, p.sample_rate);
+    const int64_t        window_frames   = std::max<int64_t>(4, samples_for(p.boundary_window_secs, p.sample_rate));
+    const int64_t        min_tail_frames = std::max(window_frames, samples_for(p.min_tail_seconds, p.sample_rate));
     std::vector<int64_t> sizes;
     int64_t              emitted = 0;
     while (emitted < n_samples) {
         const int64_t remaining = n_samples - emitted;
         // With boundary_search_seconds=0 the quiet-boundary search window is
         // empty, so a full block is shortened only to keep min_tail behind it.
-        const int64_t boundary = remaining <= max_frames ? remaining : std::min(max_frames, remaining - min_tail_frames);
+        const int64_t boundary =
+            remaining <= max_frames ? remaining : std::min(max_frames, remaining - min_tail_frames);
         sizes.push_back(boundary);
         emitted += boundary;
     }
     return sizes;
 }
 
-transcribe_status pause_segments(int64_t n_samples, const Params & p, const SpeechFn & speech,
+transcribe_status pause_segments(int64_t                n_samples,
+                                 const Params &         p,
+                                 const SpeechFn &       speech,
                                  std::vector<Segment> & out) {
     out.clear();
     if (n_samples <= 0) {
@@ -178,7 +181,8 @@ transcribe_status pause_segments(int64_t n_samples, const Params & p, const Spee
     }
     // A remainder too short to normalize, or with no speech, left behind by
     // a cut carries nothing and is dropped.
-    if (cuts > 0 && (carry_len < p.min_feature_samples || !has_speech(regions, static_cast<double>(carry_len) / rate))) {
+    if (cuts > 0 &&
+        (carry_len < p.min_feature_samples || !has_speech(regions, static_cast<double>(carry_len) / rate))) {
         return TRANSCRIBE_OK;
     }
     out.push_back({ consumed, carry_len });

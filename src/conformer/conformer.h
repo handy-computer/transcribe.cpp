@@ -301,15 +301,8 @@ ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x);
 
 // ggml_conv_2d with an F32 im2col (the vendored op rounds the activations
 // to F16 in im2col unless the kernel is BF16).
-ggml_tensor * conv_2d_f32(ggml_context * ctx,
-                          ggml_tensor *  a,
-                          ggml_tensor *  b,
-                          int            s0,
-                          int            s1,
-                          int            p0,
-                          int            p1,
-                          int            d0,
-                          int            d1);
+ggml_tensor *
+conv_2d_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1, int d0, int d1);
 
 // f32-friendly Conv1D. Use instead of ggml_conv_1d for fp32 kernels on
 // Metal (see conv_2d_dw_f32 in conformer.cpp).
@@ -453,9 +446,9 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
 // (one per ReLU stage), applies them, and writes the handles back for the
 // driver to fill. Offline (non-causal) pre_encode only.
 struct PreEncodeValidMasks {
-    ggml_tensor * mask_s1 = nullptr;  // after relu0
-    ggml_tensor * mask_s2 = nullptr;  // after relu3 (after conv2 with pre_encode_mask_after_stride)
-    ggml_tensor * mask_s3 = nullptr;  // after relu6 (after conv5 with pre_encode_mask_after_stride)
+    ggml_tensor * mask_s1        = nullptr;  // after relu0
+    ggml_tensor * mask_s2        = nullptr;  // after relu3 (after conv2 with pre_encode_mask_after_stride)
+    ggml_tensor * mask_s3        = nullptr;  // after relu6 (after conv5 with pre_encode_mask_after_stride)
     // pre_encode_mask_after_stride only: zero each utterance's positions past
     // its own single-run stage length after relu3 / relu6. With the stride-
     // placed masks the padded tail holds ReLU(pointwise bias), which a single

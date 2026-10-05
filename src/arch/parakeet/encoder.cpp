@@ -329,15 +329,15 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     conf::ConvPolicy policy{};
     policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
     policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
-    policy.direct_pw                  = conf::detect_direct_pw(backend_name);
-    policy.direct_conv0_in_pre_encode = true;
-    policy.direct_dw_in_block         = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode    = detect_direct_dw_in_pre_encode(backend_name);
+    policy.direct_pw                    = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode   = true;
+    policy.direct_dw_in_block           = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode      = detect_direct_dw_in_pre_encode(backend_name);
     // Cache-aware streaming (NeMo causal_downsampling=true) uses
     // CausalConv2D for the pre-encode subsample (left=k-1, right=stride-1).
     // Inferred from the attention style — only ChunkedLimited is causal.
     // Independent of the conformer conv-module's conv_context.
-    policy.causal_pre_encode          = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+    policy.causal_pre_encode = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb{};
 
@@ -389,9 +389,9 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
                                              /*name_prefix=*/"enc.pre_encode",
                                              /*error_tag=*/"parakeet", mask_pre_encode ? &pe_masks : nullptr);
     if (mask_pre_encode) {
-        eb.pre_encode_mask_s1_in = pe_masks.mask_s1;
-        eb.pre_encode_mask_s2_in = pe_masks.mask_s2;
-        eb.pre_encode_mask_s3_in = pe_masks.mask_s3;
+        eb.pre_encode_mask_s1_in   = pe_masks.mask_s1;
+        eb.pre_encode_mask_s2_in   = pe_masks.mask_s2;
+        eb.pre_encode_mask_s3_in   = pe_masks.mask_s3;
         eb.pre_encode_extent_s2_in = pe_masks.mask_s2_extent;
         eb.pre_encode_extent_s3_in = pe_masks.mask_s3_extent;
     }
@@ -1014,18 +1014,18 @@ VadBuild build_vad_graph(ggml_context *          ctx,
     ggml_set_input(vb.mel_in);
 
     conf::PreEncodeValidMasks pe_masks;
-    ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode), vb.mel_in, policy, /*name_prefix=*/"vad.pre_encode",
-                                             /*error_tag=*/"parakeet vad",
-                                             hp.kestrel_length_masking ? &pe_masks : nullptr);
+    ggml_tensor *             x =
+        conf::build_pre_encode(ctx, to_view(w.pre_encode), vb.mel_in, policy, /*name_prefix=*/"vad.pre_encode",
+                               /*error_tag=*/"parakeet vad", hp.kestrel_length_masking ? &pe_masks : nullptr);
     if (x == nullptr) {
         return vb;
     }
-    vb.pe_mask_s1_in  = pe_masks.mask_s1;
-    vb.pe_mask_s2_in  = pe_masks.mask_s2;
-    vb.pe_mask_s3_in  = pe_masks.mask_s3;
+    vb.pe_mask_s1_in   = pe_masks.mask_s1;
+    vb.pe_mask_s2_in   = pe_masks.mask_s2;
+    vb.pe_mask_s3_in   = pe_masks.mask_s3;
     vb.pe_extent_s2_in = pe_masks.mask_s2_extent;
     vb.pe_extent_s3_in = pe_masks.mask_s3_extent;
-    vb.pre_encode_out = x;  // [d_model, T]
+    vb.pre_encode_out  = x;  // [d_model, T]
 
     const int64_t d_model = x->ne[0];
     const int64_t H       = hp.vad_hidden;
@@ -1039,11 +1039,11 @@ VadBuild build_vad_graph(ggml_context *          ctx,
 
     // ctx: Conv1d(H -> H, k=K, pad K/2) over time, F32 im2col. conv_1d_f32
     // takes [T, IC] data and returns [T, OC].
-    ggml_tensor * t = ggml_cont(ctx, ggml_transpose(ctx, h));                                // [T, H]
-    t               = conf::conv_1d_f32(ctx, w.vad.ctx_w, t, /*stride=*/1, /*padding=*/K / 2, /*dilation=*/1);  // [T, H]
-    t               = ggml_add(ctx, t, ggml_reshape_2d(ctx, w.vad.ctx_b, 1, H));
-    t               = ggml_silu(ctx, t);
-    ggml_tensor * c = ggml_cont(ctx, ggml_transpose(ctx, t));                                // [H, T]
+    ggml_tensor * t = ggml_cont(ctx, ggml_transpose(ctx, h));                                     // [T, H]
+    t = conf::conv_1d_f32(ctx, w.vad.ctx_w, t, /*stride=*/1, /*padding=*/K / 2, /*dilation=*/1);  // [T, H]
+    t = ggml_add(ctx, t, ggml_reshape_2d(ctx, w.vad.ctx_b, 1, H));
+    t = ggml_silu(ctx, t);
+    ggml_tensor * c = ggml_cont(ctx, ggml_transpose(ctx, t));  // [H, T]
     vb.ctx_out      = conf::named(c, "vad.ctx");
 
     // out: Conv1d(H -> 1, k=1), then sigmoid.

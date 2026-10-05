@@ -303,6 +303,15 @@ overrides; non-NeMo families are unaffected.
   unified, ctc) are not locked at intake time; they are read from the
   archive during Stage 3 convert. Each intake's `intake_gaps`
   enumerates this.
+- Two F16 roundings found while porting `parakeet-ultra` apply to every
+  parakeet variant but are fixed or bypassed for ultra only: the vendored
+  `ggml_conv_2d` im2cols the subsampler's pointwise convs to F16 (~3e-4 rel
+  at `enc.pre_encode.out`; ultra opts into `ConvPolicy::pre_encode_f32_pointwise`),
+  and flash attention casts the rel-pos score bias to F16 (~1e-3 rel at
+  `enc.final`; ultra's tensor regime sets `TRANSCRIBE_NO_FLASH=1`). The other
+  variants' tolerances were measured with both in place. Before tightening
+  them, enable the F32 pointwise path and the no-flash regime and re-validate.
+  See the forward map's ultra notes.
 
 ## Stage 3 conversion notes
 

@@ -130,9 +130,9 @@ struct EncoderBuild {
     // (1 on valid time frames, 0 on padded). Null unless variable-length
     // batching on a non-causal pre-encode. The driver fills them from the
     // per-utterance valid length downsampled to each stage.
-    ggml_tensor * pre_encode_mask_s1_in = nullptr;  // after relu0
-    ggml_tensor * pre_encode_mask_s2_in = nullptr;  // after relu3
-    ggml_tensor * pre_encode_mask_s3_in = nullptr;  // after relu6
+    ggml_tensor * pre_encode_mask_s1_in   = nullptr;  // after relu0
+    ggml_tensor * pre_encode_mask_s2_in   = nullptr;  // after relu3
+    ggml_tensor * pre_encode_mask_s3_in   = nullptr;  // after relu6
     ggml_tensor * pre_encode_extent_s2_in = nullptr;  // kestrel masking, batched (see PreEncodeValidMasks)
     ggml_tensor * pre_encode_extent_s3_in = nullptr;
 
@@ -235,17 +235,17 @@ EncoderBuild build_encoder_graph(ggml_context *                     compute_ctx,
 // the subsampler masks (kestrel length masking) are graph inputs the
 // driver fills like build_encoder_graph's.
 struct VadBuild {
-    ggml_tensor * mel_in         = nullptr;  // ne=[T_mel, n_mels, 1, 1]
-    ggml_tensor * pe_mask_s1_in  = nullptr;
-    ggml_tensor * pe_mask_s2_in  = nullptr;
-    ggml_tensor * pe_mask_s3_in  = nullptr;
+    ggml_tensor * mel_in          = nullptr;  // ne=[T_mel, n_mels, 1, 1]
+    ggml_tensor * pe_mask_s1_in   = nullptr;
+    ggml_tensor * pe_mask_s2_in   = nullptr;
+    ggml_tensor * pe_mask_s3_in   = nullptr;
     ggml_tensor * pe_extent_s2_in = nullptr;  // single utterance: filled all ones
     ggml_tensor * pe_extent_s3_in = nullptr;
-    ggml_tensor * pre_encode_out = nullptr;  // ne=[d_model, T]
-    ggml_tensor * proj_out       = nullptr;  // ne=[H, T], after SiLU
-    ggml_tensor * ctx_out        = nullptr;  // ne=[H, T], after SiLU
-    ggml_tensor * prob           = nullptr;  // ne=[1, T], sigmoid
-    ggml_cgraph * graph          = nullptr;
+    ggml_tensor * pre_encode_out  = nullptr;  // ne=[d_model, T]
+    ggml_tensor * proj_out        = nullptr;  // ne=[H, T], after SiLU
+    ggml_tensor * ctx_out         = nullptr;  // ne=[H, T], after SiLU
+    ggml_tensor * prob            = nullptr;  // ne=[1, T], sigmoid
+    ggml_cgraph * graph           = nullptr;
 };
 
 VadBuild build_vad_graph(ggml_context *          compute_ctx,
