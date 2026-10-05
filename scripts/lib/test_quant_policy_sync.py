@@ -64,6 +64,7 @@ from lib.gguf_common import reference_dtype_for  # noqa: E402
 # buffers. Loader requires F32 in these slots -> F32 at every reference dtype.
 NORM = [
     "dec.layers.0.attn.linear_q.bias",      # .bias
+    "vad.ctx.bias",                         # parakeet-ultra VAD head bias
     "enc.blocks.3.norm_ff1.weight",         # norm_ prefix
     "enc.blocks.3.conv.bn.weight",          # .bn. batchnorm
     "dec.final_norm.weight",                # cohere final norm (dot separator)
@@ -104,6 +105,8 @@ CONV = [
     "enc.blocks.3.conv.pointwise2.weight",  # conformer 1x1 pointwise
     "enc.pre_encode.conv.0.weight",         # pre-encode subsampling conv
     "enc.blocks.3.conv.depthwise.weight",   # conformer depthwise conv
+    "vad.proj.weight",                      # parakeet-ultra VAD head 1x1 conv
+    "vad.ctx.weight",                       # parakeet-ultra VAD head k=5 conv
 ]
 
 # Linear / Embed: ggml_mul_mat operands and the decoder token embedding.

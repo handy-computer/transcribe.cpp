@@ -308,6 +308,41 @@ overrides; non-NeMo families are unaffected.
 
 Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
 
+### `parakeet-ultra`
+
+- **HF-safetensors input path** — moondream ships only `config.json` +
+  `model.safetensors` + `tokenizer.json` (no `.nemo`).
+  `load_hf_safetensors_model()` renames HF keys to NeMo keys through an
+  explicit rule table (an unmapped name is an error), builds a NeMo-shaped
+  cfg from `config.json` (asserting silu FF, relu joint, k=3/s=2
+  subsampling, no attention/conv bias), and hands the shared NeMo write
+  path the same surface `_DirectNemoArchive` does. Key renames:
+  `subsampling.layers.N`→`pre_encode.conv.N`, `subsampling.linear`→
+  `pre_encode.out`, `{q,k,v,o}_proj`→`linear_{q,k,v,out}`,
+  `relative_k_proj`→`linear_pos`, `bias_{u,v}`→`pos_bias_{u,v}`,
+  `conv.norm`→`conv.batch_norm`, `encoder_projector`→`joint.enc`,
+  `decoder.decoder_projector`→`joint.pred`, `joint.head`→`joint.joint_net.2`.
+- **F16 at rest → F32 GGUF** — 356 F16 tensors are upcast (exact). The
+  F32 GGUF is the parity artifact; F16 loses nothing at rest.
+- **Tokenizer from `tokenizer.json`** — `_HfBpeAsSpm` rebuilds the
+  SentencePiece surface: scores are 0 for the 274 user-defined pieces and
+  `-(id-274)` after; every non-unk piece NORMAL. The emitted
+  tokens/scores/types equal the v3 `.nemo` tokenizer.model exactly
+  (8193 entries incl. `<blank>`, checked against the cached v3 archive).
+- **VAD head** — emitted as `vad.{proj,ctx,out}.{weight,bias}`, PyTorch
+  `[out, in, k]` layout. `policy.cpp` and `reference_dtype_for` route
+  `vad.*.weight` to the Conv bucket, so the head stays F32 in every quant
+  preset (0.2M params; quantizing it could move cut points).
+- **Segmenter constants in the GGUF** — kestrel's VAD threshold (0.5),
+  min speech/gap (0.1 s), min pause (0.2 s), segment cap (30 s), min
+  segment (1 s) and scan block (120 s) are written as
+  `stt.parakeet.vad.*` / `stt.parakeet.segmenter.*` so the C++ segmenter
+  reads them rather than hard-coding a second copy.
+- **Frontend** — `stt.frontend.dither = 0` (kestrel never dithers; the C++
+  frontend reads but does not apply dither). Window `hann` (symmetric, as
+  NeMo and kestrel use).
+- **Languages** — same 25 as v3, written in the moondream card's order.
+
 ### `parakeet-tdt-1.1b`
 
 - **VARIANT_PROFILES dispatch** — keying by `decoder.vocab_size` was
