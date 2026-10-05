@@ -89,7 +89,7 @@ its var is unset. Convention: `TRANSCRIBE_<FAMILY>_GGUF`.
 | `TRANSCRIBE_SORTFORMER_GGUF` | `sortformer_diarize_unit`, `cli_diarize_smoke` |
 | `TRANSCRIBE_COHERE_GGUF` | `cohere_real_smoke`, `cohere_e2e_smoke` |
 | `TRANSCRIBE_GRANITE5_CTC_GGUF` | `granite5_ctc_real_smoke`, `granite5_ctc_e2e_smoke` |
-| `TRANSCRIBE_WHISPER_GGUF` | `whisper_e2e_smoke`, `whisper_tokenize_parity`, `sortformer_diarize_unit` (concurrency leg) |
+| `TRANSCRIBE_WHISPER_GGUF` | `whisper_e2e_smoke`, `whisper_tokenize_parity` |
 | `TRANSCRIBE_QWEN3_ASR_GGUF` (+ `_0_6B_GGUF` / `_1_7B_GGUF`) | qwen3_asr smokes / parity |
 | `TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF` | moonshine_streaming smokes, `stream_offline_interleave_smoke` |
 | `TRANSCRIBE_VOXTRAL_REALTIME_GGUF` | `voxtral_realtime_real_smoke`, `stream_offline_interleave_smoke` |

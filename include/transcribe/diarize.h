@@ -74,10 +74,10 @@ TRANSCRIBE_API transcribe_status transcribe_diarize_run(struct transcribe_diariz
                                                         const struct transcribe_diarize_params * params);
 
 /*
- * Speaker segments of the last successful run, grouped by speaker and
- * time-ordered within a speaker; segments of different speakers may
- * overlap. 0 before any run. An out-of-range index returns OK with a
- * zeroed row.
+ * Speaker segments of the last run, grouped by speaker and time-ordered
+ * within a speaker; segments of different speakers may overlap. 0 before any
+ * run, and 0 after a run that passed input validation but then failed
+ * (aborted, backend error). An out-of-range index returns OK with a zeroed row.
  */
 TRANSCRIBE_API int               transcribe_diarize_n_segments(const struct transcribe_diarize_session * session);
 TRANSCRIBE_API transcribe_status transcribe_diarize_get_segment(const struct transcribe_diarize_session * session,
