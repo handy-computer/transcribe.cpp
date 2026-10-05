@@ -97,23 +97,6 @@ may additionally need the prefix's lib dir on the loader path (e.g.
 `LD_LIBRARY_PATH=$TRANSCRIBE_DIR/lib`): the rpath the build emits does not
 propagate to downstream binaries.
 
-## macOS CPU build
-
-macOS builds do not use ggml's default `GGML_NATIVE=ON`, which would tune the
-library to the machine running `cargo build`:
-
-- **arm64**: `GGML_NATIVE=OFF`, clang's default Apple Silicon target. The
-  result runs on every Apple Silicon Mac, M1 included, and keeps ggml's
-  llamafile matmul kernels, which a native build on an M2 or newer compiles
-  out.
-- **x86_64**: SSE4.2 + AVX + F16C (every Mac that runs macOS 10.15 or later).
-  Without this, an Intel build cross-compiled from Apple Silicon gets
-  SSE2-only kernels. `dynamic-backends` builds pick per-ISA modules at
-  runtime instead.
-
-To build for the local machine only, pass
-`TRANSCRIBE_CMAKE_ARGS="-DGGML_NATIVE=ON"`.
-
 ## Build-flag escape hatch
 
 The features above cover the common, tested configurations. Anything else CMake
