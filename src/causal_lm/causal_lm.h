@@ -36,6 +36,10 @@ struct BlockView {
     ggml_tensor * attn_k_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
     ggml_tensor * attn_v_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
     ggml_tensor * attn_o_w      = nullptr;  // [n_heads * head_dim, hidden]
+    // Optional Qwen2 projection biases; null for existing callers.
+    ggml_tensor * attn_q_b      = nullptr;
+    ggml_tensor * attn_k_b      = nullptr;
+    ggml_tensor * attn_v_b      = nullptr;
     // Per-head Q/K RMSNorm (Qwen3). Null on Llama-style decoders (e.g.
     // Voxtral's Ministral backbone); helpers skip the norm when null.
     ggml_tensor * attn_q_norm   = nullptr;  // [head_dim] per-head Q-norm, or null

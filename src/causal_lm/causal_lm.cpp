@@ -272,8 +272,17 @@ ggml_tensor * block_prefill(ggml_context *      ctx,
     // Q/K/V projections (bias-free on Qwen3). Packing into one mul_mat
     // consistently regresses on Metal; left separate.
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);
+    if (view.attn_q_b != nullptr) {
+        Q = ggml_add(ctx, Q, view.attn_q_b);
+    }
     ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);
+    if (view.attn_k_b != nullptr) {
+        K = ggml_add(ctx, K, view.attn_k_b);
+    }
     ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);
+    if (view.attn_v_b != nullptr) {
+        V = ggml_add(ctx, V, view.attn_v_b);
+    }
 
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads, T_seq, 1);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T_seq, 1);
@@ -409,8 +418,17 @@ ggml_tensor * block_step(ggml_context *      ctx,
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);
+    if (view.attn_q_b != nullptr) {
+        Q = ggml_add(ctx, Q, view.attn_q_b);
+    }
     ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);
+    if (view.attn_k_b != nullptr) {
+        K = ggml_add(ctx, K, view.attn_k_b);
+    }
     ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);
+    if (view.attn_v_b != nullptr) {
+        V = ggml_add(ctx, V, view.attn_v_b);
+    }
 
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads, 1, 1);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, 1, 1);
@@ -526,8 +544,17 @@ ggml_tensor * block_step_n(ggml_context *      ctx,
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);
+    if (view.attn_q_b != nullptr) {
+        Q = ggml_add(ctx, Q, view.attn_q_b);
+    }
     ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);
+    if (view.attn_k_b != nullptr) {
+        K = ggml_add(ctx, K, view.attn_k_b);
+    }
     ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);
+    if (view.attn_v_b != nullptr) {
+        V = ggml_add(ctx, V, view.attn_v_b);
+    }
 
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads, T_seq, 1);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T_seq, 1);
@@ -640,8 +667,17 @@ ggml_tensor * block_step_batched(ggml_context *      ctx,
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);  // [q_dim, B]
+    if (view.attn_q_b != nullptr) {
+        Q = ggml_add(ctx, Q, view.attn_q_b);
+    }
     ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);  // [kv_dim, B]
+    if (view.attn_k_b != nullptr) {
+        K = ggml_add(ctx, K, view.attn_k_b);
+    }
     ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);  // [kv_dim, B]
+    if (view.attn_v_b != nullptr) {
+        V = ggml_add(ctx, V, view.attn_v_b);
+    }
 
     // Batch on ne[2] (the per-token/position axis) so RoPE applies each
     // utterance's own position. T == 1 per utterance, so ne[2] == B.
@@ -753,8 +789,17 @@ ggml_tensor * block_prefill_batched(ggml_context *      ctx,
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);  // [q_dim, T, B]
+    if (view.attn_q_b != nullptr) {
+        Q = ggml_add(ctx, Q, view.attn_q_b);
+    }
     ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);  // [kv_dim, T, B]
+    if (view.attn_k_b != nullptr) {
+        K = ggml_add(ctx, K, view.attn_k_b);
+    }
     ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);  // [kv_dim, T, B]
+    if (view.attn_v_b != nullptr) {
+        V = ggml_add(ctx, V, view.attn_v_b);
+    }
 
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads, T, B);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T, B);
