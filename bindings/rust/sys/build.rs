@@ -22,6 +22,9 @@
 //!   `cuda`             -> TRANSCRIBE_CUDA=ON
 //!   `rocm`             -> TRANSCRIBE_HIP=ON
 //!   `openmp`           -> TRANSCRIBE_USE_OPENMP=ON
+//! macOS builds pin a portable CPU floor instead of ggml's GGML_NATIVE=ON
+//! (arm64: GGML_NATIVE=OFF; x86_64: SSE4.2 + AVX + F16C), so the library does
+//! not depend on the machine that ran `cargo build`. See main().
 //! Official-artifact hygiene flags (OpenMP/BLAS off) are deliberately NOT
 //! forced here: a source build is the consumer's build (same philosophy as
 //! the Python sdist).
@@ -182,6 +185,43 @@ fn main() {
             cfg.define("GGML_METAL_EMBED_LIBRARY", "ON");
         } else {
             cfg.define("TRANSCRIBE_METAL", "OFF");
+        }
+    }
+    // macOS CPU floor. ggml defaults to GGML_NATIVE=ON (-mcpu/-march=native),
+    // which tunes the library to whatever machine runs `cargo build`, and an
+    // app ships that build to every Mac:
+    //
+    //   arm64: on an M2-or-newer builder native enables i8mm, which (a) the M1
+    //   lacks, so the first quantized CPU matmul is SIGILL there, and (b)
+    //   compiles out ggml's llamafile sgemm (ggml-cpu.c undefines it under
+    //   __ARM_FEATURE_MATMUL_INT8), measured 1.2-2.1x slower F16 / Q8_0 CPU
+    //   inference on an M4 Max. GGML_NATIVE=OFF builds for clang's default
+    //   arm64-apple target (the M1 baseline): runs on every Apple Silicon Mac,
+    //   llamafile on. Same posture as the macOS wheel and the XCFramework.
+    //
+    //   x86_64: an Intel build cross-compiled from an Apple Silicon host (what
+    //   a GitHub macOS runner does) is a CMake cross-compile, for which ggml
+    //   turns every x86 extension off: SSE2-only kernels. Pin SSE4.2 + AVX +
+    //   F16C, which every Mac that runs macOS 10.15 or later has (Ivy Bridge,
+    //   2012, onward), and leave AVX2 / FMA / BMI2 off explicitly so a build on
+    //   a newer Intel host lands on the same floor. A dynamic-backends build
+    //   already picks per-ISA CPU modules at runtime (above), so skip it there.
+    //
+    // TRANSCRIBE_CMAKE_ARGS is applied after these, so e.g.
+    // `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=ON` restores a machine-local build.
+    if target_os == "macos" {
+        cfg.define("GGML_NATIVE", "OFF");
+        if target_arch == "x86_64" && !dynamic_backends {
+            for (opt, value) in [
+                ("GGML_SSE42", "ON"),
+                ("GGML_AVX", "ON"),
+                ("GGML_F16C", "ON"),
+                ("GGML_AVX2", "OFF"),
+                ("GGML_FMA", "OFF"),
+                ("GGML_BMI2", "OFF"),
+            ] {
+                cfg.define(opt, value);
+            }
         }
     }
     if feature("VULKAN") {
