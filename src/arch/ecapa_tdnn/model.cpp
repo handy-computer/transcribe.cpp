@@ -47,7 +47,7 @@ constexpr const char * kTag = "ecapa_tdnn";
 constexpr const char k_default_variant[] = "lang-id-voxlingua107-ecapa";
 
 // Nodes reserved in the scheduler. Must be >= the graph's node count; see
-// graph.cpp's kGraphSize. The built graph is 566 nodes and is independent of
+// graph.cpp's kGraphSize. The built graph is 571 nodes and is independent of
 // T, so this is ~3.5x headroom.
 constexpr size_t k_sched_graph_size = 2048;
 
@@ -540,6 +540,13 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
         if (gb.idx[i] != nullptr) {
             ggml_backend_tensor_set(gb.idx[i], s.idx_buf[i].data(), 0, s.idx_buf[i].size() * sizeof(int32_t));
         }
+    }
+    if (gb.chunk_ids != nullptr) {
+        int32_t ids[kRes2NetScale];
+        for (int i = 0; i < kRes2NetScale; ++i) {
+            ids[i] = i;
+        }
+        ggml_backend_tensor_set(gb.chunk_ids, ids, 0, sizeof(ids));
     }
 
     // ---- compute -------------------------------------------------------------

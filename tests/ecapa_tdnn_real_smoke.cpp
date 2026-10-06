@@ -1,7 +1,9 @@
 // ecapa_tdnn_real_smoke.cpp - the real VoxLingua107 ECAPA-TDNN GGUF through
 // the public LANGID API: label table, aliases, top-1 on committed FLEURS
-// clips, the crop on a long clip, and a short clip just over the minimum.
-// Gated by TRANSCRIBE_ECAPA_TDNN_GGUF (RC 77 skip). CPU backend.
+// clips, the crop on a long clip, and a short clip just over the minimum,
+// all on the CPU backend; then, when a GPU backend loads, the stock-op GPU
+// graph against the CPU graph's logits. Gated by TRANSCRIBE_ECAPA_TDNN_GGUF
+// (RC 77 skip).
 
 #include "transcribe.h"
 #include "transcribe/langid.h"
@@ -59,6 +61,74 @@ std::string top1(transcribe_langid_session * s, const char * wav, float * p_out,
     transcribe_langid_get_candidate(s, 0, &c);
     *p_out = c.p;
     return c.code != nullptr ? c.code : "";
+}
+
+// Every label's logit for one clip, by label index; empty when the run fails.
+std::vector<float> all_logits(transcribe_langid_session * s, const char * wav) {
+    std::vector<float> pcm;
+    if (!load_sample(wav, pcm) ||
+        transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) != TRANSCRIBE_OK) {
+        return {};
+    }
+    transcribe_langid_result r;
+    transcribe_langid_result_init(&r);
+    transcribe_langid_get_result(s, &r);
+    std::vector<float> out(static_cast<size_t>(r.n_candidates), 0.0f);
+    for (int i = 0; i < r.n_candidates; ++i) {
+        transcribe_langid_candidate c;
+        transcribe_langid_candidate_init(&c);
+        transcribe_langid_get_candidate(s, i, &c);
+        if (c.index >= 0 && c.index < r.n_candidates) {
+            out[static_cast<size_t>(c.index)] = c.logit;
+        }
+    }
+    return out;
+}
+
+// The GPU backends run the stock-op graph, which no other test reaches.
+// Their matmuls are not bit-exact F32 (Vulkan on an AMD iGPU lands ~1e-2 off
+// the CPU logits), so this bounds the drift rather than demanding parity.
+void check_gpu_matches_cpu(const char * path, transcribe_model * cpu_model) {
+    const transcribe_backend_request gpus[] = { TRANSCRIBE_BACKEND_VULKAN, TRANSCRIBE_BACKEND_METAL };
+    transcribe_model *               gm     = nullptr;
+    for (const transcribe_backend_request b : gpus) {
+        transcribe_model_load_params mp;
+        transcribe_model_load_params_init(&mp);
+        mp.backend = b;
+        if (transcribe_model_load_file(path, &mp, &gm) == TRANSCRIBE_OK) {
+            break;
+        }
+        gm = nullptr;
+    }
+    if (gm == nullptr) {
+        std::fprintf(stderr, "ecapa_tdnn_real_smoke: no GPU backend; skipping the GPU graph check.\n");
+        return;
+    }
+
+    transcribe_langid_session * cs = nullptr;
+    transcribe_langid_session * gs = nullptr;
+    CHECK(transcribe_langid_session_init(cpu_model, nullptr, &cs) == TRANSCRIBE_OK);
+    CHECK(transcribe_langid_session_init(gm, nullptr, &gs) == TRANSCRIBE_OK);
+    for (const char * wav : { "fleurs-en.wav", "fleurs-zh.wav", "ru-long.wav" }) {
+        const std::vector<float> a = all_logits(cs, wav);
+        const std::vector<float> b = all_logits(gs, wav);
+        if (a.empty() || a.size() != b.size()) {
+            std::fprintf(stderr, "FAIL: %s: GPU run (%zu logits) vs CPU (%zu)\n", wav, b.size(), a.size());
+            ++g_failures;
+            continue;
+        }
+        float max_diff = 0.0f;
+        for (size_t i = 0; i < a.size(); ++i) {
+            max_diff = std::fmax(max_diff, std::fabs(a[i] - b[i]));
+        }
+        if (!(max_diff < 0.05f)) {
+            std::fprintf(stderr, "FAIL: %s: GPU logits differ from CPU by %.4f\n", wav, max_diff);
+            ++g_failures;
+        }
+    }
+    transcribe_langid_session_free(gs);
+    transcribe_langid_session_free(cs);
+    transcribe_model_free(gm);
 }
 
 }  // namespace
@@ -127,6 +197,8 @@ int main() {
     CHECK(audio_ms == 800 && std::isfinite(p));
 
     transcribe_langid_session_free(s);
+
+    check_gpu_matches_cpu(path, m);
     transcribe_model_free(m);
 
     if (g_failures != 0) {

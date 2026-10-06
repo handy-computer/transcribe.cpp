@@ -125,7 +125,7 @@ ggml_tensor * conv_taps(ggml_context * ctx, ggml_tensor * xpad, ggml_tensor * w,
     return acc;
 }
 
-// Nodes reserved in the cgraph. The real graph is 566 nodes for the published
+// Nodes reserved in the cgraph. The real graph is 571 nodes for the published
 // configuration and is independent of T.
 constexpr size_t kGraphSize = 2048;
 
@@ -179,38 +179,39 @@ ggml_tensor * mean_over_time(ggml_context * ctx, ggml_tensor * x) {
 //   yi = B(i-1)(xi + y(i-1))    i = 2 .. S-1
 //   out = concat(y0 .. y(S-1))
 //
-// Chunk views are strided (stride C, width C/S), so each needs a ggml_cont
-// before it can serve as a matmul operand.
+// The output is assembled in h itself: chunk 0 already holds y0, and each yi
+// is written over chunk i once it has been read, so there is no concat
+// chain. The write is a set_rows into h viewed as [C/S, S, T] (row i of each
+// frame is chunk i; chunk_ids holds 0..S-1), which touches only that chunk;
+// ggml_set would rewrite all of h on some backends. Chunk i is read through
+// the previous write's result, which orders the read after it. The strided
+// chunk views feed get_rows / add directly; both accept a row stride, so no
+// ggml_cont either.
 ggml_tensor * res2net(ggml_context *         ctx,
                       const SeRes2NetBlock & blk,
                       ggml_tensor *          h,
                       ggml_tensor *          idx,
+                      ggml_tensor *          chunk_ids,
                       int                    dilation,
                       int                    T,
                       int                    chunk) {
     const size_t chunk_bytes = static_cast<size_t>(chunk) * ggml_element_size(h);
 
-    ggml_tensor * acc  = nullptr;  // concatenated output so far
+    ggml_tensor * out  = ggml_reshape_3d(ctx, h, chunk, kRes2NetScale, T);
     ggml_tensor * prev = nullptr;  // y(i-1)
 
-    for (int i = 0; i < kRes2NetScale; ++i) {
-        ggml_tensor * ci =
-            ggml_cont(ctx, ggml_view_2d(ctx, h, chunk, T, h->nb[1], static_cast<size_t>(i) * chunk_bytes));
+    for (int i = 1; i < kRes2NetScale; ++i) {
+        ggml_tensor *   ci = ggml_view_2d(ctx, out, chunk, T, out->nb[2], static_cast<size_t>(i) * chunk_bytes);
+        ggml_tensor *   in = (i == 1) ? ci : ggml_add(ctx, ci, prev);
+        const Res2Sub & s  = blk.res2[i - 1];
+        ggml_tensor *   yi = tdnn_conv(ctx, reflect_rows(ctx, in, idx), s.w, s.b, s.bn, dilation, T);
 
-        ggml_tensor * yi = nullptr;
-        if (i == 0) {
-            yi = ci;
-        } else {
-            ggml_tensor *   in = (i == 1) ? ci : ggml_add(ctx, ci, prev);
-            const Res2Sub & s  = blk.res2[i - 1];
-            yi                 = tdnn_conv(ctx, reflect_rows(ctx, in, idx), s.w, s.b, s.bn, dilation, T);
-        }
-
+        out  = ggml_set_rows(ctx, out, ggml_reshape_3d(ctx, yi, chunk, 1, T),
+                             ggml_view_1d(ctx, chunk_ids, 1, static_cast<size_t>(i) * sizeof(int32_t)));
         prev = yi;
-        acc  = (acc == nullptr) ? yi : ggml_concat(ctx, acc, yi, 0);
     }
 
-    return acc;
+    return ggml_reshape_2d(ctx, out, h->ne[0], T);
 }
 
 // SpeechBrain SEBlock: s = mean_T(x) -> 1x1 -> ReLU -> 1x1 -> sigmoid, then
@@ -304,19 +305,23 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
                       const Weights &       w,
                       ggml_tensor * const * blk_out,
                       int                   Cm) {
-    ggml_tensor * pooled = nullptr;
+    const int64_t T = blk_out[0]->ne[1];
+
     // ---- MFA: 1x1 over concat(blk1, blk2, blk3), split into three blocks --
-    ggml_tensor * m      = nullptr;
+    // All three products are expanded before the adds, and the chain starts
+    // from the last block's product, so both adds wait on it and sit next to
+    // each other where Vulkan fuses them into one pass. (Starting from block
+    // 1's product lets the Vulkan graph reorderer hoist that add into block
+    // 3, which splits the pair.)
+    ggml_tensor * part[kNumSeBlocks] = {};
     for (int i = 0; i < kNumSeBlocks; ++i) {
-        ggml_tensor * part = ggml_mul_mat(ctx, w.mfa_w[i], blk_out[i]);
-        if (w.mfa_w[i]->type == GGML_TYPE_F16) {
-            ggml_prec_set_acc(part, GGML_PREC_F32);
-        }
-        m = (m == nullptr) ? part : ggml_add(ctx, m, part);
+        part[i] = linear(ctx, w.mfa_w[i], blk_out[i], nullptr);
+        ggml_build_forward_expand(gb.graph, part[i]);
     }
-    m = ggml_add(ctx, m, w.mfa_b);
-    m = ggml_relu(ctx, m);
-    m = bn_affine(ctx, m, w.mfa_bn.scale, w.mfa_bn.shift);
+    ggml_tensor * m = ggml_add(ctx, ggml_add(ctx, part[2], part[0]), part[1]);
+    m               = ggml_add(ctx, m, w.mfa_b);
+    m               = ggml_relu(ctx, m);
+    m               = bn_affine(ctx, m, w.mfa_bn.scale, w.mfa_bn.shift);
     mark_dump(gb.dumps.mfa_out, m, "enc.mfa.out");
 
     // ---- attentive statistics pooling ------------------------------------
@@ -325,9 +330,14 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
     // (unpadded) weighting SpeechBrain uses when wav_lens is all-ones; the
     // variance is the biased 1/T one, and the clamp before the sqrt is
     // SpeechBrain's `.clamp(eps)` and must not be dropped.
+    //
+    // Every statistic works on d = m - mean, so the attention-weighted ones
+    // below reuse d and d^2 instead of making their own full-size passes.
     ggml_tensor * mT   = ggml_cont(ctx, ggml_transpose(ctx, m));  // [T, Cm]
     ggml_tensor * mean = ggml_mean(ctx, mT);                      // [1, Cm]
-    ggml_tensor * var  = ggml_mean(ctx, ggml_sqr(ctx, ggml_sub(ctx, mT, mean)));
+    ggml_tensor * d    = ggml_sub(ctx, mT, mean);                 // [T, Cm]
+    ggml_tensor * d2   = ggml_sqr(ctx, d);
+    ggml_tensor * var  = ggml_mean(ctx, d2);
     ggml_tensor * sd   = ggml_sqrt(ctx, ggml_clamp(ctx, var, hp.asp_eps, FLT_MAX));
 
     ggml_tensor * mean1 = ggml_reshape_1d(ctx, mean, Cm);
@@ -344,20 +354,34 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
     a               = bn_affine(ctx, a, w.asp_bn.scale, w.asp_bn.shift);
     a               = ggml_tanh(ctx, a);
 
-    ggml_tensor * al = linear(ctx, w.asp_attn_w, a, w.asp_attn_b);  // [Cm, T]
-    // Marked BEFORE the transpose: ggml ne = [Cm, T] lands on disk as
-    // [T, Cm], the orientation the reference dumps.
-    mark_dump(gb.dumps.asp_attn_logits, al, "enc.asp.attn_logits");
+    // Attention logits WITHOUT the per-channel bias: the softmax runs over T
+    // within each channel, so a per-channel constant cancels out of it. The
+    // dump point needs the biased logits, so the dump build adds the bias on
+    // a side branch, marked BEFORE any transpose: ggml ne = [Cm, T] lands on
+    // disk as [T, Cm], the orientation the reference dumps.
+    ggml_tensor * al = linear(ctx, w.asp_attn_w, a, nullptr);  // [Cm, T]
+    if (debug::enabled()) {
+        mark_dump(gb.dumps.asp_attn_logits, ggml_add(ctx, al, w.asp_attn_b), "enc.asp.attn_logits");
+        ggml_build_forward_expand(gb.graph, gb.dumps.asp_attn_logits);
+    }
 
-    ggml_tensor * alT  = ggml_cont(ctx, ggml_transpose(ctx, al));     // [T, Cm]
-    ggml_tensor * attn = ggml_soft_max(ctx, alT);                     // over ne[0] = T
+    ggml_tensor * alT  = ggml_cont(ctx, ggml_transpose(ctx, al));  // [T, Cm]
+    ggml_tensor * attn = ggml_soft_max(ctx, alT);                  // over ne[0] = T
 
-    ggml_tensor * mu  = ggml_sum_rows(ctx, ggml_mul(ctx, attn, mT));  // [1, Cm]
-    ggml_tensor * dev = ggml_sqr(ctx, ggml_sub(ctx, mT, mu));
-    ggml_tensor * sig = ggml_sum_rows(ctx, ggml_mul(ctx, attn, dev));
-    sig               = ggml_sqrt(ctx, ggml_clamp(ctx, sig, hp.asp_eps, FLT_MAX));
+    // Weighted moments about the uniform mean, each a per-channel dot product
+    // over T (a batched mat-vec, one batch per channel; no product tensor):
+    //   e1 = sum_t attn d,  e2 = sum_t attn d^2
+    //   mu = mean + e1,     sigma^2 = sum_t attn (m - mu)^2 = e2 - e1^2
+    // (sum_t attn = 1).
+    ggml_tensor * attn3 = ggml_reshape_3d(ctx, attn, T, 1, Cm);
+    ggml_tensor * e1    = ggml_reshape_2d(ctx, ggml_mul_mat(ctx, attn3, ggml_reshape_3d(ctx, d, T, 1, Cm)), 1, Cm);
+    ggml_tensor * e2    = ggml_reshape_2d(ctx, ggml_mul_mat(ctx, attn3, ggml_reshape_3d(ctx, d2, T, 1, Cm)), 1, Cm);
+    ggml_tensor * mu    = ggml_add(ctx, mean, e1);  // [1, Cm]
+    ggml_tensor * sig   = ggml_sub(ctx, e2, ggml_sqr(ctx, e1));
+    sig                 = ggml_sqrt(ctx, ggml_clamp(ctx, sig, hp.asp_eps, FLT_MAX));
 
-    pooled = ggml_concat(ctx, ggml_reshape_1d(ctx, mu, Cm), ggml_reshape_1d(ctx, sig, Cm), /*dim=*/0);  // [2*Cm]
+    ggml_tensor * pooled =
+        ggml_concat(ctx, ggml_reshape_1d(ctx, mu, Cm), ggml_reshape_1d(ctx, sig, Cm), /*dim=*/0);  // [2*Cm]
     mark_dump(gb.dumps.asp_out, pooled, "enc.asp.out");
 
     return pooled;
@@ -496,6 +520,9 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T, bool cpu_
             named(gb.idx[i], name);
             ggml_set_input(gb.idx[i]);
         }
+        gb.chunk_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, kRes2NetScale);
+        named(gb.chunk_ids, "res2.chunk_ids");
+        ggml_set_input(gb.chunk_ids);
     }
 
     // ---- stage 0: TDNNBlock n_mels -> C ----------------------------------
@@ -532,7 +559,12 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T, bool cpu_
         if (cpu_ops) {
             h = res2net_cpu(ctx, ar_conv, blk, h, hp.kernel_sizes[static_cast<size_t>(i + 1)], d, chunk);
         } else {
-            h = res2net(ctx, blk, h, gb.idx[i], d, T, chunk);
+            // The stock Res2Net writes its output over its input, so a dump
+            // build hands it a copy to keep the tdnn1 dump intact.
+            if (i == 0 && debug::enabled()) {
+                h = ggml_cont(ctx, h);
+            }
+            h = res2net(ctx, blk, h, gb.idx[i], gb.chunk_ids, d, T, chunk);
         }
         if (i == 0) {
             mark_dump(gb.dumps.blk1_res2_out, h, "enc.blk.1.res2.out");

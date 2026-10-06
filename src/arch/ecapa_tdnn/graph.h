@@ -58,6 +58,10 @@ struct GraphBuild {
     // graph pads inside its Res2Net kernel and leaves these null.
     ggml_tensor * idx[kNumSeBlocks] = { nullptr, nullptr, nullptr };
 
+    // Res2Net chunk numbers 0..kRes2NetScale-1, I32. Only the stock-op graph
+    // uses them (set_rows targets when writing a chunk's output in place).
+    ggml_tensor * chunk_ids = nullptr;
+
     // Output.
     ggml_tensor * logits = nullptr;  // ne = [n_labels]
 
