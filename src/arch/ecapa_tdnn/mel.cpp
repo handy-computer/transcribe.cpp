@@ -44,12 +44,19 @@ namespace {
 void dft_naive_f32(const float * in, int N, const float * cos_lut, const float * sin_lut, int lut_size, float * out) {
     const int stride = lut_size / N;
     for (int k = 0; k < N; ++k) {
-        float re = 0.0f;
-        float im = 0.0f;
+        float     re   = 0.0f;
+        float     im   = 0.0f;
+        // idx = (k * n * stride) % lut_size, advanced incrementally (same
+        // indices, same accumulation order, no division per term).
+        const int step = (k * stride) % lut_size;
+        int       idx  = 0;
         for (int n = 0; n < N; ++n) {
-            const int idx = (k * n * stride) % lut_size;
             re += in[n] * cos_lut[idx];
             im -= in[n] * sin_lut[idx];
+            idx += step;
+            if (idx >= lut_size) {
+                idx -= lut_size;
+            }
         }
         out[2 * k]     = re;
         out[2 * k + 1] = im;
@@ -180,6 +187,22 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
     }
 
     build_twiddle_lut(cfg_.n_fft, cos_lut_, sin_lut_);
+
+    fb_lo_.assign(static_cast<size_t>(cfg_.n_mels), 0);
+    fb_hi_.assign(static_cast<size_t>(cfg_.n_mels), 0);
+    for (int m = 0; m < cfg_.n_mels; ++m) {
+        const float * row = cfg_.filterbank.data() + static_cast<size_t>(m) * static_cast<size_t>(n_freq_);
+        int           lo  = n_freq_;
+        int           hi  = 0;
+        for (int k = 0; k < n_freq_; ++k) {
+            if (row[k] != 0.0f) {
+                lo = std::min(lo, k);
+                hi = k + 1;
+            }
+        }
+        fb_lo_[static_cast<size_t>(m)] = lo < hi ? lo : 0;
+        fb_hi_[static_cast<size_t>(m)] = lo < hi ? hi : 0;
+    }
 }
 
 int MelFrontend::n_frames_for(int64_t n_samples) const {
@@ -275,7 +298,8 @@ transcribe_status MelFrontend::compute(const float *        pcm,
             for (int m = 0; m < n_mels; ++m) {
                 const float * fb_row = cfg_.filterbank.data() + static_cast<size_t>(m) * static_cast<size_t>(n_freq);
                 double        sum    = 0.0;
-                for (int k = 0; k < n_freq; ++k) {
+                const int     k_hi   = fb_hi_[static_cast<size_t>(m)];
+                for (int k = fb_lo_[static_cast<size_t>(m)]; k < k_hi; ++k) {
                     sum += static_cast<double>(fb_row[k]) * static_cast<double>(power[static_cast<size_t>(k)]);
                 }
                 // SpeechBrain Filterbank.log_mel: 10*log10(max(x, amin))

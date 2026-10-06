@@ -3,7 +3,7 @@
 // runs the same against static, shared and installed builds.
 //
 // arch_ecapa_tdnn_minimal.gguf (tests/fixtures/make_gguf_fixtures.py) is a
-// 1/32-width model with the exact metadata and tensor contract of the real
+// 1/8-width model with the exact metadata and tensor contract of the real
 // VoxLingua107 file, so this drives the production loader, front end, ggml
 // graph and role dispatcher over the same code path the real checkpoint
 // uses. It asserts structure and invariants (statuses, orderings,
@@ -51,11 +51,32 @@ std::vector<float> noise(size_t n, uint32_t seed) {
     return out;
 }
 
+// The loader logs which weight groups it moved onto the AVX2 CPU GEMM
+// ("AVX2 GEMM for conv + F16 1x1"); the last such line, for the checks below.
+std::string g_gemm_log;
+
+void capture_log(transcribe_log_level /*level*/, const char * msg, void * /*userdata*/) {
+    if (msg != nullptr && std::strstr(msg, "AVX2 GEMM for") != nullptr) {
+        g_gemm_log = msg;
+    }
+}
+
+// Whether this CPU runs the AVX2 GEMM (the same test cpu_gemm.cpp makes).
+bool cpu_has_gemm() {
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("f16c");
+#else
+    return false;
+#endif
+}
+
 std::string fixture(const char * name) {
     return std::string(TRANSCRIBE_TEST_FIXTURES_DIR) + "/" + name;
 }
 
 transcribe_model * load_cpu(const char * name, transcribe_status * st_out = nullptr) {
+    g_gemm_log.clear();
     transcribe_model_load_params mp;
     transcribe_model_load_params_init(&mp);
     mp.backend                 = TRANSCRIBE_BACKEND_CPU;
@@ -235,7 +256,11 @@ void test_bad_labels() {
 // Q8_0 weights are widened to F16 at load: a Q8_0 model must give exactly
 // the logits of the same model stored as F16 holding the dequantized values.
 void test_q8_0_widened_to_f16() {
-    transcribe_model * q8  = load_cpu("arch_ecapa_tdnn_q8_0.gguf");
+    transcribe_model * q8 = load_cpu("arch_ecapa_tdnn_q8_0.gguf");
+    if (cpu_has_gemm()) {
+        // Widened to F16, every 1x1 weight takes the GEMM too.
+        CHECK(g_gemm_log.find("conv + F16 1x1") != std::string::npos);
+    }
     transcribe_model * ref = load_cpu("arch_ecapa_tdnn_q8_0_as_f16.gguf");
     CHECK(q8 != nullptr && ref != nullptr);
     if (q8 == nullptr || ref == nullptr) {
@@ -260,16 +285,45 @@ void test_q8_0_widened_to_f16() {
     transcribe_model_free(ref);
 }
 
+// Res2Net kernels wider than the GEMM's segment limit: the loader keeps
+// those weights on ggml_mul_mat (it used to route them to the GEMM and
+// overflow its per-tap segment array) and the model still runs.
+void test_wide_kernel_fallback() {
+    transcribe_status  st = TRANSCRIBE_OK;
+    transcribe_model * m  = load_cpu("arch_ecapa_tdnn_k5.gguf", &st);
+    CHECK(st == TRANSCRIBE_OK && m != nullptr);
+    if (m == nullptr) {
+        return;
+    }
+    if (cpu_has_gemm()) {
+        CHECK(!g_gemm_log.empty() && g_gemm_log.find("conv") == std::string::npos);
+    }
+    const std::vector<float>    pcm = noise(16000 * 3, 7);
+    transcribe_langid_session * s   = open_session(m, 4);
+    CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
+    for (const auto & c : candidates_of(s)) {
+        CHECK(std::isfinite(c.logit));
+    }
+    transcribe_langid_session_free(s);
+    transcribe_model_free(m);
+}
+
 }  // namespace
 
 int main() {
-    transcribe_log_set(nullptr, nullptr);
+    transcribe_log_set(capture_log, nullptr);
 
     transcribe_status  st = TRANSCRIBE_OK;
     transcribe_model * m  = load_cpu("arch_ecapa_tdnn_minimal.gguf", &st);
     if (st != TRANSCRIBE_OK || m == nullptr) {
         std::fprintf(stderr, "FAIL: load arch_ecapa_tdnn_minimal.gguf: %s\n", transcribe_status_string(st));
         return EXIT_FAILURE;
+    }
+    if (cpu_has_gemm()) {
+        // The toy model is wide enough for the GEMM, so the graph tests below
+        // (thread invariance in particular) run the GEMM path; F32 1x1 weights
+        // stay on ggml_mul_mat by design.
+        CHECK(g_gemm_log.find("AVX2 GEMM for conv") != std::string::npos);
     }
     test_model_surface(m);
     test_run(m);
@@ -278,6 +332,7 @@ int main() {
 
     test_bad_labels();
     test_q8_0_widened_to_f16();
+    test_wide_kernel_fallback();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

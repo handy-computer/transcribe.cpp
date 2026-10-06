@@ -7,9 +7,13 @@ shipped family is ecapa_tdnn, SpeechBrain's VoxLingua107 ECAPA-TDNN
 
 Almost all of the difference between a good and a bad integration is in what
 you feed it and what you let it choose from. This page is the protocol, with
-the measured numbers behind each rule. They come from FLEURS `test`, 15
-languages x 200 utterances (`scripts/langid/`), scored with the SpeechBrain
-reference; the C++ engine makes the same decisions on the same audio.
+the measured numbers behind each rule. They are a snapshot of
+`scripts/langid/score.py --md` on the SpeechBrain reference sweeps of FLEURS
+`test`, 15 languages x 200 utterances, untrimmed and trimmed
+(`scripts/langid/`); the C++ engine makes the same decisions on the same
+audio. The shipped GGUFs' own accuracy and reference agreement are rendered
+from the catalog on the
+[model page](models/lang-id-voxlingua107-ecapa.md#accuracy).
 
 ## Minimal use
 
@@ -82,9 +86,7 @@ Accuracy over a user's selection, trimmed crops:
 
 `en+ru` is 99.5% at 3 s while open-set Russian is 54.0%: open-set errors go
 to neighbouring languages (`ru` -> `be`), and a selection without the
-neighbour removes them. A wider but bounded 40-language list lifts the
-untrimmed open-set mean from 67.0 / 85.2 / 91.1 to 77.4 / 92.3 / 96.6 at
-3 / 5 / 10 s.
+neighbour removes them.
 
 If the user has exactly one language enabled, don't call language ID at all.
 
@@ -105,9 +107,6 @@ operating point:
 | open (107) | 0.5 | 97.7 | 92.6 |
 | open (107) | 0.7 | 88.8 | 95.9 |
 | open (107) | 0.9 | 77.1 | 99.0 |
-| 40-language list | 0.5 | 98.7 | 97.3 |
-| 40-language list | 0.7 | 95.9 | 98.6 |
-| 40-language list | 0.9 | 92.0 | 99.4 |
 
 The median top probability is 0.999 when the model is right and 0.650 when it
 is wrong, so a 0.9 gate is a real signal.

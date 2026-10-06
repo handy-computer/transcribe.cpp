@@ -206,18 +206,6 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Stage 0 reuses the reflect-index tensor built for the first SERes2Net
-    // block (the graph carries one index input per SERes2Net block), so the
-    // two padding widths have to agree. They do for every published
-    // configuration: k=5 d=1 and k=3 d=2 both give p = 2.
-    if (hp.pad(0) != hp.pad(1)) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "%s: stage 0 reflect padding (%d) differs from stage 1 (%d); this build "
-                "shares one reflect-index input between them",
-                kTag, hp.pad(0), hp.pad(1));
-        return TRANSCRIBE_ERR_GGUF;
-    }
-
     for (const int32_t v : { hp.se_channels, hp.attention_channels, hp.embedding_dim, hp.classifier_hidden }) {
         if (v <= 0 || v > kMaxChannels) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: se/attention/embedding/hidden dimensions out of range", kTag);

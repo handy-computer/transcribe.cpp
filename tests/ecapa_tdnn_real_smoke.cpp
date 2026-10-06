@@ -121,7 +121,7 @@ int main() {
     // still runs.
     float   p        = 0.0f;
     int64_t audio_ms = 0;
-    top1(s, "long-45s.wav", &p, &audio_ms);
+    top1(s, "ru-long.wav", &p, &audio_ms);
     CHECK(audio_ms == 30000);
     top1(s, "short-800ms.wav", &p, &audio_ms);
     CHECK(audio_ms == 800 && std::isfinite(p));

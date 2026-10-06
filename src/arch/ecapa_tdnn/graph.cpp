@@ -7,10 +7,19 @@
 // and the ASP / MFA input concatenations split into per-operand weight
 // blocks.
 //
-// Layout: every activation is ggml ne = [C, T]. Reductions over time need
-// ggml's ne[0], so they run on a contiguous transposed copy [T, C] and the
-// result is reshaped back. The three SE transposes and two ASP transposes
-// per pass are negligible next to the 1x1 convolutions.
+// Two graphs share this file, selected by build_graph's `cpu_ops`:
+//   - the stock-op graph (GPU backends, and any multi-backend schedule):
+//     plain ggml ops; reductions over time run on a contiguous transposed
+//     copy [T, C] because ggml reduces over ne[0].
+//   - the CPU graph (ggml CPU backend only): the same math through the
+//     fused kernels in cpu_ops.h (epilogues, time reductions on [C, T]
+//     without transposes, Res2Net without concats) and, where the model
+//     packed its weights, the AVX2 GEMM in cpu_gemm.h with the epilogue
+//     fused into the store. On a Ryzen 7 4750U this is ~2.4x faster than
+//     the stock graph for the F16 file at 8 threads.
+// Stage 0 is one im2col matmul in both (see build_blk0_im2col).
+//
+// Layout: every activation is ggml ne = [C, T].
 //
 // Helper contract (named / linear / bn_affine / reflect_rows / conv_taps):
 // an activation is ggml `ne = [C, T]`, CHANNEL-INNERMOST, frames are rows.
@@ -19,7 +28,8 @@
 //   - a bias / BatchNorm vector `[C]` a free broadcast over T,
 //   - reflect padding a single `ggml_get_rows` over the frame axis,
 //   - a dilated k>1 convolution a sum of matmuls against row-slices of the
-//     padded activation, with no im2col and no transposes.
+//     padded activation, with no transposes (stage 0 alone runs as one
+//     matmul over a host-built im2col; see build_blk0_im2col).
 // Time-axis reductions (means, softmax, weighted sums) act on ggml's ne[0],
 // so the caller transposes to `[T, C]` first.
 //
@@ -33,6 +43,7 @@
 
 #include "graph.h"
 
+#include "cpu_ops.h"
 #include "ecapa_tdnn.h"
 #include "ggml.h"
 #include "transcribe-debug.h"
@@ -115,8 +126,7 @@ ggml_tensor * conv_taps(ggml_context * ctx, ggml_tensor * xpad, ggml_tensor * w,
 }
 
 // Nodes reserved in the cgraph. The real graph is 566 nodes for the published
-// configuration and is independent of T (TRANSCRIBE_ECAPA_GRAPH_STATS
-// reports it).
+// configuration and is independent of T.
 constexpr size_t kGraphSize = 2048;
 
 // Name a tensor, mark it as a graph output so the scheduler cannot reuse its
@@ -125,6 +135,11 @@ constexpr size_t kGraphSize = 2048;
 void mark_dump(ggml_tensor *& slot, ggml_tensor * t, const char * name) {
     named(t, name);
     debug::mark_tensor_for_dump(t);
+    if (t->view_src != nullptr) {
+        // In-place CPU kernels return a view; the allocator frees the view's
+        // backing tensor, so that is what has to be kept alive.
+        debug::mark_tensor_for_dump(t->view_src);
+    }
     slot = t;
 }
 
@@ -207,94 +222,91 @@ ggml_tensor * se_block(ggml_context * ctx, const SeBlock & se, ggml_tensor * x) 
     return ggml_mul(ctx, x, s);
 }
 
-}  // namespace
+// ---- CPU-backend variants (cpu_ops.h) -------------------------------------
+//
+// Same math as the stock helpers above; see cpu_ops.h for why they exist.
 
-GraphBuild build_graph(ggml_context * ctx, const Model & model, int T) {
-    GraphBuild gb{};
-
-    const HParams & hp = model.hparams;
-    const Weights & w  = model.weights;
-
-    if (ctx == nullptr || T <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: invalid arg (ctx=%p, T=%d)", static_cast<void *>(ctx),
-                T);
-        return gb;
+// F32 accumulation for F16 weights (see linear()).
+ggml_tensor * mul_mat_acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
+    ggml_tensor * y = ggml_mul_mat(ctx, w, x);
+    if (w->type == GGML_TYPE_F16) {
+        ggml_prec_set_acc(y, GGML_PREC_F32);
     }
+    return y;
+}
 
-    const int C     = hp.c_block();
-    const int Cm    = hp.c_mfa();
-    const int chunk = hp.c_chunk();
+// TDNNBlock k=1: with packed weights one GEMM with the bias/ReLU/BN fused
+// into its store; otherwise ggml_mul_mat plus one fused epilogue pass.
+ggml_tensor * tdnn_1x1_cpu(ggml_context * ctx, gemm::Arena * ar, const TdnnLayer & l, ggml_tensor * x) {
+    if (ar != nullptr) {
+        const gemm::Segment sg{ l.w, 0, x, 0 };
+        return gemm::mul_mat(ctx, *ar, &sg, 1, x->ne[1], gemm::Epilogue::ReluBn, l.b, l.bn.scale, l.bn.shift);
+    }
+    return cpu::epilogue(ctx, mul_mat_acc(ctx, l.w, x), l.b, l.bn.scale, l.bn.shift, false, true);
+}
 
-    // reflect_rows needs T > p so the mirrored indices stay in range. The
-    // 500 ms LANGID minimum gives T >= 51 frames; the largest p here is 4.
-    for (int i = 0; i < kNumSeBlocks; ++i) {
-        if (T <= hp.pad(i + 1)) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: T=%d is too short for reflect padding %d", T,
-                    hp.pad(i + 1));
-            return gb;
+// Res2Net on the CPU. Each sub-conv is ONE matmul of its stacked taps
+// (the [w, K*w] view of the tap-major [w, w, K] weight) against the padded
+// chunk input, and one fused kernel that sums the shifted tap rows, applies
+// the epilogue, and builds the next chunk's padded input; the output is
+// assembled once at the end instead of through S - 1 growing concats.
+//
+// With packed weights (the GEMM path) the stacked-tap trick is replaced by a
+// true dilated conv: one GEMM with one segment per tap, tap k reading the
+// padded input k*d rows further on, with the epilogue fused into the store.
+// The padded input for the next chunk (h[next] + y, reflect padded) is then
+// a small pad kernel.
+ggml_tensor * res2net_cpu(ggml_context *         ctx,
+                          gemm::Arena *          ar,
+                          const SeRes2NetBlock & blk,
+                          ggml_tensor *          h,
+                          int                    kernel,
+                          int                    dilation,
+                          int                    chunk) {
+    ggml_tensor * ys[kRes2NetSubs] = {};
+    const int64_t T                = h->ne[1];
+
+    cpu::Res2Step st = cpu::res2_step(ctx, h, /*next=*/1, chunk, nullptr, nullptr, nullptr, nullptr, kernel, dilation);
+    for (int j = 0; j < kRes2NetSubs; ++j) {
+        const Res2Sub & s  = blk.res2[j];
+        const int       nx = (j + 2 < kRes2NetScale) ? j + 2 : -1;
+        if (ar != nullptr) {
+            gemm::Segment sg[gemm::kMaxSegs];
+            for (int k = 0; k < kernel; ++k) {
+                sg[k] = { s.w, k, st.pad, static_cast<int64_t>(k) * dilation };
+            }
+            ys[j] = gemm::mul_mat(ctx, *ar, sg, kernel, T, gemm::Epilogue::ReluBn, s.b, s.bn.scale, s.bn.shift);
+            if (nx >= 0) {
+                st = cpu::res2_pad(ctx, h, nx, chunk, ys[j], kernel, dilation);
+            }
+            continue;
         }
+        ggml_tensor * ws = ggml_reshape_2d(ctx, s.w, chunk, chunk * kernel);  // [w, K*w], tap-major rows
+        ggml_tensor * z  = mul_mat_acc(ctx, ws, st.pad);                      // [K*w, T + 2p]
+        st               = cpu::res2_step(ctx, h, nx, chunk, z, s.b, s.bn.scale, s.bn.shift, kernel, dilation);
+        ys[j]            = st.y;
     }
+    return cpu::res2_gather(ctx, h, ys, kRes2NetSubs);
+}
 
-    gb.graph = ggml_new_graph_custom(ctx, kGraphSize, /*grads=*/false);
-    if (gb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: ggml_new_graph_custom failed");
-        return gb;
-    }
+// SEBlock fused with the residual add: x * s + residual.
+ggml_tensor * se_block_cpu(ggml_context * ctx, const SeBlock & se, ggml_tensor * x, ggml_tensor * residual) {
+    ggml_tensor * s = cpu::time_mean(ctx, x);
+    s               = ggml_relu(ctx, linear(ctx, se.c1_w, s, se.c1_b));
+    s               = ggml_sigmoid(ctx, linear(ctx, se.c2_w, s, se.c2_b));
+    return cpu::scale_add(ctx, x, s, residual);
+}
 
-    // ---- inputs ----------------------------------------------------------
-    gb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.mel_n_mels, T);
-    named(gb.mel_in, "fe.mel.in");
-    ggml_set_input(gb.mel_in);
-
-    for (int i = 0; i < kNumSeBlocks; ++i) {
-        char name[32];
-        std::snprintf(name, sizeof(name), "reflect.idx.%d", i);
-        gb.idx[i] = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T + 2 * hp.pad(i + 1));
-        named(gb.idx[i], name);
-        ggml_set_input(gb.idx[i]);
-    }
-
-    // ---- stage 0: TDNNBlock n_mels -> C ----------------------------------
-    // read_hparams guarantees pad(0) == pad(1), so idx[0] is the right gather.
-    ggml_tensor * x =
-        tdnn_conv(ctx, reflect_rows(ctx, gb.mel_in, gb.idx[0]), w.blk0_w, w.blk0_b, w.blk0_bn, hp.dilations[0], T);
-    mark_dump(gb.dumps.blk0_out, x, "enc.blk.0.out");
-
-    // ---- stages 1..3: SERes2Net ------------------------------------------
-    ggml_tensor * blk_out[kNumSeBlocks] = { nullptr, nullptr, nullptr };
-    for (int i = 0; i < kNumSeBlocks; ++i) {
-        const SeRes2NetBlock & blk = w.blocks[i];
-        const int              d   = hp.dilations[static_cast<size_t>(i + 1)];
-
-        ggml_tensor * residual = x;
-
-        ggml_tensor * h = tdnn_1x1(ctx, blk.tdnn1, x);
-        if (i == 0) {
-            mark_dump(gb.dumps.blk1_tdnn1_out, h, "enc.blk.1.tdnn1.out");
-        }
-
-        h = res2net(ctx, blk, h, gb.idx[i], d, T, chunk);
-        if (i == 0) {
-            mark_dump(gb.dumps.blk1_res2_out, h, "enc.blk.1.res2.out");
-        }
-
-        h = tdnn_1x1(ctx, blk.tdnn2, h);
-
-        h = se_block(ctx, blk.se, h);
-        if (i == 0) {
-            mark_dump(gb.dumps.blk1_se_out, h, "enc.blk.1.se.out");
-        }
-
-        x = ggml_add(ctx, h, residual);
-
-        char name[32];
-        std::snprintf(name, sizeof(name), "enc.blk.%d.out", i + 1);
-        mark_dump(gb.dumps.blk_out[i], x, name);
-        blk_out[i] = x;
-    }
-
+// MFA + attentive statistics pooling, stock ops. Returns pooled [2*Cm].
+ggml_tensor * mfa_asp(ggml_context *        ctx,
+                      GraphBuild &          gb,
+                      const HParams &       hp,
+                      const Weights &       w,
+                      ggml_tensor * const * blk_out,
+                      int                   Cm) {
+    ggml_tensor * pooled = nullptr;
     // ---- MFA: 1x1 over concat(blk1, blk2, blk3), split into three blocks --
-    ggml_tensor * m = nullptr;
+    ggml_tensor * m      = nullptr;
     for (int i = 0; i < kNumSeBlocks; ++i) {
         ggml_tensor * part = ggml_mul_mat(ctx, w.mfa_w[i], blk_out[i]);
         if (w.mfa_w[i]->type == GGML_TYPE_F16) {
@@ -345,9 +357,209 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T) {
     ggml_tensor * sig = ggml_sum_rows(ctx, ggml_mul(ctx, attn, dev));
     sig               = ggml_sqrt(ctx, ggml_clamp(ctx, sig, hp.asp_eps, FLT_MAX));
 
-    ggml_tensor * pooled =
-        ggml_concat(ctx, ggml_reshape_1d(ctx, mu, Cm), ggml_reshape_1d(ctx, sig, Cm), /*dim=*/0);  // [2*Cm]
+    pooled = ggml_concat(ctx, ggml_reshape_1d(ctx, mu, Cm), ggml_reshape_1d(ctx, sig, Cm), /*dim=*/0);  // [2*Cm]
     mark_dump(gb.dumps.asp_out, pooled, "enc.asp.out");
+
+    return pooled;
+}
+
+// MFA + attentive statistics pooling on the CPU: the three MFA products and
+// their epilogue are one fused pass, and every reduction over time runs on
+// the [C, T] layout directly (no transposes). Returns pooled [2*Cm].
+ggml_tensor * mfa_asp_cpu(ggml_context *        ctx,
+                          gemm::Arena *         ar,
+                          GraphBuild &          gb,
+                          const HParams &       hp,
+                          const Weights &       w,
+                          ggml_tensor * const * blk_out) {
+    const int     Cm = hp.c_mfa();
+    const int64_t T  = blk_out[0]->ne[1];
+
+    ggml_tensor * m = nullptr;
+    if (ar != nullptr) {
+        // All three products accumulate in one GEMM (three segments).
+        const gemm::Segment sg[kNumSeBlocks] = {
+            { w.mfa_w[0], 0, blk_out[0], 0 },
+            { w.mfa_w[1], 0, blk_out[1], 0 },
+            { w.mfa_w[2], 0, blk_out[2], 0 }
+        };
+        m = gemm::mul_mat(ctx, *ar, sg, kNumSeBlocks, T, gemm::Epilogue::ReluBn, w.mfa_b, w.mfa_bn.scale,
+                          w.mfa_bn.shift);
+    } else {
+        m = cpu::epilogue_sum3(ctx, mul_mat_acc(ctx, w.mfa_w[0], blk_out[0]), mul_mat_acc(ctx, w.mfa_w[1], blk_out[1]),
+                               mul_mat_acc(ctx, w.mfa_w[2], blk_out[2]), w.mfa_b, w.mfa_bn.scale, w.mfa_bn.shift, true);
+    }
+    mark_dump(gb.dumps.mfa_out, m, "enc.mfa.out");
+
+    // [mean, std] over T, then the context term wm@mean + ws@std + b.
+    ggml_tensor * st    = cpu::time_stats(ctx, m, &hp.asp_eps);
+    ggml_tensor * mean1 = ggml_view_1d(ctx, st, Cm, 0);
+    ggml_tensor * sd1   = ggml_view_1d(ctx, st, Cm, static_cast<size_t>(Cm) * sizeof(float));
+    ggml_tensor * cvec  = ggml_add(ctx, linear(ctx, w.asp_wm, mean1, nullptr), linear(ctx, w.asp_ws, sd1, nullptr));
+    cvec                = ggml_add(ctx, cvec, w.asp_b);
+
+    // a = tanh(BN(ReLU(wx@m + cvec))): cvec plays the bias.
+    ggml_tensor * a  = nullptr;
+    ggml_tensor * al = nullptr;
+    if (ar != nullptr) {
+        const gemm::Segment sx{ w.asp_wx, 0, m, 0 };
+        a = gemm::mul_mat(ctx, *ar, &sx, 1, T, gemm::Epilogue::ReluBnTanh, cvec, w.asp_bn.scale, w.asp_bn.shift);
+        const gemm::Segment sa{ w.asp_attn_w, 0, a, 0 };
+        al = gemm::mul_mat(ctx, *ar, &sa, 1, T, gemm::Epilogue::None, nullptr, nullptr, nullptr);
+    } else {
+        a  = cpu::epilogue(ctx, mul_mat_acc(ctx, w.asp_wx, m), cvec, w.asp_bn.scale, w.asp_bn.shift,
+                           /*tanh_after=*/true, true);
+        al = mul_mat_acc(ctx, w.asp_attn_w, a);
+    }
+    // al: attention logits [Cm, T] WITHOUT the bias; attn_stats adds it per
+    // channel before the softmax over time. The dump point needs the biased
+    // logits, so the dump build adds it explicitly on a side branch.
+    if (debug::enabled()) {
+        mark_dump(gb.dumps.asp_attn_logits, ggml_add(ctx, al, w.asp_attn_b), "enc.asp.attn_logits");
+        ggml_build_forward_expand(gb.graph, gb.dumps.asp_attn_logits);
+    }
+    ggml_tensor * pooled = cpu::attn_stats(ctx, m, al, w.asp_attn_b, &hp.asp_eps);  // [2*Cm] = [mu, sigma]
+    mark_dump(gb.dumps.asp_out, pooled, "enc.asp.out");
+    return pooled;
+}
+
+}  // namespace
+
+void build_blk0_im2col(const HParams & hp, const float * mel, int T, std::vector<float> & out) {
+    const int    n_mels = hp.mel_n_mels;
+    const int    K      = hp.kernel_sizes[0];
+    const int    d      = hp.dilations[0];
+    const int    p      = hp.pad(0);
+    const size_t cols   = static_cast<size_t>(hp.blk0_cols());
+    out.assign(static_cast<size_t>(T) * cols, 0.0f);
+    for (int t = 0; t < T; ++t) {
+        float * row = out.data() + static_cast<size_t>(t) * cols;
+        for (int k = 0; k < K; ++k) {
+            int src = t + k * d - p;  // torch "reflect", edge not repeated
+            if (src < 0) {
+                src = -src;
+            } else if (src >= T) {
+                src = 2 * (T - 1) - src;
+            }
+            const float * m = mel + static_cast<size_t>(src) * static_cast<size_t>(n_mels);
+            std::copy(m, m + n_mels, row + static_cast<size_t>(k) * static_cast<size_t>(n_mels));
+        }
+    }
+}
+
+GraphBuild build_graph(ggml_context * ctx, const Model & model, int T, bool cpu_ops, gemm::Arena * arena) {
+    GraphBuild gb{};
+
+    // Per weight group: the arena when that group was packed, else null
+    // (null routes the group through ggml_mul_mat).
+    gemm::Arena * ar_conv = cpu_ops && model.gemm_conv ? arena : nullptr;
+    gemm::Arena * ar_lin  = cpu_ops && model.gemm_lin ? arena : nullptr;
+
+    const HParams & hp = model.hparams;
+    const Weights & w  = model.weights;
+
+    if (ctx == nullptr || T <= 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: invalid arg (ctx=%p, T=%d)", static_cast<void *>(ctx),
+                T);
+        return gb;
+    }
+
+    const int Cm    = hp.c_mfa();
+    const int chunk = hp.c_chunk();
+
+    // reflect_rows needs T > p so the mirrored indices stay in range. The
+    // 500 ms LANGID minimum gives T >= 51 frames; the largest p here is 4.
+    for (int i = 0; i < kNumSeBlocks; ++i) {
+        if (T <= hp.pad(i + 1)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: T=%d is too short for reflect padding %d", T,
+                    hp.pad(i + 1));
+            return gb;
+        }
+    }
+
+    gb.graph = ggml_new_graph_custom(ctx, kGraphSize, /*grads=*/false);
+    if (gb.graph == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: ggml_new_graph_custom failed");
+        return gb;
+    }
+
+    // ---- inputs ----------------------------------------------------------
+    gb.blk0_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.blk0_cols(), T);
+    named(gb.blk0_in, "fe.mel.im2col");
+    ggml_set_input(gb.blk0_in);
+
+    if (!cpu_ops) {
+        for (int i = 0; i < kNumSeBlocks; ++i) {
+            char name[32];
+            std::snprintf(name, sizeof(name), "reflect.idx.%d", i);
+            gb.idx[i] = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T + 2 * hp.pad(i + 1));
+            named(gb.idx[i], name);
+            ggml_set_input(gb.idx[i]);
+        }
+    }
+
+    // ---- stage 0: TDNNBlock n_mels -> C ----------------------------------
+    // One matmul over the host-built im2col (K0 taps x n_mels, zero padded to
+    // a multiple of 32): n_mels = 60 alone is not a multiple of any CPU
+    // tinyBLAS tile, and ggml's fallback GEMM for that shape is ~15x slower.
+    ggml_tensor * x = nullptr;
+    if (ar_conv != nullptr) {
+        const gemm::Segment sg{ w.blk0_w_im2col, 0, gb.blk0_in, 0 };
+        x = gemm::mul_mat(ctx, *ar_conv, &sg, 1, T, gemm::Epilogue::ReluBn, w.blk0_b, w.blk0_bn.scale, w.blk0_bn.shift);
+    } else if (cpu_ops) {
+        x = cpu::epilogue(ctx, mul_mat_acc(ctx, w.blk0_w_im2col, gb.blk0_in), w.blk0_b, w.blk0_bn.scale,
+                          w.blk0_bn.shift, false, true);
+    } else {
+        x = linear(ctx, w.blk0_w_im2col, gb.blk0_in, w.blk0_b);
+        x = ggml_relu(ctx, x);
+        x = bn_affine(ctx, x, w.blk0_bn.scale, w.blk0_bn.shift);
+    }
+    mark_dump(gb.dumps.blk0_out, x, "enc.blk.0.out");
+
+    // ---- stages 1..3: SERes2Net ------------------------------------------
+    ggml_tensor * blk_out[kNumSeBlocks] = { nullptr, nullptr, nullptr };
+    for (int i = 0; i < kNumSeBlocks; ++i) {
+        const SeRes2NetBlock & blk = w.blocks[i];
+        const int              d   = hp.dilations[static_cast<size_t>(i + 1)];
+
+        ggml_tensor * residual = x;
+
+        ggml_tensor * h = cpu_ops ? tdnn_1x1_cpu(ctx, ar_lin, blk.tdnn1, x) : tdnn_1x1(ctx, blk.tdnn1, x);
+        if (i == 0) {
+            mark_dump(gb.dumps.blk1_tdnn1_out, h, "enc.blk.1.tdnn1.out");
+        }
+
+        if (cpu_ops) {
+            h = res2net_cpu(ctx, ar_conv, blk, h, hp.kernel_sizes[static_cast<size_t>(i + 1)], d, chunk);
+        } else {
+            h = res2net(ctx, blk, h, gb.idx[i], d, T, chunk);
+        }
+        if (i == 0) {
+            mark_dump(gb.dumps.blk1_res2_out, h, "enc.blk.1.res2.out");
+        }
+
+        h = cpu_ops ? tdnn_1x1_cpu(ctx, ar_lin, blk.tdnn2, h) : tdnn_1x1(ctx, blk.tdnn2, h);
+
+        if (cpu_ops) {
+            // The SE output and the residual add are one kernel here, so the
+            // enc.blk.1.se.out dump point does not exist in this graph.
+            x = se_block_cpu(ctx, blk.se, h, residual);
+        } else {
+            h = se_block(ctx, blk.se, h);
+            if (i == 0) {
+                mark_dump(gb.dumps.blk1_se_out, h, "enc.blk.1.se.out");
+            }
+            x = ggml_add(ctx, h, residual);
+        }
+
+        char name[32];
+        std::snprintf(name, sizeof(name), "enc.blk.%d.out", i + 1);
+        mark_dump(gb.dumps.blk_out[i], x, name);
+        blk_out[i] = x;
+    }
+
+    ggml_tensor * pooled =
+        cpu_ops ? mfa_asp_cpu(ctx, ar_lin, gb, hp, w, blk_out) : mfa_asp(ctx, gb, hp, w, blk_out, Cm);
 
     // ---- embedding head (asp_bn folded into fc) ---------------------------
     ggml_tensor * emb = linear(ctx, w.fc_w, pooled, w.fc_b);
@@ -369,7 +581,6 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T) {
     ggml_set_output(gb.logits);
     ggml_build_forward_expand(gb.graph, gb.logits);
 
-    (void) C;
     return gb;
 }
 

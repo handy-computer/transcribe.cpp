@@ -74,9 +74,35 @@ def integrity_pass(records: dict) -> int:
         for r in rec.get("speed_benchmarks", []):
             if r.get("machine"):
                 machines[r["machine"]].add(name)
+        # A number edited by hand rarely keeps its siblings in step. Reports
+        # are not checked in, so these self-consistency checks are what
+        # catch an edit that no ingest produced.
+        drifted = [r for r in rec.get("speed_benchmarks", [])
+                   if r.get("total_ms") and not xrt_consistent(r)]
+        outside = [r for r in rec.get("accuracy_benchmarks", [])
+                   if None not in (r.get("ci95") or [None])
+                   and not r["ci95"][0] - 0.01 <= common.row_pct(r) <= r["ci95"][1] + 0.01]
+        disagree = [r for r in rec.get("accuracy_benchmarks", [])
+                    if r.get("agreement") and r["agreement"]["n_agree"] > r["agreement"]["n"]]
+        for rows, what in ((drifted, "speed row(s) whose xrt_compute is not "
+                                     "sample_duration_s / total_ms"),
+                           (outside, "accuracy row(s) whose value lies outside its ci95"),
+                           (disagree, "accuracy row(s) with agreement n_agree > n")):
+            if rows:
+                bad += 1
+                print(f"  FAIL {name}: {len(rows)} {what}")
     print(f"integrity  {len(records) - bad}/{len(records)} clean; "
           f"{len(machines)} machine slug(s): {', '.join(sorted(machines))}")
     return bad
+
+
+def xrt_consistent(row: dict) -> bool:
+    """xrt_compute matches sample_duration_s / total_ms, allowing for
+    total_ms stored to 0.1 ms and xRT to 0.01."""
+    duration, total = row["sample_duration_s"], row["total_ms"]
+    low = duration / ((total + 0.05) / 1000) - 0.005
+    high = duration / (max(total - 0.05, 1e-6) / 1000) + 0.005
+    return low <= row["xrt_compute"] <= high
 
 
 def pairing_pass(records: dict, selected: bool = False) -> int:
@@ -116,19 +142,26 @@ def pairing_pass(records: dict, selected: bool = False) -> int:
 
 
 def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> int:
-    """Check publication matrices, including explicit legacy accuracy rows."""
+    """Check publication matrices, including explicit legacy accuracy rows.
+
+    Each record is held to its role's profile (language ID has its own). A
+    profile whose speed matrix declares `pending` reports that half as TODO
+    even when enforcing, until the bench it names lands."""
     try:
-        resolved_id, profile = profiles.load_profile(profile_id)
+        profiles.load_profile(profile_id)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"publication FAIL: {exc}")
         return 1
 
     problems = 0
-    totals = collections.Counter()
+    totals: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     for name, record in records.items():
+        resolved_id, profile = profiles.profile_for(record, profile_id)
         # An ASR publication profile does not apply to standalone diarizers.
-        if not record.get("capabilities", {}).get("transcribe", {}).get("supported"):
+        if not profile.get("role") and \
+                not record.get("capabilities", {}).get("transcribe", {}).get("supported"):
             continue
+        pending = profile["speed"].get("pending")
         accuracy_raw = profiles.expected_accuracy(record, profile)
         speed_raw = profiles.expected_speed(record, profile)
         accuracy = profiles.apply_exceptions(record, "accuracy", accuracy_raw)
@@ -177,7 +210,7 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
                     # Preserve pre-profile rows that were already published,
                     # even when their quant was not selected by today's
                     # publication matrix. They are archive data, not drift.
-                    totals["accuracy_archived"] += 1
+                    totals[resolved_id]["accuracy_archived"] += 1
                 else:
                     accuracy_extra.add(key)
                 continue
@@ -193,9 +226,9 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
         per_model["accuracy_extra"] = len(accuracy_extra)
         per_model["accuracy_duplicate"] = sum(
             count - 1 for count in accuracy_counts.values() if count > 1)
-        totals["accuracy_required"] += len(expected_keys)
+        totals[resolved_id]["accuracy_required"] += len(expected_keys)
         for suffix in ("missing", "invalid", "extra", "duplicate"):
-            totals[f"accuracy_{suffix}"] += per_model[f"accuracy_{suffix}"]
+            totals[resolved_id][f"accuracy_{suffix}"] += per_model[f"accuracy_{suffix}"]
 
         # Both published samples are required for each quant selected by the
         # profile on every machine/backend target.
@@ -215,21 +248,28 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
         per_model["speed_extra"] = len(speed_actual - speed_expected)
         per_model["speed_duplicate"] = sum(
             count - 1 for count in speed_counts.values() if count > 1)
-        totals["speed_required"] += len(speed_expected)
+        totals[resolved_id]["speed_required"] += len(speed_expected)
         for suffix in ("missing", "invalid", "extra", "duplicate"):
-            totals[f"speed_{suffix}"] += per_model[f"speed_{suffix}"]
+            totals[resolved_id][f"speed_{suffix}"] += per_model[f"speed_{suffix}"]
 
-        count = sum(per_model.values())
-        if count:
-            problems += count
-            details = ", ".join(f"{key}={value}" for key, value in per_model.items() if value)
+        held = {key: value for key, value in per_model.items()
+                if value and not (pending and key.startswith("speed_"))}
+        waiting = {key: value for key, value in per_model.items()
+                   if value and key not in held}
+        if held:
+            problems += sum(held.values())
+            details = ", ".join(f"{key}={value}" for key, value in held.items())
             print(f"  {'FAIL' if enforce else 'TODO'} {name}: {details}")
+        if waiting:
+            details = ", ".join(f"{key}={value}" for key, value in waiting.items())
+            print(f"  TODO {name}: {details} (pending: {pending})")
 
-    print(f"publication {resolved_id}: accuracy {totals['accuracy_required']} required, "
-          f"{totals['accuracy_missing']} missing, {totals['accuracy_invalid']} invalid, "
-          f"{totals['accuracy_extra']} extra, {totals['accuracy_archived']} archived legacy; speed "
-          f"{totals['speed_required']} required, {totals['speed_missing']} missing, "
-          f"{totals['speed_invalid']} invalid, {totals['speed_extra']} extra")
+    for resolved_id, total in sorted(totals.items()):
+        print(f"publication {resolved_id}: accuracy {total['accuracy_required']} required, "
+              f"{total['accuracy_missing']} missing, {total['accuracy_invalid']} invalid, "
+              f"{total['accuracy_extra']} extra, {total['accuracy_archived']} archived legacy; speed "
+              f"{total['speed_required']} required, {total['speed_missing']} missing, "
+              f"{total['speed_invalid']} invalid, {total['speed_extra']} extra")
     if problems and not enforce:
         print("            audit only; pass --publication-profile to enforce this gate")
     return problems if enforce else 0

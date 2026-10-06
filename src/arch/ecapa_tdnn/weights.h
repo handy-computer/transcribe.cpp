@@ -119,6 +119,13 @@ struct HParams {
 
     int32_t n_freq() const { return mel_n_fft / 2 + 1; }
 
+    // Inner width of the stage-0 im2col matmul: K0 * n_mels rounded up to a
+    // multiple of 32 (every CPU tinyBLAS tile width divides it), zero padded.
+    int32_t blk0_cols() const {
+        const int32_t n = kernel_sizes.empty() ? 0 : kernel_sizes[0] * mel_n_mels;
+        return (n + 31) / 32 * 32;
+    }
+
     // Reflect padding on each side of stage `i`: d * (k - 1) / 2, the
     // "same"-padding width SpeechBrain's Conv1d uses.
     int32_t pad(int i) const {
@@ -168,8 +175,13 @@ struct Weights {
     ggml_tensor * mel_filters = nullptr;  // ne=[n_freq, n_mels]
 
     // Stage 0: plain TDNNBlock, n_mels -> C, k = kernel_sizes[0].
-    ggml_tensor * blk0_w = nullptr;  // ne=[n_mels, C, K0]
-    ggml_tensor * blk0_b = nullptr;  // [C]
+    ggml_tensor * blk0_w        = nullptr;  // ne=[n_mels, C, K0]
+    // Derived at load (model.cpp, not in the GGUF): blk0_w regrouped as one
+    // [K0 * n_mels, C] matrix, zero-padded on the inner axis to
+    // HParams::blk0_cols(), so stage 0 is a single aligned matmul against
+    // the host-built im2col of the mel. Same type as blk0_w.
+    ggml_tensor * blk0_w_im2col = nullptr;  // ne=[blk0_cols, C]
+    ggml_tensor * blk0_b        = nullptr;  // [C]
     BnAffine      blk0_bn;
 
     // Stages 1..3.

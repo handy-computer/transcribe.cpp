@@ -157,6 +157,13 @@ class MelFrontend {
     // and avoid a per-load cast in the inner butterfly.
     std::vector<float> cos_lut_;
     std::vector<float> sin_lut_;
+
+    // Nonzero support of each filterbank row: [fb_lo_[m], fb_hi_[m]) holds
+    // every nonzero weight of mel m (SpeechBrain's triangles cover a few
+    // bins each). The mel matmul only visits that range; the skipped terms
+    // are exact zeros, so the fp64 sum is unchanged.
+    std::vector<int> fb_lo_;
+    std::vector<int> fb_hi_;
 };
 
 // --- test hook ---------------------------------------------------------

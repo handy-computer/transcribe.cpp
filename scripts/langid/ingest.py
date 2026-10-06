@@ -15,9 +15,10 @@ Output (gitignored, see .gitignore `/samples/langid/`):
   samples/langid/fleurs-<code>/<id>.wav        16-bit PCM mono 16 kHz
   samples/langid/fleurs-<code>.manifest.jsonl  {"id","audio","language","duration_s",...}
 
-Selection rule: the first N utterances in parquet order whose decoded
-duration is >= 1 s. Parquet order is the only ordering; no shuffling, no
-hashing, so the same cache always produces the same manifest.
+Only the FLEURS `test` split is read. Selection rule: the first N
+utterances in parquet order whose decoded duration is >= 1 s. Parquet order
+is the only ordering; no shuffling, no hashing, so the same cache always
+produces the same manifest.
 
 Utterance ids are `fleurs-<code>-<NNNN>` where NNNN is the index among the
 selected rows, NOT the FLEURS sentence id: FLEURS records the same sentence
@@ -48,9 +49,10 @@ SPLIT = "test"
 DATASET = "google/fleurs"
 LICENCE = "CC-BY-4.0"
 
-# FLEURS config -> VoxLingua107 label code, in the dataset gate's order. `es_419` is Latin-American Spanish,
-# `cmn_hans_cn` is Mandarin in simplified Han, `nb_no` is Bokmal (the label
-# set spells Norwegian `no`); VoxLingua107 has one label for each.
+# FLEURS config -> VoxLingua107 label code, in the dataset gate's order.
+# `es_419` is Latin-American Spanish, `cmn_hans_cn` is Mandarin in simplified
+# Han, `nb_no` is Bokmal (the label set spells Norwegian `no`); VoxLingua107
+# has one label for each.
 FLEURS_LANGUAGES: list[tuple[str, str]] = [
     ("en_us", "en"),
     ("cmn_hans_cn", "zh"),
@@ -67,7 +69,6 @@ FLEURS_LANGUAGES: list[tuple[str, str]] = [
     ("da_dk", "da"),
     ("id_id", "id"),
     ("ms_my", "ms"),
-    ("it_it", "it"),
 ]
 
 CODE_TO_CONFIG = {code: config for config, code in FLEURS_LANGUAGES}
@@ -90,7 +91,7 @@ def fleurs_parquet(config: str) -> Path:
     return Path(matches[-1])
 
 
-def iter_rows(path: Path, split: str):
+def iter_rows(path: Path):
     """Yield parquet rows in file order without materialising the table.
 
     FLEURS test splits carry ~400-900 utterances of ~12 s each; a whole-table
@@ -161,7 +162,7 @@ def ingest_language(config: str, code: str, args) -> dict:
     entries: list[dict] = []
     n_short = 0
     n_resampled = 0
-    for row_index, row in enumerate(iter_rows(parquet, args.split)):
+    for row_index, row in enumerate(iter_rows(parquet)):
         if len(entries) >= args.n:
             break
         pcm, sr = decode_audio(row)
@@ -181,7 +182,7 @@ def ingest_language(config: str, code: str, args) -> dict:
             "duration_s": round(pcm.size / SAMPLE_RATE, 3),
             "fleurs_id": int(row["id"]),
             "config": config,
-            "split": args.split,
+            "split": SPLIT,
             "row_index": row_index,
             "dataset": DATASET,
             "licence": LICENCE,
@@ -269,7 +270,6 @@ def main(argv: list[str] | None = None) -> int:
     fp = sub.add_parser("fleurs", help="FLEURS from the local HF parquet cache")
     fp.add_argument("--lang", required=True,
                     help="VoxLingua107 code, comma-separated list, or 'all'")
-    fp.add_argument("--split", default=SPLIT, help=f"dataset split (default: {SPLIT})")
     fp.add_argument("--n", type=int, default=DEFAULT_N,
                     help=f"utterances per language (default: {DEFAULT_N})")
     fp.add_argument("--force", action="store_true",

@@ -118,7 +118,10 @@ CREATE TABLE accuracy(
     utts_over_50pct INTEGER,
     publication_profile TEXT,
     scoring TEXT,
-    mode TEXT
+    mode TEXT,
+    agreement_n_agree INTEGER,
+    agreement_n INTEGER,
+    agreement_max_abs_logit_delta REAL
 );
 CREATE UNIQUE INDEX accuracy_identity ON accuracy(
     dataset_id, variant, quant, metric,
@@ -238,7 +241,7 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                 (variant, item["quant"], item["filename"], item["size_bytes"])
                 for item in record.get("downloads", [])])
             con.executemany(
-                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO accuracy VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (dataset_id(row), variant, row["quant"], row["metric"],
                      row.get("language_hint"), row.get("backend"), row.get("err_pct"),
                      row.get("acc_pct"),
@@ -250,7 +253,10 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                      (row.get("errors") or {}).get("del"),
                      (row.get("errors") or {}).get("ins"), row.get("empty_hyp"),
                      row.get("utts_over_50pct"), row.get("publication_profile"),
-                     row.get("scoring"), row.get("mode"))
+                     row.get("scoring"), row.get("mode"),
+                     (row.get("agreement") or {}).get("n_agree"),
+                     (row.get("agreement") or {}).get("n"),
+                     (row.get("agreement") or {}).get("max_abs_logit_delta"))
                     for row in record.get("accuracy_benchmarks", [])])
             con.executemany(
                 "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [

@@ -47,7 +47,7 @@ from typing import Any
 
 import numpy as np
 import gguf
-from gguf import GGMLQuantizationType, GGUFValueType
+from gguf import GGMLQuantizationType
 
 
 class EcapaNumpy:
@@ -62,10 +62,7 @@ class EcapaNumpy:
         for name, field in reader.fields.items():
             if not field.types:
                 continue
-            if field.types[0] == GGUFValueType.ARRAY:
-                self.meta[name] = field.contents()
-            else:
-                self.meta[name] = field.contents()
+            self.meta[name] = field.contents()
 
         arch = self.meta.get("general.architecture")
         if arch != "ecapa_tdnn":
@@ -173,8 +170,9 @@ class EcapaNumpy:
         """`y = x * scale + shift`, the converter's affine form of BatchNorm.
 
         Broadcasts over time. The scale/shift pair already absorbed
-        gamma/beta/running_mean/running_var/eps at conversion time
-        (notes/DECISIONS.md D08 explains why this cannot fold into the conv).
+        gamma/beta/running_mean/running_var/eps at conversion time. It cannot
+        fold into the conv: a TDNNBlock is conv -> ReLU -> BN, and the ReLU
+        sits between them.
         """
         return (x * scale + shift).astype(np.float32)
 

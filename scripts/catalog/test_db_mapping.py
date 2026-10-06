@@ -16,7 +16,8 @@ SCHEMA = json.loads((HERE.parents[1] / "catalog" / "_schema.json").read_text())
 
 # Row properties that are flattened or renamed rather than stored one to one.
 ACCURACY_MAPPED = {"dataset": "dataset_id", "split": "dataset_id", "language": "dataset_id",
-                   "ci95": "ci_lo/ci_hi", "errors": "substitutions/deletions/insertions"}
+                   "ci95": "ci_lo/ci_hi", "errors": "substitutions/deletions/insertions",
+                   "agreement": "agreement_n_agree/agreement_n/agreement_max_abs_logit_delta"}
 SPEED_MAPPED = {}
 
 

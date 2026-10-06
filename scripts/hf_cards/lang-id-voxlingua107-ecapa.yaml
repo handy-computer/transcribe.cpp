@@ -62,8 +62,8 @@ usage: |
 
 wer:
   notes: |
-    Open-set top-1 accuracy over all 107 labels, mean of 15 FLEURS languages
-    (200 test utterances each), on the first 5 s of each clip without silence
-    trimming. Accuracy is higher with an allowed set and with trimmed speech;
-    see docs/langid.md. The C++ F32 port makes the same decision as the
-    SpeechBrain reference on all 12000 FLEURS decisions (3 / 5 / 10 s / full).
+    Open-set top-1 accuracy over all 107 labels, the mean over 15 FLEURS
+    languages, on the first 5 s of each clip without silence trimming.
+    Accuracy is higher with an allowed set and with trimmed speech; see
+    docs/langid.md. Agreement with the SpeechBrain reference, per GGUF, is on
+    the transcribe.cpp model page.

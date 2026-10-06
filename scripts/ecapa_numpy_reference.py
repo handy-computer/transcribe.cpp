@@ -31,11 +31,11 @@ Usage:
     uv run scripts/ecapa_numpy_reference.py \
       --gguf models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-F32.gguf \
       --audio samples/fleurs-en.wav \
-      --out build/validate/ecapa_tdnn/voxlingua107/fleurs-en/numpy
+      --out build/validate/ecapa_tdnn/lang-id-voxlingua107-ecapa/fleurs-en/numpy
 
     uv run scripts/compare_tensors.py \
-      build/validate/ecapa_tdnn/voxlingua107/fleurs-en/numpy \
-      build/validate/ecapa_tdnn/voxlingua107/fleurs-en/ref \
+      build/validate/ecapa_tdnn/lang-id-voxlingua107-ecapa/fleurs-en/numpy \
+      build/validate/ecapa_tdnn/lang-id-voxlingua107-ecapa/fleurs-en/ref \
       --tolerances tests/tolerances/ecapa_tdnn.json
 
 Writes `<name>.f32` + `<name>.json` for every stage tensor in the dump contract, plus `prediction.json` in the same shape the SpeechBrain dumper

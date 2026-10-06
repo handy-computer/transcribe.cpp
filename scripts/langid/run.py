@@ -23,14 +23,13 @@ Output JSONL:
   line n   {"id","language","crop_s","trim","audio_s","logits":[107],"top1","top1_prob"}
 
 All 107 raw logits are stored per (utterance, crop) so every restricted
-selection can be scored offline by score.py from a single sweep
-. `top1`/`top1_prob` are the open-set decision, kept as a
-convenience; score.py recomputes everything from `logits`.
+selection can be scored offline by score.py from a single sweep.
+`top1`/`top1_prob` are the open-set decision, kept as a convenience;
+score.py recomputes everything from `logits`.
 
 Crop semantics
 --------------
-`--trim none`  : the first N seconds of the raw clip. This is what the
-                 langid.cpp original evaluation measured, so "3 s" is roughly
+`--trim none`  : the first N seconds of the raw clip, so "3 s" is roughly
                  2 s of speech on FLEURS (the clips open with silence).
 `--trim energy`: drop everything before the first 20 ms frame whose RMS
                  exceeds 5% of the clip's maximum frame RMS, then take the
@@ -169,8 +168,7 @@ def materialise_crops(rows: list[dict], crop: str | int, trim: str) -> list[tupl
 
 
 class _DumperArgs:
-    """Argument shim for the dumper's loader (same pattern as
-    make_samples_fleurs.py)."""
+    """Argument shim for the dumper's loader."""
 
     def __init__(self, model: str, revision: str, threads: int) -> None:
         self.model = model

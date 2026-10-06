@@ -15,7 +15,7 @@ Usage:
       scripts/dump_reference_ecapa_tdnn_speechbrain.py encoder \
       --model speechbrain/lang-id-voxlingua107-ecapa \
       --audio samples/fleurs-en.wav \
-      --out build/validate/ecapa_tdnn/voxlingua107/fleurs-en/ref
+      --out build/validate/ecapa_tdnn/lang-id-voxlingua107-ecapa/fleurs-en/ref
 
 Writes:
     <name>.f32        raw little-endian float32, row-major
@@ -408,9 +408,8 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     # SpeechBrain 1.1.1's Filterbank builds its [201, 60] matrix inside
     # forward() from `f_central` / `band`; there is no `fbank_matrix`
-    # attribute or buffer to read (notes/PLAN.md section 1 assumes one — see the
-    # oracle report). Wrapping the real method captures exactly the matrix
-    # this forward pass used, which is stronger than recomputing it.
+    # attribute or buffer to read. Wrapping the real method captures exactly
+    # the matrix this forward pass used, which is stronger than recomputing it.
     fbanks = fe.compute_fbanks
     captured_filters: dict[str, Any] = {}
     original_create = fbanks._create_fbank_matrix
@@ -448,8 +447,8 @@ def cmd_encoder(args: argparse.Namespace) -> int:
         raise SystemExit(
             f"error: frame count mismatch: fe.mel has T={T}, but "
             f"floor({n_samples}/{HOP}) + 1 = {expected_T}. The C++ front end "
-            f"derives T from this formula; a mismatch means the STFT "
-            f"framing assumption in notes/PLAN.md section 1.1 is wrong."
+            f"derives T from this formula; a mismatch means its STFT "
+            f"framing assumption (center=True, hop {HOP}) is wrong."
         )
     print(f"frames: T={T} == floor({n_samples}/{HOP}) + 1  [ok]")
 
@@ -520,8 +519,9 @@ def cmd_encoder(args: argparse.Namespace) -> int:
     expected_window = torch.hamming_window(WIN)
     if not torch.equal(window.to(torch.float32).cpu(), expected_window):
         raise SystemExit(
-            "error: STFT window is not torch.hamming_window(400); notes/PLAN.md "
-            "section 1.1 (periodic Hamming) does not describe this checkpoint"
+            "error: STFT window is not torch.hamming_window(400); the periodic "
+            "Hamming window the C++ front end builds does not describe this "
+            "checkpoint"
         )
     dump("fe.window", vec(window, WIN, name="fe.window"), "frontend")
 

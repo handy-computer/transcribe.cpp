@@ -20,7 +20,8 @@ same checkpoint revision the reference run loaded.
 Usage:
     uv run scripts/langid/compare.py \\
         reports/langid/ref-speechbrain-untrimmed.jsonl \\
-        reports/langid/cpp-f32-untrimmed.jsonl
+        reports/langid/cpp-f32-untrimmed.jsonl \\
+        --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.agreement.json
 
 Rows are joined on (id, crop_s, trim). Both runs must cover the same keys;
 a key present in only one side is reported and counted as a failure, because
@@ -97,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-listed", type=int, default=MAX_LISTED_DISAGREEMENTS)
     p.add_argument("--near-ties", type=Path, default=None,
                    help="JSON list of reviewed near-tie disagreements")
+    p.add_argument("--json", type=Path, default=None,
+                   help="also write the agreement for scripts/catalog/"
+                        "ingest_accuracy.py; name it <gguf stem>.fleurs-mul."
+                        "agreement.json under reports/langid/")
     args = p.parse_args(argv)
     near_ties: dict[tuple, dict] = {}
     if args.near_ties is not None:
@@ -243,17 +248,49 @@ def main(argv: list[str] | None = None) -> int:
 
     if only_a or only_b:
         print("FAIL: the two runs do not cover the same rows")
-        return 1
-    if unlisted:
+        status = 1
+    elif unlisted:
         print(f"FAIL: {len(unlisted)} disagreements are not reviewed near-ties "
               f"(add them to --near-ties only after listening): "
               f"{[d['key'] for d in unlisted[:10]]}")
-        return 1
-    if rate < args.gate:
+        status = 1
+    elif rate < args.gate:
         print(f"FAIL: agreement {100 * rate:.4f}% < {100 * args.gate:.2f}%")
-        return 1
-    print(f"PASS: agreement {100 * rate:.4f}% >= {100 * args.gate:.2f}%")
-    return 0
+        status = 1
+    else:
+        print(f"PASS: agreement {100 * rate:.4f}% >= {100 * args.gate:.2f}%")
+        status = 0
+
+    if args.json:
+        # The catalog records every shipped GGUF's agreement, gate or not:
+        # only F32 is held to the gate, the quants' counts are the evidence
+        # for shipping them.
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(json.dumps({
+            "schema": "transcribe-langid-agreement-v1",
+            "reference": ha["engine"],
+            "reference_run": rel(args.a),
+            "run": rel(args.b),
+            "model": hb["model"],
+            "n": n,
+            "n_agree": n_agree,
+            "max_abs_logit_delta": abs_deltas[-1],
+            "disagreements": len(disagreements),
+            "unlisted": len(unlisted),
+            "same_rows": not (only_a or only_b),
+            "gate": args.gate,
+            "passed": status == 0,
+        }, indent=2) + "\n")
+        print(f"wrote {args.json}")
+    return status
+
+
+def rel(path: Path) -> str:
+    """Repo-relative when possible, matching score.py's `run`."""
+    try:
+        return str(path.resolve().relative_to(Path(__file__).resolve().parents[2]))
+    except ValueError:
+        return str(path)
 
 
 if __name__ == "__main__":

@@ -107,7 +107,8 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_labels.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_k5.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -422,6 +423,16 @@ foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize
     transcribe_apply_warnings(transcribe_${_t}_unit)
     add_test(NAME transcribe_${_t}_unit COMMAND transcribe_${_t}_unit)
 endforeach()
+
+# ecapa_tdnn CPU kernels (AVX2 GEMM, fused reductions) against scalar
+# references, at several thread counts. The GEMM part skips (RC 77) where the
+# CPU or build has no AVX2 kernel.
+add_executable(transcribe_ecapa_tdnn_gemm_unit ecapa_tdnn_gemm_unit.cpp)
+target_link_libraries(transcribe_ecapa_tdnn_gemm_unit PRIVATE transcribe ggml)
+target_include_directories(transcribe_ecapa_tdnn_gemm_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+transcribe_apply_warnings(transcribe_ecapa_tdnn_gemm_unit)
+add_test(NAME transcribe_ecapa_tdnn_gemm_unit COMMAND transcribe_ecapa_tdnn_gemm_unit)
+set_tests_properties(transcribe_ecapa_tdnn_gemm_unit PROPERTIES SKIP_RETURN_CODE 77)
 
 # -----------------------------------------------------------------------------
 # Dispatcher-level streaming entry-point behavior

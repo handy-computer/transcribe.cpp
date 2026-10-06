@@ -5,7 +5,9 @@
 """Fold bench driver reports into the catalog's speed_benchmarks rows.
 
 `scripts/bench/run.py` writes one report per (variant, backend) under
-reports/perf/<machine-slug>/, and reports/ is gitignored -- so the latency
+reports/perf/<machine-slug>/ (`scripts/langid/bench.py` writes the same shape
+for language ID, which transcribe-bench cannot run), and reports/ is
+gitignored -- so the latency
 breakdown only exists on the machine that measured it. This is the hop that
 moves it into the catalog, where it is durable and publishable.
 
@@ -112,7 +114,9 @@ def cells(report: dict) -> list[dict]:
             # the canonical backend; the driver records that at the top level.
             "backend": (report.get("backend") or run.get("backend", "")).lower(),
             "quant": quant,
-            "sample": pathlib.PurePosixPath(run.get("sample_path", "")).stem,
+            # The driver names a cell after its clip; scripts/langid/bench.py
+            # scores several lengths of one clip and names each.
+            "sample": run.get("sample") or pathlib.PurePosixPath(run.get("sample_path", "")).stem,
             "sample_duration_s": duration,
             "total_ms": round(total, 1),
             # xrt is recomputed from the unrounded mean rather than carried
@@ -140,25 +144,26 @@ def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
     best: dict[tuple, dict] = {}
     superseded, unreadable, experiments = collections.Counter(), [], 0
     for path in sorted(reports_dir.glob("*/*.json")):
-        try:
-            report = json.loads(path.read_text())
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            unreadable.append(str(path.relative_to(common.REPO)))
-            continue
-        if not isinstance(report, dict) or report.get("schema") != "transcribe-bench-driver-v1":
-            kind = report.get("schema") if isinstance(report, dict) else type(report).__name__
-            unreadable.append(f"{path.relative_to(common.REPO)} (schema {kind!r})")
-            continue
-        if not publishable(report):
-            experiments += 1
-            continue
         # Reports normally live under the repo, but --reports can name a
         # staging directory elsewhere (or a relative one); the label is only
         # for the operator, so fall back to the path as given.
         try:
-            report["_file"] = str(path.resolve().relative_to(common.REPO))
+            label = str(path.resolve().relative_to(common.REPO))
         except ValueError:
-            report["_file"] = str(path)
+            label = str(path)
+        try:
+            report = json.loads(path.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            unreadable.append(label)
+            continue
+        if not isinstance(report, dict) or report.get("schema") != "transcribe-bench-driver-v1":
+            kind = report.get("schema") if isinstance(report, dict) else type(report).__name__
+            unreadable.append(f"{label} (schema {kind!r})")
+            continue
+        if not publishable(report):
+            experiments += 1
+            continue
+        report["_file"] = label
         for row in cells(report):
             key = (row["variant"], row["machine"], row["backend"], row["quant"], row["sample"])
             previous = best.get(key)
@@ -214,7 +219,6 @@ def main() -> int:
     for note in notes:
         print(f"  note: {note}")
 
-    profile_id, profile = profiles.load_profile()
     filled = updated = added = matched = 0
     drift, refused, unmatched = [], [], []
     for variant, record in common.load_records().items():
@@ -261,6 +265,7 @@ def main() -> int:
         # Profile runs can create rows; the old importer could only refresh
         # placeholders, which made a newly required quant impossible to ingest
         # without first hand-authoring empty catalog cells.
+        profile_id, profile = profiles.profile_for(record)
         expected = profiles.apply_exceptions(
             record, "speed", profiles.expected_speed(record, profile))
         expected_keys = {

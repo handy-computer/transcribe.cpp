@@ -4,15 +4,7 @@
     "Decision spaces scored by scripts/langid/score.py from a single run.py sweep.",
     "Codes are VoxLingua107 label codes; `aliases` maps the spellings a caller",
     "is likely to use onto them (the same aliases the GGUF carries).",
-    "",
-    "handy40 IS A PLACEHOLDER. The real Handy language list",
-    "was not available when this was written, so it is a plausible 40-language",
-    "dictation set: the 15 evaluated languages plus 25 widely-dictated ones.",
-    "Replace `handy40.codes` with the real list and re-run score.py; nothing",
-    "else has to change, because run.py stores all 107 logits per utterance.",
-    "",
-    "The 11 pair/triple selections are langid.cpp's original evaluation table,",
-    "with `nb+da` written `no+da`: VoxLingua107 spells Norwegian Bokmal `no`."
+    "VoxLingua107 spells Norwegian Bokmal `no`, so the Norwegian/Danish pair is `no+da`."
   ],
   "aliases": {
     "he": "iw",
@@ -20,25 +12,13 @@
     "fil": "tl",
     "nb": "no"
   },
-  "restricted": {
-    "handy40": {
-      "label": "Handy's 40 (placeholder)",
-      "placeholder": true,
-      "codes": [
-        "en", "zh", "de", "fr", "es", "pt", "ja", "ko", "ru", "cs",
-        "sk", "no", "da", "id", "ms", "it", "nl", "pl", "tr", "sv",
-        "fi", "el", "hu", "ro", "uk", "bg", "hr", "sr", "vi", "th",
-        "hi", "ar", "he", "fa", "ta", "bn", "ca", "gl", "sl", "ur"
-      ]
-    }
-  },
   "selections": [
     { "name": "en+zh",       "codes": ["en", "zh"] },
     { "name": "en+es+pt",    "codes": ["en", "es", "pt"] },
     { "name": "es+pt",       "codes": ["es", "pt"] },
     { "name": "ja+ko",       "codes": ["ja", "ko"] },
     { "name": "en+ru",       "codes": ["en", "ru"] },
-    { "name": "no+da",       "codes": ["no", "da"], "plan_v1_name": "nb+da" },
+    { "name": "no+da",       "codes": ["no", "da"] },
     { "name": "en+de+ja",    "codes": ["en", "de", "ja"] },
     { "name": "en+fr+de+es", "codes": ["en", "fr", "de", "es"] },
     { "name": "de+fr+ja",    "codes": ["de", "fr", "ja"] },

@@ -17,7 +17,6 @@
 #include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
-#include "transcribe-env.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
@@ -30,6 +29,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <memory>
@@ -52,9 +52,8 @@ constexpr const char k_default_variant[] = "lang-id-voxlingua107-ecapa";
 constexpr size_t k_sched_graph_size = 2048;
 
 // Metadata arena for one per-call graph build. The published configuration
-// uses 0.36 MiB of it (TRANSCRIBE_ECAPA_GRAPH_STATS reports the figure; the
-// graph is independent of T); the rest is headroom so a future graph change
-// cannot silently truncate.
+// uses 0.36 MiB of it (the graph is independent of T); the rest is headroom
+// so a future graph change cannot silently truncate.
 constexpr size_t k_compute_ctx_bytes = 4u * 1024u * 1024u;
 
 int64_t now_us() {
@@ -116,11 +115,9 @@ transcribe_status read_labels(const gguf_context * gguf, LangidLabels & out) {
 // Q8_0 is a download format here, not a compute format: every Q8_0 weight is
 // widened to F16 at load. ggml's Q8_0 matmuls also quantize the ACTIVATIONS
 // to 8 bits, and on FLEURS that, not the 8-bit weights, is what moves the
-// decision: computed in Q8_0 the published file agrees with SpeechBrain on
-// 93.1% of 12000 top-1 decisions; the same weights computed in F16 agree on
-// 97.5% and score at F32's accuracy. The cost is F16 memory for those weights
-// (45 MB instead of 27 MB resident) and F16 speed, which is no slower than
-// Q8_0 on any backend measured without the CPU repack path.
+// decision; the same weights computed in F16 score at F32's accuracy
+// (agreement figures: docs/models/lang-id-voxlingua107-ecapa.md). The cost
+// is F16 memory for those weights, and F16 speed.
 //
 // Retype in place: the tensors come from the no_alloc gguf context and have
 // no data or views yet, so only type and strides change. Returns the count.
@@ -202,6 +199,110 @@ transcribe_status stream_weights(const std::string & path, const gguf_context * 
         ggml_fp32_to_fp16_row(f32.data(), f16.data(), n);
         ggml_backend_tensor_set(t, f16.data(), 0, ggml_nbytes(t));
     }
+    return TRANSCRIBE_OK;
+}
+
+// Build Weights::blk0_w_im2col from blk0_w: the tap-major [n_mels, C, K0]
+// kernel regrouped to [K0*n_mels, C] (column k*n_mels + m of output row c is
+// tap k, mel m) and zero padded to hp.blk0_cols(). Same type as blk0_w.
+transcribe_status build_derived_weights(Model & m) {
+    const HParams & hp     = m.hparams;
+    ggml_tensor *   src    = m.weights.blk0_w;
+    const int64_t   n_mels = hp.mel_n_mels;
+    const int64_t   C      = hp.c_block();
+    const int64_t   K      = hp.kernel_sizes[0];
+    const int64_t   cols   = hp.blk0_cols();
+
+    ggml_init_params ip{};
+    ip.mem_size   = 4 * ggml_tensor_overhead();
+    ip.no_alloc   = true;
+    m.ctx_derived = ggml_init(ip);
+    if (m.ctx_derived == nullptr) {
+        return TRANSCRIBE_ERR_OOM;
+    }
+    ggml_tensor * dst = ggml_new_tensor_2d(m.ctx_derived, src->type, cols, C);
+    ggml_set_name(dst, "blk.0.conv.weight.im2col");
+    m.derived_buffer = ggml_backend_alloc_ctx_tensors(m.ctx_derived, m.plan.primary);
+    if (m.derived_buffer == nullptr) {
+        return TRANSCRIBE_ERR_OOM;
+    }
+    ggml_backend_buffer_set_usage(m.derived_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    const size_t         esz = ggml_type_size(src->type);  // F32 / F16, block size 1
+    std::vector<uint8_t> in(ggml_nbytes(src));
+    std::vector<uint8_t> out(ggml_nbytes(dst), 0);         // zero bits are 0.0 in F32 and F16
+    ggml_backend_tensor_get(src, in.data(), 0, in.size());
+    for (int64_t k = 0; k < K; ++k) {
+        for (int64_t c = 0; c < C; ++c) {
+            const uint8_t * s = in.data() + static_cast<size_t>(k) * src->nb[2] + static_cast<size_t>(c) * src->nb[1];
+            uint8_t * d = out.data() + static_cast<size_t>(c) * dst->nb[1] + static_cast<size_t>(k * n_mels) * esz;
+            std::memcpy(d, s, static_cast<size_t>(n_mels) * esz);
+        }
+    }
+    ggml_backend_tensor_set(dst, out.data(), 0, out.size());
+    m.weights.blk0_w_im2col = dst;
+    return TRANSCRIBE_OK;
+}
+
+// Repack weights for the AVX2 GEMM (cpu_gemm.h), in two all-or-nothing
+// groups the graph routes as a unit:
+//   - the k>1 kernels (F32 in every shipped file): this GEMM beats ggml's on
+//     their small shapes, and stage 0's K = 320 is not a tinyBLAS shape;
+//   - the T-wide 1x1 weights, only when F16 (F16 files, and Q8_0 after
+//     widening): ggml widens F16 operands in its inner loop, ~1.7x slower.
+//     For F32 1x1 weights ggml's tinyBLAS is as fast as this GEMM.
+// A group is skipped (left on ggml_mul_mat) unless every weight fits the
+// GEMM: F16/F32, contiguous, rows a multiple of the panel, and at most
+// kMaxSegs matrices (one GEMM segment per tap).
+transcribe_status pack_gemm_weights(Model & m) {
+    if (!gemm::available()) {
+        return TRANSCRIBE_OK;
+    }
+    Weights & w = m.weights;
+
+    auto fits = [](const std::vector<ggml_tensor *> & ts, bool need_f16) {
+        for (const ggml_tensor * t : ts) {
+            if (t->ne[1] % gemm::kPanel != 0 || t->ne[2] * t->ne[3] > gemm::kMaxSegs || !ggml_is_contiguous(t) ||
+                (need_f16 && t->type != GGML_TYPE_F16) || (t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_F32)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    // After fits() this cannot fail; if it ever does, some weights are
+    // already packed and unreadable by ggml_mul_mat, so the load fails.
+    auto pack = [&](const std::vector<ggml_tensor *> & ts) {
+        for (ggml_tensor * t : ts) {
+            if (!gemm::pack_weight(t)) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: GEMM weight repack failed for %s", kTag, t->name);
+                return false;
+            }
+        }
+        return true;
+    };
+
+    std::vector<ggml_tensor *> conv{ w.blk0_w_im2col };
+    std::vector<ggml_tensor *> lin;
+    for (SeRes2NetBlock & b : w.blocks) {
+        for (Res2Sub & r : b.res2) {
+            conv.push_back(r.w);
+        }
+        lin.push_back(b.tdnn1.w);
+        lin.push_back(b.tdnn2.w);
+    }
+    for (ggml_tensor * t : w.mfa_w) {
+        lin.push_back(t);
+    }
+    lin.push_back(w.asp_wx);
+    lin.push_back(w.asp_attn_w);
+
+    m.gemm_conv = fits(conv, /*need_f16=*/false);
+    m.gemm_lin  = fits(lin, /*need_f16=*/true);
+    if ((m.gemm_conv && !pack(conv)) || (m.gemm_lin && !pack(lin))) {
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: AVX2 GEMM for %s%s%s", kTag, m.gemm_conv ? "conv" : "",
+            m.gemm_conv && m.gemm_lin ? " + " : "", m.gemm_lin ? "F16 1x1" : (m.gemm_conv ? "" : "nothing"));
     return TRANSCRIBE_OK;
 }
 
@@ -308,6 +409,20 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (auto st = stream_weights(loader.path(), guard.ctx, m->ctx_meta); st != TRANSCRIBE_OK) {
         return st;
     }
+    if (auto st = build_derived_weights(*m); st != TRANSCRIBE_OK) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: derived weight allocation failed", kTag);
+        return st;
+    }
+
+    // Fused CPU kernels only when the whole graph runs on the CPU backend:
+    // a custom op has no GPU implementation, and the scheduler would bounce
+    // every one of them back to the host.
+    m->cpu_ops = m->plan.primary_kind == BackendKind::Cpu && m->plan.scheduler_list.size() == 1;
+    if (m->cpu_ops) {
+        if (auto st = pack_gemm_weights(*m); st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
 
     m->roles = TRANSCRIBE_ROLE_LANGID;
     // The abort callback is honored (transcribe_langid_set_abort_callback).
@@ -353,9 +468,21 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
                              "frontend");
     }
 
-    // ---- reflect-padding indices ------------------------------------------
-    for (int i = 0; i < kNumSeBlocks; ++i) {
-        build_reflect_indices(T, hp.pad(i + 1), s.idx_buf[i]);
+    // reflect_rows / the Res2Net kernel need T > pad (the 500 ms LANGID
+    // minimum gives T >= 51 frames; the largest pad here is 4).
+    for (int i = 0; i < kNumStages - 1; ++i) {
+        if (T <= hp.pad(i)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: T=%d is too short for reflect padding %d", kTag, T, hp.pad(i));
+            return TRANSCRIBE_ERR_INPUT_TOO_SHORT;
+        }
+    }
+
+    // ---- stage-0 im2col and reflect-padding indices ------------------------
+    build_blk0_im2col(hp, s.mel_buf.data(), T, s.im2col_buf);
+    if (!m.cpu_ops) {
+        for (int i = 0; i < kNumSeBlocks; ++i) {
+            build_reflect_indices(T, hp.pad(i + 1), s.idx_buf[i]);
+        }
     }
 
     // ---- graph -------------------------------------------------------------
@@ -366,6 +493,7 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
         ggml_free(s.compute_ctx);
         s.compute_ctx = nullptr;
     }
+    s.gemm_arena.clear();
     {
         if (s.graph_arena.size() != k_compute_ctx_bytes) {
             s.graph_arena.resize(k_compute_ctx_bytes);
@@ -381,7 +509,7 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
         }
     }
 
-    GraphBuild gb = build_graph(s.compute_ctx, m, T);
+    GraphBuild gb = build_graph(s.compute_ctx, m, T, m.cpu_ops, &s.gemm_arena);
     if (gb.graph == nullptr || gb.logits == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -405,30 +533,13 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
         return TRANSCRIBE_ERR_OOM;
     }
 
-    // ---- graph stats (TRANSCRIBE_ECAPA_GRAPH_STATS=1) ------------------------
-    //
-    // One line per session, after the first allocation: the node count, how
-    // much of the metadata arena the build used, the number of scheduler
-    // splits (more than one means an op fell back to another backend), and
-    // each backend's compute buffer.
-    if (!s.logged_graph_stats && env::flag("TRANSCRIBE_ECAPA_GRAPH_STATS")) {
-        s.logged_graph_stats = true;
-        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "%s: graph T=%d nodes=%d arena=%.2f/%.2f MiB splits=%d threads=%d", kTag, T,
-                ggml_graph_n_nodes(gb.graph), static_cast<double>(ggml_used_mem(s.compute_ctx)) / (1024.0 * 1024.0),
-                static_cast<double>(s.graph_arena.size()) / (1024.0 * 1024.0), ggml_backend_sched_get_n_splits(s.sched),
-                n_threads);
-        for (ggml_backend_t be : m.plan.scheduler_list) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "%s:   sched buffer [%s] %.2f MiB", kTag, ggml_backend_name(be),
-                    static_cast<double>(ggml_backend_sched_get_buffer_size(s.sched, be)) / (1024.0 * 1024.0));
-        }
-    }
-
     // ---- inputs -------------------------------------------------------------
-    // The front end writes frame-major [T, n_mels], byte-identical to ggml
-    // ne = [n_mels, T].
-    ggml_backend_tensor_set(gb.mel_in, s.mel_buf.data(), 0, s.mel_buf.size() * sizeof(float));
+    // Frame-major [T, cols], byte-identical to ggml ne = [cols, T].
+    ggml_backend_tensor_set(gb.blk0_in, s.im2col_buf.data(), 0, s.im2col_buf.size() * sizeof(float));
     for (int i = 0; i < kNumSeBlocks; ++i) {
-        ggml_backend_tensor_set(gb.idx[i], s.idx_buf[i].data(), 0, s.idx_buf[i].size() * sizeof(int32_t));
+        if (gb.idx[i] != nullptr) {
+            ggml_backend_tensor_set(gb.idx[i], s.idx_buf[i].data(), 0, s.idx_buf[i].size() * sizeof(int32_t));
+        }
     }
 
     // ---- compute -------------------------------------------------------------
@@ -458,7 +569,7 @@ void dump_stages(const GraphBuild & gb) {
     try_dump("enc.blk.0.out", gb.dumps.blk0_out, "encoder");
     try_dump("enc.blk.1.tdnn1.out", gb.dumps.blk1_tdnn1_out, "encoder");
     try_dump("enc.blk.1.res2.out", gb.dumps.blk1_res2_out, "encoder");
-    try_dump("enc.blk.1.se.out", gb.dumps.blk1_se_out, "encoder");
+    try_dump("enc.blk.1.se.out", gb.dumps.blk1_se_out, "encoder");  // stock-op graph only
     try_dump("enc.blk.1.out", gb.dumps.blk_out[0], "encoder");
     try_dump("enc.blk.2.out", gb.dumps.blk_out[1], "encoder");
     try_dump("enc.blk.3.out", gb.dumps.blk_out[2], "encoder");
@@ -544,6 +655,12 @@ Model::~Model() {
     }
     if (backend_buffer != nullptr) {
         safe_buffer_free(backend_buffer);
+    }
+    if (ctx_derived != nullptr) {
+        ggml_free(ctx_derived);
+    }
+    if (derived_buffer != nullptr) {
+        safe_buffer_free(derived_buffer);
     }
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
         safe_backend_free(*it);

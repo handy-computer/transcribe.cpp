@@ -15,13 +15,14 @@ top-k (`docs/langid.md`).
 
 Acceptance: tensor parity on eight FLEURS clips (`validate.py`), and top-1
 decision parity with SpeechBrain on FLEURS (15 languages x 200 utterances x
-3 / 5 / 10 s / full = 12000 decisions): **12000 / 12000**, max abs logit
-difference 6.5e-05 (C++ F32, CPU). Shipped matrix: F32 + F16 + Q8_0;
-F16 agrees on 11991 / 12000 (near-ties only), Q8_0 on 11703 / 12000 at F32
-accuracy. The loader widens Q8_0 weights to F16 (`widen_q8_0_weights` in
+3 / 5 / 10 s / full crops, C++ F32 on CPU), where every disagreement must be
+a reviewed near-tie. Shipped matrix: F32 + F16 + Q8_0. Each GGUF's agreement
+and accuracy live in the catalog and are rendered on
+[the model page](../../models/lang-id-voxlingua107-ecapa.md#accuracy). The
+loader widens Q8_0 weights to F16 (`widen_q8_0_weights` in
 `src/arch/ecapa_tdnn/model.cpp`): computed in Q8_0, ggml also rounds the
-activations to 8 bits and agreement drops to 11175 / 12000 (langid.cpp's
-Q8_0 measured the same 93.2%), 1.6 points open-set at 3 s.
+activations to 8 bits and agreement drops by several points (the model
+page's accuracy snapshot has the figures).
 
 ## Identity
 
@@ -88,15 +89,24 @@ Accuracy and decision parity (FLEURS from the HF cache):
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang all
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine speechbrain ... --out reports/langid/ref-speechbrain-untrimmed.jsonl
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine cpp --library build-shared/src/libtranscribe.dylib ... --out reports/langid/cpp-f32-untrimmed.jsonl
-uv run scripts/langid/compare.py reports/langid/ref-speechbrain-untrimmed.jsonl reports/langid/cpp-f32-untrimmed.jsonl
-uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl --md reports/langid/cpp-f32-untrimmed.md
+uv run scripts/langid/compare.py reports/langid/ref-speechbrain-untrimmed.jsonl reports/langid/cpp-f32-untrimmed.jsonl \
+  --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.agreement.json
+uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl --md reports/langid/cpp-f32-untrimmed.md \
+  --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
+uv run scripts/catalog/ingest_accuracy.py --models lang-id-voxlingua107-ecapa
 ```
+
+The catalog rows follow the `langid-publication-v1` profile
+(`catalog/_benchmark_profiles.json`): the open-set mean on the 5 s untrimmed
+crop of each shipped GGUF's sweep, with that sweep's agreement.
 
 `compare.py` fails on any disagreement that is not on a reviewed near-tie
 list (`--near-ties`), and refuses runs whose labels, recipe, manifest hashes
 or checkpoint revision differ.
 
-Benchmarks: `scripts/langid/bench.py` (`tools/transcribe-bench` is ASR-only).
+Benchmarks: `scripts/langid/bench.py --profile` (`tools/transcribe-bench` is
+ASR-only) writes bench-driver reports under `reports/perf/`, which
+`scripts/catalog/ingest_perf.py` folds into the catalog.
 
 ## Capability Validation
 
@@ -104,7 +114,7 @@ Benchmarks: `scripts/langid/bench.py` (`tools/transcribe-bench` is ASR-only).
 |------------|------|----------------|---------------------|--------|--------|
 | Language ID | open set | `build/bin/transcribe-cli -m models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-F32.gguf samples/fleurs-ja.wav` | `language: ja` | MUST PASS | PASS |
 | Language ID | allowed set | `... --allow en,de samples/fleurs-de.wav` | `language: de`, 2 candidates | MUST PASS | PASS |
-| Crop | 30 s window | `transcribe_ecapa_tdnn_real_smoke` (`long-45s.wav`) | `audio_ms == 30000` | MUST PASS | PASS |
+| Crop | 30 s window | `transcribe_ecapa_tdnn_real_smoke` (`ru-long.wav`) | `audio_ms == 30000` | MUST PASS | PASS |
 | Minimum length | 500 ms | `transcribe_ecapa_tdnn_smoke`, `transcribe_langid_dispatch_unit` | `INPUT_TOO_SHORT` below 500 ms | MUST PASS | PASS |
 | Transcribe / translate / timestamps / streaming | n/a | `transcribe_session_init` | `UNSUPPORTED_ROLE` | OUT OF SCOPE — not an ASR model | SKIP — not exposed by runtime |
 | Batch (offline) | n/a | `transcribe-cli --batch` | refused: ASR-only | OUT OF SCOPE — no batch entry points for new roles in v1 | ACCEPTED GAP — one clip per call |
@@ -130,8 +140,8 @@ Benchmarks: `scripts/langid/bench.py` (`tools/transcribe-bench` is ASR-only).
   future repack path must filter on the row count or langid.cpp's abandon
   path disables repacking for the whole file. The performance-core thread
   default did not help (8 threads ties or beats 12).
-- `AUTO` placement is unchanged (GPU first). Metal is 5-10x faster than CPU
-  on the M4 Max; CPU stays well under real time.
+- `AUTO` placement is unchanged (GPU first). Metal against CPU latency is in
+  the model page's Performance section.
 - Q8_0 conv kernels stay F32 (the quantizer's Conv bucket is F32 in every
   preset), so the Q8_0 file is 26.7 MB against langid.cpp's 24.1 MB, and
   `cls.out.weight` is Q8_0 where langid.cpp kept it F16.

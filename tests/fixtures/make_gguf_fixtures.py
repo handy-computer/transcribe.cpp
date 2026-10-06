@@ -1373,20 +1373,22 @@ QWEN3_ASR_CHAT_TEMPLATE = (
 # ---------------------------------------------------------------------------
 #
 # The same metadata and tensor contract scripts/convert-ecapa_tdnn.py writes
-# for speechbrain/lang-id-voxlingua107-ecapa, at 1/32 width: channels
-# [32]*4 + [96], the real kernel sizes / dilations / res2net scale, a real
+# for speechbrain/lang-id-voxlingua107-ecapa, at 1/8 width: channels
+# [128]*4 + [384] and 32 attention channels, the narrowest that still puts
+# every weight on the AVX2 CPU GEMM (16-row panels; Res2Net chunk = 16, and
+# 2-D weights Q8_0-eligible in the Q8_0 fixtures), the real kernel sizes / dilations / res2net scale, a real
 # 60 x 201 front end, five labels aa..ee plus the alias xx=aa. Weights are
 # small seeded pseudo-random values so a forward pass stays well inside float
 # range; tests assert structure and invariants, never specific values.
 
 import random as _random
 
-ECAPA_CHANNELS     = [32, 32, 32, 32, 96]
+ECAPA_CHANNELS     = [128, 128, 128, 128, 384]
 ECAPA_KERNELS      = [5, 3, 3, 3, 1]
 ECAPA_DILATIONS    = [1, 2, 3, 4, 1]
 ECAPA_SCALE        = 8
 ECAPA_SE           = 8
-ECAPA_ATT          = 8
+ECAPA_ATT          = 32
 ECAPA_EMB          = 16
 ECAPA_HID          = 16
 ECAPA_N_MELS       = 60
@@ -1395,7 +1397,8 @@ ECAPA_LABEL_CODES  = ["aa", "bb", "cc", "dd", "ee"]
 ECAPA_LABEL_NAMES  = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
 
 
-def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str]) -> list[bytes]:
+def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str],
+                           kernels: list[int]) -> list[bytes]:
     return [
         _pack_kv_string("stt.frontend.type", "speechbrain_fbank"),
         _pack_kv_uint32("stt.frontend.sample_rate", 16000),
@@ -1410,7 +1413,7 @@ def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str
         _pack_kv_string("stt.frontend.normalize", "sentence_mean"),
         _pack_kv_uint32("stt.ecapa_tdnn.format_version", 1),
         _pack_kv_array_int32("stt.ecapa_tdnn.channels", ECAPA_CHANNELS),
-        _pack_kv_array_int32("stt.ecapa_tdnn.kernel_sizes", ECAPA_KERNELS),
+        _pack_kv_array_int32("stt.ecapa_tdnn.kernel_sizes", kernels),
         _pack_kv_array_int32("stt.ecapa_tdnn.dilations", ECAPA_DILATIONS),
         _pack_kv_uint32("stt.ecapa_tdnn.res2net_scale", ECAPA_SCALE),
         _pack_kv_uint32("stt.ecapa_tdnn.se_channels", ECAPA_SE),
@@ -1425,7 +1428,7 @@ def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str
     ]
 
 
-def _ecapa_tdnn_tensors(n_labels: int) -> list[Tensor]:
+def _ecapa_tdnn_tensors(n_labels: int, kernels: list[int]) -> list[Tensor]:
     rng = _random.Random(0)
     out: list[Tensor] = []
 
@@ -1460,11 +1463,11 @@ def _ecapa_tdnn_tensors(n_labels: int) -> list[Tensor]:
     add("frontend.mel_filterbank", [ECAPA_N_FREQ, ECAPA_N_MELS], fb)
 
     c, cm, chunk = ECAPA_CHANNELS[0], ECAPA_CHANNELS[-1], ECAPA_CHANNELS[0] // ECAPA_SCALE
-    tdnn("blk.0", ECAPA_N_MELS, c, ECAPA_KERNELS[0], conv=True)
+    tdnn("blk.0", ECAPA_N_MELS, c, kernels[0], conv=True)
     for i in (1, 2, 3):
         tdnn(f"blk.{i}.tdnn1", c, c, 1, conv=False)
         for j in range(ECAPA_SCALE - 1):
-            tdnn(f"blk.{i}.res2.{j}", chunk, chunk, ECAPA_KERNELS[i], conv=True)
+            tdnn(f"blk.{i}.res2.{j}", chunk, chunk, kernels[i], conv=True)
         tdnn(f"blk.{i}.tdnn2", c, c, 1, conv=False)
         weight(f"blk.{i}.se.c1.weight", [c, ECAPA_SE])
         vec(f"blk.{i}.se.c1.bias", ECAPA_SE, 0.0, 0.05)
@@ -1525,8 +1528,9 @@ def _ecapa_tdnn_q8_0(tensors: list[Tensor], as_f16: bool) -> list[Tensor]:
     return out
 
 
-def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_0: str = "") -> bytes:
-    tensors = _ecapa_tdnn_tensors(len(codes))
+def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_0: str = "",
+                     kernels: list[int] = ECAPA_KERNELS) -> bytes:
+    tensors = _ecapa_tdnn_tensors(len(codes), kernels)
     if q8_0:
         tensors = _ecapa_tdnn_q8_0(tensors, as_f16=(q8_0 == "as_f16"))
     return _build_full_gguf(
@@ -1534,7 +1538,7 @@ def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_
         [
             _pack_kv_string("general.architecture", "ecapa_tdnn"),
             _pack_kv_string("stt.variant", "ecapa-tdnn-toy"),
-            *_ecapa_tdnn_hparams_kv(codes, names, aliases),
+            *_ecapa_tdnn_hparams_kv(codes, names, aliases, kernels),
         ],
         tensors,
     )
@@ -1968,6 +1972,11 @@ def emit_fixtures(out_dir: Path) -> None:
            _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="q8_0"))
     _write(out_dir / "arch_ecapa_tdnn_q8_0_as_f16.gguf",
            _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="as_f16"))
+    # Res2Net kernels wider than the CPU GEMM's segment limit (3): the loader
+    # must keep those weights on ggml_mul_mat rather than overflow the GEMM's
+    # per-tap segment array.
+    _write(out_dir / "arch_ecapa_tdnn_k5.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], kernels=[5, 5, 5, 5, 1]))
 
 
 def main(argv: list[str]) -> int:

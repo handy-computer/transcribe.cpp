@@ -1,5 +1,8 @@
 {
   "default": "asr-publication-v2",
+  "roles": {
+    "langid": "langid-publication-v1"
+  },
   "profiles": {
     "asr-publication-v2": {
       "description": "The complete benchmark set published for transcription models. v2: accuracy on L40S; batch_size is the recommended setting for new runs, and a cell is satisfied at any batch size (the row records the one used).",
@@ -66,6 +69,53 @@
           ],
           "reason": "A variant that supports exactly one non-English language is benched on that language at the same two clip lengths as jfk/dots. English jfk/dots decode out of distribution on a single-language fine-tune and can loop until the position cap, and whether that happens differs between CPU and GPU, so the figure would not be comparable."
         }
+      }
+    },
+    "langid-publication-v1": {
+      "role": "langid",
+      "description": "The benchmark set published for language ID (LANGID role) models. Accuracy: open-set top-1 over every label, the macro mean over the FLEURS test languages of scripts/langid/ingest.py, on the first crop_s seconds of each clip without silence trimming, C++ on CPU, every shipped quant; scored by scripts/langid/score.py from one scripts/langid/run.py sweep (all crops), which scripts/langid/compare.py also compares against the reference sweep for the row's agreement. Speed: scripts/langid/bench.py through the Python binding; a sample <clip>-<N>s is the first N seconds of samples/<clip>.wav.",
+      "accuracy": [
+        {
+          "dataset": "fleurs",
+          "split": "test",
+          "languages": "pooled",
+          "metric": "accuracy",
+          "quants": "all-downloads",
+          "batch_size": 1,
+          "timestamps": "none",
+          "backend": "cpu",
+          "crop_s": "5",
+          "trim": "none"
+        }
+      ],
+      "speed": {
+        "quants": "all-downloads",
+        "samples": [
+          "ru-long-10s",
+          "ru-long-30s"
+        ],
+        "iterations": 20,
+        "warmup": 3,
+        "targets": [
+          {
+            "machine": "m4-max",
+            "display": "Apple M4 Max",
+            "backends": [
+              "cpu",
+              "metal"
+            ]
+          },
+          {
+            "machine": "ryzen-4750u",
+            "display": "AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR)",
+            "backends": [
+              "cpu",
+              "vulkan"
+            ],
+            "cooldown_tctl_c": 55.0
+          }
+        ],
+        "pending": "The published cells were measured on samples/long-45s.wav, since replaced by ru-long.wav, before the CPU kernel work, and the Ryzen rig has none yet. Re-bench both rigs with scripts/langid/bench.py --profile, ingest, delete the long-45s rows, then remove this key to enforce the speed matrix."
       }
     }
   }

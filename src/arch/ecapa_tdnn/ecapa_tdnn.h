@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include "cpu_gemm.h"
 #include "mel.h"
 #include "transcribe-backend.h"
 #include "transcribe-langid.h"
@@ -43,6 +44,23 @@ struct Model final : public transcribe_model {
     ggml_backend_buffer_t backend_buffer = nullptr;
     BackendPlan           plan;
 
+    // Load-time derived weights (Weights::blk0_w_im2col): their own metadata
+    // context and backend buffer, since ctx_meta is sized for the file.
+    ggml_context *        ctx_derived    = nullptr;
+    ggml_backend_buffer_t derived_buffer = nullptr;
+
+    // True when the graph uses the fused CPU kernels (cpu_ops.h): the
+    // primary backend is the ggml CPU backend. Fixed at load.
+    bool cpu_ops = false;
+
+    // Which weights were repacked at load for the AVX2 GEMM (cpu_gemm.h);
+    // packed weights are only readable by that GEMM. Fixed at load.
+    //   gemm_conv: the k>1 kernels (stage 0's im2col weight, Res2Net taps)
+    //   gemm_lin:  the T-wide 1x1 weights (tdnn1/tdnn2, mfa, asp.tdnn.x,
+    //              asp.attn); only when they are F16
+    bool gemm_conv = false;
+    bool gemm_lin  = false;
+
     // Built at load from stt.langid.labels.*; immutable after.
     LangidLabels labels;
 
@@ -58,6 +76,7 @@ struct Model final : public transcribe_model {
 struct Session final : public transcribe_langid_session {
     // Host scratch, reused across calls.
     std::vector<float>   mel_buf;                // [T * n_mels], frame-major
+    std::vector<float>   im2col_buf;             // [T * blk0_cols], frame-major
     std::vector<int32_t> idx_buf[kNumSeBlocks];  // reflect indices, [T + 2p]
 
     // Metadata arena for the per-call graph build, handed to ggml_init as
@@ -66,8 +85,9 @@ struct Session final : public transcribe_langid_session {
     // mem_buffer.
     std::vector<uint8_t> graph_arena;
 
-    // One-shot TRANSCRIBE_ECAPA_GRAPH_STATS reporting latch (see model.cpp).
-    bool logged_graph_stats = false;
+    // GEMM node descriptors of the current graph (cpu_gemm.h). Cleared with
+    // the compute context at the start of every run.
+    gemm::Arena gemm_arena;
 };
 
 extern const Arch arch;

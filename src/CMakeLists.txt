@@ -67,6 +67,8 @@ add_library(transcribe
     arch/sortformer/model.cpp
     arch/sortformer/stream.cpp
     arch/sortformer/weights.cpp
+    arch/ecapa_tdnn/cpu_gemm.cpp
+    arch/ecapa_tdnn/cpu_ops.cpp
     arch/ecapa_tdnn/graph.cpp
     arch/ecapa_tdnn/mel.cpp
     arch/ecapa_tdnn/model.cpp
@@ -289,6 +291,14 @@ if(MSVC)
     set_source_files_properties(third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "/w")
 else()
     set_source_files_properties(third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+
+# ecapa_tdnn's fused CPU kernels round every multiply and add separately so
+# they reproduce the stock ggml op chain they replace; GCC/Clang contract
+# a*b+c into an FMA by default (-ffp-contract=fast), which changes the bits.
+if(NOT MSVC)
+    set_source_files_properties(arch/ecapa_tdnn/cpu_gemm.cpp arch/ecapa_tdnn/cpu_ops.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 
 if(WIN32)

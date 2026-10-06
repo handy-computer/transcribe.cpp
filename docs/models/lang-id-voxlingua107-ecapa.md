@@ -43,11 +43,11 @@ Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measure
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
-Open-set top-1 accuracy over all 107 labels, mean of 15 FLEURS languages
-(200 test utterances each), on the first 5 s of each clip without silence
-trimming. Accuracy is higher with an allowed set and with trimmed speech;
-see docs/langid.md. The C++ F32 port makes the same decision as the
-SpeechBrain reference on all 12000 FLEURS decisions (3 / 5 / 10 s / full).
+Open-set top-1 accuracy over all 107 labels, the mean over 15 FLEURS
+languages, on the first 5 s of each clip without silence trimming.
+Accuracy is higher with an allowed set and with trimmed speech; see
+docs/langid.md. Agreement with the SpeechBrain reference, per GGUF, is on
+the transcribe.cpp model page.
 <!-- /catalog -->
 
 Only near-reference tiers ship (F32 / F16 / Q8_0): the decision is an argmax
@@ -55,37 +55,56 @@ over 107 logits, and the k-quant tiers would save a few MB at most.
 
 ## Accuracy
 
-FLEURS `test`, 15 languages x 200 utterances, crops from the start of each
-clip (no silence trimming), C++ F32 on CPU. Top-1 accuracy, %:
+<!-- catalog:agreement -->
+| GGUF | Top-1 accuracy (95% CI) | Top-1 agreement with SpeechBrain | Max abs logit difference |
+| --- | ---: | ---: | ---: |
+| F32  | 85.20% (84.10-86.50) | 12000 / 12000 | 6.5e-05 |
+| F16  | 85.20% (84.00-86.40) | 11991 / 12000 | 0.098 |
+| Q8_0 | 86.30% (85.20-87.50) | 11703 / 12000 | 2.8 |
+
+Measured at transcribe.cpp `62522202` on 2026-10-05.
+<!-- /catalog -->
+
+Accuracy is the headline above: open set, first 5 s of each clip, no silence
+trimming, C++ on CPU. Agreement counts the scored run's top-1 decisions that
+match the SpeechBrain reference on the same audio, over every crop of the
+sweep (3 / 5 / 10 s / full). It is the ship gate for F32
+(`scripts/langid/compare.py`: every disagreement must be a reviewed near-tie)
+and the evidence for the quants. F16's flips are all near-ties (top-two
+margin under 0.025 logit). Q8_0 is a download format: transcribe.cpp widens
+its weights to F16 at load, so it computes like F16 (F16's memory) and its
+accuracy matches F32 within the confidence interval; its flips are the 8-bit
+weights alone, on decisions F32 also finds uncertain.
+
+### Snapshot: crops and decision spaces
+
+A snapshot of `scripts/langid/score.py --md` on the C++ sweeps behind the
+rows above (transcribe.cpp `62522202`, CPU; FLEURS `test`, 15 languages x 200
+utterances, crops from the start of each clip, no silence trimming). It is
+not rendered from the catalog; regenerate it with the commands under
+Reproduction. Top-1 accuracy, %.
+
+Open set (all 107 labels) at the other crops; 5 s is the catalog row above:
+
+| GGUF | 3 s | 10 s | full |
+|---|---|---|---|
+| F32 | 67.0 | 91.1 | 91.4 |
+| F16 | 67.0 | 91.1 | 91.5 |
+| Q8_0 | 67.2 | 92.0 | 92.3 |
+
+Restricted to a selection, F32:
 
 | decision space | 3 s | 5 s | 10 s | full |
 |---|---|---|---|---|
-| open set (all 107 labels) | 67.0 | 85.2 | 91.1 | 91.4 |
-| a 40-language dictation list | 77.4 | 92.3 | 96.6 | 96.6 |
 | en+ru | 98.8 | 100.0 | 100.0 | 100.0 |
 | en+fr+de+es | 88.6 | 94.1 | 98.9 | 99.4 |
 | cs+sk | 83.0 | 92.2 | 96.8 | 96.5 |
 | id+ms | 87.8 | 89.5 | 89.5 | 88.8 |
 
-Per-language tables, confidence / coverage and confusions:
-`uv run scripts/langid/score.py <run>.jsonl --md <run>.md`.
-
-Agreement with the SpeechBrain reference (top-1, the same 12000 decisions:
-3000 clips x 3 / 5 / 10 s / full):
-
-| GGUF | agreement | max abs logit difference | open set 3 / 5 / 10 s / full |
-|---|---|---|---|
-| F32 | 12000 / 12000 | 6.5e-05 | 67.0 / 85.2 / 91.1 / 91.4 |
-| F16 | 11991 / 12000 | 0.098 | 67.0 / 85.2 / 91.1 / 91.5 |
-| Q8_0 | 11703 / 12000 | 2.8 | 67.2 / 86.3 / 92.0 / 92.3 |
-
-F16's nine flips are all near-ties (top-two margin under 0.025 logit). Q8_0
-is a download format: transcribe.cpp widens its weights to F16 at load, so it
-computes like F16 (45 MB resident) and its accuracy matches F32 within the
-confidence interval. Its flips are the 8-bit weights alone, on decisions F32
-also finds uncertain. Computed in Q8_0, as langid.cpp does, ggml also rounds
-the activations to 8 bits; that moves 6.9% of decisions (93.1% agreement,
-65.4 / 84.3 / 90.9 / 91.4).
+Computed in Q8_0 instead, as langid.cpp does, ggml also rounds the
+activations to 8 bits; that moves 6.9% of decisions (93.1% agreement, open
+set 65.4 / 84.3 / 90.9 / 91.4). Per-language tables, confidence / coverage
+and confusions: `uv run scripts/langid/score.py <run>.jsonl --md <run>.md`.
 
 ## Quick Start
 
@@ -115,42 +134,49 @@ accepted as aliases). Match them against your ASR model's
 
 ## Performance
 
+Measured with `scripts/langid/bench.py` through the Python binding
+(`tools/transcribe-bench` is ASR-only), on the first N seconds of one clip;
+CPU uses the library default thread count.
+
 ### Apple M4 Max
 
-Compute latency (mel + encode), median of 20 warm runs, transcribe.cpp
-`62522202`, `scripts/langid/bench.py`. CPU uses the library default thread
-count (8).
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode), speedup over realtime in parentheses.
 
-| Backend | Audio | F32 | F16 | Q8_0 |
-|---|---|---:|---:|---:|
-| Metal | 3 s | 6.6 ms | 6.4 ms | 6.1 ms |
-| Metal | 5 s | 9.4 ms | 9.5 ms | 9.3 ms |
-| Metal | 10 s | 14.3 ms | 14.1 ms | 14.2 ms |
-| Metal | 30 s | 37.1 ms | 35.7 ms | 36.2 ms |
-| CPU | 3 s | 40.1 ms | 25.1 ms | 22.9 ms |
-| CPU | 5 s | 70.1 ms | 41.4 ms | 37.7 ms |
-| CPU | 10 s | 147.1 ms | 82.5 ms | 74.9 ms |
-| CPU | 30 s | 450.9 ms | 251.5 ms | 229.5 ms |
+| Backend | Sample               |               F32 |                F16 |               Q8_0 |
+| ------- | -------------------- | ----------------: | -----------------: | -----------------: |
+| Metal   | long-45s-10s (10.0s) | 14.3 ms (699.79×) |  14.1 ms (709.72×) |  14.2 ms (703.23×) |
+| Metal   | long-45s-30s (30.0s) | 37.1 ms (808.41×) |  35.6 ms (841.51×) |  36.2 ms (828.04×) |
+| CPU     | long-45s-10s (10.0s) | 147.1 ms (67.97×) |  82.5 ms (121.26×) |  74.9 ms (133.58×) |
+| CPU     | long-45s-30s (30.0s) | 450.9 ms (66.53×) | 251.5 ms (119.27×) | 229.5 ms (130.70×) |
+
+Apple M4 Max: transcribe.cpp `62522202` on 2026-10-05.
+<!-- /catalog -->
 
 `AUTO` resolves like every other family (the GPU when there is one). Metal is
-5-10x faster here; CPU is still well under real time and avoids contending
-with an ASR model on the GPU, so load with `TRANSCRIBE_BACKEND_CPU` when that
-matters. Not yet measured on the AMD Ryzen 7 PRO 4750U publication rig, or on
-Vulkan / CUDA.
+several times faster here; CPU is still well under real time and avoids
+contending with an ASR model on the GPU, so load with
+`TRANSCRIBE_BACKEND_CPU` when that matters.
+
+The `long-45s` cells are medians of 20 warm runs on `samples/long-45s.wav`,
+which has since been replaced by `samples/ru-long.wav`, and the CPU ones
+predate the current CPU kernels. Both publication rigs are due a re-bench
+(the AMD Ryzen 7 PRO 4750U has no published cells yet):
 
 ```bash
-uv run --project scripts/envs/ecapa_tdnn scripts/langid/bench.py \
-  --library build-shared/src/libtranscribe.dylib \
-  --gguf models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-{F32,F16,Q8_0}.gguf \
-  --backends cpu,metal --durations 3,5,10,30
+uv run --project scripts/envs/ecapa_tdnn scripts/langid/bench.py --profile \
+  --library build-shared/src/libtranscribe.dylib
+uv run scripts/catalog/ingest_perf.py
+uv run scripts/catalog/render.py
 ```
 
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against SpeechBrain 1.1.1 on
-eight committed FLEURS clips (`samples/fleurs-*.wav`): 17 stage tensors
-(front end, every encoder block, pooling, embedding, logits) within family
-tolerance, and the top-1 label equal to the reference on every clip. The
+eight committed FLEURS clips (`samples/fleurs-*.wav`): every stage tensor
+gated in `tests/tolerances/ecapa_tdnn.json` (front end, every encoder block,
+pooling, embedding, logits) within tolerance on the calibration host (Apple
+Silicon), and the top-1 label equal to the reference on every clip. The
 dataset gate is the FLEURS decision parity above.
 
 | Field | Value |
@@ -159,7 +185,7 @@ dataset gate is the FLEURS decision parity above.
 | Dump script | `scripts/dump_reference_ecapa_tdnn_speechbrain.py` |
 | Manifest | `tests/golden/ecapa_tdnn/lang-id-voxlingua107-ecapa.manifest.json` |
 | Command | `uv run scripts/validate.py all --family ecapa_tdnn` |
-| Dataset gate | `scripts/langid/compare.py` (FLEURS, 12000 decisions) |
+| Dataset gate | `scripts/langid/compare.py` (FLEURS, every crop; see Accuracy) |
 
 ## Known Limitations
 
@@ -207,6 +233,10 @@ uv run scripts/validate.py all --family ecapa_tdnn
 
 ### Accuracy acceptance
 
+One reference sweep, then one C++ sweep per shipped GGUF (shown for F32;
+repeat with F16 and Q8_0). `compare.py` is the gate; `score.py --json` and
+`compare.py --json` are what `ingest_accuracy.py` reads, named after the GGUF.
+
 ```bash
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang all
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine speechbrain \
@@ -219,5 +249,11 @@ uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine cpp \
   --manifest samples/langid/fleurs-*.manifest.jsonl --crops 3,5,10,full \
   --out reports/langid/cpp-f32-untrimmed.jsonl
 uv run scripts/langid/compare.py reports/langid/ref-speechbrain-untrimmed.jsonl \
-  reports/langid/cpp-f32-untrimmed.jsonl
+  reports/langid/cpp-f32-untrimmed.jsonl \
+  --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.agreement.json
+uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl \
+  --md reports/langid/cpp-f32-untrimmed.md \
+  --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
+uv run scripts/catalog/ingest_accuracy.py --models lang-id-voxlingua107-ecapa
+uv run scripts/catalog/render.py
 ```

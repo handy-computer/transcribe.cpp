@@ -11,11 +11,11 @@ dependencies = [
     # version-specific, and so is the arithmetic inside them.
     # tests/tolerances/ecapa_tdnn.json was measured against THIS version
     # (recorded as reference.revision in
-    # tests/golden/ecapa_tdnn/voxlingua107.manifest.json); a silent bump can
+    # tests/golden/ecapa_tdnn/lang-id-voxlingua107-ecapa.manifest.json); a silent bump can
     # move both the hook points and the numbers.
     "speechbrain==1.1.1",
-    # CPU torch. The parity regime is fp32 on CPU with one thread
-    # (notes/PLAN.md section 5); no CUDA/Metal build is needed or wanted here.
+    # CPU torch. The parity regime is fp32 on CPU with one thread; no
+    # CUDA/Metal build is needed or wanted here.
     "torch==2.13.0",
     "torchaudio==2.11.0",
     "numpy>=1.26",

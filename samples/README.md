@@ -65,10 +65,6 @@ split, licensed **CC-BY-4.0**.
 | `fleurs-ru.wav` | 7.92 s | `ru_ru` | 1917 |
 | `fleurs-id.wav` | 8.58 s | `id_id` | 1909 |
 | `short-800ms.wav` | 0.80 s | `en_us` | 1904 (first 800 ms) |
-| `long-45s.wav` | 52.28 s | `en_us` | 1904, 1675, 1950, 1728, 1972, 1938 (concatenated) |
-
-`long-45s.wav` is longer than its name says; it only has to exceed the 30 s
-language ID window, and the name is kept so it matches langid.cpp's records.
 
 ## Everything else
 
