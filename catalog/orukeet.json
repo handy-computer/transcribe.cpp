@@ -1,0 +1,49 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "orukeet",
+  "family": "parakeet",
+  "display_name": "Orukeet",
+  "params": 627052166,
+  "license": {
+    "spdx": "cc-by-sa-4.0",
+    "display": "CC-BY-SA-4.0"
+  },
+  "upstream_repo": "oruk/orukeet",
+  "upstream_commit": "b59c13a",
+  "published_repo": "handy-computer/orukeet-gguf",
+  "docs_page": "parakeet.md",
+  "languages": [
+    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu",
+    "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv",
+    "uk"
+  ],
+  "language_tag_form": "bare-bcp47",
+  "long_form_strategy": "chunked-unbounded",
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":true,"verified":false},
+    "timestamps": {"supported":true,"verified":false,"granularities":["token"]},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":true}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"orukeet-F32.gguf","size_bytes":2508435744},
+    {"quant":"F16","filename":"orukeet-F16.gguf","size_bytes":1255869984},
+    {"quant":"Q8_0","filename":"orukeet-Q8_0.gguf","size_bytes":739508704},
+    {"quant":"Q6_K","filename":"orukeet-Q6_K.gguf","size_bytes":610342368},
+    {"quant":"Q5_K_M","filename":"orukeet-Q5_K_M.gguf","size_bytes":548946400},
+    {"quant":"Q4_K_M","filename":"orukeet-Q4_K_M.gguf","size_bytes":485425632}
+  ],
+  "accuracy_benchmarks": [],
+  "headline_benchmark": {
+    "dataset": "librispeech",
+    "split": "test-clean",
+    "language": "en",
+    "metric": "wer",
+    "batch_size": null,
+    "timestamps": "none"
+  },
+  "speed_benchmarks": []
+}

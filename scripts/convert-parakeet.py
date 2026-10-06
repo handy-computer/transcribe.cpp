@@ -130,6 +130,22 @@ V3_LANGUAGES = [
 ]
 
 VARIANT_PROFILES: dict[str, dict] = {
+    "orukeet": {
+        "variant": "tdt-0.6b-orukeet",
+        "display_name": "Orukeet",
+        "version": "v0.1.0",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
+        "languages": V3_LANGUAGES,
+        "lang_detect": True,
+        "author": "Oruk",
+        "organization": "oruk",
+        "prefer_direct_load": True,
+        "license": "cc-by-sa-4.0",
+        "license_name": "Creative Commons Attribution-ShareAlike 4.0",
+        "license_link": "https://creativecommons.org/licenses/by-sa/4.0/",
+    },
     # v2: 0.6B English-only TDT.
     "parakeet-tdt-0.6b-v2": {
         "variant": "tdt-0.6b-v2",
@@ -555,8 +571,6 @@ def load_nemo_model(model_spec: str, prefer_direct: bool = False):
     transiently doubles disk usage; the direct path streams entries
     out of the archive at near-zero transient cost.
     """
-    from nemo.collections.asr.models import ASRModel
-
     local = Path(model_spec).expanduser()
 
     if prefer_direct:
@@ -566,6 +580,8 @@ def load_nemo_model(model_spec: str, prefer_direct: bool = False):
             cfg, sd, sp_proto = _load_nemo_archive_directly(nemo_direct)
             return _DirectNemoArchive(cfg, sd, sp_proto)
         # else fall through to NeMo path
+
+    from nemo.collections.asr.models import ASRModel
 
     nemo_path: Path | None = None
     if local.exists():

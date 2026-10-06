@@ -197,6 +197,28 @@ uv run --project scripts/envs/parakeet-kestrel scripts/wer/run_reference_parakee
 | Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | SKIP — not exposed by runtime |
 | Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | SKIP — not exposed by runtime |
 
+### orukeet (oruk/orukeet)
+
+Weights-only fine-tune of `parakeet-tdt-0.6b-v3` (Oruk AI, r3 checkpoint).
+Half of the encoder's 9-tap depthwise conv taps are frozen fitted Gabor
+values, stored as ordinary F32 conv weights; architecture, tokenizer and
+frontend are byte-for-byte v3, so no runtime work. Reference is NeMo on
+the `.nemo` archive (the publisher's benchmark pipeline), same env as v3.
+License is CC-BY-SA-4.0, not CC-BY-4.0. Intake:
+`reports/porting/parakeet/orukeet/intake.json`.
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|---|---|---|---|---|---|
+| Transcribe | explicit en | `build/bin/transcribe-cli -m models/orukeet/orukeet-F32.gguf --language en samples/jfk.wav` | English transcript with PnC; LibriSpeech test-clean WER within Stage 7 band of the NeMo oracle | MUST PASS | PASS — jfk byte-equal to NeMo (validate.py compare 18/18 within the finalized parakeet tolerances, transcript exact); LibriSpeech test-clean gate in Stage 7 |
+| Transcribe | auto | `build/bin/transcribe-cli -m models/orukeet/orukeet-F32.gguf samples/jfk.wav` | English transcript, no hint | MUST PASS | PASS — no-hint jfk byte-equal to NeMo |
+| Transcribe | explicit non-English (de/ru/uk clips) | `… --language de samples/german.wav` | transcript in source language with correct script | MUST PASS | PASS — german.wav identical with and without --language de; ru-short / uk-short correct Cyrillic transcripts |
+| Language detection | auto, non-English | `build/bin/transcribe-cli -m models/orukeet/orukeet-F32.gguf samples/ru-short.wav` (no `--language`) | Russian transcript without a hint; same dispatcher path as v3 | MUST PASS | PASS — ru-short / uk-short / german transcribed in-language with no hint (same dispatcher path as v3) |
+| Offline batch | batch | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --batch-sizes 2,4,8 --backend cpu` | per-item transcripts equal to serial | MUST PASS | PASS — text byte-equal serial vs 2/4/8 on 7 clips incl. dots (35 s), CPU (golden tests/golden/batch/orukeet.cpu.json, list tests/golden/batch/orukeet.list). product-names.wav (56 s) flips one near-tie token ('QuidQuil' vs 'Quid Quill') at batch 4/8 in a mixed-length batch; parakeet-tdt-0.6b-v3 Q8_0 shows the identical flip on the same clip, so it is a pre-existing runtime property of the family on long padded clips, not this checkpoint, and the clip is excluded from the golden |
+| Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | PASS — 22 monotonic word spans on jfk, same TDT duration math as v3 |
+| Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE — no streaming training | SKIP — not exposed by runtime (offline-only model) |
+| Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | SKIP — not exposed by runtime |
+| Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | SKIP — not exposed by runtime |
+
 ## Open decisions before Stage 3 (convert)
 
 These decisions block converter design for the new variants and should
