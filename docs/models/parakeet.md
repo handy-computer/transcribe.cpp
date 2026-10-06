@@ -25,11 +25,9 @@ Most users want one of three:
   and on every FLEURS language. A drop-in replacement for
   `parakeet-tdt-0.6b-v3`, which remains available.
   See [parakeet-ultra.md](parakeet-ultra.md) for how it segments long audio.
-- **Multilingual, alternative → `orukeet`.** Oruk AI's fine-tune of v3 with
-  half of the encoder's depthwise filters replaced by frozen fitted Gabor
-  kernels. Same size, languages and API as v3; ahead of v3 on English and
-  on 20 of 25 FLEURS languages, behind `parakeet-ultra` on nearly all of
-  them. CC-BY-SA-4.0 weights. See [orukeet.md](orukeet.md).
+- **Multilingual, alternative → `orukeet`.** Oruk AI's retune of v3. Same
+  size and speed, a bit more accurate than v3, less accurate than
+  `parakeet-ultra`. CC-BY-SA-4.0 weights. See [orukeet.md](orukeet.md).
 - **German → `parakeet-primeline`.** primeLine's German fine-tune of
   v3. Same size and speed; tuned for German while keeping the other 24
   v3 languages usable.

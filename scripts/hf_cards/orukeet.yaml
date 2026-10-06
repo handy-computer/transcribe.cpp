@@ -21,32 +21,17 @@ tags:
   - gabor
 
 summary: |
-  Oruk AI's fine-tune of NVIDIA's parakeet-tdt-0.6b-v3. Offline multilingual
-  speech-to-text over the same 25 European languages. A FastConformer encoder
-  with a TDT transducer decoder, in which half of the encoder's temporal
-  depthwise filters (12,288 nine-tap kernels) were replaced by frozen fitted
-  Gabor functions before the rest of the network was retrained around them.
-  The frozen taps are stored as ordinary convolution weights, so the runtime
-  is exactly v3's. Takes 16 kHz mono WAV and produces a punctuated, cased
-  transcript with optional token-level timestamps. A drop-in replacement for
-  v3: same size, languages and API. Not a streaming model and does not
-  translate. Weights are CC-BY-SA-4.0.
+  A tuned version of parakeet-tdt-0.6b-v3 from Oruk AI. Turns speech into
+  text in 25 European languages, works offline, and runs as fast as v3. Give
+  it a 16 kHz mono WAV and it gives you back text with punctuation and
+  capitals. Swap it in anywhere you use v3. Does not stream and does not
+  translate.
 
 wer:
   notes: |
-    Greedy transducer decoding, no external LM. The reference is NeMo
-    loading Oruk's published `.nemo` archive, the same pipeline behind the
-    numbers on their card. On this manifest NeMo scores 1.87%.
+    Lower is better. Q8_0 is the one to grab: same accuracy as the full
+    size file at a third of the size.
 
-    Oruk's card reports 1.46% on the same split with their own normalizer,
-    against 1.53% for v3 on that pipeline. Their final adaptation and
-    checkpoint selection used LibriSpeech test-other, so test-other is not a
-    held-out split for this model; test-clean was not used for training.
-
-    Against our own sweeps of the sibling checkpoints at Q8_0: lower WER
-    than parakeet-tdt-0.6b-v3 on test-clean and on 20 of the 25 FLEURS
-    languages (the exceptions are German, French, Spanish, Italian and
-    Russian, by 0.1 to 0.9 points), with the largest gains on the Baltic,
-    Finno-Ugric and South Slavic languages. parakeet-ultra scores lower than
-    Orukeet on test-clean and on 23 of 25 FLEURS languages (Orukeet leads on
-    Czech and Croatian).
+    Compared to v3 it is a bit more accurate on English and on 20 of the 25
+    languages. parakeet-ultra is still more accurate than both on almost
+    everything.

@@ -3,47 +3,34 @@
 <!-- catalog:intro -->
 Upstream: [`oruk/orukeet`](https://huggingface.co/oruk/orukeet) at [`b59c13a`](https://huggingface.co/oruk/orukeet/commit/b59c13a).
 
-Oruk AI's fine-tune of NVIDIA's parakeet-tdt-0.6b-v3. Offline multilingual
-speech-to-text over the same 25 European languages. A FastConformer encoder
-with a TDT transducer decoder, in which half of the encoder's temporal
-depthwise filters (12,288 nine-tap kernels) were replaced by frozen fitted
-Gabor functions before the rest of the network was retrained around them.
-The frozen taps are stored as ordinary convolution weights, so the runtime
-is exactly v3's. Takes 16 kHz mono WAV and produces a punctuated, cased
-transcript with optional token-level timestamps. A drop-in replacement for
-v3: same size, languages and API. Not a streaming model and does not
-translate. Weights are CC-BY-SA-4.0.
+A tuned version of parakeet-tdt-0.6b-v3 from Oruk AI. Turns speech into
+text in 25 European languages, works offline, and runs as fast as v3. Give
+it a 16 kHz mono WAV and it gives you back text with punctuation and
+capitals. Swap it in anywhere you use v3. Does not stream and does not
+translate.
 <!-- /catalog -->
 
-## What it's for
+## What it does
 
-Offline multilingual speech-to-text over the same 25 European languages as
-`parakeet-tdt-0.6b-v3`. Oruk AI fine-tuned v3 without changing its
-architecture, tokenizer or frontend, so it drops into any v3 setup by
-swapping the GGUF: same size, same languages, same API, same speed.
+Speech to text in 25 European languages, offline. It is
+`parakeet-tdt-0.6b-v3` with new weights from Oruk AI: same size, same speed,
+same 25 languages, slightly more accurate. If you already run v3, point at
+this file instead and you are done.
 
-The twist is inside the encoder. Each of the 24 FastConformer blocks has
-1,024 nine-tap temporal depthwise filters; Oruk fitted a Gabor function
-(a Gaussian-windowed cosine) to every one of them and froze the half that
-fit best, 12,288 kernels in all, then retrained the rest of the network
-around them. The frozen taps are stored as ordinary convolution weights, so
-the runtime has nothing Gabor-specific in it.
+The one unusual thing about it: half the encoder's conv filters were
+swapped for fixed Gabor functions and the rest of the model was retrained
+around them. That lives entirely in the weights, so nothing changes at
+runtime.
 
-Not a streaming model and does not translate. See Oruk's
-[model card](https://huggingface.co/oruk/orukeet) and
-[technical report](https://huggingface.co/oruk/orukeet/blob/main/orukeet-technical-report.pdf)
-for the training recipe and their own evaluation.
-
-One caveat on the upstream numbers: the final adaptation pass and
-checkpoint selection used LibriSpeech test-other, so treat Oruk's test-other
-figure as not held out. test-clean, which we score below, was not used for
-training.
+It does not stream and it does not translate.
 
 <!-- catalog:pin -->
 Licensed CC-BY-SA-4.0. Ported from upstream commit [`b59c13a`](https://huggingface.co/oruk/orukeet/commit/b59c13a), pinned 2026-10-06. Validated against the NeMo reference at transcribe.cpp commit [`65856fac`](https://github.com/handy-computer/transcribe.cpp/tree/65856fac) on 2026-10-06.
 <!-- /catalog -->
 
 ## Download
+
+Grab Q8_0 unless you have a reason not to.
 
 <!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
@@ -61,22 +48,12 @@ WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, t
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
-Greedy transducer decoding, no external LM. The reference is NeMo
-loading Oruk's published `.nemo` archive, the same pipeline behind the
-numbers on their card. On this manifest NeMo scores 1.87%.
+Lower is better. Q8_0 is the one to grab: same accuracy as the full
+size file at a third of the size.
 
-Oruk's card reports 1.46% on the same split with their own normalizer,
-against 1.53% for v3 on that pipeline. Their final adaptation and
-checkpoint selection used LibriSpeech test-other, so test-other is not a
-held-out split for this model; test-clean was not used for training.
-
-Against our own sweeps of the sibling checkpoints at Q8_0: lower WER
-than parakeet-tdt-0.6b-v3 on test-clean and on 20 of the 25 FLEURS
-languages (the exceptions are German, French, Spanish, Italian and
-Russian, by 0.1 to 0.9 points), with the largest gains on the Baltic,
-Finno-Ugric and South Slavic languages. parakeet-ultra scores lower than
-Orukeet on test-clean and on 23 of 25 FLEURS languages (Orukeet leads on
-Czech and Croatian).
+Compared to v3 it is a bit more accurate on English and on 20 of the 25
+languages. parakeet-ultra is still more accurate than both on almost
+everything.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -122,20 +99,18 @@ build/bin/transcribe-cli \
   samples/jfk.wav
 ```
 
-If your audio is not already 16 kHz mono WAV, convert it first:
+Audio has to be 16 kHz mono WAV. Convert anything else first:
 
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
 
-Pass `--language de` (or any of the 25 codes) to pin the language; without
-a hint the model detects it.
+It figures out the language on its own. Add `--language de` (or any of the
+25 codes) if you want to force one.
 
 ## Performance
 
-Same encoder, decoder and tensor shapes as `parakeet-tdt-0.6b-v3`, and the
-same speed: the Gabor taps are ordinary conv weights, so nothing in the
-graph changes.
+Same speed as v3.
 
 ### Apple M4 Max
 
@@ -167,91 +142,62 @@ Compute latency (mel + encode + decode), speedup over realtime in parentheses; p
 AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8bab590e` on 2026-10-06.
 <!-- /catalog -->
 
-Benchmark reproduction:
+Rerun the benchmark yourself:
 
 ```bash
 uv run scripts/bench/run.py --profile --models orukeet
 ```
 
-## Numerical Validation
+## How we checked it
 
-transcribe.cpp is validated tensor-by-tensor against NeMo loading the
-published `.nemo` archive, using the parakeet family's finalized tolerances
-unchanged: the checkpoint is a weights-only fine-tune, so every tensor in the
-v3 contract applies as-is. All 18 contract tensors pass on `jfk` and the
-transcript matches NeMo verbatim. Batched decoding is byte-identical to
-single-stream at batch sizes 2, 4 and 8.
+Compared tensor by tensor against NeMo running Oruk's own `.nemo` file,
+using the same tolerances as v3. Everything matches and the test transcript
+is identical. Batches of 2, 4 and 8 give the same text as one at a time.
 
 | Field | Value |
 | --- | --- |
-| Reference | NeMo (`nemo_toolkit[asr]`), `oruk/orukeet` `orukeet-v0.1.0.nemo` |
+| Reference | NeMo, `oruk/orukeet` `orukeet-v0.1.0.nemo` |
 | Dump script | `scripts/dump_reference_parakeet_nemo.py` |
 | Manifest | `tests/golden/parakeet/orukeet.manifest.json` |
 | Tolerances | `tests/tolerances/parakeet.json` |
 | Command | `uv run scripts/validate.py all --family parakeet --variant orukeet --model models/orukeet/orukeet-v0.1.0.nemo` |
 
-## Reproduction
-
-### Convert
-
-Oruk publishes a NeMo `.nemo` archive alongside Transformers, ONNX, Core ML
-and native exports. The converter reads the archive directly (no NeMo
-install needed for this step) with the `orukeet` profile.
+## Build it yourself
 
 ```bash
+# get the source checkpoint
 hf download oruk/orukeet orukeet-v0.1.0.nemo --local-dir models/orukeet
+
+# convert to F32 GGUF
 uv run --project scripts/envs/parakeet \
   scripts/convert-parakeet.py models/orukeet/orukeet-v0.1.0.nemo \
     models/orukeet/orukeet-F32.gguf --repo-id oruk/orukeet
-```
 
-Oruk also ships a `transcribe-cpp/orukeet-Q8_0.gguf` in their repo, built
-with this same converter and profile at an earlier commit. It loads and
-transcribes on current builds; the matrix here is regenerated from the F32
-so every quant shares one provenance.
-
-### Quantize
-
-```bash
+# make the smaller files
 uv run scripts/quantize-all.py models/orukeet/orukeet-F32.gguf
-```
 
-### Validate
-
-```bash
+# check it against NeMo
 uv run scripts/validate.py all --family parakeet --variant orukeet \
   --model models/orukeet/orukeet-v0.1.0.nemo
-```
 
-### WER
-
-```bash
+# measure WER
 uv run scripts/wer/ingest.py librispeech
-
-# reference arm (NeMo); `org/repo:file.nemo` pins the archive inside the HF repo
-uv run --project scripts/envs/parakeet \
-  scripts/wer/run_reference_parakeet_nemo.py \
-    --manifest samples/wer/librispeech-test-clean.manifest.jsonl \
-    --model oruk/orukeet:orukeet-v0.1.0.nemo \
-    --out reports/wer/orukeet-REF.librispeech-test-clean.jsonl
-
-# transcribe.cpp arm
 uv run scripts/wer/run.py \
   --model models/orukeet/orukeet-F32.gguf \
   --manifest samples/wer/librispeech-test-clean.manifest.jsonl \
   --out reports/wer/orukeet-F32.librispeech-test-clean.b1.jsonl
-
-uv run scripts/wer/score.py <report>.jsonl
+uv run scripts/wer/score.py reports/wer/orukeet-F32.librispeech-test-clean.b1.jsonl
 ```
 
-## Known Limitations
+Oruk also ships a `transcribe-cpp/orukeet-Q8_0.gguf` in their own repo.
+It was made with this same converter and works too; ours is just rebuilt
+from the F32 so all the sizes come from one place.
 
-- Offline only. No streaming decode; the publisher's "live" mode is window
-  re-decoding, not a cache-aware encoder.
+## Limits
+
+- No streaming.
 - No translation.
-- Token-level timestamps only, as for every TDT variant in the family.
-- Weights are CC-BY-SA-4.0 (ShareAlike), unlike the CC-BY-4.0 of the rest of
-  the parakeet family. Derivatives of the weights inherit the licence.
-- Long audio runs through the family's unbounded single-pass path; there is
-  no voice-activity segmenter (that is `parakeet-ultra`'s addition, not
-  this model's).
+- Timestamps are per token, not per word.
+- Licence is CC-BY-SA-4.0. The rest of the parakeet family is CC-BY-4.0.
+  If you make a derivative of the weights, it has to carry the same licence.
+- Long files go through in one pass. Nothing cuts them up for you.
