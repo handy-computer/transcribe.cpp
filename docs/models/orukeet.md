@@ -133,10 +133,39 @@ a hint the model detects it.
 
 ## Performance
 
-Same encoder, decoder and tensor shapes as `parakeet-tdt-0.6b-v3`, so the
-[v3](parakeet-tdt-0.6b-v3.md) and [`parakeet-ultra`](parakeet-ultra.md)
-tables are representative. This variant's own profile run on the two
-publication rigs is pending; the tables land here when it has run.
+Same encoder, decoder and tensor shapes as `parakeet-tdt-0.6b-v3`, and the
+same speed: the Gabor taps are ordinary conv weights, so nothing in the
+graph changes.
+
+### Apple M4 Max
+
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  59 ms (185.68×) |  65 ms (170.12×) |
+| Metal   | dots (35.3s) | 159 ms (221.73×) | 164 ms (215.85×) |
+| CPU     | jfk (11.0s)  |  304 ms (36.17×) |  305 ms (36.03×) |
+| CPU     | dots (35.3s) |  969 ms (36.45×) |  1.03 s (34.29×) |
+
+Apple M4 Max: transcribe.cpp `d91374b3` on 2026-10-06.
+<!-- /catalog -->
+
+### AMD Ryzen 7 PRO 4750U
+
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
+
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 454 ms (24.20×) | 455 ms (24.17×) |
+| Vulkan  | dots (35.3s) | 1.36 s (25.99×) | 1.38 s (25.59×) |
+| CPU     | jfk (11.0s)  | 730 ms (15.07×) | 776 ms (14.18×) |
+| CPU     | dots (35.3s) | 2.90 s (12.17×) | 2.95 s (11.97×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8bab590e` on 2026-10-06.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
