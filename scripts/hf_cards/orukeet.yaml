@@ -1,0 +1,52 @@
+# Spec for the HF README of handy-computer/orukeet-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+
+pin_date: 2026-10-06
+
+validation:
+  reference: NeMo
+  commit: 65856fac
+  date: 2026-10-06
+
+pipeline_tag: automatic-speech-recognition
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - tdt
+  - multilingual
+  - gabor
+
+summary: |
+  Oruk AI's fine-tune of NVIDIA's parakeet-tdt-0.6b-v3. Offline multilingual
+  speech-to-text over the same 25 European languages. A FastConformer encoder
+  with a TDT transducer decoder, in which half of the encoder's temporal
+  depthwise filters (12,288 nine-tap kernels) were replaced by frozen fitted
+  Gabor functions before the rest of the network was retrained around them.
+  The frozen taps are stored as ordinary convolution weights, so the runtime
+  is exactly v3's. Takes 16 kHz mono WAV and produces a punctuated, cased
+  transcript with optional token-level timestamps. A drop-in replacement for
+  v3: same size, languages and API. Not a streaming model and does not
+  translate. Weights are CC-BY-SA-4.0.
+
+wer:
+  notes: |
+    Greedy transducer decoding, no external LM. The reference is NeMo
+    loading Oruk's published `.nemo` archive, the same pipeline behind the
+    numbers on their card. On this manifest NeMo scores 1.87%.
+
+    Oruk's card reports 1.46% on the same split with their own normalizer,
+    against 1.53% for v3 on that pipeline. Their final adaptation and
+    checkpoint selection used LibriSpeech test-other, so test-other is not a
+    held-out split for this model; test-clean was not used for training.
+
+    Against our own sweeps of the sibling checkpoints at Q8_0: lower WER
+    than parakeet-tdt-0.6b-v3 on test-clean and on 20 of the 25 FLEURS
+    languages (the exceptions are German, French, Spanish, Italian and
+    Russian, by 0.1 to 0.9 points), with the largest gains on the Baltic,
+    Finno-Ugric and South Slavic languages. parakeet-ultra scores lower than
+    Orukeet on test-clean and on 23 of 25 FLEURS languages (Orukeet leads on
+    Czech and Croatian).

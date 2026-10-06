@@ -27,8 +27,9 @@ Most users want one of three:
   See [parakeet-ultra.md](parakeet-ultra.md) for how it segments long audio.
 - **Multilingual, alternative → `orukeet`.** Oruk AI's fine-tune of v3 with
   half of the encoder's depthwise filters replaced by frozen fitted Gabor
-  kernels. Same size, languages and API as v3; see [orukeet.md](orukeet.md)
-  for how it compares on our sweep.
+  kernels. Same size, languages and API as v3; ahead of v3 on English and
+  on 20 of 25 FLEURS languages, behind `parakeet-ultra` on nearly all of
+  them. CC-BY-SA-4.0 weights. See [orukeet.md](orukeet.md).
 - **German → `parakeet-primeline`.** primeLine's German fine-tune of
   v3. Same size and speed; tuned for German while keeping the other 24
   v3 languages usable.
@@ -65,6 +66,7 @@ quant matrix and the comparison to NVIDIA's self-reported numbers.
 | `parakeet-tdt-0.6b-v2`     |   618M | en                         |    730 MB | LibriSpeech test-clean (WER) | 1.69% | token timestamps            | [parakeet-tdt-0.6b-v2.md](parakeet-tdt-0.6b-v2.md) |
 | `parakeet-ultra`           |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.80% | token timestamps            | [parakeet-ultra.md](parakeet-ultra.md) |
 | `parakeet-tdt-0.6b-v3`     |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.94% | token timestamps            | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
+| `orukeet`                  |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.86% | token timestamps            | [orukeet.md](orukeet.md) |
 | `parakeet-primeline`       |   627M | 25 languages + auto-detect |    740 MB | FLEURS de (WER)              | 5.98% | token timestamps            | [parakeet-primeline.md](parakeet-primeline.md) |
 | `parakeet-tdt-1.1b`        |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.38% | token timestamps            | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |
 | `parakeet-tdt_ctc-110m`    |   114M | en                         |    135 MB | LibriSpeech test-clean (WER) | 2.43% | token timestamps            | [parakeet-tdt_ctc-110m.md](parakeet-tdt_ctc-110m.md) |
