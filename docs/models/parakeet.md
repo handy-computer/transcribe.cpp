@@ -7,8 +7,8 @@ head), classical RNN-T, or CTC — and a TDT+CTC hybrid that ships both
 heads in one checkpoint. All variants take 16 kHz mono PCM through a
 mel frontend; English-only across the family, except
 `parakeet-tdt-0.6b-v3`, Moondream's post-trained `parakeet-ultra`, Oruk's
-Gabor-kernel fine-tune `orukeet` and the German fine-tune
-`parakeet-primeline`, which cover 25 European languages.
+retune `orukeet` and the German fine-tune `parakeet-primeline`, which
+cover 25 European languages.
 
 For the architecture deep-dive, validation contract, and porting notes,
 see the family doc at
