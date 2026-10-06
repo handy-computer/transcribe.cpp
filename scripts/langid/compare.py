@@ -32,6 +32,10 @@ Exit status:
     1  an unlisted disagreement, agreement below the gate, or coverage differs
     2  usage / input / provenance error
 
+Only F32 is held to the gate. For the quants pass --report-only: the
+agreement is still measured, printed and written (--json, with "passed"),
+but only a coverage mismatch exits 1.
+
 Near-tie list (JSON): [{"id", "crop_s", "trim", "a_top1", "b_top1",
 "max_gap", "note"}]. An entry only excuses that exact disagreement while both
 engines' margins stay within max_gap; review every entry by listening.
@@ -98,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-listed", type=int, default=MAX_LISTED_DISAGREEMENTS)
     p.add_argument("--near-ties", type=Path, default=None,
                    help="JSON list of reviewed near-tie disagreements")
+    p.add_argument("--report-only", action="store_true",
+                   help="measure and record agreement without gating on it (the quants); "
+                        "a coverage mismatch still exits 1")
     p.add_argument("--json", type=Path, default=None,
                    help="also write the agreement for scripts/catalog/"
                         "ingest_accuracy.py; name it <gguf stem>.fleurs-mul."
@@ -282,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
             "passed": status == 0,
         }, indent=2) + "\n")
         print(f"wrote {args.json}")
+    if args.report_only and not (only_a or only_b):
+        return 0
     return status
 
 

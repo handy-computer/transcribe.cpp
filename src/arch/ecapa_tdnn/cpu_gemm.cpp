@@ -47,30 +47,29 @@ constexpr int64_t kNC = 192;  // column block: 256 x 192 packed F32 = 192 KiB in
 // raw partial sums to acc[12] (two __m256 per column); the caller loads /
 // stores / applies the epilogue. The accumulators are named locals so the
 // compiler keeps all twelve in registers through the k loop.
-#    define ECAPA_FMA6(W0, W1, BP)                          \
-        do {                                                \
-            __m256 xb = _mm256_broadcast_ss((BP) + 0);      \
-            a00       = _mm256_fmadd_ps(W0, xb, a00);       \
-            a01       = _mm256_fmadd_ps(W1, xb, a01);       \
-            xb        = _mm256_broadcast_ss((BP) + 1);      \
-            a10       = _mm256_fmadd_ps(W0, xb, a10);       \
-            a11       = _mm256_fmadd_ps(W1, xb, a11);       \
-            xb        = _mm256_broadcast_ss((BP) + 2);      \
-            a20       = _mm256_fmadd_ps(W0, xb, a20);       \
-            a21       = _mm256_fmadd_ps(W1, xb, a21);       \
-            xb        = _mm256_broadcast_ss((BP) + 3);      \
-            a30       = _mm256_fmadd_ps(W0, xb, a30);       \
-            a31       = _mm256_fmadd_ps(W1, xb, a31);       \
-            xb        = _mm256_broadcast_ss((BP) + 4);      \
-            a40       = _mm256_fmadd_ps(W0, xb, a40);       \
-            a41       = _mm256_fmadd_ps(W1, xb, a41);       \
-            xb        = _mm256_broadcast_ss((BP) + 5);      \
-            a50       = _mm256_fmadd_ps(W0, xb, a50);       \
-            a51       = _mm256_fmadd_ps(W1, xb, a51);       \
+#    define ECAPA_FMA6(W0, W1, BP)                     \
+        do {                                           \
+            __m256 xb = _mm256_broadcast_ss((BP) + 0); \
+            a00       = _mm256_fmadd_ps(W0, xb, a00);  \
+            a01       = _mm256_fmadd_ps(W1, xb, a01);  \
+            xb        = _mm256_broadcast_ss((BP) + 1); \
+            a10       = _mm256_fmadd_ps(W0, xb, a10);  \
+            a11       = _mm256_fmadd_ps(W1, xb, a11);  \
+            xb        = _mm256_broadcast_ss((BP) + 2); \
+            a20       = _mm256_fmadd_ps(W0, xb, a20);  \
+            a21       = _mm256_fmadd_ps(W1, xb, a21);  \
+            xb        = _mm256_broadcast_ss((BP) + 3); \
+            a30       = _mm256_fmadd_ps(W0, xb, a30);  \
+            a31       = _mm256_fmadd_ps(W1, xb, a31);  \
+            xb        = _mm256_broadcast_ss((BP) + 4); \
+            a40       = _mm256_fmadd_ps(W0, xb, a40);  \
+            a41       = _mm256_fmadd_ps(W1, xb, a41);  \
+            xb        = _mm256_broadcast_ss((BP) + 5); \
+            a50       = _mm256_fmadd_ps(W0, xb, a50);  \
+            a51       = _mm256_fmadd_ps(W1, xb, a51);  \
         } while (0)
 
-template <bool F16>
-ECAPA_TARGET void tile_core(const void * a, const float * bp, int64_t kc, __m256 * acc) {
+template <bool F16> ECAPA_TARGET void tile_core(const void * a, const float * bp, int64_t kc, __m256 * acc) {
     __m256 a00 = acc[0], a01 = acc[1], a10 = acc[2], a11 = acc[3], a20 = acc[4], a21 = acc[5];
     __m256 a30 = acc[6], a31 = acc[7], a40 = acc[8], a41 = acc[9], a50 = acc[10], a51 = acc[11];
     if constexpr (F16) {
@@ -215,8 +214,8 @@ void gemm_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
     // read the same value because nobody arrives before every thread has
     // read it (the read happens before this thread's own arrival).
     const uint32_t gen = d.generation.load(std::memory_order_acquire) + 1;
-    const int64_t M = d.M;
-    const int64_t N = d.N;
+    const int64_t  M   = d.M;
+    const int64_t  N   = d.N;
 
     const int64_t mb   = std::min(kMB, M);
     const int64_t n_rb = (M + mb - 1) / mb;
@@ -280,8 +279,8 @@ void gemm_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
             const bool          f16 = w->type == GGML_TYPE_F16;
             const size_t        esz = ggml_type_size(w->type);
             const size_t        ldx = x->nb[1] / sizeof(float);
-            const float * xs = static_cast<const float *>(x->data) + static_cast<size_t>(d.segs[s].x_row0) * ldx;
-            const char *  wm = static_cast<const char *>(w->data) + static_cast<size_t>(d.segs[s].mat) * M * K * esz;
+            const float *       xs  = static_cast<const float *>(x->data) + static_cast<size_t>(d.segs[s].x_row0) * ldx;
+            const char * wm = static_cast<const char *>(w->data) + static_cast<size_t>(d.segs[s].mat) * M * K * esz;
 
             for (int64_t k0 = 0; k0 < K; k0 += kKC, ++blk) {
                 const int64_t kc    = std::min(kKC, K - k0);
@@ -375,11 +374,11 @@ ggml_tensor * mul_mat(ggml_context *  ctx,
     if (n_segs < 1 || n_segs > kMaxSegs) {
         return nullptr;
     }
-    Desc & d   = arena.emplace_back();
-    d.n_segs   = n_segs;
-    d.M        = segs[0].w->ne[1];
-    d.N        = N;
-    d.ep       = ep;
+    Desc & d = arena.emplace_back();
+    d.n_segs = n_segs;
+    d.M      = segs[0].w->ne[1];
+    d.N      = N;
+    d.ep     = ep;
 
     ggml_tensor * args[GGML_MAX_SRC] = {};
     int           n                  = 0;

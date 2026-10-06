@@ -21,6 +21,7 @@ against them instead of a stamp.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import pathlib
 import sys
@@ -32,6 +33,20 @@ import profiles  # noqa: E402
 REPORTS = common.REPO / "reports" / "wer"
 LANGID_REPORTS = common.REPO / "reports" / "langid"
 LANGID_SCORE = "transcribe-langid-score-v1"
+LANGID_INGEST = common.REPO / "scripts" / "langid" / "ingest.py"
+
+
+def fleurs_langid_codes() -> list[str]:
+    """The label codes of scripts/langid/ingest.py's FLEURS_LANGUAGES, the
+    language set the profile's macro mean is over. Read from the source
+    (ingest.py needs numpy, which the catalog scripts do not install)."""
+    tree = ast.parse(LANGID_INGEST.read_text())
+    for node in tree.body:
+        target = node.target if isinstance(node, ast.AnnAssign) else (
+            node.targets[0] if isinstance(node, ast.Assign) else None)
+        if isinstance(target, ast.Name) and target.id == "FLEURS_LANGUAGES":
+            return [code for _config, code in ast.literal_eval(node.value)]
+    raise RuntimeError(f"FLEURS_LANGUAGES not found in {LANGID_INGEST}")
 
 
 def score_path(record: dict, cell: dict, reports: pathlib.Path) -> pathlib.Path:
@@ -98,8 +113,14 @@ def langid_row(record: dict, cell: dict, score: dict, agreement: dict | None,
         reasons.append(f"no {cell['crop_s']} s crop")
     if not score.get("engine_sha"):
         reasons.append("engine_sha is empty")
-    if agreement is not None and agreement.get("run") != score.get("run"):
+    if score.get("dataset") == "fleurs" and sorted(score.get("languages") or []) != sorted(fleurs_langid_codes()):
+        reasons.append(f"languages={score.get('languages')!r} are not scripts/langid/ingest.py's FLEURS set")
+    if agreement is None:
+        reasons.append("no agreement (write it with compare.py --json)")
+    elif agreement.get("run") != score.get("run"):
         reasons.append(f"agreement is for {agreement.get('run')!r}, not {score.get('run')!r}")
+    elif not agreement.get("same_rows", False):
+        reasons.append("agreement run does not cover the reference's rows")
     if reasons:
         return None, reasons
     row = {
@@ -118,12 +139,11 @@ def langid_row(record: dict, cell: dict, score: dict, agreement: dict | None,
         "publication_profile": profile_id,
         "measured_on": (score.get("created") or "")[:10] or None,
     }
-    if agreement is not None:
-        row["agreement"] = {
-            "n_agree": agreement["n_agree"],
-            "n": agreement["n"],
-            "max_abs_logit_delta": float(f"{agreement['max_abs_logit_delta']:.2g}"),
-        }
+    row["agreement"] = {
+        "n_agree": agreement["n_agree"],
+        "n": agreement["n"],
+        "max_abs_logit_delta": float(f"{agreement['max_abs_logit_delta']:.2g}"),
+    }
     return row, []
 
 
@@ -173,9 +193,6 @@ def main() -> int:
                 agreement = (json.loads(agreement_path.read_text())
                              if agreement_path.exists() else None)
                 new_row, reasons = langid_row(record, cell, score, agreement, profile_id)
-                if not reasons and agreement is None:
-                    print(f"  note {source_path.name}: no {agreement_path.name}; "
-                          f"the row carries no reference agreement")
             else:
                 new_row, reasons = None, []
                 recipe = score.get("recipe") or {}

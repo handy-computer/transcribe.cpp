@@ -35,11 +35,11 @@ namespace {
 // builds, so this keeps the attention softmax on the arithmetic the stock
 // graph had.
 ECAPA_AVX2 inline __m256 v_expf(__m256 x) {
-    const __m256  r = _mm256_set1_ps(0x1.8p23f);
-    const __m256  z = _mm256_fmadd_ps(x, _mm256_set1_ps(0x1.715476p+0f), r);
-    const __m256  n = _mm256_sub_ps(z, r);
-    const __m256  b = _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.7f7d1cp-20f),
-                                       _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.62e4p-1f), x));
+    const __m256 r = _mm256_set1_ps(0x1.8p23f);
+    const __m256 z = _mm256_fmadd_ps(x, _mm256_set1_ps(0x1.715476p+0f), r);
+    const __m256 n = _mm256_sub_ps(z, r);
+    const __m256 b =
+        _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.7f7d1cp-20f), _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.62e4p-1f), x));
     const __m256i e = _mm256_slli_epi32(_mm256_castps_si256(z), 23);
     const __m256  k = _mm256_castsi256_ps(_mm256_add_epi32(e, _mm256_castps_si256(_mm256_set1_ps(1))));
     const __m256i c =
@@ -60,9 +60,10 @@ ECAPA_AVX2 inline __m256 v_expf(__m256 x) {
         _mm256_castps_si256(_mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.f), n), _mm256_set1_ps(192), _CMP_GT_OQ));
     return _mm256_or_ps(
         _mm256_and_ps(_mm256_castsi256_ps(d), _mm256_mul_ps(s1, s1)),
-        _mm256_andnot_ps(_mm256_castsi256_ps(d),
-                         _mm256_or_ps(_mm256_and_ps(_mm256_castsi256_ps(c), _mm256_mul_ps(_mm256_fmadd_ps(s2, j, s2), s1)),
-                                      _mm256_andnot_ps(_mm256_castsi256_ps(c), _mm256_fmadd_ps(k, j, k)))));
+        _mm256_andnot_ps(
+            _mm256_castsi256_ps(d),
+            _mm256_or_ps(_mm256_and_ps(_mm256_castsi256_ps(c), _mm256_mul_ps(_mm256_fmadd_ps(s2, j, s2), s1)),
+                         _mm256_andnot_ps(_mm256_castsi256_ps(c), _mm256_fmadd_ps(k, j, k)))));
 }
 
 bool cpu_has_avx2_fma() {
@@ -90,6 +91,9 @@ ECAPA_AVX2 void exp_row_avx2(float * r, const float * mx, double * sum, size_t n
 }
 #endif
 
+// Elsewhere (ARM included) this is libm expf, which is not the NEON
+// ggml_v_expf ggml's soft_max uses there: the softmax is within a few ulp of
+// the stock graph's, not bit-identical.
 void exp_row(float * r, const float * mx, double * sum, size_t n) {
 #if ECAPA_OPS_X86
     static const bool avx2 = cpu_has_avx2_fma();
@@ -136,8 +140,7 @@ void thread_rows(int64_t n, int ith, int nth, int64_t & r0, int64_t & r1) {
 // that 3072 channels still spread over 8+ threads.
 constexpr int64_t kChanBlock = 256;
 
-template <typename F>
-void for_channel_blocks(int64_t C, int ith, int nth, F && f) {
+template <typename F> void for_channel_blocks(int64_t C, int ith, int nth, F && f) {
     for (int64_t c0 = static_cast<int64_t>(ith) * kChanBlock; c0 < C; c0 += static_cast<int64_t>(nth) * kChanBlock) {
         f(c0, std::min(C, c0 + kChanBlock));
     }
@@ -183,14 +186,14 @@ void epilogue_rows(const float * in,
 
 // dst is a view of src[0] (in place). src: [z, (b), scale, shift].
 void epilogue_inplace_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
-    const auto *  p     = static_cast<const EpilogueParams *>(ud);
-    const int64_t C     = dst->ne[0];
-    int           i     = 1;
-    const float * b     = p->has_bias ? f32(dst->src[i++]) : nullptr;
-    const float * s     = f32(dst->src[i++]);
-    const float * sh    = f32(dst->src[i++]);
-    int64_t       r0    = 0;
-    int64_t       r1    = 0;
+    const auto *  p  = static_cast<const EpilogueParams *>(ud);
+    const int64_t C  = dst->ne[0];
+    int           i  = 1;
+    const float * b  = p->has_bias ? f32(dst->src[i++]) : nullptr;
+    const float * s  = f32(dst->src[i++]);
+    const float * sh = f32(dst->src[i++]);
+    int64_t       r0 = 0;
+    int64_t       r1 = 0;
     thread_rows(dst->ne[1], ith, nth, r0, r1);
     epilogue_rows(f32(dst), row_floats(dst), f32_mut(dst), row_floats(dst), C, r0, r1, b, s, sh, p->tanh_after);
 }
@@ -198,18 +201,18 @@ void epilogue_inplace_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
 // dst is a view of src[0]; src: [z0, z1, z2, b, scale, shift].
 void epilogue_sum3_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
     (void) ud;
-    const int64_t C    = dst->ne[0];
-    const float * z1   = f32(dst->src[1]);
-    const float * z2   = f32(dst->src[2]);
-    const float * b    = f32(dst->src[3]);
-    const float * s    = f32(dst->src[4]);
-    const float * sh   = f32(dst->src[5]);
-    float *       y    = f32_mut(dst);
-    const size_t  st   = row_floats(dst);
-    const size_t  st1  = row_floats(dst->src[1]);
-    const size_t  st2  = row_floats(dst->src[2]);
-    int64_t       r0   = 0;
-    int64_t       r1   = 0;
+    const int64_t C   = dst->ne[0];
+    const float * z1  = f32(dst->src[1]);
+    const float * z2  = f32(dst->src[2]);
+    const float * b   = f32(dst->src[3]);
+    const float * s   = f32(dst->src[4]);
+    const float * sh  = f32(dst->src[5]);
+    float *       y   = f32_mut(dst);
+    const size_t  st  = row_floats(dst);
+    const size_t  st1 = row_floats(dst->src[1]);
+    const size_t  st2 = row_floats(dst->src[2]);
+    int64_t       r0  = 0;
+    int64_t       r1  = 0;
     thread_rows(dst->ne[1], ith, nth, r0, r1);
     for (int64_t t = r0; t < r1; ++t) {
         float *       yr  = y + static_cast<size_t>(t) * st;
@@ -415,11 +418,11 @@ Res2Params unpack_res2(const void * ud) {
 
 // src: [h, (z, b, scale, shift)].
 void res2_step_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
-    const Res2Params    p   = unpack_res2(ud);
-    const ggml_tensor * h   = dst->src[0];
-    const int64_t       w   = dst->ne[0];
-    const int64_t       T   = h->ne[1];
-    const int64_t       pad = static_cast<int64_t>(p.dilation) * (p.kernel - 1) / 2;
+    const Res2Params    p          = unpack_res2(ud);
+    const ggml_tensor * h          = dst->src[0];
+    const int64_t       w          = dst->ne[0];
+    const int64_t       T          = h->ne[1];
+    const int64_t       pad        = static_cast<int64_t>(p.dilation) * (p.kernel - 1) / 2;
     const int64_t       n_pad_rows = p.next >= 0 ? T + 2 * pad : 0;
     const int64_t       n_rows     = n_pad_rows + (p.has_z ? T : 0);
     const size_t        sd         = row_floats(dst);
@@ -519,9 +522,9 @@ void res2_pad_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
 // dst [C, T]; src: [h, y_1 .. y_n] (y_i are [w, T] views).
 void res2_gather_fn(ggml_tensor * dst, int ith, int nth, void * ud) {
     (void) ud;
-    const ggml_tensor * h  = dst->src[0];
-    const int64_t       C  = dst->ne[0];
-    int                 n  = 0;
+    const ggml_tensor * h = dst->src[0];
+    const int64_t       C = dst->ne[0];
+    int                 n = 0;
     while (n + 1 < GGML_MAX_SRC && dst->src[n + 1] != nullptr) {
         ++n;
     }
@@ -560,10 +563,10 @@ ggml_tensor * epilogue(ggml_context * ctx,
                        ggml_tensor *  shift,
                        bool           tanh_after,
                        bool           inplace) {
-    const EpilogueParams * p = b != nullptr ? (tanh_after ? &k_ep_bias_tanh : &k_ep_bias)
-                                            : (tanh_after ? &k_ep_nobias_tanh : &k_ep_nobias);
-    ggml_tensor *          args[3];
-    int                    n = 0;
+    const EpilogueParams * p =
+        b != nullptr ? (tanh_after ? &k_ep_bias_tanh : &k_ep_bias) : (tanh_after ? &k_ep_nobias_tanh : &k_ep_nobias);
+    ggml_tensor * args[3];
+    int           n = 0;
     if (b != nullptr) {
         args[n++] = b;
     }
@@ -603,15 +606,17 @@ ggml_tensor * scale_add(ggml_context * ctx, ggml_tensor * x, ggml_tensor * s, gg
 
 ggml_tensor * time_stats(ggml_context * ctx, ggml_tensor * x, const float * eps) {
     ggml_tensor * args[1] = { x };
-    return ggml_custom_4d(ctx, GGML_TYPE_F32, 2 * x->ne[0], 1, 1, 1, args, 1, time_stats_fn, GGML_N_TASKS_MAX,
-                          ud(eps));
+    return ggml_custom_4d(ctx, GGML_TYPE_F32, 2 * x->ne[0], 1, 1, 1, args, 1, time_stats_fn, GGML_N_TASKS_MAX, ud(eps));
 }
 
-ggml_tensor * attn_stats(ggml_context * ctx, ggml_tensor * x, ggml_tensor * logits, ggml_tensor * bias,
-                         const float * eps) {
+ggml_tensor * attn_stats(ggml_context * ctx,
+                         ggml_tensor *  x,
+                         ggml_tensor *  logits,
+                         ggml_tensor *  bias,
+                         const float *  eps) {
     ggml_tensor * sm_args[1] = { bias };
-    ggml_tensor * w = ggml_custom_inplace(ctx, logits, sm_args, 1, softmax_time_fn, GGML_N_TASKS_MAX, nullptr);
-    ggml_tensor * args[2] = { x, w };
+    ggml_tensor * w          = ggml_custom_inplace(ctx, logits, sm_args, 1, softmax_time_fn, GGML_N_TASKS_MAX, nullptr);
+    ggml_tensor * args[2]    = { x, w };
     return ggml_custom_4d(ctx, GGML_TYPE_F32, 2 * x->ne[0], 1, 1, 1, args, 2, weighted_stats_fn, GGML_N_TASKS_MAX,
                           ud(eps));
 }

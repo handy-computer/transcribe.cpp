@@ -58,8 +58,11 @@ ggml_tensor * time_stats(ggml_context * ctx, ggml_tensor * x, const float * eps)
 // Attentive statistics: per channel c, w = softmax_t(logits[c, t] + bias[c]),
 // mu = sum_t w x, sigma = sqrt(max(sum_t w (x - mu)^2, *eps)). x and logits
 // ne = [C, T], bias ne = [C]; returns ne = [2C] = [mu, sigma].
-ggml_tensor * attn_stats(ggml_context * ctx, ggml_tensor * x, ggml_tensor * logits, ggml_tensor * bias,
-                         const float * eps);
+ggml_tensor * attn_stats(ggml_context * ctx,
+                         ggml_tensor *  x,
+                         ggml_tensor *  logits,
+                         ggml_tensor *  bias,
+                         const float *  eps);
 
 // One Res2Net step. Chunk i of the block (i >= 1) is
 //   y_i = BN(ReLU(sum_k Z[k*w + c, t + k*d] + b))

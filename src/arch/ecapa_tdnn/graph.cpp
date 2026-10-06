@@ -290,11 +290,20 @@ ggml_tensor * res2net_cpu(ggml_context *         ctx,
     return cpu::res2_gather(ctx, h, ys, kRes2NetSubs);
 }
 
-// SEBlock fused with the residual add: x * s + residual.
-ggml_tensor * se_block_cpu(ggml_context * ctx, const SeBlock & se, ggml_tensor * x, ggml_tensor * residual) {
+// SEBlock fused with the residual add: x * s + residual. The fused kernel
+// never materializes x * s, so a dump build passes `se_out` to get it on a
+// side branch (the caller marks it and adds it to the graph).
+ggml_tensor * se_block_cpu(ggml_context *  ctx,
+                           const SeBlock & se,
+                           ggml_tensor *   x,
+                           ggml_tensor *   residual,
+                           ggml_tensor **  se_out) {
     ggml_tensor * s = cpu::time_mean(ctx, x);
     s               = ggml_relu(ctx, linear(ctx, se.c1_w, s, se.c1_b));
     s               = ggml_sigmoid(ctx, linear(ctx, se.c2_w, s, se.c2_b));
+    if (se_out != nullptr) {
+        *se_out = ggml_mul(ctx, x, s);
+    }
     return cpu::scale_add(ctx, x, s, residual);
 }
 
@@ -573,9 +582,14 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T, bool cpu_
         h = cpu_ops ? tdnn_1x1_cpu(ctx, ar_lin, blk.tdnn2, h) : tdnn_1x1(ctx, blk.tdnn2, h);
 
         if (cpu_ops) {
-            // The SE output and the residual add are one kernel here, so the
-            // enc.blk.1.se.out dump point does not exist in this graph.
-            x = se_block_cpu(ctx, blk.se, h, residual);
+            // The SE output and the residual add are one kernel here; a dump
+            // build recomputes enc.blk.1.se.out on a side branch.
+            ggml_tensor * se_out = nullptr;
+            x = se_block_cpu(ctx, blk.se, h, residual, i == 0 && debug::enabled() ? &se_out : nullptr);
+            if (se_out != nullptr) {
+                mark_dump(gb.dumps.blk1_se_out, se_out, "enc.blk.1.se.out");
+                ggml_build_forward_expand(gb.graph, se_out);
+            }
         } else {
             h = se_block(ctx, blk.se, h);
             if (i == 0) {

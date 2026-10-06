@@ -33,13 +33,13 @@ Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface
 <!-- catalog:downloads -->
 | Quantization | Download |  Size | Top-1 accuracy (FLEURS multilingual) |
 | --- | --- | ---: | ---: |
-| F32          | [lang-id-voxlingua107-ecapa-F32.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F32.gguf) | 85 MB | 85.20% |
-| F16          | [lang-id-voxlingua107-ecapa-F16.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F16.gguf) | 45 MB | 85.20% |
-| Q8_0         | [lang-id-voxlingua107-ecapa-Q8_0.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-Q8_0.gguf) | 27 MB | 86.30% |
+| F32          | [lang-id-voxlingua107-ecapa-F32.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F32.gguf) | 85 MB | 85.23% |
+| F16          | [lang-id-voxlingua107-ecapa-F16.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F16.gguf) | 45 MB | 85.17% |
+| Q8_0         | [lang-id-voxlingua107-ecapa-Q8_0.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-Q8_0.gguf) | 27 MB | 86.27% |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `62522202` on 2026-10-05.
+Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `16d46bc2` on 2026-10-06.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
@@ -58,11 +58,11 @@ over 107 logits, and the k-quant tiers would save a few MB at most.
 <!-- catalog:agreement -->
 | GGUF | Top-1 accuracy (95% CI) | Top-1 agreement with SpeechBrain | Max abs logit difference |
 | --- | ---: | ---: | ---: |
-| F32  | 85.20% (84.10-86.50) | 12000 / 12000 | 6.5e-05 |
-| F16  | 85.20% (84.00-86.40) | 11991 / 12000 | 0.098 |
-| Q8_0 | 86.30% (85.20-87.50) | 11703 / 12000 | 2.8 |
+| F32  | 85.23% (84.07-86.47) | 12000 / 12000 | 7.4e-05 |
+| F16  | 85.17% (84.00-86.43) | 11984 / 12000 | 0.094 |
+| Q8_0 | 86.27% (85.13-87.47) | 11704 / 12000 | 2.9 |
 
-Measured at transcribe.cpp `62522202` on 2026-10-05.
+Measured at transcribe.cpp `16d46bc2` on 2026-10-06.
 <!-- /catalog -->
 
 Accuracy is the headline above: open set, first 5 s of each clip, no silence
@@ -71,7 +71,7 @@ match the SpeechBrain reference on the same audio, over every crop of the
 sweep (3 / 5 / 10 s / full). It is the ship gate for F32
 (`scripts/langid/compare.py`: every disagreement must be a reviewed near-tie)
 and the evidence for the quants. F16's flips are all near-ties (top-two
-margin under 0.025 logit). Q8_0 is a download format: transcribe.cpp widens
+margin under 0.04 logit). Q8_0 is a download format: transcribe.cpp widens
 its weights to F16 at load, so it computes like F16 (F16's memory) and its
 accuracy matches F32 within the confidence interval; its flips are the 8-bit
 weights alone, on decisions F32 also finds uncertain.
@@ -79,7 +79,7 @@ weights alone, on decisions F32 also finds uncertain.
 ### Snapshot: crops and decision spaces
 
 A snapshot of `scripts/langid/score.py --md` on the C++ sweeps behind the
-rows above (transcribe.cpp `62522202`, CPU; FLEURS `test`, 15 languages x 200
+rows above (transcribe.cpp `16d46bc2`, CPU; FLEURS `test`, 15 languages x 200
 utterances, crops from the start of each clip, no silence trimming). It is
 not rendered from the catalog; regenerate it with the commands under
 Reproduction. Top-1 accuracy, %.
@@ -89,7 +89,7 @@ Open set (all 107 labels) at the other crops; 5 s is the catalog row above:
 | GGUF | 3 s | 10 s | full |
 |---|---|---|---|
 | F32 | 67.0 | 91.1 | 91.4 |
-| F16 | 67.0 | 91.1 | 91.5 |
+| F16 | 66.9 | 91.0 | 91.4 |
 | Q8_0 | 67.2 | 92.0 | 92.3 |
 
 Restricted to a selection, F32:
@@ -234,8 +234,11 @@ uv run scripts/validate.py all --family ecapa_tdnn
 ### Accuracy acceptance
 
 One reference sweep, then one C++ sweep per shipped GGUF (shown for F32;
-repeat with F16 and Q8_0). `compare.py` is the gate; `score.py --json` and
-`compare.py --json` are what `ingest_accuracy.py` reads, named after the GGUF.
+repeat with F16 and Q8_0, passing `--report-only` to `compare.py`: only F32
+is gated). `compare.py` is the gate; `score.py --json` and `compare.py --json`
+are what `ingest_accuracy.py` reads, named after the GGUF, and the importer
+rejects a score without its agreement or over a language set other than
+`scripts/langid/ingest.py`'s.
 
 ```bash
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang all

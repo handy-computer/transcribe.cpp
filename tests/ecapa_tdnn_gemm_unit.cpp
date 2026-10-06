@@ -28,24 +28,24 @@ namespace {
 
 int g_fail = 0;
 
-#define CHECK(cond, ...)                                       \
-    do {                                                       \
-        if (!(cond)) {                                         \
+#define CHECK(cond, ...)                                              \
+    do {                                                              \
+        if (!(cond)) {                                                \
             std::fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__); \
-            std::fprintf(stderr, __VA_ARGS__);                 \
-            std::fprintf(stderr, "\n");                        \
-            ++g_fail;                                          \
-        }                                                      \
+            std::fprintf(stderr, __VA_ARGS__);                        \
+            std::fprintf(stderr, "\n");                               \
+            ++g_fail;                                                 \
+        }                                                             \
     } while (0)
 
 struct Case {
-    const char *    name;
-    ggml_type       wtype;
-    int64_t         M, K, N;
-    int             n_segs;      // segments share one weight tensor (n_mats = n_segs)
-    int64_t         row_step;    // segment s reads x from row s * row_step
-    gemm::Epilogue  ep;
-    bool            bias;
+    const char *   name;
+    ggml_type      wtype;
+    int64_t        M, K, N;
+    int            n_segs;    // segments share one weight tensor (n_mats = n_segs)
+    int64_t        row_step;  // segment s reads x from row s * row_step
+    gemm::Epilogue ep;
+    bool           bias;
 };
 
 std::vector<float> rnd(size_t n, std::mt19937 & rng, float scale) {
@@ -106,13 +106,13 @@ bool run_case(const Case & c) {
     for (int nt : { 1, 3, 8, 16 }) {
         ggml_backend_t be = ggml_backend_cpu_init();
         ggml_backend_cpu_set_n_threads(be, nt);
-        ggml_init_params ip{ 64 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
-        ggml_context *   ctx = ggml_init(ip);
-        ggml_tensor *    w   = ggml_new_tensor_3d(ctx, c.wtype, c.K, c.M, Q);
-        ggml_tensor *    x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, c.K, x_rows);
-        ggml_tensor *    b   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, c.M);
-        ggml_tensor *    s   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, c.M);
-        ggml_tensor *    h   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, c.M);
+        ggml_init_params      ip{ 64 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
+        ggml_context *        ctx  = ggml_init(ip);
+        ggml_tensor *         w    = ggml_new_tensor_3d(ctx, c.wtype, c.K, c.M, Q);
+        ggml_tensor *         x    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, c.K, x_rows);
+        ggml_tensor *         b    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, c.M);
+        ggml_tensor *         s    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, c.M);
+        ggml_tensor *         h    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, c.M);
         ggml_backend_buffer_t wbuf = ggml_backend_alloc_ctx_tensors(ctx, be);
         if (c.wtype == GGML_TYPE_F16) {
             ggml_backend_tensor_set(w, wh.data(), 0, ggml_nbytes(w));
@@ -176,19 +176,19 @@ bool run_case(const Case & c) {
 void run_reductions() {
     const int64_t      C = 600, T = 517;  // C not a multiple of the 256 channel block
     std::mt19937       rng(99);
-    std::vector<float> xf = rnd(static_cast<size_t>(C * T), rng, 1.0f);
-    std::vector<float> lf = rnd(static_cast<size_t>(C * T), rng, 2.0f);
-    std::vector<float> bf = rnd(static_cast<size_t>(C), rng, 1.0f);
+    std::vector<float> xf  = rnd(static_cast<size_t>(C * T), rng, 1.0f);
+    std::vector<float> lf  = rnd(static_cast<size_t>(C * T), rng, 2.0f);
+    std::vector<float> bf  = rnd(static_cast<size_t>(C), rng, 1.0f);
     static const float eps = 1e-12f;
 
     for (int nt : { 1, 5, 8 }) {
         ggml_backend_t be = ggml_backend_cpu_init();
         ggml_backend_cpu_set_n_threads(be, nt);
-        ggml_init_params ip{ 64 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
-        ggml_context *   ctx = ggml_init(ip);
-        ggml_tensor *    x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, T);
-        ggml_tensor *    l   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, T);
-        ggml_tensor *    b   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, C);
+        ggml_init_params      ip{ 64 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
+        ggml_context *        ctx = ggml_init(ip);
+        ggml_tensor *         x   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, T);
+        ggml_tensor *         l   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, T);
+        ggml_tensor *         b   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, C);
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, be);
         ggml_backend_tensor_set(x, xf.data(), 0, ggml_nbytes(x));
         ggml_backend_tensor_set(l, lf.data(), 0, ggml_nbytes(l));
@@ -205,7 +205,8 @@ void run_reductions() {
         ggml_gallocr_alloc_graph(ga, g);
         CHECK(ggml_backend_graph_compute(be, g) == GGML_STATUS_SUCCESS, "reductions: compute failed");
 
-        std::vector<float> vst(static_cast<size_t>(2 * C)), vat(static_cast<size_t>(2 * C)), vmn(static_cast<size_t>(C));
+        std::vector<float> vst(static_cast<size_t>(2 * C)), vat(static_cast<size_t>(2 * C)),
+            vmn(static_cast<size_t>(C));
         ggml_backend_tensor_get(st, vst.data(), 0, ggml_nbytes(st));
         ggml_backend_tensor_get(at, vat.data(), 0, ggml_nbytes(at));
         ggml_backend_tensor_get(mn, vmn.data(), 0, ggml_nbytes(mn));
@@ -220,19 +221,23 @@ void run_reductions() {
             for (int64_t t = 0; t < T; ++t) {
                 const double d = xf[static_cast<size_t>(t * C + c)] - mean;
                 q += d * d;
-                mx = std::fmax(mx, static_cast<double>(lf[static_cast<size_t>(t * C + c)]) + bf[static_cast<size_t>(c)]);
+                mx =
+                    std::fmax(mx, static_cast<double>(lf[static_cast<size_t>(t * C + c)]) + bf[static_cast<size_t>(c)]);
             }
             for (int64_t t = 0; t < T; ++t) {
-                z += std::exp(static_cast<double>(lf[static_cast<size_t>(t * C + c)]) + bf[static_cast<size_t>(c)] - mx);
+                z +=
+                    std::exp(static_cast<double>(lf[static_cast<size_t>(t * C + c)]) + bf[static_cast<size_t>(c)] - mx);
             }
             for (int64_t t = 0; t < T; ++t) {
-                const double w =
-                    std::exp(static_cast<double>(lf[static_cast<size_t>(t * C + c)]) + bf[static_cast<size_t>(c)] - mx) / z;
+                const double w = std::exp(static_cast<double>(lf[static_cast<size_t>(t * C + c)]) +
+                                          bf[static_cast<size_t>(c)] - mx) /
+                                 z;
                 mu += w * xf[static_cast<size_t>(t * C + c)];
             }
             for (int64_t t = 0; t < T; ++t) {
-                const double w =
-                    std::exp(static_cast<double>(lf[static_cast<size_t>(t * C + c)]) + bf[static_cast<size_t>(c)] - mx) / z;
+                const double w = std::exp(static_cast<double>(lf[static_cast<size_t>(t * C + c)]) +
+                                          bf[static_cast<size_t>(c)] - mx) /
+                                 z;
                 const double d = xf[static_cast<size_t>(t * C + c)] - mu;
                 sg += w * d * d;
             }
@@ -264,13 +269,13 @@ int main() {
     }
 
     const Case cases[] = {
-        { "f16 1x1 relu-bn", GGML_TYPE_F16, 64, 96, 37, 1, 0, gemm::Epilogue::ReluBn, true },
-        { "f16 mfa 3-seg", GGML_TYPE_F16, 48, 300, 61, 3, 0, gemm::Epilogue::ReluBn, true },
-        { "f16 none tanh-free", GGML_TYPE_F16, 32, 513, 13, 1, 0, gemm::Epilogue::None, false },
-        { "f16 tanh", GGML_TYPE_F16, 16, 40, 7, 1, 0, gemm::Epilogue::ReluBnTanh, true },
-        { "f32 dilated conv 3-tap", GGML_TYPE_F32, 32, 24, 50, 3, 4, gemm::Epilogue::ReluBn, true },
-        { "f32 im2col no-bias", GGML_TYPE_F32, 16, 320, 101, 1, 0, gemm::Epilogue::ReluBn, false },
-        { "f16 N=1", GGML_TYPE_F16, 16, 33, 1, 2, 1, gemm::Epilogue::None, false },
+        { "f16 1x1 relu-bn",        GGML_TYPE_F16, 64, 96,  37,  1, 0, gemm::Epilogue::ReluBn,     true  },
+        { "f16 mfa 3-seg",          GGML_TYPE_F16, 48, 300, 61,  3, 0, gemm::Epilogue::ReluBn,     true  },
+        { "f16 none tanh-free",     GGML_TYPE_F16, 32, 513, 13,  1, 0, gemm::Epilogue::None,       false },
+        { "f16 tanh",               GGML_TYPE_F16, 16, 40,  7,   1, 0, gemm::Epilogue::ReluBnTanh, true  },
+        { "f32 dilated conv 3-tap", GGML_TYPE_F32, 32, 24,  50,  3, 4, gemm::Epilogue::ReluBn,     true  },
+        { "f32 im2col no-bias",     GGML_TYPE_F32, 16, 320, 101, 1, 0, gemm::Epilogue::ReluBn,     false },
+        { "f16 N=1",                GGML_TYPE_F16, 16, 33,  1,   2, 1, gemm::Epilogue::None,       false },
     };
     for (const Case & c : cases) {
         run_case(c);

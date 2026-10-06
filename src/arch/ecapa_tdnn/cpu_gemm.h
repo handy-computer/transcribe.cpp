@@ -51,8 +51,8 @@ constexpr int kMaxSegs = 3;
 bool pack_weight(ggml_tensor * t);
 
 enum class Epilogue : int32_t {
-    None    = 0,  // y = acc
-    ReluBn  = 1,  // y = max(acc + b, 0) * scale + shift (b optional)
+    None       = 0,  // y = acc
+    ReluBn     = 1,  // y = max(acc + b, 0) * scale + shift (b optional)
     ReluBnTanh = 2,
 };
 
@@ -89,7 +89,7 @@ struct Desc {
     // Slot t holds thread t's progress through its own job range, tagged
     // with the compute generation so a reused graph starts clean without a
     // reset pass (custom ops have no barrier to reset behind).
-    static constexpr int kMaxThreads = 256;
+    static constexpr int  kMaxThreads       = 256;
     std::atomic<uint64_t> slot[kMaxThreads] = {};
     std::atomic<uint32_t> generation{ 0 };
     std::atomic<int32_t>  arrived{ 0 };

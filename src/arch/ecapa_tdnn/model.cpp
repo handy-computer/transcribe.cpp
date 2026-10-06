@@ -576,7 +576,7 @@ void dump_stages(const GraphBuild & gb) {
     try_dump("enc.blk.0.out", gb.dumps.blk0_out, "encoder");
     try_dump("enc.blk.1.tdnn1.out", gb.dumps.blk1_tdnn1_out, "encoder");
     try_dump("enc.blk.1.res2.out", gb.dumps.blk1_res2_out, "encoder");
-    try_dump("enc.blk.1.se.out", gb.dumps.blk1_se_out, "encoder");  // stock-op graph only
+    try_dump("enc.blk.1.se.out", gb.dumps.blk1_se_out, "encoder");
     try_dump("enc.blk.1.out", gb.dumps.blk_out[0], "encoder");
     try_dump("enc.blk.2.out", gb.dumps.blk_out[1], "encoder");
     try_dump("enc.blk.3.out", gb.dumps.blk_out[2], "encoder");

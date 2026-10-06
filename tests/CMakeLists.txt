@@ -1394,12 +1394,13 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         SKIP_RETURN_CODE 77)
 
     # ecapa_tdnn on the LANGID role: label table, aliases, top-1 on the
-    # committed FLEURS clips, the 30 s crop. Gated by
+    # committed FLEURS clips, the 30 s crop, and the GPU graph against the
+    # CPU logits when a GPU backend loads. Gated by
     # TRANSCRIBE_ECAPA_TDNN_GGUF (RC 77 skip).
     add_executable(transcribe_ecapa_tdnn_real_smoke
         ecapa_tdnn_real_smoke.cpp)
     target_link_libraries(transcribe_ecapa_tdnn_real_smoke
-        PRIVATE transcribe transcribe-common-example)
+        PRIVATE transcribe transcribe-common-example ggml)
     target_compile_definitions(transcribe_ecapa_tdnn_real_smoke PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
     transcribe_apply_warnings(transcribe_ecapa_tdnn_real_smoke)

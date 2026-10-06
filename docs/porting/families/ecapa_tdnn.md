@@ -102,7 +102,8 @@ crop of each shipped GGUF's sweep, with that sweep's agreement.
 
 `compare.py` fails on any disagreement that is not on a reviewed near-tie
 list (`--near-ties`), and refuses runs whose labels, recipe, manifest hashes
-or checkpoint revision differ.
+or checkpoint revision differ. Only F32 is gated: run the F16 and Q8_0
+sweeps through it with `--report-only`, which still writes their agreement.
 
 Benchmarks: `scripts/langid/bench.py --profile` (`tools/transcribe-bench` is
 ASR-only) writes bench-driver reports under `reports/perf/`, which
