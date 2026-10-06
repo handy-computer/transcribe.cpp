@@ -29,9 +29,5 @@ summary: |
 
 wer:
   notes: |
-    Lower is better. Q8_0 is the one to grab: same accuracy as the full
-    size file at a third of the size.
-
-    Compared to v3 it is a bit more accurate on English and on 20 of the 25
-    languages. parakeet-ultra is still more accurate than both on almost
-    everything.
+    A bit more accurate than v3 on English and on 20 of the 25 languages.
+    parakeet-ultra is more accurate than both on almost everything.

@@ -17,11 +17,6 @@ Speech to text in 25 European languages, offline. It is
 same 25 languages, slightly more accurate. If you already run v3, point at
 this file instead and you are done.
 
-The one unusual thing about it: half the encoder's conv filters were
-swapped for fixed Gabor functions and the rest of the model was retrained
-around them. That lives entirely in the weights, so nothing changes at
-runtime.
-
 It does not stream and it does not translate.
 
 <!-- catalog:pin -->
@@ -29,8 +24,6 @@ Licensed CC-BY-SA-4.0. Ported from upstream commit [`b59c13a`](https://huggingfa
 <!-- /catalog -->
 
 ## Download
-
-Grab Q8_0 unless you have a reason not to.
 
 <!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
@@ -48,12 +41,8 @@ WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, t
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
-Lower is better. Q8_0 is the one to grab: same accuracy as the full
-size file at a third of the size.
-
-Compared to v3 it is a bit more accurate on English and on 20 of the 25
-languages. parakeet-ultra is still more accurate than both on almost
-everything.
+A bit more accurate than v3 on English and on 20 of the 25 languages.
+parakeet-ultra is more accurate than both on almost everything.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
