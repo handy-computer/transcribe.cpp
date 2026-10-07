@@ -1281,10 +1281,9 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         const bool is_chunked = (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
         const bool is_local_pe =
             (!is_chunked) && (pm->hparams.enc_att_context_left >= 0 && pm->hparams.enc_att_context_right >= 0);
-        const bool is_windowed_chunked = is_chunked && eb.chunked_mask_in != nullptr && eb.chunked_mask_in->ne[3] > 1;
-        const int  zero_index          = is_windowed_chunked ? static_cast<int>(eb.chunked_mask_in->ne[0]) - 1 :
-                                         is_local_pe         ? pm->hparams.enc_att_context_left :
-                                                               (pos_len - 1) / 2;
+        const int zero_index = eb.chunked_windowed ? static_cast<int>(eb.chunked_mask_in->ne[0]) - 1 :
+                               is_local_pe         ? pm->hparams.enc_att_context_left :
+                                                     (pos_len - 1) / 2;
 
         pc->pos_buf.assign(static_cast<size_t>(pos_len) * d_model, 0.0f);
 
@@ -1322,7 +1321,7 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         const int          T_k      = static_cast<int>(eb.chunked_mask_in->ne[0]);
         const int          T_q      = static_cast<int>(eb.chunked_mask_in->ne[1]);
         const int          N        = static_cast<int>(eb.chunked_mask_in->ne[3]);
-        const bool         windowed = N > 1;
+        const bool         windowed = eb.chunked_windowed;
         std::vector<float> mask_buf(static_cast<size_t>(T_k) * T_q * N, -std::numeric_limits<float>::infinity());
         if (windowed) {
             compute_chunked_limited_window_mask(mask_buf.data(), T_enc, chunk_size, left_chunks);

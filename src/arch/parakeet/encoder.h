@@ -104,6 +104,11 @@ struct EncoderBuild {
     // broadcasts across heads inside rel_pos_mhsa.
     ggml_tensor * chunked_mask_in = nullptr;
 
+    // True when the graph took the bounded [window,chunk,1,n_chunks]
+    // ChunkedLimited geometry; the driver sizes its host mask and places
+    // the zero-offset pos_emb row accordingly.
+    bool chunked_windowed = false;
+
     // Buffered-streaming conv valid-frame mask, ne=[T_enc, 1, 1, 1] f32.
     // Null unless the buffered path has pre_encode overhang frames that
     // NeMo would expose via pad_mask to every Conformer conv module. Also

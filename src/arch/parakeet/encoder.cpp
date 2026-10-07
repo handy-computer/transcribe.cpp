@@ -468,23 +468,24 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         // (Regular, both contexts >= 0) shortens pos_len to (left+right+1)
         // (NeMo LocalAttRelPositionalEncoding). Long single-utterance
         // ChunkedLimited runs use the exact bounded query/key geometry;
-        // shorter, batched, and debug runs retain the dense reference graph.
+        // shorter and batched runs retain the dense reference graph.
         // ChunkedLimitedWithRc engages its dense mask only when buf_mask is
         // non-null (offline runs full attention).
         const bool is_chunked =
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited) ||
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc && buf_mask != nullptr);
-        const int     chunk_size       = hp.enc_att_context_right + 1;
-        const int     left_chunks      = chunk_size > 0 ? hp.enc_att_context_left / chunk_size : 0;
-        const int     chunk_window     = (left_chunks + 1) * chunk_size;
+        const int  chunk_size       = hp.enc_att_context_right + 1;
+        const int  left_chunks      = chunk_size > 0 ? hp.enc_att_context_left / chunk_size : 0;
+        const int  chunk_window     = (left_chunks + 1) * chunk_size;
         // Window materialization has a fixed reshape/im2col cost. Keep the
         // dense graph below the measured crossover so short requests do not
         // regress; long requests replace quadratic attention with O(T*W).
-        const bool    windowed_chunked = hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited &&
-                                         n_batch == 1 && !var_len_masks && !transcribe::debug::enabled() &&
-                                         chunk_size > 0 && hp.enc_att_context_left >= 0 &&
-                                         T_enc > kWindowedChunkMinWindowCount * chunk_window;
-        const bool    is_local_pe = (!is_chunked) && (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
+        const bool windowed_chunked = hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited &&
+                                      n_batch == 1 && !var_len_masks && chunk_size > 0 &&
+                                      hp.enc_att_context_left >= 0 &&
+                                      T_enc > kWindowedChunkMinWindowCount * chunk_window;
+        eb.chunked_windowed         = windowed_chunked;
+        const bool    is_local_pe   = (!is_chunked) && (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
         const int64_t pos_len =
             windowed_chunked ? static_cast<int64_t>(chunk_window + chunk_size - 1) :
             is_local_pe      ? static_cast<int64_t>(hp.enc_att_context_left + hp.enc_att_context_right + 1) :

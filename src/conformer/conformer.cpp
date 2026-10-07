@@ -721,22 +721,29 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         p = ggml_reshape_4d(ctx, p, head_dim, n_head, pos_len, 1);
         p = ggml_cont(ctx, ggml_permute(ctx, p, 0, 2, 1, 3));
 
-        ggml_tensor * matrix_bd = ggml_mul_mat(ctx, p, q_v);
-        matrix_bd               = rel_shift(ctx, matrix_bd);
-        matrix_bd =
-            ggml_view_4d(ctx, matrix_bd, W, C, n_head, N, matrix_bd->nb[1], matrix_bd->nb[2], matrix_bd->nb[3], 0);
-        matrix_bd = ggml_add(ctx, matrix_bd, params.attn_chunked_mask);
+        // Position scores [pos_len, C, n_head, N]. The relative shift is the
+        // same strided view as shifted_view below, with the rectangular
+        // [W, C] geometry: out[k, q] = in[k - q + C - 1, q].
+        ggml_tensor * scores       = ggml_mul_mat(ctx, p, q_v);
+        const size_t  query_stride = C == 1 ? static_cast<size_t>(W) * scores->nb[0] : scores->nb[1] - scores->nb[0];
+        ggml_tensor * matrix_bd = ggml_view_4d(ctx, scores, W, C, n_head, N, query_stride, scores->nb[2], scores->nb[3],
+                                               /*offset=*/(C - 1) * scores->nb[0]);
 
         ggml_tensor * o = nullptr;
         if (use_flash) {
-            matrix_bd = ggml_scale(ctx, ggml_cont(ctx, matrix_bd), scale);
+            matrix_bd = ggml_cont(ctx, matrix_bd);
+            matrix_bd = ggml_add(ctx, matrix_bd, params.attn_chunked_mask);
+            matrix_bd = ggml_scale(ctx, matrix_bd, scale);
             matrix_bd = ggml_cast(ctx, matrix_bd, GGML_TYPE_F16);
 
             o = ggml_flash_attn_ext(ctx, q_u, k, v, matrix_bd, scale, /*max_bias=*/0.0f,
                                     /*logit_softcap=*/0.0f);
         } else {
+            // The strided view is a valid broadcast operand; the mask adds
+            // onto the contiguous result.
             ggml_tensor * kq      = ggml_mul_mat(ctx, k, q_u);
             kq                    = ggml_add(ctx, kq, matrix_bd);
+            kq                    = ggml_add(ctx, kq, params.attn_chunked_mask);
             ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr, scale, /*max_bias=*/0.0f);
             ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
             o                     = ggml_mul_mat(ctx, v_t, kq_soft);
