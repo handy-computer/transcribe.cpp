@@ -23,9 +23,7 @@ dependencies = [
     "huggingface-hub>=0.30",
     # Used by the converter (T3), not by the dumper.
     "gguf>=0.10",
-    "pyyaml>=6.0",
     # FLEURS lives in the local HF hub cache as parquet; the fixture builder
     # reads it with pyarrow rather than pulling in `datasets`.
     "pyarrow>=15",
-    "pandas>=2.0",
 ]

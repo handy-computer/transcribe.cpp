@@ -40,8 +40,6 @@ page's accuracy snapshot has the figures).
   torch 2.13.0, CPU, one thread.
 - Instrumented reference: `scripts/dump_reference_ecapa_tdnn_speechbrain.py`
   (forward hooks on one `classify_batch`; asserts every hook fires once).
-- Cross-check reference: `scripts/lib/ecapa_numpy.py`, a NumPy forward pass
-  driven only by the GGUF, which proves the converter's rewrites.
 
 ## GGUF contract
 
@@ -52,14 +50,14 @@ Keys: `stt.variant`, `stt.frontend.*` (`window = hamming_periodic`,
 attention / embedding / classifier widths, `asp_eps`, leaky slope) and
 `stt.langid.labels.{codes,names,aliases}`. Integer scalars are uint32.
 
-The converter applies four exact rewrites, each proven by the NumPy
-reference: BatchNorm to a `scale` / `shift` pair (TDNNBlock is conv -> ReLU
--> BN, so it cannot fold backward); the three activation-free BNs folded
-forward into `fc`, `cls.l1`, `cls.out`; and the ASP and MFA input weights
-split per concatenated operand. Tensor names follow the
-`tools/transcribe-quantize` rules (`.bias` / `.bn.` F32, `.conv.weight` for
-k>1 tap-major kernels F32 / F16, every other `.weight` quantizable,
-`frontend.mel_filterbank` F32), so the quant policy has no ECAPA entries.
+The converter applies four exact rewrites: BatchNorm to a `scale` / `shift`
+pair (TDNNBlock is conv -> ReLU -> BN, so it cannot fold backward); the
+three activation-free BNs folded forward into `fc`, `cls.l1`, `cls.out`; and
+the ASP and MFA input weights split per concatenated operand. Tensor names
+follow the `tools/transcribe-quantize` rules (`.bias` / `.bn.` F32,
+`.conv.weight` for k>1 tap-major kernels F32 / F16, every other `.weight`
+quantizable, `frontend.mel_filterbank` F32), so the quant policy has no
+ECAPA entries.
 The full catalogue is in `src/arch/ecapa_tdnn/weights.h`.
 
 The front end is the shared `transcribe-mel` (`src/transcribe-mel.cpp`)

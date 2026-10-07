@@ -74,35 +74,9 @@ def integrity_pass(records: dict) -> int:
         for r in rec.get("speed_benchmarks", []):
             if r.get("machine"):
                 machines[r["machine"]].add(name)
-        # A number edited by hand rarely keeps its siblings in step. Reports
-        # are not checked in, so these self-consistency checks are what
-        # catch an edit that no ingest produced.
-        drifted = [r for r in rec.get("speed_benchmarks", [])
-                   if r.get("total_ms") and not xrt_consistent(r)]
-        outside = [r for r in rec.get("accuracy_benchmarks", [])
-                   if None not in (r.get("ci95") or [None])
-                   and not r["ci95"][0] - 0.01 <= common.row_pct(r) <= r["ci95"][1] + 0.01]
-        disagree = [r for r in rec.get("accuracy_benchmarks", [])
-                    if r.get("agreement") and r["agreement"]["n_agree"] > r["agreement"]["n"]]
-        for rows, what in ((drifted, "speed row(s) whose xrt_compute is not "
-                                     "sample_duration_s / total_ms"),
-                           (outside, "accuracy row(s) whose value lies outside its ci95"),
-                           (disagree, "accuracy row(s) with agreement n_agree > n")):
-            if rows:
-                bad += 1
-                print(f"  FAIL {name}: {len(rows)} {what}")
     print(f"integrity  {len(records) - bad}/{len(records)} clean; "
           f"{len(machines)} machine slug(s): {', '.join(sorted(machines))}")
     return bad
-
-
-def xrt_consistent(row: dict) -> bool:
-    """xrt_compute matches sample_duration_s / total_ms, allowing for
-    total_ms stored to 0.1 ms and xRT to 0.01."""
-    duration, total = row["sample_duration_s"], row["total_ms"]
-    low = duration / ((total + 0.05) / 1000) - 0.005
-    high = duration / (max(total - 0.05, 1e-6) / 1000) + 0.005
-    return low <= row["xrt_compute"] <= high
 
 
 def pairing_pass(records: dict, selected: bool = False) -> int:

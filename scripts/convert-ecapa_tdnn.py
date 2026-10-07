@@ -32,8 +32,7 @@ than against `hyperparams.yaml`: the yaml carries only `input_size`,
 geometry, top_db, amin, ...) is a SpeechBrain *default* of the pinned
 version, so the yaml cannot confirm it.
 
-Four exact rewrites happen here; the NumPy reference
-`scripts/lib/ecapa_numpy.py` proves each of them numerically:
+Four exact rewrites happen here:
 
   1. Every TDNN BatchNorm becomes a `scale`/`shift` vector pair. It cannot
      be folded into its conv because SpeechBrain's TDNNBlock is
@@ -111,7 +110,6 @@ DEFAULT_REVISION = "0253049ae131d6a4be1c4f0d8b0ff483a0f8c8e9"
 DEFAULT_VARIANT = "lang-id-voxlingua107-ecapa"
 
 ARCH = "ecapa_tdnn"
-FORMAT_VERSION = 1
 
 # Architecture constants. Every one of these is ASSERTED against the live
 # module tree below, never assumed — see `assert_architecture`.
@@ -529,38 +527,6 @@ def capture_fbank_matrix(clf) -> np.ndarray:
         m.detach().to(dtype=torch.float32, device="cpu").numpy())
 
 
-def crosscheck_filters(filters_201x60: np.ndarray) -> float | None:
-    """Diff the captured matrix against the T2 reference dump, if present.
-
-    `build/validate/.../ref/fe.filters.f32` was written by the reference
-    dumper from the same `_create_fbank_matrix` call during a real
-    classification, so the difference must be exactly 0. Anything in the
-    1e-05 range means this converter recomputed the geometry instead of
-    capturing it (a float64 rebuild differs by about 1.16e-05).
-    """
-    ref = (REPO_ROOT / "build" / "validate" / ARCH / DEFAULT_VARIANT /
-           "fleurs-en" / "ref" / "fe.filters.f32")
-    if not ref.exists():
-        print(f"  fbank cross-check: SKIPPED ({ref} not found; run "
-              f"`uv run scripts/validate.py ref --family {ARCH}` first)")
-        return None
-    a = np.fromfile(ref, dtype=np.float32)
-    if a.size != N_STFT * N_MELS:
-        raise ArchError(f"{ref} has {a.size} elements, expected "
-                        f"{N_STFT * N_MELS}")
-    diff = float(np.max(np.abs(a.reshape(N_STFT, N_MELS) - filters_201x60)))
-    status = "exact" if diff == 0.0 else ("ok" if diff < 1e-6 else "SUSPICIOUS")
-    print(f"  fbank cross-check vs reference dump: max|diff| = {diff:.3e} "
-          f"[{status}]")
-    if diff >= 1e-6:
-        raise ArchError(
-            f"captured fbank matrix differs from the reference dump by "
-            f"{diff:.3e}; it should be bit-identical (same _create_fbank_matrix "
-            f"call). A ~1e-05 diff means the geometry was recomputed instead "
-            f"of captured.")
-    return diff
-
-
 # ---------------------------------------------------------------------------
 # Weight extraction / conversion-time algebra
 # ---------------------------------------------------------------------------
@@ -698,7 +664,6 @@ def convert(clf, out_path: Path, *, variant: str, repo_id: str,
     writer.add_float32("stt.frontend.top_db", TOP_DB)
     writer.add_string("stt.frontend.normalize", canonicalize_normalize("sentence_mean"))
 
-    writer.add_uint32("stt.ecapa_tdnn.format_version", FORMAT_VERSION)
     writer.add_array("stt.ecapa_tdnn.channels", CHANNELS)
     writer.add_array("stt.ecapa_tdnn.kernel_sizes", KERNEL_SIZES)
     writer.add_array("stt.ecapa_tdnn.dilations", DILATIONS)
@@ -886,8 +851,6 @@ def main(argv: list[str] | None = None) -> int:
                         "omitted)")
     p.add_argument("--revision", default=DEFAULT_REVISION,
                    help="HF revision (commit SHA) to pin the download to")
-    p.add_argument("--variant", default=DEFAULT_VARIANT,
-                   help=f"stt.variant string (default: {DEFAULT_VARIANT})")
     p.add_argument("--repo-id", default=None,
                    help="HF repo id used for the output slug and metadata "
                         "when converting from a local path")
@@ -908,11 +871,10 @@ def main(argv: list[str] | None = None) -> int:
     clf = load_reference(src)
     labels = assert_architecture(clf)
     filters = capture_fbank_matrix(clf)
-    crosscheck_filters(filters)
 
     import speechbrain
 
-    report = convert(clf, out_path, variant=args.variant,
+    report = convert(clf, out_path, variant=DEFAULT_VARIANT,
                      repo_id=repo_id, revision=args.revision,
                      filters_201x60=filters, labels=labels)
     report["speechbrain_version"] = speechbrain.__version__

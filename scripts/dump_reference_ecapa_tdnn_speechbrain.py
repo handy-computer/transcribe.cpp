@@ -20,7 +20,7 @@ Usage:
 Writes:
     <name>.f32        raw little-endian float32, row-major
     <name>.json       per-tensor sidecar via shared scripts.lib.ref_dump
-    prediction.json   behavioural artifact (top-1 label + top-5 log-probs)
+    prediction.json   behavioural artifact (top-1 label)
 
 There is a single stage, `encoder`: language ID is one forward pass, so
 the front end, the ECAPA-TDNN embedding network and the classifier head
@@ -63,16 +63,6 @@ dim and transposing here is what makes the two directories comparable.
     enc.emb                 [256]       fc output
     cls.hidden              [512]       DNN.block_0.act output (pre-BN1)
     cls.logits_raw          [107]       the gate
-
-Plus two run-invariant front-end tables, dumped so the converter and the
-C++ mel unit test can be checked against SpeechBrain directly:
-
-    fe.window               [400]       STFT.window (periodic Hamming)
-    fe.filters              [201, 60]   the fbank matrix used this forward
-
-These two are NOT part of the tolerance contract: the C++ runtime does
-not dump them (the window is recomputed and the filterbank is read from
-the GGUF), so compare_tensors reports them MISSING-left without failing.
 """
 
 from __future__ import annotations
@@ -103,9 +93,7 @@ DEFAULT_REVISION = "0253049ae131d6a4be1c4f0d8b0ff483a0f8c8e9"
 
 SAMPLE_RATE = 16000
 HOP = 160
-N_FFT = 400
 WIN = 400
-N_STFT = N_FFT // 2 + 1  # 201
 N_MELS = 60
 EMB_DIM = 256
 N_LABELS = 107
@@ -194,18 +182,6 @@ def vec(t, n: int, *, name: str) -> np.ndarray:
         raise ValueError(f"{name}: expected {n} elements, got {t.numel()} "
                          f"(shape {tuple(t.shape)})")
     a = t.detach().to(dtype=torch.float32, device="cpu").reshape(-1).numpy()
-    return np.ascontiguousarray(a, dtype=np.float32)
-
-
-def mat(t, shape: tuple[int, int], *, name: str) -> np.ndarray:
-    """Torch matrix -> 2-D float32 numpy, with an exact shape assertion."""
-    import torch
-
-    if not isinstance(t, torch.Tensor):
-        raise TypeError(f"{name}: expected a torch.Tensor, got {type(t)!r}")
-    if tuple(t.shape) != shape:
-        raise ValueError(f"{name}: expected shape {shape}, got {tuple(t.shape)}")
-    a = t.detach().to(dtype=torch.float32, device="cpu").numpy()
     return np.ascontiguousarray(a, dtype=np.float32)
 
 
@@ -405,27 +381,10 @@ def cmd_encoder(args: argparse.Namespace) -> int:
     hook(cl.out, "cls.logits_raw", hooks, handles)
     hook(cl.softmax, "cls.log_probs", hooks, handles)
 
-    # SpeechBrain 1.1.1's Filterbank builds its [201, 60] matrix inside
-    # forward() from `f_central` / `band`; there is no `fbank_matrix`
-    # attribute or buffer to read. Wrapping the real method captures exactly
-    # the matrix this forward pass used, which is stronger than recomputing it.
-    fbanks = fe.compute_fbanks
-    captured_filters: dict[str, Any] = {}
-    original_create = fbanks._create_fbank_matrix
-
-    def capture_create(f_central_mat, band_mat):
-        m = original_create(f_central_mat, band_mat)
-        captured_filters.setdefault("value", m)
-        captured_filters["calls"] = captured_filters.get("calls", 0) + 1
-        return m
-
-    fbanks._create_fbank_matrix = capture_create
-
     try:
         with torch.inference_mode():
             out_prob, score, index, text_lab = clf.classify_batch(wav, wav_lens)
     finally:
-        fbanks._create_fbank_matrix = original_create
         for h in handles:
             h.remove()
 
@@ -435,11 +394,6 @@ def cmd_encoder(args: argparse.Namespace) -> int:
     bad = {n: h.calls for n, h in hooks.items() if h.calls != 1}
     if bad:
         raise SystemExit(f"error: unexpected hook call counts: {bad}")
-    if captured_filters.get("calls") != 1:
-        raise SystemExit(
-            f"error: Filterbank._create_fbank_matrix fired "
-            f"{captured_filters.get('calls')} times, expected 1"
-        )
 
     T = int(hooks["fe.mel"].value.shape[1])
     if T != expected_T:
@@ -512,7 +466,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
             "error: cls.log_probs hook does not match classify_batch's out_prob"
         )
 
-    # ---- run-invariant front-end tables ---------------------------------
+    # ---- front-end window ------------------------------------------------
     window = fe.compute_STFT.window
     expected_window = torch.hamming_window(WIN)
     if not torch.equal(window.to(torch.float32).cpu(), expected_window):
@@ -521,10 +475,6 @@ def cmd_encoder(args: argparse.Namespace) -> int:
             "Hamming window the C++ front end builds does not describe this "
             "checkpoint"
         )
-    dump("fe.window", vec(window, WIN, name="fe.window"), "frontend")
-
-    filters = captured_filters["value"]
-    dump("fe.filters", mat(filters, (N_STFT, N_MELS), name="fe.filters"), "frontend")
 
     # ---- prediction ------------------------------------------------------
     label_index = int(index.item())
@@ -542,29 +492,16 @@ def cmd_encoder(args: argparse.Namespace) -> int:
             f"ind2lab[{label_index}] is {ind2lab[label_index]!r}"
         )
 
-    order = np.argsort(-log_probs)[:5]
-    top5 = []
-    for i in order:
-        c, n = split_label(str(ind2lab[int(i)]))
-        top5.append({
-            "index": int(i),
-            "code": c,
-            "name": n,
-            "log_prob": float(log_probs[int(i)]),
-        })
-
     prediction = {
         "label_index": label_index,
         "code": code,
         "name": name,
         "log_prob": float(log_probs[label_index]),
-        "top5": top5,
         "source": {**source, "score": float(score.item())},
     }
     (out_dir / "prediction.json").write_text(json.dumps(prediction, indent=2) + "\n")
     print(f"prediction: {code} ({name}) log_prob={prediction['log_prob']:.6f} "
           f"prob={math.exp(prediction['log_prob']):.4f}")
-    print("top5: " + ", ".join(f"{e['code']}={e['log_prob']:.3f}" for e in top5))
 
     return 0
 

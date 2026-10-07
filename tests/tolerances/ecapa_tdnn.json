@@ -60,12 +60,7 @@
     "Both are max_abs on wide [T, C] activations; a re-measure on different",
     "CPU SIMD width may need a fresh Stage-4 pass rather than a hand edit.",
     "",
-    "cls.logits_raw is the gate.",
-    "",
-    "fe.window [400] and fe.filters [201, 60] are dumped by the reference but",
-    "deliberately absent from this file: the C++ runtime recomputes the window",
-    "and reads the filterbank from the GGUF, so it never dumps them.",
-    "compare_tensors reports them MISSING without failing."
+    "cls.logits_raw is the gate."
   ],
   "fe.mel": {
     "max_abs": 0.004079,

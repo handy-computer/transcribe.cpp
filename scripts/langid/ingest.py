@@ -3,9 +3,10 @@
 ingest.py - build an evaluation corpus from a named dataset source.
 
 Sources:
-  fleurs   Reads the FLEURS parquet already present in the local Hugging
-           Face hub cache (`datasets--google--fleurs`). Nothing is
-           downloaded; the 15 configs the evaluation uses are cached.
+  fleurs   Reads the FLEURS test parquet of each config at the pinned
+           dataset revision FLEURS_REVISION, through the Hugging Face hub
+           cache (HF_HOME honoured); a config missing from the cache is
+           downloaded.
 
 Usage:
   uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang en
@@ -17,8 +18,8 @@ Output (gitignored, see .gitignore `/samples/langid/`):
 
 Only the FLEURS `test` split is read. Selection rule: the first N
 utterances in parquet order whose decoded duration is >= 1 s. Parquet order
-is the only ordering; no shuffling, no hashing, so the same cache always
-produces the same manifest.
+is the only ordering; no shuffling, no hashing, and the dataset revision is
+pinned, so every run produces the same manifest.
 
 Utterance ids are `fleurs-<code>-<NNNN>` where NNNN is the index among the
 selected rows, NOT the FLEURS sentence id: FLEURS records the same sentence
@@ -32,7 +33,6 @@ Idempotent: an existing manifest is left alone unless --force.
 from __future__ import annotations
 
 import argparse
-import glob
 import io
 import json
 import sys
@@ -47,6 +47,7 @@ MIN_DURATION_S = 1.0
 DEFAULT_N = 200
 SPLIT = "test"
 DATASET = "google/fleurs"
+FLEURS_REVISION = "70bb2e84b976b7e960aa89f1c648e09c59f894dd"
 LICENCE = "CC-BY-4.0"
 
 # FLEURS config -> VoxLingua107 label code, in the dataset gate's order.
@@ -75,20 +76,14 @@ CODE_TO_CONFIG = {code: config for config, code in FLEURS_LANGUAGES}
 
 
 def fleurs_parquet(config: str) -> Path:
-    pattern = (
-        Path.home()
-        / ".cache/huggingface/hub/datasets--google--fleurs/snapshots/*/parquet-data"
-        / config
-        / f"{SPLIT}-00000-of-00001.parquet"
-    )
-    matches = sorted(glob.glob(str(pattern)))
-    if not matches:
-        raise SystemExit(
-            f"error: no cached FLEURS parquet for config {config!r} "
-            f"(looked at {pattern}). This script never downloads; populate "
-            f"the Hugging Face cache first."
-        )
-    return Path(matches[-1])
+    from huggingface_hub import hf_hub_download
+
+    return Path(hf_hub_download(
+        repo_id=DATASET,
+        repo_type="dataset",
+        filename=f"parquet-data/{config}/{SPLIT}-00000-of-00001.parquet",
+        revision=FLEURS_REVISION,
+    ))
 
 
 def iter_rows(path: Path):
@@ -267,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="source", required=True)
 
-    fp = sub.add_parser("fleurs", help="FLEURS from the local HF parquet cache")
+    fp = sub.add_parser("fleurs", help="FLEURS parquet at the pinned revision")
     fp.add_argument("--lang", required=True,
                     help="VoxLingua107 code, comma-separated list, or 'all'")
     fp.add_argument("--n", type=int, default=DEFAULT_N,

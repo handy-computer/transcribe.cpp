@@ -178,8 +178,10 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
                     "gpu": suite.get("gpu"),
                     "backend": suite.get("backend"),
                     # Language ID's crop and trim: which slice of a run.py
-                    # sweep the published number is.
-                    **{key: suite[key] for key in ("crop_s", "trim") if key in suite},
+                    # sweep the published number is, and which languages
+                    # its pooled mean is over.
+                    **{key: suite[key] for key in ("crop_s", "trim", "pooled_languages")
+                       if key in suite},
                 })
     return cells
 

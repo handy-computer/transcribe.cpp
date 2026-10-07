@@ -85,7 +85,24 @@
           "timestamps": "none",
           "backend": "cpu",
           "crop_s": "5",
-          "trim": "none"
+          "trim": "none",
+          "pooled_languages": [
+            "en",
+            "zh",
+            "de",
+            "fr",
+            "es",
+            "pt",
+            "ja",
+            "ko",
+            "ru",
+            "cs",
+            "sk",
+            "no",
+            "da",
+            "id",
+            "ms"
+          ]
         }
       ],
       "speed": {

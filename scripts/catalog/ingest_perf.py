@@ -144,26 +144,25 @@ def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
     best: dict[tuple, dict] = {}
     superseded, unreadable, experiments = collections.Counter(), [], 0
     for path in sorted(reports_dir.glob("*/*.json")):
-        # Reports normally live under the repo, but --reports can name a
-        # staging directory elsewhere (or a relative one); the label is only
-        # for the operator, so fall back to the path as given.
-        try:
-            label = str(path.resolve().relative_to(common.REPO))
-        except ValueError:
-            label = str(path)
         try:
             report = json.loads(path.read_text())
         except (json.JSONDecodeError, UnicodeDecodeError):
-            unreadable.append(label)
+            unreadable.append(str(path.relative_to(common.REPO)))
             continue
         if not isinstance(report, dict) or report.get("schema") != "transcribe-bench-driver-v1":
             kind = report.get("schema") if isinstance(report, dict) else type(report).__name__
-            unreadable.append(f"{label} (schema {kind!r})")
+            unreadable.append(f"{path.relative_to(common.REPO)} (schema {kind!r})")
             continue
         if not publishable(report):
             experiments += 1
             continue
-        report["_file"] = label
+        # Reports normally live under the repo, but --reports can name a
+        # staging directory elsewhere (or a relative one); the label is only
+        # for the operator, so fall back to the path as given.
+        try:
+            report["_file"] = str(path.resolve().relative_to(common.REPO))
+        except ValueError:
+            report["_file"] = str(path)
         for row in cells(report):
             key = (row["variant"], row["machine"], row["backend"], row["quant"], row["sample"])
             previous = best.get(key)
