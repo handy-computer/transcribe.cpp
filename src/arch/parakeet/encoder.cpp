@@ -474,35 +474,60 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         const bool is_chunked =
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited) ||
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc && buf_mask != nullptr);
-        const int  chunk_size       = hp.enc_att_context_right + 1;
-        const int  left_chunks      = chunk_size > 0 ? hp.enc_att_context_left / chunk_size : 0;
-        const int  chunk_window     = (left_chunks + 1) * chunk_size;
+        const bool is_local_hp = (!is_chunked) && (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
+        // Bounded-window geometry (query block C, keys W starting at
+        // n*C - left). ChunkedLimited: C = chunk, left = left_chunks*C.
+        // Regular-local [L, R]: C is a power of two near (L+R+1)/4, which
+        // bounds the masked-out work per block at ~25% while replicating
+        // K/V about five times.
+        int        win_chunk   = 0;
+        int        win_left    = 0;
+        int        win_keys    = 0;
+        if (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited &&
+            hp.enc_att_context_right >= 0 && hp.enc_att_context_left >= 0) {
+            win_chunk = hp.enc_att_context_right + 1;
+            win_left  = (hp.enc_att_context_left / win_chunk) * win_chunk;
+            win_keys  = win_left + win_chunk;
+        } else if (is_local_hp) {
+            const int span = hp.enc_att_context_left + hp.enc_att_context_right + 1;
+            win_chunk      = 16;
+            while (win_chunk * 8 < span && win_chunk < 256) {
+                win_chunk *= 2;
+            }
+            win_left = hp.enc_att_context_left;
+            win_keys = hp.enc_att_context_left + win_chunk + hp.enc_att_context_right;
+        }
         // Window materialization has a fixed reshape/im2col cost. Keep the
         // dense graph below the measured crossover so short requests do not
         // regress; long requests replace quadratic attention with O(T*W).
-        const bool windowed_chunked = hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited &&
-                                      n_batch == 1 && !var_len_masks && chunk_size > 0 &&
-                                      hp.enc_att_context_left >= 0 &&
-                                      T_enc > kWindowedChunkMinWindowCount * chunk_window;
-        eb.chunked_windowed         = windowed_chunked;
-        const bool    is_local_pe   = (!is_chunked) && (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
+        const bool windowed = win_chunk > 0 && n_batch == 1 && !var_len_masks &&
+                              T_enc > static_cast<int64_t>(kWindowedChunkMinWindowCount) * win_keys;
+        if (!windowed) {
+            win_chunk = win_left = win_keys = 0;
+        }
+        eb.window_chunk           = win_chunk;
+        eb.window_left            = win_left;
+        eb.window_keys            = win_keys;
+        // Dense Regular-local keeps NeMo's (left+right+1) pos table and the
+        // in-graph band padding; the windowed graph carries its own band.
+        const bool    is_local_pe = is_local_hp && !windowed;
         const int64_t pos_len =
-            windowed_chunked ? static_cast<int64_t>(chunk_window + chunk_size - 1) :
-            is_local_pe      ? static_cast<int64_t>(hp.enc_att_context_left + hp.enc_att_context_right + 1) :
-                               (2 * T_enc - 1);
+            windowed    ? static_cast<int64_t>(win_keys + win_chunk - 1) :
+            is_local_pe ? static_cast<int64_t>(hp.enc_att_context_left + hp.enc_att_context_right + 1) :
+                          (2 * T_enc - 1);
         eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.enc_d_model, pos_len);
         ggml_set_name(eb.pos_emb_in, "pos_emb.in");
         ggml_set_input(eb.pos_emb_in);
 
-        // ChunkedLimited mask. The dense reference graph uses
-        // [T_enc,T_enc,1,1]. The bounded graph uses
-        // [chunk_window,chunk_size,1,n_chunks], including only prefix/tail
-        // padding masks; its chunk topology supplies the interior band.
+        // Attention mask. The dense ChunkedLimited graph uses
+        // [T_enc,T_enc,1,1]. The bounded graph (chunked or local) uses
+        // [win_keys,win_chunk,1,n_chunks] and carries the band plus the
+        // sequence edges; the driver fills it host-side.
         ggml_tensor * chunked_mask_in = nullptr;
-        if (is_chunked) {
-            if (windowed_chunked) {
-                const int64_t n_chunks = (T_enc + chunk_size - 1) / chunk_size;
-                chunked_mask_in        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, chunk_window, chunk_size, 1, n_chunks);
+        if (is_chunked || windowed) {
+            if (windowed) {
+                const int64_t n_chunks = (T_enc + win_chunk - 1) / win_chunk;
+                chunked_mask_in        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, win_keys, win_chunk, 1, n_chunks);
             } else {
                 chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, T_enc, 1, 1);
             }
@@ -558,7 +583,9 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         bparams.att_context_right  = hp.enc_att_context_right;
         bparams.att_context_style  = is_chunked ? conf::BlockParams::AttContextStyle::ChunkedLimited :
                                                   conf::BlockParams::AttContextStyle::Regular;
-        bparams.chunked_windowed   = windowed_chunked;
+        bparams.window_chunk       = win_chunk;
+        bparams.window_left        = win_left;
+        bparams.window_keys        = win_keys;
         bparams.attn_chunked_mask  = chunked_mask_in;
         bparams.attn_pad_mask      = attn_pad_mask_in;
         bparams.conv_context_left  = hp.enc_conv_context_left;

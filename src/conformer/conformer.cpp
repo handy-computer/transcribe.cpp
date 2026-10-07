@@ -635,26 +635,25 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     }
     ggml_tensor * p = pos_proj == nullptr ? ggml_mul_mat(ctx, b.attn_pos_w, pos_emb) : nullptr;
 
-    // Long offline ChunkedLimited utterances have a block mask: every
-    // chunk of C queries attends to the current chunk plus a fixed number
-    // of complete chunks on its left. Reframe those blocks as a batch of
-    // rectangular attention problems instead of materializing T-by-T
-    // scores. Q/K/V projections still run once over the whole utterance;
-    // only the bounded attention windows are replicated.
-    if (params.chunked_windowed) {
-        const int64_t C           = att_context_right + 1;
-        const int64_t left_chunks = C > 0 ? att_context_left / C : 0;
-        const int64_t W           = (left_chunks + 1) * C;
-        const int64_t T           = x->ne[1];
-        const int64_t N           = C > 0 ? (T + C - 1) / C : 0;
-        const int64_t T_pad       = N * C;
-        const int64_t pad_right   = T_pad - T;
+    // Bounded-window attention: every block of C queries attends to a
+    // fixed window of W keys (ChunkedLimited: the current chunk plus the
+    // left chunks; Regular-local: the |q-k| band). Reframe those blocks as
+    // a batch of rectangular attention problems instead of materializing
+    // T-by-T scores. Q/K/V projections still run once over the whole
+    // utterance; only the bounded attention windows are replicated.
+    if (params.window_chunk > 0) {
+        const int64_t C         = params.window_chunk;
+        const int64_t W         = params.window_keys;
+        const int64_t T         = x->ne[1];
+        const int64_t N         = (T + C - 1) / C;
+        const int64_t T_pad     = N * C;
+        const int64_t pad_right = T_pad - T;
 
-        if (rect || B != 1 || C <= 0 || W <= 0 || N <= 0 || pos_len != W + C - 1 ||
+        if (rect || B != 1 || W <= 0 || N <= 0 || params.window_left < 0 || pos_len != W + C - 1 ||
             params.attn_chunked_mask == nullptr || params.attn_chunked_mask->ne[0] != W ||
             params.attn_chunked_mask->ne[1] != C || params.attn_chunked_mask->ne[3] != N) {
             std::fprintf(stderr,
-                         "conformer rel_pos_mhsa: invalid windowed chunk "
+                         "conformer rel_pos_mhsa: invalid windowed attention "
                          "geometry (T=%lld C=%lld W=%lld N=%lld pos=%lld)\n",
                          (long long) T, (long long) C, (long long) W, (long long) N, (long long) pos_len);
             return nullptr;
@@ -679,7 +678,7 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         // im2col op. Pad the ragged tail to a complete chunk first;
         // symmetric left-context padding then produces a few unused windows
         // on the right, which are sliced before [head_dim,W,head,N].
-        const int left_pad       = static_cast<int>(left_chunks * C);
+        const int left_pad       = params.window_left;
         ggml_type window_kv_type = GGML_TYPE_F32;
         if (use_flash) {
             window_kv_type = kv_type;

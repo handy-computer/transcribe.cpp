@@ -96,9 +96,67 @@ void run_case(int T, int C, int left_chunks) {
     }
 }
 
+// Regular-local band: the compact [W, C, N] mask must reproduce the dense
+// "q - left <= k <= q + right" rule and address the same q-k offsets.
+void run_local_case(int T, int C, int left, int right) {
+    const int W = left + C + right;
+    const int N = (T + C - 1) / C;
+
+    std::vector<float> compact(static_cast<size_t>(W) * C * N);
+    transcribe::parakeet::compute_local_window_mask(compact.data(), T, C, left, right);
+
+    for (int n = 0; n < N; ++n) {
+        const int key_start = n * C - left;
+        for (int q_local = 0; q_local < C; ++q_local) {
+            const int     q_abs = n * C + q_local;
+            const float * row   = compact.data() + (static_cast<size_t>(n) * C + q_local) * W;
+            if (q_abs >= T) {
+                for (int k_local = 0; k_local < W; ++k_local) {
+                    const bool got_finite = row[k_local] == 0.0f;
+                    if (got_finite != (k_local == 0) || (!got_finite && !is_masked(row[k_local]))) {
+                        fail_case("local padded query sentinel", T, C, left * 1000 + right, q_abs, k_local);
+                    }
+                }
+                continue;
+            }
+            for (int k_abs = 0; k_abs < T; ++k_abs) {
+                const int  k_local         = k_abs - key_start;
+                const bool compact_allowed = k_local >= 0 && k_local < W && row[k_local] == 0.0f;
+                const bool dense_allowed   = (k_abs >= q_abs - left) && (k_abs <= q_abs + right);
+                if (compact_allowed != dense_allowed) {
+                    fail_case("local dense equivalence", T, C, left * 1000 + right, q_abs, k_abs);
+                }
+            }
+            for (int k_local = 0; k_local < W; ++k_local) {
+                const int k_abs = key_start + k_local;
+                if (row[k_local] == 0.0f && (k_abs < 0 || k_abs >= T)) {
+                    fail_case("local edge padding", T, C, left * 1000 + right, q_abs, k_abs);
+                }
+                // pos table: rel_shift source row k_local - q_local + C - 1,
+                // zero row left + C - 1, must address offset q_abs - k_abs.
+                const int source_row = k_local - q_local + C - 1;
+                const int zero_row   = left + C - 1;
+                if (zero_row - source_row != q_abs - k_abs) {
+                    fail_case("local relative position", T, C, left * 1000 + right, q_abs, k_abs);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
+    for (int T = 1; T <= 97; ++T) {
+        for (int C = 1; C <= 16; C += 3) {
+            for (int left = 0; left <= 20; left += 4) {
+                for (int right = 0; right <= 20; right += 5) {
+                    run_local_case(T, C, left, right);
+                }
+            }
+        }
+    }
+
     // Exhaust the awkward geometries around every chunk boundary and ragged
     // tail. This includes the Nemotron 3.5 geometry (C=14, left_chunks=4)
     // as well as much smaller windows that make off-by-one

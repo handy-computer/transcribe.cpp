@@ -1284,12 +1284,12 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
 
         // Position of relative offset 0 in the buffer: (pos_len-1)/2 for
-        // full/dense ChunkedLimited; W_left for Regular local attention;
-        // key_window-1 for the rectangular windowed ChunkedLimited graph.
+        // full/dense ChunkedLimited; W_left for dense Regular local
+        // attention; window_left + chunk - 1 for the bounded-window graph.
         const bool is_chunked = (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
         const bool is_local_pe =
             (!is_chunked) && (pm->hparams.enc_att_context_left >= 0 && pm->hparams.enc_att_context_right >= 0);
-        const int zero_index = eb.chunked_windowed ? static_cast<int>(eb.chunked_mask_in->ne[0]) - 1 :
+        const int zero_index = eb.window_chunk > 0 ? eb.window_left + eb.window_chunk - 1 :
                                is_local_pe         ? pm->hparams.enc_att_context_left :
                                                      (pos_len - 1) / 2;
 
@@ -1317,10 +1317,12 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         transcribe::debug::dump_tensor("enc.pos_emb", eb.pos_emb_in, "encoder.pos_emb");
     }
 
-    // ChunkedLimited attention mask (streaming variants): 0 on (q, k)
-    // pairs whose chunk indices are in [q_chunk - left_chunks, q_chunk],
-    // -INF outside. NeMo: chunk_size = att_context_right + 1,
-    // left_chunks = att_context_left / chunk_size.
+    // Attention mask. Dense ChunkedLimited (streaming variants): 0 on
+    // (q, k) pairs whose chunk indices are in [q_chunk - left_chunks,
+    // q_chunk], -INF outside (NeMo: chunk_size = att_context_right + 1,
+    // left_chunks = att_context_left / chunk_size). Bounded-window graphs
+    // take the compact [W, C, 1, N] layout for the same chunk band, or the
+    // Regular-local |q-k| band.
     if (eb.chunked_mask_in != nullptr) {
         const int chunk_size  = pm->hparams.enc_att_context_right + 1;
         const int left_chunks = (chunk_size > 0) ? (pm->hparams.enc_att_context_left / chunk_size) : 0;
@@ -1329,10 +1331,13 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         const int          T_k      = static_cast<int>(eb.chunked_mask_in->ne[0]);
         const int          T_q      = static_cast<int>(eb.chunked_mask_in->ne[1]);
         const int          N        = static_cast<int>(eb.chunked_mask_in->ne[3]);
-        const bool         windowed = eb.chunked_windowed;
+        const bool         windowed = eb.window_chunk > 0;
         std::vector<float> mask_buf(static_cast<size_t>(T_k) * T_q * N, -std::numeric_limits<float>::infinity());
-        if (windowed) {
+        if (windowed && pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited) {
             compute_chunked_limited_window_mask(mask_buf.data(), T_enc, chunk_size, left_chunks);
+        } else if (windowed) {
+            compute_local_window_mask(mask_buf.data(), T_enc, eb.window_chunk, pm->hparams.enc_att_context_left,
+                                      pm->hparams.enc_att_context_right);
         } else {
             // Dense reference layout [T_k,T_q,1,1].
             for (int q = 0; q < T_enc; ++q) {
@@ -2396,6 +2401,39 @@ void compute_chunked_limited_window_mask(float * out_buf, int T, int chunk_size,
                 continue;
             }
             for (int k = 0; k < W; ++k) {
+                const int k_abs = key_start + k;
+                if (k_abs >= 0 && k_abs < T) {
+                    row[k] = 0.0f;
+                }
+            }
+        }
+    }
+}
+
+void compute_local_window_mask(float * out_buf, int T, int chunk_size, int left, int right) {
+    assert(out_buf != nullptr);
+    assert(T >= 1);
+    assert(chunk_size >= 1);
+    assert(left >= 0 && right >= 0);
+
+    const int C = chunk_size;
+    const int W = left + C + right;
+    const int N = (T + C - 1) / C;
+
+    std::fill(out_buf, out_buf + static_cast<size_t>(W) * C * N, -std::numeric_limits<float>::infinity());
+    for (int n = 0; n < N; ++n) {
+        const int key_start = n * C - left;
+        for (int q = 0; q < C; ++q) {
+            const int q_abs = n * C + q;
+            float *   row   = out_buf + (static_cast<size_t>(n) * C + q) * W;
+            if (q_abs >= T) {
+                row[0] = 0.0f;
+                continue;
+            }
+            // k_abs - q_abs = k - left - q must lie in [-left, right].
+            const int k_lo = q;
+            const int k_hi = q + left + right;  // inclusive
+            for (int k = k_lo; k <= k_hi && k < W; ++k) {
                 const int k_abs = key_start + k;
                 if (k_abs >= 0 && k_abs < T) {
                     row[k] = 0.0f;
