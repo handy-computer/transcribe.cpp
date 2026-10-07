@@ -18,6 +18,7 @@
 #include "transcribe-path.h"
 #include "weights.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -169,8 +170,17 @@ transcribe_status stream_weights(const std::string & path, const gguf_context * 
         }
         f32.resize(static_cast<size_t>(n));
         f16.resize(static_cast<size_t>(n));
-        q8_to_f32(staging.data(), f32.data(), n);
-        ggml_fp32_to_fp16_row(f32.data(), f16.data(), n);
+        // Split on Q8_0 block boundaries; each element converts the same way
+        // on any thread, so the result does not depend on the thread count.
+        const int64_t qk       = ggml_blck_size(GGML_TYPE_Q8_0);
+        const int64_t n_blocks = n / qk;
+        const int n_thr = static_cast<int>(std::min<int64_t>(default_n_threads(), std::max<int64_t>(1, n_blocks / 64)));
+        run_on_threads(n_thr, [&](int tid) {
+            const int64_t e0 = n_blocks * tid / n_thr * qk;
+            const int64_t ne = n_blocks * (tid + 1) / n_thr * qk - e0;
+            q8_to_f32(staging.data() + ggml_row_size(GGML_TYPE_Q8_0, e0), f32.data() + e0, ne);
+            ggml_fp32_to_fp16_row(f32.data() + e0, f16.data() + e0, ne);
+        });
         ggml_backend_tensor_set(t, f16.data(), 0, ggml_nbytes(t));
     }
     return TRANSCRIBE_OK;
