@@ -9,8 +9,8 @@ pin_date: 2026-10-05
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: SpeechBrain
-  commit: 62522202
-  date: 2026-10-05
+  commit: 2fdb5c95
+  date: 2026-10-07
 
 pipeline_tag: audio-classification
 tags:

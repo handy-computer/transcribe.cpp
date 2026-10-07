@@ -23,7 +23,7 @@ See SpeechBrain's [model card](https://huggingface.co/speechbrain/lang-id-voxlin
 for training data and the label list.
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa/commit/0253049), pinned 2026-10-05. Validated against the SpeechBrain reference at transcribe.cpp commit [`62522202`](https://github.com/handy-computer/transcribe.cpp/tree/62522202) on 2026-10-05.
+Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa/commit/0253049), pinned 2026-10-05. Validated against the SpeechBrain reference at transcribe.cpp commit [`2fdb5c95`](https://github.com/handy-computer/transcribe.cpp/tree/2fdb5c95) on 2026-10-07.
 <!-- /catalog -->
 
 ## Download
@@ -33,11 +33,11 @@ Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface
 | --- | --- | ---: | ---: |
 | F32          | [lang-id-voxlingua107-ecapa-F32.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F32.gguf) | 85 MB | 85.23% |
 | F16          | [lang-id-voxlingua107-ecapa-F16.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-F16.gguf) | 45 MB | 85.17% |
-| Q8_0         | [lang-id-voxlingua107-ecapa-Q8_0.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-Q8_0.gguf) | 27 MB | 86.27% |
+| Q8_0         | [lang-id-voxlingua107-ecapa-Q8_0.gguf](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf/resolve/main/lang-id-voxlingua107-ecapa-Q8_0.gguf) | 27 MB | 86.30% |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `16d46bc2` on 2026-10-06.
+Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `2fdb5c95` on 2026-10-07.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
@@ -52,11 +52,11 @@ transcribe.cpp model page.
 <!-- catalog:agreement -->
 | GGUF | Top-1 accuracy (95% CI) | Top-1 agreement with SpeechBrain | Max abs logit difference |
 | --- | ---: | ---: | ---: |
-| F32  | 85.23% (84.07-86.47) | 12000 / 12000 | 7.4e-05 |
-| F16  | 85.17% (84.00-86.43) | 11984 / 12000 | 0.094 |
-| Q8_0 | 86.27% (85.13-87.47) | 11704 / 12000 | 2.9 |
+| F32  | 85.23% (84.07-86.47) | 12000 / 12000 | 7.3e-05 |
+| F16  | 85.17% (84.00-86.43) | 11986 / 12000 | 0.095 |
+| Q8_0 | 86.30% (85.17-87.50) | 11705 / 12000 | 2.9 |
 
-Measured at transcribe.cpp `16d46bc2` on 2026-10-06.
+Measured at transcribe.cpp `2fdb5c95` on 2026-10-07.
 <!-- /catalog -->
 
 Agreement counts the scored sweep's top-1 decisions that match the
