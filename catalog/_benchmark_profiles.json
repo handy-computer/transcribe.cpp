@@ -131,8 +131,7 @@
             ],
             "cooldown_tctl_c": 55.0
           }
-        ],
-        "pending": "The Ryzen rig has no cells yet. Bench it with scripts/langid/bench.py --profile, ingest, then remove this key to enforce the speed matrix."
+        ]
       }
     }
   }
