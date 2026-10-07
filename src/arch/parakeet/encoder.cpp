@@ -497,11 +497,15 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
             win_left = hp.enc_att_context_left;
             win_keys = hp.enc_att_context_left + win_chunk + hp.enc_att_context_right;
         }
-        // Window materialization has a fixed reshape/im2col cost. Keep the
-        // dense graph below the measured crossover so short requests do not
-        // regress; long requests replace quadratic attention with O(T*W).
-        const bool windowed = win_chunk > 0 && n_batch == 1 && !var_len_masks &&
-                              T_enc > static_cast<int64_t>(kWindowedChunkMinWindowCount) * win_keys;
+        // Window materialization has a fixed reshape/im2col cost. For the
+        // chunked streaming models keep the dense graph below the measured
+        // crossover so short requests do not regress. The dense Regular-local
+        // graph pads its scores to the full [2T-1, T, H] shape (24 GB of
+        // scratch at 305 s), so it only stays dense while the band still
+        // covers most of the sequence.
+        const int64_t min_windows = is_local_hp ? 1 : kWindowedChunkMinWindowCount;
+        const bool    windowed =
+            win_chunk > 0 && n_batch == 1 && !var_len_masks && T_enc > min_windows * static_cast<int64_t>(win_keys);
         if (!windowed) {
             win_chunk = win_left = win_keys = 0;
         }
