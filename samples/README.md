@@ -43,8 +43,8 @@ Regenerate the source pool, not the clips themselves, with
 ## Language ID clips (FLEURS)
 
 Fixtures for the ecapa_tdnn (LANGID) family, carried over byte-for-byte from
-langid.cpp (`handy-computer/langid.cpp@96af3a5`, `scripts/make_samples_fleurs.py`)
-so its measured parity and tolerances still apply. Rule for the eight
+langid.cpp (`handy-computer/langid.cpp@96af3a5`, `scripts/make_samples_fleurs.py`).
+Rule for the eight
 `fleurs-<code>` clips: the first test-split utterance of 4-12 s, in parquet
 order, that the SpeechBrain reference (`speechbrain/lang-id-voxlingua107-ecapa`
 @ `0253049a`) classifies as the expected VoxLingua107 code. They back
