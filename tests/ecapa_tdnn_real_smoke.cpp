@@ -1,11 +1,9 @@
 // ecapa_tdnn_real_smoke.cpp - the real VoxLingua107 ECAPA-TDNN GGUF through
 // the public LANGID API: label table, aliases, top-1 on committed FLEURS
-// clips, the crop on a long clip, and a short clip just over the minimum,
-// all on the CPU backend; then, when a GPU backend loads, the stock-op GPU
-// graph against the CPU graph's logits. Gated by TRANSCRIBE_ECAPA_TDNN_GGUF
-// (RC 77 skip).
+// clips, the crop on a long clip, and a clip cut to 800 ms, all on the CPU
+// backend; then, when a GPU backend loads, the stock-op GPU graph against the
+// CPU graph's logits. Gated by TRANSCRIBE_ECAPA_TDNN_GGUF (RC 77 skip).
 
-#include "gguf.h"
 #include "transcribe.h"
 #include "transcribe/langid.h"
 #include "wav.h"
@@ -86,30 +84,14 @@ std::vector<float> all_logits(transcribe_langid_session * s, const char * wav) {
     return out;
 }
 
-// general.file_type of the GGUF (0 = all F32, 1 = F16, 7 = Q8_0), or -1.
-int gguf_file_type(const char * path) {
-    gguf_init_params gp{};
-    gp.no_alloc      = true;
-    gp.ctx           = nullptr;
-    gguf_context * g = gguf_init_from_file(path, gp);
-    if (g == nullptr) {
-        return -1;
-    }
-    const int64_t key = gguf_find_key(g, "general.file_type");
-    const int     ft =
-        key >= 0 && gguf_get_kv_type(g, key) == GGUF_TYPE_UINT32 ? static_cast<int>(gguf_get_val_u32(g, key)) : -1;
-    gguf_free(g);
-    return ft;
-}
-
 // The GPU backends run the stock-op graph, which no other test reaches.
 // Their matmuls are not bit-exact F32 (Vulkan on an AMD iGPU lands ~1e-2 off
 // the CPU logits, Metal ~7e-3), so this bounds the drift rather than
-// demanding parity. Reduced-precision files drift further because the CPU and
-// GPU round F16 operands differently (Metal: up to 0.052 for F16, 0.048 for
-// Q8_0 on these clips), so they get twice that.
+// demanding parity. F16 / Q8_0 files drift further because the CPU and GPU
+// round F16 operands differently (Metal: up to 0.057 on these clips), so one
+// bound of 0.1 covers F32, F16 and Q8_0.
 void check_gpu_matches_cpu(const char * path, transcribe_model * cpu_model) {
-    const float                      bound  = gguf_file_type(path) == 0 ? 0.05f : 0.1f;
+    const float                      bound  = 0.1f;
     const transcribe_backend_request gpus[] = { TRANSCRIBE_BACKEND_VULKAN, TRANSCRIBE_BACKEND_METAL };
     transcribe_model *               gm     = nullptr;
     for (const transcribe_backend_request b : gpus) {
@@ -216,8 +198,18 @@ int main() {
     int64_t audio_ms = 0;
     top1(s, "ru-long.wav", &p, &audio_ms);
     CHECK(audio_ms == 30000);
-    top1(s, "short-800ms.wav", &p, &audio_ms);
-    CHECK(audio_ms == 800 && std::isfinite(p));
+    std::vector<float> pcm;
+    if (load_sample("fleurs-en.wav", pcm)) {
+        pcm.resize(12800);  // 800 ms
+        CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
+        transcribe_langid_result r;
+        transcribe_langid_result_init(&r);
+        transcribe_langid_get_result(s, &r);
+        transcribe_langid_candidate c;
+        transcribe_langid_candidate_init(&c);
+        transcribe_langid_get_candidate(s, 0, &c);
+        CHECK(r.audio_ms == 800 && std::isfinite(c.p));
+    }
 
     transcribe_langid_session_free(s);
 

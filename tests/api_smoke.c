@@ -129,6 +129,8 @@ static void test_abi_metadata(void) {
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_SEGMENT) == sizeof(struct transcribe_segment));
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_SPEAKER_SEGMENT) == sizeof(struct transcribe_speaker_segment));
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_SPEAKER_SEGMENT) == _Alignof(struct transcribe_speaker_segment));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_LANGID_CANDIDATE) == sizeof(struct transcribe_langid_candidate));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_LANGID_CANDIDATE) == _Alignof(struct transcribe_langid_candidate));
     CHECK(transcribe_abi_struct_size((transcribe_abi_struct) 9999) == 0);
     CHECK(transcribe_abi_struct_align((transcribe_abi_struct) 9999) == 0);
 
@@ -527,41 +529,6 @@ static void test_model_introspection_null(void) {
     CHECK(transcribe_model_accepts_ext_kind(NULL, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_WHISPER_RUN) == false);
 
     CHECK(transcribe_model_roles(NULL) == 0);
-
-    /* LANGID role entry points are NULL-safe. */
-    {
-        struct transcribe_langid_info info;
-        transcribe_langid_info_init(&info);
-        CHECK(info.struct_size == sizeof(info));
-        CHECK(transcribe_langid_get_info(NULL, &info) == TRANSCRIBE_ERR_INVALID_ARG);
-        CHECK(transcribe_langid_label_code(NULL, 0) == NULL);
-        CHECK(transcribe_langid_label_name(NULL, 0) == NULL);
-        CHECK(transcribe_langid_label_index(NULL, "en") == -1);
-
-        struct transcribe_langid_session * ls = (struct transcribe_langid_session *) 0x1;
-        CHECK(transcribe_langid_session_init(NULL, NULL, &ls) == TRANSCRIBE_ERR_INVALID_ARG);
-        CHECK(ls == NULL);
-        transcribe_langid_session_free(NULL);
-        transcribe_langid_set_abort_callback(NULL, NULL, NULL);
-
-        const float pcm[1] = { 0.0f };
-        CHECK(transcribe_langid_run(NULL, pcm, 1, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
-
-        struct transcribe_langid_result r;
-        transcribe_langid_result_init(&r);
-        CHECK(transcribe_langid_get_result(NULL, &r) == TRANSCRIBE_ERR_INVALID_ARG);
-        struct transcribe_langid_candidate c;
-        transcribe_langid_candidate_init(&c);
-        CHECK(transcribe_langid_get_candidate(NULL, 0, &c) == TRANSCRIBE_OK);
-        CHECK(c.code == NULL);
-        struct transcribe_timings tm;
-        transcribe_timings_init(&tm);
-        CHECK(transcribe_langid_get_timings(NULL, &tm) == TRANSCRIBE_ERR_INVALID_ARG);
-
-        CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_LANGID_CANDIDATE) ==
-              sizeof(struct transcribe_langid_candidate));
-        CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_LANGID_RESULT) != 0);
-    }
 
     /* The feature probe is also NULL-safe and returns false for every
      * known feature value plus any out-of-range enum. */

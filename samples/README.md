@@ -64,7 +64,6 @@ split, licensed **CC-BY-4.0**.
 | `fleurs-zh.wav` | 10.38 s | `cmn_hans_cn` | 1906 |
 | `fleurs-ru.wav` | 7.92 s | `ru_ru` | 1917 |
 | `fleurs-id.wav` | 8.58 s | `id_id` | 1909 |
-| `short-800ms.wav` | 0.80 s | `en_us` | 1904 (first 800 ms) |
 
 ## Everything else
 

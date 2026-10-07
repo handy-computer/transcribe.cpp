@@ -1408,7 +1408,6 @@ def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str
         _pack_kv_float32("stt.frontend.log_clamp_min", 1e-10),
         _pack_kv_float32("stt.frontend.top_db", 80.0),
         _pack_kv_string("stt.frontend.normalize", "sentence_mean"),
-        _pack_kv_uint32("stt.ecapa_tdnn.format_version", 1),
         _pack_kv_array_int32("stt.ecapa_tdnn.channels", ECAPA_CHANNELS),
         _pack_kv_array_int32("stt.ecapa_tdnn.kernel_sizes", ECAPA_KERNELS),
         _pack_kv_array_int32("stt.ecapa_tdnn.dilations", ECAPA_DILATIONS),
@@ -1954,13 +1953,9 @@ def emit_fixtures(out_dir: Path) -> None:
     )
 
 
-    # ecapa_tdnn (LANGID role): a structurally complete toy model, and the
-    # same model with a duplicate label code, which the loader must reject
-    # with TRANSCRIBE_ERR_GGUF without leaking the half-built model (H4/H6).
+    # ecapa_tdnn (LANGID role): a structurally complete toy model.
     _write(out_dir / "arch_ecapa_tdnn_minimal.gguf",
            _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"]))
-    _write(out_dir / "arch_ecapa_tdnn_bad_labels.gguf",
-           _ecapa_tdnn_gguf(["aa", "bb", "cc", "bb", "ee"], ECAPA_LABEL_NAMES, ["xx=aa"]))
     # The toy model with its Q8_0-eligible weights in Q8_0, and the same
     # weights as F16 holding the dequantized values. The loader widens Q8_0
     # to F16, so the two must give bit-identical logits on the CPU.

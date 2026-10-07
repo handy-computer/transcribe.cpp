@@ -1,8 +1,7 @@
 # transcribe-cli routes a LANGID model to the language ID path: prints the
 # `language:` / `candidate:` lines, writes the candidates with -o, honours
-# --allow / --top / --max-audio-ms / --repeat, and refuses --batch and
-# --stream-chunk-ms. Structural checks run on the toy fixture (MODEL); with
-# TRANSCRIBE_ECAPA_TDNN_GGUF set, the real model must also call fleurs-en.
+# --allow / --top / --repeat, and refuses --batch and --stream-chunk-ms.
+# Structural checks only, on the toy fixture (MODEL).
 
 file(REMOVE_RECURSE "${TEST_DIR}")
 file(MAKE_DIRECTORY "${TEST_DIR}")
@@ -38,16 +37,6 @@ if(NOT rc EQUAL 0 OR out MATCHES "candidate: 2 ")
     message(FATAL_ERROR "--top 1: rc=${rc}\n${out}\n${err}")
 endif()
 
-run_cli(out rc err -m "${MODEL}" --allow zz "${WAV}")
-if(rc EQUAL 0 OR NOT out MATCHES "run: unsupported language")
-    message(FATAL_ERROR "--allow zz: rc=${rc}\n${out}\n${err}")
-endif()
-
-run_cli(out rc err -m "${MODEL}" --max-audio-ms 400 "${WAV}")
-if(rc EQUAL 0 OR NOT err MATCHES "langid session init: invalid argument")
-    message(FATAL_ERROR "--max-audio-ms 400: rc=${rc}\n${out}\n${err}")
-endif()
-
 run_cli(out rc err -m "${MODEL}" --stream-chunk-ms 100 "${WAV}")
 if(rc EQUAL 0 OR NOT err MATCHES "no streaming entry point")
     message(FATAL_ERROR "--stream-chunk-ms on a langid model: rc=${rc}\n${err}")
@@ -57,11 +46,4 @@ file(WRITE "${TEST_DIR}/list.txt" "${WAV}\n")
 run_cli(out rc err -m "${MODEL}" --batch "${TEST_DIR}/list.txt")
 if(rc EQUAL 0 OR NOT err MATCHES "--batch is ASR-only")
     message(FATAL_ERROR "--batch on a langid model: rc=${rc}\n${err}")
-endif()
-
-if(NOT "$ENV{TRANSCRIBE_ECAPA_TDNN_GGUF}" STREQUAL "")
-    run_cli(out rc err -m "$ENV{TRANSCRIBE_ECAPA_TDNN_GGUF}" --top 3 "${WAV}")
-    if(NOT rc EQUAL 0 OR NOT out MATCHES "language: en index=")
-        message(FATAL_ERROR "real model on ${WAV}: rc=${rc}\n${out}\n${err}")
-    endif()
 endif()

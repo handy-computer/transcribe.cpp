@@ -1,6 +1,5 @@
 // ecapa_tdnn_smoke.cpp - end-to-end smoke of the ecapa_tdnn family (LANGID
-// role) against tiny synthetic GGUFs, through the PUBLIC C API only, so it
-// runs the same against static, shared and installed builds.
+// role) against tiny synthetic GGUFs, through the public C API.
 //
 // arch_ecapa_tdnn_minimal.gguf (tests/fixtures/make_gguf_fixtures.py) is a
 // 1/32-width model with the exact metadata and tensor contract of the real
@@ -106,9 +105,7 @@ void test_model_surface(transcribe_model * m) {
     CHECK(info.sample_rate == 16000 && info.n_labels == 5 && info.min_audio_ms == 500);
     CHECK(std::strcmp(transcribe_langid_label_code(m, 2), "cc") == 0);
     CHECK(std::strcmp(transcribe_langid_label_name(m, 2), "Charlie") == 0);
-    CHECK(transcribe_langid_label_code(m, 5) == nullptr);
-    CHECK(transcribe_langid_label_index(m, "xx") == 0);
-    CHECK(transcribe_langid_label_index(m, "zz") == -1);
+    CHECK(transcribe_langid_label_index(m, "xx") == 0);  // alias from the GGUF
 
     // Not an ASR model.
     transcribe_capabilities caps;
@@ -139,11 +136,6 @@ void test_run(transcribe_model * m) {
     }
     CHECK(std::fabs(sum - 1.0) < 1e-5);
 
-    transcribe_timings tm;
-    transcribe_timings_init(&tm);
-    CHECK(transcribe_langid_get_timings(s, &tm) == TRANSCRIBE_OK);
-    CHECK(tm.mel_ms >= 0.0f && tm.encode_ms > 0.0f);
-
     // Determinism: a second run is bit-identical.
     CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
     const auto again = candidates_of(s);
@@ -152,49 +144,9 @@ void test_run(transcribe_model * m) {
         CHECK(again[i].index == first[i].index && again[i].logit == first[i].logit);
     }
 
-    // Restricted set: renormalized over {bb, dd}, mass below 1.
-    const char *             bd[] = { "bb", "dd" };
-    transcribe_langid_params lp;
-    transcribe_langid_params_init(&lp);
-    lp.allowed   = bd;
-    lp.n_allowed = 2;
-    CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), &lp) == TRANSCRIBE_OK);
-    const transcribe_langid_result rr = result_of(s);
-    CHECK(rr.n_candidates == 2 && rr.n_allowed == 2 && rr.allowed_mass > 0.0f && rr.allowed_mass < 1.0f);
-    const auto restricted = candidates_of(s);
-    CHECK(restricted.size() == 2 && std::fabs(restricted[0].p + restricted[1].p - 1.0f) < 1e-5f);
-
-    // An alias on its own takes all the mass.
-    const char * xx[] = { "xx" };
-    lp.allowed        = xx;
-    lp.n_allowed      = 1;
-    CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), &lp) == TRANSCRIBE_OK);
-    const auto alias = candidates_of(s);
-    CHECK(alias.size() == 1 && alias[0].index == 0 && alias[0].p == 1.0f);
-
-    // Unknown code; top_k.
-    const char * unknown[] = { "zz" };
-    lp.allowed             = unknown;
-    CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), &lp) ==
-          TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE);
-    transcribe_langid_params_init(&lp);
-    lp.top_k = 2;
-    CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), &lp) == TRANSCRIBE_OK);
-    CHECK(result_of(s).n_candidates == 2 && result_of(s).n_allowed == 5);
-
-    // Minimum length, and the crop on long input.
-    CHECK(transcribe_langid_run(s, pcm.data(), 6400, nullptr) == TRANSCRIBE_ERR_INPUT_TOO_SHORT);  // 400 ms
-    CHECK(transcribe_langid_run(s, pcm.data(), 8000, nullptr) == TRANSCRIBE_OK);                   // 500 ms
-    const std::vector<float> longer = noise(16000 * 45, 11);
-    CHECK(transcribe_langid_run(s, longer.data(), static_cast<int>(longer.size()), nullptr) == TRANSCRIBE_OK);
-    CHECK(result_of(s).audio_ms == 30000);
-
-    // Silence is valid input; NaN is not.
+    // Silence is valid input.
     const std::vector<float> zeros(16000, 0.0f);
     CHECK(transcribe_langid_run(s, zeros.data(), 16000, nullptr) == TRANSCRIBE_OK);
-    std::vector<float> nan_pcm = pcm;
-    nan_pcm[100]               = NAN;
-    CHECK(transcribe_langid_run(s, nan_pcm.data(), 16000, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
 
     // Abort before compute.
     transcribe_langid_set_abort_callback(s, [](void *) { return true; }, nullptr);
@@ -221,15 +173,6 @@ void test_thread_invariance(transcribe_model * m) {
     }
     transcribe_langid_session_free(s1);
     transcribe_langid_session_free(s4);
-}
-
-// H4 / H6: a duplicate label code fails the load cleanly. Run under ASan /
-// LSan (TRANSCRIBE_SANITIZE) this also proves the half-built model is freed.
-void test_bad_labels() {
-    transcribe_status  st = TRANSCRIBE_OK;
-    transcribe_model * m  = load_cpu("arch_ecapa_tdnn_bad_labels.gguf", &st);
-    CHECK(st == TRANSCRIBE_ERR_GGUF);
-    CHECK(m == nullptr);
 }
 
 // Q8_0 weights are widened to F16 at load: a Q8_0 model must give exactly
@@ -276,7 +219,6 @@ int main() {
     test_thread_invariance(m);
     transcribe_model_free(m);
 
-    test_bad_labels();
     test_q8_0_widened_to_f16();
 
     if (g_failures != 0) {

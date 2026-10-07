@@ -84,74 +84,6 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_extension_umbrella.cmake)
 
 # -----------------------------------------------------------------------------
-# Synthetic GGUF fixtures (for the loader smoke test)
-# -----------------------------------------------------------------------------
-
-set(TRANSCRIBE_FIXTURE_GENERATOR
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/make_gguf_fixtures.py)
-
-set(TRANSCRIBE_FIXTURE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_parakeet.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_sensevoice.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_funasr_nano.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_unknown.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_cache_aware.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_buffered.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_granite5_ctc_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_labels.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf)
-
-find_program(TRANSCRIBE_UV uv)
-
-if(TRANSCRIBE_UV)
-    # add_custom_command(OUTPUT ...) makes the .gguf files first-class
-    # build outputs. The build graph treats the generator script as a
-    # source dependency, so the fixtures are regenerated whenever the
-    # script changes — and a failing uv invocation produces a hard
-    # build error rather than a configure-time warning.
-    add_custom_command(
-        OUTPUT  ${TRANSCRIBE_FIXTURE_FILES}
-        COMMAND ${TRANSCRIBE_UV} run --quiet ${TRANSCRIBE_FIXTURE_GENERATOR}
-        DEPENDS ${TRANSCRIBE_FIXTURE_GENERATOR}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fixtures
-        COMMENT "Generating synthetic GGUF fixtures"
-        VERBATIM)
-
-    # Aggregate target. The loader test target depends on this; building
-    # `fixtures` directly is the supported way to hand-regenerate.
-    add_custom_target(fixtures
-        DEPENDS ${TRANSCRIBE_FIXTURE_FILES})
-else()
-    message(STATUS
-        "uv not found on PATH; transcribe_loader_smoke will not be "
-        "registered. Install uv (https://docs.astral.sh/uv/) and "
-        "reconfigure to enable.")
-endif()
-
-# -----------------------------------------------------------------------------
-# ecapa_tdnn (LANGID role) fixture smoke: public API only, so it is registered
-# above the shared-library cut and runs against static and shared builds
-# -----------------------------------------------------------------------------
-
-if(TRANSCRIBE_UV)
-    add_executable(transcribe_ecapa_tdnn_smoke ecapa_tdnn_smoke.cpp)
-    target_link_libraries(transcribe_ecapa_tdnn_smoke PRIVATE transcribe)
-    target_compile_definitions(transcribe_ecapa_tdnn_smoke PRIVATE
-        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
-    transcribe_apply_warnings(transcribe_ecapa_tdnn_smoke)
-    add_dependencies(transcribe_ecapa_tdnn_smoke fixtures)
-    add_test(NAME transcribe_ecapa_tdnn_smoke COMMAND transcribe_ecapa_tdnn_smoke)
-endif()
-
-# -----------------------------------------------------------------------------
 # Shared-library build: only the public-ABI smoke is meaningful
 # -----------------------------------------------------------------------------
 #
@@ -562,6 +494,57 @@ transcribe_apply_warnings(transcribe_threadpool_oversubscription)
 add_test(NAME transcribe_threadpool_oversubscription
     COMMAND transcribe_threadpool_oversubscription)
 
+# -----------------------------------------------------------------------------
+# Synthetic GGUF fixtures (for the loader smoke test)
+# -----------------------------------------------------------------------------
+
+set(TRANSCRIBE_FIXTURE_GENERATOR
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/make_gguf_fixtures.py)
+
+set(TRANSCRIBE_FIXTURE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_parakeet.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_sensevoice.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_funasr_nano.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_unknown.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_cache_aware.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_buffered.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_granite5_ctc_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf)
+
+find_program(TRANSCRIBE_UV uv)
+
+if(TRANSCRIBE_UV)
+    # add_custom_command(OUTPUT ...) makes the .gguf files first-class
+    # build outputs. The build graph treats the generator script as a
+    # source dependency, so the fixtures are regenerated whenever the
+    # script changes — and a failing uv invocation produces a hard
+    # build error rather than a configure-time warning.
+    add_custom_command(
+        OUTPUT  ${TRANSCRIBE_FIXTURE_FILES}
+        COMMAND ${TRANSCRIBE_UV} run --quiet ${TRANSCRIBE_FIXTURE_GENERATOR}
+        DEPENDS ${TRANSCRIBE_FIXTURE_GENERATOR}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/fixtures
+        COMMENT "Generating synthetic GGUF fixtures"
+        VERBATIM)
+
+    # Aggregate target. The loader test target depends on this; building
+    # `fixtures` directly is the supported way to hand-regenerate.
+    add_custom_target(fixtures
+        DEPENDS ${TRANSCRIBE_FIXTURE_FILES})
+else()
+    message(STATUS
+        "uv not found on PATH; transcribe_loader_smoke will not be "
+        "registered. Install uv (https://docs.astral.sh/uv/) and "
+        "reconfigure to enable.")
+endif()
 
 # -----------------------------------------------------------------------------
 # GGUF loader / arch dispatch smoke
@@ -778,6 +761,20 @@ if(TRANSCRIBE_UV)
         COMMAND transcribe_granite5_ctc_smoke)
     set_tests_properties(transcribe_granite5_ctc_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
+# ecapa_tdnn (LANGID role) fixture smoke
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_ecapa_tdnn_smoke ecapa_tdnn_smoke.cpp)
+    target_link_libraries(transcribe_ecapa_tdnn_smoke PRIVATE transcribe)
+    target_compile_definitions(transcribe_ecapa_tdnn_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_ecapa_tdnn_smoke)
+    add_dependencies(transcribe_ecapa_tdnn_smoke fixtures)
+    add_test(NAME transcribe_ecapa_tdnn_smoke COMMAND transcribe_ecapa_tdnn_smoke)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1388,7 +1385,7 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_executable(transcribe_ecapa_tdnn_real_smoke
         ecapa_tdnn_real_smoke.cpp)
     target_link_libraries(transcribe_ecapa_tdnn_real_smoke
-        PRIVATE transcribe transcribe-common-example ggml)
+        PRIVATE transcribe transcribe-common-example)
     target_compile_definitions(transcribe_ecapa_tdnn_real_smoke PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
     transcribe_apply_warnings(transcribe_ecapa_tdnn_real_smoke)
