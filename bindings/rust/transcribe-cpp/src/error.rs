@@ -173,9 +173,22 @@ impl From<&Error> for ErrorReport {
     }
 }
 
+/// Moves the partial transcript out instead of cloning it.
 impl From<Error> for ErrorReport {
     fn from(err: Error) -> Self {
-        ErrorReport::from(&err)
+        let (kind, message, status) = (err.kind(), err.to_string(), err.raw_status());
+        let partial = match err {
+            Error::Aborted { partial, .. }
+            | Error::OutputTruncated { partial, .. }
+            | Error::OutputRepetition { partial, .. } => partial.map(|p| *p),
+            _ => None,
+        };
+        ErrorReport {
+            kind,
+            message,
+            status,
+            partial,
+        }
     }
 }
 
