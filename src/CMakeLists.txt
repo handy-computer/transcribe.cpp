@@ -58,6 +58,11 @@ add_library(transcribe
     arch/qwen3_asr/weights.cpp
     arch/qwen3_asr/encoder.cpp
     arch/qwen3_asr/decoder.cpp
+    arch/arkasr/model.cpp
+    arch/arkasr/capabilities.cpp
+    arch/arkasr/weights.cpp
+    arch/arkasr/encoder.cpp
+    arch/arkasr/decoder.cpp
     arch/moss/model.cpp
     arch/moss/capabilities.cpp
     arch/moss/diarize.cpp
