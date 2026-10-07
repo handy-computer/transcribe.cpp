@@ -141,19 +141,28 @@ function initFailure(n: Native, st: number): BackendError {
  * Metal shader compile) even on a path that skipped the module scan, such as
  * `transcribe_init_backends_default` on a compiled-in build. After this, no
  * registry query can trigger first-time device bootstrap on the caller.
+ *
+ * Zero devices is a bootstrap failure even when init returned OK: the
+ * compiled-in default path does not check the count, and the guarded
+ * `transcribe_device_count` reports 0 if registry construction threw. Marking
+ * that `ready` would only defer the failure to a confusing model-load error.
  */
+function requireDevices(st: number, count: number): number {
+  return st === g.TRANSCRIBE_OK && count <= 0 ? g.TRANSCRIBE_ERR_BACKEND : st;
+}
+
 async function initAsync(n: Native): Promise<number> {
   let st = await callAsync<number>(n.F.initBackends, n.artifactDir);
   if (st !== g.TRANSCRIBE_OK) st = await callAsync<number>(n.F.initBackendsDefault);
-  if (st === g.TRANSCRIBE_OK) await callAsync<number>(n.F.deviceCount);
-  return st;
+  if (st !== g.TRANSCRIBE_OK) return st;
+  return requireDevices(st, await callAsync<number>(n.F.deviceCount));
 }
 
 function initSync(n: Native): number {
   let st = n.F.initBackends(n.artifactDir);
   if (st !== g.TRANSCRIBE_OK) st = n.F.initBackendsDefault();
-  if (st === g.TRANSCRIBE_OK) n.F.deviceCount();
-  return st;
+  if (st !== g.TRANSCRIBE_OK) return st;
+  return requireDevices(st, n.F.deviceCount());
 }
 
 /** The current backend initialization state. Never loads or initializes anything. */
