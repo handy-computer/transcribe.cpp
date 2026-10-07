@@ -17,7 +17,8 @@
     "            normalize=sentence_mean; measured on its family-local predecessor,",
     "            which ran the same fp32 mixed-radix FFT),",
     "            not a reference feature dump -- fe.mel is measured, not injected",
-    "  host      macOS / arm64 (Apple Silicon), ggml CPU backend",
+    "  host      macOS / arm64 (Apple Silicon) and Linux / x86-64 (AVX2+FMA,",
+    "            Ryzen 7 PRO 4750U), ggml CPU backend",
     "  reference speechbrain 1.1.1 on torch 2.13.0, fp32, CPU, 1 thread,",
     "            checkpoint speechbrain/lang-id-voxlingua107-ecapa @",
     "            0253049ae131d6a4be1c4f0d8b0ff483a0f8c8e9",
@@ -33,10 +34,14 @@
     "The Stage-2 provisional budgets were max(1e-4*p99_abs, 1e-6) and",
     "max(1e-5*rms, 1e-6) from the reference dumps alone.",
     "",
-    "WIDENED ENTRIES: none. Measured drift came in below the provisional",
-    "budget for every tensor on both metrics, so 1.5*observed never exceeded",
-    "it and every value below is the unchanged Stage-2 number. Nothing was",
-    "loosened to make a case pass.",
+    "WIDENED ENTRIES (max_abs only, from the x86 host; every other value is",
+    "the unchanged Stage-2 number):",
+    "  enc.mfa.out    observed 2.3806e-04 (fleurs-zh) -> 3.571e-04",
+    "  enc.blk.2.out  observed 2.0504e-04 (fleurs-zh) -> 3.076e-04",
+    "Cause: fp32 FMA reduction order over the 3072- and 1024-wide",
+    "contractions on x86 AVX2, about 2x the arm64 drift on these tensors.",
+    "mean_abs on both stays under 7% of budget, and the drift contracts",
+    "again downstream (enc.emb, cls.logits_raw under 1%).",
     "",
     "Dominant drift source: fp32 summation ORDER, not algorithm. Two",
     "contributors, in order of size:",
@@ -54,11 +59,8 @@
     "1/T statistics CONTRACT it again (enc.asp.out 9.5e-06), which is why the",
     "downstream vectors sit two orders of magnitude inside their budgets.",
     "",
-    "Tightest entries, i.e. where a slower-drifting host would first complain:",
-    "  enc.blk.0.out  1.5*observed is 99% of the budget",
-    "  enc.mfa.out    1.5*observed is 94% of the budget",
-    "Both are max_abs on wide [T, C] activations; a re-measure on different",
-    "CPU SIMD width may need a fresh Stage-4 pass rather than a hand edit.",
+    "Tightest entry: enc.blk.0.out, where 1.5*observed (arm64) is 99% of",
+    "the budget; max_abs on a wide [T, C] activation.",
     "",
     "cls.logits_raw is the gate."
   ],
@@ -87,7 +89,7 @@
     "mean_abs": 2.952e-06
   },
   "enc.blk.2.out": {
-    "max_abs": 0.0002627,
+    "max_abs": 0.0003076,
     "mean_abs": 5.964e-06
   },
   "enc.blk.3.out": {
@@ -95,7 +97,7 @@
     "mean_abs": 1.412e-05
   },
   "enc.mfa.out": {
-    "max_abs": 0.0001262,
+    "max_abs": 0.0003571,
     "mean_abs": 4.163e-06
   },
   "enc.asp.attn_logits": {
