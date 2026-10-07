@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include "cpu_gemm.h"
 #include "ggml.h"
 #include "weights.h"
 
@@ -54,12 +53,11 @@ struct GraphBuild {
     ggml_tensor * blk0_in = nullptr;
 
     // Reflect-padding gather indices, one per SERes2Net block, I32
-    // ne = [T + 2*pad(i+1)]. Only the stock-op graph uses them; the CPU
-    // graph pads inside its Res2Net kernel and leaves these null.
+    // ne = [T + 2*pad(i+1)].
     ggml_tensor * idx[kNumSeBlocks] = { nullptr, nullptr, nullptr };
 
-    // Res2Net chunk numbers 0..kRes2NetScale-1, I32. Only the stock-op graph
-    // uses them (set_rows targets when writing a chunk's output in place).
+    // Res2Net chunk numbers 0..kRes2NetScale-1, I32: the set_rows targets
+    // when writing a chunk's output in place.
     ggml_tensor * chunk_ids = nullptr;
 
     // Output.
@@ -71,12 +69,8 @@ struct GraphBuild {
 };
 
 // Build the full forward graph for T frames into `ctx` (a fresh no_alloc
-// context). `cpu_ops` selects the fused CPU kernels (cpu_ops.h); it must only
-// be set when every node runs on the ggml CPU backend. Weights the model
-// packed for the AVX2 GEMM (Model::gemm_conv / gemm_lin) are routed through
-// it; `arena` holds those nodes' descriptors and must outlive the compute.
-// Returns a build with `graph == nullptr` on invalid input.
-GraphBuild build_graph(ggml_context * ctx, const Model & model, int T, bool cpu_ops, gemm::Arena * arena);
+// context). Returns a build with `graph == nullptr` on invalid input.
+GraphBuild build_graph(ggml_context * ctx, const Model & model, int T);
 
 // Fill `out` ([T, hp.blk0_cols()] frame-major, i.e. ggml ne = [cols, T])
 // with the stage-0 im2col of the frame-major log-mel `mel` [T, n_mels]:

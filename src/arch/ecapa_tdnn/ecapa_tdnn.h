@@ -13,7 +13,6 @@
 
 #pragma once
 
-#include "cpu_gemm.h"
 #include "mel.h"
 #include "transcribe-backend.h"
 #include "transcribe-langid.h"
@@ -49,18 +48,6 @@ struct Model final : public transcribe_model {
     ggml_context *        ctx_derived    = nullptr;
     ggml_backend_buffer_t derived_buffer = nullptr;
 
-    // True when the graph uses the fused CPU kernels (cpu_ops.h): the
-    // primary backend is the ggml CPU backend. Fixed at load.
-    bool cpu_ops = false;
-
-    // Which weights were repacked at load for the AVX2 GEMM (cpu_gemm.h);
-    // packed weights are only readable by that GEMM. Fixed at load.
-    //   gemm_conv: the k>1 kernels (stage 0's im2col weight, Res2Net taps)
-    //   gemm_lin:  the T-wide 1x1 weights (tdnn1/tdnn2, mfa, asp.tdnn.x,
-    //              asp.attn); only when they are F16
-    bool gemm_conv = false;
-    bool gemm_lin  = false;
-
     // Built at load from stt.langid.labels.*; immutable after.
     LangidLabels labels;
 
@@ -84,10 +71,6 @@ struct Session final : public transcribe_langid_session {
     // run. Outlives compute_ctx's use: ggml_free never touches a borrowed
     // mem_buffer.
     std::vector<uint8_t> graph_arena;
-
-    // GEMM node descriptors of the current graph (cpu_gemm.h). Cleared with
-    // the compute context at the start of every run.
-    gemm::Arena gemm_arena;
 };
 
 extern const Arch arch;

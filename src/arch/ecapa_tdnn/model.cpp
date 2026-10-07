@@ -244,68 +244,6 @@ transcribe_status build_derived_weights(Model & m) {
     return TRANSCRIBE_OK;
 }
 
-// Repack weights for the AVX2 GEMM (cpu_gemm.h), in two all-or-nothing
-// groups the graph routes as a unit:
-//   - the k>1 kernels (F32 in every shipped file): this GEMM beats ggml's on
-//     their small shapes, and stage 0's K = 320 is not a tinyBLAS shape;
-//   - the T-wide 1x1 weights, only when F16 (F16 files, and Q8_0 after
-//     widening): ggml widens F16 operands in its inner loop, ~1.7x slower.
-//     For F32 1x1 weights ggml's tinyBLAS is as fast as this GEMM.
-// A group is skipped (left on ggml_mul_mat) unless every weight fits the
-// GEMM: F16/F32, contiguous, rows a multiple of the panel, and at most
-// kMaxSegs matrices (one GEMM segment per tap).
-transcribe_status pack_gemm_weights(Model & m) {
-    if (!gemm::available()) {
-        return TRANSCRIBE_OK;
-    }
-    Weights & w = m.weights;
-
-    auto fits = [](const std::vector<ggml_tensor *> & ts, bool need_f16) {
-        for (const ggml_tensor * t : ts) {
-            if (t->ne[1] % gemm::kPanel != 0 || t->ne[2] * t->ne[3] > gemm::kMaxSegs || !ggml_is_contiguous(t) ||
-                (need_f16 && t->type != GGML_TYPE_F16) || (t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_F32)) {
-                return false;
-            }
-        }
-        return true;
-    };
-    // After fits() this cannot fail; if it ever does, some weights are
-    // already packed and unreadable by ggml_mul_mat, so the load fails.
-    auto pack = [&](const std::vector<ggml_tensor *> & ts) {
-        for (ggml_tensor * t : ts) {
-            if (!gemm::pack_weight(t)) {
-                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: GEMM weight repack failed for %s", kTag, t->name);
-                return false;
-            }
-        }
-        return true;
-    };
-
-    std::vector<ggml_tensor *> conv{ w.blk0_w_im2col };
-    std::vector<ggml_tensor *> lin;
-    for (SeRes2NetBlock & b : w.blocks) {
-        for (Res2Sub & r : b.res2) {
-            conv.push_back(r.w);
-        }
-        lin.push_back(b.tdnn1.w);
-        lin.push_back(b.tdnn2.w);
-    }
-    for (ggml_tensor * t : w.mfa_w) {
-        lin.push_back(t);
-    }
-    lin.push_back(w.asp_wx);
-    lin.push_back(w.asp_attn_w);
-
-    m.gemm_conv = fits(conv, /*need_f16=*/false);
-    m.gemm_lin  = fits(lin, /*need_f16=*/true);
-    if ((m.gemm_conv && !pack(conv)) || (m.gemm_lin && !pack(lin))) {
-        return TRANSCRIBE_ERR_BACKEND;
-    }
-    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: AVX2 GEMM for %s%s%s", kTag, m.gemm_conv ? "conv" : "",
-            m.gemm_conv && m.gemm_lin ? " + " : "", m.gemm_lin ? "F16 1x1" : (m.gemm_conv ? "" : "nothing"));
-    return TRANSCRIBE_OK;
-}
-
 // ---------------------------------------------------------------------------
 // load
 // ---------------------------------------------------------------------------
@@ -414,16 +352,6 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    // Fused CPU kernels only when the whole graph runs on the CPU backend:
-    // a custom op has no GPU implementation, and the scheduler would bounce
-    // every one of them back to the host.
-    m->cpu_ops = m->plan.primary_kind == BackendKind::Cpu && m->plan.scheduler_list.size() == 1;
-    if (m->cpu_ops) {
-        if (auto st = pack_gemm_weights(*m); st != TRANSCRIBE_OK) {
-            return st;
-        }
-    }
-
     m->roles = TRANSCRIBE_ROLE_LANGID;
     // The abort callback is honored (transcribe_langid_set_abort_callback).
     set_feature(m.get(), TRANSCRIBE_FEATURE_CANCELLATION, true);
@@ -468,8 +396,8 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
                              "frontend");
     }
 
-    // reflect_rows / the Res2Net kernel need T > pad (the 500 ms LANGID
-    // minimum gives T >= 51 frames; the largest pad here is 4).
+    // reflect_rows needs T > pad (the 500 ms LANGID minimum gives T >= 51
+    // frames; the largest pad here is 4).
     for (int i = 0; i < kNumStages - 1; ++i) {
         if (T <= hp.pad(i)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: T=%d is too short for reflect padding %d", kTag, T, hp.pad(i));
@@ -479,10 +407,8 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
 
     // ---- stage-0 im2col and reflect-padding indices ------------------------
     build_blk0_im2col(hp, s.mel_buf.data(), T, s.im2col_buf);
-    if (!m.cpu_ops) {
-        for (int i = 0; i < kNumSeBlocks; ++i) {
-            build_reflect_indices(T, hp.pad(i + 1), s.idx_buf[i]);
-        }
+    for (int i = 0; i < kNumSeBlocks; ++i) {
+        build_reflect_indices(T, hp.pad(i + 1), s.idx_buf[i]);
     }
 
     // ---- graph -------------------------------------------------------------
@@ -493,7 +419,6 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
         ggml_free(s.compute_ctx);
         s.compute_ctx = nullptr;
     }
-    s.gemm_arena.clear();
     {
         if (s.graph_arena.size() != k_compute_ctx_bytes) {
             s.graph_arena.resize(k_compute_ctx_bytes);
@@ -509,7 +434,7 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
         }
     }
 
-    GraphBuild gb = build_graph(s.compute_ctx, m, T, m.cpu_ops, &s.gemm_arena);
+    GraphBuild gb = build_graph(s.compute_ctx, m, T);
     if (gb.graph == nullptr || gb.logits == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
