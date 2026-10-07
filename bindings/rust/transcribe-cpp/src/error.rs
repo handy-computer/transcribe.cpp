@@ -142,7 +142,9 @@ pub enum ErrorKind {
 /// { "kind": "aborted", "message": "operation aborted: ...", "status": 13, "partial": { "text": "..." } }
 /// ```
 ///
-/// `partial` is omitted unless the error carried a partial transcript.
+/// `partial` is `null` unless the error carried a partial transcript. It is
+/// always written (never skipped) so non-self-describing formats such as
+/// postcard round-trip.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -155,10 +157,7 @@ pub struct ErrorReport {
     #[cfg_attr(feature = "serde", serde(default))]
     pub status: i32,
     /// [`Error::partial`], if any.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub partial: Option<Transcript>,
 }
 
@@ -202,7 +201,6 @@ impl serde::Serialize for Error {
             kind: ErrorKind,
             message: String,
             status: i32,
-            #[serde(skip_serializing_if = "Option::is_none")]
             partial: Option<&'a Transcript>,
         }
         Report {

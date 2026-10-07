@@ -151,7 +151,7 @@ mod errors {
         assert_eq!(v["kind"], "model_file_not_found");
         assert_eq!(v["message"], err.to_string());
         assert_eq!(v["status"], err.raw_status());
-        assert!(v.get("partial").is_none(), "no partial expected: {v}");
+        assert!(v["partial"].is_null(), "no partial expected: {v}");
     }
 
     #[test]
