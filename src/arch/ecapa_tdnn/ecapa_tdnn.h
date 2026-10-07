@@ -13,9 +13,9 @@
 
 #pragma once
 
-#include "mel.h"
 #include "transcribe-backend.h"
 #include "transcribe-langid.h"
+#include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "weights.h"
 
@@ -62,6 +62,7 @@ struct Model final : public transcribe_model {
 
 struct Session final : public transcribe_langid_session {
     // Host scratch, reused across calls.
+    std::vector<float>   mel_raw;                // [n_mels * T], mel-major (MelFrontend)
     std::vector<float>   mel_buf;                // [T * n_mels], frame-major
     std::vector<float>   im2col_buf;             // [T * blk0_cols], frame-major
     std::vector<int32_t> idx_buf[kNumSeBlocks];  // reflect indices, [T + 2p]

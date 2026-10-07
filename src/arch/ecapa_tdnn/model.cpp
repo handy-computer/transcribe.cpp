@@ -271,23 +271,28 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     // ---- front end ------------------------------------------------------
     //
-    // The filterbank is SpeechBrain's own triangle geometry and is never
-    // rebuilt here. It is stored ne = [n_freq, n_mels], so the flat host
-    // vector is already mel-major, which is what MelConfig wants.
+    // The shared MelFrontend in SpeechBrain mode: periodic Hamming, constant
+    // pad, no pre-emphasis, 10*log10 with the top-dB floor, per-bin mean
+    // ("sentence_mean"). read_hparams already pinned window / pad_mode /
+    // normalize to those values and win_length to n_fft. The filterbank is
+    // SpeechBrain's own triangle geometry and is never rebuilt here. It is
+    // stored ne = [n_freq, n_mels], so the flat host vector is already
+    // mel-major, which is what MelConfig wants.
     {
         const size_t expected = static_cast<size_t>(hp.mel_n_mels) * static_cast<size_t>(hp.n_freq());
 
         MelConfig cfg;
-        cfg.sample_rate = hp.sample_rate;
-        cfg.n_mels      = hp.mel_n_mels;
-        cfg.n_fft       = hp.mel_n_fft;
-        cfg.win_length  = hp.mel_win;
-        cfg.hop_length  = hp.mel_hop;
-        cfg.window_type = hp.mel_window;
-        cfg.pad_mode    = hp.mel_pad_mode;
-        cfg.log_floor   = hp.mel_log_floor;
-        cfg.top_db      = hp.mel_top_db;
-        cfg.normalize   = hp.mel_normalize;
+        cfg.sample_rate   = hp.sample_rate;
+        cfg.num_mels      = hp.mel_n_mels;
+        cfg.n_fft         = hp.mel_n_fft;
+        cfg.win_length    = hp.mel_win;
+        cfg.hop_length    = hp.mel_hop;
+        cfg.pre_emphasis  = 0.0f;
+        cfg.window_type   = hp.mel_window;
+        cfg.pad_mode      = hp.mel_pad_mode;
+        cfg.log_clamp_min = hp.mel_log_floor;
+        cfg.top_db        = hp.mel_top_db;
+        cfg.normalize     = hp.mel_normalize;
 
         const auto rr = load_common::read_f32_tensor_checked(loader.gguf(), loader.path(), "frontend.mel_filterbank",
                                                              expected, kTag, cfg.filterbank);
@@ -298,9 +303,6 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         }
 
         m->mel = std::make_unique<MelFrontend>(cfg);
-        if (m->mel->status() != TRANSCRIBE_OK) {
-            return m->mel->status();
-        }
     }
 
     // ---- weights ---------------------------------------------------------
@@ -377,8 +379,25 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
     // ---- front end (host side) -------------------------------------------
     const int64_t t_mel_start = now_us();
     int           T           = 0;
-    if (auto st = m.mel->compute(pcm, n_samples, s.mel_buf, T, n_threads); st != TRANSCRIBE_OK) {
+    int           n_mels      = 0;
+    if (n_samples < 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (auto st = m.mel->compute(pcm, static_cast<size_t>(n_samples), s.mel_raw, n_mels, T, n_threads);
+        st != TRANSCRIBE_OK) {
         return st;
+    }
+    if (n_mels != hp.mel_n_mels) {
+        return TRANSCRIBE_ERR_GGUF;  // unreachable: the config came from hp
+    }
+    // MelFrontend emits mel-major [n_mels, T]; the stage-0 im2col and the
+    // fe.mel dump want frame-major [T, n_mels] (ggml ne = [n_mels, T]).
+    s.mel_buf.resize(static_cast<size_t>(T) * static_cast<size_t>(n_mels));
+    for (int mi = 0; mi < n_mels; ++mi) {
+        const float * src = s.mel_raw.data() + static_cast<size_t>(mi) * static_cast<size_t>(T);
+        for (int t = 0; t < T; ++t) {
+            s.mel_buf[static_cast<size_t>(t) * static_cast<size_t>(n_mels) + static_cast<size_t>(mi)] = src[t];
+        }
     }
     s.t_mel_us = now_us() - t_mel_start;
 

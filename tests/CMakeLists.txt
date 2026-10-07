@@ -411,11 +411,10 @@ add_test(NAME transcribe_run_dispatch_unit
 
 # -----------------------------------------------------------------------------
 # Dispatcher units against fake arches: roles, host thread pool, non-finite
-# input, throwing stream hooks, DIARIZE and LANGID roles, ecapa_tdnn front end
+# input, throwing stream hooks, DIARIZE and LANGID roles
 # -----------------------------------------------------------------------------
 
-foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch
-        ecapa_tdnn_mel)
+foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch)
     add_executable(transcribe_${_t}_unit ${_t}_unit.cpp)
     target_link_libraries(transcribe_${_t}_unit PRIVATE transcribe)
     target_include_directories(transcribe_${_t}_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)

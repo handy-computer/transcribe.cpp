@@ -62,10 +62,11 @@ k>1 tap-major kernels F32 / F16, every other `.weight` quantizable,
 `frontend.mel_filterbank` F32), so the quant policy has no ECAPA entries.
 The full catalogue is in `src/arch/ecapa_tdnn/weights.h`.
 
-The front end is family-local (`src/arch/ecapa_tdnn/mel.cpp`):
-`transcribe-mel` has no periodic Hamming window, `10*log10`, top-db floor or
-per-bin mean subtraction. The filterbank is SpeechBrain's own, captured by the
-converter and stored in the GGUF; it is never rebuilt.
+The front end is the shared `transcribe-mel` (`src/transcribe-mel.cpp`)
+with `window_type = "hamming_periodic"` and `normalize = "sentence_mean"`
+(`10*log10`, 80 dB top-db floor, per-bin mean subtraction, no frame drop).
+The filterbank is SpeechBrain's own, captured by the converter and stored in
+the GGUF; it is never rebuilt.
 
 ## Commands
 

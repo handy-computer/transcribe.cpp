@@ -68,7 +68,6 @@ add_library(transcribe
     arch/sortformer/stream.cpp
     arch/sortformer/weights.cpp
     arch/ecapa_tdnn/graph.cpp
-    arch/ecapa_tdnn/mel.cpp
     arch/ecapa_tdnn/model.cpp
     arch/ecapa_tdnn/weights.cpp
     arch/voxtral/model.cpp
