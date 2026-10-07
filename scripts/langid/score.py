@@ -6,10 +6,7 @@
 # ]
 # ///
 """
-score.py - turn a run.py sweep into accuracy tables.
-
-Everything below is computed from the stored 107-logit vectors, so a new
-decision space costs a re-score, not a re-run.
+score.py - open-set top-1 accuracy of a run.py sweep.
 
 Usage:
     uv run scripts/langid/score.py reports/langid/ref-speechbrain-untrimmed.jsonl \\
@@ -19,19 +16,10 @@ Usage:
     uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl \\
         --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
 
-Tables produced for each run:
-  (a) open-set top-1 accuracy per language and mean, per crop, with a 95%
-      bootstrap CI on the mean;
-  (b) each restricted selection's accuracy over that selection's utterances
-      (logits masked to the selection, softmax over the mask, argmax);
-  (c) confidence: median top-prob when right vs wrong, and coverage /
-      precision at thresholds 0.5 / 0.7 / 0.9, open-set, on full clips;
-  (d) the 10 confusion pairs with the most open-set errors.
-
-Correctness is strict code equality. `nn` is not credited for `no`, `be` is
-not credited for `ru`, `jw` is not credited for `id`: those label artefacts
-are exactly what the restricted selections are supposed to remove, and
-crediting them would erase the effect the tables are measuring.
+The markdown report is the open-set top-1 accuracy per language and mean,
+per crop, with a 95% bootstrap CI on the mean. Correctness is strict code
+equality (`nn` is not credited for `no`, `be` not for `ru`, `jw` not for
+`id`).
 
 The mean is the MACRO mean over languages (each language weighs 1/15). The
 bootstrap resamples utterances within each language and re-averages the
@@ -44,7 +32,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -54,8 +41,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CROP_ORDER_HINT = {"3": 0, "5": 1, "10": 2, "full": 99}
 N_BOOT = 1000
 BOOT_SEED = 42
-THRESHOLDS = (0.5, 0.7, 0.9)
-TOP_CONFUSIONS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -98,54 +83,6 @@ class Run:
     @property
     def name(self) -> str:
         return self.path.stem
-
-
-def softmax_masked(logits: np.ndarray, mask_idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Argmax and top-probability over a masked decision space.
-
-    `logits` is [N, 107]; `mask_idx` selects the allowed columns. The softmax
-    is taken over the allowed columns only, which is what
-    transcribe_langid_candidate.p is.
-    """
-    z = logits[:, mask_idx]
-    z = z - z.max(axis=1, keepdims=True)
-    e = np.exp(z)
-    p = e / e.sum(axis=1, keepdims=True)
-    arg = np.argmax(p, axis=1)
-    return mask_idx[arg], p[np.arange(p.shape[0]), arg]
-
-
-# ---------------------------------------------------------------------------
-# Selections
-# ---------------------------------------------------------------------------
-
-
-def load_selections(path: Path, labels: list[str]) -> dict:
-    spec = json.loads(path.read_text())
-    aliases: dict[str, str] = spec.get("aliases", {})
-    index_of = {c: i for i, c in enumerate(labels)}
-
-    def resolve(codes: list[str], where: str) -> list[str]:
-        out = []
-        for c in codes:
-            real = aliases.get(c, c)
-            if real not in index_of:
-                raise SystemExit(
-                    f"error: {where}: code {c!r} (resolved {real!r}) is not in "
-                    f"this model's label set")
-            out.append(real)
-        if len(set(out)) != len(out):
-            dupes = [c for c, n in Counter(out).items() if n > 1]
-            raise SystemExit(f"error: {where}: duplicate codes after aliasing: {dupes}")
-        return out
-
-    selections = []
-    for entry in spec.get("selections", []):
-        selections.append({
-            "name": entry["name"],
-            "codes": resolve(entry["codes"], f"selections.{entry['name']}"),
-        })
-    return {"aliases": aliases, "selections": selections, "path": path}
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +166,7 @@ def md_table(header: list[str], rows: list[list[str]]) -> list[str]:
     return out
 
 
-def section_setup(run: Run, sel: dict) -> list[str]:
+def section_setup(run: Run) -> list[str]:
     h = run.header
     r = h["recipe"]
     lines = [f"## Setup", ""]
@@ -245,14 +182,10 @@ def section_setup(run: Run, sel: dict) -> list[str]:
     lines.append(f"- Dataset: FLEURS `test`, {len(run.languages)} languages "
                  f"x {r['n_utterances'] // max(len(run.languages), 1)} utterances "
                  f"= {r['n_utterances']} clips, longest {r['longest_clip_s']:.1f} s")
-    lines.append(f"- Crops: {crop_list(run.crops)}, from the "
-                 f"{'first speech frame' if r['trim'] == 'energy' else 'start of the clip'}"
-                 f" (`--trim {r['trim']}`)")
-    lines.append(f"- Trim rule: {r['trim_rule']}")
+    lines.append(f"- Crops: {crop_list(run.crops)}, from the start of the clip")
     lines.append(f"- Logits: `{r['logit_kind']}`; both engines read the same "
                  f"16-bit crops under `{r['crop_dir']}`")
-    lines.append(f"- Decision spaces from `{rel(sel['path'])}`; "
-                 f"bootstrap {N_BOOT} resamples, seed {BOOT_SEED}")
+    lines.append(f"- Bootstrap {N_BOOT} resamples, seed {BOOT_SEED}")
     lines.append(f"- Correctness is strict label-code equality "
                  f"(`nn` is not credited for `no`, `be` not for `ru`, `jw` not for `id`)")
     lines.append("")
@@ -284,85 +217,8 @@ def section_openset(run: Run) -> list[str]:
     rows.append(["**mean**"] + [f"**{pct(means[c][0])}**" for c in run.crops])
     rows.append(["95% CI"] + [f"{pct(means[c][1])}-{pct(means[c][2])}" for c in run.crops])
 
-    lines = ["## (a) Open-set top-1 accuracy (all 107 labels), %", ""]
+    lines = ["## Open-set top-1 accuracy (all 107 labels), %", ""]
     lines += md_table(["lang"] + [crop_head(c) for c in run.crops], rows)
-    return lines
-
-
-def section_selections(run: Run, sel: dict) -> list[str]:
-    rows = []
-    for entry in sel["selections"]:
-        codes = entry["codes"]
-        idx = np.array([run.index_of[c] for c in codes])
-        cells = []
-        for crop in run.crops:
-            d = run.by_crop[crop]
-            m = np.isin(d["lang"], codes)
-            if not m.any():
-                cells.append("-")
-                continue
-            arg, _p = softmax_masked(d["logits"][m], idx)
-            pred = np.array(run.labels)[arg]
-            cells.append(pct(float((pred == d["lang"][m]).mean())))
-        n = int(np.isin(run.by_crop[run.crops[0]]["lang"], codes).sum())
-        rows.append([entry["name"], str(n)] + cells)
-    lines = ["## (b) Restricted to a user's selection "
-             "(accuracy over that selection's utterances), %", ""]
-    lines += md_table(["selection", "n utts"] +
-                      [crop_head(c) for c in run.crops], rows)
-    return lines
-
-
-def section_confidence(run: Run) -> list[str]:
-    """Median top-prob right vs wrong, and coverage/precision at thresholds.
-
-    Reported open-set on the `full` crop (the realistic case: the caller has
-    the whole utterance). `coverage` is the share of decisions kept,
-    `precision` the share of kept decisions that are right; a threshold is
-    only useful when it trades a little of the first for a lot of the second.
-    """
-    crop = "full" if "full" in run.crops else run.crops[-1]
-    d = run.by_crop[crop]
-    space_name = f"open ({len(run.labels)})"
-    arg, prob = softmax_masked(d["logits"], np.arange(len(run.labels)))
-    pred = np.array(run.labels)[arg]
-    right = pred == d["lang"]
-    med_r = float(np.median(prob[right])) if right.any() else float("nan")
-    med_w = float(np.median(prob[~right])) if (~right).any() else float("nan")
-    rows = [[space_name, f"{med_r:.3f}", f"{med_w:.3f}",
-             f"{pct(float(right.mean()))}"]]
-    thr_rows = []
-    for t in THRESHOLDS:
-        keep = prob >= t
-        cov = float(keep.mean())
-        prec = float(right[keep].mean()) if keep.any() else float("nan")
-        thr_rows.append([space_name, f"{t:.1f}", pct(cov), pct(prec)])
-
-    lines = [f"## (c) Confidence, `{crop}` clips", ""]
-    lines += md_table(["decision space", "median top-prob right",
-                       "median top-prob wrong", "accuracy %"], rows)
-    lines += md_table(["decision space", "threshold", "coverage %",
-                       "precision %"], thr_rows)
-    return lines
-
-
-def section_confusions(run: Run) -> list[str]:
-    counts: dict[tuple[str, str], Counter] = defaultdict(Counter)
-    for crop in run.crops:
-        d = run.by_crop[crop]
-        pred = np.array(run.labels)[np.argmax(d["logits"], axis=1)]
-        wrong = pred != d["lang"]
-        for t, p in zip(d["lang"][wrong], pred[wrong]):
-            counts[(str(t), str(p))][crop] += 1
-    ranked = sorted(counts.items(), key=lambda kv: -sum(kv[1].values()))[:TOP_CONFUSIONS]
-    rows = []
-    for (t, p), per_crop in ranked:
-        rows.append([f"{t} -> {p}", str(sum(per_crop.values()))] +
-                    [str(per_crop.get(c, 0)) for c in run.crops])
-    lines = [f"## (d) Top {TOP_CONFUSIONS} open-set confusion pairs "
-             f"(errors, all crops)", ""]
-    lines += md_table(["true -> predicted", "total"] +
-                      [crop_head(c) for c in run.crops], rows)
     return lines
 
 
@@ -418,13 +274,10 @@ def score_json(run: Run) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def score_run(run: Run, sel: dict) -> list[str]:
+def score_run(run: Run) -> list[str]:
     lines = [f"# Language-ID accuracy - `{run.name}`", ""]
-    lines += section_setup(run, sel)
+    lines += section_setup(run)
     lines += section_openset(run)
-    lines += section_selections(run, sel)
-    lines += section_confidence(run)
-    lines += section_confusions(run)
     return lines
 
 
@@ -432,8 +285,6 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("runs", nargs="+", type=Path, help="run.py JSONL report(s)")
-    p.add_argument("--selections", type=Path,
-                   default=Path(__file__).resolve().parent / "selections.json")
     p.add_argument("--md", type=Path,
                    help="write the first run's markdown report here (later "
                         "runs go next to it as <run name>.md)")
@@ -447,8 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--json takes exactly one run")
 
     loaded = [Run(r) for r in args.runs]
-    sel = load_selections(args.selections, loaded[0].labels)
-    scored = [(run, score_run(run, sel)) for run in loaded]
+    scored = [(run, score_run(run)) for run in loaded]
 
     text = "\n".join(scored[0][1]) + "\n"
     sys.stdout.write(text)

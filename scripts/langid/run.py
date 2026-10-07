@@ -8,13 +8,13 @@ Usage:
   uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py \
       --engine speechbrain --model speechbrain/lang-id-voxlingua107-ecapa \
       --manifest samples/langid/fleurs-*.manifest.jsonl \
-      --crops 3,5,10,full --trim none \
+      --crops 3,5,10,full \
       --out reports/langid/ref-speechbrain-untrimmed.jsonl
 
   uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py \
       --engine cpp --model models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-F32.gguf \
       --manifest samples/langid/fleurs-*.manifest.jsonl \
-      --crops 3,5,10,full --trim none --backend cpu --threads 4 \
+      --crops 3,5,10,full --backend cpu --threads 4 \
       --library build-shared/src/libtranscribe.dylib \
       --out reports/langid/cpp-f32-untrimmed.jsonl
 
@@ -22,25 +22,19 @@ Output JSONL:
   line 1   {"type":"header","engine","model","recipe":{...},"labels":[107],"created"}
   line n   {"id","language","crop_s","trim","audio_s","logits":[107],"top1","top1_prob"}
 
-All 107 raw logits are stored per (utterance, crop) so every restricted
-selection can be scored offline by score.py from a single sweep.
-`top1`/`top1_prob` are the open-set decision, kept as a convenience;
-score.py recomputes everything from `logits`.
+All 107 raw logits are stored per (utterance, crop); `top1`/`top1_prob`
+are the open-set decision, kept as a convenience; score.py and compare.py
+recompute everything from `logits`.
 
 Crop semantics
 --------------
-`--trim none`  : the first N seconds of the raw clip, so "3 s" is roughly
-                 2 s of speech on FLEURS (the clips open with silence).
-`--trim energy`: drop everything before the first 20 ms frame whose RMS
-                 exceeds 5% of the clip's maximum frame RMS, then take the
-                 first N seconds of what is left.
-`full`         : the whole clip (after trimming, for --trim energy).
-A clip shorter than the crop is used whole; the row's `audio_s` records
-what was actually scored.
+A crop of N is the first N seconds of the raw clip; `full` is the whole
+clip. A clip shorter than the crop is used whole; the row's `audio_s`
+records what was actually scored. `trim` is always "none" in the report.
 
 Both engines read the SAME 16-bit wav files
 -------------------------------------------
-Crops are materialised once to `build/langid/crops/<trim>/<crop>/<id>.wav`
+Crops are materialised once to `build/langid/crops/none/<crop>/<id>.wav`
 and both engines read those files back. Scoring in-memory floats on one
 side and 16-bit wavs on the other would make compare.py's 99.9% agreement
 gate measure PCM rounding instead of the port. The crop directory is
@@ -69,9 +63,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 SAMPLE_RATE = 16000
 N_LABELS = 107
-TRIM_FRAME_MS = 20
-TRIM_REL_THRESHOLD = 0.05
-MIN_KEEP_S = 0.5  # the LANGID role's TRANSCRIBE_ERR_INPUT_TOO_SHORT floor
+TRIM = "none"  # crops start at sample 0; part of compare.py's row key and recipe check
 
 
 # ---------------------------------------------------------------------------
@@ -106,58 +98,31 @@ def write_wav(path: Path, pcm: np.ndarray) -> None:
     sf.write(str(path), pcm, SAMPLE_RATE, subtype="PCM_16")
 
 
-def energy_trim_start(pcm: np.ndarray) -> int:
-    """First sample of speech: the start of the first 20 ms frame whose RMS
-    exceeds 5% of the loudest frame's RMS.
-
-    Relative to the clip's own maximum, so it is level-independent. The
-    result is clamped so at least MIN_KEEP_S remains: a clip whose only
-    loud frame is at the very end would otherwise be trimmed below the
-    library's 500 ms floor.
-    """
-    frame = int(TRIM_FRAME_MS * SAMPLE_RATE / 1000)  # 320
-    n_frames = pcm.size // frame
-    if n_frames == 0:
-        return 0
-    frames = pcm[: n_frames * frame].reshape(n_frames, frame)
-    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
-    peak = float(rms.max())
-    if peak <= 0.0:
-        return 0
-    above = np.flatnonzero(rms > TRIM_REL_THRESHOLD * peak)
-    if above.size == 0:
-        return 0
-    start = int(above[0]) * frame
-    return min(start, max(0, pcm.size - int(MIN_KEEP_S * SAMPLE_RATE)))
-
-
-def make_crop(pcm: np.ndarray, crop: str | int, trim: str) -> np.ndarray:
-    start = energy_trim_start(pcm) if trim == "energy" else 0
-    cut = pcm[start:]
+def make_crop(pcm: np.ndarray, crop: str | int) -> np.ndarray:
     if crop == "full":
-        return cut
+        return pcm
     n = int(float(crop) * SAMPLE_RATE)
-    return cut[:n] if cut.size > n else cut
+    return pcm[:n] if pcm.size > n else pcm
 
 
 def crop_dir(trim: str, crop: str | int) -> Path:
     return REPO_ROOT / "build" / "langid" / "crops" / trim / str(crop)
 
 
-def materialise_crops(rows: list[dict], crop: str | int, trim: str) -> list[tuple[dict, Path]]:
+def materialise_crops(rows: list[dict], crop: str | int) -> list[tuple[dict, Path]]:
     """Write every (utterance, crop) wav and return (row, path) pairs.
 
     Always rewrites: the write is cheap next to a forward pass, and an
     unconditional write means a stale crop from an earlier recipe can never
     be scored by accident.
     """
-    out = crop_dir(trim, crop)
+    out = crop_dir(TRIM, crop)
     out.mkdir(parents=True, exist_ok=True)
     pairs: list[tuple[dict, Path]] = []
     for row in rows:
         src = REPO_ROOT / row["audio"]
         dst = out / f"{row['id']}.wav"
-        write_wav(dst, make_crop(read_wav(src), crop, trim))
+        write_wav(dst, make_crop(read_wav(src), crop))
         pairs.append((row, dst))
     return pairs
 
@@ -355,7 +320,6 @@ def main(argv: list[str] | None = None) -> int:
                    help="HF repo id / checkpoint dir (speechbrain) or GGUF path (cpp)")
     p.add_argument("--manifest", required=True, nargs="+", type=Path)
     p.add_argument("--crops", default="3,5,10,full")
-    p.add_argument("--trim", default="none", choices=("none", "energy"))
     p.add_argument("--out", required=True, type=Path)
     p.add_argument("--library", type=Path, default=None,
                    help="cpp engine only; a shared libtranscribe (TRANSCRIBE_LIBRARY)")
@@ -387,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("error: manifests are empty")
     longest_s = max(r["duration_s"] for r in rows)
     print(f"{len(rows)} utterances from {len(manifests)} manifests, "
-          f"{len(crops)} crops, trim={args.trim}", file=sys.stderr)
+          f"{len(crops)} crops", file=sys.stderr)
 
     max_audio_ms = args.max_audio_ms or int(math.ceil(longest_s / 10.0) * 10.0 * 1000)
 
@@ -417,12 +381,9 @@ def main(argv: list[str] | None = None) -> int:
 
     recipe = {
         "crops": [str(c) for c in crops],
-        "trim": args.trim,
-        "trim_rule": (f"first {TRIM_FRAME_MS} ms frame with RMS > "
-                      f"{TRIM_REL_THRESHOLD:g} * max frame RMS"
-                      if args.trim == "energy" else
-                      "none (crops start at sample 0 of the raw clip)"),
-        "crop_dir": str(crop_dir(args.trim, "<crop>").relative_to(REPO_ROOT)),
+        "trim": TRIM,
+        "trim_rule": "none (crops start at sample 0 of the raw clip)",
+        "crop_dir": str(crop_dir(TRIM, "<crop>").relative_to(REPO_ROOT)),
         "manifests": [str(m) for m in manifests],
         "manifest_sha256": {str(m): _sha256_file(m) for m in manifests},
         "n_utterances": len(rows),
@@ -441,9 +402,9 @@ def main(argv: list[str] | None = None) -> int:
 
         for crop in crops:
             t_crop = time.time()
-            print(f"[{args.trim}/{crop}] materialising {len(rows)} crops ...",
+            print(f"[{TRIM}/{crop}] materialising {len(rows)} crops ...",
                   file=sys.stderr)
-            pairs = materialise_crops(rows, crop, args.trim)
+            pairs = materialise_crops(rows, crop)
 
             batch_rows = []
             for i, (row, wav_path) in enumerate(pairs):
@@ -454,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
                     "id": row["id"],
                     "language": row["language"],
                     "crop_s": crop,
-                    "trim": args.trim,
+                    "trim": TRIM,
                     "audio_s": round(pcm.size / SAMPLE_RATE, 4),
                     "logits": [round(float(x), 6) for x in logits],
                     "top1": labels[top_i],
@@ -462,7 +423,7 @@ def main(argv: list[str] | None = None) -> int:
                 })
                 if (i + 1) % 100 == 0 or i + 1 == len(pairs):
                     el = time.time() - t_crop
-                    print(f"  [{args.trim}/{crop}] {i + 1}/{len(pairs)}  "
+                    print(f"  [{TRIM}/{crop}] {i + 1}/{len(pairs)}  "
                           f"{el:.0f}s  ({el / (i + 1) * 1000:.0f} ms/utt)",
                           file=sys.stderr)
 
@@ -482,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
                 f.write(json.dumps(r) + "\n")
                 n_written += 1
             f.flush()
-            print(f"[{args.trim}/{crop}] done in {time.time() - t_crop:.0f}s",
+            print(f"[{TRIM}/{crop}] done in {time.time() - t_crop:.0f}s",
                   file=sys.stderr)
 
     engine.close()

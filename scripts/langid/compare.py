@@ -8,9 +8,8 @@ compare.py - the dataset gate: does the C++ engine make the same decisions
 as the SpeechBrain reference on the same audio?
 
 The gate: the C++ F32 result makes the same top-1 decision as the SpeechBrain
-reference on the same audio. Every disagreement must be an explicitly listed,
-reviewed near-tie (--near-ties); anything else fails, whatever the aggregate
-agreement rate. The aggregate is still reported against --gate (99.9%).
+reference on the same audio. Any disagreement fails, whatever the aggregate
+agreement rate. The aggregate is also reported against --gate (99.9%).
 
 Provenance is enforced, not just printed: both runs must share the label set,
 the recipe (trim, crops, utterance count, crop dir, logit kind, sample rate)
@@ -28,24 +27,16 @@ a key present in only one side is reported and counted as a failure, because
 a silently dropped utterance would otherwise raise the agreement rate.
 
 Exit status:
-    0  every disagreement is a listed near-tie, agreement >= the gate, same keys
-    1  an unlisted disagreement, agreement below the gate, or coverage differs
+    0  no disagreement, agreement >= the gate, same keys
+    1  a disagreement, agreement below the gate, or coverage differs
     2  usage / input / provenance error
 
 Only F32 is held to the gate. For the quants pass --report-only: the
 agreement is still measured, printed and written (--json, with "passed"),
 but only a coverage mismatch exits 1.
 
-Near-tie list (JSON): [{"id", "crop_s", "trim", "a_top1", "b_top1",
-"max_gap", "note"}]. An entry only excuses that exact disagreement while both
-engines' margins stay within max_gap; review every entry by listening.
-
 Every disagreement is printed with both engines' top-1 and, for each engine,
-that engine's own margin between the two codes in question. A near-tie shows
-up as a margin near zero on BOTH sides: the two engines put the same two
-labels within noise of each other and rounded opposite ways. A disagreement
-with a large margin on either side is a real numerical divergence and must be
-chased, not waived.
+that engine's own margin between the two codes in question.
 """
 
 from __future__ import annotations
@@ -54,7 +45,6 @@ import argparse
 import json
 import math
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 GATE = 0.999
@@ -100,8 +90,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--gate", type=float, default=GATE,
                    help=f"minimum top-1 agreement rate (default {GATE})")
     p.add_argument("--max-listed", type=int, default=MAX_LISTED_DISAGREEMENTS)
-    p.add_argument("--near-ties", type=Path, default=None,
-                   help="JSON list of reviewed near-tie disagreements")
     p.add_argument("--report-only", action="store_true",
                    help="measure and record agreement without gating on it (the quants); "
                         "a coverage mismatch still exits 1")
@@ -110,10 +98,6 @@ def main(argv: list[str] | None = None) -> int:
                         "ingest_accuracy.py; name it <gguf stem>.fleurs-mul."
                         "agreement.json under reports/langid/")
     args = p.parse_args(argv)
-    near_ties: dict[tuple, dict] = {}
-    if args.near_ties is not None:
-        for e in json.loads(args.near_ties.read_text()):
-            near_ties[(e["id"], str(e["crop_s"]), e["trim"])] = e
 
     ha, ra = load(args.a)
     hb, rb = load(args.b)
@@ -163,7 +147,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     n_agree = 0
-    per_group: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
     abs_deltas: list[float] = []
     disagreements = []
 
@@ -178,14 +161,10 @@ def main(argv: list[str] | None = None) -> int:
 
         ia = max(range(len(la)), key=lambda i: la[i])
         ib = max(range(len(lb)), key=lambda i: lb[i])
-        group = (x["language"], str(x["crop_s"]))
-        per_group[group][1] += 1
         if ia == ib:
             n_agree += 1
-            per_group[group][0] += 1
         else:
-            # Each engine's own margin between the two contested labels. Both
-            # near zero == a near-tie rounded opposite ways.
+            # Each engine's own margin between the two contested labels.
             disagreements.append({
                 "key": key,
                 "language": x["language"],
@@ -208,23 +187,6 @@ def main(argv: list[str] | None = None) -> int:
           f"median={percentile(abs_deltas, 0.50):.6g}")
     print()
 
-    langs = sorted({g[0] for g in per_group})
-    crops = sorted({g[1] for g in per_group},
-                   key=lambda c: (c == "full", float(c) if c != "full" else 0))
-    print("agreement % by language x crop")
-    print("lang   " + "".join(f"{c:>9}" for c in crops) + f"{'all':>9}")
-    for lg in langs:
-        cells = ""
-        tot_ok = tot_n = 0
-        for c in crops:
-            ok, tot = per_group.get((lg, c), [0, 0])
-            tot_ok += ok
-            tot_n += tot
-            cells += f"{(100 * ok / tot if tot else float('nan')):9.3f}"
-        cells += f"{(100 * tot_ok / tot_n if tot_n else float('nan')):9.3f}"
-        print(f"{lg:<7}{cells}")
-    print()
-
     if disagreements:
         disagreements.sort(key=lambda d: -max(abs(d["a_gap"]), abs(d["b_gap"])))
         print(f"{len(disagreements)} disagreements "
@@ -238,28 +200,14 @@ def main(argv: list[str] | None = None) -> int:
                   f"{d['max_abs_delta']:12.3g}")
         worst = max(max(abs(d["a_gap"]), abs(d["b_gap"])) for d in disagreements)
         print(f"\nlargest contested margin on either side: {worst:.5f}")
-        print("A near-tie has both gaps near zero. A large gap on either side "
-              "is a real divergence, not a rounding coincidence.")
         print()
-
-    unlisted = []
-    for d in disagreements:
-        e = near_ties.get(d["key"])
-        ok = (e is not None and e["a_top1"] == d["a_top1"] and e["b_top1"] == d["b_top1"]
-              and abs(d["a_gap"]) <= e["max_gap"] and abs(d["b_gap"]) <= e["max_gap"])
-        if not ok:
-            unlisted.append(d)
-    stale = sorted(set(near_ties) - {d["key"] for d in disagreements})
-    if stale:
-        print(f"note: {len(stale)} listed near-ties did not disagree this run: {stale[:5]}")
 
     if only_a or only_b:
         print("FAIL: the two runs do not cover the same rows")
         status = 1
-    elif unlisted:
-        print(f"FAIL: {len(unlisted)} disagreements are not reviewed near-ties "
-              f"(add them to --near-ties only after listening): "
-              f"{[d['key'] for d in unlisted[:10]]}")
+    elif disagreements:
+        print(f"FAIL: {len(disagreements)} disagreements: "
+              f"{[d['key'] for d in disagreements[:10]]}")
         status = 1
     elif rate < args.gate:
         print(f"FAIL: agreement {100 * rate:.4f}% < {100 * args.gate:.2f}%")
@@ -283,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             "n_agree": n_agree,
             "max_abs_logit_delta": abs_deltas[-1],
             "disagreements": len(disagreements),
-            "unlisted": len(unlisted),
+            "unlisted": len(disagreements),
             "same_rows": not (only_a or only_b),
             "gate": args.gate,
             "passed": status == 0,
