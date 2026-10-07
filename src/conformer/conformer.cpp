@@ -13,6 +13,7 @@
 #include "transcribe-env.h"
 #include "transcribe-log.h"
 
+#include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1154,39 +1155,51 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x               = ggml_cont(ctx, x);
     x               = name_prefixed(x, name_prefix, "mel_t");
 
-    // Causal pre_encode: NeMo's CausalConv2D pads (left=k-1, right=stride-1)
-    // on both spatial axes before the conv (p=0). Offline variants take the
-    // op-side (k-1)/2 symmetric padding instead.
-    const bool causal_pe  = policy.causal_pre_encode;
-    const int  pe_p_op    = causal_pe ? 0 : 1;
-    auto       pad_causal = [&](ggml_tensor * t) {
+    // Causal pre_encode: NeMo's CausalConv2D pads (left=k-1=2, right=stride-1=1)
+    // on both spatial axes before each stride-2 conv (p=0). Materializing
+    // that pad copies the whole activation (conv0's output is ~2 GB at ten
+    // minutes), so the graph instead asks the conv for symmetric op-side
+    // padding p=2, which im2col / direct conv apply without a copy. For
+    // k=3 / s=2 output i reads padded [2i, 2i+2] either way, so every
+    // causal output is identical; the extra right-hand zero only yields one
+    // spurious trailing column/row when the input length is odd. That tail
+    // is zeroed in place before the next conv (where it stands in for the
+    // right-pad zero that conv would have read) and dropped once at the
+    // final flatten. Offline variants take the usual (k-1)/2 = 1 padding.
+    const bool causal_pe        = policy.causal_pre_encode;
+    const int  pe_p_op          = causal_pe ? 2 : 1;
+    // Exact causal lengths per spatial axis (ne[0] = freq, ne[1] = time),
+    // advanced per stride-2 conv: floor(L/2) + 1.
+    int64_t    want_w           = x->ne[0];
+    int64_t    want_h           = x->ne[1];
+    auto       zero_causal_tail = [&](ggml_tensor * t) -> ggml_tensor * {
         if (!causal_pe) {
             return t;
         }
-        // For k=3 / s=2: left=2, right=1 on both axes (zero F32 pads).
-        const int left = 2, right = 1;
-        auto      make_pad = [&](int width_w, int width_h) {
-            ggml_tensor * p = ggml_new_tensor_4d(ctx, t->type, width_w > 0 ? width_w : t->ne[0],
-                                                 width_h > 0 ? width_h : t->ne[1], t->ne[2], t->ne[3]);
-            return ggml_fill(ctx, p, 0.0f);
-        };
-        // dim 0 (W = freq).
-        ggml_tensor * pad_l = make_pad(left, /*h=*/0);
-        t                   = ggml_concat(ctx, pad_l, t, /*dim=*/0);
-        ggml_tensor * pad_r = make_pad(right, /*h=*/0);
-        t                   = ggml_concat(ctx, t, pad_r, /*dim=*/0);
-        // dim 1 (H = time). At this point ne[0] grew by left+right.
-        ggml_tensor * pad_t = ggml_new_tensor_4d(ctx, t->type, t->ne[0], left, t->ne[2], t->ne[3]);
-        pad_t               = ggml_fill(ctx, pad_t, 0.0f);
-        t                   = ggml_concat(ctx, pad_t, t, /*dim=*/1);
-        ggml_tensor * pad_b = ggml_new_tensor_4d(ctx, t->type, t->ne[0], right, t->ne[2], t->ne[3]);
-        pad_b               = ggml_fill(ctx, pad_b, 0.0f);
-        t                   = ggml_concat(ctx, t, pad_b, /*dim=*/1);
-        return t;
+        want_w                = want_w / 2 + 1;
+        want_h                = want_h / 2 + 1;
+        const int64_t extra_w = t->ne[0] - want_w;
+        const int64_t extra_h = t->ne[1] - want_h;
+        assert(extra_w >= 0 && extra_w <= 1 && extra_h >= 0 && extra_h <= 1);
+        if (extra_w == 0 && extra_h == 0) {
+            return t;
+        }
+        // [W, H, 1, 1] mask broadcast over channels and batch: ones with a
+        // zero last column / row wherever the tail is spurious.
+        ggml_tensor * m =
+            ggml_fill(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, t->ne[0] - extra_w, t->ne[1] - extra_h), 1.0f);
+        if (extra_w != 0) {
+            ggml_tensor * col = ggml_fill(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, m->ne[1]), 0.0f);
+            m                 = ggml_concat(ctx, m, col, /*dim=*/0);
+        }
+        if (extra_h != 0) {
+            ggml_tensor * row = ggml_fill(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m->ne[0], 1), 0.0f);
+            m                 = ggml_concat(ctx, m, row, /*dim=*/1);
+        }
+        return ggml_mul_inplace(ctx, t, m);
     };
 
     // conv0 (standard 2D conv: 1 in, channels out, k=3 s=2)
-    x = pad_causal(x);
     if (policy.direct_conv0_in_pre_encode) {
         x = ggml_conv_2d_direct(ctx, pe.conv0_w, x,
                                 /*s0=*/2, /*s1=*/2,
@@ -1203,10 +1216,10 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu0");
     x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s1 : nullptr, "pre_encode.valid_mask.s1");
+    x = zero_causal_tail(x);
 
     // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2).
     // im2col path (conv_2d_dw_f32) when direct_dw_in_pre_encode is false.
-    x = pad_causal(x);
     if (policy.direct_dw_in_pre_encode) {
         x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv2_w), x,
                                    /*s0=*/2, /*s1=*/2,
@@ -1241,9 +1254,9 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     } else {
         x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2_extent : nullptr, "pre_encode.extent_mask.s2");
     }
+    x = zero_causal_tail(x);
 
     // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
-    x = pad_causal(x);
     if (policy.direct_dw_in_pre_encode) {
         x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv5_w), x,
                                    /*s0=*/2, /*s1=*/2,
@@ -1275,6 +1288,16 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
         x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
     } else {
         x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3_extent : nullptr, "pre_encode.extent_mask.s3");
+    }
+    // Causal: drop the spurious tail of the last stage as a view; the
+    // flatten's cont below materializes the exact [F', T_enc] extent.
+    if (causal_pe) {
+        want_w = want_w / 2 + 1;
+        want_h = want_h / 2 + 1;
+        assert(x->ne[0] >= want_w && x->ne[0] - want_w <= 1 && x->ne[1] >= want_h && x->ne[1] - want_h <= 1);
+        if (x->ne[0] != want_w || x->ne[1] != want_h) {
+            x = ggml_view_4d(ctx, x, want_w, want_h, x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3], /*offset=*/0);
+        }
     }
 
     // At this point ne = [F'=16, T_enc, channels=256, 1] where

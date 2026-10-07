@@ -1180,6 +1180,14 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet run: ggml_backend_sched_alloc_graph failed");
         return TRANSCRIBE_ERR_OOM;
     }
+    // Per-backend compute scratch for this graph; the only direct read on
+    // encoder memory vs audio length (process RSS misses GPU buffers).
+    for (int bi = 0; bi < ggml_backend_sched_get_n_backends(pc->sched); ++bi) {
+        ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, bi);
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "parakeet run: T_enc=%lld sched buffer %s = %.1f MB",
+                (long long) eb.out->ne[1], ggml_backend_name(be),
+                ggml_backend_sched_get_buffer_size(pc->sched, be) / 1e6);
+    }
 
     // Upload the mel; the row-major [num_mels, n_frames] buffer is
     // byte-identical to the ggml ne=[n_frames, num_mels, 1, 1] input.
