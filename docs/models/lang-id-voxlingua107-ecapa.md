@@ -92,16 +92,16 @@ accepted as aliases).
 ### Apple M4 Max
 
 <!-- catalog:perf machine=m4-max dp_ms=1 -->
-Compute latency (mel + encode), speedup over realtime in parentheses.
+Compute latency (mel + encode), speedup over realtime in parentheses; profile `langid-publication-v1`: mean over 20 iterations after 3 warmup.
 
-| Backend | Sample               |               F32 |                F16 |               Q8_0 |
-| ------- | -------------------- | ----------------: | -----------------: | -----------------: |
-| Metal   | long-45s-10s (10.0s) | 14.3 ms (699.79×) |  14.1 ms (709.72×) |  14.2 ms (703.23×) |
-| Metal   | long-45s-30s (30.0s) | 37.1 ms (808.41×) |  35.6 ms (841.51×) |  36.2 ms (828.04×) |
-| CPU     | long-45s-10s (10.0s) | 147.1 ms (67.97×) |  82.5 ms (121.26×) |  74.9 ms (133.58×) |
-| CPU     | long-45s-30s (30.0s) | 450.9 ms (66.53×) | 251.5 ms (119.27×) | 229.5 ms (130.70×) |
+| Backend | Sample              |                F32 |                F16 |               Q8_0 |
+| ------- | ------------------- | -----------------: | -----------------: | -----------------: |
+| Metal   | ru-long-10s (10.0s) |  8.2 ms (1217.01×) |  8.3 ms (1208.90×) |  8.2 ms (1212.15×) |
+| Metal   | ru-long-30s (30.0s) | 21.3 ms (1406.64×) | 20.4 ms (1468.16×) | 21.0 ms (1426.25×) |
+| CPU     | ru-long-10s (10.0s) |  123.8 ms (80.77×) |  78.9 ms (126.69×) |  80.4 ms (124.38×) |
+| CPU     | ru-long-30s (30.0s) |  382.3 ms (78.48×) | 241.8 ms (124.06×) | 247.1 ms (121.43×) |
 
-Apple M4 Max: transcribe.cpp `62522202` on 2026-10-05.
+Apple M4 Max: transcribe.cpp `2fdb5c95` on 2026-10-07.
 <!-- /catalog -->
 
 Benchmark reproduction (`tools/transcribe-bench` is ASR-only):

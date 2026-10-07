@@ -132,7 +132,7 @@
             "cooldown_tctl_c": 55.0
           }
         ],
-        "pending": "The published cells were measured on samples/long-45s.wav, since replaced by ru-long.wav, and the Ryzen rig has none yet. Re-bench both rigs with scripts/langid/bench.py --profile, ingest, delete the long-45s rows, then remove this key to enforce the speed matrix."
+        "pending": "The Ryzen rig has no cells yet. Bench it with scripts/langid/bench.py --profile, ingest, then remove this key to enforce the speed matrix."
       }
     }
   }
