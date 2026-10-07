@@ -60,10 +60,7 @@
     "Both are max_abs on wide [T, C] activations; a re-measure on different",
     "CPU SIMD width may need a fresh Stage-4 pass rather than a hand edit.",
     "",
-    "cls.logits_raw is the gate; cls.log_probs is informational (it is",
-    "recomputed host-side from the logits, so it carries the logits' drift",
-    "plus one log-sum-exp). SpeechBrain's log_softmax is finite everywhere",
-    "here (no masked positions), so no inf-tolerance escape hatch is needed.",
+    "cls.logits_raw is the gate.",
     "",
     "fe.window [400] and fe.filters [201, 60] are dumped by the reference but",
     "deliberately absent from this file: the C++ runtime recomputes the window",
@@ -125,9 +122,5 @@
   "cls.logits_raw": {
     "max_abs": 0.001809,
     "mean_abs": 0.0001014
-  },
-  "cls.log_probs": {
-    "max_abs": 0.003533,
-    "mean_abs": 0.0002712
   }
 }

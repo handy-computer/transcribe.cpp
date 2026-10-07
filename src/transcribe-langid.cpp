@@ -51,8 +51,8 @@ int32_t label_index(const LangidLabels & labels, const char * code) {
     return it != labels.index.end() ? it->second : -1;
 }
 
-// Resolve params->allowed into a per-label mask. Rejects every malformed
-// form (H2): only NULL with n_allowed == 0 means "all".
+// Resolve params->allowed into a per-label mask. Only NULL with
+// n_allowed == 0 means "all".
 transcribe_status build_allowed_mask(const LangidLabels &             labels,
                                      const transcribe_langid_params * params,
                                      std::vector<uint8_t> &           mask,
@@ -129,9 +129,6 @@ transcribe_status transcribe::build_langid_labels(std::vector<std::string>      
     if (codes.empty() || codes.size() != names.size()) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: label table: %zu codes vs %zu names", tag, codes.size(), names.size());
         return TRANSCRIBE_ERR_GGUF;
-    }
-    if (codes.size() > static_cast<size_t>(INT32_MAX)) {
-        return fail("too many labels", std::to_string(codes.size()));
     }
     LangidLabels staged;
     for (size_t i = 0; i < codes.size(); ++i) {
@@ -228,7 +225,6 @@ static transcribe_status langid_session_init_impl(transcribe_model *            
     if (params->n_threads < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    // H1: a window below the minimum could never score anything.
     const int32_t max_audio_ms =
         params->max_audio_ms == 0 ? transcribe::k_langid_default_audio_ms : params->max_audio_ms;
     if (max_audio_ms < transcribe::k_langid_min_audio_ms) {
@@ -267,7 +263,7 @@ static transcribe_status langid_run_impl(transcribe_langid_session *      sessio
     if (const auto st = build_allowed_mask(labels, params, mask, n_allowed); st != TRANSCRIBE_OK) {
         return st;
     }
-    // Score the last max_audio_ms; the minimum applies to what is scored (H1).
+    // Score the last max_audio_ms; the minimum applies to what is scored.
     const int64_t max_samples = static_cast<int64_t>(session->max_audio_ms) * k_samples_per_ms;
     const int64_t n_used      = std::min<int64_t>(n_samples, max_samples);
     if (n_used < static_cast<int64_t>(transcribe::k_langid_min_audio_ms) * k_samples_per_ms) {

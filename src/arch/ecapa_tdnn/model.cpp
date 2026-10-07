@@ -1,11 +1,5 @@
-// arch/ecapa_tdnn/model.cpp - ECAPA-TDNN family handler (LANGID role).
-//
-// load() reads the hyperparameters and label table, builds the tensor
-// catalogue, uploads the weights to the chosen backend, and constructs the
-// shared log-mel front end from the GGUF's own filterbank. The LANGID run
-// hook drives the front end host-side, builds and computes the graph in
-// graph.cpp, and hands one logit per label back to the role dispatcher
-// (transcribe-langid.cpp), which owns the softmax / ranking.
+// arch/ecapa_tdnn/model.cpp - ECAPA-TDNN family handler (LANGID role):
+// load, forward pass, and the LANGID ops table.
 
 #include "ecapa_tdnn.h"
 #include "ggml-alloc.h"
@@ -24,9 +18,6 @@
 #include "transcribe-path.h"
 #include "weights.h"
 
-#include <algorithm>
-#include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -42,24 +33,10 @@ namespace {
 
 constexpr const char * kTag = "ecapa_tdnn";
 
-// stt.variant is optional in the GGUF; this is the family's only shipped
-// checkpoint and the default when the key is absent.
+// Default when stt.variant is absent.
 constexpr const char k_default_variant[] = "lang-id-voxlingua107-ecapa";
 
-// Nodes reserved in the scheduler. Must be >= the graph's node count; see
-// graph.cpp's kGraphSize. The built graph is 571 nodes and is independent of
-// T, so this is ~3.5x headroom.
-constexpr size_t k_sched_graph_size = 2048;
-
-// Metadata arena for one per-call graph build. The published configuration
-// uses 0.36 MiB of it (the graph is independent of T); the rest is headroom
-// so a future graph change cannot silently truncate.
 constexpr size_t k_compute_ctx_bytes = 4u * 1024u * 1024u;
-
-int64_t now_us() {
-    using clock = std::chrono::steady_clock;
-    return std::chrono::duration_cast<std::chrono::microseconds>(clock::now().time_since_epoch()).count();
-}
 
 // Frees the gguf_context on every exit path of load().
 struct GgufGuard {
@@ -77,10 +54,8 @@ struct GgufGuard {
     GgufGuard & operator=(const GgufGuard &) = delete;
 };
 
-// Reflect-padding gather indices for a [C, T] activation:
-//   [p, p-1, ..., 1, 0, 1, ..., T-1, T-2, ..., T-1-p]
-// i.e. torch's "reflect" mode, which mirrors WITHOUT repeating the edge
-// frame. Requires T > p, which the 500 ms audio minimum guarantees.
+// Reflect-padding gather indices (torch "reflect", edge not repeated):
+//   [p, p-1, ..., 1, 0, 1, ..., T-1, T-2, ..., T-1-p]. Requires T > p.
 void build_reflect_indices(int T, int p, std::vector<int32_t> & out) {
     out.resize(static_cast<size_t>(T) + 2 * static_cast<size_t>(p));
     for (int j = 0; j < p; ++j) {
@@ -94,8 +69,7 @@ void build_reflect_indices(int T, int p, std::vector<int32_t> & out) {
     }
 }
 
-// Read stt.langid.labels.* into a validated label table (H6). Aliases are
-// optional; a present-but-mistyped key is a converter bug.
+// Read stt.langid.labels.* into a label table. Aliases are optional.
 transcribe_status read_labels(const gguf_context * gguf, LangidLabels & out) {
     std::vector<std::string> codes;
     std::vector<std::string> names;
@@ -249,10 +223,8 @@ transcribe_status build_derived_weights(Model & m) {
 // ---------------------------------------------------------------------------
 
 transcribe_status load(Loader & loader, const transcribe_model_load_params * params, transcribe_model ** out_model) {
-    const int64_t t_load_start = now_us();
+    const int64_t t_load_start = ggml_time_us();
 
-    // Owned by RAII until the very end, so a failure (or a throw) anywhere
-    // below, label construction included, frees everything built so far (H4).
     auto m     = std::make_unique<Model>();
     m->arch    = &arch;
     m->variant = loader.variant().empty() ? k_default_variant : loader.variant();
@@ -265,19 +237,11 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (auto st = read_labels(loader.gguf(), m->labels); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (static_cast<int32_t>(m->labels.codes.size()) != hp.n_labels) {
-        return TRANSCRIBE_ERR_GGUF;  // unreachable: both read the same KV
-    }
+    m->hparams.n_labels = static_cast<int32_t>(m->labels.codes.size());
 
     // ---- front end ------------------------------------------------------
-    //
-    // The shared MelFrontend in SpeechBrain mode: periodic Hamming, constant
-    // pad, no pre-emphasis, 10*log10 with the top-dB floor, per-bin mean
-    // ("sentence_mean"). read_hparams already pinned window / pad_mode /
-    // normalize to those values and win_length to n_fft. The filterbank is
-    // SpeechBrain's own triangle geometry and is never rebuilt here. It is
-    // stored ne = [n_freq, n_mels], so the flat host vector is already
-    // mel-major, which is what MelConfig wants.
+    // The filterbank is ne = [n_freq, n_mels], i.e. mel-major as MelConfig
+    // expects.
     {
         const size_t expected = static_cast<size_t>(hp.mel_n_mels) * static_cast<size_t>(hp.n_freq());
 
@@ -306,9 +270,6 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     // ---- weights ---------------------------------------------------------
-    //
-    // Reopen the file with no_alloc so ctx_meta holds tensor structs whose
-    // data pointers are filled in by the backend allocation below.
     GgufGuard guard;
     {
         gguf_init_params init_params{};
@@ -355,9 +316,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     m->roles = TRANSCRIBE_ROLE_LANGID;
-    // The abort callback is honored (transcribe_langid_set_abort_callback).
     set_feature(m.get(), TRANSCRIBE_FEATURE_CANCELLATION, true);
-    m->t_load_us = now_us() - t_load_start;
+    m->t_load_us = ggml_time_us() - t_load_start;
     *out_model   = m.release();
     return TRANSCRIBE_OK;
 }
@@ -365,11 +325,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 // ---------------------------------------------------------------------------
 // forward pass
 // ---------------------------------------------------------------------------
-//
-// On success the returned GraphBuild's tensors are live: they belong to
-// s.compute_ctx, which stays alive until the dispatcher releases the scratch,
-// and their data belongs to the scheduler's allocation for the graph that was
-// just computed. The caller reads outputs with ggml_backend_tensor_get.
+
+// On success gb_out's tensors stay valid until the session scratch is released.
 transcribe_status forward(Session & s, const Model & m, const float * pcm, int n_samples, GraphBuild & gb_out) {
     debug::init();
 
@@ -377,21 +334,14 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
     const int       n_threads = s.n_threads > 0 ? s.n_threads : default_n_threads();
 
     // ---- front end (host side) -------------------------------------------
-    const int64_t t_mel_start = now_us();
+    const int64_t t_mel_start = ggml_time_us();
     int           T           = 0;
     int           n_mels      = 0;
-    if (n_samples < 0) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
     if (auto st = m.mel->compute(pcm, static_cast<size_t>(n_samples), s.mel_raw, n_mels, T, n_threads);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (n_mels != hp.mel_n_mels) {
-        return TRANSCRIBE_ERR_GGUF;  // unreachable: the config came from hp
-    }
-    // MelFrontend emits mel-major [n_mels, T]; the stage-0 im2col and the
-    // fe.mel dump want frame-major [T, n_mels] (ggml ne = [n_mels, T]).
+    // MelFrontend emits mel-major [n_mels, T]; transpose to frame-major.
     s.mel_buf.resize(static_cast<size_t>(T) * static_cast<size_t>(n_mels));
     for (int mi = 0; mi < n_mels; ++mi) {
         const float * src = s.mel_raw.data() + static_cast<size_t>(mi) * static_cast<size_t>(T);
@@ -399,12 +349,8 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
             s.mel_buf[static_cast<size_t>(t) * static_cast<size_t>(n_mels) + static_cast<size_t>(mi)] = src[t];
         }
     }
-    s.t_mel_us = now_us() - t_mel_start;
+    s.t_mel_us = ggml_time_us() - t_mel_start;
 
-    if (T <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: front end produced no frames for %d samples", kTag, n_samples);
-        return TRANSCRIBE_ERR_INPUT_TOO_SHORT;
-    }
     if (s.poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
@@ -415,8 +361,7 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
                              "frontend");
     }
 
-    // reflect_rows needs T > pad (the 500 ms LANGID minimum gives T >= 51
-    // frames; the largest pad here is 4).
+    // Reflect padding needs T > pad.
     for (int i = 0; i < kNumStages - 1; ++i) {
         if (T <= hp.pad(i)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: T=%d is too short for reflect padding %d", kTag, T, hp.pad(i));
@@ -431,20 +376,14 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
     }
 
     // ---- graph -------------------------------------------------------------
-    //
-    // A fresh no_alloc metadata context per call: the previous build's tensor
-    // structs are dead the moment the scheduler is reset.
     if (s.compute_ctx != nullptr) {
         ggml_free(s.compute_ctx);
         s.compute_ctx = nullptr;
     }
     {
-        if (s.graph_arena.size() != k_compute_ctx_bytes) {
-            s.graph_arena.resize(k_compute_ctx_bytes);
-        }
         ggml_init_params init_params{};
-        init_params.mem_size   = s.graph_arena.size();
-        init_params.mem_buffer = s.graph_arena.data();
+        init_params.mem_size   = k_compute_ctx_bytes;
+        init_params.mem_buffer = nullptr;
         init_params.no_alloc   = true;
         s.compute_ctx          = ggml_init(init_params);
         if (s.compute_ctx == nullptr) {
@@ -454,16 +393,11 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
     }
 
     GraphBuild gb = build_graph(s.compute_ctx, m, T);
-    if (gb.graph == nullptr || gb.logits == nullptr) {
-        return TRANSCRIBE_ERR_GGUF;
-    }
 
     if (s.sched == nullptr) {
-        // Cast away const for the scheduler list only: the scheduler borrows
-        // the model's backends and never mutates the model.
         auto & backends = const_cast<std::vector<ggml_backend_t> &>(m.plan.scheduler_list);
-        s.sched         = ggml_backend_sched_new(backends.data(), nullptr, static_cast<int>(backends.size()),
-                                                 k_sched_graph_size, /*parallel=*/false, /*op_offload=*/true);
+        s.sched = ggml_backend_sched_new(backends.data(), nullptr, static_cast<int>(backends.size()), kGraphSize,
+                                         /*parallel=*/false, /*op_offload=*/true);
         if (s.sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: scheduler allocation failed", kTag);
             return TRANSCRIBE_ERR_OOM;
@@ -478,14 +412,11 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
     }
 
     // ---- inputs -------------------------------------------------------------
-    // Frame-major [T, cols], byte-identical to ggml ne = [cols, T].
     ggml_backend_tensor_set(gb.blk0_in, s.im2col_buf.data(), 0, s.im2col_buf.size() * sizeof(float));
     for (int i = 0; i < kNumSeBlocks; ++i) {
-        if (gb.idx[i] != nullptr) {
-            ggml_backend_tensor_set(gb.idx[i], s.idx_buf[i].data(), 0, s.idx_buf[i].size() * sizeof(int32_t));
-        }
+        ggml_backend_tensor_set(gb.idx[i], s.idx_buf[i].data(), 0, s.idx_buf[i].size() * sizeof(int32_t));
     }
-    if (gb.chunk_ids != nullptr) {
+    {
         int32_t ids[kRes2NetScale];
         for (int i = 0; i < kRes2NetScale; ++i) {
             ids[i] = i;
@@ -494,12 +425,12 @@ transcribe_status forward(Session & s, const Model & m, const float * pcm, int n
     }
 
     // ---- compute -------------------------------------------------------------
-    const int64_t t_enc_start = now_us();
+    const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs = ggml_backend_sched_graph_compute(s.sched, gb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s run: graph compute failed (%d)", kTag, static_cast<int>(gs));
         return TRANSCRIBE_ERR_BACKEND;
     }
-    s.t_encode_us = now_us() - t_enc_start;
+    s.t_encode_us = ggml_time_us() - t_enc_start;
 
     gb_out = gb;
     return TRANSCRIBE_OK;
@@ -530,30 +461,6 @@ void dump_stages(const GraphBuild & gb) {
     try_dump("enc.emb", gb.dumps.emb, "encoder");
     try_dump("cls.hidden", gb.dumps.cls_hidden, "classifier");
     try_dump("cls.logits_raw", gb.dumps.cls_logits, "classifier");
-}
-
-// SpeechBrain's classifier ends in log_softmax; the role needs raw logits, so
-// the log-probabilities are recomputed here purely for the validation dump.
-// Stable form: z - (max + log(sum(exp(z - max)))).
-void dump_log_probs(const std::vector<float> & logits) {
-    if (!debug::enabled() || logits.empty()) {
-        return;
-    }
-
-    const float max_logit = *std::max_element(logits.begin(), logits.end());
-    double      sum       = 0.0;
-    for (const float v : logits) {
-        sum += std::exp(static_cast<double>(v - max_logit));
-    }
-    const double log_z = static_cast<double>(max_logit) + std::log(sum);
-
-    std::vector<float> lp(logits.size());
-    for (size_t i = 0; i < logits.size(); ++i) {
-        lp[i] = static_cast<float>(static_cast<double>(logits[i]) - log_z);
-    }
-
-    const long long shape[1] = { static_cast<long long>(lp.size()) };
-    debug::dump_host_f32("cls.log_probs", lp.data(), static_cast<long long>(lp.size()), shape, 1, "classifier");
 }
 
 // ---------------------------------------------------------------------------
@@ -587,7 +494,6 @@ transcribe_status langid_run(transcribe_langid_session * session,
     ggml_backend_tensor_get(gb.logits, logits.data(), 0, logits.size() * sizeof(float));
 
     dump_stages(gb);
-    dump_log_probs(logits);
     return TRANSCRIBE_OK;
 }
 
@@ -600,7 +506,6 @@ const LangidOps k_langid_ops = { langid_labels, langid_new_session, langid_run }
 // ---------------------------------------------------------------------------
 
 Model::~Model() {
-    mel.reset();
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
     }

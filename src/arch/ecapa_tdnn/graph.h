@@ -1,17 +1,13 @@
 // arch/ecapa_tdnn/graph.h - ECAPA-TDNN forward graph builder.
 //
-// INTERNAL to src/arch/ecapa_tdnn/. The LANGID ops table's run hook builds
-// and computes this graph once per call.
-//
-// Every activation is ggml `ne = [C, T]` (channel-innermost); see the
-// helper notes at the top of graph.cpp. Topology is independent of T, so the
-// scheduler's allocator settles after the first call.
+// INTERNAL to src/arch/ecapa_tdnn/. Activations are ggml ne = [C, T].
 
 #pragma once
 
 #include "ggml.h"
 #include "weights.h"
 
+#include <cstddef>
 #include <vector>
 
 struct ggml_context;
@@ -22,12 +18,12 @@ namespace transcribe::ecapa_tdnn {
 
 struct Model;
 
-// Named intermediates for the numerical-parity harness. Each is a borrowed
-// pointer into the compute context and is already marked as a graph output
-// when TRANSCRIBE_DUMP_DIR is set (otherwise the scheduler may reuse its
-// buffer). The dump names are the contract with the reference dumper
-// (scripts/dump_reference_ecapa_tdnn_speechbrain.py); each tensor's ggml `ne`
-// is reversed on disk, so `ne = [C, T]` lands as the reference's `[T, C]`.
+// Graph node capacity (the built graph is ~571 nodes, independent of T).
+constexpr size_t kGraphSize = 2048;
+
+// Named intermediates for the parity dumps (marked as graph outputs when
+// TRANSCRIBE_DUMP_DIR is set). Names match
+// scripts/dump_reference_ecapa_tdnn_speechbrain.py.
 struct Dumps {
     ggml_tensor * blk0_out              = nullptr;  // enc.blk.0.out          [C, T]
     ggml_tensor * blk1_tdnn1_out        = nullptr;  // enc.blk.1.tdnn1.out    [C, T]
@@ -36,9 +32,6 @@ struct Dumps {
     ggml_tensor * blk_out[kNumSeBlocks] = { nullptr, nullptr, nullptr };
     // enc.blk.{1,2,3}.out    [C, T]
     ggml_tensor * mfa_out               = nullptr;  // enc.mfa.out            [Cm, T]
-    // asp.attn's output BEFORE the transpose: ggml ne = [Cm, T] lands on disk
-    // as [T, Cm], which is the orientation the reference dumps. Marking the
-    // transposed copy instead would be a silent SHAPE mismatch.
     ggml_tensor * asp_attn_logits       = nullptr;  // enc.asp.attn_logits    [Cm, T]
     ggml_tensor * asp_out               = nullptr;  // enc.asp.out            [2*Cm]
     ggml_tensor * emb                   = nullptr;  // enc.emb                [emb]
@@ -47,17 +40,14 @@ struct Dumps {
 };
 
 struct GraphBuild {
-    // Stage-0 input: the host-built im2col of the reflect-padded log-mel,
-    // ne = [blk0_cols, T] f32. Row t holds mel_pad[t + k*d0] for k = 0..K0-1
-    // back to back, then zeros up to blk0_cols (build_blk0_im2col).
+    // Stage-0 input: im2col of the log-mel, ne = [blk0_cols, T] (build_blk0_im2col).
     ggml_tensor * blk0_in = nullptr;
 
     // Reflect-padding gather indices, one per SERes2Net block, I32
     // ne = [T + 2*pad(i+1)].
     ggml_tensor * idx[kNumSeBlocks] = { nullptr, nullptr, nullptr };
 
-    // Res2Net chunk numbers 0..kRes2NetScale-1, I32: the set_rows targets
-    // when writing a chunk's output in place.
+    // 0..kRes2NetScale-1, I32: set_rows targets for the Res2Net chunks.
     ggml_tensor * chunk_ids = nullptr;
 
     // Output.
@@ -68,8 +58,8 @@ struct GraphBuild {
     ggml_cgraph * graph = nullptr;
 };
 
-// Build the full forward graph for T frames into `ctx` (a fresh no_alloc
-// context). Returns a build with `graph == nullptr` on invalid input.
+// Build the forward graph for T frames into a fresh no_alloc `ctx`.
+// Requires T > hp.pad(i) for every stage.
 GraphBuild build_graph(ggml_context * ctx, const Model & model, int T);
 
 // Fill `out` ([T, hp.blk0_cols()] frame-major, i.e. ggml ne = [cols, T])

@@ -1,10 +1,4 @@
 // arch/ecapa_tdnn/weights.cpp - read_hparams + build_weights.
-//
-// read_hparams is deliberately strict: every stt.ecapa_tdnn.* shape the graph
-// builder assumes is checked here, so a converter change that the graph
-// cannot express fails at load with a named key instead of producing silently
-// wrong logits. Every dimension is also bounded, so the products the loader
-// and graph derive from them (tensor sizes, frame counts) cannot overflow.
 
 #include "weights.h"
 
@@ -14,30 +8,14 @@
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
 
-#include <cmath>
 #include <cstdio>
-#include <initializer_list>
 #include <string>
 
 namespace transcribe::ecapa_tdnn {
 
 namespace {
 
-// Upper bounds on metadata-derived dimensions. Far above any real ECAPA
-// (C = 1024, n_fft = 400, 107 labels) and small enough that every product
-// the loader and graph form fits comfortably in int64 / size_t.
-constexpr int32_t kMaxChannels = 1 << 16;
-constexpr int32_t kMaxKernel   = 63;
-constexpr int32_t kMaxDilation = 64;
-constexpr int32_t kMaxNfft     = 1 << 14;
-constexpr int32_t kMaxMels     = 1024;
-constexpr int32_t kMaxLabels   = 1 << 16;
-
 constexpr const char * kTag = "ecapa_tdnn";
-
-// GGUF format revision this loader implements. Bumped only when the tensor /
-// KV contract changes incompatibly.
-constexpr int32_t kFormatVersion = 1;
 
 // Required int32 array of exactly `n` entries.
 transcribe_status read_required_i32_array_kv(const gguf_context *   gguf,
@@ -50,15 +28,6 @@ transcribe_status read_required_i32_array_kv(const gguf_context *   gguf,
     }
     if (out.size() != n) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV \"%s\" has %zu entries, expected %zu", kTag, key, out.size(), n);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_OK;
-}
-
-transcribe_status require_string_value(const std::string & got, const char * want, const char * key) {
-    if (got != want) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: unsupported %s \"%s\" (only \"%s\" is implemented)", kTag, key,
-                got.c_str(), want);
         return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_OK;
@@ -79,15 +48,6 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
         }                                     \
     } while (0)
 
-    // ---- format gate ---------------------------------------------------
-    REQ(read_required_u32_kv(gguf, "stt.ecapa_tdnn.format_version", kTag, hp.format_version));
-    if (hp.format_version != kFormatVersion) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stt.ecapa_tdnn.format_version is %d, this build implements %d", kTag,
-                hp.format_version, kFormatVersion);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-
-    // ---- front end -----------------------------------------------------
     REQ(read_required_u32_kv(gguf, "stt.frontend.sample_rate", kTag, hp.sample_rate));
     REQ(read_required_u32_kv(gguf, "stt.frontend.n_fft", kTag, hp.mel_n_fft));
     REQ(read_required_u32_kv(gguf, "stt.frontend.hop_length", kTag, hp.mel_hop));
@@ -99,11 +59,6 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     REQ(read_required_f32_kv(gguf, "stt.frontend.top_db", kTag, hp.mel_top_db));
     REQ(read_required_string_kv(gguf, "stt.frontend.normalize", kTag, hp.mel_normalize));
 
-    REQ(require_string_value(hp.mel_window, "hamming_periodic", "stt.frontend.window"));
-    REQ(require_string_value(hp.mel_pad_mode, "constant", "stt.frontend.pad_mode"));
-    REQ(require_string_value(hp.mel_normalize, "sentence_mean", "stt.frontend.normalize"));
-
-    // ---- embedding network ---------------------------------------------
     REQ(read_required_i32_array_kv(gguf, "stt.ecapa_tdnn.channels", kNumStages, hp.channels));
     REQ(read_required_i32_array_kv(gguf, "stt.ecapa_tdnn.kernel_sizes", kNumStages, hp.kernel_sizes));
     REQ(read_required_i32_array_kv(gguf, "stt.ecapa_tdnn.dilations", kNumStages, hp.dilations));
@@ -112,109 +67,53 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     REQ(read_required_u32_kv(gguf, "stt.ecapa_tdnn.attention_channels", kTag, hp.attention_channels));
     REQ(read_required_f32_kv(gguf, "stt.ecapa_tdnn.asp_eps", kTag, hp.asp_eps));
     REQ(read_required_u32_kv(gguf, "stt.ecapa_tdnn.embedding_dim", kTag, hp.embedding_dim));
-
-    // ---- classifier ------------------------------------------------------
     REQ(read_required_u32_kv(gguf, "stt.ecapa_tdnn.classifier_hidden", kTag, hp.classifier_hidden));
     REQ(read_required_f32_kv(gguf, "stt.ecapa_tdnn.classifier_leaky_slope", kTag, hp.leaky_slope));
 
-    // ---- label count -----------------------------------------------------
-    // The label table itself is built (and validated) by load(); only the
-    // length matters here, for the classifier's output width.
-    {
-        std::vector<std::string> codes;
-        if (read_string_array_kv(gguf, "stt.langid.labels.codes", codes) != KvResult::Ok || codes.empty() ||
-            codes.size() > static_cast<size_t>(kMaxLabels)) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stt.langid.labels.codes missing, malformed, empty, or too long",
-                    kTag);
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        hp.n_labels = static_cast<int32_t>(codes.size());
-    }
-
 #undef REQ
 
-    // ---- value-domain invariants ----------------------------------------
     if (hp.sample_rate != 16000) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stt.frontend.sample_rate is %d; only 16000 is supported", kTag,
                 hp.sample_rate);
         return TRANSCRIBE_ERR_GGUF;
     }
-    if (hp.mel_n_fft <= 1 || hp.mel_n_fft > kMaxNfft || hp.mel_hop <= 0 || hp.mel_hop > hp.mel_n_fft ||
-        hp.mel_win <= 0 || hp.mel_n_mels <= 0 || hp.mel_n_mels > kMaxMels) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: front-end dimensions out of range", kTag);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.mel_win != hp.mel_n_fft) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stt.frontend.win_length (%d) must equal stt.frontend.n_fft (%d)", kTag,
-                hp.mel_win, hp.mel_n_fft);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (!(hp.mel_log_floor > 0.0f) || !(hp.mel_top_db >= 0.0f) || !std::isfinite(hp.mel_top_db)) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stt.frontend.log_clamp_min must be > 0 and top_db >= 0", kTag);
+    // MelFrontend falls back silently on unknown values.
+    if (hp.mel_window != "hamming_periodic" || hp.mel_pad_mode != "constant" || hp.mel_normalize != "sentence_mean") {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: unsupported front end (window=%s pad_mode=%s normalize=%s)", kTag,
+                hp.mel_window.c_str(), hp.mel_pad_mode.c_str(), hp.mel_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
 
     for (int i = 0; i < kNumStages; ++i) {
-        const int32_t c = hp.channels[static_cast<size_t>(i)];
         const int32_t k = hp.kernel_sizes[static_cast<size_t>(i)];
         const int32_t d = hp.dilations[static_cast<size_t>(i)];
-        if (c <= 0 || c > kMaxChannels || k <= 0 || k > kMaxKernel || d <= 0 || d > kMaxDilation) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stage %d channels/kernel/dilation out of range (%d/%d/%d)", kTag,
-                    i, c, k, d);
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        if (k % 2 == 0) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                    "%s: stage %d kernel size %d is even; \"same\" reflect padding needs odd", kTag, i, k);
+        if (k <= 0 || k % 2 == 0 || d <= 0) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stage %d needs an odd kernel and positive dilation (k=%d d=%d)",
+                    kTag, i, k, d);
             return TRANSCRIBE_ERR_GGUF;
         }
     }
-
-    // The MFA stage is a 1x1 convolution over the concatenated block outputs.
     if (hp.kernel_sizes[kNumStages - 1] != 1 || hp.dilations[kNumStages - 1] != 1) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: MFA stage must be k=1 d=1, got k=%d d=%d", kTag,
                 hp.kernel_sizes[kNumStages - 1], hp.dilations[kNumStages - 1]);
         return TRANSCRIBE_ERR_GGUF;
     }
-
-    // The three SERes2Net blocks have no shortcut projection, so every
-    // embedding-block width must be identical.
+    // SERes2Net blocks have no shortcut projection: every block width matches.
     for (int i = 1; i < kNumStages - 1; ++i) {
         if (hp.channels[static_cast<size_t>(i)] != hp.channels[0]) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                    "%s: channels[%d] = %d differs from channels[0] = %d; the SERes2Net "
-                    "residual requires equal widths",
-                    kTag, i, hp.channels[static_cast<size_t>(i)], hp.channels[0]);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: channels[%d] = %d differs from channels[0] = %d", kTag, i,
+                    hp.channels[static_cast<size_t>(i)], hp.channels[0]);
             return TRANSCRIBE_ERR_GGUF;
         }
     }
-
     if (hp.channels[kNumStages - 1] != (kNumSeBlocks * hp.channels[0])) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: MFA channels %d must equal %d x block channels %d", kTag,
                 hp.channels[kNumStages - 1], kNumSeBlocks, hp.channels[0]);
         return TRANSCRIBE_ERR_GGUF;
     }
-
-    if (hp.res2net_scale != kRes2NetScale) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: res2net_scale %d is not supported (only %d is implemented)", kTag,
-                hp.res2net_scale, kRes2NetScale);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.channels[0] % hp.res2net_scale != 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: channels[0] = %d is not divisible by res2net_scale = %d", kTag,
-                hp.channels[0], hp.res2net_scale);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-
-    for (const int32_t v : { hp.se_channels, hp.attention_channels, hp.embedding_dim, hp.classifier_hidden }) {
-        if (v <= 0 || v > kMaxChannels) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: se/attention/embedding/hidden dimensions out of range", kTag);
-            return TRANSCRIBE_ERR_GGUF;
-        }
-    }
-    if (!(hp.asp_eps > 0.0f) || !std::isfinite(hp.leaky_slope)) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stt.ecapa_tdnn.asp_eps must be positive (got %g), leaky slope finite",
-                kTag, static_cast<double>(hp.asp_eps));
+    if (hp.res2net_scale != kRes2NetScale || hp.channels[0] <= 0 || hp.channels[0] % hp.res2net_scale != 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: res2net_scale must be %d and divide channels[0] (got %d, %d)", kTag,
+                kRes2NetScale, hp.res2net_scale, hp.channels[0]);
         return TRANSCRIBE_ERR_GGUF;
     }
 

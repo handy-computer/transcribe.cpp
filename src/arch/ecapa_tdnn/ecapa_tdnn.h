@@ -1,15 +1,7 @@
-// arch/ecapa_tdnn/ecapa_tdnn.h - ECAPA-TDNN family model and session types.
+// arch/ecapa_tdnn/ecapa_tdnn.h - ECAPA-TDNN family model and session types
+// (SpeechBrain ECAPA-TDNN + VoxLingua107 classifier, LANGID role).
 //
-// INTERNAL to src/arch/ecapa_tdnn/. Defines the concrete classes deriving
-// from transcribe_model / transcribe_langid_session, plus the family's Arch
-// instance.
-//
-// The family is SpeechBrain's ECAPA-TDNN embedder with the VoxLingua107
-// classifier head on top, serving the LANGID role. One model owns the
-// weights, the GGUF metadata context, the backend buffer, the label table,
-// and a shared (const-after-construction) log-mel front end; one session
-// owns per-call host scratch plus the ggml scheduler inherited from
-// SessionCore.
+// INTERNAL to src/arch/ecapa_tdnn/.
 
 #pragma once
 
@@ -51,9 +43,8 @@ struct Model final : public transcribe_model {
     // Built at load from stt.langid.labels.*; immutable after.
     LangidLabels labels;
 
-    // Front end, built once at load from stt.frontend.* plus the
-    // `frontend.mel_filterbank` tensor. const after construction, so every
-    // session shares it.
+    // Built at load from stt.frontend.* and frontend.mel_filterbank; shared
+    // by every session.
     std::unique_ptr<MelFrontend> mel;
 
     Model() = default;
@@ -66,12 +57,6 @@ struct Session final : public transcribe_langid_session {
     std::vector<float>   mel_buf;                // [T * n_mels], frame-major
     std::vector<float>   im2col_buf;             // [T * blk0_cols], frame-major
     std::vector<int32_t> idx_buf[kNumSeBlocks];  // reflect indices, [T + 2p]
-
-    // Metadata arena for the per-call graph build, handed to ggml_init as
-    // mem_buffer so a per-call ggml_init does not malloc / free it on every
-    // run. Outlives compute_ctx's use: ggml_free never touches a borrowed
-    // mem_buffer.
-    std::vector<uint8_t> graph_arena;
 };
 
 extern const Arch arch;

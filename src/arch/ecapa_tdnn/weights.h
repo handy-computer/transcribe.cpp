@@ -67,20 +67,16 @@ constexpr int kNumStages = 5;
 // SERes2Net blocks, i.e. stages 1..3.
 constexpr int kNumSeBlocks = 3;
 
-// Res2Net scale this implementation supports. The per-chunk channel count is
-// derived from HParams (channels[0] / res2net_scale); only the split count
-// itself is pinned, because it fixes the weight-slot array size below.
+// Res2Net scale this implementation supports (fixes the weight-slot count).
 constexpr int kRes2NetScale = 8;
 
 // Sub-convolutions inside one Res2Net block: the first chunk is passed
 // through unchanged, so there are scale - 1 of them.
 constexpr int kRes2NetSubs = kRes2NetScale - 1;
 
-// Every stt.* KV the family reads, plus the label count (the length of
-// stt.langid.labels.codes, which sizes the classifier output).
+// Every stt.* KV the family reads, plus the label count.
 struct HParams {
-    int32_t format_version = 0;
-    int32_t sample_rate    = 0;
+    int32_t sample_rate = 0;
 
     // Front end (stt.frontend.*).
     int32_t     mel_n_fft  = 0;
@@ -107,7 +103,7 @@ struct HParams {
     int32_t classifier_hidden = 0;
     float   leaky_slope       = 0.0f;
 
-    // Length of stt.langid.labels.codes.
+    // Set by load() from the label table.
     int32_t n_labels = 0;
 
     // ---- derived ------------------------------------------------------
@@ -215,10 +211,8 @@ struct Weights {
     ggml_tensor * cls_out_b = nullptr;  // [n_labels]
 };
 
-// Read every stt.* KV the family needs and validate the value domain.
-// Anything outside the shapes this implementation can build is rejected with
-// TRANSCRIBE_ERR_GGUF and a log line naming the offending key. Sizes derived
-// from these values are bounded here, so later arithmetic cannot overflow.
+// Read every stt.* KV the family needs and reject shapes the graph cannot
+// build. Does not set n_labels.
 transcribe_status read_hparams(const gguf_context * gguf, HParams & hp);
 
 // Bind every tensor in the catalogue above to a borrowed pointer in

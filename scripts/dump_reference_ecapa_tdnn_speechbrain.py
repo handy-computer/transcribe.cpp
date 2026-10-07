@@ -43,7 +43,7 @@ Architecture summary:
                      asp_bn -> fc(6144->256)   => enc.emb [256]
       -> Xvector.Classifier: LeakyReLU -> BN -> Linear(256->512)
                      -> LeakyReLU -> BN -> Linear(512->107)
-                     -> log_softmax             => cls.log_probs [107]
+                     -> log_softmax
 
 Dump points (the contract with src/arch/ecapa_tdnn/graph.h, in that exact
 order and with those exact names). Every activation is written TIME-MAJOR `[T, C]`:
@@ -63,7 +63,6 @@ dim and transposing here is what makes the two directories comparable.
     enc.emb                 [256]       fc output
     cls.hidden              [512]       DNN.block_0.act output (pre-BN1)
     cls.logits_raw          [107]       the gate
-    cls.log_probs           [107]       informational
 
 Plus two run-invariant front-end tables, dumped so the converter and the
 C++ mel unit test can be checked against SpeechBrain directly:
@@ -504,7 +503,6 @@ def cmd_encoder(args: argparse.Namespace) -> int:
          vec(hooks["cls.logits_raw"].value, N_LABELS, name="cls.logits_raw"),
          "classifier")
     log_probs = vec(hooks["cls.log_probs"].value, N_LABELS, name="cls.log_probs")
-    dump("cls.log_probs", log_probs, "classifier")
 
     # The hooked softmax output must be the tensor classify_batch returned;
     # if it is not, the hook is on the wrong module.

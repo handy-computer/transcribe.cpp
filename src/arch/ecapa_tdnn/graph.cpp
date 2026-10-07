@@ -1,36 +1,18 @@
 // arch/ecapa_tdnn/graph.cpp - the ECAPA-TDNN forward graph.
 //
-// Mirrors speechbrain.lobes.models.ECAPA_TDNN.ECAPA_TDNN.forward followed by
-// Xvector.Classifier, with the four conversion-time rewrites already applied
-// (scripts/convert-ecapa_tdnn.py): BatchNorm as an affine scale/shift, the three
-// activation-free BatchNorms folded forward into the following linear map,
-// and the ASP / MFA input concatenations split into per-operand weight
-// blocks.
+// SpeechBrain ECAPA_TDNN.forward + Xvector.Classifier, after the converter's
+// rewrites: BatchNorm as scale/shift, activation-free BatchNorms folded into
+// the next linear map, and the MFA / ASP concats split into weight blocks.
 //
-// One graph of plain ggml ops serves every backend; reductions over time
-// run on a contiguous transposed copy [T, C] because ggml reduces over
-// ne[0]. Stage 0 is one im2col matmul (see build_blk0_im2col).
-//
-// Layout: every activation is ggml ne = [C, T].
-//
-// Helper contract (named / linear / bn_affine / reflect_rows / conv_taps):
-// an activation is ggml `ne = [C, T]`, CHANNEL-INNERMOST, frames are rows.
-// That makes
-//   - a 1x1 convolution a plain `ggml_mul_mat(w[IC, OC], x[IC, T])`,
-//   - a bias / BatchNorm vector `[C]` a free broadcast over T,
-//   - reflect padding a single `ggml_get_rows` over the frame axis,
-//   - a dilated k>1 convolution a sum of matmuls against row-slices of the
-//     padded activation, with no transposes (stage 0 alone runs as one
-//     matmul over a host-built im2col; see build_blk0_im2col).
-// Time-axis reductions (means, softmax, weighted sums) act on ggml's ne[0],
-// so the caller transposes to `[T, C]` first.
+// Activations are ne = [C, T]: a 1x1 conv is one mul_mat, reflect padding is
+// one get_rows over frames, and time reductions run on a [T, C] transpose.
 //
 //   mel [n_mels, T]
-//     -> blk.0        TDNNBlock  n_mels -> C, k=K0, reflect pad
-//     -> blk.1..3     SERes2Net  C -> C, dilation 2 / 3 / 4
-//     -> mfa          w1@x1 + w2@x2 + w3@x3 + b, ReLU, BN     [3C, T]
-//     -> asp          attentive statistics pooling            [6C]
-//     -> fc           6C -> emb (asp_bn folded in)            [emb]
+//     -> blk.0        TDNNBlock  n_mels -> C, k=K0 (host im2col + one matmul)
+//     -> blk.1..3     SERes2Net  C -> C
+//     -> mfa          1x1 over concat(blk.1..3)                [3C, T]
+//     -> asp          attentive statistics pooling             [6C]
+//     -> fc           6C -> emb                                [emb]
 //     -> classifier   LeakyReLU, emb -> hid, LeakyReLU, hid -> n_labels
 
 #include "graph.h"
@@ -38,7 +20,6 @@
 #include "ecapa_tdnn.h"
 #include "ggml.h"
 #include "transcribe-debug.h"
-#include "transcribe-log.h"
 
 #include <cfloat>
 #include <cstddef>
@@ -61,9 +42,6 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 ggml_tensor * linear(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x, ggml_tensor * b) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
     if (w->type == GGML_TYPE_F16) {
-        // F32 accumulation for F16 weights: the reductions here are 1024 and
-        // 3072 wide and the parity regime is measured with an F32
-        // accumulator, so never let a backend pick the F16 one.
         ggml_prec_set_acc(y, GGML_PREC_F32);
     }
     if (b != nullptr) {
@@ -79,28 +57,17 @@ ggml_tensor * bn_affine(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale
     return y;
 }
 
-// Reflect padding along the frame axis as one gather. idx is I32 of length
-// T + 2p holding [p, ..., 1, 0, 1, ..., T-1, T-2, ..., T-1-p] (torch "reflect",
-// edge excluded); the result ne = [C, T + 2p] is contiguous. Requires T > p.
-ggml_tensor * reflect_rows(ggml_context * ctx, ggml_tensor * x, ggml_tensor * idx) {
-    return ggml_get_rows(ctx, x, idx);
-}
-
-// Dilated 1-D conv with "same" padding as a sum over taps: xpad is the
-// reflect-padded ne = [IC, T + 2p] (p = dilation * (K - 1) / 2), w the
-// tap-major ne = [IC, OC, K]. y[t] = sum_k w_k . xpad[t + k*dilation], which
-// is torch's Conv1d(padding="same", padding_mode="reflect"). ne = [OC, T].
+// Dilated 1-D conv as a sum over taps: xpad is the reflect-padded
+// ne = [IC, T + 2p], w the tap-major ne = [IC, OC, K].
+// y[t] = sum_k w_k . xpad[t + k*dilation], ne = [OC, T].
 ggml_tensor * conv_taps(ggml_context * ctx, ggml_tensor * xpad, ggml_tensor * w, ggml_tensor * b, int dilation, int T) {
     const int64_t IC = w->ne[0];
     const int64_t K  = w->ne[2];
 
     ggml_tensor * acc = nullptr;
     for (int64_t k = 0; k < K; ++k) {
-        // Tap k's operand: rows [k*d, k*d + T) of the padded activation. The
-        // row stride is xpad->nb[1] and the offset is a whole number of rows,
-        // so the view is contiguous and usable as a matmul src1 everywhere.
+        // Rows [k*d, k*d + T) of xpad, and tap k's [IC, OC] slice of w.
         ggml_tensor * v  = ggml_view_2d(ctx, xpad, IC, T, xpad->nb[1], static_cast<size_t>(k * dilation) * xpad->nb[1]);
-        // Tap k's kernel: the contiguous [IC, OC] slice at ne[2] == k.
         ggml_tensor * wk = ggml_view_2d(ctx, w, IC, w->ne[1], w->nb[1], static_cast<size_t>(k) * w->nb[2]);
 
         ggml_tensor * y = ggml_mul_mat(ctx, wk, v);
@@ -116,20 +83,13 @@ ggml_tensor * conv_taps(ggml_context * ctx, ggml_tensor * xpad, ggml_tensor * w,
     return acc;
 }
 
-// Nodes reserved in the cgraph. The real graph is 571 nodes for the published
-// configuration and is independent of T.
-constexpr size_t kGraphSize = 2048;
-
-// Name a tensor, mark it as a graph output so the scheduler cannot reuse its
-// buffer before the post-compute dump pass reads it (a no-op unless
-// TRANSCRIBE_DUMP_DIR is set), and stash the pointer.
+// Name a tensor, mark it for dumping (no-op unless TRANSCRIBE_DUMP_DIR is
+// set), and stash the pointer.
 void mark_dump(ggml_tensor *& slot, ggml_tensor * t, const char * name) {
     named(t, name);
     debug::mark_tensor_for_dump(t);
     if (t->view_src != nullptr) {
-        // In-place ops (Res2Net's set_rows) return a view; the allocator
-        // frees the view's backing tensor, so that is what has to be kept
-        // alive.
+        // In-place ops return a view; keep its backing tensor alive too.
         debug::mark_tensor_for_dump(t->view_src);
     }
     slot = t;
@@ -162,23 +122,10 @@ ggml_tensor * mean_over_time(ggml_context * ctx, ggml_tensor * x) {
     return ggml_reshape_1d(ctx, ggml_mean(ctx, xT), x->ne[0]);
 }
 
-// SpeechBrain Res2NetBlock with scale S: split the C channels into S chunks
-// of C/S, pass the first through unchanged, and run each remaining chunk
-// through its own dilated conv after adding the previous chunk's output.
-//
-//   y0 = x0
-//   y1 = B0(x1)
-//   yi = B(i-1)(xi + y(i-1))    i = 2 .. S-1
-//   out = concat(y0 .. y(S-1))
-//
-// The output is assembled in h itself: chunk 0 already holds y0, and each yi
-// is written over chunk i once it has been read, so there is no concat
-// chain. The write is a set_rows into h viewed as [C/S, S, T] (row i of each
-// frame is chunk i; chunk_ids holds 0..S-1), which touches only that chunk;
-// ggml_set would rewrite all of h on some backends. Chunk i is read through
-// the previous write's result, which orders the read after it. The strided
-// chunk views feed get_rows / add directly; both accept a row stride, so no
-// ggml_cont either.
+// SpeechBrain Res2NetBlock with scale S over chunks x0..x(S-1) of C/S:
+//   y0 = x0,  y1 = B0(x1),  yi = B(i-1)(xi + y(i-1)),  out = concat(y0..y(S-1))
+// Each yi is written over chunk i of h in place with set_rows (h viewed as
+// [C/S, S, T]), so there is no concat.
 ggml_tensor * res2net(ggml_context *         ctx,
                       const SeRes2NetBlock & blk,
                       ggml_tensor *          h,
@@ -196,7 +143,7 @@ ggml_tensor * res2net(ggml_context *         ctx,
         ggml_tensor *   ci = ggml_view_2d(ctx, out, chunk, T, out->nb[2], static_cast<size_t>(i) * chunk_bytes);
         ggml_tensor *   in = (i == 1) ? ci : ggml_add(ctx, ci, prev);
         const Res2Sub & s  = blk.res2[i - 1];
-        ggml_tensor *   yi = tdnn_conv(ctx, reflect_rows(ctx, in, idx), s.w, s.b, s.bn, dilation, T);
+        ggml_tensor *   yi = tdnn_conv(ctx, ggml_get_rows(ctx, in, idx), s.w, s.b, s.bn, dilation, T);
 
         out  = ggml_set_rows(ctx, out, ggml_reshape_3d(ctx, yi, chunk, 1, T),
                              ggml_view_1d(ctx, chunk_ids, 1, static_cast<size_t>(i) * sizeof(int32_t)));
@@ -225,11 +172,8 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
     const int64_t T = blk_out[0]->ne[1];
 
     // ---- MFA: 1x1 over concat(blk1, blk2, blk3), split into three blocks --
-    // All three products are expanded before the adds, and the chain starts
-    // from the last block's product, so both adds wait on it and sit next to
-    // each other where Vulkan fuses them into one pass. (Starting from block
-    // 1's product lets the Vulkan graph reorderer hoist that add into block
-    // 3, which splits the pair.)
+    // Expand all three products first and start the sum from part[2] so the
+    // two adds stay adjacent (Vulkan fuses them).
     ggml_tensor * part[kNumSeBlocks] = {};
     for (int i = 0; i < kNumSeBlocks; ++i) {
         part[i] = linear(ctx, w.mfa_w[i], blk_out[i], nullptr);
@@ -242,14 +186,7 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
     mark_dump(gb.dumps.mfa_out, m, "enc.mfa.out");
 
     // ---- attentive statistics pooling ------------------------------------
-    //
-    // mean / std are the utterance statistics over T with the uniform
-    // (unpadded) weighting SpeechBrain uses when wav_lens is all-ones; the
-    // variance is the biased 1/T one, and the clamp before the sqrt is
-    // SpeechBrain's `.clamp(eps)` and must not be dropped.
-    //
-    // Every statistic works on d = m - mean, so the attention-weighted ones
-    // below reuse d and d^2 instead of making their own full-size passes.
+    // Uniform mean / biased std over T, std clamped at eps (SpeechBrain).
     ggml_tensor * mT   = ggml_cont(ctx, ggml_transpose(ctx, m));  // [T, Cm]
     ggml_tensor * mean = ggml_mean(ctx, mT);                      // [1, Cm]
     ggml_tensor * d    = ggml_sub(ctx, mT, mean);                 // [T, Cm]
@@ -260,9 +197,7 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
     ggml_tensor * mean1 = ggml_reshape_1d(ctx, mean, Cm);
     ggml_tensor * sd1   = ggml_reshape_1d(ctx, sd, Cm);
 
-    // The context term wm@mean + ws@std + b is a [att] vector broadcast over
-    // T, so the 3*Cm -> att convolution costs one Cm x T matmul instead of
-    // three.
+    // wm@mean + ws@std + b is constant over T: one [att] vector, broadcast.
     ggml_tensor * cvec = ggml_add(ctx, linear(ctx, w.asp_wm, mean1, nullptr), linear(ctx, w.asp_ws, sd1, nullptr));
     cvec               = ggml_add(ctx, cvec, w.asp_b);
 
@@ -271,11 +206,7 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
     a               = bn_affine(ctx, a, w.asp_bn.scale, w.asp_bn.shift);
     a               = ggml_tanh(ctx, a);
 
-    // Attention logits WITHOUT the per-channel bias: the softmax runs over T
-    // within each channel, so a per-channel constant cancels out of it. The
-    // dump point needs the biased logits, so the dump build adds the bias on
-    // a side branch, marked BEFORE any transpose: ggml ne = [Cm, T] lands on
-    // disk as [T, Cm], the orientation the reference dumps.
+    // The per-channel bias cancels in the softmax over T; only the dump adds it.
     ggml_tensor * al = linear(ctx, w.asp_attn_w, a, nullptr);  // [Cm, T]
     if (debug::enabled()) {
         mark_dump(gb.dumps.asp_attn_logits, ggml_add(ctx, al, w.asp_attn_b), "enc.asp.attn_logits");
@@ -285,11 +216,8 @@ ggml_tensor * mfa_asp(ggml_context *        ctx,
     ggml_tensor * alT  = ggml_cont(ctx, ggml_transpose(ctx, al));  // [T, Cm]
     ggml_tensor * attn = ggml_soft_max(ctx, alT);                  // over ne[0] = T
 
-    // Weighted moments about the uniform mean, each a per-channel dot product
-    // over T (a batched mat-vec, one batch per channel; no product tensor):
-    //   e1 = sum_t attn d,  e2 = sum_t attn d^2
-    //   mu = mean + e1,     sigma^2 = sum_t attn (m - mu)^2 = e2 - e1^2
-    // (sum_t attn = 1).
+    // Weighted moments about the uniform mean (sum_t attn = 1):
+    //   e1 = sum_t attn d,  e2 = sum_t attn d^2,  mu = mean + e1,  sigma^2 = e2 - e1^2
     ggml_tensor * attn3 = ggml_reshape_3d(ctx, attn, T, 1, Cm);
     ggml_tensor * e1    = ggml_reshape_2d(ctx, ggml_mul_mat(ctx, attn3, ggml_reshape_3d(ctx, d, T, 1, Cm)), 1, Cm);
     ggml_tensor * e2    = ggml_reshape_2d(ctx, ggml_mul_mat(ctx, attn3, ggml_reshape_3d(ctx, d2, T, 1, Cm)), 1, Cm);
@@ -334,30 +262,10 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T) {
     const HParams & hp = model.hparams;
     const Weights & w  = model.weights;
 
-    if (ctx == nullptr || T <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: invalid arg (ctx=%p, T=%d)", static_cast<void *>(ctx),
-                T);
-        return gb;
-    }
-
     const int Cm    = hp.c_mfa();
     const int chunk = hp.c_chunk();
 
-    // reflect_rows needs T > p so the mirrored indices stay in range. The
-    // 500 ms LANGID minimum gives T >= 51 frames; the largest p here is 4.
-    for (int i = 0; i < kNumSeBlocks; ++i) {
-        if (T <= hp.pad(i + 1)) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: T=%d is too short for reflect padding %d", T,
-                    hp.pad(i + 1));
-            return gb;
-        }
-    }
-
     gb.graph = ggml_new_graph_custom(ctx, kGraphSize, /*grads=*/false);
-    if (gb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "ecapa_tdnn graph: ggml_new_graph_custom failed");
-        return gb;
-    }
 
     // ---- inputs ----------------------------------------------------------
     gb.blk0_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.blk0_cols(), T);
@@ -376,9 +284,8 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T) {
     ggml_set_input(gb.chunk_ids);
 
     // ---- stage 0: TDNNBlock n_mels -> C ----------------------------------
-    // One matmul over the host-built im2col (K0 taps x n_mels, zero padded to
-    // a multiple of 32): n_mels = 60 alone is not a multiple of any CPU
-    // tinyBLAS tile, and ggml's fallback GEMM for that shape is ~15x slower.
+    // One matmul over the host im2col, inner dim padded to a multiple of 32
+    // for the CPU tinyBLAS tiles.
     ggml_tensor * x = linear(ctx, w.blk0_w_im2col, gb.blk0_in, w.blk0_b);
     x               = ggml_relu(ctx, x);
     x               = bn_affine(ctx, x, w.blk0_bn.scale, w.blk0_bn.shift);
@@ -397,8 +304,7 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T) {
             mark_dump(gb.dumps.blk1_tdnn1_out, h, "enc.blk.1.tdnn1.out");
         }
 
-        // Res2Net writes its output over its input, so a dump build hands it
-        // a copy to keep the tdnn1 dump intact.
+        // Res2Net writes in place; copy so the tdnn1 dump survives.
         if (i == 0 && debug::enabled()) {
             h = ggml_cont(ctx, h);
         }
@@ -427,9 +333,7 @@ GraphBuild build_graph(ggml_context * ctx, const Model & model, int T) {
     mark_dump(gb.dumps.emb, emb, "enc.emb");
 
     // ---- classifier -------------------------------------------------------
-    // LeakyReLU comes FIRST, before the BatchNorm that is folded into the
-    // following linear map; getting that order wrong is invisible until the
-    // logits are compared.
+    // LeakyReLU precedes each (folded) BatchNorm.
     ggml_tensor * e = ggml_leaky_relu(ctx, emb, hp.leaky_slope, /*inplace=*/false);
     ggml_tensor * hcls =
         ggml_leaky_relu(ctx, linear(ctx, w.cls_l1_w, e, w.cls_l1_b), hp.leaky_slope, /*inplace=*/false);
