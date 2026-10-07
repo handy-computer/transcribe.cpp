@@ -95,11 +95,11 @@ identify the spoken language through a langid session. `run()` returns a
 `LangIdResult` with candidates ranked by `p`. Codes are the model's own labels
 (`"iw"`, `"jw"`; `model.langid_label_index("he")` resolves aliases), so match
 `result.code` against the ASR model's `capabilities.languages` yourself.
-`allowed=None` scores every label; pass the languages you expect, and a low
-`allowed_mass` means the speech is probably none of them. An empty `allowed`
-list raises `InvalidArgument` rather than meaning "all"; clips under
-`model.langid_info.min_audio_ms` raise `InputTooShort`. Locking, `Busy`,
-`cancel()` and `close()` work as on `Session`.
+`allowed=None` scores every label; `allowed_mass` is the unrestricted
+probability the allowed set captured. An empty `allowed` list raises
+`InvalidArgument`; clips under `model.langid_info.min_audio_ms` raise
+`InputTooShort`. Locking, `Busy`, `cancel()` and `close()` work as on
+`Session`.
 
 ```python
 with model.langid_session() as lid:

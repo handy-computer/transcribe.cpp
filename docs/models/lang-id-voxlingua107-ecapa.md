@@ -12,16 +12,14 @@ the last 30 s of a clip.
 
 ## What it's for
 
-Spoken language identification: which of 107 languages is this clip in?
-This is **not a transcription model**. It serves the LANGID role
-(`include/transcribe/langid.h`): a run returns the model's language labels
-ranked by probability, optionally restricted to the languages your user has
-enabled, plus `allowed_mass`, the signal that the speech is outside that set.
-Use it to pick the `language` for an ASR model, or to route audio.
+Spoken language identification over 107 languages. This is **not a
+transcription model**. It serves the LANGID role
+(`include/transcribe/langid.h`, [`docs/langid.md`](../langid.md)): a run
+returns the model's language labels ranked by probability, optionally
+restricted to a caller-chosen set, plus `allowed_mass`, the unrestricted
+probability that set captured.
 
-How to get good answers out of it (trim silence, pass the allowed set, decide
-at 5 s, re-decide at 10 s) is in [`docs/langid.md`](../langid.md). See
-SpeechBrain's [model card](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa)
+See SpeechBrain's [model card](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa)
 for training data and the label list.
 
 <!-- catalog:pin -->
@@ -45,13 +43,9 @@ Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measure
 <!-- catalog:prose field=wer.notes -->
 Open-set top-1 accuracy over all 107 labels, the mean over 15 FLEURS
 languages, on the first 5 s of each clip without silence trimming.
-Accuracy is higher with an allowed set and with trimmed speech; see
-docs/langid.md. Agreement with the SpeechBrain reference, per GGUF, is on
-the transcribe.cpp model page.
+Agreement with the SpeechBrain reference, per GGUF, is on the
+transcribe.cpp model page.
 <!-- /catalog -->
-
-Only near-reference tiers ship (F32 / F16 / Q8_0): the decision is an argmax
-over 107 logits, and the k-quant tiers would save a few MB at most.
 
 ## Accuracy
 
@@ -65,46 +59,8 @@ over 107 logits, and the k-quant tiers would save a few MB at most.
 Measured at transcribe.cpp `16d46bc2` on 2026-10-06.
 <!-- /catalog -->
 
-Accuracy is the headline above: open set, first 5 s of each clip, no silence
-trimming, C++ on CPU. Agreement counts the scored run's top-1 decisions that
-match the SpeechBrain reference on the same audio, over every crop of the
-sweep (3 / 5 / 10 s / full). It is the ship gate for F32
-(`scripts/langid/compare.py`: every disagreement must be a reviewed near-tie)
-and the evidence for the quants. F16's flips are all near-ties (top-two
-margin under 0.04 logit). Q8_0 is a download format: transcribe.cpp widens
-its weights to F16 at load, so it computes like F16 (F16's memory) and its
-accuracy matches F32 within the confidence interval; its flips are the 8-bit
-weights alone, on decisions F32 also finds uncertain.
-
-### Snapshot: crops and decision spaces
-
-A snapshot of `scripts/langid/score.py --md` on the C++ sweeps behind the
-rows above (transcribe.cpp `16d46bc2`, CPU; FLEURS `test`, 15 languages x 200
-utterances, crops from the start of each clip, no silence trimming). It is
-not rendered from the catalog; regenerate it with the commands under
-Reproduction. Top-1 accuracy, %.
-
-Open set (all 107 labels) at the other crops; 5 s is the catalog row above:
-
-| GGUF | 3 s | 10 s | full |
-|---|---|---|---|
-| F32 | 67.0 | 91.1 | 91.4 |
-| F16 | 66.9 | 91.0 | 91.4 |
-| Q8_0 | 67.2 | 92.0 | 92.3 |
-
-Restricted to a selection, F32:
-
-| decision space | 3 s | 5 s | 10 s | full |
-|---|---|---|---|---|
-| en+ru | 98.8 | 100.0 | 100.0 | 100.0 |
-| en+fr+de+es | 88.6 | 94.1 | 98.9 | 99.4 |
-| cs+sk | 83.0 | 92.2 | 96.8 | 96.5 |
-| id+ms | 87.8 | 89.5 | 89.5 | 88.8 |
-
-Computed in Q8_0 instead, as langid.cpp does, ggml also rounds the
-activations to 8 bits; that moves 6.9% of decisions (93.1% agreement, open
-set 65.4 / 84.3 / 90.9 / 91.4). Per-language tables, confidence / coverage
-and confusions: `uv run scripts/langid/score.py <run>.jsonl --md <run>.md`.
+Agreement counts the scored sweep's top-1 decisions that match the
+SpeechBrain reference on the same audio, over the 3 / 5 / 10 s / full crops.
 
 ## Quick Start
 
@@ -129,14 +85,9 @@ From the C API, use the LANGID role (`include/transcribe/langid.h`):
 `transcribe_langid_session_init`, `transcribe_langid_run`, then
 `transcribe_langid_get_result` / `transcribe_langid_get_candidate`. Labels are
 the model's own codes (`iw`, `jw`, `tl`, `no`; `he`, `jv`, `fil`, `nb` are
-accepted as aliases). Match them against your ASR model's
-`transcribe_capabilities::languages` yourself.
+accepted as aliases).
 
 ## Performance
-
-Measured with `scripts/langid/bench.py` through the Python binding
-(`tools/transcribe-bench` is ASR-only), on the first N seconds of one clip;
-CPU uses the library default thread count.
 
 ### Apple M4 Max
 
@@ -153,31 +104,20 @@ Compute latency (mel + encode), speedup over realtime in parentheses.
 Apple M4 Max: transcribe.cpp `62522202` on 2026-10-05.
 <!-- /catalog -->
 
-`AUTO` resolves like every other family (the GPU when there is one). Metal is
-several times faster here; CPU is still well under real time and avoids
-contending with an ASR model on the GPU, so load with
-`TRANSCRIBE_BACKEND_CPU` when that matters.
-
-The `long-45s` cells are medians of 20 warm runs on `samples/long-45s.wav`,
-which has since been replaced by `samples/ru-long.wav`, and the CPU ones
-predate the current CPU kernels. Both publication rigs are due a re-bench
-(the AMD Ryzen 7 PRO 4750U has no published cells yet):
+Benchmark reproduction (`tools/transcribe-bench` is ASR-only):
 
 ```bash
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/bench.py --profile \
   --library build-shared/src/libtranscribe.dylib
-uv run scripts/catalog/ingest_perf.py
-uv run scripts/catalog/render.py
 ```
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against SpeechBrain 1.1.1 on
-eight committed FLEURS clips (`samples/fleurs-*.wav`): every stage tensor
-gated in `tests/tolerances/ecapa_tdnn.json` (front end, every encoder block,
-pooling, embedding, logits) within tolerance on the calibration host (Apple
-Silicon), and the top-1 label equal to the reference on every clip. The
-dataset gate is the FLEURS decision parity above.
+transcribe.cpp is validated tensor-by-tensor against SpeechBrain on eight
+FLEURS clips (`samples/fleurs-*.wav`): every stage tensor gated in
+`tests/tolerances/ecapa_tdnn.json` (front end, every encoder block, pooling,
+embedding, logits) falls within tolerance, and the top-1 label matches the
+reference on every clip.
 
 | Field | Value |
 | --- | --- |
@@ -185,30 +125,25 @@ dataset gate is the FLEURS decision parity above.
 | Dump script | `scripts/dump_reference_ecapa_tdnn_speechbrain.py` |
 | Manifest | `tests/golden/ecapa_tdnn/lang-id-voxlingua107-ecapa.manifest.json` |
 | Command | `uv run scripts/validate.py all --family ecapa_tdnn` |
-| Dataset gate | `scripts/langid/compare.py` (FLEURS, every crop; see Accuracy) |
+| Dataset gate | `scripts/langid/compare.py` (FLEURS, every crop) |
 
 ## Known Limitations
 
 - **Closed set.** There is no "unknown" or "no speech" label: silence, music
-  and out-of-set languages still get a confident-looking top candidate. Gate
-  with VAD and watch `allowed_mass`.
-- **Confusable pairs.** `ru`/`be`, `no`/`nn`, `id`/`jw`/`ms`, `cs`/`sk`; `id`
-  vs `ms` stays near 89% even restricted to the pair.
+  and out-of-set languages still get a top candidate.
 - **No Cantonese label**: Cantonese is classified as `zh`.
-- **Minimum 500 ms** of scored audio (`TRANSCRIBE_ERR_INPUT_TOO_SHORT`);
-  answers under ~3 s of speech are weak.
+- **Minimum 500 ms** of scored audio (`TRANSCRIBE_ERR_INPUT_TOO_SHORT`).
 - **Scores at most the last 30 s** by default
   (`transcribe_langid_session_params::max_audio_ms`).
-- **Q8_0 runs at F16 speed.** langid.cpp computes Q8_0 with ggml's ARM
-  weight-repacking kernels, about 1.3x faster than F16 on an Apple CPU, at
-  the accuracy cost above; transcribe.cpp widens Q8_0 to F16 instead.
+- **Q8_0 weights are widened to F16 at load**, so Q8_0 computes and uses
+  memory like F16.
 
 ## Reproduction
 
 ### Convert
 
-Loads the SpeechBrain checkpoint through SpeechBrain (the only implementation)
-from the Hugging Face cache, and writes F32 only.
+Loads the SpeechBrain checkpoint through SpeechBrain from the Hugging Face
+cache and writes F32 only.
 
 ```bash
 uv run --project scripts/envs/ecapa_tdnn \
@@ -234,11 +169,8 @@ uv run scripts/validate.py all --family ecapa_tdnn
 ### Accuracy acceptance
 
 One reference sweep, then one C++ sweep per shipped GGUF (shown for F32;
-repeat with F16 and Q8_0, passing `--report-only` to `compare.py`: only F32
-is gated). `compare.py` is the gate; `score.py --json` and `compare.py --json`
-are what `ingest_accuracy.py` reads, named after the GGUF, and the importer
-rejects a score without its agreement or over a language set other than
-`scripts/langid/ingest.py`'s.
+repeat with F16 and Q8_0, passing `--report-only` to `compare.py`, which gates
+F32 only).
 
 ```bash
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang all
@@ -255,7 +187,6 @@ uv run scripts/langid/compare.py reports/langid/ref-speechbrain-untrimmed.jsonl 
   reports/langid/cpp-f32-untrimmed.jsonl \
   --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.agreement.json
 uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl \
-  --md reports/langid/cpp-f32-untrimmed.md \
   --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
 uv run scripts/catalog/ingest_accuracy.py --models lang-id-voxlingua107-ecapa
 uv run scripts/catalog/render.py

@@ -149,10 +149,8 @@ by `p` (index, code, name, `p`, `p_unrestricted`, `logit`), `n_allowed`,
 `allowed` is the first caller-owned `const char * const *` input. Every
 binding keeps the array and each encoded string alive until the native call
 returns (TypeScript frees them only after its async worker call settles).
-Omitted / `None` / `nil` / `null` passes NULL, meaning every label. An empty
-list is rejected by the binding itself with `InvalidArgument`: many
-marshallers turn an empty array into NULL, which would silently flip the
-meaning to "all labels".
+Omitted / `None` / `nil` / `null` passes NULL, meaning every label; an empty
+list raises `InvalidArgument`.
 
 A langid run follows the same execution rules as an ASR or diarize run:
 model-wide compute lock, `Busy` under a stream lease, results copied out

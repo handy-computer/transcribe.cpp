@@ -27,23 +27,9 @@ unchanged; see `docs/roles.md`.
 
 ## New: the LANGID role
 
-Language identification is a role of its own (`include/transcribe/langid.h`,
-`docs/langid.md`), served by the ecapa_tdnn family (VoxLingua107 ECAPA-TDNN,
-107 labels). It is new API, so nothing migrates; it replaces the separate
-langid.cpp library and its `langid_*` API:
-
-| langid.cpp | 0.4 |
-| --- | --- |
-| `langid_model_load` / `langid_context_init` | `transcribe_model_load_file` / `transcribe_langid_session_init` |
-| `langid_identify` | `transcribe_langid_run` |
-| `langid_get_result` / `langid_get_candidate` | `transcribe_langid_get_result` / `transcribe_langid_get_candidate` |
-| candidate `prob` / `prob_open` | `p` / `p_unrestricted` |
-| `LANGID_ERR_AUDIO_TOO_SHORT` / `_UNKNOWN_LANGUAGE` | `TRANSCRIBE_ERR_INPUT_TOO_SHORT` (new, 21) / `TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE` |
-| non-NULL `allowed` with `n_allowed <= 0` meant "all" | `TRANSCRIBE_ERR_INVALID_ARG`; only NULL means "all" |
-| `max_audio_ms` below 500 ms accepted | `TRANSCRIBE_ERR_INVALID_ARG` at session init |
-| accessors before a result: `INVALID_ARG` | OK with zeroed output, like every other accessor |
-| `langid_embed` | not available (no EMBED role yet) |
-| langid.cpp GGUFs (`langid.*` keys) | reconvert with `scripts/convert-ecapa_tdnn.py` (`stt.*` keys, renamed tensors) |
+Language identification is a new role (`include/transcribe/langid.h`,
+`docs/langid.md`) with a new status, `TRANSCRIBE_ERR_INPUT_TOO_SHORT` (21).
+It is new API, so nothing migrates.
 
 ## Capabilities are ASR-only
 

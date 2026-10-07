@@ -146,7 +146,7 @@
   "known_risks": [
     "Role is LANGID, not ASR: acceptance is FLEURS decision parity vs SpeechBrain (12000 decisions) plus top-1 accuracy, not WER on LibriSpeech.",
     "capabilities.language_detection / stt.capability.lang_detect mean ASR auto-detect and stay false; language ID is the model's role (transcribe_model_roles), not an ASR capability.",
-    "SpeechBrain front end (periodic Hamming, 10*log10, 80 dB top-db, per-bin mean) is not expressible by transcribe-mel; it is family-local (src/arch/ecapa_tdnn/mel.cpp).",
+    "SpeechBrain front end (periodic Hamming, 10*log10, 80 dB top-db, per-bin mean) runs on the shared transcribe-mel (src/transcribe-mel.cpp) with window_type hamming_periodic and normalize sentence_mean.",
     "Labels use VoxLingua107's legacy codes (iw, jw, tl, no); modern codes are stored as aliases. Codes are not canonicalized against ASR models' language lists.",
     "Closed-set classifier: out-of-set speech still gets a confident label; callers use allowed_mass / restrict the allowed set."
   ],

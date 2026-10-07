@@ -1,8 +1,7 @@
 # ECAPA-TDNN (language ID)
 
 Status: supported (LANGID role). Ported from `handy-computer/langid.cpp`
-(`96af3a5`), where the C++ was first written and validated against
-SpeechBrain; that repo is superseded by this family.
+(`96af3a5`).
 
 ECAPA-TDNN is SpeechBrain's speaker / language embedder (architecture pattern
 `encoder-classifier`): SpeechBrain Fbank front end, a TDNN block, three
@@ -15,14 +14,11 @@ top-k (`docs/langid.md`).
 
 Acceptance: tensor parity on eight FLEURS clips (`validate.py`), and top-1
 decision parity with SpeechBrain on FLEURS (15 languages x 200 utterances x
-3 / 5 / 10 s / full crops, C++ F32 on CPU), where every disagreement must be
-a reviewed near-tie. Shipped matrix: F32 + F16 + Q8_0. Each GGUF's agreement
-and accuracy live in the catalog and are rendered on
+3 / 5 / 10 s / full crops, C++ F32 on CPU). Shipped matrix: F32 + F16 + Q8_0.
+Each GGUF's accuracy and agreement live in the catalog and are rendered on
 [the model page](../../models/lang-id-voxlingua107-ecapa.md#accuracy). The
 loader widens Q8_0 weights to F16 (`widen_q8_0_weights` in
-`src/arch/ecapa_tdnn/model.cpp`): computed in Q8_0, ggml also rounds the
-activations to 8 bits and agreement drops by several points (the model
-page's accuracy snapshot has the figures).
+`src/arch/ecapa_tdnn/model.cpp`).
 
 ## Identity
 
@@ -46,8 +42,8 @@ page's accuracy snapshot has the figures).
 Keys: `stt.variant`, `stt.frontend.*` (`window = hamming_periodic`,
 `pad_mode = constant`, `log_clamp_min = 1e-10`, `top_db = 80`,
 `normalize = sentence_mean`, plus the usual sizes), `stt.ecapa_tdnn.*`
-(format version, channels, kernel sizes, dilations, res2net scale, SE /
-attention / embedding / classifier widths, `asp_eps`, leaky slope) and
+(channels, kernel sizes, dilations, res2net scale, SE / attention /
+embedding / classifier widths, `asp_eps`, leaky slope) and
 `stt.langid.labels.{codes,names,aliases}`. Integer scalars are uint32.
 
 The converter applies four exact rewrites: BatchNorm to a `scale` / `shift`
@@ -90,7 +86,7 @@ uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine speechbr
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine cpp --library build-shared/src/libtranscribe.dylib ... --out reports/langid/cpp-f32-untrimmed.jsonl
 uv run scripts/langid/compare.py reports/langid/ref-speechbrain-untrimmed.jsonl reports/langid/cpp-f32-untrimmed.jsonl \
   --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.agreement.json
-uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl --md reports/langid/cpp-f32-untrimmed.md \
+uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl \
   --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
 uv run scripts/catalog/ingest_accuracy.py --models lang-id-voxlingua107-ecapa
 ```
@@ -99,10 +95,10 @@ The catalog rows follow the `langid-publication-v1` profile
 (`catalog/_benchmark_profiles.json`): the open-set mean on the 5 s untrimmed
 crop of each shipped GGUF's sweep, with that sweep's agreement.
 
-`compare.py` fails on any disagreement that is not on a reviewed near-tie
-list (`--near-ties`), and refuses runs whose labels, recipe, manifest hashes
-or checkpoint revision differ. Only F32 is gated: run the F16 and Q8_0
-sweeps through it with `--report-only`, which still writes their agreement.
+`compare.py` fails on any top-1 disagreement or an agreement below 99.9%,
+and refuses runs whose labels, recipe, manifest hashes or checkpoint revision
+differ. Only F32 is gated: run the F16 and Q8_0 sweeps through it with
+`--report-only`, which still writes their agreement.
 
 Benchmarks: `scripts/langid/bench.py --profile` (`tools/transcribe-bench` is
 ASR-only) writes bench-driver reports under `reports/perf/`, which
@@ -118,30 +114,3 @@ ASR-only) writes bench-driver reports under `reports/perf/`, which
 | Minimum length | 500 ms | `transcribe_ecapa_tdnn_smoke`, `transcribe_langid_dispatch_unit` | `INPUT_TOO_SHORT` below 500 ms | MUST PASS | PASS |
 | Transcribe / translate / timestamps / streaming | n/a | `transcribe_session_init` | `UNSUPPORTED_ROLE` | OUT OF SCOPE — not an ASR model | SKIP — not exposed by runtime |
 | Batch (offline) | n/a | `transcribe-cli --batch` | refused: ASR-only | OUT OF SCOPE — no batch entry points for new roles in v1 | ACCEPTED GAP — one clip per call |
-
-## Notes
-
-- Regime for every parity number: F32 GGUF, CPU backend, one thread,
-  production C++ front end, macOS arm64. On the port, every stage tensor was
-  bit-identical to langid.cpp's (ggml 0.20.2 there, 0.25.3 here), so
-  `tests/tolerances/ecapa_tdnn.json` carries over unchanged.
-- Hardening from the langid.cpp review, fixed in the role dispatcher and
-  tested in `tests/langid_dispatch_unit.cpp`: H1 minimum checked after the
-  crop and sub-minimum `max_audio_ms` rejected at init; H2 only NULL means
-  "all labels"; H3 non-finite PCM and logits rejected; H6 malformed label
-  tables fail the load. H4 (no leak when label metadata is bad) is covered by
-  `arch_ecapa_tdnn_bad_labels.gguf` in `transcribe_ecapa_tdnn_smoke`
-  (`leaks --atExit`: 0 leaks).
-- Not ported: langid.cpp's CPU weight-repacking buffer. It only speeds up
-  Q8_0 compute (ARM only; ggml has no Q8_0 repack on x86), which the Q8_0
-  widening replaces. Measured on the M4 Max CPU at 10 s, generic build
-  flags: Q8_0 widened 49 ms, Q8_0 computed 56 ms, Q8_0 + repack 36 ms;
-  Metal 14 ms for all. `cls.out.weight` (107 rows) cannot be repacked, so a
-  future repack path must filter on the row count or langid.cpp's abandon
-  path disables repacking for the whole file. The performance-core thread
-  default did not help (8 threads ties or beats 12).
-- `AUTO` placement is unchanged (GPU first). Metal against CPU latency is in
-  the model page's Performance section.
-- Q8_0 conv kernels stay F32 (the quantizer's Conv bucket is F32 in every
-  preset), so the Q8_0 file is 26.7 MB against langid.cpp's 24.1 MB, and
-  `cls.out.weight` is Q8_0 where langid.cpp kept it F16.

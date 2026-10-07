@@ -47,9 +47,8 @@ usage: |
   #   ...
   ```
 
-  From the C API, use the LANGID role (`include/transcribe/langid.h`); the
-  usage protocol (trim silence, pass the allowed set, decide at 5 s) is in
-  `docs/langid.md`.
+  From the C API, use the LANGID role (`include/transcribe/langid.h`, see
+  `docs/langid.md`).
 
   If your audio isn't already 16 kHz mono WAV, convert it first:
 
@@ -64,6 +63,5 @@ wer:
   notes: |
     Open-set top-1 accuracy over all 107 labels, the mean over 15 FLEURS
     languages, on the first 5 s of each clip without silence trimming.
-    Accuracy is higher with an allowed set and with trimmed speech; see
-    docs/langid.md. Agreement with the SpeechBrain reference, per GGUF, is on
-    the transcribe.cpp model page.
+    Agreement with the SpeechBrain reference, per GGUF, is on the
+    transcribe.cpp model page.
