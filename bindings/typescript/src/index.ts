@@ -7,8 +7,13 @@
  */
 
 import {
-  native,
+  backendState,
+  initialize,
+  loadLibrary,
+  nativeAsync,
+  nativeReady,
   setLogHandler,
+  type BackendState,
   type LogHandler,
   type Native,
 } from "./native.js";
@@ -65,7 +70,7 @@ import type {
 
 export * from "./types.js";
 export * from "./errors.js";
-export { setLogHandler, type LogHandler };
+export { backendState, initialize, setLogHandler, type BackendState, type LogHandler };
 
 // ---- enum maps -------------------------------------------------------------
 
@@ -309,18 +314,25 @@ class Mutex {
 
 // ---- module-level introspection -------------------------------------------
 //
-// Note: these (like every public entry point) trigger the lazy native bootstrap
-// on first call — they dlopen the library, verify the ABI, and init backends.
-// There is no way to probe the binding without loading the native library, with
-// one exception: `headerHash` below is the compile-time PUBLIC_HEADER_HASH and
-// is the value the binding *expects*, not one read from the loaded library.
+// Native bootstrap is two-phase (see native.ts). `version()` and
+// `libraryPath()` only load and verify the library — they never initialize a
+// compute backend, so they are safe to call at any time, including while
+// `initialize()` runs. `headerHash` is the compile-time PUBLIC_HEADER_HASH: the
+// value the binding *expects*, not one read from the loaded library.
+//
+// Backend initialization (on Metal, compiling the GPU shader library: up to
+// many seconds) happens off the event loop in `initialize()`, which
+// `TranscribeModel.load()` and the `*Async` discovery functions await
+// automatically. The synchronous discovery functions block the calling thread
+// if they are the first to need backends, and throw `BackendInitializing` if
+// called while `initialize()` is in flight.
 
 export function version(): {
   version: string;
   commit: string;
   headerHash: string;
 } {
-  const n = native();
+  const n = loadLibrary();
   return {
     version: n.F.version(),
     commit: n.F.versionCommit(),
@@ -329,7 +341,7 @@ export function version(): {
 }
 
 export function libraryPath(): string {
-  return native().libraryPath;
+  return loadLibrary().libraryPath;
 }
 
 /**
@@ -379,8 +391,14 @@ function deviceFromRaw(
   return info;
 }
 
+/**
+ * Every registered compute device. Synchronous: if backends are not yet
+ * initialized this initializes them on the calling thread (which can block for
+ * seconds on Metal), and it throws `BackendInitializing` while `initialize()`
+ * is in flight. UI hosts should use {@link getAvailableBackendsAsync}.
+ */
 export function getAvailableBackends(): BackendInfo[] {
-  const n = native();
+  const n = nativeReady();
   const count = n.F.deviceCount();
   const out: BackendInfo[] = [];
   for (let i = 0; i < count; i++) {
@@ -394,9 +412,42 @@ export function getAvailableBackends(): BackendInfo[] {
   return out;
 }
 
+/**
+ * {@link getAvailableBackends} without blocking the event loop: awaits
+ * {@link initialize}, then reads each device's info (a live driver memory
+ * query) on a worker thread.
+ */
+export async function getAvailableBackendsAsync(): Promise<BackendInfo[]> {
+  const n = await nativeAsync();
+  const count = n.F.deviceCount();
+  const out: BackendInfo[] = [];
+  for (let i = 0; i < count; i++) {
+    const handle = n.F.deviceGet(i);
+    if (!handle) continue;
+    const dev: any = {};
+    n.F.deviceInfoInit(dev);
+    const st = await callAsync<number>(n.F.deviceGetInfo, handle, dev);
+    check(n, st, `reading backend device ${i}`);
+    out.push(deviceFromRaw(dev, handle, i));
+  }
+  return out;
+}
+
+/**
+ * Whether some registered device can satisfy `backend`. Synchronous, with the
+ * same initialization behavior as {@link getAvailableBackends}; UI hosts should
+ * use {@link backendAvailableAsync}.
+ */
 export function backendAvailable(backend: Backend): boolean {
-  const n = native();
-  return n.F.backendAvailable(lookup(BACKENDS, backend, "backend"));
+  const raw = lookup(BACKENDS, backend, "backend");
+  return nativeReady().F.backendAvailable(raw);
+}
+
+/** {@link backendAvailable} without blocking the event loop (awaits {@link initialize}). */
+export async function backendAvailableAsync(backend: Backend): Promise<boolean> {
+  const raw = lookup(BACKENDS, backend, "backend");
+  const n = await nativeAsync();
+  return n.F.backendAvailable(raw);
 }
 
 // ---- result materialization ------------------------------------------------
@@ -1453,11 +1504,17 @@ export class TranscribeModel {
     ensureExitHook();
   }
 
+  /**
+   * Load a GGUF model. Never blocks the event loop on backend initialization:
+   * it awaits {@link initialize} (sharing any in-flight init) and then loads the
+   * file on a worker thread. A failed load (missing or invalid file) affects
+   * only this call; only a failed backend initialization is permanent.
+   */
   static async load(
     path: string,
     opts: ModelOptions = {},
   ): Promise<TranscribeModel> {
-    const n = native();
+    const n = await nativeAsync();
     const p: any = {};
     n.F.modelLoadParamsInit(p);
     if ("gpuDevice" in opts) {

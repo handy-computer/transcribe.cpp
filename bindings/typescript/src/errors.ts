@@ -37,6 +37,15 @@ export class AbiError extends TranscribeError {}
 export class InputTooLong extends TranscribeError {}
 export class VersionMismatch extends TranscribeError {}
 
+/**
+ * Raised by a synchronous backend query (`getAvailableBackends()`,
+ * `backendAvailable()`) while `initialize()` is still running. The call fails
+ * fast instead of waiting, because waiting on the main thread can deadlock
+ * with the init worker. Await `initialize()` or use the async variants.
+ * Binding-side error, so `status` is 0.
+ */
+export class BackendInitializing extends TranscribeError {}
+
 /** Raised when the model does not serve the role (ASR, diarize) the call needs. */
 export class UnsupportedRole extends TranscribeError {}
 
