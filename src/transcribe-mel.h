@@ -189,6 +189,11 @@ class MelFrontend {
     int                 n_freq_;  // n_fft/2 + 1
     std::vector<double> window_;  // [n_fft], periodic hann zero-padded
     std::vector<float>  mel_fb_;  // [num_mels * n_freq] row-major, Slaney
+    // Per mel row: the scalar matmul runs over [fb_lo_, fb_hi_) only.
+    // fb_lo_ is rounded down to a multiple of 4 so the 4-wide groups stay
+    // aligned; the skipped weights are all zero, so the sum is unchanged.
+    std::vector<int>    fb_lo_;
+    std::vector<int>    fb_hi_;
 
     // sin/cos LUT for the mixed-radix FFT. Sized to n_fft so that every
     // recursion-level N (n_fft, n_fft/2, n_fft/4, ..., odd leaf) divides

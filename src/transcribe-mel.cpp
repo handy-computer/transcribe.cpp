@@ -315,6 +315,25 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
                                     static_cast<double>(cfg.f_max), mel_fb_);
     }
 
+    const int n_rows = n_freq_ > 0 ? static_cast<int>(mel_fb_.size() / static_cast<size_t>(n_freq_)) : 0;
+    fb_lo_.assign(n_rows, 0);
+    fb_hi_.assign(n_rows, 0);
+    for (int m = 0; m < n_rows; ++m) {
+        const float * row = mel_fb_.data() + static_cast<size_t>(m) * n_freq_;
+        int           lo  = n_freq_;
+        int           hi  = 0;
+        for (int k = 0; k < n_freq_; ++k) {
+            if (row[k] != 0.0f) {
+                lo = std::min(lo, k);
+                hi = k + 1;
+            }
+        }
+        if (lo < hi) {
+            fb_lo_[m] = lo - lo % 4;
+            fb_hi_[m] = hi;
+        }
+    }
+
     // Sin/cos LUT for the mixed-radix FFT. Only the non-pow2 path
     // consumes it; pow2 sizes go through fft_radix2 (Linux) or vDSP
     // (Apple), both of which carry their own twiddle factors.
@@ -537,15 +556,16 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                 }
                 for (int m = 0; m < n_mels; ++m) {
                     const float * fb_row = mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+                    const int     k_hi   = fb_hi_[static_cast<size_t>(m)];
                     double        sum    = 0.0;
-                    int           k      = 0;
-                    for (; k < n_freq - 3; k += 4) {
+                    int           k      = fb_lo_[static_cast<size_t>(m)];
+                    for (; k < k_hi && k < n_freq - 3; k += 4) {
                         sum += static_cast<double>(fb_row[k]) * static_cast<double>(power_scratch[k]) +
                                static_cast<double>(fb_row[k + 1]) * static_cast<double>(power_scratch[k + 1]) +
                                static_cast<double>(fb_row[k + 2]) * static_cast<double>(power_scratch[k + 2]) +
                                static_cast<double>(fb_row[k + 3]) * static_cast<double>(power_scratch[k + 3]);
                     }
-                    for (; k < n_freq; ++k) {
+                    for (; k < k_hi; ++k) {
                         sum += static_cast<double>(fb_row[k]) * static_cast<double>(power_scratch[k]);
                     }
                     float result;
@@ -693,15 +713,16 @@ transcribe_status MelFrontend::compute(const float *        pcm,
             const float * pwr = power.data() + static_cast<size_t>(t) * n_freq;
             for (int m = 0; m < n_mels; ++m) {
                 const float * fb_row = mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+                const int     k_hi   = fb_hi_[static_cast<size_t>(m)];
                 double        sum    = 0.0;
-                int           k      = 0;
-                for (; k < n_freq - 3; k += 4) {
+                int           k      = fb_lo_[static_cast<size_t>(m)];
+                for (; k < k_hi && k < n_freq - 3; k += 4) {
                     sum += static_cast<double>(fb_row[k]) * static_cast<double>(pwr[k]) +
                            static_cast<double>(fb_row[k + 1]) * static_cast<double>(pwr[k + 1]) +
                            static_cast<double>(fb_row[k + 2]) * static_cast<double>(pwr[k + 2]) +
                            static_cast<double>(fb_row[k + 3]) * static_cast<double>(pwr[k + 3]);
                 }
-                for (; k < n_freq; ++k) {
+                for (; k < k_hi; ++k) {
                     sum += static_cast<double>(fb_row[k]) * static_cast<double>(pwr[k]);
                 }
                 float result;
