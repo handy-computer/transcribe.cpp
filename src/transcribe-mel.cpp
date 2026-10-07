@@ -140,6 +140,17 @@ void build_hann_window_symmetric_padded(int win_length, int n_fft, bool periodic
     }
 }
 
+// Periodic Hamming of length win_length, zero-padded to n_fft on both
+// sides: torch.hamming_window(N) with the default periodic=True,
+// 0.54 - 0.46*cos(2πk/N). SpeechBrain (ecapa_tdnn).
+void build_hamming_window_periodic_padded(int win_length, int n_fft, std::vector<double> & out) {
+    out.assign(n_fft, 0.0);
+    const int pad_each = (n_fft - win_length) / 2;
+    for (int k = 0; k < win_length; ++k) {
+        out[pad_each + k] = 0.54 - 0.46 * std::cos(2.0 * M_PI * k / static_cast<double>(win_length));
+    }
+}
+
 // In-place radix-2 Cooley-Tukey FFT, fp64. Operates on n complex
 // numbers stored as interleaved (re, im, re, im, ...). n must be a
 // power of 2. For n=512 (Parakeet) this is ~80 lines and runs in
@@ -289,6 +300,8 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
         for (int i = 0; i < cfg.win_length && i < static_cast<int>(cfg.window.size()); ++i) {
             window_[left_pad + i] = static_cast<double>(cfg.window[i]);
         }
+    } else if (cfg.window_type == "hamming_periodic") {
+        build_hamming_window_periodic_padded(cfg.win_length, cfg.n_fft, window_);
     } else {
         const bool periodic = (cfg.window_type == "hann_periodic");
         build_hann_window_symmetric_padded(cfg.win_length, cfg.n_fft, periodic, window_);
@@ -480,6 +493,11 @@ transcribe_status MelFrontend::compute(const float *        pcm,
 
     const bool whisper_mode = (cfg_.normalize == "per_utterance" || cfg_.normalize == "global");
 
+    // SpeechBrain power-to-dB (normalize == "sentence_mean"):
+    // 10*log10(max(x, amin)) in fp64, one rounding at storage.
+    const bool   db_mode  = (cfg_.normalize == "sentence_mean");
+    const double db_floor = static_cast<double>(cfg_.log_clamp_min > 0.0f ? cfg_.log_clamp_min : 1.0e-10f);
+
     int stft_threads = n_threads;
     if (stft_threads <= 0) {
         stft_threads = default_n_threads();
@@ -531,7 +549,12 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                         sum += static_cast<double>(fb_row[k]) * static_cast<double>(power_scratch[k]);
                     }
                     float result;
-                    if (whisper_mode) {
+                    if (db_mode) {
+                        if (sum < db_floor) {
+                            sum = db_floor;
+                        }
+                        result = static_cast<float>(10.0 * std::log10(sum));
+                    } else if (whisper_mode) {
                         if (sum < 1.0e-10) {
                             sum = 1.0e-10;
                         }
@@ -629,7 +652,15 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                     power.data(), n_freq, 0.0f, log_mel.data(), n_frames);
         {
             const size_t total = static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames);
-            if (whisper_mode) {
+            if (db_mode) {
+                for (size_t i = 0; i < total; ++i) {
+                    double v = static_cast<double>(log_mel[i]);
+                    if (v < db_floor) {
+                        v = db_floor;
+                    }
+                    log_mel[i] = static_cast<float>(10.0 * std::log10(v));
+                }
+            } else if (whisper_mode) {
                 for (size_t i = 0; i < total; ++i) {
                     double v = static_cast<double>(log_mel[i]);
                     if (v < 1.0e-10) {
@@ -674,7 +705,12 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                     sum += static_cast<double>(fb_row[k]) * static_cast<double>(pwr[k]);
                 }
                 float result;
-                if (whisper_mode) {
+                if (db_mode) {
+                    if (sum < db_floor) {
+                        sum = db_floor;
+                    }
+                    result = static_cast<float>(10.0 * std::log10(sum));
+                } else if (whisper_mode) {
                     if (sum < 1.0e-10) {
                         sum = 1.0e-10;
                     }
@@ -697,6 +733,47 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     std::vector<double>().swap(padded);
     std::vector<float>().swap(padded_f32);
     std::vector<float>().swap(window_f32);
+
+    // ---- 5s. SpeechBrain sentence-mean normalize ----
+    // log_mel already holds 10*log10(max(x, amin)). Top-dB floor over time
+    // AND frequency (SpeechBrain clamps inside Filterbank), then subtract
+    // each mel bin's mean over ALL frames (InputNormalization, norm_type=
+    // "sentence", std_norm=False). No frame is dropped or masked: torch
+    // keeps the center-pad frames. fp64 accumulators, one rounding at
+    // storage.
+    if (db_mode) {
+        const size_t total = static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames);
+        if (cfg_.top_db > 0.0f) {
+            double max_all = -std::numeric_limits<double>::infinity();
+            for (size_t i = 0; i < total; ++i) {
+                const double v = static_cast<double>(log_mel[i]);
+                if (v > max_all) {
+                    max_all = v;
+                }
+            }
+            const double floor_val = max_all - static_cast<double>(cfg_.top_db);
+            for (size_t i = 0; i < total; ++i) {
+                if (static_cast<double>(log_mel[i]) < floor_val) {
+                    log_mel[i] = static_cast<float>(floor_val);
+                }
+            }
+        }
+        for (int m = 0; m < n_mels; ++m) {
+            float * row = log_mel.data() + static_cast<size_t>(m) * n_frames;
+            double  sum = 0.0;
+            for (int t = 0; t < n_frames; ++t) {
+                sum += static_cast<double>(row[t]);
+            }
+            const double mean = sum / static_cast<double>(n_frames);
+            for (int t = 0; t < n_frames; ++t) {
+                row[t] = static_cast<float>(static_cast<double>(row[t]) - mean);
+            }
+        }
+        out_mel      = std::move(log_mel);
+        out_n_mels   = n_mels;
+        out_n_frames = n_frames;
+        return TRANSCRIBE_OK;
+    }
 
     // ---- 5n. No-op normalize (NeMo "NA"/none) ----
     // Emit raw log-mel as-is: streaming Conformer variants (e.g.
