@@ -1,11 +1,15 @@
 # Canary-Qwen 2.5B
 
-NVIDIA's [`nvidia/canary-qwen-2.5b`](https://huggingface.co/nvidia/canary-qwen-2.5b)
-ported to transcribe.cpp. A NeMo SALM (Speech-Augmented Language Model):
-a 32-layer FastConformer audio encoder (`d_model=1024`, 16 heads) feeds
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-qwen-2.5b`](https://huggingface.co/nvidia/canary-qwen-2.5b) at [`b1469e1`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1).
+
+Offline English speech-to-text. NeMo SALM (Speech-Augmented Language
+Model): a FastConformer audio encoder (32 layers, `d_model=1024`) feeds
 audio embeddings into a Qwen3-1.7B causal LM (28 layers,
-`hidden_size=2048`, `intermediate_size=6144`) via audio-token injection
-at a sentinel position in the prompt.
+`hidden_size=2048`) via audio-token injection at a sentinel position in
+the prompt. English only. Takes a 16 kHz mono WAV and produces a
+transcript via greedy decoding.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -17,9 +21,9 @@ implicitly when the audio supports it).
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-qwen-2.5b)
 for training data, intended use, and upstream evaluation.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`b1469e1`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1bba1cfe140205529c79c434ca47180960),
-pinned 2026-05-15.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`b1469e1`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1), pinned 2026-05-15. Validated against the NeMo SALM 2.7.3 reference at transcribe.cpp commit [`6f6c699`](https://github.com/handy-computer/transcribe.cpp/tree/6f6c699) on 2026-05-16.
+<!-- /catalog -->
 
 ## Input limits
 
@@ -32,25 +36,40 @@ exact per-session value. See the [input-length contract](../input-limits.md).
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [canary-qwen-2.5b-BF16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-BF16.gguf)     | 4.73 GB | 1.63% |
-| F16    | [canary-qwen-2.5b-F16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-F16.gguf)       | 4.73 GB | 1.63% |
-| Q8_0   | [canary-qwen-2.5b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q8_0.gguf)     | 2.61 GB | 1.63% |
-| Q6_K   | [canary-qwen-2.5b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q6_K.gguf)     | 2.06 GB | 1.63% |
-| Q5_K_M | [canary-qwen-2.5b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q5_K_M.gguf) | 1.85 GB | 1.63% |
-| Q4_K_M | [canary-qwen-2.5b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q4_K_M.gguf) | 1.62 GB | 1.63% |
+| BF16         | [canary-qwen-2.5b-BF16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-BF16.gguf) | 5.08 GB | 1.63% |
+| F16          | [canary-qwen-2.5b-F16.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-F16.gguf) | 5.08 GB | 1.63% |
+| Q8_0         | [canary-qwen-2.5b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q8_0.gguf) | 2.80 GB | 1.63% |
+| Q6_K         | [canary-qwen-2.5b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q6_K.gguf) | 2.21 GB | 1.63% |
+| Q5_K_M       | [canary-qwen-2.5b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q5_K_M.gguf) | 1.98 GB | 1.63% |
+| Q4_K_M       | [canary-qwen-2.5b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-qwen-2.5b-gguf/resolve/main/canary-qwen-2.5b-Q4_K_M.gguf) | 1.74 GB | 1.63% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
-with the Whisper-style English text normalizer and jiwer 3.x. The
-same-machine NeMo SALM reference run (CPU torch, dither=0.0, greedy
-`model.generate`) lands at **1.61%** with 95% bootstrap CI [1.47%,
-1.75%]; NVIDIA's published number is 1.60% (within the same CI). All six
-GGUF presets land at exactly 1.63% (`+0.02pp` over our same-machine REF
-run). The remaining `+0.02pp` C++ vs REF gap is BF16 weight-precision
-cascade noise: of 2620 utterances, only 21 (0.8%) differ post-normalizer,
-all classic small-margin token flips (homophones, word-boundary flips,
-function-word substitutions).
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Scored with the Whisper-style English text normalizer and jiwer 3.x on an Apple M4.
+The same-machine NeMo SALM reference run (CPU torch, dither=0.0, greedy
+`model.generate`) lands at **1.61%** with 95% bootstrap CI [1.47%, 1.75%]: `0.01`
+above NVIDIA's published 1.60% but well within statistical noise. All six GGUF
+presets land at exactly 1.63% (`+0.02` over our reference run, same CI band).
+Investigation of the worst per-utterance differences shows scattered token-level
+noise consistent with BF16 weight precision (homophones, word-boundary flips,
+function-word substitutions). Reproduce with `scripts/wer/run.py` +
+`scripts/wer/score.py`.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 3.58% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -78,59 +97,51 @@ CLI flags:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 243.9 ms (45.1×) | 232.4 ms (47.3×) |
-| Metal   | dots (35.3s) |   1.02 s (34.5×) | 911.7 ms (38.8×) |
-| CPU     | jfk (11.0s)  |    1.42 s (7.7×) |   1.06 s (10.4×) |
-| CPU     | dots (35.3s) |    5.14 s (6.9×) |    4.00 s (8.8×) |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `1b19945`.
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Metal   | jfk (11.0s)  | 228.6 ms (48.11×) | 204.7 ms (53.73×) |
+| Metal   | dots (35.3s) | 961.4 ms (36.75×) | 830.8 ms (42.53×) |
+| CPU     | jfk (11.0s)  |   1.02 s (10.83×) |   1.04 s (10.55×) |
+| CPU     | dots (35.3s) |    3.83 s (9.22×) |    3.81 s (9.27×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Vulkan  | jfk (11.0s)  |   2.41 s (4.6×)  |   2.11 s (5.2×)  |
-| Vulkan  | dots (35.3s) |   9.72 s (3.6×)  |   8.48 s (4.2×)  |
-| CPU     | jfk (11.0s)  |   4.73 s (2.3×)  |   3.43 s (3.2×)  |
-| CPU     | dots (35.3s) |  18.42 s (1.9×)  |  13.51 s (2.6×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora Linux 43, transcribe.cpp `51db32d`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  2.47 s (4.45×) |  2.15 s (5.12×) |
+| Vulkan  | dots (35.3s) | 10.09 s (3.50×) |  8.71 s (4.06×) |
+| CPU     | jfk (11.0s)  |  3.87 s (2.84×) |  3.46 s (3.18×) |
+| CPU     | dots (35.3s) | 16.24 s (2.18×) | 13.87 s (2.55×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models canary-qwen-2.5b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name canary-qwen-2.5b-publication
+uv run scripts/bench/run.py --profile --models canary-qwen-2.5b
 ```
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against NeMo SALM
-(`nemo.collections.speechlm2.SALM` 2.7.3) on `samples/jfk.wav` with the
-strict CPU backend, BF16 weights promoted to F32 at load time. All 16
-checkpointed tensors fall within family tolerance, and the BF16
-transcript matches the reference verbatim
-(`And so my fellow Americans ask not what your country can do for you ask what you can do for your country`).
-Tolerances are pinned in `tests/tolerances/canary_qwen.json` with a
-detailed `_comment` block naming the precision regime, the two
-implementation gotchas (BF16 mel filterbank in NeMo's preprocessor,
-forced F32 promotion of F16 depthwise conv kernels on CPU), and the
-mechanism behind every widened entry. Last validated at commit
-[`6f6c699`](https://github.com/handy-computer/transcribe.cpp/tree/6f6c699).
+transcribe.cpp is validated tensor-by-tensor against NeMo SALM (`nemo.collections.speechlm2.SALM` 2.7.3) on
+`samples/jfk.wav` with the strict CPU backend, BF16 weights promoted to F32 at load time. All 16 checkpointed
+tensors fall within family tolerance, and the BF16 transcript matches the reference verbatim (`And so my
+fellow Americans ask not what your country can do for you ask what you can do for your country`). Tolerances
+are pinned in `tests/tolerances/canary_qwen.json` with a detailed `_comment` block naming the precision
+regime, the two implementation gotchas (BF16 mel filterbank in NeMo's preprocessor, forced F32 promotion of
+F16 depthwise conv kernels on CPU), and the mechanism behind every widened entry.
 
 | Field | Value |
 | --- | --- |
@@ -139,27 +150,6 @@ mechanism behind every widened entry. Last validated at commit
 | Manifest | `tests/golden/canary_qwen/canary-qwen-2.5b.manifest.json` |
 | Tolerances | `tests/tolerances/canary_qwen.json` |
 | Command | `uv run scripts/validate.py all --family canary_qwen --variant canary-qwen-2.5b` |
-
-Selected tensors (observed on CPU, strict backend; see tolerance file
-for budgets):
-
-| Tensor | Shape | Max abs diff | Mean abs diff | Notes |
-| --- | --- | ---: | ---: | --- |
-| `enc.mel.in`         | `[128,1101]`  | `6.724e-01` | `5.242e-05` | NeMo preprocessor's BF16 fb/window matrices vs C++ F32 STFT |
-| `enc.pre_encode.out` | `[138,1024]`  | `2.610e+02` | `5.795e-01` | Output of the conv subsampler; large extreme-bin spikes from the mel difference are absorbed here, then drained by the next LayerNorm |
-| `enc.block.0.out`    | `[138,1024]`  | `1.653e+01` | `2.448e-02` | First FastConformer block |
-| `enc.block.16.out`   | `[138,1024]`  | `2.528e+01` | `7.975e-02` | Mid-encoder |
-| `enc.block.31.out`   | `[138,1024]`  | `7.921e-01` | `1.875e-02` | Final FastConformer block |
-| `enc.final`          | `[1024,138]`  | `7.921e-01` | `1.875e-02` | Encoder output (transposed) |
-| `perception.proj.out`| `[138,2048]`  | `3.520e+00` | `4.314e-02` | Audio→LM width projection |
-| `dec.token_emb`      | `[15,2048]`   | `0.000e+00` | `0.000e+00` | Pure embedding lookup |
-| `dec.audio_injected` | `[152,2048]`  | `3.520e+00` | `3.917e-02` | Audio-tokens scattered into the prompt sequence |
-| `dec.block.0.out`    | `[152,2048]`  | `3.355e+00` | `4.365e-02` | First Qwen3 LM block |
-| `dec.block.14.out`   | `[152,2048]`  | `1.506e+01` | `1.190e-01` | Mid-LM |
-| `dec.block.27.out`   | `[152,2048]`  | `1.112e+02` | `9.333e-01` | Final LM block (accumulated) |
-| `dec.out_before_head`| `[152,2048]`  | `1.566e+01` | `4.152e-02` | Pre-head hidden state |
-| `dec.logits_raw.gen0`| `[151936]`    | `5.226e-01` | `6.571e-02` | Greedy step 0 logits |
-| `dec.logits_raw.gen8`| `[151936]`    | `1.514e+00` | `2.116e-01` | Greedy step 8 logits (mid-generation, exercises KV cache write/read) |
 
 For the full porting writeup including the SALM trace, the
 audio-injection scatter contract, and the BF16-vs-F32 weight precision

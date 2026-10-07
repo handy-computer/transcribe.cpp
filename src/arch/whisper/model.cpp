@@ -19,6 +19,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
+#include "transcribe-prompting.h"
 #include "weights.h"
 #include "whisper.h"
 
@@ -28,6 +29,7 @@
 #include "third_party/miniz/miniz.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -70,14 +72,10 @@ WhisperModel::~WhisperModel() {
 WhisperSession::~WhisperSession() {
     kv_cache.free();
     enc_out.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
+}
+
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+void WhisperSession::on_scratch_released() noexcept {
     compute_ctx_size = 0;
 }
 
@@ -473,7 +471,7 @@ transcribe_status whisper_load(Loader &                             loader,
     // Backend plan.
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "whisper", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "whisper", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
@@ -485,7 +483,7 @@ transcribe_status whisper_load(Loader &                             loader,
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -602,7 +600,7 @@ transcribe_status run_whisper_encoder_on_window(WhisperSession * cc,
     const int64_t t_enc_build_start = ggml_time_us();
     if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: ensure_compute_ctx (encoder) failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams, n_mel_frames,
@@ -621,7 +619,7 @@ transcribe_status run_whisper_encoder_on_window(WhisperSession * cc,
         if (cc->enc_out.tensor == nullptr || cc->enc_out.d_model != d_enc_g || cc->enc_out.T_enc != T_enc_g) {
             if (!enc_out_init(cc->enc_out, cm->plan.primary, d_enc_g, T_enc_g)) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: enc_out_init failed");
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
         }
         ggml_tensor * enc_out_view =
@@ -637,7 +635,7 @@ transcribe_status run_whisper_encoder_on_window(WhisperSession * cc,
                                            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: ggml_backend_sched_new failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
 
         // Apply the caller's CPU thread count once at sched creation; it
@@ -651,7 +649,7 @@ transcribe_status run_whisper_encoder_on_window(WhisperSession * cc,
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "whisper run: ggml_backend_sched_alloc_graph failed "
                 "(encoder)");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload mel.
@@ -663,7 +661,7 @@ transcribe_status run_whisper_encoder_on_window(WhisperSession * cc,
     const int64_t t_enc_compute_start = ggml_time_us();
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: encoder graph compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->perf.enc_compute.add(ggml_time_us() - t_enc_compute_start);
 
@@ -942,6 +940,80 @@ transcribe_status load_mel_from_ref(const char * ref_dir, int n_mels, int n_mel_
     return TRANSCRIBE_OK;
 }
 #endif  // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+
+}  // namespace
+
+namespace {
+
+bool whisper_has_generic_prompt(const transcribe_run_params * params) {
+    return params != nullptr && (params->n_vocabulary > 0 || transcribe::prompting::has_text(params->prompt));
+}
+
+// Token cap on the <|startofprev|> slot: the run extension's
+// max_prev_context_tokens, else half the decoder window minus one (openai).
+int whisper_prev_cap(const transcribe_whisper_run_ext & wp, const WhisperHParams & hp) {
+    return wp.max_prev_context_tokens > 0 ? wp.max_prev_context_tokens : hp.dec_max_target_positions / 2 - 1;
+}
+
+// Transcript prefix ids (openai DecodingOptions.prefix): " " + strip(prefix),
+// plain text only. Empty when the prefix is absent or all whitespace. Shared
+// by whisper_run and whisper_run_validate so the validated length is the one
+// that runs.
+transcribe_status whisper_prefix_ids(const WhisperModel & cm, const char * prefix, std::vector<int32_t> & out) {
+    out.clear();
+    const std::string text = prefix != nullptr ? transcribe::prompting::strip(prefix) : std::string();
+    if (text.empty()) {
+        return TRANSCRIBE_OK;
+    }
+    if (const transcribe_status st = transcribe::prompting::encode_plain(cm.tok, " " + text, out, "prefix");
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const int eos_id = cm.tok.eos_id() >= 0 ? cm.tok.eos_id() : 50257;  // as whisper_run
+    for (int32_t id : out) {
+        if (id >= eos_id) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: prefix encodes to special token id %d", id);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+// Generic prompting (transcribe_run_params::vocabulary / prompt) rendered into
+// the <|startofprev|> slot, as text-only ids (the caller prepends the marker).
+// Text is `Glossary: {terms}` (", "-joined), then " " + prompt, tokenized in
+// HF get_prompt_ids form (" " + text.strip()). The slot holds at most
+// `budget` tokens; Whisper natively keeps the LAST tokens, which would drop
+// the highest-priority terms, so overflow is resolved here instead: context
+// is trimmed first (keeping its most recent tokens), then terms are dropped
+// from the end of the list, with one WARN naming what was dropped. Returns
+// INVALID_ARG on control-token literals; an empty `out` means nothing to prime.
+transcribe_status whisper_generic_prompt_ids(const WhisperModel &          cm,
+                                             const transcribe_run_params * params,
+                                             int                           budget,
+                                             int                           eos_id,
+                                             std::vector<int32_t> &        out) {
+    out.clear();
+    std::string ctx = params->prompt != nullptr ? transcribe::prompting::strip(params->prompt) : std::string();
+    if (!ctx.empty()) {
+        ctx = " " + ctx;
+    }
+    transcribe::prompting::FittedPrompt fit;
+    if (const transcribe_status st = transcribe::prompting::fit_terms_and_context(
+            cm.tok, transcribe::prompting::terms(params), { " Glossary: ", ", ", "" }, ctx, budget, "whisper run", fit);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    out = std::move(fit.term_ids);
+    out.insert(out.end(), fit.ctx_ids.begin(), fit.ctx_ids.end());
+    for (int32_t id : out) {
+        if (id >= eos_id) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: prompting text encodes to special token id %d", id);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+    return TRANSCRIBE_OK;
+}
 
 }  // namespace
 
@@ -1258,9 +1330,10 @@ transcribe_status whisper_run(transcribe_session *          session,
     const int  n_mels                 = cm->hparams.enc_num_mel_bins;
     const int  n_mel_frames_per_chunk = cm->hparams.fe_nb_max_frames > 0 ? cm->hparams.fe_nb_max_frames : 3000;
     const int  n_samples_per_chunk    = cm->hparams.fe_n_samples > 0 ? cm->hparams.fe_n_samples : 480000;
-    // Short-form = fits a single 30s window; bypasses the dynamic-stride
-    // machinery. HF's generate() takes a different code path for is_shortform,
-    // so this is a numeric + behavioral parity gate (not just an optimization).
+    // Short-form = fits a single 30s window. Controls PCM padding only (HF's
+    // processor pads short-form PCM to 30s before the mel, long-form does
+    // not); the seek loop below is unified across both forms, matching HF's
+    // generate(), which since 5.x runs one seek loop for every input length.
     const bool is_short_form          = (n_samples <= n_samples_per_chunk);
 
     const int64_t t_mel_start      = ggml_time_us();
@@ -1344,8 +1417,13 @@ transcribe_status whisper_run(transcribe_session *          session,
     if (requested_timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
         return TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS;
     }
-    const bool want_segment_timestamps =
-        requested_timestamps == TRANSCRIBE_TIMESTAMPS_AUTO || requested_timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT;
+    // AUTO resolves to NONE under a transcript prefix: the timestamp rules
+    // restart after the prefix and force an initial timestamp near 0 s while
+    // the prefix's speech is still playing, which derails the continuation.
+    // An explicit SEGMENT request with a prefix is rejected in run_validate.
+    const bool has_prefix              = params != nullptr && transcribe::prompting::has_text(params->prefix);
+    const bool want_segment_timestamps = (requested_timestamps == TRANSCRIBE_TIMESTAMPS_AUTO && !has_prefix) ||
+                                         requested_timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT;
 
     // Multilingual variants emit <|lang|> + <|task|> in the decoder prefix;
     // .en variants have just <|sot|> and no translate/transcribe/language
@@ -1526,8 +1604,7 @@ transcribe_status whisper_run(transcribe_session *          session,
     // text-side only); or initial_prompt string, tokenized as HF's
     // get_prompt_ids form ("<|startofprev|> " + strip) with any special token
     // (id >= eos_id) in the text rejected (tokenization_whisper.py).
-    const int max_prev_cap =
-        wp->max_prev_context_tokens > 0 ? wp->max_prev_context_tokens : (cm->hparams.dec_max_target_positions / 2 - 1);
+    const int            max_prev_cap = whisper_prev_cap(*wp, cm->hparams);
     std::vector<int32_t> prompt_text_ids;
     if (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) {
         // The library prepends <|startofprev|>; a leading prev_sot id from the
@@ -1605,17 +1682,55 @@ transcribe_status whisper_run(transcribe_session *          session,
             }
         }
     }
-    // Cap prompt tokens to max_prev_cap (left-truncate, keep most-recent).
-    if (static_cast<int>(prompt_text_ids.size()) > max_prev_cap) {
-        prompt_text_ids.erase(prompt_text_ids.begin(), prompt_text_ids.end() - max_prev_cap);
+    // Transcript prefix (openai DecodingOptions.prefix), right after the SOT
+    // sequence on the first window only. It sits in the prompt, so the
+    // timestamp rules (which read generated_ids) begin after it and the result
+    // text holds only the continuation; raw_text leads with it.
+    std::vector<int32_t> prefix_ids;
+    if (const transcribe_status st = whisper_prefix_ids(*cm, params != nullptr ? params->prefix : nullptr, prefix_ids);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    all_raw_ids.insert(all_raw_ids.end(), prefix_ids.begin(), prefix_ids.end());
+
+    // Prompt ids capped to `cap` tokens: the extension prompt keeps its most
+    // recent tokens; the generic vocabulary / context prompt, which share the
+    // slot (whisper_run_validate rejects them together), are fitted.
+    const std::vector<int32_t> ext_prompt_ids = std::move(prompt_text_ids);
+    const auto                 capped_prompt  = [&](int cap, std::vector<int32_t> & out) -> transcribe_status {
+        if (whisper_has_generic_prompt(params)) {
+            if (prev_sot_id < 0) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "whisper run: model has no <|startofprev|> token; prompting unavailable");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            return whisper_generic_prompt_ids(*cm, params, cap, eos_id, out);
+        }
+        const size_t keep = std::min(ext_prompt_ids.size(), static_cast<size_t>(std::max(cap, 0)));
+        out.assign(ext_prompt_ids.end() - static_cast<std::ptrdiff_t>(keep), ext_prompt_ids.end());
+        return TRANSCRIBE_OK;
+    };
+    // Later windows get the full slot. The first window shares it with the
+    // prefix, so its prompt + prefix stay within max_prev_cap and the rest of
+    // the decoder window is left for the continuation.
+    if (const transcribe_status st = capped_prompt(max_prev_cap, prompt_text_ids); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    std::vector<int32_t> first_prompt_ids = prompt_text_ids;
+    if (!prefix_ids.empty()) {
+        if (const transcribe_status st =
+                capped_prompt(max_prev_cap - static_cast<int>(prefix_ids.size()), first_prompt_ids);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
     }
 
     // History stored as segment token slices (not one flat vector) because
     // skip_ending_double_timestamps applies per-segment. FIRST_SEGMENT puts the
     // prompt at the head; ALL_SEGMENTS starts empty and re-prepends per chunk.
     std::vector<std::vector<int32_t>> prev_history_segments;
-    if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT && !prompt_text_ids.empty()) {
-        prev_history_segments.push_back(prompt_text_ids);
+    if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT && !first_prompt_ids.empty()) {
+        prev_history_segments.push_back(first_prompt_ids);
     }
 
     // Per-chunk; HF auto-disables when the previous chunk's accepted
@@ -1669,7 +1784,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             ggml_backend_tensor_get(cc->enc_out.tensor, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
 
             if (!new_compute_ctx(16 * 1024 * 1024)) {
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
             DecoderBuild det_db = build_decoder_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams,
                                                               /*seq_len=*/1, T_enc_local, cc->decoder_use_flash);
@@ -1678,7 +1793,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             }
             ggml_backend_sched_reset(cc->sched);
             if (!ggml_backend_sched_alloc_graph(cc->sched, det_db.graph)) {
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
             const int32_t sot = cm->hparams.decoder_start_token_id;
             ggml_backend_tensor_set(det_db.token_ids_in, &sot, 0, sizeof(int32_t));
@@ -1688,7 +1803,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                 ggml_backend_tensor_set(det_db.causal_mask_in, &zero, 0, sizeof(float));
             }
             if (ggml_backend_sched_graph_compute(cc->sched, det_db.graph) != GGML_STATUS_SUCCESS) {
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_BACKEND;
             }
             const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
             ggml_backend_tensor_get(det_db.dumps.logits_raw, last_logits.data(), 0, row_bytes);
@@ -1729,11 +1844,12 @@ transcribe_status whisper_run(transcribe_session *          session,
         //   else: empty.
         // We diverge from HF for FIRST_SEGMENT (the default): prime only the
         // first window, matching whisper.cpp / OpenAI.
-        std::vector<int32_t> prev_tokens;
+        const std::vector<int32_t> & window_prompt = is_first_chunk ? first_prompt_ids : prompt_text_ids;
+        std::vector<int32_t>         prev_tokens;
         if (do_condition_on_prev_tokens && !prev_history_segments.empty() && prev_sot_id >= 0) {
             prev_tokens.push_back(prev_sot_id);
-            if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS && !prompt_text_ids.empty()) {
-                prev_tokens.insert(prev_tokens.end(), prompt_text_ids.begin(), prompt_text_ids.end());
+            if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS && !window_prompt.empty()) {
+                prev_tokens.insert(prev_tokens.end(), window_prompt.begin(), window_prompt.end());
             }
             std::vector<int32_t> hist;
             for (const auto & seg : prev_history_segments) {
@@ -1747,15 +1863,15 @@ transcribe_status whisper_run(transcribe_session *          session,
             }
             const int cap = std::min<int>(static_cast<int>(hist.size()), max_prev_cap);
             prev_tokens.insert(prev_tokens.end(), hist.end() - cap, hist.end());
-        } else if (!prompt_text_ids.empty() && prev_sot_id >= 0 &&
+        } else if (!window_prompt.empty() && prev_sot_id >= 0 &&
                    (is_first_chunk || wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS)) {
             // FIRST_SEGMENT primes the initial prompt on the first window
             prev_tokens.push_back(prev_sot_id);
-            prev_tokens.insert(prev_tokens.end(), prompt_text_ids.begin(), prompt_text_ids.end());
+            prev_tokens.insert(prev_tokens.end(), window_prompt.begin(), window_prompt.end());
         }
 
         // Prefix for this chunk:
-        //   multilingual: prev_tokens + [SOT, lang, task, notimestamps?]
+        //   multilingual: prev_tokens + [SOT, lang, task, notimestamps?] + prefix?
         //   .en:          prev_tokens + [SOT,             notimestamps?]
         // .en vocab has no <|lang|>/<|task|> tokens; emitting them would land
         // on a garbage id.
@@ -1769,6 +1885,9 @@ transcribe_status whisper_run(transcribe_session *          session,
         }
         if (!want_segment_timestamps) {
             prompt_ids.push_back(cm->hparams.no_timestamps_token_id);
+        }
+        if (is_first_chunk) {
+            prompt_ids.insert(prompt_ids.end(), prefix_ids.begin(), prefix_ids.end());
         }
         const int seq_len = static_cast<int>(prompt_ids.size());
 
@@ -1892,7 +2011,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             if (!kv_cache_init(cc->kv_cache, cm->plan.primary, static_cast<int>(n_ctx_decoder), T_enc_local,
                                cm->hparams.dec_d_model, n_layers, kv_type_g)) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: KV cache init failed");
-                return TRANSCRIBE_ERR_BACKEND;
+                return TRANSCRIBE_ERR_OOM;
             }
         }
 
@@ -1904,7 +2023,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             const int64_t t_cross_build_start = ggml_time_us();
             if (!new_compute_ctx(8 * 1024 * 1024)) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: ggml_init for cross_kv failed");
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
             DecoderBuild cross_db = build_cross_kv_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
                                                          cc->enc_out.tensor, T_enc_local);
@@ -1917,7 +2036,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             ggml_backend_sched_reset(cc->sched);
             if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: alloc_graph failed (cross_kv)");
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
             // No tensor_set: cross-KV reads cc->enc_out.tensor via
             // a view inside build_cross_kv_graph, populated by the
@@ -1928,7 +2047,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, cross_db.graph);
                 gs != GGML_STATUS_SUCCESS) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: cross_kv compute failed (%d)", static_cast<int>(gs));
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_BACKEND;
             }
             cc->perf.cross_compute.add(ggml_time_us() - t_cross_compute_start);
             cc->kv_cache.cross_populated = true;
@@ -1962,7 +2081,7 @@ transcribe_status whisper_run(transcribe_session *          session,
             {
                 const int64_t t_prompt_build_start = ggml_time_us();
                 if (!new_compute_ctx(16 * 1024 * 1024)) {
-                    return TRANSCRIBE_ERR_GGUF;
+                    return TRANSCRIBE_ERR_OOM;
                 }
                 const int    kv_pad = kv_pad_self_attn(cm->plan.primary_kind, cc->decoder_use_flash);
                 DecoderBuild db     = build_decoder_graph_kv(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
@@ -1978,7 +2097,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                 ggml_backend_sched_reset(cc->sched);
                 if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: alloc_graph failed (prompt)");
-                    return TRANSCRIBE_ERR_GGUF;
+                    return TRANSCRIBE_ERR_OOM;
                 }
 
                 ggml_backend_tensor_set(db.token_ids_in, prompt_ids.data(), 0, prompt_ids.size() * sizeof(int32_t));
@@ -2023,7 +2142,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                 const int64_t t_prompt_compute_start = ggml_time_us();
                 if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, db.graph);
                     gs != GGML_STATUS_SUCCESS) {
-                    return TRANSCRIBE_ERR_GGUF;
+                    return TRANSCRIBE_ERR_BACKEND;
                 }
                 cc->perf.prompt_compute.add(ggml_time_us() - t_prompt_compute_start);
                 cc->kv_cache.n    = seq_len;
@@ -2153,7 +2272,7 @@ transcribe_status whisper_run(transcribe_session *          session,
 
             if (use_step_graph) {
                 if (!new_compute_ctx(8 * 1024 * 1024)) {
-                    return TRANSCRIBE_ERR_GGUF;
+                    return TRANSCRIBE_ERR_OOM;
                 }
                 sb = build_step_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, max_n_kv, T_enc_local,
                                       cc->decoder_use_flash);
@@ -2164,7 +2283,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                 ggml_backend_sched_reset(cc->sched);
                 if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: sched_alloc_graph failed (step)");
-                    return TRANSCRIBE_ERR_GGUF;
+                    return TRANSCRIBE_ERR_OOM;
                 }
 
                 // Self-attn mask: [0, seq_len) populated by prompt pass
@@ -2225,7 +2344,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                     const int64_t t_step_compute_start = ggml_time_us();
                     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, sb.graph);
                         gs != GGML_STATUS_SUCCESS) {
-                        return TRANSCRIBE_ERR_GGUF;
+                        return TRANSCRIBE_ERR_BACKEND;
                     }
                     cc->perf.step_compute.add(ggml_time_us() - t_step_compute_start);
 
@@ -2239,7 +2358,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                 } else {
                     const int64_t t_step_build_start = ggml_time_us();
                     if (!new_compute_ctx(4 * 1024 * 1024)) {
-                        return TRANSCRIBE_ERR_GGUF;
+                        return TRANSCRIBE_ERR_OOM;
                     }
                     const int    kv_pad = kv_pad_self_attn(cm->plan.primary_kind, cc->decoder_use_flash);
                     DecoderBuild step_db =
@@ -2255,7 +2374,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                     const int64_t t_step_alloc_start = ggml_time_us();
                     ggml_backend_sched_reset(cc->sched);
                     if (!ggml_backend_sched_alloc_graph(cc->sched, step_db.graph)) {
-                        return TRANSCRIBE_ERR_GGUF;
+                        return TRANSCRIBE_ERR_OOM;
                     }
 
                     int32_t tok = next_id;
@@ -2289,7 +2408,7 @@ transcribe_status whisper_run(transcribe_session *          session,
                     const int64_t t_step_compute_start = ggml_time_us();
                     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, step_db.graph);
                         gs != GGML_STATUS_SUCCESS) {
-                        return TRANSCRIBE_ERR_GGUF;
+                        return TRANSCRIBE_ERR_BACKEND;
                     }
                     cc->perf.step_compute.add(ggml_time_us() - t_step_compute_start);
 
@@ -2448,17 +2567,19 @@ transcribe_status whisper_run(transcribe_session *          session,
         all_text_ids.insert(all_text_ids.end(), generated_text_ids.begin(), generated_text_ids.end());
         all_raw_ids.insert(all_raw_ids.end(), generated_ids.begin(), generated_ids.end());
 
-        // Seek advance.
-        //   Short-form: full-chunk advance. PCM is padded to exactly
-        //     n_samples_per_chunk, so the silent tail would hallucinate
-        //     "you you you" if re-entered; single-pass it (matches HF's
-        //     separate is_shortform path).
-        //   Long-form: dynamic advance via segment_offset_frames (last closed
-        //     timestamp pair), guarded against 0-advance infinite loops.
+        // Seek advance. HF (generation_whisper.py, 5.6.1) runs ONE seek loop
+        // for every input length — there is no separate short-form decode
+        // path, and max_frames for a padded short-form window is the full
+        // 3000 frames. Short-form therefore uses the same dynamic advance as
+        // long-form: a decode ending in a lone close-timestamp or with no
+        // timestamp pairs (always the case under <|notimestamps|>) advances
+        // the full window, so well-behaved short-form stays single-pass. Only
+        // a consecutive-timestamp ending (<|t|><|t|>: the model closed a
+        // segment early and the timestamp rules forced a reopen — issue #89)
+        // re-enters the loop at t and decodes the speech after a premature
+        // EOS. Guarded against 0-advance infinite loops.
         //   No-speech fired: declared empty, skip the whole window.
-        if (is_short_form) {
-            seek += seek_num_frames;
-        } else if (no_speech_fired_this_chunk) {
+        if (no_speech_fired_this_chunk) {
             seek += seek_num_frames;
         } else {
             if (segment_offset_frames <= 0) {
@@ -2479,11 +2600,13 @@ transcribe_status whisper_run(transcribe_session *          session,
 // autoregressive DECODE is batched across B utterances in lockstep. The batched
 // fast path covers only the common, parity-exact case and peels everything else
 // to the serial whisper_run():
-//   batched: short-form (<= 30s) at tier 0 (T=0 greedy), TIMESTAMPS_NONE, no
-//            initial_prompt.
-//   serial : long-form, segment-timestamps, T > 0, prompt/prompt_tokens,
-//            invalid inputs, and any utterance whose tier-0 output fails the
-//            fallback thresholds (so the temperature ladder runs exactly).
+//   batched: short-form (<= 30s) single-window decodes (segment timestamps,
+//            the temperature ladder, and initial_prompt run in-batch).
+//   serial : long-form, invalid inputs, device/topology constraints (see the
+//            global gates below), and any utterance whose accepted decode
+//            ends in a consecutive-timestamp pair — the serial seek loop
+//            re-enters at that timestamp (continuation), which the
+//            single-window batched graph cannot do.
 //
 // A clip that passes tier 0 (the common case) is bit-for-bit the serial tier-0
 // result, so batch_parity holds; anything that would diverge runs serially.
@@ -2616,12 +2739,21 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
     const bool           prompt_requested = (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) ||
                                             (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0');
     std::vector<int32_t> prev_tokens;
-    if (prompt_requested) {
+    if (whisper_has_generic_prompt(params)) {
+        std::vector<int32_t> ptext;
+        if (prev_sot_id < 0 ||
+            whisper_generic_prompt_ids(*cm, params, whisper_prev_cap(*wp, hp), eos_id, ptext) != TRANSCRIBE_OK) {
+            return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+        }
+        if (!ptext.empty()) {
+            prev_tokens.push_back(prev_sot_id);
+            prev_tokens.insert(prev_tokens.end(), ptext.begin(), ptext.end());
+        }
+    } else if (prompt_requested) {
         if (prev_sot_id < 0) {
             return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
         }
-        const int max_prev_cap =
-            wp->max_prev_context_tokens > 0 ? wp->max_prev_context_tokens : (hp.dec_max_target_positions / 2 - 1);
+        const int            max_prev_cap = whisper_prev_cap(*wp, hp);
         std::vector<int32_t> ptext;
         if (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) {
             if (wp->prompt_tokens[0] == prev_sot_id) {
@@ -2782,7 +2914,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
             cc->enc_host.resize(enc_hosts[b].size());
             std::memcpy(cc->enc_host.data(), enc_hosts[b].data(), enc_hosts[b].size() * sizeof(float));
             if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) {
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
             DecoderBuild det = build_decoder_prefill_graph(cc->compute_ctx, cm->weights, hp, /*seq_len=*/1, T_enc_local,
                                                            cc->decoder_use_flash);
@@ -2791,7 +2923,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
             }
             ggml_backend_sched_reset(cc->sched);
             if (!ggml_backend_sched_alloc_graph(cc->sched, det.graph)) {
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
             const int32_t sot = hp.decoder_start_token_id;
             ggml_backend_tensor_set(det.token_ids_in, &sot, 0, sizeof(int32_t));
@@ -2801,7 +2933,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
                 ggml_backend_tensor_set(det.causal_mask_in, &zero, 0, sizeof(float));
             }
             if (ggml_backend_sched_graph_compute(cc->sched, det.graph) != GGML_STATUS_SUCCESS) {
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_BACKEND;
             }
             std::vector<float> ll(static_cast<size_t>(vocab_size));
             ggml_backend_tensor_get(det.dumps.logits_raw, ll.data(), 0,
@@ -2895,7 +3027,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
         if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary, max_n_kv, T_enc_max, d_model, n_layer, B,
                                    kv_type_g)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run_batch: kv_cache_init_batched failed");
-            return TRANSCRIBE_ERR_BACKEND;
+            return TRANSCRIBE_ERR_OOM;
         }
     } else {
         ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
@@ -2926,7 +3058,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
     // ---- Batched cross-attention K/V (tier-invariant; computed once). ----
     {
         if (!new_compute_ctx(16 * 1024 * 1024)) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
         DecoderBuild cross = build_cross_kv_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_enc_max, B);
         if (cross.graph == nullptr) {
@@ -2934,7 +3066,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
         std::vector<float> packed(static_cast<size_t>(d_model) * T_enc_max * B, 0.0f);
         for (int b = 0; b < n; ++b) {
@@ -2946,7 +3078,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
         }
         ggml_backend_tensor_set(cross.encoder_out_in, packed.data(), 0, packed.size() * sizeof(float));
         if (ggml_backend_sched_graph_compute(cc->sched, cross.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         cc->kv_cache.cross_populated = true;
     }
@@ -2971,24 +3103,24 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
     }
 
     StepBuildBatched sb{};
-    auto             rebuild_step = [&](int win) -> bool {
+    auto             rebuild_step = [&](int win) -> transcribe_status {
         if (!new_compute_ctx(32 * 1024 * 1024)) {
-            return false;
+            return TRANSCRIBE_ERR_OOM;
         }
         sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache, win, T_enc_max, B,
                                       cc->decoder_use_flash);
         if (sb.graph == nullptr || sb.logits_out == nullptr) {
-            return false;
+            return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-            return false;
+            return TRANSCRIBE_ERR_OOM;
         }
         ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0, cmask.size() * sizeof(ggml_fp16_t));
-        return true;
+        return TRANSCRIBE_OK;
     };
-    if (!rebuild_step(kv_window)) {
-        return TRANSCRIBE_ERR_GGUF;
+    if (const transcribe_status st = rebuild_step(kv_window); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     std::vector<ggml_fp16_t> smask(static_cast<size_t>(kv_window) * B, f16_ninf);
@@ -3007,7 +3139,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
         ggml_backend_tensor_set(sb.kv_idx_in, kvidx_buf.data(), 0, B * sizeof(int64_t));
         ggml_backend_tensor_set(sb.self_mask_in, smask.data(), 0, smask.size() * sizeof(ggml_fp16_t));
         if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         return TRANSCRIBE_OK;
     };
@@ -3015,9 +3147,9 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
         ggml_backend_tensor_get(sb.logits_out, logits_host.data(), 0,
                                 static_cast<size_t>(vocab_size) * B * sizeof(float));
     };
-    auto ensure_window = [&](int posv) -> bool {
+    auto ensure_window = [&](int posv) -> transcribe_status {
         if (posv + 1 <= kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         int win = kv_window;
         while (win < posv + 1 && win < max_n_kv) {
@@ -3027,7 +3159,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
             win = max_n_kv;
         }
         if (win == kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * B, f16_ninf);
         for (int b = 0; b < n; ++b) {
@@ -3113,14 +3245,14 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
             if (cc->poll_abort()) {
                 return TRANSCRIBE_ERR_ABORTED;
             }
-            if (!ensure_window(pos)) {
-                return TRANSCRIBE_ERR_GGUF;
+            if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+                return st;
             }
             for (int b = 0; b < n; ++b) {
                 tok_buf[b] = valid[b] ? prompts[b][pos] : eos_id;
             }
-            if (run_step(pos) != TRANSCRIBE_OK) {
-                return TRANSCRIBE_ERR_GGUF;
+            if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+                return st;
             }
             if (ti == 0 && pos == sot_index && no_speech_token_id >= 0 &&
                 no_speech_token_id < static_cast<int>(vocab_size)) {
@@ -3183,14 +3315,14 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
             if (all_done || pos + 1 > max_n_kv) {
                 break;
             }
-            if (!ensure_window(pos)) {
-                return TRANSCRIBE_ERR_GGUF;
+            if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+                return st;
             }
             for (int b = 0; b < n; ++b) {
                 tok_buf[b] = fin[b] ? eos_id : next_tok[b];
             }
-            if (run_step(pos) != TRANSCRIBE_OK) {
-                return TRANSCRIBE_ERR_GGUF;
+            if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+                return st;
             }
             read_logits();
             for (int b = 0; b < n; ++b) {
@@ -3229,14 +3361,25 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
         return s.substr(a, b - a);
     };
     auto finalize = [&](int b, const std::vector<int32_t> & g, const std::vector<int32_t> & gt) {
+        // Continuation peel: a decode that ends in a consecutive-timestamp
+        // pair re-enters the serial seek loop at that timestamp (HF's unified
+        // seek loop; the short-form advance matches long-form). The
+        // single-window batched graph cannot continue, so peel the utterance
+        // to the serial fallback below for the exact multi-window result.
+        // retrieve_segment's offset logic is mode-agnostic (HF runs it for
+        // return_timestamps=False too), so check both timestamp modes.
+        WhisperSegmentResult sr = whisper_retrieve_segment(g, cm->tok, /*time_offset_ms=*/0, seek_num_frames, want_ts,
+                                                           timestamp_begin, vocab_size);
+        if (sr.segment_offset_frames > 0 && sr.segment_offset_frames < seek_num_frames) {
+            needs_serial[b]  = 1;
+            accepted_done[b] = 1;
+            return;
+        }
         transcribe_session::ResultSet rs;
         std::vector<int>              tids(gt.begin(), gt.end());
         std::string                   text =
             tids.empty() ? std::string() : trim_ws(cm->tok.decode(tids.data(), static_cast<int>(tids.size())));
         if (want_ts) {
-            WhisperSegmentResult sr =
-                whisper_retrieve_segment(g, cm->tok, /*time_offset_ms=*/0, seek_num_frames,
-                                         /*want_segment_timestamps=*/true, timestamp_begin, vocab_size);
             rs.segments    = std::move(sr.segments);
             rs.result_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         } else {
@@ -3380,9 +3523,48 @@ static bool whisper_accepts_ext_kind(const transcribe_model * model, transcribe_
 // the snapshot is cleared — an accepted gap, since run() is one-shot with no
 // accumulating transcript to protect.
 static transcribe_status whisper_run_validate(const transcribe_session * ctx, const transcribe_run_params * params) {
-    (void) ctx;
-    return transcribe_ext_check(params != nullptr ? params->family : nullptr, TRANSCRIBE_EXT_KIND_WHISPER_RUN,
-                                sizeof(struct transcribe_whisper_run_ext));
+    if (const transcribe_status st =
+            transcribe_ext_check(params != nullptr ? params->family : nullptr, TRANSCRIBE_EXT_KIND_WHISPER_RUN,
+                                 sizeof(struct transcribe_whisper_run_ext));
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    // Transcript prefix: with explicit SEGMENT timestamps the timestamp rules
+    // restart after the prefix and force an initial timestamp while the
+    // prefix's speech is still playing, which in practice ends the decode
+    // (AUTO resolves to NONE instead; see whisper_run). And like openai, the
+    // prefix may take at most half the decoder window.
+    if (params != nullptr && transcribe::prompting::has_text(params->prefix)) {
+        if (params->timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "whisper run: a transcript prefix does not compose with segment timestamps; use NONE or AUTO");
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        const auto *         cm = static_cast<const WhisperModel *>(ctx->model);
+        std::vector<int32_t> ids;
+        if (const transcribe_status st = whisper_prefix_ids(*cm, params->prefix, ids); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        const int limit = cm->hparams.dec_max_target_positions / 2 - 1;
+        if (static_cast<int>(ids.size()) > limit) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: transcript prefix is %zu tokens; the limit is %d",
+                    ids.size(), limit);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+    // The generic prompting fields and the extension's own prompt fill the
+    // same <|startofprev|> slot; there is no documented way to merge them.
+    if (whisper_has_generic_prompt(params) && params->family != nullptr) {
+        const auto * wp = reinterpret_cast<const transcribe_whisper_run_ext *>(params->family);
+        if ((wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) ||
+            (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0')) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "whisper run: generic vocabulary/prompt cannot be combined with the whisper extension's "
+                    "initial_prompt/prompt_tokens");
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+    return TRANSCRIBE_OK;
 }
 
 }  // namespace

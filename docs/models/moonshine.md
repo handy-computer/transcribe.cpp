@@ -16,13 +16,12 @@ see the family doc at
 
 ## Choosing a variant
 
-- **Smallest footprint, near-realtime CPU.** `moonshine-tiny` (27M
-  params) at Q8_0 is 34 MB and decodes well above realtime on commodity
-  hardware. WER is on par with `whisper-tiny.en` while running on raw
-  audio (no mel frontend in the load path).
-- **Higher accuracy, still small.** `moonshine-base` (61M params) at
-  Q8_0 is 74 MB and lands inside `whisper-small.en` accuracy territory
-  for English audio.
+- **Smallest footprint, near-realtime CPU.** `moonshine-tiny` decodes
+  well above realtime on commodity hardware. WER is on par with
+  `whisper-tiny.en` while running on raw audio (no mel frontend in the
+  load path).
+- **Higher accuracy, still small.** `moonshine-base` lands inside
+  `whisper-small.en` accuracy territory for English audio.
 - **Streaming workloads.** Moonshine is **not** streaming-first — the
   encoder is global, the decoder runs on the whole utterance. If you
   need chunked / real-time decoding, see
@@ -49,10 +48,12 @@ to Q8_0 storage and would be near-duplicates.
 
 ### English
 
-| Variant | Params | Q8_0 size | WER (LibriSpeech test-clean) | Doc |
-| --- | ---: | ---: | ---: | --- |
-| `moonshine-tiny` |  27M | 34 MB | 4.60% | [moonshine-tiny.md](moonshine-tiny.md) |
-| `moonshine-base` |  61M | 74 MB | 3.26% | [moonshine-base.md](moonshine-base.md) |
+<!-- catalog:family variants=moonshine-tiny,moonshine-base -->
+| Variant          | Params | Languages | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `moonshine-tiny` |    27M | en        |     35 MB | LibriSpeech test-clean (WER) | 4.60% | -            | [moonshine-tiny.md](moonshine-tiny.md) |
+| `moonshine-base` |    62M | en        |     77 MB | LibriSpeech test-clean (WER) | 3.26% | -            | [moonshine-base.md](moonshine-base.md) |
+<!-- /catalog -->
 
 ### Language-specific (Useful Sensors fine-tunes)
 
@@ -62,25 +63,48 @@ because Useful Sensors does not publish per-language WER/CER for these
 variants. See each repo's `README.md` on Hugging Face for the full
 F32 / F16 / Q8_0 table and the reference baseline.
 
-| Variant | Lang | Params | Q8_0 size | Metric (FLEURS test) | Q8_0 | Repo |
-| --- | --- | ---: | ---: | --- | ---: | --- |
-| `moonshine-tiny-vi` | Vietnamese (vi) | 27M | 34 MB | WER | 13.16% | [handy-computer/moonshine-tiny-vi-gguf](https://huggingface.co/handy-computer/moonshine-tiny-vi-gguf) |
-| `moonshine-tiny-uk` | Ukrainian (uk)  | 27M | 34 MB | WER | 18.89% | [handy-computer/moonshine-tiny-uk-gguf](https://huggingface.co/handy-computer/moonshine-tiny-uk-gguf) |
-| `moonshine-tiny-zh` | Mandarin (zh)   | 27M | 34 MB | CER | 13.78% | [handy-computer/moonshine-tiny-zh-gguf](https://huggingface.co/handy-computer/moonshine-tiny-zh-gguf) |
-| `moonshine-tiny-ko` | Korean (ko)     | 27M | 34 MB | CER |  8.98% | [handy-computer/moonshine-tiny-ko-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ko-gguf) |
-| `moonshine-tiny-ar` | Arabic (ar)     | 27M | 34 MB | WER | 26.79% | [handy-computer/moonshine-tiny-ar-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ar-gguf) |
-| `moonshine-tiny-ja` | Japanese (ja)   | 27M | 34 MB | CER | 13.36% | [handy-computer/moonshine-tiny-ja-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ja-gguf) |
-| `moonshine-base-vi` | Vietnamese (vi) | 61M | 74 MB | WER |  9.79% | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
-| `moonshine-base-uk` | Ukrainian (uk)  | 61M | 74 MB | WER | 14.39% | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
-| `moonshine-base-zh` | Mandarin (zh)   | 61M | 74 MB | CER | 17.00% | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
-| `moonshine-base-ko` | Korean (ko)     | 61M | 74 MB | CER |  8.13% | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
-| `moonshine-base-ar` | Arabic (ar)     | 61M | 74 MB | WER | 24.50% | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
-| `moonshine-base-ja` | Japanese (ja)   | 61M | 74 MB | CER | 10.53% | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
+<!-- catalog:family variants=moonshine-tiny-vi,moonshine-tiny-uk,moonshine-tiny-zh,moonshine-tiny-ko,moonshine-tiny-ar,moonshine-tiny-ja,moonshine-base-vi,moonshine-base-uk,moonshine-base-zh,moonshine-base-ko,moonshine-base-ar,moonshine-base-ja -->
+| Variant             | Params | Languages | Q8_0 size | Benchmark       |   Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `moonshine-tiny-vi` |    27M | vi        |     35 MB | FLEURS vi (WER) | 13.37% | -            | [handy-computer/moonshine-tiny-vi-gguf](https://huggingface.co/handy-computer/moonshine-tiny-vi-gguf) |
+| `moonshine-tiny-uk` |    27M | uk        |     35 MB | FLEURS uk (WER) | 18.76% | -            | [handy-computer/moonshine-tiny-uk-gguf](https://huggingface.co/handy-computer/moonshine-tiny-uk-gguf) |
+| `moonshine-tiny-zh` |    27M | zh        |     35 MB | FLEURS zh (CER) | 13.88% | -            | [handy-computer/moonshine-tiny-zh-gguf](https://huggingface.co/handy-computer/moonshine-tiny-zh-gguf) |
+| `moonshine-tiny-ko` |    27M | ko        |     35 MB | FLEURS ko (CER) |  9.00% | -            | [handy-computer/moonshine-tiny-ko-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ko-gguf) |
+| `moonshine-tiny-ar` |    27M | ar        |     35 MB | FLEURS ar (WER) | 26.70% | -            | [handy-computer/moonshine-tiny-ar-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ar-gguf) |
+| `moonshine-tiny-ja` |    27M | ja        |     35 MB | FLEURS ja (CER) | 13.44% | -            | [handy-computer/moonshine-tiny-ja-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ja-gguf) |
+| `moonshine-base-vi` |    62M | vi        |     77 MB | FLEURS vi (WER) |  9.96% | -            | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
+| `moonshine-base-uk` |    62M | uk        |     77 MB | FLEURS uk (WER) | 14.38% | -            | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
+| `moonshine-base-zh` |    62M | zh        |     77 MB | FLEURS zh (CER) | 17.79% | -            | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
+| `moonshine-base-ko` |    62M | ko        |     77 MB | FLEURS ko (CER) |  8.12% | -            | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
+| `moonshine-base-ar` |    62M | ar        |     77 MB | FLEURS ar (WER) | 24.62% | -            | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
+| `moonshine-base-ja` |    62M | ja        |     77 MB | FLEURS ja (CER) | 11.11% | -            | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant repo's `README.md` has direct download links and the
 full F32 / F16 / Q8_0 measurement table.
+
+## Performance
+
+The language-specific checkpoints have exactly the same architecture and tensor
+shapes as their corresponding English checkpoint; only the trained weight
+values differ. They therefore inherit the English checkpoint's per-quant speed
+measurements rather than claiming separate benchmark runs:
+
+- every `moonshine-tiny-{ar,ja,ko,uk,vi,zh}` row is measured on
+  `moonshine-tiny`;
+- every `moonshine-base-{ar,ja,ko,uk,vi,zh}` row is measured on
+  `moonshine-base`.
+
+These are the published Q8_0 averages; the per-sample latency and xRT tables are
+in [moonshine-tiny.md](moonshine-tiny.md#performance) and
+[moonshine-base.md](moonshine-base.md#performance).
+
+| Size | Apple M4 Max Metal | Apple M4 Max CPU | Ryzen 4750U Vulkan | Ryzen 4750U CPU |
+| --- | ---: | ---: | ---: | ---: |
+| tiny and tiny language fine-tunes | 127x | 153.5x | 56x | 45.5x |
+| base and base language fine-tunes | 79.5x | 80.5x | 34.5x | 22x |
 
 ## Input limits
 

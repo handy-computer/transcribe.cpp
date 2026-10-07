@@ -28,6 +28,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-decode-budget.h"
 #include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -35,6 +36,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-repetition-guard.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -60,14 +62,6 @@ static_assert(std::is_base_of_v<transcribe_session, CanaryQwenSession>);
 CanaryQwenSession::~CanaryQwenSession() {
     kv_cache.free();
     kv_cache_batch.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 CanaryQwenModel::~CanaryQwenModel() {
@@ -124,9 +118,8 @@ constexpr float      kBnEps              = 1e-5f;
 // TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that fills the generation budget
 // before end-of-stream is flagged via transcribe_was_truncated().
 
-// Per-run generation budget. Keep in sync with the single-utterance and
-// batched step loops below.
-constexpr int k_max_new = 256;
+// Generation reserve: what the input gate keeps free, and the decode-budget floor.
+constexpr int k_gen_reserve = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum
 // (decoder.max_position_embeddings, e.g. 40960), optionally lowered — never
@@ -156,7 +149,7 @@ int64_t canary_qwen_max_audio_ms(const CanaryQwenHParams & hp) {
     // counts; ~14 for canary_qwen). Advisory headroom, generous enough to
     // cover small template drift.
     constexpr int k_prompt_overhead = 32;
-    const int     max_audio_tokens  = hp.dec_max_position - k_prompt_overhead - k_max_new;
+    const int     max_audio_tokens  = hp.dec_max_position - k_prompt_overhead - k_gen_reserve;
     if (max_audio_tokens <= 0) {
         return 0;
     }
@@ -254,7 +247,7 @@ transcribe_status fuse_batch_norm(CanaryQwenModel & m) {
     ggml_init_params params   = { ctx_size, nullptr, true };
     m.bn_fused_ctx            = ggml_init(params);
     if (m.bn_fused_ctx == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     for (size_t i = 0; i < n_blocks; ++i) {
@@ -265,7 +258,7 @@ transcribe_status fuse_batch_norm(CanaryQwenModel & m) {
 
     m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(m.bn_fused_ctx, m.plan.scheduler_list.back());
     if (m.bn_fused_buffer == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     std::vector<float> bn_w(d), bn_b(d), rm(d), rv(d);
@@ -329,7 +322,7 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
     ggml_init_params init_params = { ctx_size, nullptr, true };
     m.conv_pw_f32_ctx            = ggml_init(init_params);
     if (m.conv_pw_f32_ctx == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     std::vector<ggml_tensor *> replacements;
@@ -339,7 +332,7 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
         if (r == nullptr) {
             ggml_free(m.conv_pw_f32_ctx);
             m.conv_pw_f32_ctx = nullptr;
-            return TRANSCRIBE_ERR_BACKEND;
+            return TRANSCRIBE_ERR_OOM;
         }
         ggml_set_name(r, s.src->name);
         replacements.push_back(r);
@@ -350,7 +343,7 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen: conv F16->F32 promotion buffer alloc failed");
         ggml_free(m.conv_pw_f32_ctx);
         m.conv_pw_f32_ctx = nullptr;
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_buffer_set_usage(m.conv_pw_f32_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
@@ -455,7 +448,7 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
     ggml_init_params init_params = { ctx_size, nullptr, true };
     m.linear_f32_ctx             = ggml_init(init_params);
     if (m.linear_f32_ctx == nullptr) {
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     std::vector<ggml_tensor *> replacements;
@@ -465,7 +458,7 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
         if (r == nullptr) {
             ggml_free(m.linear_f32_ctx);
             m.linear_f32_ctx = nullptr;
-            return TRANSCRIBE_ERR_BACKEND;
+            return TRANSCRIBE_ERR_OOM;
         }
         ggml_set_name(r, s.src->name);
         replacements.push_back(r);
@@ -476,7 +469,7 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen: BF16→F32 linear promotion buffer alloc failed");
         ggml_free(m.linear_f32_ctx);
         m.linear_f32_ctx = nullptr;
-        return TRANSCRIBE_ERR_BACKEND;
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_buffer_set_usage(m.linear_f32_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
@@ -562,7 +555,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         m->limits.has_context_cap    = true;
         m->limits.model_max_ctx      = m->hparams.dec_max_position;
         m->limits.prompt_overhead    = 32;
-        m->limits.gen_reserve        = k_max_new;
+        m->limits.gen_reserve        = k_gen_reserve;
         // audio_tokens ≈ mel_frames / subsampling_factor ;
         //   mel_frames = ms*sr/(hop*1000)
         m->limits.ms_per_audio_token = static_cast<double>(m->hparams.enc_subsampling_factor) *
@@ -645,7 +638,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     // Backend plan + alloc + stream tensor data.
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0, "canary_qwen",
+    if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->device : nullptr, "canary_qwen",
                                              m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
@@ -658,7 +651,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -688,10 +681,12 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({ b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w });
         }
-        if (!transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
-                                                 entries, m->packed_gate_up, "canary_qwen")) {
+        if (const transcribe_status st =
+                transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
+                                                    entries, m->packed_gate_up, "canary_qwen");
+            st != TRANSCRIBE_OK) {
             m->packed_gate_up.free();
-            return TRANSCRIBE_ERR_GGUF;
+            return st;
         }
     }
 
@@ -823,7 +818,7 @@ transcribe_status run(transcribe_session *          context,
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen run: ggml_init failed (encoder)");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -839,7 +834,7 @@ transcribe_status run(transcribe_session *          context,
                                            /*op_offload=*/true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen run: ggml_backend_sched_new failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
@@ -873,7 +868,7 @@ transcribe_status run(transcribe_session *          context,
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen run: encoder compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->t_encode_us = ggml_time_us() - t_enc_start;
 
@@ -918,22 +913,25 @@ transcribe_status run(transcribe_session *          context,
     // Input-length gate: audio + prompt + generation must fit the decoder
     // context window. Reject an over-length clip here, before prefill/decode.
     const int ceiling = canary_qwen_context_ceiling(cc->n_ctx, hp);
-    if (T_prompt + k_max_new > ceiling) {
+    if (T_prompt + k_gen_reserve > ceiling) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen run: input too long — %d audio + %d prompt tokens "
                             "leave no room for output within the %d-token context (need %d). "
                             "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
                             "split it into segments.",
-                            T_enc, prefix_len + suffix_len, ceiling, T_prompt + k_max_new);
+                            T_enc, prefix_len + suffix_len, ceiling, T_prompt + k_gen_reserve);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
+    const int max_new = transcribe::pick_decode_budget(
+        transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token), k_gen_reserve, T_prompt, ceiling);
+
     // KV cache init (grow-to-fit, clamped to the context ceiling). Size to
-    // hold prompt + generation budget, rounded up to a power of two (the step
+    // hold prompt + decode budget, rounded up to a power of two (the step
     // graph's flash-attn path wants pow2 attention width). A pre-allocated
     // smaller cache is freed and re-allocated.
     int want_n_ctx = 1024;
-    while (want_n_ctx < T_prompt + k_max_new) {
+    while (want_n_ctx < T_prompt + max_new) {
         want_n_ctx *= 2;
     }
     if (want_n_ctx > ceiling) {
@@ -1033,7 +1031,7 @@ transcribe_status run(transcribe_session *          context,
         const int64_t t0 = ggml_time_us();
         if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen run: prefill compute failed (%d)", static_cast<int>(gs));
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         t_prefill_compute_us = ggml_time_us() - t0;
         t_prefill_us         = t_prefill_compute_us;
@@ -1081,7 +1079,6 @@ transcribe_status run(transcribe_session *          context,
 
     // Step loop.
     const int32_t eos_id   = hp.eos_token_id;
-    const int     max_new  = k_max_new;
     int           cur_past = T_prompt;
 
     int max_n_kv = 1024;
@@ -1160,6 +1157,7 @@ transcribe_status run(transcribe_session *          context,
         per_step_compute_us.reserve(64);
     }
 
+    bool repeating = false;
     while (next_tok != eos_id && static_cast<int32_t>(generated_ids.size()) < max_new && cur_past + 1 <= max_n_kv) {
         const int64_t t_in0 = profile_decode ? ggml_time_us() : 0;
         ggml_backend_tensor_set(sb.input_id_in, &next_tok, 0, sizeof(int32_t));
@@ -1181,7 +1179,7 @@ transcribe_status run(transcribe_session *          context,
         const int64_t t_c0 = profile_decode ? ggml_time_us() : 0;
         if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, sb.graph); gs != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen run: step compute failed (%d)", static_cast<int>(gs));
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         if (profile_decode) {
             const int64_t dt = ggml_time_us() - t_c0;
@@ -1204,17 +1202,24 @@ transcribe_status run(transcribe_session *          context,
 
         cur_past += 1;
         n_steps += 1;
+        if (next_tok != eos_id && transcribe::stop_on_repetition(generated_ids, "canary_qwen run")) {
+            cc->mark_repetition_stop();
+            repeating = true;
+            break;
+        }
     }
 
     // Decode stopped at EOS (complete) or the generation budget / context width
-    // (truncated). Surface the latter via transcribe_was_truncated() + WARN.
-    if (next_tok != eos_id) {
+    // (truncated). Surface the latter via transcribe_was_truncated() + WARN; a
+    // repetition stop has already done both.
+    if (!repeating && next_tok != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                             "canary_qwen run: output truncated at %d tokens — decode reached "
                             "the generation budget before end-of-stream; the transcript may "
                             "be incomplete.",
                             static_cast<int>(generated_ids.size()));
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "canary_qwen run");
     }
 
     if (profile_decode) {
@@ -1268,7 +1273,7 @@ transcribe_status run(transcribe_session *          context,
 
     // A truncated decode returns OUTPUT_TRUNCATED; the partial transcript above
     // stays readable (like an aborted run).
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 }  // namespace
@@ -1293,7 +1298,7 @@ transcribe_status reset_ctx(CanaryQwenSession * cc, int mb) {
     ip.mem_buffer   = nullptr;
     ip.no_alloc     = true;
     cc->compute_ctx = ggml_init(ip);
-    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_GGUF;
+    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_OOM;
 }
 
 // Conformer encoder (+ perception) for one utterance from a PRECOMPUTED mel
@@ -1311,7 +1316,7 @@ transcribe_status encode_one(CanaryQwenSession *        cc,
     }
 
     if (reset_ctx(cc, 32) != TRANSCRIBE_OK) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, mel_n_frames,
                                           /*kv_type=*/GGML_TYPE_COUNT, cc->encoder_use_flash, cm->backend.c_str());
@@ -1323,12 +1328,12 @@ transcribe_status encode_one(CanaryQwenSession *        cc,
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
                                            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
         if (cc->sched == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     ggml_backend_tensor_set(eb.mel_in, mel_buf.data(), 0, mel_buf.size() * sizeof(float));
@@ -1343,7 +1348,7 @@ transcribe_status encode_one(CanaryQwenSession *        cc,
 
     const int64_t t_enc0 = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     enc_us += ggml_time_us() - t_enc0;
 
@@ -1359,21 +1364,8 @@ transcribe_status run_batch_serial(CanaryQwenSession *           cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 }  // namespace
@@ -1456,13 +1448,13 @@ transcribe_status run_batch(transcribe_session *          session,
 
         // Input-length gate (same as single-shot run()); reject this utterance,
         // the rest of the batch still runs.
-        if (T_prompt[b] + k_max_new > ceiling) {
+        if (T_prompt[b] + k_gen_reserve > ceiling) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "canary_qwen run_batch: utterance %d input too long — %d audio "
                                 "+ %d prompt tokens leave no room for output within the "
                                 "%d-token context (need %d). Shorten the audio (see "
                                 "transcribe_capabilities.max_audio_ms) or split it.",
-                                b, T_enc[b], T_prompt[b] - T_enc[b], ceiling, T_prompt[b] + k_max_new);
+                                b, T_enc[b], T_prompt[b] - T_enc[b], ceiling, T_prompt[b] + k_gen_reserve);
             fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
             continue;
         }
@@ -1484,9 +1476,11 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         return TRANSCRIBE_OK;
     }
-    T_enc_max          = std::max(1, T_enc_max);
-    const int max_new  = k_max_new;
-    int       max_n_kv = 1024;
+    T_enc_max = std::max(1, T_enc_max);
+    const int max_new =
+        transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(T_enc_max, cm->limits.ms_per_audio_token),
+                                       k_gen_reserve, max_T_prompt, ceiling);
+    int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) {
         max_n_kv *= 2;
     }
@@ -1521,7 +1515,7 @@ transcribe_status run_batch(transcribe_session *          session,
     std::vector<std::vector<int32_t>> generated(n);
     {
         if (reset_ctx(cc, 32) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
         PrefillBuildBatched pb = build_prefill_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
                                                              max_T_prompt, T_enc_max, n, cc->decoder_use_flash);
@@ -1530,7 +1524,7 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_OOM;
         }
 
         const int            hidden = hp.dec_hidden;
@@ -1587,7 +1581,7 @@ transcribe_status run_batch(transcribe_session *          session,
         ggml_backend_tensor_set(pb.last_idx_in, lidx.data(), 0, lidx.size() * sizeof(int32_t));
         apply_thread_policy(cc);
         if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         std::vector<int32_t> amax(n, 0);
         ggml_backend_tensor_get(pb.out, amax.data(), 0, amax.size() * sizeof(int32_t));
@@ -1605,7 +1599,7 @@ transcribe_status run_batch(transcribe_session *          session,
     const int32_t eos_id = cm->hparams.eos_token_id;
 
     if (reset_ctx(cc, 16) != TRANSCRIBE_OK) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     StepBuildBatched sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch, max_n_kv, n,
                                                    cc->decoder_use_flash);
@@ -1614,7 +1608,7 @@ transcribe_status run_batch(transcribe_session *          session,
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     transcribe::causal_lm::StepBatchedIO io{};
@@ -1668,7 +1662,7 @@ transcribe_status run_batch(transcribe_session *          session,
         // a TRANSCRIBE_OK status, never a worse one.
         if (b < static_cast<int>(truncated.size()) && truncated[b] && rs.status == TRANSCRIBE_OK) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;

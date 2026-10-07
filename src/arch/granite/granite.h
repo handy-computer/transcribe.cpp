@@ -104,9 +104,6 @@ struct GraniteModel final : public transcribe_model {
 };
 
 struct GraniteSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     // Audio encoder output (post-projector) buffered between encode and
     // decode. Each row is one audio token in LM hidden space (2048).
     std::vector<float> mel_buf;

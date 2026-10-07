@@ -126,14 +126,66 @@ function tryPlatformPackage(): Resolved | null {
     }
     // A contract mismatch is fatal, not a fall-through.
     const contract = validateContract(dir, provider);
+    const libraryPath = path.join(dir, LIB_NAME);
+    if (!fs.existsSync(libraryPath)) {
+      throw new BackendError(
+        `provider ${provider} at ${dir} is missing ${LIB_NAME} — the package is ` +
+          `partially installed. Delete node_modules and reinstall.`,
+      );
+    }
     return {
-      libraryPath: path.join(dir, LIB_NAME),
+      libraryPath,
       artifactDir: dir,
       provider,
       backends: contract.backends ?? [],
     };
   }
   return null;
+}
+
+/**
+ * Explain why no provider package resolved, distinguishing "never installed"
+ * from "partially installed". The partial state is real: an interrupted
+ * optional-dependency extraction (the provider is by far the largest artifact
+ * in the tree) leaves an empty or missing directory that npm's hidden lockfile
+ * (node_modules/.package-lock.json) still records as installed. npm then
+ * trusts that lockfile on later installs, computes an empty diff, and never
+ * repairs the tree — only deleting node_modules (or the hidden lockfile)
+ * heals it, so the error must say which state the tree is in.
+ */
+function diagnoseMissingProvider(): string {
+  const tuple = platformTuple();
+  if (!tuple) {
+    return `no prebuilt @transcribe-cpp provider exists for ${process.platform}-${process.arch}.`;
+  }
+  const provider = `@transcribe-cpp/${tuple}`;
+  const require = createRequire(import.meta.url);
+  for (const nm of require.resolve.paths(provider) ?? []) {
+    const providerDir = path.join(nm, "@transcribe-cpp", tuple);
+    let recorded = false;
+    try {
+      const hidden = JSON.parse(
+        fs.readFileSync(path.join(nm, ".package-lock.json"), "utf8"),
+      ) as { packages?: Record<string, unknown> };
+      recorded = `node_modules/@transcribe-cpp/${tuple}` in (hidden.packages ?? {});
+    } catch {
+      // No readable hidden lockfile (pnpm/bun/yarn, or not this tree) — the
+      // directory probe below still catches a partially extracted provider.
+    }
+    if (fs.existsSync(providerDir) || recorded) {
+      return (
+        `${provider}@${OUR_VERSION} under ${nm} is partially installed — its files ` +
+        `are missing even though the install recorded it as complete (typically an ` +
+        `interrupted download of this large optional dependency). A plain \`npm install\` ` +
+        `will NOT repair this; delete node_modules and reinstall.`
+      );
+    }
+  }
+  return (
+    `${provider}@${OUR_VERSION} is not installed. It is an optional dependency of ` +
+    `transcribe-cpp, and package managers skip optional dependencies silently when ` +
+    `they are disabled or a download fails; reinstall with \`npm install --include=optional\`.`
+  );
 }
 
 /** A library produced by the source build (`npm run build:native`). */
@@ -204,9 +256,9 @@ export function resolveLibrary(): Resolved {
     tryDevTree() ??
     (() => {
       throw new BackendError(
-        "No transcribe.cpp native library found. Set TRANSCRIBE_LIBRARY, install a " +
-          "matching @transcribe-cpp/<platform> package, run `npm run build:native` to " +
-          `build from source, or build the shared library (build-shared/src/${LIB_NAME}).`,
+        `No transcribe.cpp native library found: ${diagnoseMissingProvider()} ` +
+          "Alternatively set TRANSCRIBE_LIBRARY, run `npm run build:native` to build " +
+          `from source, or build the shared library (build-shared/src/${LIB_NAME}).`,
       );
     })()
   );

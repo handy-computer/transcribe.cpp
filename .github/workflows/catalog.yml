@@ -1,0 +1,62 @@
+name: model-catalog
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "catalog/**"
+      - "scripts/catalog/**"
+      - "scripts/hf_cards/**"
+      - "docs/models/**"
+      - "README.md"
+      - "scripts/bench/**"
+      - "scripts/wer/languages.py"
+      - "scripts/wer/der.py"
+      - "scripts/wer/test_der.py"
+      - ".github/workflows/catalog.yml"
+  push:
+    branches: [main]
+    paths:
+      - "catalog/**"
+      - "scripts/catalog/**"
+      - "scripts/hf_cards/**"
+      - "docs/models/**"
+      - "README.md"
+      - "scripts/bench/**"
+      - "scripts/wer/languages.py"
+      - "scripts/wer/der.py"
+      - "scripts/wer/test_der.py"
+      - ".github/workflows/catalog.yml"
+
+concurrency:
+  group: model-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  catalog:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
+      - name: Canonical formatting
+        run: uv run scripts/catalog/format.py --check
+      - name: Schema, integrity and pairing
+        run: uv run scripts/catalog/check.py
+      - name: Publication profile
+        run: uv run scripts/catalog/check.py --publication-profile
+      - name: HF cards render from the catalog
+        run: |
+          for spec in scripts/hf_cards/*.yaml; do
+            uv run scripts/hf_cards/generate.py "$spec" --skip-upstream --stdout > /dev/null
+          done
+      - name: Published tables match the catalog
+        run: uv run scripts/catalog/render.py --check
+      - name: Rebuild portable database
+        run: |
+          uv run --with pytest pytest -q scripts/catalog/test_db_mapping.py
+          uv run scripts/wer/test_der.py
+          uv run scripts/catalog/db.py --out "$RUNNER_TEMP/catalog.db"
+          sqlite3 "$RUNNER_TEMP/catalog.db" "PRAGMA integrity_check"

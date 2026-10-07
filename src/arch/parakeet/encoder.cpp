@@ -260,13 +260,26 @@ ggml_tensor * build_spk_kernel_ff(ggml_context * ctx, ggml_tensor * x, const Par
     return y;
 }
 
-// Single-speaker mode applies the speaker kernel to x and the background
-// kernel to zeros. The latter reduces to a per-channel constant broadcast
-// over time.
+// Speaker-kernel layer-0 injection (NeMo SpeakerKernelMixin pre-layer hook).
+//
+// Single-speaker mode (spk_mask == nullptr) mirrors spk_targets=None:
+// the speaker kernel sees x unmasked (mask defaults to all-ones) and the
+// background kernel sees zeros (bg default_value=0.0), which reduces to a
+// per-channel constant broadcast over time. This path is byte-identical
+// to the shipped single-speaker graph.
+//
+// Multitalker mode (spk_mask/bg_mask ne=[1, T] f32) mirrors
+// mask_with_speaker_targets: x_spk = FF_spk(x * m_spk) added to x, then
+// x_bg = FF_bg(x' * m_bg) added on the UPDATED x' (NeMo applies the bg
+// kernel after the spk residual), with m_spk the target speaker's raw
+// per-frame sigmoids and m_bg the binarized union of the other active
+// speakers.
 ggml_tensor * apply_spk_kernel_injection(ggml_context *          ctx,
                                          ggml_tensor *           x,
                                          const ParakeetWeights & w,
-                                         const ParakeetHParams & hp) {
+                                         const ParakeetHParams & hp,
+                                         ggml_tensor *           spk_mask = nullptr,
+                                         ggml_tensor *           bg_mask  = nullptr) {
     if (!hp.has_spk_kernel) {
         return x;
     }
@@ -274,14 +287,23 @@ ggml_tensor * apply_spk_kernel_injection(ggml_context *          ctx,
         if (kernel.layer != 0) {
             continue;  // loader rejects non-zero layers; defensive
         }
-        ggml_tensor * x_spk = build_spk_kernel_ff(ctx, x, kernel.spk);
-        x                   = ggml_add(ctx, x, x_spk);
-        if (kernel.has_bg) {
-            // W3_bg * relu(b0_bg) + b3_bg is broadcast over time.
-            ggml_tensor * hb   = ggml_relu(ctx, kernel.bg.lin0_b);
-            ggml_tensor * c_bg = ggml_mul_mat(ctx, kernel.bg.lin3_w, hb);
-            c_bg               = ggml_add(ctx, c_bg, kernel.bg.lin3_b);
-            x                  = ggml_add(ctx, x, c_bg);
+        if (spk_mask == nullptr) {
+            ggml_tensor * x_spk = build_spk_kernel_ff(ctx, x, kernel.spk);
+            x                   = ggml_add(ctx, x, x_spk);
+            if (kernel.has_bg) {
+                // W3_bg * relu(b0_bg) + b3_bg is broadcast over time.
+                ggml_tensor * hb   = ggml_relu(ctx, kernel.bg.lin0_b);
+                ggml_tensor * c_bg = ggml_mul_mat(ctx, kernel.bg.lin3_w, hb);
+                c_bg               = ggml_add(ctx, c_bg, kernel.bg.lin3_b);
+                x                  = ggml_add(ctx, x, c_bg);
+            }
+        } else {
+            ggml_tensor * x_spk = build_spk_kernel_ff(ctx, ggml_mul(ctx, x, spk_mask), kernel.spk);
+            x                   = ggml_add(ctx, x, x_spk);
+            if (kernel.has_bg && bg_mask != nullptr) {
+                ggml_tensor * x_bg = build_spk_kernel_ff(ctx, ggml_mul(ctx, x, bg_mask), kernel.bg);
+                x                  = ggml_add(ctx, x, x_bg);
+            }
         }
     }
     return x;
@@ -297,20 +319,25 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
                                  const char *                       backend_name,
                                  const BufferedStreamMaskOverride * buf_mask,
                                  int                                n_batch,
-                                 bool                               batch_var_len) {
+                                 bool                               batch_var_len,
+                                 bool                               spk_supervision,
+                                 int                                mt_keep_frames) {
     if (n_batch < 1) {
         n_batch = 1;
     }
-    const bool       var_len_masks = batch_var_len && n_batch > 1;
+    const bool       var_len_masks = batch_var_len && (n_batch > 1 || hp.kestrel_length_masking);
     conf::ConvPolicy policy{};
-    policy.direct_pw               = conf::detect_direct_pw(backend_name);
-    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
+    policy.direct_pw                    = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode   = true;
+    policy.direct_dw_in_block           = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode      = detect_direct_dw_in_pre_encode(backend_name);
     // Cache-aware streaming (NeMo causal_downsampling=true) uses
     // CausalConv2D for the pre-encode subsample (left=k-1, right=stride-1).
     // Inferred from the attention style — only ChunkedLimited is causal.
     // Independent of the conformer conv-module's conv_context.
-    policy.causal_pre_encode       = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+    policy.causal_pre_encode = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb{};
 
@@ -362,9 +389,11 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
                                              /*name_prefix=*/"enc.pre_encode",
                                              /*error_tag=*/"parakeet", mask_pre_encode ? &pe_masks : nullptr);
     if (mask_pre_encode) {
-        eb.pre_encode_mask_s1_in = pe_masks.mask_s1;
-        eb.pre_encode_mask_s2_in = pe_masks.mask_s2;
-        eb.pre_encode_mask_s3_in = pe_masks.mask_s3;
+        eb.pre_encode_mask_s1_in   = pe_masks.mask_s1;
+        eb.pre_encode_mask_s2_in   = pe_masks.mask_s2;
+        eb.pre_encode_mask_s3_in   = pe_masks.mask_s3;
+        eb.pre_encode_extent_s2_in = pe_masks.mask_s2_extent;
+        eb.pre_encode_extent_s3_in = pe_masks.mask_s3_extent;
     }
     if (x == nullptr) {
         // build_pre_encode already logged the diagnostic.
@@ -388,9 +417,40 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         x                 = conf::named(x, "enc.pre_encode.xscaled");
     }
 
-    // NeMo applies the optional layer-0 injection after xscaling.
+    // NeMo applies the optional layer-0 injection after xscaling. With
+    // spk_supervision (multitalker bundle, n_batch == 1), the per-frame
+    // speaker/background masks become graph inputs the driver fills from
+    // the embedded diarizer's predictions.
+    // Kernel-mode chunk gating: keep only the target speaker's active
+    // chunks (reference cache_gating — inactive chunks never reach that
+    // speaker's conformer/decoder, and its attention context spans its
+    // own kept history, matching the per-speaker streaming caches).
+    // Applied after the continuous pre_encode + xscaling, before the
+    // layer-0 injection, exactly where the reference gathers instances.
+    if (spk_supervision && n_batch == 1 && mt_keep_frames > 0) {
+        ggml_tensor * keep = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, mt_keep_frames);
+        ggml_set_name(keep, "mt_keep.in");
+        ggml_set_input(keep);
+        eb.mt_keep_in = keep;
+        x             = ggml_get_rows(ctx, x, keep);
+        x             = conf::named(x, "enc.pre_encode.mt_gathered");
+    }
+
     if (hp.has_spk_kernel) {
-        x = apply_spk_kernel_injection(ctx, x, w, hp);
+        ggml_tensor * spk_mask = nullptr;
+        ggml_tensor * bg_mask  = nullptr;
+        if (spk_supervision && n_batch == 1) {
+            const int64_t T_inj = x->ne[1];
+            spk_mask            = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(spk_mask, "spk_mask.in");
+            ggml_set_input(spk_mask);
+            bg_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(bg_mask, "bg_mask.in");
+            ggml_set_input(bg_mask);
+            eb.spk_mask_in = spk_mask;
+            eb.bg_mask_in  = bg_mask;
+        }
+        x = apply_spk_kernel_injection(ctx, x, w, hp, spk_mask, bg_mask);
         x = conf::named(x, "enc.pre_encode.spk_injected");
     }
 
@@ -666,13 +726,15 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
                                            int                       drop_extra_pre_encoded,
                                            StreamingEncoderCacheIO & cache_io,
                                            ggml_type                 kv_type,
-                                           const char *              backend_name) {
+                                           const char *              backend_name,
+                                           bool                      spk_supervision) {
     conf::ConvPolicy policy{};
-    policy.direct_pw               = conf::detect_direct_pw(backend_name);
-    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
+    policy.direct_pw                  = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode = true;
+    policy.direct_dw_in_block         = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode    = detect_direct_dw_in_pre_encode(backend_name);
     // Causal pre-encode is the cache-aware streaming convention only.
-    policy.causal_pre_encode       = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+    policy.causal_pre_encode          = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb{};
 
@@ -744,8 +806,24 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
     }
 
     // Apply the same optional layer-0 injection to each streaming chunk.
+    // With spk_supervision (multitalker streaming pass), the per-chunk
+    // speaker/background masks become graph inputs the driver fills from
+    // the diarizer predictions for this chunk's frames.
     if (hp.has_spk_kernel) {
-        x = apply_spk_kernel_injection(ctx, x, w, hp);
+        ggml_tensor * spk_mask = nullptr;
+        ggml_tensor * bg_mask  = nullptr;
+        if (spk_supervision) {
+            const int64_t T_inj = x->ne[1];
+            spk_mask            = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(spk_mask, "stream.spk_mask.in");
+            ggml_set_input(spk_mask);
+            bg_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, T_inj);
+            ggml_set_name(bg_mask, "stream.bg_mask.in");
+            ggml_set_input(bg_mask);
+            eb.spk_mask_in = spk_mask;
+            eb.bg_mask_in  = bg_mask;
+        }
+        x = apply_spk_kernel_injection(ctx, x, w, hp, spk_mask, bg_mask);
     }
 
     const int64_t T_q_new = x->ne[1];
@@ -928,6 +1006,79 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
         ggml_build_forward_expand(eb.graph, eb.dumps.final_out);
     }
     return eb;
+}
+
+VadBuild build_vad_graph(ggml_context *          ctx,
+                         const ParakeetWeights & w,
+                         const ParakeetHParams & hp,
+                         int                     n_mel_frames,
+                         const char *            backend_name) {
+    VadBuild vb{};
+    if (ctx == nullptr || n_mel_frames <= 0 || !hp.has_vad_head || w.vad.proj_w == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet vad: invalid arg (no vad head or empty mel)");
+        return vb;
+    }
+    // Same subsampler policy as build_encoder_graph on this model, so the
+    // head sees exactly the pre_encode output the encoder would.
+    conf::ConvPolicy policy{};
+    policy.direct_pw                    = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode   = true;
+    policy.direct_dw_in_block           = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode      = detect_direct_dw_in_pre_encode(backend_name);
+    policy.causal_pre_encode            = false;
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
+
+    vb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_mel_frames, hp.fe_num_mels, 1, 1);
+    ggml_set_name(vb.mel_in, "vad.mel.in");
+    ggml_set_input(vb.mel_in);
+
+    conf::PreEncodeValidMasks pe_masks;
+    ggml_tensor *             x =
+        conf::build_pre_encode(ctx, to_view(w.pre_encode), vb.mel_in, policy, /*name_prefix=*/"vad.pre_encode",
+                               /*error_tag=*/"parakeet vad", hp.kestrel_length_masking ? &pe_masks : nullptr);
+    if (x == nullptr) {
+        return vb;
+    }
+    vb.pe_mask_s1_in   = pe_masks.mask_s1;
+    vb.pe_mask_s2_in   = pe_masks.mask_s2;
+    vb.pe_mask_s3_in   = pe_masks.mask_s3;
+    vb.pe_extent_s2_in = pe_masks.mask_s2_extent;
+    vb.pe_extent_s3_in = pe_masks.mask_s3_extent;
+    vb.pre_encode_out  = x;  // [d_model, T]
+
+    const int64_t d_model = x->ne[0];
+    const int64_t H       = hp.vad_hidden;
+    const int     K       = hp.vad_context_kernel;
+
+    // proj: Conv1d(d_model -> H, k=1) == mul_mat over channels. [1, d, H] -> [d, H].
+    ggml_tensor * h = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, w.vad.proj_w, d_model, H), x);  // [H, T]
+    h               = ggml_add(ctx, h, w.vad.proj_b);
+    h               = ggml_silu(ctx, h);
+    vb.proj_out     = conf::named(h, "vad.proj");
+
+    // conv_1d_f32 takes [T, IC] data and returns [T, OC].
+    ggml_tensor * t = ggml_cont(ctx, ggml_transpose(ctx, h));                                     // [T, H]
+    t = conf::conv_1d_f32(ctx, w.vad.ctx_w, t, /*stride=*/1, /*padding=*/K / 2, /*dilation=*/1);  // [T, H]
+    t = ggml_add(ctx, t, ggml_reshape_2d(ctx, w.vad.ctx_b, 1, H));
+    t = ggml_silu(ctx, t);
+    ggml_tensor * c = ggml_cont(ctx, ggml_transpose(ctx, t));  // [H, T]
+    vb.ctx_out      = conf::named(c, "vad.ctx");
+
+    ggml_tensor * o = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, w.vad.out_w, H, 1), c);  // [1, T]
+    o               = ggml_add(ctx, o, w.vad.out_b);
+    vb.prob         = conf::named(ggml_sigmoid(ctx, o), "vad.prob");
+
+    vb.graph = ggml_new_graph_custom(ctx, /*size=*/1024, /*grads=*/false);
+    if (vb.graph == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet vad: ggml_new_graph_custom failed");
+        return vb;
+    }
+    ggml_build_forward_expand(vb.graph, vb.prob);
+    for (ggml_tensor * keep : { vb.pre_encode_out, vb.proj_out, vb.ctx_out }) {
+        transcribe::debug::mark_tensor_for_dump(keep);
+    }
+    return vb;
 }
 
 }  // namespace transcribe::parakeet

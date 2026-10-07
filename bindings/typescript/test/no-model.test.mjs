@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import * as os from "node:os";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import koffi from "koffi";
 import {
   version,
   getAvailableBackends,
@@ -14,6 +15,10 @@ import {
   ModelFileNotFound,
   ModelLoadError,
 } from "../dist/index.js";
+
+test("async FFI stack is large enough for Vulkan model loading", () => {
+  assert.ok(koffi.config().async_stack_size >= 512 * 1024);
+});
 
 test("Stream does not expose internal lease/teardown controls", () => {
   // releaseLease()/deactivate() must NOT be reachable from user code — calling
@@ -81,11 +86,19 @@ test("each backend device has a well-formed, index-aligned shape", () => {
 test("backendAvailable is a clean boolean probe", () => {
   assert.equal(backendAvailable("cpu"), true);
   assert.equal(typeof backendAvailable("cuda"), "boolean");
+  assert.equal(typeof backendAvailable("rocm"), "boolean");
 });
 
 test("invalid backend string is rejected, not silently coerced", () => {
   // @ts-expect-error intentionally bogus
   assert.throws(() => backendAvailable("nope"));
+});
+
+test("removed gpuDevice option is rejected instead of selecting auto", async () => {
+  await assert.rejects(
+    () => TranscribeModel.load("/no/such/model.gguf", { gpuDevice: 0 }),
+    /gpuDevice was removed in 0\.2/,
+  );
 });
 
 test("missing model file maps to ModelFileNotFound", async () => {

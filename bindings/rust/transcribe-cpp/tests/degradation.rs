@@ -42,13 +42,14 @@ fn cpu_is_the_floor() {
 #[test]
 fn unavailable_backend_probes_cleanly() {
     init_backends_default().expect("init_backends_default");
-    // In a CPU/Metal build Vulkan and CUDA are not compiled in. The probe must
-    // answer (true/false) without crashing — this is what lets a host turn an
+    // In a CPU/Metal build Vulkan, CUDA, and ROCm are not compiled in. The probe
+    // must answer (true/false) without crashing — this is what lets a host turn an
     // explicit Backend::Vulkan request into a clear error instead of a failed
     // model load. We assert it does not panic and is internally consistent;
     // CPU is the one backend we can assert positively on every runner.
     let _vulkan = backend_available(Backend::Vulkan);
     let _cuda = backend_available(Backend::Cuda);
+    let _rocm = backend_available(Backend::Rocm);
     assert!(backend_available(Backend::Cpu));
 }
 

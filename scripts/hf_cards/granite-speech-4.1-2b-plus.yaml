@@ -1,11 +1,6 @@
 # Spec for the HF README of handy-computer/granite-speech-4.1-2b-plus-gguf.
-# Consumed by scripts/hf_cards/generate.py.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
 
-hf_repo: ibm-granite/granite-speech-4.1-2b-plus
-target_repo: handy-computer/granite-speech-4.1-2b-plus-gguf
-transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/granite-speech-4.1-2b-plus.md
-
-upstream_commit: edd3bf5
 pin_date: 2026-05-17
 
 validation:
@@ -13,15 +8,7 @@ validation:
   commit: 275332d
   date: 2026-05-17
 
-license: apache-2.0
-license_display: Apache-2.0
 pipeline_tag: automatic-speech-recognition
-languages:
-  - en
-  - fr
-  - de
-  - es
-  - pt
 tags:
   - gguf
   - transcribe.cpp
@@ -51,65 +38,14 @@ summary: |
   This variant is transcription-only: unlike the base granite-speech-4.1-2b,
   it does not perform speech translation.
 
-default_quant_index: 2  # Q8_0
-
-# Capability flags for the transcribe_cpp metadata block.
-capabilities:
-  streaming: false
-  translate: false
-  lang_detect: false
-  timestamps: word  # none | segment | word | token
-
-# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
-# raw as rtf_<machine> in the metadata block.
-perf:
-  m4-max:
-    metal: 33
-    cpu: 5.2
-  m4:
-    metal: 11
-    cpu: 5
-  ryzen-4750u:
-    vulkan: 2.75
-    cpu: 1.4
-
 wer:
-  source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances)
-    with greedy decoding and the model-card chat template (system prompt +
-    leading-space user instruction + `add_generation_prompt=True`). BF16
-    reference baseline (re-run locally with that exact prompt): 1.48%; 0.04pp
-    above upstream's published 1.44%, within bootstrap CI overlap and likely
-    a chat-template / normalization difference on the publisher side. Text
-    normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
-    Leaderboard uses. The `add_generation_prompt=True` is load-bearing —
-    without it the model emits 25-27 empty hypotheses on short test-clean
-    clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the
-    prompt correctly; this note only matters if you reproduce the reference.
-
-quants:
-  - name: BF16
-    filename: granite-speech-4.1-2b-plus-BF16.gguf
-    size: 4.23 GB
-    wer: 1.49%
-  - name: F16
-    filename: granite-speech-4.1-2b-plus-F16.gguf
-    size: 4.23 GB
-    wer: 1.48%
-  - name: Q8_0
-    filename: granite-speech-4.1-2b-plus-Q8_0.gguf
-    size: 2.35 GB
-    wer: 1.50%
-  - name: Q6_K
-    filename: granite-speech-4.1-2b-plus-Q6_K.gguf
-    size: 1.86 GB
-    wer: 1.46%
-  - name: Q5_K_M
-    filename: granite-speech-4.1-2b-plus-Q5_K_M.gguf
-    size: 1.69 GB
-    wer: 1.48%
-  - name: Q4_K_M
-    filename: granite-speech-4.1-2b-plus-Q4_K_M.gguf
-    size: 1.49 GB
-    wer: 1.56%
+    Greedy decoding with the model-card chat template (system prompt + leading-space
+    user instruction + `add_generation_prompt=True`). BF16 reference baseline (re-run
+    locally with that exact prompt): 1.48%; 0.04pp above upstream's published 1.44%,
+    within bootstrap CI overlap and likely a chat-template / normalization difference on
+    the publisher side. Text normalizer: Whisper `EnglishTextNormalizer`, the same
+    normalizer Open ASR Leaderboard uses. The `add_generation_prompt=True` is
+    load-bearing — without it the model emits 25-27 empty hypotheses on short test-clean
+    clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the prompt
+    correctly; this note only matters if you reproduce the reference.

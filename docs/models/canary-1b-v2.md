@@ -1,9 +1,16 @@
 # Canary 1B v2
 
-NVIDIA's [`nvidia/canary-1b-v2`](https://huggingface.co/nvidia/canary-1b-v2)
-ported to transcribe.cpp. A 978M-parameter multitask AED with a 32-layer
-FastConformer encoder and an 8-layer Transformer decoder, covering 25
-European languages.
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-1b-v2`](https://huggingface.co/nvidia/canary-1b-v2) at [`87bc526`](https://huggingface.co/nvidia/canary-1b-v2/commit/87bc526).
+
+Offline multilingual speech-to-text and translation across 25 European
+languages. A multitask AED with a 32-layer FastConformer encoder and an
+8-layer Transformer decoder. Supports automatic speech recognition for
+any of the 25 supported languages, plus translation between supported
+language pairs (per the upstream model card). Takes a 16 kHz mono WAV and
+produces a transcript. Not a streaming model; word and segment timestamps
+from the upstream model are not exposed in the v1 port.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -26,29 +33,70 @@ variants (180m-flash, 1b-flash) cover only English/German/Spanish/French.
 Not a streaming model. Word and segment timestamps from the upstream
 model are not exposed in the v1 port.
 
+**Prompting:** transcript prefix (`--prefix`) via NeMo's `user_prefix` turn. The decoder-context slot is not exposed: context text made the output loop and over-insert in testing.
+
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-v2)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`87bc526`](https://huggingface.co/nvidia/canary-1b-v2/commit/87bc52657add533cd0156b3fc1aef027280754bf),
-pinned 2026-05-08.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`87bc526`](https://huggingface.co/nvidia/canary-1b-v2/commit/87bc526), pinned 2026-05-08. Validated against the NeMo reference at transcribe.cpp commit [`db53eda`](https://github.com/handy-computer/transcribe.cpp/tree/db53eda) on 2026-05-08.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [canary-1b-v2-F32.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-F32.gguf)       | 3.7 GB | 1.92% |
-| F16    | [canary-1b-v2-F16.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-F16.gguf)       | 1.8 GB | 1.92% |
-| Q8_0   | [canary-1b-v2-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q8_0.gguf)     | 1.1 GB | 1.91% |
-| Q6_K   | [canary-1b-v2-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q6_K.gguf)     | 889 MB | 1.94% |
-| Q5_K_M | [canary-1b-v2-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q5_K_M.gguf) | 798 MB | 1.93% |
-| Q4_K_M | [canary-1b-v2-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q4_K_M.gguf) | 701 MB | 1.91% |
+| F32          | [canary-1b-v2-F32.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-F32.gguf) | 3.92 GB | 1.92% |
+| F16          | [canary-1b-v2-F16.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-F16.gguf) | 1.97 GB | 1.92% |
+| Q8_0         | [canary-1b-v2-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q8_0.gguf) | 1.14 GB | 1.91% |
+| Q6_K         | [canary-1b-v2-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q6_K.gguf) |  932 MB | 1.94% |
+| Q5_K_M       | [canary-1b-v2-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q5_K_M.gguf) |  837 MB | 1.93% |
+| Q4_K_M       | [canary-1b-v2-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/main/canary-1b-v2-Q4_K_M.gguf) |  735 MB | 1.91% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy decoding and no external LM. F32 reference baseline: 1.92%.
-NVIDIA's self-reported number on the upstream model card is 2.18%; our
-F32 port comes in slightly under upstream (Δ −0.26pp) and is likely
-down to scoring differences.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy decoding, no external LM. F32 reference baseline: 1.92%. NVIDIA's
+self-reported number on the upstream model card is 2.18%; our F32 port comes in
+slightly under the upstream-reported number (Δ −0.26pp) and is likely down to
+scoring differences.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| bg       | WER    |  9.22% |
+| cs       | WER    |  8.56% |
+| da       | WER    | 11.34% |
+| de       | WER    |  4.46% |
+| el       | WER    | 26.02% |
+| en       | WER    |  4.47% |
+| es       | WER    |  3.10% |
+| et       | WER    | 12.72% |
+| fi       | WER    |  8.86% |
+| fr       | WER    |  5.09% |
+| hr       | WER    |  8.40% |
+| hu       | WER    | 13.06% |
+| it       | WER    |  3.10% |
+| lt       | WER    | 13.45% |
+| lv       | WER    | 10.41% |
+| mt       | WER    | 19.75% |
+| nl       | WER    |  6.28% |
+| pl       | WER    |  6.88% |
+| pt       | WER    |  4.50% |
+| ro       | WER    |  6.87% |
+| ru       | WER    |  7.83% |
+| sk       | WER    |  6.84% |
+| sl       | WER    | 12.76% |
+| sv       | WER    |  9.74% |
+| uk       | WER    | 10.58% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -94,43 +142,40 @@ CLI flags specific to canary:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 124.3 ms (88.5×) | 121.6 ms (90.5×) |
-| Metal   | dots (35.3s) | 430.7 ms (82.0×) | 406.1 ms (87.0×) |
-| CPU     | jfk (11.0s)  | 555.0 ms (19.8×) | 453.5 ms (24.3×) |
-| CPU     | dots (35.3s) |   1.96 s (18.0×) |   1.66 s (21.3×) |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `19b3b87`.
+| Backend | Sample       |               Q8_0 |             Q4_K_M |
+| ------- | ------------ | -----------------: | -----------------: |
+| Metal   | jfk (11.0s)  | 105.1 ms (104.66×) | 104.1 ms (105.66×) |
+| Metal   | dots (35.3s) |  384.7 ms (91.84×) |  362.1 ms (97.57×) |
+| CPU     | jfk (11.0s)  |  415.1 ms (26.50×) |  442.4 ms (24.86×) |
+| CPU     | dots (35.3s) |    1.49 s (23.66×) |    1.56 s (22.71×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Vulkan  | jfk (11.0s)  | 829.9 ms (13.3×) | 748.8 ms (14.7×) |
-| Vulkan  | dots (35.3s) |   2.70 s (13.1×) |   2.46 s (14.4×) |
-| CPU     | jfk (11.0s)  |    1.55 s (7.1×) |    1.16 s (9.5×) |
-| CPU     | dots (35.3s) |    5.74 s (6.2×) |    4.70 s (7.5×) |
+<!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora Linux 43, transcribe.cpp `4d44530`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Vulkan  | jfk (11.0s)  | 758.9 ms (14.49×) | 732.3 ms (15.02×) |
+| Vulkan  | dots (35.3s) |   2.57 s (13.77×) |   2.41 s (14.64×) |
+| CPU     | jfk (11.0s)  |    1.15 s (9.54×) |    1.15 s (9.54×) |
+| CPU     | dots (35.3s) |    4.97 s (7.11×) |    4.77 s (7.40×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models canary-1b-v2 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name canary-1b-v2-publication
+uv run scripts/bench/run.py --profile --models canary-1b-v2
 ```
 
 ## Numerical Validation

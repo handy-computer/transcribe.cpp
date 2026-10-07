@@ -170,6 +170,20 @@ transcribe_status read_moss_hparams(const gguf_context * gguf, MossHParams & hp)
     if (auto st = read_required_i32_array(gguf, "stt.moss.digit_tokens", hp.digit_tokens); st != TRANSCRIBE_OK) {
         return st;
     }
+    // Optional instruction split (generic vocabulary); absent on GGUFs that
+    // predate it, which then keep the fixed prompt.
+    if (auto st = read_optional_string_kv(gguf, "stt.moss.prompt_instruction", kFamilyTag, "", hp.prompt_instruction);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (read_int32_array_kv(gguf, "stt.moss.prompt_instruction_head_tokens", hp.prompt_instruction_head_tokens) !=
+            KvResult::Ok ||
+        read_int32_array_kv(gguf, "stt.moss.prompt_instruction_tail_tokens", hp.prompt_instruction_tail_tokens) !=
+            KvResult::Ok) {
+        hp.prompt_instruction.clear();
+        hp.prompt_instruction_head_tokens.clear();
+        hp.prompt_instruction_tail_tokens.clear();
+    }
     if (hp.digit_tokens.size() != 10) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss: stt.moss.digit_tokens must have 10 entries, got %zu",
                 hp.digit_tokens.size());

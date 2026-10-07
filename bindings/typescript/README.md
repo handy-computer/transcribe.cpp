@@ -12,6 +12,10 @@ A matching prebuilt native package is selected automatically for your
 platform (`@transcribe-cpp/<platform>`); there is nothing to compile and no
 environment variables to set.
 
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `gpuDevice` with exact device objects.
+
 ## Quickstart
 
 ```ts
@@ -23,12 +27,34 @@ const model = await TranscribeModel.load("whisper-tiny-Q5_K_M.gguf");
 const result = await model.transcribe(pcm, { timestamps: "segment" });
 
 console.log(result.text);
-console.log(result.language); // detected or requested
+console.log(result.language); // model-detected, or "" when unavailable/a hint was supplied
 for (const seg of result.segments) {
   console.log(`[${seg.t0Ms}–${seg.t1Ms}ms] ${seg.text}`);
 }
 
 model.dispose();
+```
+
+### Punctuation, capitalization, and text normalization
+
+`pnc` and `itn` default to `"default"`, preserving each model family's shipped
+behavior. Probe `model.supports("pnc")` or `model.supports("itn")` before
+selecting `"off"`/`"on"`. Both options are available on single runs, batches,
+and streams.
+
+```ts
+const result = await model.transcribe(pcm, { pnc: "off", itn: "on" });
+```
+
+### Prompting
+
+`vocabulary` (custom terms), `prompt` (context, or the instruction under
+`task: "instruct"`) and `prefix` (text the model continues from) take effect
+where `model.supports()` reports `"vocabulary"`, `"context_prompt"`,
+`"instruct"` or `"transcript_prefix"`.
+
+```ts
+const result = await model.transcribe(pcm, { vocabulary: ["Kubernetes", "gRPC"] });
 ```
 
 ### Streaming
@@ -43,6 +69,7 @@ for (const chunk of pcmChunks) {
   render(committed, tentative);
 }
 await stream.finalize();
+const snapshot = stream.snapshot; // text, language, segments, words, tokens, timings
 stream.reset();
 ```
 
@@ -82,10 +109,28 @@ const stream = await session.stream({ family: { kind: "moonshine" } });
 model.accepts({ kind: "whisper" }); // does this model take that extension?
 ```
 
+### Diarization (DIARIZE role)
+
+`model.roles` lists what a model serves (`"asr"`, `"diarize"`; Sortformer is
+diarize-only). Calls for a role the model lacks throw `UnsupportedRole`.
+
+```ts
+const { sampleRate, maxSpeakers } = model.diarizeInfo;
+using diarizer = model.createDiarizeSession();
+const turns = await diarizer.run(pcm, {
+  family: { kind: "sortformer_diarize", preset: "very_high_latency" },
+});
+for (const t of turns) console.log(t.speakerId, t.t0Ms, t.t1Ms);
+```
+
+`run` accepts a `signal`; cancelling throws `Aborted` (with no partial result).
+`diarizer.timings` reports the last run. Diarize runs wait on the same
+model-wide lock as other compute calls (see below).
+
 ### Resource management
 
-`TranscribeModel`, `Session`, and `Stream` all implement `Symbol.dispose`, so
-`using` works (TypeScript 5.2+ / Node 22+):
+`TranscribeModel`, `Session`, `DiarizeSession`, and `Stream` all implement
+`Symbol.dispose`, so `using` works (TypeScript 5.2+ / Node 22+):
 
 ```ts
 using model = await TranscribeModel.load("model.gguf");
@@ -101,10 +146,15 @@ the model lease). Disposal is idempotent and order-independent.
 ```ts
 import { getAvailableBackends, backendAvailable } from "transcribe-cpp";
 
-getAvailableBackends(); // [{ kind: "metal", name: "MTL0", description: "…" }, …]
-backendAvailable("cuda"); // boolean — never throws
+const devices = getAvailableBackends();
+backendAvailable("rocm"); // boolean — never throws
 
-const model = await TranscribeModel.load("model.gguf", { backend: "metal" });
+// Policy selection: first matching ROCm device.
+const automatic = await TranscribeModel.load("model.gguf", { backend: "rocm" });
+// Exact selection: use this process-local CPU device or fail without fallback.
+const cpu = devices.find((device) => device.deviceType === "cpu");
+if (!cpu) throw new Error("CPU device is not registered");
+const exact = await TranscribeModel.load("model.gguf", { device: cpu });
 ```
 
 `backend` defaults to `"auto"` (best accelerator, else CPU). A missing Vulkan
@@ -118,14 +168,14 @@ native compute to a **libuv worker thread** (via koffi's async calls), so the
 event loop stays responsive while inference runs.
 
 The C library allows **one compute in flight per model** — a `run`, a `runBatch`,
-or an *active stream* — across all of its sessions. The binding enforces this:
-every compute call serializes through an internal model-wide mutex, and an active
-stream holds a model-wide lease for its whole lifetime. While a stream is active
-(after `stream()`, before `finalize()`/`reset()`), a `run`/`runBatch`/`stream` on
-any session of that model is refused with a `Busy` error rather than allowed to
-race. So to parallelize, load one model per worker; to share a model, finalize or
-reset the stream first. A single `Session` is single-use-at-a-time — don't call
-`run`/`feed` on the same session concurrently.
+a diarize `run`, or an *active stream* — across all of its sessions. The binding
+enforces this: every compute call serializes through an internal model-wide
+mutex, and an active stream holds a model-wide lease for its whole lifetime.
+While a stream is active (after `stream()`, before `finalize()`/`reset()`), a
+`run`/`runBatch`/`stream` on any session of that model is refused with a `Busy`
+error rather than allowed to race. So to parallelize, load one model per worker;
+to share a model, finalize or reset the stream first. A single `Session` is
+single-use-at-a-time — don't call `run`/`feed` on the same session concurrently.
 
 Hand-offs are ordered, not racy: `finalize()`/`reset()`/`dispose()` release the
 lease only after the native teardown runs on the shared queue, so the slot is
@@ -134,19 +184,24 @@ is correctly serialized — `stream.reset(); const next = await session.stream()
 works without awaiting the (void) `reset()`. The reverse order — beginning before
 the teardown — is refused with `Busy`, by design.
 
+A `feed()` rejected up front (e.g. NaN samples) leaves the stream `"active"` and
+the lease held; a failure inside the model makes it `"failed"` and frees the lease.
+
 Because the compute is genuinely on another thread, **do not touch a session
 while a call against it is in flight** — it is single-threaded in the C library:
 
-- Reading a stream's `text`/`state`/`revision`/`lastStatus`, or a session's
-  `limits`/`wasAborted`, during an un-awaited `feed`/`finalize`/`run` **throws**.
+- Reading a stream's `text`/`snapshot`/`state`/`revision`/`lastStatus`, a
+  session's `limits`/`wasAborted`, or a `DiarizeSession`'s `timings`, during an
+  un-awaited `feed`/`finalize`/`run`/`runBatch` **throws**.
 - `reset()` and `dispose()` are safe to call any time: the native teardown is
   deferred behind any in-flight call, so it never frees a session mid-compute.
 - Disposing a `Session` or `TranscribeModel` while a stream is still active
   releases the lease and invalidates the stream — its later calls throw rather
   than touch the freed handle.
-- The **input PCM is borrowed, not copied**: `run`/`runBatch`/`feed` hand the
-  buffer to native code that reads it on the worker thread, so do not mutate it
-  (e.g. reuse a scratch/capture buffer) until the returned promise resolves.
+- The **input PCM is borrowed, not copied**: `run`/`runBatch`/`feed` (and
+  `DiarizeSession.run`) hand the buffer to native code that reads it on the
+  worker thread, so do not mutate it (e.g. reuse a scratch/capture buffer)
+  until the returned promise resolves.
   Pass a fresh buffer per call, or `await` before overwriting.
 
 The normal pattern is safe — `await` first, then read:

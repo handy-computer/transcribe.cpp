@@ -1,34 +1,137 @@
 # Whisper large-v3
 
-OpenAI's [`openai/whisper-large-v3`](https://huggingface.co/openai/whisper-large-v3) ported to transcribe.cpp. A 1.55B-parameter
-encoder-decoder transformer (audio encoder + autoregressive text decoder with
-cross-attention).
+<!-- catalog:intro -->
+Upstream: [`openai/whisper-large-v3`](https://huggingface.co/openai/whisper-large-v3) at [`06f233f`](https://huggingface.co/openai/whisper-large-v3/commit/06f233f).
+
+OpenAI Whisper large-v3 — converted to GGUF for transcribe.cpp. Multilingual transcription, language detection, and speech translation (audio in any supported language → English text). v3 family adds Cantonese (yue) and uses a 128-bin mel input. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
+<!-- /catalog -->
 
 ## What it's for
 
 Offline multilingual speech-to-text and any-language → English speech translation. The model auto-detects the audio's language (100 languages covered) and emits a transcript in that language; passing `language="<code>"` and `task="translate"` to the underlying `whisper_full_params` produces an English translation instead. `transcribe-cli` reads a 16 kHz mono WAV and returns the transcript text. Long audio is handled via 30-second chunked decoding. v3 family adds Cantonese (yue) on top of v2's 99 languages and switches to a 128-bin mel input.
 
+**Prompting:** vocabulary (`--vocabulary`, rendered as `Glossary: …`), context prompt (`--prompt`) and transcript prefix (`--prefix`, first 30 s window only) through the generic `transcribe_run_params` fields; vocabulary and context share Whisper's 223-token prompt budget and cannot be combined with the Whisper extension's `initial_prompt` / `prompt_tokens`. A prefix does not compose with segment timestamps: `AUTO` falls back to none and an explicit segment request is an error.
+
 See the [upstream model card](https://huggingface.co/openai/whisper-large-v3) for training data, intended
 use, and the original evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`06f233f`](https://huggingface.co/openai/whisper-large-v3/commit/06f233f),
-pinned 2026-04-25. Validated against the transformers reference at
-transcribe.cpp commit
-[`5.6.1`](https://github.com/handy-computer/transcribe.cpp/tree/5.6.1)
-on 2026-04-26.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`06f233f`](https://huggingface.co/openai/whisper-large-v3/commit/06f233f), pinned 2026-04-25. Validated against the transformers reference at transcribe.cpp commit [`0a26478`](https://github.com/handy-computer/transcribe.cpp/tree/0a26478) on 2026-09-13.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F16    | [whisper-large-v3-F16.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-F16.gguf) | 2.88 GB | 1.81% |
-| Q8_0   | [whisper-large-v3-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q8_0.gguf) | 1.55 GB | 1.82% |
-| Q6_K   | [whisper-large-v3-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q6_K.gguf) | 1.21 GB | 1.83% |
-| Q5_K_M | [whisper-large-v3-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q5_K_M.gguf) | 1.08 GB | 1.84% |
-| Q4_K_M | [whisper-large-v3-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q4_K_M.gguf) | 951 MB | 1.86% |
+| F16          | [whisper-large-v3-F16.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-F16.gguf) | 3.11 GB | 1.81% |
+| Q8_0         | [whisper-large-v3-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q8_0.gguf) | 1.67 GB | 1.82% |
+| Q6_K         | [whisper-large-v3-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q6_K.gguf) | 1.30 GB | 1.83% |
+| Q5_K_M       | [whisper-large-v3-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q5_K_M.gguf) | 1.16 GB | 1.84% |
+| Q4_K_M       | [whisper-large-v3-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/main/whisper-large-v3-Q4_K_M.gguf) |  997 MB | 1.86% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with transcribe.cpp's default greedy decode and segment timestamps enabled — the same runs summarized in the [Whisper family table](whisper.md#all-variants). Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions add ~0.1pp of run-to-run variance on the noise floor, and quantization is otherwise generally WER-neutral. See the [WER methodology](../tools/wer.md) for the harness.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+OpenAI's self-reported number on the same split is 2.01%. Both are
+short-form WER decoded without timestamps; OpenAI does not publish its exact
+evaluation configuration, so small differences are expected. Single-run
+figures: GPU reductions can shift corpus WER by about 0.1pp between runs,
+mostly on short-clip hallucination outcomes at the noise floor.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |    Q8_0 |
+| --- | --- | ---: |
+| af       | WER    |  32.43% |
+| am       | WER    | 132.70% |
+| ar       | WER    |  14.92% |
+| as       | WER    | 104.77% |
+| az       | WER    |  21.10% |
+| be       | WER    |  43.78% |
+| bg       | WER    |  12.82% |
+| bn       | WER    |  55.03% |
+| bs       | WER    |  13.50% |
+| ca       | WER    |   4.97% |
+| cs       | WER    |  10.50% |
+| cy       | WER    |  30.67% |
+| da       | WER    |  12.48% |
+| de       | WER    |   4.13% |
+| el       | WER    |  11.53% |
+| en       | WER    |   4.03% |
+| es       | WER    |   2.70% |
+| et       | WER    |  18.30% |
+| fa       | WER    |  30.11% |
+| fi       | WER    |   7.73% |
+| fil      | WER    |  11.82% |
+| fr       | WER    |   5.39% |
+| gl       | WER    |  13.27% |
+| gu       | WER    |  66.38% |
+| ha       | WER    |  85.65% |
+| he       | WER    |  26.73% |
+| hi       | WER    |  17.06% |
+| hr       | WER    |  10.94% |
+| hu       | WER    |  13.40% |
+| hy       | WER    |  43.64% |
+| id       | WER    |   6.08% |
+| is       | WER    |  31.85% |
+| it       | WER    |   2.54% |
+| ja       | CER    |   4.81% |
+| jv       | WER    |  64.72% |
+| ka       | WER    |  93.97% |
+| kk       | WER    |  33.07% |
+| km       | CER    | 101.09% |
+| kn       | WER    |  31.99% |
+| ko       | CER    |   4.89% |
+| lb       | WER    |  85.67% |
+| ln       | WER    |  72.22% |
+| lo       | CER    | 100.28% |
+| lt       | WER    |  24.55% |
+| lv       | WER    |  19.21% |
+| mi       | WER    |  38.78% |
+| mk       | WER    |  15.09% |
+| ml       | WER    | 100.17% |
+| mn       | WER    |  85.60% |
+| mr       | WER    |  34.30% |
+| ms       | WER    |   7.59% |
+| mt       | WER    |  68.79% |
+| my       | CER    | 143.39% |
+| nb       | WER    |   8.19% |
+| ne       | WER    |  40.44% |
+| nl       | WER    |   5.42% |
+| oc       | WER    |  69.15% |
+| pa       | WER    |  57.39% |
+| pl       | WER    |   4.69% |
+| ps       | WER    |  89.14% |
+| pt       | WER    |   3.88% |
+| ro       | WER    |   9.20% |
+| ru       | WER    |   4.96% |
+| sd       | WER    | 184.20% |
+| sk       | WER    |   9.25% |
+| sl       | WER    |  19.15% |
+| sn       | WER    | 115.38% |
+| so       | WER    |  91.10% |
+| sr       | WER    |  28.49% |
+| sv       | WER    |   7.80% |
+| sw       | WER    |  34.57% |
+| ta       | WER    |  20.04% |
+| te       | WER    |  65.84% |
+| tg       | WER    |  80.86% |
+| th       | CER    |   8.78% |
+| tr       | WER    |   6.51% |
+| uk       | WER    |   6.28% |
+| ur       | WER    |  21.75% |
+| uz       | WER    |  86.28% |
+| vi       | WER    |   8.74% |
+| yo       | WER    |  97.26% |
+| yue      | CER    |  22.06% |
+| zh       | CER    |   7.98% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -49,62 +152,52 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mel + encode + decode, mean over the recorded
-iterations after warmup), with speedup over realtime in parentheses. Units:
-`ms` below 1 s, `s` above (2 decimal places). Decode latency dominates as
-model size grows; the encoder is only run once per 30-second window.
-
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 508.6 ms (21.6×) | 517.0 ms (21.3×) |
-| Metal   | dots (35.3s) |   1.38 s (25.7×) |   1.35 s (26.1×) |
-| CPU     | jfk (11.0s)  |    9.68 s (1.1×) |    7.48 s (1.5×) |
-| CPU     | dots (35.3s) |   19.86 s (1.8×) |   15.45 s (2.3×) |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `e0fa0f6`.
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Metal   | jfk (11.0s)  | 744.8 ms (14.77×) | 616.5 ms (17.84×) |
+| Metal   | dots (35.3s) |   1.79 s (19.74×) |   1.58 s (22.41×) |
+| CPU     | jfk (11.0s)  |    3.73 s (2.95×) |    4.14 s (2.66×) |
+| CPU     | dots (35.3s) |    8.07 s (4.38×) |    8.72 s (4.05×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-large-v3 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu \
-  --iters 3 --warmup 1 \
-  --name whisper-large-v3-publication
+uv run scripts/bench/run.py --profile --models whisper-large-v3
 ```
 
 ### AMD Ryzen 7 PRO 4750U
 
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  6.30 s (1.7×)  |  6.07 s (1.8×)  |
-| Vulkan  | dots (35.3s) |  14.42 s (2.5×) |  13.75 s (2.6×) |
-| CPU     | jfk (11.0s)  |  25.59 s (0.4×) |  19.96 s (0.6×) |
-| CPU     | dots (35.3s) |  53.80 s (0.7×) |  43.18 s (0.8×) |
+| Vulkan  | jfk (11.0s)  |  6.60 s (1.67×) |  6.63 s (1.66×) |
+| Vulkan  | dots (35.3s) | 15.20 s (2.32×) | 15.05 s (2.35×) |
+| CPU     | jfk (11.0s)  | 13.60 s (0.81×) | 12.95 s (0.85×) |
+| CPU     | dots (35.3s) | 31.24 s (1.13×) | 28.10 s (1.26×) |
 
-Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-large-v3 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name whisper-large-v3-publication
+uv run scripts/bench/run.py --profile --models whisper-large-v3
 ```
 
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against the transformers reference (`WhisperForConditionalGeneration`, fp32 CPU) on the manifest's case (`samples/jfk.wav`). All 23 checkpointed tensors fall within per-variant tolerance, and the transcript matches the HF reference verbatim. Tolerance budget lives at
-[`tests/tolerances/whisper-large-v3.json`](https://github.com/handy-computer/transcribe.cpp/blob/main/tests/tolerances/whisper-large-v3.json). Last validated at commit [`1854f57`](https://github.com/handy-computer/transcribe.cpp/tree/1854f57).
+[`tests/tolerances/whisper-large-v3.json`](https://github.com/handy-computer/transcribe.cpp/blob/main/tests/tolerances/whisper-large-v3.json).
 
 | Field | Value |
 | --- | --- |
@@ -112,24 +205,6 @@ transcribe.cpp is validated tensor-by-tensor against the transformers reference 
 | Manifest | `tests/golden/whisper/whisper-large-v3.manifest.json` |
 | Tolerance file | `tests/tolerances/whisper-large-v3.json` |
 | Command | `uv run scripts/validate.py all --family whisper --variant whisper-large-v3` |
-
-Selected tensors (worst observed across cases; see tolerance file for per-tensor budgets):
-
-| Tensor                 | Max abs diff | Mean abs diff | Notes |
-| ---------------------- | ---: | ---: | --- |
-| `enc.mel.in`           |  `2.229e-05` |   `4.055e-08` | fp32 mixed-radix FFT vs torch fp64 frontend |
-| `enc.conv1.out`        |  `1.574e-03` |   `4.796e-05` | fp32 conv stem |
-| `enc.conv2.out`        |  `4.495e-03` |   `6.128e-05` | stride-2 conv stem (matches enc.embed.out) |
-| `enc.block.0.out`      |  `1.093e-02` |   `1.163e-03` | first encoder block |
-| `enc.block.31.out`     |  `1.439e+00` |   `1.996e-03` | final encoder block (peak signal grows with depth) |
-| `enc.final`            |  `1.332e+00` |   `2.135e-03` | post-LN encoder output |
-| `dec.token_emb`        |  `0.000e+00` |   `0.000e+00` | exact zero-drift (`ggml_get_rows` on the F32 GGUF) |
-| `dec.block.0.out`      |  `1.465e-02` |   `6.079e-04` | first decoder block, prompt pass |
-| `dec.block.31.out`     |  `4.006e-01` |   `1.022e-02` | final decoder block (accumulated) |
-| `dec.out_before_head`  |  `1.770e-01` |   `1.271e-02` | post final LN, pre-vocab projection |
-| `dec.logits_raw`       |  `1.371e-01` |   `2.566e-02` | vocab projection (raw logits) |
-| `dec.logits`           |  `2.347e-01` |   `1.833e-02` | log-softmax over vocab |
-| `dec.logits_raw.gen20` |  `2.925e-02` |   `5.238e-03` | step-20 logits (KV-cached path) |
 
 The C++ mel frontend (Slaney filterbank + Hann periodic window +
 whisper-style log-mel compression) drives `enc.mel.in` to fp32-vs-fp64

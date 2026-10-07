@@ -65,6 +65,12 @@ struct MossHParams {
     std::vector<int32_t> prompt_prefix_tokens;
     std::vector<int32_t> prompt_suffix_tokens;
     std::vector<int32_t> digit_tokens;  // ids for '0'..'9'
+    // The suffix split around the instruction text (newer GGUFs; empty on
+    // older ones): suffix == head + encode(instruction) + tail. Lets the
+    // runtime append a hotword list to the instruction.
+    std::string          prompt_instruction;
+    std::vector<int32_t> prompt_instruction_head_tokens;
+    std::vector<int32_t> prompt_instruction_tail_tokens;
 
     // Token ids (resolved from tokenizer KV at load).
     int32_t bos_token_id = -1;

@@ -24,10 +24,12 @@ of tests.
 
 | Variable | Effect |
 | --- | --- |
+| `TRANSCRIBE_BACKENDS=<list>` | Restrict which backends may register: a comma-separated list of `cpu`, `metal`, `vulkan`, `cuda`, `rocm`, `other`, `all` (case-insensitive). An excluded backend never runs any code (no module load, no driver init). It can only narrow the mask a host passes to `transcribe_init_backends_ex()`, applies even if the host never calls it, and CPU is always kept. Unknown names are dropped and logged as an error naming what is still allowed, so a typo narrows rather than widens (`vulcan` means CPU-only). Unset or empty means `all`. Read once per process. |
 | `TRANSCRIBE_NO_FLASH` | Disable flash attention on encoder and decoder (forces the manual F32 path). |
 | `TRANSCRIBE_FORCE_FLASH` | Force flash attention on. Wins over `TRANSCRIBE_NO_FLASH` if both are set. |
 | `TRANSCRIBE_CONV_DIRECT_DW` / `TRANSCRIBE_CONV_NO_DIRECT_DW` | Force the depthwise-conv dispatch to the direct `conv_2d_dw` path / the im2col path, overriding the per-family backend default. |
 | `TRANSCRIBE_CONV_DIRECT_PW` / `TRANSCRIBE_CONV_NO_DIRECT_PW` | Force the pointwise-conv dispatch to direct `mul_mat` / im2col, overriding the backend default. |
+| `TRANSCRIBE_NO_REPETITION_GUARD` | Turn off the stop for greedy decodes that start repeating themselves, and the trim of a repeating tail at a budget stop (see [`input-limits.md`](input-limits.md)). For byte-exact reference parity; a looping decode then runs to its budget and keeps its repeats. Read once per process. |
 | `TRANSCRIBE_DUMP_DIR=<dir>` | Enable the per-stage tensor dumper; writes `<name>.f32` + `<name>.json` per dumped tensor into `<dir>`. The basis for the numerical-comparison harness (`scripts/compare_tensors.py`). |
 | `TRANSCRIBE_PERF_DEBUG` | Print a per-stage timing breakdown to stderr (DEBUG log) on the families that profile (`cohere`, `granite`, `canary`, `canary_qwen`, `moonshine`, `moonshine_streaming`, `moss`, `qwen3_asr`, `whisper`). For whisper, a value containing `cpu` or `all` additionally prints the CPU sub-section breakdown. |
 | `TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING` | Print a per-component streaming wall-time breakdown at stream finalize (voxtral_realtime). |
@@ -81,11 +83,16 @@ its var is unset. Convention: `TRANSCRIBE_<FAMILY>_GGUF`.
 | Variable | Test(s) |
 | --- | --- |
 | `TRANSCRIBE_PARAKEET_GGUF` | `parakeet_real_smoke`, `decoder_smoke` |
+| `TRANSCRIBE_PARAKEET_UNIFIED_GGUF` | `parakeet_buffered_stream_eos_smoke`, `stream_offline_interleave_smoke` |
+| `TRANSCRIBE_GIGAAM_GGUF` | `gigaam_workspace_release_smoke` |
+| `TRANSCRIBE_MULTITALKER_BUNDLE_GGUF` | `parakeet_multitalker_e2e_smoke` |
+| `TRANSCRIBE_SORTFORMER_GGUF` | `sortformer_diarize_unit`, `cli_diarize_smoke` |
 | `TRANSCRIBE_COHERE_GGUF` | `cohere_real_smoke`, `cohere_e2e_smoke` |
+| `TRANSCRIBE_GRANITE5_CTC_GGUF` | `granite5_ctc_real_smoke`, `granite5_ctc_e2e_smoke` |
 | `TRANSCRIBE_WHISPER_GGUF` | `whisper_e2e_smoke`, `whisper_tokenize_parity` |
 | `TRANSCRIBE_QWEN3_ASR_GGUF` (+ `_0_6B_GGUF` / `_1_7B_GGUF`) | qwen3_asr smokes / parity |
-| `TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF` | moonshine_streaming smokes |
-| `TRANSCRIBE_VOXTRAL_REALTIME_GGUF` | `voxtral_realtime_real_smoke` |
+| `TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF` | moonshine_streaming smokes, `stream_offline_interleave_smoke` |
+| `TRANSCRIBE_VOXTRAL_REALTIME_GGUF` | `voxtral_realtime_real_smoke`, `stream_offline_interleave_smoke` |
 | `TRANSCRIBE_WHISPER_BIN_*` | whisper.cpp `.bin` parser/e2e fixtures |
 
 Other test/tooling vars:

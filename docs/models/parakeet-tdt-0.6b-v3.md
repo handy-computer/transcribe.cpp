@@ -1,8 +1,13 @@
 # Parakeet TDT 0.6B v3
 
-NVIDIA's [`nvidia/parakeet-tdt-0.6b-v3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-ported to transcribe.cpp. A 0.6B-parameter Conformer encoder with a TDT/RNNT
-transducer decoder.
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-tdt-0.6b-v3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) at [`6d590f7`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/commit/6d590f7).
+
+Offline multilingual speech-to-text covering 25 European languages. A
+Conformer encoder with a TDT/RNNT transducer decoder. Takes a 16 kHz mono
+WAV and produces a transcript with optional token-level timestamps. Not a
+streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -17,25 +22,63 @@ Spanish, Swedish, Ukrainian.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`6d590f7`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/commit/6d590f77001d318fb17a0b5bf7ee329a91b52598),
-pinned 2026-04-16.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`6d590f7`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/commit/6d590f7), pinned 2026-04-16. Validated against the NeMo reference at transcribe.cpp commit [`bf0d0b7`](https://github.com/handy-computer/transcribe.cpp/tree/bf0d0b7) on 2026-04-18.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [parakeet-tdt-0.6b-v3-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-F32.gguf)       | 2.51 GB | 1.95% |
-| F16    | [parakeet-tdt-0.6b-v3-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-F16.gguf)       | 1.26 GB | 1.95% |
-| Q8_0   | [parakeet-tdt-0.6b-v3-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf)     | 740 MB  | 1.94% |
-| Q6_K   | [parakeet-tdt-0.6b-v3-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q6_K.gguf)     | 627 MB  | 1.93% |
-| Q5_K_M | [parakeet-tdt-0.6b-v3-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q5_K_M.gguf) | 565 MB  | 1.92% |
-| Q4_K_M | [parakeet-tdt-0.6b-v3-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q4_K_M.gguf) | 502 MB  | 1.98% |
+| F32          | [parakeet-tdt-0.6b-v3-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-F32.gguf) | 2.51 GB | 1.95% |
+| F16          | [parakeet-tdt-0.6b-v3-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-F16.gguf) | 1.26 GB | 1.95% |
+| Q8_0         | [parakeet-tdt-0.6b-v3-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q8_0.gguf) |  740 MB | 1.94% |
+| Q6_K         | [parakeet-tdt-0.6b-v3-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q6_K.gguf) |  610 MB | 1.93% |
+| Q5_K_M       | [parakeet-tdt-0.6b-v3-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q5_K_M.gguf) |  549 MB | 1.92% |
+| Q4_K_M       | [parakeet-tdt-0.6b-v3-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q4_K_M.gguf) |  485 MB | 1.98% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy transducer decoding and no external LM. F32 reference baseline:
-1.95%. NVIDIA's self-reported number on the same split is 1.93% (from the
-[HF model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3))
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy transducer decoding, no external LM. F32 reference baseline: 1.95%. NVIDIA's
+self-reported number on the same split is 1.93%.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| bg       | WER    | 12.81% |
+| cs       | WER    | 12.31% |
+| da       | WER    | 18.64% |
+| de       | WER    |  5.24% |
+| el       | WER    | 35.33% |
+| en       | WER    |  4.83% |
+| es       | WER    |  3.65% |
+| et       | WER    | 17.96% |
+| fi       | WER    | 13.30% |
+| fr       | WER    |  5.30% |
+| hr       | WER    | 12.59% |
+| hu       | WER    | 16.06% |
+| it       | WER    |  3.02% |
+| lt       | WER    | 22.20% |
+| lv       | WER    | 23.77% |
+| mt       | WER    | 20.63% |
+| nl       | WER    |  7.66% |
+| pl       | WER    |  7.37% |
+| pt       | WER    |  4.96% |
+| ro       | WER    | 12.62% |
+| ru       | WER    |  6.54% |
+| sk       | WER    | 10.19% |
+| sl       | WER    | 24.30% |
+| sv       | WER    | 15.25% |
+| uk       | WER    |  6.84% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -56,51 +99,47 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  74 ms (149×) |  76 ms (146×) |
-| Metal   | dots (35.3s) | 231 ms (153×) | 230 ms (153×) |
-| CPU     | jfk (11.0s)  |  381 ms (29×) |  323 ms (34×) |
-| CPU     | dots (35.3s) |  1.29 s (27×) |  1.11 s (32×) |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  60 ms (181.74×) |  62 ms (178.45×) |
+| Metal   | dots (35.3s) | 164 ms (215.45×) | 167 ms (212.12×) |
+| CPU     | jfk (11.0s)  |  286 ms (38.48×) |  310 ms (35.53×) |
+| CPU     | dots (35.3s) |  1.00 s (35.16×) |  1.08 s (32.71×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  858 ms (13×) |  868 ms (13×) |
-| Vulkan  | dots (35.3s) |  3.07 s (12×) |  3.10 s (11×) |
-| CPU     | jfk (11.0s)  |  1.41 s (8×)  |  1.22 s (9×)  |
-| CPU     | dots (35.3s) |  5.34 s (7×)  |  4.78 s (7×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 453 ms (24.29×) | 458 ms (24.01×) |
+| Vulkan  | dots (35.3s) | 1.37 s (25.84×) | 1.39 s (25.50×) |
+| CPU     | jfk (11.0s)  | 729 ms (15.09×) | 794 ms (13.86×) |
+| CPU     | dots (35.3s) | 2.89 s (12.22×) | 2.97 s (11.89×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-tdt-0.6b-v3 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-tdt-0.6b-v3-publication
+uv run scripts/bench/run.py --profile --models parakeet-tdt-0.6b-v3
 ```
 
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against NeMo on `samples/jfk.wav`.
 All 18 checkpointed tensors fall within family tolerance, and the final
-transcript matches the NeMo reference verbatim. Last validated at commit
-[`bf0d0b7`](https://github.com/handy-computer/transcribe.cpp/tree/bf0d0b7).
+transcript matches the NeMo reference verbatim.
 
 | Field | Value |
 | --- | --- |
@@ -108,21 +147,6 @@ transcript matches the NeMo reference verbatim. Last validated at commit
 | Dump script | `scripts/dump_reference_parakeet_nemo.py` |
 | Manifest | `tests/golden/parakeet/parakeet-tdt-0.6b-v3.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family parakeet --variant parakeet-tdt-0.6b-v3` |
-
-Selected tensors:
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.mel.in`          | `5.189e+00` | `1.639e-03` | fp64 vs fp32 STFT precision gap |
-| `enc.pre_encode.out`  | `6.940e+03` | `2.438e+02` | Mel gap amplified through pre-encoder (v3 amplifies more aggressively than v2) |
-| `enc.block.0.out`     | `1.296e+03` | `1.468e+01` | Early encoder, still amplified |
-| `enc.block.12.out`    | `1.285e+03` | `1.433e+01` | Mid-encoder |
-| `enc.block.23.out`    | `3.055e-02` | `3.040e-04` | Converged by final block |
-| `enc.final`           | `3.055e-02` | `3.040e-04` | Final encoder output |
-| `dec.enc_out`         | `3.055e-02` | `3.040e-04` | Decoder input from encoder |
-| `dec.embed.0`         | `0.000e+00` | `0.000e+00` | Exact match |
-| `dec.lstm.*`          | `<= 1.192e-07` | near zero | fp32 round-off on first step |
-| `dec.joint.0`         | `1.190e+01` | `1.098e+01` | Joint projection over encoder drift |
 
 Same divergence profile as v2: C++ runs the STFT in fp64 where NeMo runs fp32.
 The gap enters at the mel spectrogram, is amplified through the pre-encoder

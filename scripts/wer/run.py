@@ -45,6 +45,11 @@ Usage:
                     with this flag, run.py fails loud. If --language is
                     omitted and the manifest has a single consistent
                     language, it is inferred automatically.
+    --itn MODE      off (default) | on | default. Pinned off so hypotheses
+                    stay in spoken form and remain comparable with the
+                    ITN-off reference runs, regardless of what the library's
+                    per-family default is. Stamped into the batch_header
+                    recipe. Only 'default' defers to the library.
 
 Output JSONL:
     - First line (batch header):
@@ -76,11 +81,13 @@ if REMOTE_HELPERS.is_dir() and str(REMOTE_HELPERS) not in sys.path:
     sys.path.insert(0, str(REMOTE_HELPERS))
 
 from dataset_specs import (  # noqa: E402
+
     default_language_for,
     ingest_args_for,
     local_manifest_path_for,
     parse_dataset_spec,
 )
+from languages import LANGUAGE_ALIASES  # noqa: E402
 
 
 def read_stderr_tail(path: str, max_lines: int = 50, max_bytes: int = 65536) -> str:
@@ -168,6 +175,27 @@ def resolve_dataset(repo: Path, spec: str) -> tuple[Path, str | None]:
     return manifest, default_lang
 
 
+def engine_sha() -> str | None:
+    """Short SHA of the checkout that built transcribe-cli, if it is a repo.
+
+    TRANSCRIBE_ENGINE_SHA overrides the lookup, for a runner that has the
+    binary but not the checkout: a Modal container is handed a source tree
+    with no .git, so `git rev-parse` there finds nothing and every remote
+    sweep would land an unattributable row. The dispatcher passes the sha of
+    the tree it built from instead.
+    """
+    override = os.environ.get("TRANSCRIBE_ENGINE_SHA", "").strip()
+    if override:
+        return override
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             cwd=Path(__file__).resolve().parents[2])
+        return out.stdout.strip() or None if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def main() -> int:
     repo = find_repo_root(Path(__file__).parent)
 
@@ -202,7 +230,7 @@ def main() -> int:
                         "batched encoder pads to the group max). Output is "
                         "keyed by file, so id mapping is preserved.")
     p.add_argument("--backend",
-                   choices=("auto", "cpu", "cpu_accel", "metal", "vulkan"),
+                   choices=("auto", "cpu", "cpu_accel", "metal", "vulkan", "cuda"),
                    default=None,
                    help="Compute backend (default: transcribe-cli default)")
     p.add_argument("--kv-type",
@@ -217,6 +245,19 @@ def main() -> int:
     p.add_argument("--diarize", action="store_true",
                    help="Request diarization and retain timed speaker "
                         "intervals for scripts/wer/der.py")
+    p.add_argument("--publication-profile", default="",
+                   help="publication profile that selected this run; normally "
+                        "set by the profile-aware local or Modal dispatcher")
+    p.add_argument("--itn", choices=("off", "on", "default"), default="off",
+                   help="Inverse text normalization for ITN-aware families "
+                        "(sensevoice, funasr_nano). Pinned to 'off' — the "
+                        "harness measures spoken-form text so hypotheses stay "
+                        "comparable with the ITN-off reference runs, "
+                        "independent of the library's per-family run-time "
+                        "default (ON for sensevoice, OFF for funasr_nano). "
+                        "Do not change this to refresh a published table "
+                        "without re-running the reference side to match. "
+                        "See docs/tools/wer.md.")
     p.add_argument("--stream-chunk-ms", type=int, default=0,
                    help="When > 0, drive each utterance through the "
                         "streaming API in N-ms chunks. Requires a model "
@@ -278,7 +319,10 @@ def main() -> int:
     # models like nemotron-3.5-asr-streaming-0.6b require because their
     # caps.languages list carries only the BCP-47 long forms.
     def _primary(tag: str) -> str:
-        return tag.split("-", 1)[0].lower() if tag else tag
+        if not tag:
+            return tag
+        primary = tag.split("-", 1)[0].lower()
+        return LANGUAGE_ALIASES.get(tag.lower(), LANGUAGE_ALIASES.get(primary, primary))
     manifest_langs = {
         e["language"] for e in manifest if e.get("language")
     }
@@ -329,6 +373,7 @@ def main() -> int:
     print(f"model:    {args.model}")
     print(f"manifest: {args.manifest} ({total} utterances)")
     print(f"language: {args.language or '(default)'}")
+    print(f"itn:      {args.itn}")
     print(f"output:   {out_path}")
     print(f"mode:     batch (single process, model loads once); "
           f"batch_size={bs}"
@@ -360,6 +405,15 @@ def main() -> int:
     cmd += ["--timestamps", args.timestamps]
     if args.diarize:
         cmd += ["--diarize"]
+    # Always explicit, never inherited. The library's per-family ITN default
+    # is a product decision that can change; the benchmark recipe must not
+    # move with it, or a published WER silently starts describing different
+    # text. Families without an ITN toggle ignore the flag (the library logs
+    # an advisory WARN, suppressed here by -q).
+    if args.itn == "off":
+        cmd += ["--no-itn"]
+    elif args.itn == "on":
+        cmd += ["--itn"]
     if args.stream_chunk_ms > 0:
         cmd += ["--stream-chunk-ms", str(args.stream_chunk_ms)]
         if args.stream_att_right is not None:
@@ -428,11 +482,17 @@ def main() -> int:
                 result["recipe"] = {
                     "timestamps": args.timestamps,
                     "diarize": args.diarize,
+                    "itn": args.itn,
                     "language": args.language or "auto-detect",
                     "batch_size": bs,
                     "backend": args.backend or "default",
                     "kv_type": args.kv_type or "default",
                     "decode": "greedy+default-fallback",
+                    # The build that produced the hypotheses. A score with no
+                    # engine behind it cannot be reproduced or superseded, and
+                    # the catalog refuses to publish one.
+                    "engine_sha": engine_sha(),
+                    "publication_profile": args.publication_profile or None,
                 }
                 fout.write(json.dumps(result) + "\n")
                 fout.flush()

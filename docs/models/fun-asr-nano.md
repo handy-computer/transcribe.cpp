@@ -34,10 +34,12 @@ transcribe.cpp's WER pipeline. See each per-variant doc for the full
 quant matrix and per-language WER/CER on the language each variant
 targets.
 
-| Variant | Params | Q8_0 size | WER (Q8_0) | Languages | Doc |
-| --- | ---: | ---: | ---: | --- | --- |
-| `fun-asr-nano-2512`     | ~800M | 850 MB | 1.79% | zh, en, ja + 7 dialects | [fun-asr-nano-2512.md](fun-asr-nano-2512.md) |
-| `fun-asr-mlt-nano-2512` | ~800M | 850 MB | 1.74% | 31 languages            | [fun-asr-mlt-nano-2512.md](fun-asr-mlt-nano-2512.md) |
+<!-- catalog:family variants=fun-asr-nano-2512,fun-asr-mlt-nano-2512 -->
+| Variant                 | Params | Languages    | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `fun-asr-nano-2512`     |   830M | zh, en, ja   |    891 MB | LibriSpeech test-clean (WER) | 1.79% | -            | [fun-asr-nano-2512.md](fun-asr-nano-2512.md) |
+| `fun-asr-mlt-nano-2512` |   830M | 31 languages |    891 MB | LibriSpeech test-clean (WER) | 1.74% | -            | [fun-asr-mlt-nano-2512.md](fun-asr-mlt-nano-2512.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

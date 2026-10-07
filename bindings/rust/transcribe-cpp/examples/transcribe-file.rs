@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pcm = common::load_wav(&audio_path);
 
     let model = Model::load(&model_path)?;
-    let caps = model.capabilities();
+    let caps = model.capabilities()?;
     println!(
         "model: {} on {} | max_ts={:?}",
         model.arch(),

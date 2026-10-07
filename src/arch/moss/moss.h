@@ -55,10 +55,12 @@ void build_audio_span(const MossHParams &    hp,
 // out_audio_positions holds the absolute prompt positions of the audio_pad
 // tokens (in order), so the b-th audio feature is scattered to
 // input_ids[out_audio_positions[b]].
-void build_prompt_tokens(const MossHParams &    hp,
-                         int                    audio_seq_len,
-                         std::vector<int32_t> & out_ids,
-                         std::vector<int32_t> & out_audio_positions);
+// `suffix` overrides hp.prompt_suffix_tokens (the hotword-extended suffix).
+void build_prompt_tokens(const MossHParams &          hp,
+                         int                          audio_seq_len,
+                         std::vector<int32_t> &       out_ids,
+                         std::vector<int32_t> &       out_audio_positions,
+                         const std::vector<int32_t> * suffix = nullptr);
 
 struct MossModel final : public transcribe_model {
     Tokenizer      tok;
@@ -81,9 +83,6 @@ struct MossModel final : public transcribe_model {
 };
 
 struct MossSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     transcribe::causal_lm::KvCache kv_cache;
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).

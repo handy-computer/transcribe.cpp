@@ -1,13 +1,16 @@
 // run_dispatch_unit.cpp - dispatcher-level transcribe_run behavior tests.
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
 #include "transcribe.h"
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <string>
 
 namespace {
@@ -59,6 +62,7 @@ void test_no_run_hook_clears_and_not_implemented() {
 constexpr uint32_t kFakeRunKind = 0xF00D;
 
 bool              g_run_called          = false;
+bool              g_run_throw           = false;  // fake_run throws std::bad_alloc
 transcribe_status g_run_validate_status = TRANSCRIBE_OK;
 
 transcribe_status fake_run(transcribe_session *          session,
@@ -68,7 +72,10 @@ transcribe_status fake_run(transcribe_session *          session,
     (void) pcm;
     (void) n_samples;
     (void) params;
-    g_run_called        = true;
+    g_run_called = true;
+    if (g_run_throw) {
+        throw std::bad_alloc();
+    }
     // A successful run installs a fresh result.
     session->full_text  = "fresh result";
     session->has_result = true;
@@ -441,13 +448,361 @@ void test_raw_text_single_batch_and_alias() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// release_scratch: the dispatcher releases per-run compute scratch after
+// every offline run or batch that reached its commit point: exactly once per
+// public call, and never on a pre-clear rejection.
+// ---------------------------------------------------------------------------
+
+// release_scratch itself is non-virtual on the base (it always frees the
+// base-owned sched/compute_ctx, both null here); count via the family hook
+// it invokes afterwards.
+struct CountingSession final : public transcribe_session {
+    int releases = 0;
+
+    void on_scratch_released() noexcept override { ++releases; }
+};
+
+void test_release_scratch_after_run_and_batch() {
+    transcribe_model model;
+    model.arch = &run_validate_arch();  // run_batch == nullptr -> serial fallback
+
+    CountingSession session;
+    session.model = &model;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+    g_run_validate_status = TRANSCRIBE_OK;
+
+    float pcm = 0.0f;
+    CHECK(transcribe_run(&session, &pcm, 1, &params) == TRANSCRIBE_OK);
+    CHECK(session.releases == 1);
+
+    // A malformed call never reaches the run hook and must not release.
+    CHECK(transcribe_run(&session, nullptr, 1, &params) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(session.releases == 1);
+
+    // Family preflight rejection: nothing ran, nothing released.
+    transcribe_ext ext;
+    ext.size              = sizeof(transcribe_ext);
+    ext.kind              = kFakeRunKind;
+    params.family         = &ext;
+    g_run_validate_status = TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+    CHECK(transcribe_run(&session, &pcm, 1, &params) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(session.releases == 1);
+    params.family         = nullptr;
+    g_run_validate_status = TRANSCRIBE_OK;
+
+    // Batch (serial fallback, 3 utterances): once per call, not per item.
+    const float * pcms[3] = { &pcm, &pcm, &pcm };
+    const int     lens[3] = { 1, 1, 1 };
+    CHECK(transcribe_run_batch(&session, pcms, lens, 3, &params) == TRANSCRIBE_OK);
+    CHECK(session.releases == 2);
+
+    // A family hook that throws is mapped to a status by the api_guard and
+    // must still release exactly once: the scratch is at its high-water mark
+    // on precisely this path. Single run and batch (serial fallback).
+    g_run_throw = true;
+    CHECK(transcribe_run(&session, &pcm, 1, &params) == TRANSCRIBE_ERR_OOM);
+    CHECK(session.releases == 3);
+    CHECK(transcribe_run_batch(&session, pcms, lens, 3, &params) == TRANSCRIBE_ERR_OOM);
+    CHECK(session.releases == 4);
+    g_run_throw = false;
+}
+
+// ---------------------------------------------------------------------------
+// Serial batch fallback truncation: one truncated or repetition-stopped
+// utterance must not mark the rest (the flags are per-run state), and its
+// partial transcript must survive. fake_family_run derives its status from the
+// session flags, as every autoregressive family's run() does.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+transcribe_status fake_family_run(transcribe_session *          session,
+                                  const float *                 pcm,
+                                  int                           n_samples,
+                                  const transcribe_run_params * params) {
+    (void) n_samples;
+    (void) params;
+    const bool repeat   = pcm[0] > 1.5f;
+    const bool truncate = pcm[0] > 0.5f && !repeat;
+    session->clear_result();
+    session->full_text  = repeat ? "looped" : truncate ? "partial" : "complete";
+    session->has_result = true;
+    if (repeat) {
+        session->mark_repetition_stop();
+    } else if (truncate) {
+        session->was_truncated = true;
+    }
+    return session->truncation_status();
+}
+
+transcribe_status fake_family_run_batch(transcribe_session *          session,
+                                        const float * const *         pcm,
+                                        const int *                   n_samples,
+                                        int                           n,
+                                        const transcribe_run_params * params) {
+    return transcribe::run_batch_serial(
+        session, pcm, n_samples, n, [&](const float * p, int ns) { return fake_family_run(session, p, ns, params); });
+}
+
+void check_truncated_then_clean(const transcribe::Arch & arch) {
+    transcribe_model model;
+    model.arch = &arch;
+
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
+
+    const float   repeating = 2.0f, truncating = 1.0f, clean = 0.0f;
+    const float * pcm[4] = { &repeating, &clean, &truncating, &clean };
+    const int     ns[4]  = { 1, 1, 1, 1 };
+    CHECK(transcribe_run_batch(&session, pcm, ns, 4, &params) == TRANSCRIBE_OK);
+    CHECK(transcribe_batch_n_results(&session) == 4);
+    CHECK(transcribe_batch_status(&session, 0) == TRANSCRIBE_ERR_OUTPUT_REPETITION);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 0), "looped") == 0);
+    CHECK(transcribe_batch_status(&session, 1) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 1), "complete") == 0);
+    CHECK(transcribe_batch_status(&session, 2) == TRANSCRIBE_ERR_OUTPUT_TRUNCATED);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "partial") == 0);
+    CHECK(transcribe_batch_status(&session, 3) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 3), "complete") == 0);
+    CHECK(transcribe_was_truncated(&session));
+
+    // Single-shot: the repetition stop is its own status, keeps its partial,
+    // and does not leak into the next run.
+    CHECK(transcribe_run(&session, &repeating, 1, &params) == TRANSCRIBE_ERR_OUTPUT_REPETITION);
+    CHECK(std::strcmp(transcribe_full_text(&session), "looped") == 0);
+    CHECK(transcribe_was_truncated(&session));
+    CHECK(transcribe_run(&session, &clean, 1, &params) == TRANSCRIBE_OK);
+    CHECK(!transcribe_was_truncated(&session));
+}
+
+void test_batch_serial_truncation_is_per_utterance() {
+    // Family run_batch hook falling back to its serial path.
+    const transcribe::Arch family_arch = {
+        "fake-family-serial",
+        nullptr,
+        nullptr,
+        fake_family_run,
+        fake_family_run_batch,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+    };
+    check_truncated_then_clean(family_arch);
+
+    // No run_batch hook: the dispatcher's generic serial fallback.
+    const transcribe::Arch dispatcher_arch = {
+        "fake-dispatcher-serial",
+        nullptr,
+        nullptr,
+        fake_family_run,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+    };
+    check_truncated_then_clean(dispatcher_arch);
+}
+
+// ---------------------------------------------------------------------------
+// Generic prompting fields: validation, warn-and-strip, and the normalized
+// full-size view families receive.
+// ---------------------------------------------------------------------------
+
+transcribe_run_params g_seen_params;
+int                   g_prompt_runs = 0;
+
+transcribe_status capture_run(transcribe_session *          session,
+                              const float *                 pcm,
+                              int                           n_samples,
+                              const transcribe_run_params * params) {
+    (void) pcm;
+    (void) n_samples;
+    g_seen_params = *params;
+    ++g_prompt_runs;
+    session->full_text  = "fresh result";
+    session->has_result = true;
+    return TRANSCRIBE_OK;
+}
+
+const transcribe::Arch & capture_arch() {
+    static const transcribe::Arch arch = {
+        "fake-prompt", nullptr, nullptr, capture_run, nullptr, nullptr,
+        nullptr,       nullptr, nullptr, nullptr,     nullptr, nullptr,
+    };
+    return arch;
+}
+
+transcribe_status prompt_run(transcribe_model & model, const transcribe_run_params & params) {
+    transcribe_session session;
+    session.model               = &model;
+    session.full_text           = "previous result";
+    session.has_result          = true;
+    float                   pcm = 0.0f;
+    const transcribe_status st  = transcribe_run(&session, &pcm, 1, &params);
+    if (st != TRANSCRIBE_OK) {
+        // Every dispatcher-level prompting rejection is pre-clear (family
+        // text checks go through check_prompting_text / run_validate).
+        CHECK(session.has_result);
+        CHECK(session.full_text == "previous result");
+    }
+    return st;
+}
+
+void test_prompting_validation() {
+    transcribe_model model;
+    model.arch           = &capture_arch();
+    const char * terms[] = { "GGUF", "", "ggml" };
+
+    transcribe_run_params p;
+    transcribe_run_params_init(&p);
+    CHECK(p.vocabulary == nullptr && p.n_vocabulary == 0 && p.prompt == nullptr && p.prefix == nullptr);
+
+    // Vocabulary shape.
+    p.n_vocabulary = -1;
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+    p.n_vocabulary = 2;
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+    const char * with_null[] = { "a", nullptr };
+    p.vocabulary             = with_null;
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+
+    // INSTRUCT without the bit, then its argument rules with it.
+    transcribe_run_params_init(&p);
+    p.task   = TRANSCRIBE_TASK_INSTRUCT;
+    p.prompt = "Summarize.";
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_UNSUPPORTED_TASK);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INSTRUCT, true);
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(g_seen_params.task == TRANSCRIBE_TASK_INSTRUCT);
+    CHECK(std::strcmp(g_seen_params.prompt, "Summarize.") == 0);
+    p.prompt = "";
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+    p.prompt = nullptr;
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+    p.prompt          = "Summarize.";
+    p.target_language = "fr";
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+    p.target_language = nullptr;
+    p.timestamps      = TRANSCRIBE_TIMESTAMPS_NONE;
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+
+    // Prefix: hard gate, and never under INSTRUCT.
+    p.prefix = "Good morning";
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, true);
+    CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);
+    p.task = TRANSCRIBE_TASK_TRANSCRIBE;
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(g_seen_params.prefix, "Good morning") == 0);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, false);
+    p.prefix = "";  // empty == absent
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(g_seen_params.prefix == nullptr);
+
+    // Soft inputs without their bits: warn, run, and the family sees none.
+    transcribe_run_params_init(&p);
+    p.vocabulary   = terms;
+    p.n_vocabulary = 3;
+    p.prompt       = "Earnings call.";
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(g_seen_params.vocabulary == nullptr && g_seen_params.n_vocabulary == 0);
+    CHECK(g_seen_params.prompt == nullptr);
+
+    // With the bits, they pass through untouched.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT_PROMPT, true);
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(g_seen_params.vocabulary == terms && g_seen_params.n_vocabulary == 3);
+    CHECK(std::strcmp(g_seen_params.prompt, "Earnings call.") == 0);
+
+    // Vocabulary under INSTRUCT needs both V and I.
+    p.task   = TRANSCRIBE_TASK_INSTRUCT;
+    p.prompt = "Summarize.";
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(g_seen_params.n_vocabulary == 3);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, false);
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(g_seen_params.n_vocabulary == 0);
+}
+
+// A caller compiled before the prompting fields existed passes a struct that
+// ends at spec_k_drafts. Whatever lies past it must be read as defaults.
+void test_prompting_short_struct_reads_defaults() {
+    transcribe_model model;
+    model.arch = &capture_arch();
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, true);
+
+    transcribe_run_params p;
+    std::memset(&p, 0xA5, sizeof(p));
+    transcribe_run_params base;
+    transcribe_run_params_init(&base);
+    const size_t old_size = offsetof(transcribe_run_params, spec_k_drafts) + sizeof(base.spec_k_drafts);
+    std::memcpy(&p, &base, old_size);
+    p.struct_size = old_size;
+
+    CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
+    CHECK(g_seen_params.vocabulary == nullptr && g_seen_params.n_vocabulary == 0);
+    CHECK(g_seen_params.prompt == nullptr && g_seen_params.prefix == nullptr);
+    CHECK(g_seen_params.struct_size == old_size);
+}
+
+void test_prompting_batch_rejects_prefix() {
+    transcribe_model model;
+    model.arch = &capture_arch();
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, true);
+
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_run_params p;
+    transcribe_run_params_init(&p);
+    p.prefix             = "Good morning";
+    float         a      = 0.0f;
+    const float * pcm[2] = { &a, &a };
+    const int     ns[2]  = { 1, 1 };
+    CHECK(transcribe_run_batch(&session, pcm, ns, 2, &p) == TRANSCRIBE_ERR_INVALID_ARG);
+
+    // Vocabulary is fine in a batch and reaches every utterance.
+    const char * terms[] = { "GGUF" };
+    p.prefix             = nullptr;
+    p.vocabulary         = terms;
+    p.n_vocabulary       = 1;
+    g_prompt_runs        = 0;
+    CHECK(transcribe_run_batch(&session, pcm, ns, 2, &p) == TRANSCRIBE_OK);
+    CHECK(g_prompt_runs == 2);
+    CHECK(g_seen_params.n_vocabulary == 1);
+}
+
+}  // namespace
+
 int main() {
     test_no_run_hook_clears_and_not_implemented();
+    test_batch_serial_truncation_is_per_utterance();
+    test_release_scratch_after_run_and_batch();
     test_run_validate_failure_preserves_snapshot();
     test_run_validate_success_clears_and_runs();
     test_advisory_enum_validation();
     test_batch_abort_pads_missing_to_n();
     test_batch_fastpath_abort_pads_missing_to_n();
     test_raw_text_single_batch_and_alias();
+    test_prompting_validation();
+    test_prompting_short_struct_reads_defaults();
+    test_prompting_batch_rejects_prefix();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

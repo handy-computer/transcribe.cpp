@@ -85,7 +85,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc"]
+            "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", "encoder-diarizer"]
           },
           "description": "Heuristic matches against known patterns. Human selects one in architecture_pattern."
         },
@@ -288,7 +288,7 @@
     },
     "architecture_pattern": {
       "type": ["string", "null"],
-      "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", null]
+      "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", "encoder-diarizer", null]
     },
     "known_risks": {
       "type": "array",

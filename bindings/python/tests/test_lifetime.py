@@ -76,18 +76,14 @@ def test_gc_order_session_keeps_model_alive(model_path, audio_pcm):
 
 # --- multi-session use of one model ------------------------------------------
 #
-# SUPPORTED in 0.x: many sessions on one model, run serially (from any
-# threads). NOT yet supported: overlapping runs across sessions of one model
-# — they share the model's compute backend and some family state, so
-# concurrent runs race (observed: corrupted whisper decodes on CPU,
-# command-buffer failures on Metal). The xfail below pins the limitation so
-# the day a per-session backend architecture lands, the XPASS flags it for
-# promotion to a hard test.
+# Sessions of one model share its compute backend, so the binding serializes
+# their calls with a model-wide lock (see Model). The model-free lock and
+# stream lease tests live in test_compute_lock.py.
 
 
 def test_serial_sessions_across_threads(model_path, audio_pcm):
-    # Two threads, each with its own session, runs SERIALIZED by a lock:
-    # the supported session-pool pattern.
+    # Two threads, each with its own session, runs serialized by a caller
+    # lock: must keep working (it nests with the binding's lock).
     import threading
 
     lock = threading.Lock()
@@ -114,12 +110,11 @@ def test_serial_sessions_across_threads(model_path, audio_pcm):
     assert all("country" in text for text in results.values()), results
 
 
-# Run INSIDE a subprocess: the known failure mode is NATIVE (corrupted
-# decodes, Metal command-buffer failures, potentially a crash or a wedged
-# thread). xfail can absorb a Python assert but not a segfault of the test
-# runner, and a wedged native thread must never reach interpreter teardown
-# in the CI process (freeing the session under an in-flight native call is
-# a use-after-free). os._exit on the wedge path skips teardown on purpose.
+# Run INSIDE a subprocess: a regression of the compute lock fails NATIVELY
+# (corrupted decodes, Metal command-buffer failures, potentially a crash or a
+# wedged thread). A segfault must fail this test, not kill the runner, and a
+# wedged native thread must never reach interpreter teardown in the CI
+# process. os._exit on the wedge path skips teardown on purpose.
 _CONCURRENT_RUNS_SNIPPET = """\
 import array, os, sys, threading, wave
 
@@ -136,7 +131,8 @@ results, errors = {}, []
 def worker(tag, model):
     try:
         with model.session() as session:
-            results[tag] = session.run(pcm).text.lower()
+            for k in range(2):  # NO caller lock: the binding serializes
+                results[(tag, k)] = session.run(pcm).text.lower()
     except Exception as exc:
         errors.append((tag, repr(exc)))
 
@@ -152,18 +148,14 @@ with t.Model(model_path) as model:
         os._exit(3)  # never free handles under an in-flight native call
 
 assert not errors, errors
-assert len(results) == 2 and all("country" in v for v in results.values()), results
+assert len(results) == 4 and all("country" in v for v in results.values()), results
 print("CONCURRENT-OK")
 """
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="known 0.x limitation: overlapping runs on sessions of one model "
-    "race on the shared backend/model state (see Model docstring and "
-    "notes/bindings-review-fixes.md); per-session backends planned",
-)
 def test_concurrent_sessions_on_shared_model(model_path, audio_path):
+    # Unsynchronized callers on two sessions of one model wait for each
+    # other and both decode cleanly.
     import os
     import subprocess
     import sys

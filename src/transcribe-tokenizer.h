@@ -131,6 +131,33 @@ class Tokenizer {
     // token-type guard.
     bool is_control(int id) const;
 
+    // True if the token at `id` is an UNKNOWN-typed entry per the GGUF
+    // tokenizer.ggml.token_type array (= TOKEN_TYPE_UNKNOWN = 2, the
+    // llama.cpp convention used in scripts/lib/gguf_common.py).
+    // The NeMo SentencePiece families (parakeet, canary) mark `<unk>`
+    // UNKNOWN-typed. Out-of-range ids and tokenizers that did not carry a
+    // token_type array return false, so this is safe to consult without a
+    // per-family token-type guard.
+    bool is_unknown(int id) const;
+
+    // True if `id` should be dropped from display text when the caller
+    // has not asked to keep special tags: CONTROL- or UNKNOWN-typed, the
+    // declared unk id (covers GGUFs without a token_type array), or any
+    // piece spelled "<unk>". The last covers aggregate tokenizers (older
+    // canary), where every per-language sub-vocab has its own <unk> at its
+    // offset and GGUFs converted before the converter typed those UNKNOWN
+    // left them NORMAL.
+    //
+    // `<unk>` matters because NeMo models can legitimately emit it: their
+    // training transcripts contained characters missing from the vocab
+    // (e.g. nemotron-3.5 lacks « » — … № Ё, all common in Russian;
+    // canary-180m-flash lacks … in every language and « „ in de), which
+    // SentencePiece encoded as <unk>, so the model learned to predict it.
+    // Without stripping, it decodes to a literal "<unk>" in transcripts.
+    // Families with extra display-only tags (parakeet's <ll-RR> fallback)
+    // layer their own checks on top.
+    bool is_strippable_special(int id) const;
+
     // Register a synthesized "special-piece" literal that find() will
     // resolve. Used by source adapters that don't carry every special-
     // token string in the vocab itself — notably the legacy whisper.cpp
@@ -183,6 +210,18 @@ class Tokenizer {
     //                                  merges (the encoder needs them).
     transcribe_status encode(const std::string & text, std::vector<int32_t> & out_ids) const;
 
+    // SentencePiece BPE encode over the pieces with ids in [lo, hi) (hi < 0 =
+    // whole vocab; canary passes one language's sub-vocab range). Piece
+    // order is the merge rank, so scores are not needed. Input normalization
+    // approximates nmt_nfkc, not full NFKC. A run of uncoverable characters
+    // becomes one unknown piece. Accepts GGUF model "unigram" or "bpe" (the
+    // canary converter labels these BPE models "unigram").
+    transcribe_status encode_sentencepiece_bpe(const std::string &    text,
+                                               std::vector<int32_t> & out_ids,
+                                               int                    lo,
+                                               int                    hi,
+                                               bool                   remove_extra_whitespaces) const;
+
     // Identification + special token ids. -1 if the corresponding key
     // was absent from the GGUF.
     const std::string & model_type() const { return model_; }
@@ -211,6 +250,10 @@ class Tokenizer {
     void set_pretokenizer(const std::string & pre) { pre_ = pre; }
 
   private:
+    // True if token_type_[id] == type; false for out-of-range ids or an
+    // absent token_type array.
+    bool has_token_type(int id, int32_t type) const;
+
     // How decode() should reassemble token bytes. Set during load().
     //   SentencePiece    - U+2581 → ASCII space (unigram / bpe)
     //   Gpt2ByteUnicode  - invert GPT-2 byte-to-unicode per codepoint

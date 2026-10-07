@@ -153,9 +153,7 @@ struct CohereModel final : public transcribe_model {
 };
 
 struct CohereSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-    ggml_tensor *        encoder_out = nullptr;
+    ggml_tensor * encoder_out = nullptr;
 
     // KV cache for the decoder.
     CohereKvCache kv_cache;
@@ -174,6 +172,7 @@ struct CohereSession final : public transcribe_session {
 
     CohereSession() = default;
     ~CohereSession() override;
+    void on_scratch_released() noexcept override;
 };
 
 }  // namespace transcribe::cohere

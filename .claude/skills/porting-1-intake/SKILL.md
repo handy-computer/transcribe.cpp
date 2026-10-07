@@ -55,6 +55,12 @@ field semantics.
 
 2. **Architecture pattern.** One of `encoder-transducer`, `encoder-decoder`, `audio-llm`, `encoder-ctc`. The script's `config.architecture_candidates` is a heuristic starting point. If it doesn't fit, propose a new pattern and have the user accept it based on your research of the architecture.
 
+   **Role.** ASR (the product is a transcript) or DIARIZE (the product is
+   who spoke when; see `docs/roles.md`). A DIARIZE port implements
+   `DiarizeOps` (`src/transcribe-diarize.h`) instead of the ASR hooks, sets
+   `"role": "diarize"` in its catalog record, and is accepted on DER
+   (`scripts/diar/`), not WER.
+
 3. **Acceptance dataset.** Default: LibriSpeech test-clean. Capture any
    publisher-reported score in `upstream_benchmarks` when available for
    context, but downstream gates use the measured Oracle reference

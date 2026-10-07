@@ -26,9 +26,10 @@ DERIVED_PRESETS: tuple[str, ...] = ("F16", "Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M")
 # `general.architecture` KV string written by the family's converter
 # (NOT the family directory name; e.g. cohere converts to "cohere_asr").
 # Used when k-quant tiers would degenerate into Q8_0 because the model's
-# row sizes do not divide the k-quant super-block size (256). Shipping
-# four near-duplicate Q-tier GGUFs is wasted disk; restrict the matrix
-# to the tiers that actually differ for that architecture.
+# row sizes do not divide the k-quant super-block size (256), or when a
+# family's output is too sensitive to weight perturbation to certify the
+# k tiers. Shipping four near-duplicate Q-tier GGUFs is wasted disk;
+# restrict the matrix to the tiers that actually earn their place.
 FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
     # moonshine-tiny: hidden=288 / intermediate=1152 / vocab=32768 — none
     # divide 256, so Q6_K/Q5_K_M/Q4_K_M all fall back to Q8_0 storage.
@@ -38,6 +39,15 @@ FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
     # land within ~5% of Q8_0 file size (measured Stage 5). Drop the K
     # tiers to avoid shipping near-duplicate GGUFs.
     "moonshine_streaming": ("F16", "Q8_0"),
+    # sortformer (streaming diarizer): output depends on discrete AOSC
+    # speaker-cache compression decisions; k-quant weight error can
+    # deterministically flip a near-tie pick and permute speaker labels
+    # mid-stream (Stage 7: Q5_K_M swapped labels on AMI TS3003b at the
+    # default CPU operating point, 9.5%->32.1% DER; flip risk is chaotic
+    # in quant error, so clean-on-sample Q6_K/Q4_K_M cannot be certified
+    # either). K tiers also save little (Q8_0 139MB -> Q4_K_M 92MB) and
+    # are slower than Q8_0 on CPU. Ship only the near-reference tiers.
+    "sortformer": ("F16", "Q8_0"),
 }
 
 

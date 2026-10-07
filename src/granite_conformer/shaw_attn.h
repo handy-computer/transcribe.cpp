@@ -47,8 +47,11 @@ struct ShawAttnWeights {
 //   zero_pad     : [d_model, T_pad - T_enc, B] f32 zeros, or nullptr when
 //                  T_enc % context_size == 0.
 //   dists        : [context_size * context_size] int32 Shaw lookup
-//                  indices (`clamp(c - r + max_pos_emb, 0, 2*max_pos_emb)`,
-//                  c = key/column, r = query/row). Shared across B.
+//                  indices, ne0 = key and ne1 = query, with the value at
+//                  (key, query) being
+//                  `clamp(query - key, +/- context_size) + max_pos_emb`.
+//                  Both Granite families build the identical array. Shared
+//                  across B. Ignored when `pos_rows` is non-null.
 //   pad_mask_3d  : [context_size, context_size, num_blocks * B] f32 additive
 //                  mask (all-zero except each utterance's last block slice,
 //                  which has -INF on pad-K columns). The caller tiles the
@@ -57,6 +60,28 @@ struct ShawAttnWeights {
 //   n_heads, head_dim, context_size, num_blocks, T_enc : shape scalars
 //                  (num_blocks is per-utterance; B is read from x->ne[2]).
 //   layer_norm_eps : pre-norm eps (both Granite families use 1e-5).
+//   pos_rows     : OPTIONAL [2*context_size - 1] int32 row indices into
+//                  rel_pos_emb, one per relative offset. When non-null the
+//                  positional bias takes the SKEW path (see below) and
+//                  `dists` is ignored; pass nullptr to keep the direct
+//                  ctx*ctx lookup.
+//
+// Two ways to build the Shaw bias, same math:
+//
+//   direct (`dists`) — get_rows the full [head_dim, ctx, ctx] table, then
+//     a batched mul_mat with N = n_heads. Materialises head_dim*ctx*ctx
+//     floats per layer (8 MB at ctx=128, head_dim=128) and hands the GEMM
+//     a pathological shape.
+//   skew (`pos_rows`) — get_rows only the 2*ctx-1 distinct offsets
+//     (130 KB), one fat mul_mat against q, then conformer::rel_shift
+//     rotates relative offsets into absolute key columns. ~2x the
+//     multiply-adds at a far better GEMM shape, and it lands already in
+//     kq's axis order so two permute+cont round trips disappear. Valid
+//     for any index that is a pure function of (query - key), clamped or
+//     not, which covers both Granite conventions.
+//
+// The caller owns the sign convention: pos_rows[d] is the rel_pos_emb row
+// for relative offset derived from d = key - query + context_size - 1.
 //
 // Returns: [d_model, T_enc, B] (matches input), or nullptr on shape error.
 ggml_tensor * shaw_block_attn(ggml_context *          ctx,
@@ -70,6 +95,7 @@ ggml_tensor * shaw_block_attn(ggml_context *          ctx,
                               int                     context_size,
                               int                     num_blocks,
                               int                     T_enc,
-                              float                   layer_norm_eps);
+                              float                   layer_norm_eps,
+                              ggml_tensor *           pos_rows = nullptr);
 
 }  // namespace transcribe::granite_conformer

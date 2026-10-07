@@ -20,6 +20,11 @@ void apply_family_invariants(transcribe_model & model) {
     // Cancellation is wired at the per-run level. No PNC/ITN toggle; the
     // Whisper-specific features do not apply here.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+    // Generic vocabulary and context prompt both go in the system message,
+    // the model's only context slot (prompting A/B,
+    // notes/prompting-ab-results.md).
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT_PROMPT, true);
 }
 
 }  // namespace transcribe::qwen3_asr

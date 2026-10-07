@@ -34,6 +34,7 @@ enum class BackendKind {
     Metal,     // Apple Metal
     Vulkan,    // Vulkan compute
     Cuda,      // NVIDIA CUDA
+    Rocm,      // AMD ROCm
     Sycl,      // Intel oneAPI / SYCL
     Accel,     // BLAS / AMX / other host-memory accelerator
     OtherGpu,  // GPU/IGPU device we don't have a special case for
@@ -48,8 +49,8 @@ BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type, const cha
 
 // Classify a backend device into a BackendKind. Uses
 // ggml_backend_dev_type for the GPU/IGPU/ACCEL/CPU dimension and the
-// reg name ("MTL", "Vulkan", "CUDA", "SYCL", ...) to resolve the
-// vendor. Never returns Unknown for a valid device pointer.
+// reg name ("MTL", "Vulkan", "CUDA", "ROCm", "SYCL", ...) to resolve
+// the vendor. Never returns Unknown for a valid device pointer.
 BackendKind classify_device(ggml_backend_dev_t dev);
 
 // Probe order for GPU device selection. `dev_types` holds the ggml
@@ -94,5 +95,12 @@ struct BackendPlan {
 void safe_backend_free(ggml_backend_t backend) noexcept;
 void safe_buffer_free(ggml_backend_buffer_t buffer) noexcept;
 void safe_sched_free(ggml_backend_sched_t sched) noexcept;
+
+// Release a session's per-run compute scratch: the scheduler (whose
+// allocator only ever grows) first, then the no_alloc graph context. Both
+// are nulled; families re-create them lazily on the next run. Used by
+// transcribe_session::release_scratch and the base destructor, keeping the
+// sched / compute_ctx free order in one place. NULLs are no-ops.
+void release_compute_scratch(ggml_backend_sched_t & sched, struct ggml_context *& compute_ctx) noexcept;
 
 }  // namespace transcribe

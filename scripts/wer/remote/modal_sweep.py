@@ -93,6 +93,12 @@ from reference_specs import resolve_reference
 from subprocess_io import run_subprocess_capturing_stderr
 from workdir import prepare_work
 
+_CATALOG_HELPERS = pathlib.Path(REPO) / "scripts" / "catalog"
+if _CATALOG_HELPERS.is_dir() and str(_CATALOG_HELPERS) not in sys.path:
+    sys.path.insert(0, str(_CATALOG_HELPERS))
+import common as catalog_common
+import profiles as benchmark_profiles
+
 
 # SRC_FP keys the build cache (C++ binary). HYP_FP keys the hyp cache and
 # folds SRC_FP in so a binary change invalidates hyps too. Splitting them
@@ -388,6 +394,27 @@ def list_ggufs(repos: list[str]) -> list[tuple[str, list[str]]]:
 # streams to Modal logs.
 # ---------------------------------------------------------------------------
 
+def _local_engine_sha() -> str:
+    """Short SHA of the dispatching checkout, or "" when the engine is dirty.
+
+    Refuses to name a commit the binary does not correspond to: if src/ or
+    CMakeLists.txt carry uncommitted edits the build is not that commit, and
+    no claim beats a wrong one.
+    """
+    import subprocess
+    root = pathlib.Path(__file__).resolve().parents[3]
+    try:
+        dirty = subprocess.run(["git", "status", "--porcelain", "src", "CMakeLists.txt"],
+                               capture_output=True, text=True, timeout=5, cwd=root)
+        if dirty.returncode != 0 or dirty.stdout.strip():
+            return ""
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5, cwd=root)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _run_wer_impl(
     model_repo: str,
     model_file: str,
@@ -398,6 +425,9 @@ def _run_wer_impl(
     sort_by_length: bool = True,
     timestamps: str = "none",
     language: str = "",
+    engine_sha: str = "",
+    publication_profile: str = "",
+    backend: str = "",
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
     dataset_status: dict | None = None,
@@ -419,7 +449,8 @@ def _run_wer_impl(
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = hyp_cache_paths(
         HYP_FP, model_file, dataset_spec, n_utts, batch_size, sort_by_length,
-        timestamps, language, stream_chunk_ms, stream_att_right)
+        timestamps, language, stream_chunk_ms, stream_att_right,
+        publication_profile, backend)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         _log_prepared_dataset("wer", dataset_status)
@@ -459,6 +490,11 @@ def _run_wer_impl(
 
     # Force per-line stdout flushing so progress streams live to Modal logs.
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    # The container gets a source tree with no .git, so run.py's own
+    # `git rev-parse` finds nothing and every remote row would land
+    # unattributable. Hand it the sha of the tree this sweep built from.
+    if engine_sha:
+        env["TRANSCRIBE_ENGINE_SHA"] = engine_sha
     cmd = [
         "uv", "run", "scripts/wer/run.py",
         "--cli", cli_path,
@@ -474,6 +510,10 @@ def _run_wer_impl(
         cmd += ["--timestamps", timestamps]
     if language:
         cmd += ["--language", language]
+    if publication_profile:
+        cmd += ["--publication-profile", publication_profile]
+    if backend:
+        cmd += ["--backend", backend]
     if stream_chunk_ms and stream_chunk_ms > 0:
         cmd += ["--stream-chunk-ms", str(stream_chunk_ms)]
         if stream_att_right >= 0:
@@ -577,6 +617,9 @@ def _register_runner(gpu_id: str):
         stream_chunk_ms: int = 0,
         stream_att_right: int = -1,
         dataset_status: dict | None = None,
+        engine_sha: str = "",
+        publication_profile: str = "",
+        backend: str = "",
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -586,7 +629,8 @@ def _register_runner(gpu_id: str):
             model_repo, model_file, dataset_spec, n_utts,
             build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
-            timestamps=timestamps, language=language,
+            timestamps=timestamps, language=language, engine_sha=engine_sha,
+            publication_profile=publication_profile, backend=backend,
             stream_chunk_ms=stream_chunk_ms,
             stream_att_right=stream_att_right,
             dataset_status=dataset_status,
@@ -816,6 +860,94 @@ _REF_GPU_FNS = {gpu: _register_reference_runner(gpu) for gpu in GPU_TO_ARCH}
 # Local entrypoints.
 # ---------------------------------------------------------------------------
 
+def _dispatch(cells: list[dict], gpu: str, *, clean: bool = False, n_utts: int = -1,
+              sort_by_length: bool = True, stream_chunk_ms: int = 0,
+              stream_att_right: int = -1) -> tuple[list[tuple], list[tuple]]:
+    """Run every cell at once on one GPU class and collect the results.
+
+    A cell is {repo, file, dataset, bs, language, timestamps,
+    publication_profile, backend}. The binary is built once, every distinct
+    dataset is prefetched in parallel, then one container per cell is
+    spawned up front, so wall time is the slowest cell rather than the sum of
+    per-dataset rounds. Each hypothesis file is written the moment its cell
+    finishes.
+    """
+    runner = _GPU_FNS.get(gpu)
+    if runner is None:
+        raise SystemExit(f"--gpu {gpu!r} not registered; choose one of: {sorted(_GPU_FNS)}")
+    repo_root = pathlib.Path(REPO)
+    arch = GPU_TO_ARCH[gpu]
+    build_dir = _build_dir(gpu)
+    print(f">>> build (arch sm_{arch} -> {build_dir})")
+    build.remote(arch=arch, build_dir=build_dir, clean=clean)
+
+    datasets = sorted({c["dataset"] for c in cells})
+    print(f">>> prefetch {len(datasets)} dataset(s) in parallel")
+    status_futs = {d: prefetch_dataset.spawn(d) for d in datasets}
+    statuses = {}
+    for d, fut in status_futs.items():
+        statuses[d] = fut.get()
+        print(f">>> dataset ready: {statuses[d]['dataset_id']} "
+              f"n={statuses[d]['utterances']} sha={statuses[d]['manifest_sha256'][:12]}")
+
+    print(f">>> launching {len(cells)} {gpu} containers in parallel...")
+    n = None if n_utts < 0 else n_utts
+    engine_sha = _local_engine_sha()
+    futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
+                             c["bs"], sort_by_length, build_dir, c["timestamps"],
+                             c.get("language", ""), stream_chunk_ms, stream_att_right,
+                             statuses[c["dataset"]], engine_sha,
+                             c.get("publication_profile", ""), c.get("backend", "")))
+            for c in cells]
+
+    rows, failures = [], []
+    for c, fut in futs:
+        bs = c["bs"]
+        slug = c["file"].replace(".gguf", "") + (f" b{bs}" if bs != 1 else "")
+        try:
+            res = fut.get()
+            # b1 stays untagged (matches the published-run filenames); b>1 is
+            # tagged .b{bs} so batched hyps score independently for comparison.
+            path = write_hyp(repo_root, res["hyp_jsonl"], c["file"], c["dataset"],
+                             batch_size=(bs if bs != 1 else None),
+                             timestamps=c["timestamps"],
+                             stream_chunk_ms=stream_chunk_ms,
+                             stream_att_right=stream_att_right,
+                             n_utts=(n_utts if n_utts >= 0 else None))
+            s = res["summary"]
+            rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
+                         s["wall_s"], s["rtf_wall"], str(path)))
+            tag = "CACHED" if res.get("cached") else "OK"
+            print(f"  [{tag}] {slug} {c['dataset']}: {s['wall_s']:.1f}s, "
+                  f"RTF {s['rtf_wall']:.1f}x -> {path}")
+        except Exception as e:  # noqa: BLE001 - one cell's failure must not hide the rest
+            failures.append((slug, c["dataset"], repr(e)))
+            print(f"  [FAIL] {slug} {c['dataset']}: {e} (check Modal dashboard for stderr)")
+
+    for ds in datasets:
+        ds_rows = [r for r in rows if r[1] == ds]
+        if not ds_rows:
+            continue
+        summary_path = repo_root / "reports" / "wer" / f"remote_sweep.{dataset_id(ds)}.summary.tsv"
+        with open(summary_path, "w") as f:
+            f.write("slug\tdataset\tn_utts\taudio_s\twall_s\trtf\tpath\n")
+            for r in ds_rows:
+                f.write("\t".join(str(x) for x in r) + "\n")
+
+    print("\n========== sweep summary ==========")
+    print(f"{'slug':<48} {'dataset':<24} {'n':>5} {'audio':>9} {'wall':>8} {'rtf':>6}")
+    for slug, ds, n_, audio, wall, rtf, _ in rows:
+        print(f"{slug:<48} {ds:<24} {n_:>5} {audio:>9.1f} {wall:>8.1f} {rtf:>6.1f}")
+    if failures:
+        print("\nfailures:")
+        for slug, ds, err in failures:
+            print(f"  {slug} {ds}: {err}")
+    ids = sorted({dataset_id(d) for d in datasets})
+    print("\nscore locally:  for f in reports/wer/*.{" + ",".join(ids) + "}.jsonl; "
+          "do uv run scripts/wer/score.py \"$f\"; done")
+    return rows, failures
+
+
 @app.local_entrypoint()
 def sweep(
     models: str,
@@ -830,13 +962,15 @@ def sweep(
     language: str = "",
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
+    publication_profile: str = "",
+    backend: str = "",
 ) -> None:
-    """Fan WER across one or more models on one GPU class.
+    """Fan WER across one or more models on one dataset and GPU class.
 
-    --models      Comma-separated. Each entry is either an hf_card slug
-                  (e.g. "moonshine-base" → scripts/hf_cards/moonshine-base.yaml)
+    --models      Comma-separated. Each entry is either a catalog variant
+                  (e.g. "moonshine-base" -> catalog/moonshine-base.json)
                   or a HF repo path (e.g. "handy-computer/foo-gguf").
-                  Slugs pin the quant set; repo paths discover via HF API.
+                  Variants pin the quant set; repo paths discover via HF API.
     --dataset     "librispeech:test-clean" (default), "librispeech:<split>",
                   or "fleurs:<bcp47>".
     --quants      Optional substring filter, e.g. "Q8_0,F16".
@@ -862,10 +996,8 @@ def sweep(
 
     repo_root = pathlib.Path(REPO)
     resolved = [(s, *resolve_model(repo_root, s)) for s in specs]
-
     needs_listing = sorted({repo for _, repo, fns in resolved if fns is None})
     listings = dict(list_ggufs.remote(needs_listing)) if needs_listing else {}
-
     sizes = [int(x) for x in batch_sizes.split(",") if x.strip()] or [1]
 
     cells: list[dict] = []
@@ -883,8 +1015,10 @@ def sweep(
                 continue
         for f in fns:
             for bs in sizes:
-                cells.append({"repo": repo, "file": f, "dataset": dataset, "bs": bs})
-
+                cells.append({"repo": repo, "file": f, "dataset": dataset, "bs": bs,
+                              "language": language, "timestamps": timestamps,
+                              "publication_profile": publication_profile,
+                              "backend": backend})
     if skipped:
         print(">>> skipped (no cells generated):")
         for s, r in skipped:
@@ -892,75 +1026,74 @@ def sweep(
     print(f">>> {len(cells)} cells to run")
     if not cells:
         raise SystemExit("nothing to do")
+    _dispatch(cells, gpu, clean=clean, n_utts=n_utts, sort_by_length=sort_by_length,
+              stream_chunk_ms=stream_chunk_ms, stream_att_right=stream_att_right)
 
-    runner = _GPU_FNS.get(gpu)
-    if runner is None:
-        raise SystemExit(
-            f"--gpu {gpu!r} not registered; choose one of: {sorted(_GPU_FNS)}"
-        )
 
-    arch = GPU_TO_ARCH[gpu]
-    build_dir = _build_dir(gpu)
-    print(f">>> build (arch sm_{arch} -> {build_dir})")
-    build.remote(arch=arch, build_dir=build_dir, clean=clean)
-    print(f">>> prefetch dataset ({dataset})")
-    dataset_status = prefetch_dataset.remote(dataset)
-    print(f">>> dataset ready: {dataset_status['dataset_id']} "
-          f"n={dataset_status['utterances']} "
-          f"sha={dataset_status['manifest_sha256'][:12]}")
+@app.local_entrypoint()
+def publication_sweep(
+    models: str,
+    profile: str = "",
+    missing_only: bool = True,
+    clean: bool = False,
+    plan_only: bool = False,
+) -> None:
+    """Run every accuracy cell a catalog publication profile still needs.
 
-    print(f">>> launching {len(cells)} {gpu} containers in parallel...")
-    n = None if n_utts < 0 else n_utts
-    futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
-                             c["bs"], sort_by_length, build_dir, timestamps,
-                             language, stream_chunk_ms, stream_att_right,
-                             dataset_status))
-            for c in cells]
+    Datasets, quants, batch size, timestamps, language prompts, and GPU come
+    from the checked-in profile. Every cell across every dataset is planned
+    up front and dispatched at once, one container each.
+    """
+    profile_id, profile_data = benchmark_profiles.load_profile(profile or None)
+    records = catalog_common.load_records()
+    selected = [item.strip() for item in models.split(",") if item.strip()]
+    unknown = [item for item in selected if item not in records]
+    if unknown:
+        raise SystemExit(f"no catalog record for: {', '.join(unknown)}")
+    if not selected:
+        raise SystemExit("--models is required (comma-separated catalog variants)")
 
-    rows, failures = [], []
-    for c, fut in futs:
-        bs = c["bs"]
-        slug = c["file"].replace(".gguf", "") + (f" b{bs}" if bs != 1 else "")
-        try:
-            res = fut.get()
-            # b1 stays untagged (matches the published-run filenames); b>1 is
-            # tagged .b{bs} so batched hyps score independently for comparison.
-            p = write_hyp(repo_root, res["hyp_jsonl"], c["file"], c["dataset"],
-                          batch_size=(bs if bs != 1 else None),
-                          timestamps=timestamps,
-                          stream_chunk_ms=stream_chunk_ms,
-                          stream_att_right=stream_att_right)
-            s = res["summary"]
-            rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
-                         s["wall_s"], s["rtf_wall"], str(p)))
-            tag = "CACHED" if res.get("cached") else "OK"
-            print(f"  [{tag}] {slug}: {s['wall_s']:.1f}s, RTF {s['rtf_wall']:.1f}x -> {p}")
-        except Exception as e:
-            failures.append((slug, repr(e)))
-            print(f"  [FAIL] {slug}: {e} (check Modal dashboard for stderr)")
+    by_gpu: dict[str, list[dict]] = {}
+    for variant in selected:
+        record = records[variant]
+        repo = record.get("published_repo")
+        if not repo:
+            raise SystemExit(f"{variant}: catalog has no published_repo")
+        files = {d["quant"]: d["filename"] for d in record.get("downloads", [])}
+        expected = benchmark_profiles.apply_exceptions(
+            record, "accuracy",
+            benchmark_profiles.expected_accuracy(record, profile_data))
+        valid = {benchmark_profiles.profile_key(row)
+                 for row in record.get("accuracy_benchmarks", []) if row.get("engine_sha")}
+        legacy = {benchmark_profiles.accuracy_core_key(row)
+                  for row in record.get("accuracy_benchmarks", [])
+                  if row.get("measurement_provenance") == "legacy-published"}
+        for cell in expected:
+            if missing_only and (benchmark_profiles.profile_key(cell) in valid
+                                 or benchmark_profiles.accuracy_core_key(cell) in legacy):
+                continue
+            by_gpu.setdefault(cell["gpu"], []).append({
+                "repo": repo, "file": files[cell["quant"]],
+                "dataset": benchmark_profiles.dataset_spec(cell),
+                "bs": cell["batch_size"], "language": cell["runtime_language"],
+                "timestamps": cell["timestamps"], "publication_profile": profile_id,
+                "backend": cell["backend"], "_variant": variant,
+                "_sort": cell["sort_by_length"],
+            })
 
-    if rows:
-        ds_id = dataset_id(dataset)
-        summary_path = pathlib.Path(REPO) / "reports" / "wer" / \
-                       f"remote_sweep.{ds_id}.summary.tsv"
-        with open(summary_path, "w") as f:
-            f.write("slug\tdataset\tn_utts\taudio_s\twall_s\trtf\tpath\n")
-            for r in rows:
-                f.write("\t".join(str(x) for x in r) + "\n")
-        print(f"\nsummary: {summary_path}")
-
-    print("\n========== sweep summary ==========")
-    print(f"{'slug':<48} {'dataset':<24} {'n':>5} {'audio':>9} {'wall':>8} {'rtf':>6}")
-    for slug, ds, n_, audio, wall, rtf, _ in rows:
-        print(f"{slug:<48} {ds:<24} {n_:>5} {audio:>9.1f} {wall:>8.1f} {rtf:>6.1f}")
-    if failures:
-        print("\nfailures:")
-        for slug, err in failures:
-            print(f"  {slug}: {err}")
-    if skipped:
-        print(f"\nskipped: {len(skipped)} entries (listed at config time above)")
-    print(f"\nscore locally:  for f in reports/wer/*.{dataset_id(dataset)}.jsonl; "
-          f"do uv run scripts/wer/score.py \"$f\"; done")
+    total = sum(len(cells) for cells in by_gpu.values())
+    print(f"publication profile {profile_id}: {total} cell(s) across "
+          f"{len({c['dataset'] for cells in by_gpu.values() for c in cells})} dataset(s), "
+          f"{len(by_gpu)} GPU class(es)")
+    for gpu, cells in sorted(by_gpu.items()):
+        for c in cells:
+            print(f"  {gpu}: {c['_variant']:40s} {c['dataset']:22s} {c['file']} "
+                  f"lang={c['language']} bs={c['bs']} ts={c['timestamps']}")
+    if plan_only or not total:
+        return
+    for gpu, cells in sorted(by_gpu.items()):
+        sorts = {c["_sort"] for c in cells}
+        _dispatch(cells, gpu, clean=clean, sort_by_length=all(sorts))
 
 
 @app.local_entrypoint()
@@ -1039,7 +1172,8 @@ def batch_sweep(
     # Launch all batch sizes in parallel (each its own container). Pass the
     # locally-computed build_dir so the runner reads exactly what build() wrote.
     futs = [(bs, runner.spawn(repo, model_file, dataset, n, bs, sort_by_length,
-                              build_dir, "none", language, 0, -1, dataset_status))
+                              build_dir, "none", language, 0, -1, dataset_status,
+                              _local_engine_sha(), "", ""))
             for bs in sizes]
 
     rows: list[tuple] = []

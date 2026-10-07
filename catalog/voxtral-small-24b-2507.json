@@ -1,0 +1,69 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "voxtral-small-24b-2507",
+  "family": "voxtral",
+  "display_name": "voxtral-small-24b-2507",
+  "params": 24261827088,
+  "license": {
+    "spdx": "apache-2.0",
+    "display": "Apache-2.0"
+  },
+  "upstream_repo": "mistralai/Voxtral-Small-24B-2507",
+  "upstream_commit": "da5b424",
+  "published_repo": "handy-computer/Voxtral-Small-24B-2507-gguf",
+  "docs_page": "voxtral.md",
+  "languages": ["en","fr","de","es","it","pt","nl","hi"],
+  "long_form_strategy": "hard-cap",
+  "benchmark_exceptions": [
+    {"kind":"speed","match":{"machine":"m4-max","backend":"cpu"},"reason":"The model card explicitly scopes this 24B GPU-class model to Metal; CPU execution is impractical at its 14.3-25.8 GB publication-quant footprint."},
+    {"kind":"speed","match":{"machine":"ryzen-4750u","backend":"cpu"},"reason":"The model card explicitly omits CPU for this 24B GPU-class model; the publication quants are 14.3 GB and 25.8 GB before runtime state."},
+    {"kind":"speed","match":{"machine":"ryzen-4750u","backend":"vulkan"},"reason":"The smallest downloadable quant is 14.3 GB, exceeding the reference Ryzen 4750U Vulkan device-memory budget."}
+  ],
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":false},
+    "translate": {"supported":true,"verified":false,"targets":["en","fr","de","es","it","pt","nl","hi"],"pairs":null},
+    "lang_detect": {"supported":true,"verified":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":false}
+  },
+  "downloads": [
+    {"quant":"BF16","filename":"Voxtral-Small-24B-2507-BF16.gguf","size_bytes":48537285088},
+    {"quant":"F16","filename":"Voxtral-Small-24B-2507-F16.gguf","size_bytes":48548098528},
+    {"quant":"Q8_0","filename":"Voxtral-Small-24B-2507-Q8_0.gguf","size_bytes":25810383328},
+    {"quant":"Q6_K","filename":"Voxtral-Small-24B-2507-Q6_K.gguf","size_bytes":19936473568},
+    {"quant":"Q5_K_M","filename":"Voxtral-Small-24B-2507-Q5_K_M.gguf","size_bytes":17138659808},
+    {"quant":"Q4_K_M","filename":"Voxtral-Small-24B-2507-Q4_K_M.gguf","size_bytes":14302261728}
+  ],
+  "accuracy_benchmarks": [
+    {"dataset":"fleurs","split":"test","language":"de","quant":"Q8_0","metric":"wer","err_pct":3.29,"ci95":[2.93,3.65],"n_utts":862,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":361,"del":199,"ins":55},"empty_hyp":0,"utts_over_50pct":0,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"en","quant":"Q8_0","metric":"wer","err_pct":3.55,"ci95":[3.07,4.1],"n_utts":647,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":259,"del":196,"ins":62},"empty_hyp":0,"utts_over_50pct":0,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"es","quant":"Q8_0","metric":"wer","err_pct":2.86,"ci95":[2.47,3.25],"n_utts":908,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":338,"del":274,"ins":54},"empty_hyp":0,"utts_over_50pct":0,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"fr","quant":"Q8_0","metric":"wer","err_pct":3.86,"ci95":[3.39,4.31],"n_utts":676,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":433,"del":192,"ins":69},"empty_hyp":0,"utts_over_50pct":1,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"hi","quant":"Q8_0","metric":"wer","err_pct":7.4,"ci95":[6.65,8.36],"n_utts":418,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":759,"del":408,"ins":220},"empty_hyp":0,"utts_over_50pct":5,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"it","quant":"Q8_0","metric":"wer","err_pct":2.69,"ci95":[2.19,3.34],"n_utts":865,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":268,"del":273,"ins":31},"empty_hyp":0,"utts_over_50pct":2,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"nl","quant":"Q8_0","metric":"wer","err_pct":5.12,"ci95":[4.38,5.96],"n_utts":364,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":236,"del":144,"ins":50},"empty_hyp":0,"utts_over_50pct":1,"measurement_provenance":"legacy-published"},
+    {"dataset":"fleurs","split":"test","language":"pt","quant":"Q8_0","metric":"wer","err_pct":3.74,"ci95":[3.25,4.26],"n_utts":919,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":401,"del":308,"ins":95},"empty_hyp":0,"utts_over_50pct":3,"measurement_provenance":"legacy-published"},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"BF16","metric":"wer","err_pct":1.56,"ci95":[null,null],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"F16","metric":"wer","err_pct":1.57,"ci95":[null,null],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q8_0","metric":"wer","err_pct":1.56,"ci95":[null,null],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q6_K","metric":"wer","err_pct":1.58,"ci95":[null,null],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q5_K_M","metric":"wer","err_pct":1.6,"ci95":[null,null],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"Q4_K_M","metric":"wer","err_pct":2.11,"ci95":[null,null],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"measurement_provenance":"legacy-published"}
+  ],
+  "headline_benchmark": {
+    "dataset": "librispeech",
+    "split": "test-clean",
+    "language": "en",
+    "metric": "wer",
+    "batch_size": 8,
+    "timestamps": "none"
+  },
+  "speed_benchmarks": [
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":12934.7,"xrt_compute":2.73,"load_ms":4433.2,"mel_ms":11.3,"encode_ms":1045.2,"decode_ms":11878.1,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":12935.5,"xrt_wall":2.73,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":3964.6,"xrt_compute":2.77,"load_ms":3598.9,"mel_ms":5.0,"encode_ms":401.1,"decode_ms":3558.5,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":3965.1,"xrt_wall":2.77,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":14680.8,"xrt_compute":2.41,"load_ms":7038.4,"mel_ms":12.4,"encode_ms":1068.0,"decode_ms":13600.4,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":14681.8,"xrt_wall":2.41,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":4445.6,"xrt_compute":2.47,"load_ms":7405.4,"mel_ms":5.0,"encode_ms":491.5,"decode_ms":3949.0,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"wall_ms":4446.1,"xrt_wall":2.47,"publication_profile":"asr-publication-v2"}
+  ]
+}

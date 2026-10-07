@@ -1,0 +1,31 @@
+# Spec for the HF README of handy-computer/granite-speech-5.0-470m-turboctc-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+
+pin_date: 2026-09-12
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: transformers
+  commit: b9427cf
+  date: 2026-09-12
+
+pipeline_tag: automatic-speech-recognition
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - granite
+  - conformer
+  - ctc
+
+summary: |
+  Offline English speech-to-text. A Granite Conformer encoder with a self-conditioned CTC
+  head. Takes a 16 kHz mono WAV and produces a transcript. Not a streaming model. English
+  only.
+
+wer:
+  notes: |
+    Greedy CTC decoding, no external LM. Measured reference baseline (transformers
+    5.17.0, F32, CPU): 1.33%, 95% CI [1.20, 1.47].

@@ -46,9 +46,9 @@ enum Fixtures {
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
-    // Extra family-extension canaries — not in the CI fetch-canary set, so these
-    // gate on their own env var / in-repo GGUF and XCTSkip when absent (they run
-    // locally where the GGUFs exist; CI skips them).
+    // Feature-specific canaries use an env override or in-repo GGUF and skip
+    // when absent. CI exports the lightweight shared canaries; heavyweight
+    // models such as Voxtral remain local-only.
     private static func familyModel(_ envKey: String, _ relativePath: String) -> String? {
         if let override = env(envKey) { return override }
         let path = repoRoot().appendingPathComponent(relativePath).path
@@ -72,6 +72,28 @@ enum Fixtures {
         familyModel(
             "TRANSCRIBE_SMOKE_VOXTRAL_MODEL",
             "models/Voxtral-Mini-4B-Realtime-2602/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf")
+    }
+    /// Canary model whose generic PNC run parameter changes the prompt.
+    static func pncModelPath() -> String? {
+        familyModel(
+            "TRANSCRIBE_SMOKE_PNC_MODEL",
+            "models/canary-180m-flash/canary-180m-flash-Q8_0.gguf")
+    }
+    /// SenseVoice model whose generic ITN parameter changes text normalization.
+    static func itnModelPath() -> String? {
+        familyModel(
+            "TRANSCRIBE_SMOKE_ITN_MODEL",
+            "models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf")
+    }
+
+    /// Sortformer (DIARIZE only) + its in-repo two-speaker sample.
+    static func sortformerModelAndAudio() throws -> (model: String, pcm: [Float]) {
+        guard let model = familyModel(
+            "TRANSCRIBE_SMOKE_SORTFORMER_MODEL",
+            "models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf")
+        else { throw XCTSkip("no Sortformer model (set TRANSCRIBE_SMOKE_SORTFORMER_MODEL)") }
+        let audio = repoRoot().appendingPathComponent("samples/sortformer-2spk-mix.wav").path
+        return (model, try loadWav(audio))
     }
 
     /// The model path + decoded PCM, or `XCTSkip` when either is absent.

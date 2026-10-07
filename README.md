@@ -6,29 +6,77 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 
 **Supported models:**
 
-| Family | Variants | Docs |
-| --- | --- | --- |
-| Parakeet | 10 variants: TDT, RNN-T, CTC, TDT+CTC (110M–1.1B) | [docs/models/parakeet.md](docs/models/parakeet.md) |
-| Canary | `canary-1b`, `canary-1b-v2`, `canary-1b-flash`, `canary-180m-flash` | [docs/models/canary.md](docs/models/canary.md) |
-| Canary-Qwen | `canary-qwen-2.5b` (FastConformer + Qwen3-1.7B SALM) | [docs/models/canary-qwen-2.5b.md](docs/models/canary-qwen-2.5b.md) |
-| Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
-| GigaAM | `gigaam-v3-{e2e-rnnt,e2e-ctc,rnnt,ctc}` | [docs/models/gigaam.md](docs/models/gigaam.md) |
-| Moonshine | `moonshine-tiny`, `moonshine-base` | [docs/models/moonshine.md](docs/models/moonshine.md) |
-| Moonshine Streaming | `moonshine-streaming-{tiny,small,medium}` | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
-| Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
-| Cohere Transcribe | `cohere-transcribe-03-2026` | [docs/models/cohere-transcribe-03-2026.md](docs/models/cohere-transcribe-03-2026.md) |
-| SenseVoice | `sensevoice-small` | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
-| FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
-| Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
-| Nemotron 3.5 ASR Streaming | `nemotron-3.5-asr-streaming-0.6b` (multilingual, 40 locales) | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
-| Multitalker Parakeet Streaming | `multitalker-parakeet-streaming-0.6b-v1` (single-speaker ASR path only) | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
-| Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b{,-plus,-nar}` | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
-| Voxtral | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` (audio-LLM; transcription + translation) | [docs/models/voxtral.md](docs/models/voxtral.md) |
-| Voxtral Realtime | `voxtral-mini-4b-realtime-2602` (streaming audio-LLM) | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |
-| MedASR | `medasr` (Conformer + CTC, English medical-dictation, gated) | [docs/models/medasr.md](docs/models/medasr.md) |
-| MOSS Transcribe-Diarize | `moss-transcribe-diarize` (audio-LLM; English + Chinese ASR with inline speaker diarization) | [docs/models/moss-transcribe-diarize.md](docs/models/moss-transcribe-diarize.md) |
+<!-- catalog:family-index -->
+| Family | Variants | Available capabilities | Docs |
+| --- | --- | --- | --- |
+| Canary | `canary-180m-flash`, `canary-1b`, `canary-1b-flash`, `canary-1b-v2` | translate | [docs/models/canary.md](docs/models/canary.md) |
+| Canary-Qwen 2.5B | `canary-qwen-2.5b` | - | [docs/models/canary-qwen-2.5b.md](docs/models/canary-qwen-2.5b.md) |
+| Cohere Transcribe | `cohere-transcribe-03-2026`, `cohere-transcribe-arabic-07-2026` | - | [docs/models/cohere.md](docs/models/cohere.md) |
+| Fun-ASR-Nano | `fun-asr-mlt-nano-2512`, `fun-asr-nano-2512` | - | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
+| GigaAM-v3 | `gigaam-v3-ctc`, `gigaam-v3-e2e-ctc`, `gigaam-v3-e2e-rnnt`, `gigaam-v3-rnnt` | token timestamps | [docs/models/gigaam.md](docs/models/gigaam.md) |
+| Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b`, `granite-speech-4.1-2b-nar`, `granite-speech-4.1-2b-plus` | diarize, translate, word timestamps | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
+| Granite Speech 5.0 TurboCTC | `granite-speech-5.0-470m-turboctc`, `granite-speech-5.0-470m-turboctc-nc` | - | [docs/models/granite-speech-5.0-turboctc.md](docs/models/granite-speech-5.0-turboctc.md) |
+| MedASR | `medasr` | token timestamps | [docs/models/medasr.md](docs/models/medasr.md) |
+| Moonshine | `moonshine-base`, `moonshine-base-ar`, `moonshine-base-ja`, `moonshine-base-ko`, `moonshine-base-uk`, `moonshine-base-vi`, `moonshine-base-zh`, `moonshine-tiny`, `moonshine-tiny-ar`, `moonshine-tiny-ja`, `moonshine-tiny-ko`, `moonshine-tiny-uk`, `moonshine-tiny-vi`, `moonshine-tiny-zh` | - | [docs/models/moonshine.md](docs/models/moonshine.md) |
+| Moonshine Streaming | `moonshine-streaming-medium`, `moonshine-streaming-small`, `moonshine-streaming-tiny` | streaming | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
+| MOSS-Transcribe-Diarize | `moss-transcribe-diarize` | diarize, segment timestamps | [docs/models/moss-transcribe-diarize.md](docs/models/moss-transcribe-diarize.md) |
+| Multitalker Parakeet Streaming 0.6B v1 | `multitalker-parakeet-streaming-0.6b-v1` | diarize, streaming, token timestamps | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
+| Nemotron 3.5 ASR Streaming 0.6B | `nemotron-3.5-asr-streaming-0.6b` | streaming, token timestamps | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
+| Nemotron Speech Streaming EN 0.6B | `nemotron-speech-streaming-en-0.6b` | streaming, token timestamps | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
+| Parakeet | `parakeet-ctc-0.6b`, `parakeet-ctc-1.1b`, `parakeet-primeline`, `parakeet-rnnt-0.6b`, `parakeet-rnnt-1.1b`, `parakeet-tdt-0.6b-v2`, `parakeet-tdt-0.6b-v3`, `parakeet-tdt-1.1b`, `parakeet-tdt_ctc-1.1b`, `parakeet-tdt_ctc-110m`, `parakeet-ultra`, `parakeet-unified-en-0.6b`, `orukeet` | streaming, token timestamps | [docs/models/parakeet.md](docs/models/parakeet.md) |
+| Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | - | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
+| SenseVoice Small | `sensevoice-small` | - | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
+| Voxtral (2507) | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` | translate | [docs/models/voxtral.md](docs/models/voxtral.md) |
+| Voxtral Realtime (2602) | `voxtral-mini-4b-realtime-2602` | streaming | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |
+| Whisper | `whisper-base`, `whisper-base.en`, `whisper-large`, `whisper-large-v2`, `whisper-large-v3`, `whisper-large-v3-turbo`, `whisper-medium`, `whisper-medium.en`, `whisper-small`, `whisper-small.en`, `whisper-tiny`, `whisper-tiny.en`, `breeze-asr-25` | segment timestamps, translate | [docs/models/whisper.md](docs/models/whisper.md) |
+<!-- /catalog -->
+
+**Speaker diarization models** (no transcription; verified by DER/JER rather than WER):
+
+<!-- catalog:family-index role=diarize -->
+| Family | Variants | Available capabilities | Docs |
+| --- | --- | --- | --- |
+| Streaming Sortformer Diarizer 4spk v2.1 | `diar_streaming_sortformer_4spk-v2.1` | diarize, streaming | [docs/models/diar_streaming_sortformer_4spk-v2.1.md](docs/models/diar_streaming_sortformer_4spk-v2.1.md) |
+<!-- /catalog -->
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
+
+## Model catalog
+
+[`catalog/`](catalog/) is the source of truth for model metadata, accuracy, and
+performance. Each release includes a queryable
+[`catalog.db`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db)
+and [`SHA-256 checksum`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db.sha256).
+Rebuild it locally with `uv run scripts/catalog/db.py --out catalog.db`.
+The exact accuracy and published speed matrices and standard benchmark recipes
+required for publication live in
+[`catalog/_benchmark_profiles.json`](catalog/_benchmark_profiles.json). Run
+`uv run scripts/catalog/check.py --publication-profile` to enforce it; the
+ordinary catalog check reports the migration backlog without failing.
+
+Published tables are generated from it rather than hand-written. A model doc
+delegates a region with a marker, and `scripts/catalog/render.py` rewrites
+only what sits between the pair:
+
+```markdown
+<!-- catalog:downloads -->
+| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+...
+<!-- /catalog -->
+```
+
+The Hugging Face card specs under [`scripts/hf_cards/`](scripts/hf_cards/)
+hold editorial copy only (summary, tags, validation pin, prose notes).
+`scripts/hf_cards/generate.py` reads the spec and the catalog record together,
+so repos, licence, languages, capabilities, the quant table, and per-rig
+speedups are never written into a YAML by hand.
+
+```bash
+uv run scripts/catalog/format.py --check  # canonical record layout
+uv run scripts/catalog/check.py           # schema, integrity, pairing
+uv run scripts/catalog/render.py          # rewrite the marked doc regions
+uv run scripts/catalog/render.py --check
+```
 
 ## Build
 
@@ -42,6 +90,9 @@ Metal is enabled automatically on Apple Silicon. For Vulkan (Linux/Windows):
 ```bash
 # Ubuntu/Debian
 sudo apt install build-essential cmake libvulkan-dev glslc libopenblas-dev
+
+# Fedora
+sudo dnf install vulkan-headers openblas-devel glslc spirv-headers-devel
 
 cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
@@ -58,6 +109,18 @@ For CUDA (Linux + NVIDIA GPU):
 cmake -B build -DTRANSCRIBE_CUDA=ON
 cmake --build build
 ```
+
+For HIP/ROCm (Linux + AMD GPU), which needs ROCm 6.1 or newer:
+
+```bash
+cmake -B build -DTRANSCRIBE_HIP=ON -DAMDGPU_TARGETS=gfx1201
+cmake --build build
+```
+
+Replace `gfx1201` with your GPU architecture — `rocminfo | grep gfx` prints it.
+Pass a semicolon-separated list for several architectures. ROCm devices report
+as the `rocm` backend kind, are picked up by the default `auto` backend, and can
+be required explicitly with `--backend rocm`.
 
 `libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 
@@ -130,7 +193,9 @@ Official bindings wrap the C API for other languages:
 | Swift / ObjC | [bindings/swift](bindings/swift) |
 
 See [`docs/bindings.md`](docs/bindings.md) for how the bindings are generated
-and kept in sync with the header.
+and kept in sync with the header. Upgrading from 0.1? Read the
+[0.2 migration guide](docs/migrating-to-0.2.md), including the new exact-device
+selection API and the changed meaning of CLI `--device 0`.
 
 ## Tests
 
@@ -195,7 +260,8 @@ tools/transcribe-quantize/ Quantization tool source
 bindings/                  Python, TypeScript, Rust, and Swift bindings
 docs/                      Porting and validation guidance
 scripts/                   Python converter + test tooling
-ggml/                      Vendored ggml (see ggml/UPSTREAM for pinned SHA)
+ggml/                      Vendored ggml (see ggml/UPSTREAM for its recipe)
+patches/ggml/              Downstream patches applied by scripts/sync-ggml.sh
 src/third_party/miniz/     Vendored miniz deflate codec (see its UPSTREAM file)
 samples/                   Test audio files
 tests/                     Unit and smoke tests

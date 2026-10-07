@@ -24,6 +24,8 @@ void apply_family_invariants(transcribe_model & model) {
     // runtime toggle.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN, true);
+    // Generic vocabulary as the upstream get_prompt hotword list.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, true);
 }
 
 }  // namespace transcribe::funasr_nano

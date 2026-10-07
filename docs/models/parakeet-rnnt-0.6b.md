@@ -1,8 +1,10 @@
 # Parakeet RNN-T 0.6B
 
-NVIDIA's [`nvidia/parakeet-rnnt-0.6b`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b)
-ported to transcribe.cpp. A 0.6B-parameter FastConformer-Large encoder with a
-classic RNN-T transducer decoder (predictor + joint, no duration head).
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-rnnt-0.6b`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b) at [`c0c1f09`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b/commit/c0c1f09).
+
+Offline English speech-to-text with greedy RNN-T decoding. A FastConformer-Large encoder with an RNN-T transducer decoder. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -20,22 +22,39 @@ than the CTC variant at the same encoder size.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-rnnt-0.6b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`c0c1f09`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b/commit/c0c1f09fdc3f18b0b2ddbeafd5d6684f1b38078f),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`c0c1f09`](https://huggingface.co/nvidia/parakeet-rnnt-0.6b/commit/c0c1f09), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [parakeet-rnnt-0.6b-F32.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-F32.gguf) | 2.47 GB |                        1.62% |
-| F16    | [parakeet-rnnt-0.6b-F16.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-F16.gguf) | 1.24 GB |                        1.62% |
-| Q8_0   | [parakeet-rnnt-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q8_0.gguf) |  730 MB |                        1.62% |
-| Q6_K   | [parakeet-rnnt-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q6_K.gguf) |  601 MB |                        1.62% |
-| Q5_K_M | [parakeet-rnnt-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q5_K_M.gguf) |  540 MB |                        1.62% |
-| Q4_K_M | [parakeet-rnnt-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q4_K_M.gguf) |  476 MB |                        1.59% |
+| F32          | [parakeet-rnnt-0.6b-F32.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-F32.gguf) | 2.47 GB | 1.62% |
+| F16          | [parakeet-rnnt-0.6b-F16.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-F16.gguf) | 1.24 GB | 1.62% |
+| Q8_0         | [parakeet-rnnt-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q8_0.gguf) |  730 MB | 1.62% |
+| Q6_K         | [parakeet-rnnt-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q6_K.gguf) |  601 MB | 1.62% |
+| Q5_K_M       | [parakeet-rnnt-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q5_K_M.gguf) |  540 MB | 1.62% |
+| Q4_K_M       | [parakeet-rnnt-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-rnnt-0.6b-gguf/resolve/main/parakeet-rnnt-0.6b-Q4_K_M.gguf) |  476 MB | 1.66% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding and no external LM. F32 reference baseline: 1.62%. NVIDIA's self-reported number on the same split is 1.63% (from the [HF model card](https://huggingface.co/nvidia/parakeet-rnnt-0.6b)).
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy RNN-T decoding, no external LM. F32 reference baseline: 1.62%. NVIDIA's
+self-reported number on the same split is 1.63%.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 4.57% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -56,43 +75,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
-
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  64 ms (173×) |  65 ms (170×) |
-| Metal   | dots (35.3s) | 178 ms (198×) | 181 ms (196×) |
-| CPU     | jfk (11.0s)  |  360 ms (31×) |  302 ms (36×) |
-| CPU     | dots (35.3s) |  1.22 s (29×) |  1.03 s (34×) |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  55 ms (201.01×) |  56 ms (198.17×) |
+| Metal   | dots (35.3s) | 138 ms (255.29×) | 142 ms (248.43×) |
+| CPU     | jfk (11.0s)  |  281 ms (39.19×) |  301 ms (36.52×) |
+| CPU     | dots (35.3s) |  977 ms (36.16×) |  1.04 s (34.02×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  742 ms (15×) |  754 ms (15×) |
-| Vulkan  | dots (35.3s) |  2.55 s (14×) |  2.59 s (14×) |
-| CPU     | jfk (11.0s)  |  1.24 s (9×)  |  1.07 s (10×) |
-| CPU     | dots (35.3s) |  4.71 s (7×)  |  4.14 s (9×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 425 ms (25.87×) | 431 ms (25.51×) |
+| Vulkan  | dots (35.3s) | 1.25 s (28.33×) | 1.27 s (27.86×) |
+| CPU     | jfk (11.0s)  | 675 ms (16.30×) | 720 ms (15.29×) |
+| CPU     | dots (35.3s) | 2.64 s (13.39×) | 2.71 s (13.05×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-rnnt-0.6b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-rnnt-0.6b-publication
+uv run scripts/bench/run.py --profile --models parakeet-rnnt-0.6b
 ```
 
 ## Numerical Validation

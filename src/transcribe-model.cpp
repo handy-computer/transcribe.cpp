@@ -4,11 +4,24 @@
 
 #include "transcribe-model.h"
 
+#include "transcribe-backend.h"
 #include "transcribe-session.h"
 
 #include <utility>
 
-transcribe_model::~transcribe_model()     = default;
+transcribe_model::~transcribe_model() = default;
+
+// Scheduler first, then the compute context (release_compute_scratch keeps
+// that order). Runs after the derived destructors; see the header note.
+transcribe::SessionCore::~SessionCore() {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+}
+
+void transcribe::SessionCore::release_scratch() noexcept {
+    transcribe::release_compute_scratch(sched, compute_ctx);
+    on_scratch_released();
+}
+
 transcribe_session::~transcribe_session() = default;
 
 void transcribe_session::clear_result() {

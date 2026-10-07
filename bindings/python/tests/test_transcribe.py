@@ -193,6 +193,18 @@ class TestCancellation:
             session.run(audio_pcm)
             assert session.was_aborted is False
 
+    def test_run_clears_pending_cancel(self, model_path, audio_pcm):
+        # A cancel() requested before run()/run_batch() is cleared when the
+        # call starts: the stale flag must not abort the new call.
+        with t.Model(model_path) as model, model.session() as session:
+            session.cancel()
+            assert "country" in session.run(audio_pcm).text.lower()
+            assert session.was_aborted is False
+            session.cancel()
+            results = session.run_batch([audio_pcm])
+            assert "country" in results[0].text.lower()
+            assert session.was_aborted is False
+
     def test_cross_thread_cancel_in_flight_run(self, model_path, audio_pcm):
         # Long input (tiled jfk) so the run is mid-flight when the timer
         # fires from another thread. The abort must surface as Aborted with

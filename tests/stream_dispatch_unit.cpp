@@ -1546,8 +1546,72 @@ void test_begin_accepts_min_prefix_run_params() {
 
 }  // namespace
 
+transcribe_run_params g_stream_seen;
+
+transcribe_status capture_stream_begin(transcribe_session *             session,
+                                       const transcribe_run_params *    run_params,
+                                       const transcribe_stream_params * stream_params) {
+    (void) session;
+    (void) stream_params;
+    g_stream_seen = *run_params;
+    ++g_begin_calls;
+    return TRANSCRIBE_OK;
+}
+
+// Streaming rejects a prefix and INSTRUCT before the hook; vocabulary and a
+// context prompt reach the hook through library-owned copies.
+void test_begin_prompting() {
+    const transcribe::Arch arch = {
+        "fake-stream-prompt", nullptr, nullptr, nullptr, nullptr, nullptr, capture_stream_begin, fake_stream_feed,
+        fake_stream_finalize, nullptr, nullptr, nullptr,
+    };
+    transcribe_model model;
+    model.arch                    = &arch;
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT_PROMPT, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INSTRUCT, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, true);
+
+    transcribe_session session;
+    session.model = &model;
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
+
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    rp.prefix     = "Good morning";
+    g_begin_calls = 0;
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_INVALID_ARG);
+    rp.prefix = nullptr;
+    rp.task   = TRANSCRIBE_TASK_INSTRUCT;
+    rp.prompt = "Summarize.";
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_ERR_UNSUPPORTED_TASK);
+    CHECK(g_begin_calls == 0);
+
+    std::string  t0 = "GGUF", t1 = "", t2 = "ggml", ctx = "Earnings call.";
+    const char * terms[] = { t0.c_str(), t1.c_str(), t2.c_str() };
+    rp.task              = TRANSCRIBE_TASK_TRANSCRIBE;
+    rp.vocabulary        = terms;
+    rp.n_vocabulary      = 3;
+    rp.prompt            = ctx.c_str();
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) == TRANSCRIBE_OK);
+    CHECK(g_begin_calls == 1);
+    CHECK(g_stream_seen.n_vocabulary == 2);  // empty term dropped
+    CHECK(g_stream_seen.vocabulary != terms);
+    CHECK(g_stream_seen.prompt != ctx.c_str());
+    t0.assign("XXXX");
+    ctx.assign("clobbered");
+    CHECK(std::strcmp(g_stream_seen.vocabulary[0], "GGUF") == 0);
+    CHECK(std::strcmp(g_stream_seen.vocabulary[1], "ggml") == 0);
+    CHECK(std::strcmp(g_stream_seen.prompt, "Earnings call.") == 0);
+    transcribe_stream_reset(&session);
+}
+
 int main() {
     test_accessors_on_null_ctx();
+    test_begin_prompting();
     test_accessors_on_idle_ctx();
     test_default_params();
     test_begin_null_args();

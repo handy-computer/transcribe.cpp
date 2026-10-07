@@ -1,9 +1,13 @@
 # Moonshine tiny
 
-Useful Sensors' [`UsefulSensors/moonshine-tiny`](https://huggingface.co/UsefulSensors/moonshine-tiny)
-ported to transcribe.cpp. A 27M-parameter encoder-decoder transformer that
-consumes raw 16 kHz PCM directly (no STFT, no mel filterbank) via a three-layer
-Conv1d stem.
+<!-- catalog:intro -->
+Upstream: [`UsefulSensors/moonshine-tiny`](https://huggingface.co/UsefulSensors/moonshine-tiny) at [`390624e`](https://huggingface.co/UsefulSensors/moonshine-tiny/commit/390624e).
+
+Useful Sensors Moonshine tiny — an encoder-decoder transformer for English
+speech recognition. Consumes raw 16 kHz PCM directly via a three-layer Conv1d
+stem (no STFT, no mel) and emits transcript-only output. English-only; no
+translation, no language detection, no timestamps.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -17,31 +21,39 @@ timestamps.
 See the [upstream model card](https://huggingface.co/UsefulSensors/moonshine-tiny)
 for training data, intended use, and the original evaluation methodology.
 
-Licensed MIT. Ported from upstream commit
-[`390624e`](https://huggingface.co/UsefulSensors/moonshine-tiny/commit/390624ed33d594443aa4aa221f5b9f283b545b5a),
-pinned 2026-05-05. Validated against the transformers reference at
-transcribe.cpp commit
-[`07a8a84`](https://github.com/handy-computer/transcribe.cpp/tree/07a8a84)
-on 2026-05-05.
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`390624e`](https://huggingface.co/UsefulSensors/moonshine-tiny/commit/390624e), pinned 2026-05-05. Validated against the transformers reference at transcribe.cpp commit [`07a8a84`](https://github.com/handy-computer/transcribe.cpp/tree/07a8a84) on 2026-05-05.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32  | [moonshine-tiny-F32.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-F32.gguf)   | 105 MB | 4.58% |
-| F16  | [moonshine-tiny-F16.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-F16.gguf)   |  57 MB | 4.58% |
-| Q8_0 | [moonshine-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-Q8_0.gguf) |  34 MB | 4.60% |
+| F32          | [moonshine-tiny-F32.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-F32.gguf) | 110 MB | 4.58% |
+| F16          | [moonshine-tiny-F16.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-F16.gguf) |  59 MB | 4.58% |
+| Q8_0         | [moonshine-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/moonshine-tiny-gguf/resolve/main/moonshine-tiny-Q8_0.gguf) |  35 MB | 4.60% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-the transcribe.cpp default decode (greedy, `num_beams=1`, `max_length=194` —
-matching the upstream `generation_config`). Useful Sensors' self-reported
-number on the same split is 4.55% (model card). Our F32 reference baseline
-lands at 4.58%, within rounding of upstream and well within the ±1.00 pp
-Stage 7 acceptance gate. Q8_0 drift is +0.02 pp vs F32 — within bootstrap CI
-noise. Only F16 and Q8_0 are shipped as derived presets: at moonshine-tiny's
-shapes (hidden 288, intermediate 1152, vocab 32768) none of the dimensions
-divide the k-quant super-block size of 256, so Q6_K / Q5_K_M / Q4_K_M would
-all fall back to Q8_0 storage and be near-duplicates.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Decoded with the transcribe.cpp defaults (greedy, num_beams=1, max_length=194,
+matching the upstream generation_config). Useful Sensors' self-reported number on
+the same split is 4.55% (model card). Our F32 reference baseline lands at 4.58%,
+within rounding of upstream and well within the ±1.00 pp Stage 7 acceptance gate.
+Q8_0 drift is +0.02 pp vs F32 — within bootstrap CI noise.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 14.13% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -62,43 +74,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 5 iterations after 2 warmups),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
-(2 decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |         Q8_0 |
-| ------- | ------------ | -----------: |
-| Metal   | jfk (11.0s)  |  61 ms (180×) |
-| Metal   | dots (35.3s) | 478 ms (74×)  |
-| CPU     | jfk (11.0s)  |  52 ms (210×) |
-| CPU     | dots (35.3s) | 366 ms (97×)  |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `e0fa0f6`.
+| Backend | Sample       |            Q8_0 |
+| ------- | ------------ | --------------: |
+| Metal   | jfk (11.0s)  | 56 ms (197.19×) |
+| Metal   | dots (35.3s) | 422 ms (83.81×) |
+| CPU     | jfk (11.0s)  | 54 ms (201.68×) |
+| CPU     | dots (35.3s) | 373 ms (94.78×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |
-| ------- | ------------ | ------------: |
-| Vulkan  | jfk (11.0s)  |  143 ms (77×) |
-| Vulkan  | dots (35.3s) | 1.02 s (35×)  |
-| CPU     | jfk (11.0s)  |  163 ms (68×) |
-| CPU     | dots (35.3s) | 1.53 s (23×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |
+| ------- | ------------ | --------------: |
+| Vulkan  | jfk (11.0s)  | 132 ms (83.21×) |
+| Vulkan  | dots (35.3s) | 938 ms (37.65×) |
+| CPU     | jfk (11.0s)  | 175 ms (62.93×) |
+| CPU     | dots (35.3s) | 1.79 s (19.71×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models moonshine-tiny \
-  --quants q8_0 \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 5 --warmup 2 \
-  --name moonshine-publication
+uv run scripts/bench/run.py --profile --models moonshine-tiny
 ```
 
 ## Numerical Validation

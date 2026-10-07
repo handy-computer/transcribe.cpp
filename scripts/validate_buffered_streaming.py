@@ -156,8 +156,9 @@ def load_f32(path: Path, expected_shape: list[int] | None = None) -> np.ndarray:
     return raw
 
 
-def compare_pair(name: str, ref_path: Path, cpp_path: Path) -> dict:
-    """Per-tensor diff. Returns a row with max_abs, mean_abs, p99_abs, rel."""
+def compare_pair(name: str, ref_path: Path, cpp_path: Path,
+                 eos_pad_frames: int | None = None) -> dict:
+    """Compare common tensor rows, excluding the expected EOS divergence."""
     if not ref_path.exists() or not cpp_path.exists():
         return {
             "name": name,
@@ -167,6 +168,24 @@ def compare_pair(name: str, ref_path: Path, cpp_path: Path) -> dict:
         }
     ref = load_f32(ref_path).astype(np.float64)
     cpp = load_f32(cpp_path).astype(np.float64)
+    extra = {}
+    if eos_pad_frames is not None and ref.shape != cpp.shape:
+        if ref.ndim == 1 and cpp.shape[0] >= ref.shape[0]:
+            # Real audio must match and the synthetic tail must be zero.
+            pad = cpp[ref.shape[0]:]
+            extra["pad_samples"] = int(pad.size)
+            extra["pad_max_abs"] = float(np.abs(pad).max()) if pad.size else 0.0
+            cpp = cpp[:ref.shape[0]]
+        elif ref.ndim == 2 and cpp.shape[0] >= ref.shape[0] and cpp.shape[1:] == ref.shape[1:]:
+            n_real = ref.shape[0] - 1  # drop NeMo's conv-overhang row
+            extra["pad_rows"] = int(cpp.shape[0] - ref.shape[0])
+            tail = max(0, min(eos_pad_frames, n_real))
+            if tail > 0:
+                extra["eos_tail_rows"] = tail
+                extra["eos_tail_max_abs"] = float(
+                    np.abs(ref[n_real - tail:n_real] - cpp[n_real - tail:n_real]).max())
+            ref = ref[:n_real - tail]
+            cpp = cpp[:n_real - tail]
     if ref.shape != cpp.shape:
         # Some chunks may have differently-shaped tensors (last-chunk
         # divergence). Report and skip.
@@ -176,6 +195,9 @@ def compare_pair(name: str, ref_path: Path, cpp_path: Path) -> dict:
             "ref_shape": list(ref.shape),
             "cpp_shape": list(cpp.shape),
         }
+    if ref.size == 0:
+        return {"name": name, "status": "OK", "max_abs": 0.0, "mean_abs": 0.0,
+                "p99_abs": 0.0, "rel_max": 0.0, "n_elem": 0, **extra}
     diff = np.abs(ref - cpp)
     max_abs = float(diff.max())
     mean_abs = float(diff.mean())
@@ -189,6 +211,7 @@ def compare_pair(name: str, ref_path: Path, cpp_path: Path) -> dict:
         "p99_abs": p99_abs,
         "rel_max": rel,
         "n_elem": int(ref.size),
+        **extra,
     }
 
 
@@ -263,13 +286,17 @@ def main() -> int:
 
     rows: list[dict] = []
     fail_chunks = 0
+    last_step = common[-1] if common else None
+    eos_pad_frames = int(round(args.right_secs * 1000)) // 80
     for step in common:
         for kind in ("audio_in", "enc_out"):
             name = f"stream.chunk.{step}.{kind}"
+            # The final R rows intentionally differ because cpp adds lookahead.
             r = compare_pair(
                 name,
                 ref_dir / f"{name}.f32",
                 cpp_dir / f"{name}.f32",
+                eos_pad_frames=(eos_pad_frames if step == last_step else None),
             )
             rows.append({"step": step, **r})
             if r.get("status") == "OK":
@@ -279,8 +306,17 @@ def main() -> int:
                 if over_max or over_mean:
                     tag = "FAIL"
                     fail_chunks += 1
+                if "pad_max_abs" in r and r["pad_max_abs"] != 0.0:
+                    tag = "FAIL"
+                    fail_chunks += 1
+                extra = ""
+                if "pad_samples" in r:
+                    extra = f" eos_pad_samples={r['pad_samples']} (zeros: {r['pad_max_abs'] == 0.0})"
+                if "eos_tail_max_abs" in r:
+                    extra = (f" eos_tail_rows={r['eos_tail_rows']} eos_tail_max_abs={r['eos_tail_max_abs']:.3e}"
+                             f" pad_rows={r.get('pad_rows', 0)} (expected divergence, not gated)")
                 print(f"  step {step:>2} {kind:9s}: max_abs={r['max_abs']:.3e} "
-                      f"mean_abs={r['mean_abs']:.3e} rel_max={r['rel_max']:.3e} [{tag}]")
+                      f"mean_abs={r['mean_abs']:.3e} rel_max={r['rel_max']:.3e} [{tag}]{extra}")
             else:
                 # Variable-stride algorithm produces identical chunk
                 # geometry to ref, so SHAPE_DIFF or MISSING is now a
@@ -310,12 +346,17 @@ def main() -> int:
         print(f"FAIL: {fail_chunks} chunks exceed tolerance or have wrong shape")
         return 1
     if not transcript_match:
-        # Greedy RNN-T can tip a single-token decision on fp32 noise
-        # even when per-chunk encoder outputs match within tolerance.
-        # Report informationally — per-chunk parity is the algorithmic
-        # gate; WER on test-clean is the corpus-level gate.
-        print("WARN: transcript byte-match differs (per-chunk parity gate passes — "
-              "likely fp32-noise tipping a greedy decision)")
+        if cpp_text_norm.startswith(ref_text_norm):
+            tail = cpp_text_norm[len(ref_text_norm):]
+            print(f"INFO: cpp transcript extends ref by {tail!r} "
+                  "(EOS silence lookahead; expected)")
+        else:
+            # Greedy RNN-T can tip a single-token decision on fp32 noise
+            # even when per-chunk encoder outputs match within tolerance.
+            # Report informationally — per-chunk parity is the algorithmic
+            # gate; WER on test-clean is the corpus-level gate.
+            print("WARN: transcript byte-match differs (per-chunk parity gate passes — "
+                  "likely fp32-noise tipping a greedy decision)")
     print("OK")
     return 0
 

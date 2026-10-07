@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pcm = common::load_wav(&audio_path);
 
     let model = Model::load(&model_path)?;
-    if !model.capabilities().supports_streaming {
+    if !model.capabilities()?.supports_streaming {
         // Not an error — the wrong-model case, stated plainly (a whisper model
         // would land here). Exit 0 so CI's no-canary path stays green.
         eprintln!("{} does not support streaming", model.arch());

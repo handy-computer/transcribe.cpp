@@ -5,7 +5,7 @@ import CTranscribe
 /// failures stay distinct (requirements §3): "no such provider" is not
 /// "provider can't satisfy this request".
 ///
-/// `.aborted` / `.outputTruncated` carry the preserved partial `Transcript`
+/// `.aborted` / `.outputTruncated` / `.outputRepetition` carry the preserved partial `Transcript`
 /// (the C side keeps partial output readable after those statuses); it is `nil`
 /// when the error is built outside a run (e.g. by `check`).
 ///
@@ -25,6 +25,11 @@ public enum TranscribeError: Error {
     case inputTooLong(String)
     case aborted(message: String, partial: Transcript?)
     case outputTruncated(message: String, partial: Transcript?)
+    /// The decode was stopped because the output began repeating itself; the
+    /// repeats are dropped from `partial`, which is incomplete.
+    case outputRepetition(message: String, partial: Transcript?)
+    /// The model's `roles` lack the one the call needs (`TRANSCRIBE_ERR_UNSUPPORTED_ROLE`).
+    case unsupportedRole(String)
     case versionMismatch(String)
     case busy(String)
     case other(status: Int32, message: String)
@@ -64,8 +69,36 @@ public enum TranscribeError: Error {
             return .aborted(message: message, partial: nil)
         case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
             return .outputTruncated(message: message, partial: nil)
+        case TRANSCRIBE_ERR_OUTPUT_REPETITION:
+            return .outputRepetition(message: message, partial: nil)
+        case TRANSCRIBE_ERR_UNSUPPORTED_ROLE:
+            return .unsupportedRole(message)
         default:
             return .other(status: raw, message: message)
+        }
+    }
+
+    /// The partial transcript carried by `.aborted` / `.outputTruncated` /
+    /// `.outputRepetition`, if any; `nil` for every other case.
+    public var partial: Transcript? {
+        switch self {
+        case .aborted(_, let partial), .outputTruncated(_, let partial), .outputRepetition(_, let partial):
+            return partial
+        default:
+            return nil
+        }
+    }
+
+    /// True when the decode stopped before end-of-stream, at the generation
+    /// budget (`.outputTruncated`) or because the output began repeating
+    /// (`.outputRepetition`), as `transcribe_was_truncated` reports it. The
+    /// transcript in `partial` is incomplete.
+    public var isTruncated: Bool {
+        switch self {
+        case .outputTruncated, .outputRepetition:
+            return true
+        default:
+            return false
         }
     }
 

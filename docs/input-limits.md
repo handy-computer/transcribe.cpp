@@ -14,9 +14,10 @@ were trained on and warn when you cross it. Whatever the bucket, the library
 never truncates silently: an over-length input is rejected up front with
 `TRANSCRIBE_ERR_INPUT_TOO_LONG`; a transcript that runs into the context or
 generation budget mid-decode returns the hard status
-`TRANSCRIBE_ERR_OUTPUT_TRUNCATED` (with the partial transcript still readable
-and `transcribe_was_truncated()` set); and a soft-window family logs a `WARN`
-and proceeds. Every model reports its usable limit through
+`TRANSCRIBE_ERR_OUTPUT_TRUNCATED`, and one stopped because the output began
+looping returns `TRANSCRIBE_ERR_OUTPUT_REPETITION` (both with the partial
+transcript still readable and `transcribe_was_truncated()` set); and a
+soft-window family logs a `WARN` and proceeds. Every model reports its usable limit through
 `transcribe_capabilities::max_audio_ms` (or, per-session,
 `transcribe_session_get_limits()`) so you can check before you call. (Streaming
 is the one exception to the non-OK truncation rule — see below.)
@@ -73,23 +74,32 @@ need and do not have a length gate.
 | --- | --- | --- |
 | qwen3_asr, canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere, canary | decoder context window (`dec_max_position_embeddings` / `dec_max_seq`), or the encoder positional table (`enc_pos_emb_max_len`, for cohere/canary) — all from GGUF | KV cache grows to fit, clamped to the model's true max. Over-length input is **rejected before the decode** (or before the encoder, where the encoder table is the binding limit) with `TRANSCRIBE_ERR_INPUT_TOO_LONG`. |
 
-These families wrap an LLM-style decoder whose context window
-(`audio_tokens + prompt + generation`) is the binding constraint. The number of
-tokens a clip consumes is a deterministic function of its sample count
-(`n_samples → mel frames → fixed subsampling → audio tokens`), so the library
-computes the prefill size *before* running the encoder and rejects an
-over-length clip immediately — the caller never pays for a compute pass that
-cannot fit. The rejection goes through the log callback, not raw stderr.
+A clip's sample count deterministically fixes its decoder prefill size or
+encoder frame count, so the library checks the relevant bound before running
+and rejects over-length input immediately. The rejection goes through the log
+callback, not raw stderr.
 
 The one case that cannot be predicted up front is the transcript itself running
-long enough to exhaust the remaining budget mid-decode (rare — the output would
-have to be very large for the audio length). There, the run returns the hard
-status `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` while keeping the partial transcript
-readable (exactly like an aborted run); `transcribe_was_truncated(session)` is
-also set, and a `WARN` is logged. A truncated transcript is never returned as
-`TRANSCRIBE_OK` — a caller cannot mistake it for complete — and the partial
-output is never discarded. In `transcribe_run_batch` this is a per-utterance
-status (the whole-batch call still returns `TRANSCRIBE_OK`).
+long enough to exhaust the remaining budget mid-decode. There, the run returns
+the hard status `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` while keeping the partial
+transcript readable (exactly like an aborted run);
+`transcribe_was_truncated(session)` is also set, and a `WARN` is logged. A
+truncated transcript is never returned as `TRANSCRIBE_OK` — a caller cannot
+mistake it for complete — and the partial output is never discarded. In
+`transcribe_run_batch` this is a per-utterance status (the whole-batch call
+still returns `TRANSCRIBE_OK`).
+
+Autoregressive families scale the decode budget with audio length, capped by
+the remaining decoder context. Lowering `n_ctx` can therefore make truncation
+more likely. For `canary` and `cohere`, input and output have separate encoder
+and decoder limits; `max_audio_ms` reports the encoder limit, not a recommended
+chunk size.
+
+A greedy decode can also fall into repeating one phrase until the budget runs
+out. The greedy families (`canary`, `canary_qwen`, `cohere`, `funasr_nano`,
+`granite`, `moonshine`, `moonshine_streaming`, `moss`, `qwen3_asr`, `voxtral`)
+have some protection against this, so that you don't infinitely decode
+on sequences which are identical and are obviously looping
 
 ### 3. Soft window — warn and proceed
 
@@ -159,15 +169,16 @@ with `TRANSCRIBE_ERR_INPUT_TOO_LONG` (one-shot and batch) or surfaced via
 
 | Situation | Status | Log | Result |
 | --- | --- | --- | --- |
-| Input within limit | `TRANSCRIBE_OK` | — | full transcript |
+| Input within limit and decode completes | `TRANSCRIBE_OK` | — | full transcript |
 | Over-length, hard-cap family | `TRANSCRIBE_ERR_INPUT_TOO_LONG` | `ERROR` via callback | no transcript (rejected before the decode) |
 | Generation ran long mid-decode | `TRANSCRIBE_ERR_OUTPUT_TRUNCATED` | `WARN` via callback | partial transcript readable; `transcribe_was_truncated() == true` |
+| Greedy decode started repeating | `TRANSCRIBE_ERR_OUTPUT_REPETITION` | `WARN` via callback | partial transcript readable, repeats dropped; `transcribe_was_truncated() == true` |
 | Over-window, soft-window family | `TRANSCRIBE_OK` | `WARN` via callback | full transcript (accuracy may be degraded) |
 | Chunked / unbounded family | `TRANSCRIBE_OK` | — | full transcript |
 | Cache/graph allocation failed | `TRANSCRIBE_ERR_OOM` | `ERROR` via callback | no transcript (no silent context shrink) |
 
-In `transcribe_run_batch`, `INPUT_TOO_LONG` and `OUTPUT_TRUNCATED` are
-per-utterance statuses (`transcribe_batch_status(session, i)`); the whole-batch
+In `transcribe_run_batch`, `INPUT_TOO_LONG`, `OUTPUT_TRUNCATED`, and
+`OUTPUT_REPETITION` are per-utterance statuses (`transcribe_batch_status(session, i)`); the whole-batch
 call returns `TRANSCRIBE_OK`.
 
 `transcribe_was_truncated(session)` is reset at the top of every
@@ -176,8 +187,8 @@ lifecycle as `transcribe_was_aborted`).
 
 ## Streaming is the exception
 
-`TRANSCRIBE_ERR_OUTPUT_TRUNCATED` is an **offline-only** status
-(`transcribe_run` / `transcribe_run_batch`). An active stream is incremental
+`TRANSCRIBE_ERR_OUTPUT_TRUNCATED` and `TRANSCRIBE_ERR_OUTPUT_REPETITION` are
+**offline-only** statuses (`transcribe_run` / `transcribe_run_batch`). An active stream is incremental
 and has its own terminal-state machine (`transcribe_stream_*`,
 IDLE/ACTIVE/FINISHED/FAILED), and `stream_feed` / `stream_finalize` return the
 status of *that step*, not a verdict on the whole transcript. So when a

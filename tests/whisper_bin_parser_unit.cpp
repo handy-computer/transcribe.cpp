@@ -36,12 +36,25 @@
 #include "transcribe-bin-loader.h"
 
 #include <sys/stat.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <process.h>
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#endif
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -149,13 +162,13 @@ void test_missing_path() {
 // so the parser will fail at the manifest stage if it gets past the
 // header checks — but for these tests we only care about the
 // hparams + mel-filter-dim gates.
-bool write_synthetic_bin(const std::string & path,
-                         int32_t             n_vocab,
-                         int32_t             n_audio_layer,
-                         int32_t             n_text_layer,
-                         int32_t             n_mels,
-                         int32_t             n_mel_filters,
-                         int32_t             n_fft_filters) {
+bool write_synthetic_bin(const std::filesystem::path & path,
+                         int32_t                       n_vocab,
+                         int32_t                       n_audio_layer,
+                         int32_t                       n_text_layer,
+                         int32_t                       n_mels,
+                         int32_t                       n_mel_filters,
+                         int32_t                       n_fft_filters) {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f) {
         return false;
@@ -186,29 +199,69 @@ bool write_synthetic_bin(const std::string & path,
     return static_cast<bool>(f);
 }
 
-void test_bad_n_fft() {
+// Create an empty .bin path without weakening mkstemps()'s atomic
+// uniqueness guarantee. The Windows branch uses CREATE_NEW for the
+// equivalent create-if-absent behavior and native wide paths.
+std::filesystem::path make_temp_bin_path() {
+#ifdef _WIN32
+    std::error_code             ec;
+    const std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+    if (ec) {
+        return {};
+    }
+
+    for (unsigned int attempt = 0; attempt < 100; ++attempt) {
+        const std::filesystem::path path =
+            dir / ("transcribe_bin_test_" + std::to_string(::_getpid()) + "_" + std::to_string(attempt) + ".bin");
+        const HANDLE file =
+            ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            ::CloseHandle(file);
+            return path;
+        }
+        const DWORD error = ::GetLastError();
+        if (error != ERROR_FILE_EXISTS && error != ERROR_ALREADY_EXISTS) {
+            return {};
+        }
+    }
+    return {};
+#else
     char      tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
     const int fd     = ::mkstemps(tmpl, 4);
     if (fd < 0) {
+        return {};
+    }
+    ::close(fd);
+    return std::filesystem::path(tmpl);
+#endif
+}
+
+void remove_temp_file(const std::filesystem::path & path) {
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+}
+
+void test_bad_n_fft() {
+    const std::filesystem::path path = make_temp_bin_path();
+    if (path.empty()) {
         std::fprintf(stderr, "SKIP: could not create tempfile for synthetic bin\n");
         ++g_skipped;
         return;
     }
-    ::close(fd);
-    const std::string path = tmpl;
 
     // Whisper-shaped hparams but non-canonical n_fft (200 instead of
     // 201). Parser must reject before we even get to the vocab phase.
     if (!write_synthetic_bin(path, 51865, 4, 4, 80, 80, 200)) {
         std::fprintf(stderr, "SKIP: failed to write synthetic .bin\n");
         ++g_skipped;
-        ::unlink(path.c_str());
+        remove_temp_file(path);
         return;
     }
+    const std::string                       path_utf8 = path.u8string();
     transcribe::bin_loader::WhisperBinModel m;
-    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path.c_str(), m);
+    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path_utf8.c_str(), m);
     CHECK(rc == TRANSCRIBE_ERR_GGUF);
-    ::unlink(path.c_str());
+    remove_temp_file(path);
 }
 
 void test_distil_layer_count_accepted() {
@@ -216,28 +269,26 @@ void test_distil_layer_count_accepted() {
     // whisper-shaped hparams should pass the hparams gate. We don't
     // care that the parser later fails at "no tensors" — the hparams
     // check should not be the gating step.
-    char      tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
-    const int fd     = ::mkstemps(tmpl, 4);
-    if (fd < 0) {
+    const std::filesystem::path path = make_temp_bin_path();
+    if (path.empty()) {
         ++g_skipped;
         return;
     }
-    ::close(fd);
-    const std::string path = tmpl;
 
     if (!write_synthetic_bin(path, 51865, 24, 2, 80, 80, 201)) {
         ++g_skipped;
-        ::unlink(path.c_str());
+        remove_temp_file(path);
         return;
     }
+    const std::string                       path_utf8 = path.u8string();
     transcribe::bin_loader::WhisperBinModel m;
-    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path.c_str(), m);
+    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path_utf8.c_str(), m);
     // Header + mel filters parse; we then run out of bytes for the
     // vocab/tensor sections. The expected status is ERR_GGUF (with a
     // "no tensors" / truncated diagnostic), NOT UNSUPPORTED_ARCH —
     // that's the proof that the geometry gate accepts distil layers.
     CHECK(rc == TRANSCRIBE_ERR_GGUF);
-    ::unlink(path.c_str());
+    remove_temp_file(path);
 }
 
 }  // namespace

@@ -54,6 +54,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: Public-ABI drift gate (pinned hash vs include/transcribe.abihash)
         run: uv run --no-project scripts/ci/swift_abihash_check.py
 
@@ -70,13 +72,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary fetches via uvx
-      - name: Install build deps
-        run: brew install ninja ccache
-      - uses: actions/cache@v4
         with:
-          path: ~/Library/Caches/ccache
-          key: ccache-swift-macos-${{ github.sha }}
-          restore-keys: ccache-swift-macos-
+          version: "0.12.19"
+      - name: Verify build deps
+        run: |
+          command -v ninja
+          command -v ccache
+          ninja --version
+          ccache --version
       - name: Build the macOS xcframework slice
         run: TRANSCRIBE_XCFRAMEWORK_SLICES="macos" scripts/ci/build_xcframework.sh
       # Fetch the canary GGUFs (whisper-tiny + moonshine-streaming-tiny) and
@@ -117,12 +120,11 @@ jobs:
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
       - uses: actions/checkout@v4
-      - name: Install build deps
-        run: brew install ninja ccache
-      - uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/ccache
-          key: ccache-swift-ios-${{ github.sha }}
-          restore-keys: ccache-swift-ios-
+      - name: Verify build deps
+        run: |
+          command -v ninja
+          command -v ccache
+          ninja --version
+          ccache --version
       - name: Cross-compile the iOS device + simulator slices (build-verify)
         run: TRANSCRIBE_XCFRAMEWORK_SLICES="ios-device ios-sim" scripts/ci/build_xcframework.sh

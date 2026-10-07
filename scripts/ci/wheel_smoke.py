@@ -126,7 +126,7 @@ def main() -> int:
             # Intel macOS ships a CPU-only wheel (no Metal — Intel-Mac GPUs are
             # out of scope; Metal / tuned CPU is reachable via the sdist). The
             # bundled artifact must therefore expose only CPU.
-            for accel in ("metal", "vulkan", "cuda"):
+            for accel in ("metal", "vulkan", "cuda", "rocm"):
                 assert not t.backend_available(accel), (
                     f"{accel} unexpectedly available in the CPU-only x86 macOS wheel"
                 )

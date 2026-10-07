@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "CORRECTNESS REGIME (Stage 4, offline path): reference-dtype F32 GGUF; KV f32; C++ MelFrontend real mel (NeMo ceil(n/hop) framing); --backend cpu --threads 1. Every number below is measured in that regime via validate.py all / compare_tensors.py.",
+    "Sortformer is a diarizer: diar.preds_offline is [T,4] sigmoid activity in [0,1] (arrival-order columns); enc.* are pre-sigmoid encoder activations. The model's actual output (diar.preds_offline) matches NeMo to max_abs 2.96e-4 / mean_abs 5.0e-6 (near bit-exact).",
+    "Dominant drift source: F32 accumulation over the 17-layer NEST FastConformer (reused verbatim from parakeet::build_encoder_graph) with normalize=none mel magnitudes (~16). Drift is uniform across frames (peaks mid-sequence, boundaries no worse) and DECREASES down the stack (fastconformer 3.3e-3 -> encoder_proj 9.8e-4 -> transformer 1.1e-3 -> preds 3.0e-4), confirming intrinsic accumulation, not a masking/framing bug. Mel values verified to 1.6e-4 (~1e-5 relative) vs NeMo.",
+    "Finalized = max(1.5 x observed, provisional). Widened vs Stage-2 provisional: fastconformer, encoder_proj, transformer, preds (F32 conformer accumulation; ~0.1% relative, well under the 1% investigate threshold).",
+    "enc.mel.in is shape_optional: NeMo pads the mel tensor to a multiple of 16 (pad_to=16, zero pad) which its own forward() trims off before the encoder; the C++ feeds the real ceil(n/hop) length. The real frames match to 1.6e-4; full padded-tensor parity is a Step-7 (frontend) item.",
+    "diar.probs (streaming AOSC/FIFO path) is now dumped by the C++ streaming forward (run_streaming) and gated. With the checkpoint-shipped cfg the short oracle clip is a single chunk, so diar.probs == diar.preds_offline math (empty spkcache/fifo -> concat is just the chunk); its tolerance tracks diar.preds_offline. Multi-chunk / compression parity is exercised via VALIDATE_SORTFORMER_PRESET=small (and the AMI DER acceptance)."
+  ],
+  "diar.preds_offline": {
+    "max_abs": 4.5e-04,
+    "mean_abs": 7.6e-06
+  },
+  "enc.encoder_proj.out": {
+    "max_abs": 1.5e-03,
+    "mean_abs": 1.9e-04
+  },
+  "enc.fastconformer.out": {
+    "max_abs": 4.9e-03,
+    "mean_abs": 2.1e-04
+  },
+  "enc.transformer.out": {
+    "max_abs": 1.7e-03,
+    "mean_abs": 2.0e-04
+  },
+  "enc.mel.in": {
+    "max_abs": 2.5e-04,
+    "mean_abs": 2.7e-06,
+    "shape_optional": true
+  },
+  "diar.probs": {
+    "max_abs": 4.5e-04,
+    "mean_abs": 7.6e-06
+  }
+}

@@ -50,6 +50,8 @@ struct CptFlags {
 
     bool is_whitespace() const { return (bits & WHITESPACE) != 0; }
 
+    bool is_accent_mark() const { return (bits & ACCENT_MARK) != 0; }
+
     // True if any category bit in MASK_CATEGORIES (the low byte) is
     // set. Mirrors unicode_cpt_flags::as_uint() & MASK_CATEGORIES != 0
     // from llama.cpp. Used by the pretokenizer to distinguish "known
@@ -171,5 +173,22 @@ std::vector<std::string> pretokenize_gpt2_raw_bytes(const std::string & text);
 // trained to see right after "format". Without this granite-specific
 // pretokenizer we'd emit 5380 where the reference produces (30, 198).
 std::vector<std::string> pretokenize_granite(const std::string & text);
+
+// Mistral Tekken pretokenizer (Voxtral). The tekken.json pattern is:
+//
+//   [^\r\n\p{L}\p{N}]? [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]* [\p{Ll}\p{Lm}\p{Lo}\p{M}]+
+//   | [^\r\n\p{L}\p{N}]? [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+ [\p{Ll}\p{Lm}\p{Lo}\p{M}]*
+//   | \p{N}
+//   |  ?[^\s\p{L}\p{N}]+ [\r\n/]*
+//   | \s* [\r\n]+
+//   | \s+ (?!\S)
+//   | \s+
+//
+// Case is ASCII-only: A-Z is upper, a-z is lower, other letters are
+// both. So "iPhone" -> "i", "Phone", but a non-ASCII case change inside
+// a word does not split (rare; e.g. "нужноМАНА" differs from
+// mistral-common). Combining marks join letter runs, so Devanagari /
+// Thai words stay whole.
+std::vector<std::string> pretokenize_tekken(const std::string & text);
 
 }  // namespace transcribe::unicode

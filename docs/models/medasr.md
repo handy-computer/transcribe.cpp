@@ -1,6 +1,10 @@
 # MedASR
 
-Google's [`google/medasr`](https://huggingface.co/google/medasr) ported to transcribe.cpp. 105M-parameter encoder-CTC for medical-dictation English ASR. 17-layer Conformer encoder with RoPE attention (rope_theta=10000), macaron FFNs (residual scalars [1.5, 0.5]), BatchNorm conv module (kernel=32, residual scalars [2.0, 1.0]), and a Linear 512→512 CTC head over a SentencePiece BPE vocabulary.
+<!-- catalog:intro -->
+Upstream: [`google/medasr`](https://huggingface.co/google/medasr) at [`ae1e484`](https://huggingface.co/google/medasr/commit/ae1e484).
+
+Offline English speech-to-text optimized for medical dictation (radiology, internal medicine, family medicine). 17-layer Conformer encoder with RoPE attention, macaron FFNs, and a 512-token SentencePiece CTC head. Greedy CTC decode; no language model, no beam search.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -8,9 +12,11 @@ Offline English speech-to-text optimized for medical dictation (radiology, inter
 
 Trained on ~5,000 hours of de-identified physician dictations on top of a LibriHeavy 50k-hour pretrain. The upstream model card flags lower accuracy on non-native accents and a male-skewed speaker distribution.
 
-Licensed under the [Health AI Developer Foundations terms](https://developers.google.com/health-ai-developer-foundations/terms). The upstream repo is gated; you must accept the HF terms before download.
+The upstream repo is gated; you must accept the HF terms before download.
 
-Ported from upstream commit [`ae1e484`](https://huggingface.co/google/medasr/commit/ae1e4845b4b07479735d93e1e591e566435b7104), pinned 2026-06-04.
+<!-- catalog:pin -->
+Licensed [Health AI Developer Foundations](https://developers.google.com/health-ai-developer-foundations/terms). Ported from upstream commit [`ae1e484`](https://huggingface.co/google/medasr/commit/ae1e484), pinned 2026-06-04. Validated against the transformers @ 65dc2615 (dev; v5.0.0 unreleased) reference at transcribe.cpp commit [`782abfd`](https://github.com/handy-computer/transcribe.cpp/tree/782abfd) on 2026-06-04.
+<!-- /catalog -->
 
 ## Input limits
 
@@ -22,18 +28,40 @@ long recordings for best results. See the
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [medasr-F32.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F32.gguf)       | 417 MB | 17.88% |
-| F16    | [medasr-F16.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F16.gguf)       | 202 MB | 17.88% |
-| Q8_0   | [medasr-Q8_0.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q8_0.gguf)     | 122 MB | 17.86% |
-| Q6_K   | [medasr-Q6_K.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q6_K.gguf)     | 101 MB | 17.93% |
-| Q5_K_M | [medasr-Q5_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q5_K_M.gguf) |  90 MB | 17.91% |
-| Q4_K_M | [medasr-Q4_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q4_K_M.gguf) |  79 MB | 18.14% |
+| F32          | [medasr-F32.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F32.gguf) | 421 MB | 17.88% |
+| F16          | [medasr-F16.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-F16.gguf) | 211 MB | 17.88% |
+| Q8_0         | [medasr-Q8_0.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q8_0.gguf) | 128 MB | 17.86% |
+| Q6_K         | [medasr-Q6_K.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q6_K.gguf) | 106 MB | 17.93% |
+| Q5_K_M       | [medasr-Q5_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q5_K_M.gguf) |  94 MB | 17.91% |
+| Q4_K_M       | [medasr-Q4_K_M.gguf](https://huggingface.co/handy-computer/medasr-gguf/resolve/main/medasr-Q4_K_M.gguf) |  83 MB | 18.14% |
+<!-- /catalog -->
 
-**Recommended default: Q8_0.** Smallest preset with no statistically detectable WER degradation versus F32 (122 MB; +0.00 pp within bootstrap CI). Q4_K_M shows a real +0.26 pp degradation on LibriSpeech and is shipped for completeness but **not recommended** — prefer Q5_K_M if you need smaller than Q8_0.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2,620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline (HuggingFace transformers, Mac MPS): **17.88%**; transcribe.cpp F32 matches exactly. Absolute WER is higher than general-purpose ASR (e.g. Whisper-base ≈ 5%) because the model is fine-tuned for medical dictation — on the publisher's internal RAD-DICT / GENERAL-DICT / FM-DICT datasets the model scores 6.6%–9.3%, but those datasets are not publicly reproducible. See [`reports/wer/medasr.test-clean.summary.md`](../../reports/wer/medasr.test-clean.summary.md) for the full sweep.
+<!-- catalog:prose field=wer.notes -->
+Greedy CTC decoding, no external LM. F32 reference baseline (HuggingFace
+transformers, Mac MPS): 17.88%; transcribe.cpp F32 matches exactly. Absolute WER is
+higher than general-purpose ASR (e.g. Whisper-base ~5%) because the model is
+fine-tuned for medical dictation — on the publisher's internal RAD-DICT /
+GENERAL-DICT / FM-DICT datasets the model scores 6.6%–9.3%, but those datasets are
+not publicly reproducible. Q8_0 is the recommended default (smallest preset with no
+statistically detectable WER degradation); Q4_K_M shows a real +0.26 pp degradation
+and is shipped for completeness but not recommended — prefer Q5_K_M if you need
+smaller than Q8_0.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 37.48% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -55,36 +83,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2 decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample        |          Q8_0 |        Q4_K_M |
-| ------- | ------------- | ------------: | ------------: |
-| Metal   | jfk (11.0 s)  |  38 ms (290×) |  44 ms (248×) |
-| Metal   | dots (35.3 s) |  84 ms (419×) |  90 ms (394×) |
-| CPU     | jfk (11.0 s)  |  161 ms (68×) |  180 ms (61×) |
-| CPU     | dots (35.3 s) |  558 ms (63×) |  623 ms (57×) |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.5, transcribe.cpp `8139a4b`. Metal device: `Apple M4 Max`. Mel pipeline uses the shared `MelFrontend` (Accelerate vDSP fp64 FFT + cblas_sgemm); encoder is the conformer + RoPE + BatchNorm-conv graph in `src/arch/medasr/encoder.cpp`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 17 ms (658.45×) | 16 ms (667.76×) |
+| Metal   | dots (35.3s) | 39 ms (915.05×) | 40 ms (893.98×) |
+| CPU     | jfk (11.0s)  | 162 ms (68.09×) | 179 ms (61.33×) |
+| CPU     | dots (35.3s) | 564 ms (62.60×) | 632 ms (55.88×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample        |          Q8_0 |        Q4_K_M |
-| ------- | ------------- | ------------: | ------------: |
-| Vulkan  | jfk (11.0 s)  |  163 ms (68×) |  174 ms (63×) |
-| Vulkan  | dots (35.3 s) |  481 ms (74×) |  495 ms (71×) |
-| CPU     | jfk (11.0 s)  |  543 ms (20×) |  488 ms (23×) |
-| CPU     | dots (35.3 s) | 1.84 s (19×)  | 1.63 s (22×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `79d139a`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 160 ms (68.93×) | 157 ms (70.04×) |
+| Vulkan  | dots (35.3s) | 480 ms (73.59×) | 484 ms (72.95×) |
+| CPU     | jfk (11.0s)  | 400 ms (27.48×) | 466 ms (23.58×) |
+| CPU     | dots (35.3s) | 1.46 s (24.25×) | 1.50 s (23.58×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models medasr --quants q8_0,q4_k_m --samples jfk,dots \
-  --backends metal,cpu,vulkan --iters 3 --warmup 1 --name medasr-publication
+uv run scripts/bench/run.py --profile --models medasr
 ```
 
 ## Numerical Validation

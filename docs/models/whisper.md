@@ -38,24 +38,28 @@ see the family doc at
 
 WER is on LibriSpeech test-clean for the **Q8_0** preset (the default
 recommended quant), measured by transcribe.cpp's WER pipeline with
-segment timestamps enabled. See each per-variant doc for the full quant
+timestamps off (`scripts/wer/run.py --timestamps none`, the WER harness
+default). See each per-variant doc for the full quant
 matrix (F32/F16/Q8_0/Q6_K/Q5_K_M/Q4_K_M) and a discussion of how our
 numbers compare to OpenAI's self-reported figures. Numbers come from single Metal-backed runs; Metal's non-deterministic parallel reductions add ~0.1pp run-to-run variance on the noise floor.
 
-| Variant | Languages | Q8_0 size | WER (Q8_0) | Doc |
-| --- | --- | ---: | ---: | --- |
-| `whisper-tiny`           | 99 + auto-detect    |   44 MB | 7.53% | [whisper-tiny.md](whisper-tiny.md) |
-| `whisper-tiny.en`        | English only        |   44 MB | 5.72% | [whisper-tiny.en.md](whisper-tiny.en.md) |
-| `whisper-base`           | 99 + auto-detect    |   81 MB | 5.12% | [whisper-base.md](whisper-base.md) |
-| `whisper-base.en`        | English only        |   81 MB | 4.16% | [whisper-base.en.md](whisper-base.en.md) |
-| `whisper-small`          | 99 + auto-detect    |  257 MB | 3.33% | [whisper-small.md](whisper-small.md) |
-| `whisper-small.en`       | English only        |  257 MB | 3.09% | [whisper-small.en.md](whisper-small.en.md) |
-| `whisper-medium`         | 99 + auto-detect    |  793 MB | 2.64% | [whisper-medium.md](whisper-medium.md) |
-| `whisper-medium.en`      | English only        |  793 MB | 2.72% | [whisper-medium.en.md](whisper-medium.en.md) |
-| `whisper-large`          | 99 + auto-detect    | 1.55 GB | 2.74% | [whisper-large.md](whisper-large.md) |
-| `whisper-large-v2`       | 99 + auto-detect    | 1.55 GB | 2.65% | [whisper-large-v2.md](whisper-large-v2.md) |
-| `whisper-large-v3`       | 100 + auto-detect   | 1.55 GB | 1.82% | [whisper-large-v3.md](whisper-large-v3.md) |
-| `whisper-large-v3-turbo` | 100 + auto-detect   |  845 MB | 2.01% | [whisper-large-v3-turbo.md](whisper-large-v3-turbo.md) |
+<!-- catalog:family variants=breeze-asr-25,whisper-tiny,whisper-tiny.en,whisper-base,whisper-base.en,whisper-small,whisper-small.en,whisper-medium,whisper-medium.en,whisper-large,whisper-large-v2,whisper-large-v3,whisper-large-v3-turbo -->
+| Variant                  | Params | Languages                   | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities                  | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `breeze-asr-25`          |   1.5B | zh, en + auto-detect        |   1.67 GB | LibriSpeech test-clean (WER) | 2.27% | translate, segment timestamps | [handy-computer/Breeze-ASR-25-gguf](https://huggingface.co/handy-computer/Breeze-ASR-25-gguf) |
+| `whisper-tiny`           |    38M | 99 languages + auto-detect  |     46 MB | LibriSpeech test-clean (WER) | 7.52% | translate, segment timestamps | [whisper-tiny.md](whisper-tiny.md) |
+| `whisper-tiny.en`        |    38M | en                          |     46 MB | LibriSpeech test-clean (WER) | 5.72% | segment timestamps            | [whisper-tiny.en.md](whisper-tiny.en.md) |
+| `whisper-base`           |    73M | 99 languages + auto-detect  |     85 MB | LibriSpeech test-clean (WER) | 5.12% | translate, segment timestamps | [whisper-base.md](whisper-base.md) |
+| `whisper-base.en`        |    73M | en                          |     85 MB | LibriSpeech test-clean (WER) | 4.16% | segment timestamps            | [whisper-base.en.md](whisper-base.en.md) |
+| `whisper-small`          |   242M | 99 languages + auto-detect  |    270 MB | LibriSpeech test-clean (WER) | 3.33% | translate, segment timestamps | [whisper-small.md](whisper-small.md) |
+| `whisper-small.en`       |   242M | en                          |    270 MB | LibriSpeech test-clean (WER) | 3.09% | segment timestamps            | [whisper-small.en.md](whisper-small.en.md) |
+| `whisper-medium`         |   764M | 99 languages + auto-detect  |    832 MB | LibriSpeech test-clean (WER) | 2.64% | translate, segment timestamps | [whisper-medium.md](whisper-medium.md) |
+| `whisper-medium.en`      |   764M | en                          |    831 MB | LibriSpeech test-clean (WER) | 2.72% | segment timestamps            | [whisper-medium.en.md](whisper-medium.en.md) |
+| `whisper-large`          |   1.5B | 99 languages + auto-detect  |   1.67 GB | LibriSpeech test-clean (WER) | 2.71% | translate, segment timestamps | [whisper-large.md](whisper-large.md) |
+| `whisper-large-v2`       |   1.5B | 99 languages + auto-detect  |   1.67 GB | LibriSpeech test-clean (WER) | 2.97% | translate, segment timestamps | [whisper-large-v2.md](whisper-large-v2.md) |
+| `whisper-large-v3`       |   1.5B | 100 languages + auto-detect |   1.67 GB | LibriSpeech test-clean (WER) | 1.82% | translate, segment timestamps | [whisper-large-v3.md](whisper-large-v3.md) |
+| `whisper-large-v3-turbo` |   809M | 100 languages + auto-detect |    886 MB | LibriSpeech test-clean (WER) | 2.01% | segment timestamps            | [whisper-large-v3-turbo.md](whisper-large-v3-turbo.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

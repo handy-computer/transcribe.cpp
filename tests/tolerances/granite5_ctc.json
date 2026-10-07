@@ -1,0 +1,192 @@
+{
+  "_comment": [
+    "granite5_ctc (Granite Speech 5.0 TurboCTC) tolerances. Stage 4 finalized.",
+    "",
+    "Correctness regime (every number below was measured in exactly this one):",
+    "  GGUF:          granite-speech-5.0-470m-turboctc-BF16.gguf, the reference",
+    "                 tier \u2014 BF16 weights, F32 norms/biases/BN stats, F16 conv",
+    "                 kernels (gguf_common.reference_dtype_for).",
+    "  KV cache:      none. encoder-ctc is a single forward with no decoder",
+    "                 loop, so --kv-type does not reach a graph.",
+    "  Frontend:      the production C++ path (MelFrontend per_utterance +",
+    "                 host deltas + 2-frame stacking). No reference-mel",
+    "                 injection is used anywhere in this file. `mel.in` is a",
+    "                 real frontend-parity gate, not a pinned read.",
+    "  Backend:       CPU, --threads 1 (scripts/validate.py defaults).",
+    "  Reference:     transformers 5.17.0 GraniteSpeech5ForCTC at F32",
+    "                 (oracle_dtype in the golden manifest), eager attention.",
+    "  Cases:         jfk (1100 mel frames, even) and dots (3533, odd); each",
+    "                 entry takes the max over both.",
+    "",
+    "Dominant drift source: ggml's BF16 matmul rounds the F32 activation to",
+    "BF16 before the dot product, so the C++ computes BF16 x BF16 against an",
+    "F32 x F32 reference. This is NOT weight rounding: the BF16 and F32 GGUFs",
+    "built from this checkpoint hold numerically identical weights (max diff",
+    "2.98e-08 across all 520 tensors, and that residue is the F16-vs-F32 conv",
+    "kernel bucket, not the BF16 bucket, which round-trips exactly). BF16",
+    "carries 8 mantissa bits, so one rounding is ~2^-9 = 0.2% relative; the",
+    "observed 0.3%-1.6% of p99_abs is that compounding over 16 blocks.",
+    "",
+    "Control measurement that localizes it (Stage 4, not a shipped artifact):",
+    "the same C++ graph against an F32-tier GGUF of the same checkpoint",
+    "(scripts/convert-granite5_ctc.py --reference-dtype f32) matches the F32",
+    "oracle to 3e-6..5e-5 RELATIVE on every one of the 24 tensors, worst",
+    "absolute 4.65e-04 on enc.block.8.out. That is float accumulation order",
+    "only. The graph \u2014 the in-block stride-2 subsampling with its mean-pooled",
+    "and trimmed residual, the Shaw bias index sign, the self-conditioned CTC",
+    "injection after block 7, and the tied CTC head \u2014 is therefore exact, and",
+    "the budgets below are absorbing storage dtype, not an unlocated bug.",
+    "",
+    "Widened vs the Stage 2 magnitude budget (1e-4 x p99_abs / 1e-5 x rms):",
+    "every encoder tensor, by 24x to 242x, for the reason above. The widening",
+    "is largest where the residual stream is at its widest (block 1's",
+    "post_conv / post_ff2, right after the second subsampling) and smallest on",
+    "enc.ctc.mid_injection, whose input is a softmax and therefore bounded.",
+    "",
+    "NOT widened: mel.in keeps its Stage 2 magnitude budget (1.482e-04). The",
+    "C++ frontend sits 5x inside it at 1.824e-05 (1.2e-05 relative), identical",
+    "on the BF16 and F32 builds because the frontend is host F32 code that",
+    "never touches a weight. Tightening it to the observed value was not done",
+    "without user sign-off, per the Stage 4 recipe.",
+    "",
+    "Downstream check that these budgets do not hide an accuracy loss: the",
+    "BF16 C++ transcript is character-identical to the reference on both dump",
+    "cases, and the full LibriSpeech test-clean gate is in the family doc.",
+    "",
+    "Re-finalized entry, depthwise-conv change (post-Stage-4 perf work):",
+    "  enc.ctc_logits max_abs 0.0922 -> 0.227. The granite5_ctc conv module moved",
+    "  from conformer::conv_2d_dw_f32 (im2col + mul_mat) to",
+    "  conformer::conv_2d_dw_direct_f32 for speed (M4/Metal/F32 encoder",
+    "  114.7 ms -> 101.4 ms). The two accumulate differently, and on the dots",
+    "  case that moved this tensor's max_abs from 6.150e-02 to 1.513e-01,",
+    "  past the old 1.5x-observed budget.",
+    "",
+    "  This was localized before it was absorbed, not widened on the drift",
+    "  number alone:",
+    "    1. F32 replay. Against an F32-tier GGUF and the F32 oracle, the",
+    "       direct build matches on BOTH cases at the same 1e-5-relative level",
+    "       the im2col build does, and on this very tensor it is marginally",
+    "       BETTER: dots 8.106e-05 vs 8.202e-05, jfk 2.270e-04 vs 2.265e-04.",
+    "       So the graph stays exact; only the BF16 rounding pattern moved.",
+    "    2. mean_abs IMPROVED in the same run (5.442e-03 vs 5.504e-03), and it",
+    "       is mean_abs, not max_abs, that tracks accuracy here. max_abs on",
+    "       this tensor is a 1-in-7.2M order statistic (441 x 16384), which a",
+    "       change of rounding pattern moves freely at fixed accuracy.",
+    "    3. Accuracy held end to end: full LibriSpeech test-clean is 1.33% at",
+    "       batch 1 and batch 8 with the identical 527 sub / 87 del / 92 ins",
+    "       split, and all 2620 hypotheses are BYTE-IDENTICAL to the im2col",
+    "       baseline. Batch text parity against the frozen golden and bit-exact",
+    "       (0.0) batch tensor parity both still hold.",
+    "  No other entry moved; every other tensor stayed inside its budget.",
+    "",
+    "enc.ctc_logits max_abs sign-off (CJ, 2026-09-11). The decisive evidence is",
+    "the top-2 logit gap, not the drift magnitude: this is a CTC head, so only an",
+    "argmax flip can change output. Measured on the Stage 2 dumps, the minimum",
+    "top-2 gap is 1.744 (jfk, 137 frames) and 3.506 (dots, 441 frames), against a",
+    "0.227 budget. Drift would need to be 7.7x the budget (11.5x the observed",
+    "1.513e-01) before one frame could flip, and there are 0 argmax mismatches vs",
+    "the reference across all 578 frames. Relative drift is 0.24%/0.80% of p99_abs",
+    "for max, but mean/rms is 0.064%/0.063% -- flat between the two cases, i.e. the",
+    "rounding pattern moved and the accuracy level did not. max/mean is 8x on jfk",
+    "(2.2M values) and 28x on dots (7.2M values), which is the order-statistic",
+    "behaviour expected of a max over 3.2x more samples at equal mean. mean_abs",
+    "remains the entry with teeth at a 1.52x margin (8.26e-03 budget vs 5.44e-03",
+    "observed); a mask/index/off-by-one bug moves the mean, not just the tail."
+  ],
+  "enc.block.0.out": {
+    "max_abs": 0.128,
+    "mean_abs": 0.0115
+  },
+  "enc.block.0.post_attn": {
+    "max_abs": 0.0835,
+    "mean_abs": 0.00939
+  },
+  "enc.block.0.post_conv": {
+    "max_abs": 0.143,
+    "mean_abs": 0.0145
+  },
+  "enc.block.0.post_ff1": {
+    "max_abs": 0.0724,
+    "mean_abs": 0.00743
+  },
+  "enc.block.0.post_ff2": {
+    "max_abs": 0.152,
+    "mean_abs": 0.0166
+  },
+  "enc.block.1.out": {
+    "max_abs": 0.135,
+    "mean_abs": 0.0106
+  },
+  "enc.block.1.post_attn": {
+    "max_abs": 0.156,
+    "mean_abs": 0.0157
+  },
+  "enc.block.1.post_conv": {
+    "max_abs": 0.347,
+    "mean_abs": 0.0178
+  },
+  "enc.block.1.post_ff1": {
+    "max_abs": 0.142,
+    "mean_abs": 0.0141
+  },
+  "enc.block.1.post_ff2": {
+    "max_abs": 0.344,
+    "mean_abs": 0.0199
+  },
+  "enc.block.15.out": {
+    "max_abs": 0.035,
+    "mean_abs": 0.00218
+  },
+  "enc.block.2.out": {
+    "max_abs": 0.144,
+    "mean_abs": 0.00876
+  },
+  "enc.block.2.post_attn": {
+    "max_abs": 0.147,
+    "mean_abs": 0.0129
+  },
+  "enc.block.2.post_conv": {
+    "max_abs": 0.167,
+    "mean_abs": 0.0153
+  },
+  "enc.block.2.post_ff1": {
+    "max_abs": 0.138,
+    "mean_abs": 0.0123
+  },
+  "enc.block.2.post_ff2": {
+    "max_abs": 0.18,
+    "mean_abs": 0.0174
+  },
+  "enc.block.7.out": {
+    "max_abs": 0.0218,
+    "mean_abs": 0.00155
+  },
+  "enc.block.8.out": {
+    "max_abs": 0.148,
+    "mean_abs": 0.00807
+  },
+  "enc.ctc.mid_injection": {
+    "max_abs": 0.00275,
+    "mean_abs": 9.03e-05
+  },
+  "enc.ctc.mid_logits": {
+    "max_abs": 0.103,
+    "mean_abs": 0.00622
+  },
+  "enc.ctc_logits": {
+    "max_abs": 0.227,
+    "mean_abs": 0.00826
+  },
+  "enc.input_linear.out": {
+    "max_abs": 0.0207,
+    "mean_abs": 0.00165
+  },
+  "enc.out": {
+    "max_abs": 0.035,
+    "mean_abs": 0.00218
+  },
+  "mel.in": {
+    "max_abs": 0.000148,
+    "mean_abs": 5.44e-06
+  }
+}

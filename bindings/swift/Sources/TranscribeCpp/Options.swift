@@ -1,14 +1,21 @@
 import CTranscribe
+import Foundation
 
 // MARK: - Enums
 
-/// The run mode: plain transcription or speech translation. Named
-/// `TranscriptionTask` (not `Task`) so it does not shadow Swift's
+/// The run mode: plain transcription, speech translation, or `instruct`
+/// (`RunOptions.prompt` replaces the task instruction; free-text output;
+/// offline only).
+/// Named `TranscriptionTask` (not `Task`) so it does not shadow Swift's
 /// `_Concurrency.Task` in files that `import TranscribeCpp`.
 public enum TranscriptionTask: Sendable {
-    case transcribe, translate
+    case transcribe, translate, instruct
     var cValue: transcribe_task {
-        self == .transcribe ? TRANSCRIBE_TASK_TRANSCRIBE : TRANSCRIBE_TASK_TRANSLATE
+        switch self {
+        case .transcribe: return TRANSCRIBE_TASK_TRANSCRIBE
+        case .translate: return TRANSCRIBE_TASK_TRANSLATE
+        case .instruct: return TRANSCRIBE_TASK_INSTRUCT
+        }
     }
 }
 
@@ -82,6 +89,7 @@ public enum Diarize: Sendable {
 
 public enum Feature: Sendable {
     case initialPrompt, temperatureFallback, longForm, cancellation, pnc, itn, diarization
+    case vocabulary, contextPrompt, instruct, transcriptPrefix
     var cValue: transcribe_feature {
         switch self {
         case .initialPrompt: return TRANSCRIBE_FEATURE_INITIAL_PROMPT
@@ -91,6 +99,10 @@ public enum Feature: Sendable {
         case .pnc: return TRANSCRIBE_FEATURE_PNC
         case .itn: return TRANSCRIBE_FEATURE_ITN
         case .diarization: return TRANSCRIBE_FEATURE_DIARIZATION
+        case .vocabulary: return TRANSCRIBE_FEATURE_VOCABULARY
+        case .contextPrompt: return TRANSCRIBE_FEATURE_CONTEXT_PROMPT
+        case .instruct: return TRANSCRIBE_FEATURE_INSTRUCT
+        case .transcriptPrefix: return TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX
         }
     }
 }
@@ -99,11 +111,11 @@ public enum Feature: Sendable {
 
 public struct ModelOptions: Sendable {
     public var backend: Backend
-    /// GPU device registry index. 0 means auto / first matching device.
-    public var gpuDevice: Int32
-    public init(backend: Backend = .auto, gpuDevice: Int32 = 0) {
+    /// Exact process-local device. `nil` applies the backend's automatic policy.
+    public var device: Device?
+    public init(backend: Backend = .auto, device: Device? = nil) {
         self.backend = backend
-        self.gpuDevice = gpuDevice
+        self.device = device
     }
 }
 
@@ -136,6 +148,16 @@ public struct RunOptions: Sendable {
     public var specKDrafts: Int32
     /// Family-specific run extension (whisper run options); M3.
     public var family: RunExtension?
+    /// Custom terms in priority order, formatted per family
+    /// (`Feature.vocabulary`; ignored with a warning elsewhere).
+    public var vocabulary: [String]
+    /// Context text under transcribe/translate (`Feature.contextPrompt`);
+    /// the required instruction under `.instruct`.
+    public var prompt: String?
+    /// Transcript text the model continues from (`Feature.transcriptPrefix`;
+    /// an error elsewhere, and in batch and streaming runs). `text` holds only
+    /// the continuation; `rawText` leads with the prefix.
+    public var prefix: String?
 
     public init(
         task: TranscriptionTask = .transcribe,
@@ -150,7 +172,10 @@ public struct RunOptions: Sendable {
         targetLanguage: String? = nil,
         keepSpecialTags: Bool = false,
         specKDrafts: Int32 = -1,
-        family: RunExtension? = nil
+        family: RunExtension? = nil,
+        vocabulary: [String] = [],
+        prompt: String? = nil,
+        prefix: String? = nil
     ) {
         self.task = task
         self.timestamps = timestamps
@@ -162,11 +187,25 @@ public struct RunOptions: Sendable {
         self.keepSpecialTags = keepSpecialTags
         self.specKDrafts = specKDrafts
         self.family = family
+        self.vocabulary = vocabulary
+        self.prompt = prompt
+        self.prefix = prefix
+    }
+
+    /// Throws `.invalidArgument` if a string option contains a NUL character,
+    /// where C would silently cut it.
+    func checkCStrings() throws {
+        var strings = [language, targetLanguage, prompt, prefix].compactMap { $0 } + vocabulary
+        if case .whisper(let o)? = family, let p = o.initialPrompt { strings.append(p) }
+        if strings.contains(where: { $0.contains("\0") }) {
+            throw TranscribeError.invalidArgument("a string option contains a NUL character")
+        }
     }
 
     /// Materialize a `transcribe_run_params` and run `body` with a pointer to
-    /// it. The `language` / `target_language` C strings are kept alive for the
-    /// duration of `body` (the C side copies them before returning).
+    /// it. The C strings (language, target language, vocabulary, prompt,
+    /// prefix) are kept alive for the duration of `body` (the C side copies
+    /// them before returning).
     func withCParams<R>(_ body: (UnsafePointer<transcribe_run_params>) throws -> R) rethrows -> R {
         var params = transcribe_run_params()
         transcribe_run_params_init(&params)
@@ -183,11 +222,33 @@ public struct RunOptions: Sendable {
                 params.target_language = tgt
                 return try withRunExtension(family) { ext in
                     params.family = ext
-                    return try withUnsafePointer(to: &params) { try body($0) }
+                    return try withCStringArray(vocabulary) { terms, n in
+                        params.vocabulary = terms
+                        params.n_vocabulary = n
+                        return try withOptionalCString(prompt) { p in
+                            params.prompt = p
+                            return try withOptionalCString(prefix) { x in
+                                params.prefix = x
+                                return try withUnsafePointer(to: &params) { try body($0) }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+/// Run `body` with a C array of NUL-terminated copies of `strings` (NULL when
+/// empty), freed when `body` returns.
+func withCStringArray<R>(
+    _ strings: [String], _ body: (UnsafePointer<UnsafePointer<CChar>?>?, Int32) throws -> R
+) rethrows -> R {
+    if strings.isEmpty { return try body(nil, 0) }
+    let copies: [UnsafeMutablePointer<CChar>?] = strings.map { strdup($0) }
+    defer { copies.forEach { free($0) } }
+    let ptrs: [UnsafePointer<CChar>?] = copies.map { UnsafePointer($0) }
+    return try ptrs.withUnsafeBufferPointer { try body($0.baseAddress, Int32(strings.count)) }
 }
 
 func withOptionalCString<R>(

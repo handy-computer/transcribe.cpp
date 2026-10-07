@@ -47,9 +47,6 @@ struct MedAsrModel final : public transcribe_model {
 };
 
 struct MedAsrSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     ggml_tensor * encoder_out = nullptr;
 
     std::vector<float> mel_buf;
@@ -58,6 +55,7 @@ struct MedAsrSession final : public transcribe_session {
 
     MedAsrSession() = default;
     ~MedAsrSession() override;
+    void on_scratch_released() noexcept override;
 };
 
 }  // namespace transcribe::medasr

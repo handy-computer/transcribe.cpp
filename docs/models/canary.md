@@ -19,11 +19,10 @@ see the family doc at
 - **Best 4-language accuracy.** `canary-1b` (the original release;
   CC-BY-NC-4.0) uses a 24-layer decoder, trading decode speed for
   accuracy on en/de/es/fr.
-- **Faster decode, same 4 languages.** `canary-1b-flash` (883M, 4-layer
-  decoder) — the speed-tuned sibling at ~1.6% WER on LibriSpeech
-  test-clean.
-- **Smallest footprint.** `canary-180m-flash` (182M, 208 MB at Q8_0) —
-  the ultralight variant; same 4-language coverage as the flash 1B.
+- **Faster decode, same 4 languages.** `canary-1b-flash` uses a 4-layer
+  decoder, the speed-tuned sibling of `canary-1b`.
+- **Smallest footprint.** `canary-180m-flash` is the ultralight variant,
+  with the same 4-language coverage as the flash 1B.
 
 ## All variants
 
@@ -31,12 +30,14 @@ WER is on LibriSpeech test-clean for the **Q8_0** preset, measured by
 transcribe.cpp's WER pipeline. See each per-variant doc for the full
 quant matrix and per-language WER/BLEU tables.
 
-| Variant | Decoder depth | Params | Q8_0 size | WER (Q8_0) | Languages | Doc |
-| --- | ---: | ---: | ---: | ---: | --- | --- |
-| `canary-1b`        | 24 | 1.0B | 1.1 GB | 1.55% | en, de, es, fr  | [canary-1b.md](canary-1b.md) |
-| `canary-1b-v2`     |  8 | 978M | 1.1 GB | 1.91% | 25 European     | [canary-1b-v2.md](canary-1b-v2.md) |
-| `canary-1b-flash`  |  4 | 883M | 1.0 GB | 1.62% | en, de, es, fr  | [canary-1b-flash.md](canary-1b-flash.md) |
-| `canary-180m-flash`|  4 | 182M | 208 MB | 1.93% | en, de, es, fr  | [canary-180m-flash.md](canary-180m-flash.md) |
+<!-- catalog:family variants=canary-1b,canary-1b-v2,canary-1b-flash,canary-180m-flash -->
+| Variant             | Params | Languages      | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `canary-1b`         |     1B | en, de, es, fr |   1.16 GB | LibriSpeech test-clean (WER) | 1.55% | translate    | [canary-1b.md](canary-1b.md) |
+| `canary-1b-v2`      |   980M | 25 languages   |   1.14 GB | LibriSpeech test-clean (WER) | 1.91% | translate    | [canary-1b-v2.md](canary-1b-v2.md) |
+| `canary-1b-flash`   |   890M | en, de, es, fr |   1.05 GB | LibriSpeech test-clean (WER) | 1.62% | translate    | [canary-1b-flash.md](canary-1b-flash.md) |
+| `canary-180m-flash` |   189M | en, de, es, fr |    218 MB | LibriSpeech test-clean (WER) | 1.93% | translate    | [canary-180m-flash.md](canary-180m-flash.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

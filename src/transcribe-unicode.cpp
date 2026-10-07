@@ -657,6 +657,206 @@ std::vector<std::string> pretokenize_granite(const std::string & text) {
 }
 
 // ---------------------------------------------------------------------------
+// Tekken (Mistral / Voxtral) pretokenizer.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr size_t k_no_match = static_cast<size_t>(-1);
+
+// Pretoken end offsets (in codepoints) for the Tekken regex. The letter
+// alternatives can fail after a partial match, so each is a small
+// backtracking matcher.
+std::vector<size_t> tekken_split_offsets(const std::vector<uint32_t> & cpts, size_t begin, size_t end) {
+    std::vector<size_t> out;
+
+    auto get_cpt = [&](size_t p) -> uint32_t {
+        return (begin <= p && p < end) ? cpts[p] : OOR;
+    };
+    auto get_flags = [&](size_t p) -> CptFlags {
+        return (begin <= p && p < end) ? flags_from_cpt(cpts[p]) : CptFlags{};
+    };
+
+    // [\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}], with ASCII-only case (see
+    // pretokenize_tekken in the header).
+    auto is_upper_class = [&](size_t p) {
+        const uint32_t c = get_cpt(p);
+        const CptFlags f = get_flags(p);
+        return (f.is_letter() && !(c >= 'a' && c <= 'z')) || f.is_accent_mark();
+    };
+    // [\p{Ll}\p{Lm}\p{Lo}\p{M}]
+    auto is_lower_class = [&](size_t p) {
+        const uint32_t c = get_cpt(p);
+        const CptFlags f = get_flags(p);
+        return (f.is_letter() && !(c >= 'A' && c <= 'Z')) || f.is_accent_mark();
+    };
+    // [^\r\n\p{L}\p{N}]  (any in-range codepoint, marks included)
+    auto is_prefix = [&](size_t p) {
+        const uint32_t c = get_cpt(p);
+        const CptFlags f = get_flags(p);
+        return c != OOR && c != '\r' && c != '\n' && !f.is_letter() && !f.is_number();
+    };
+    // [^\s\p{L}\p{N}]
+    auto is_symbol = [&](size_t p) {
+        const CptFlags f = get_flags(p);
+        return get_cpt(p) != OOR && !f.is_whitespace() && !f.is_letter() && !f.is_number();
+    };
+
+    // UPPER* LOWER+ starting at `s`. If no LOWER follows the upper run,
+    // backtrack to the last codepoint in the run that is in both classes.
+    auto match_upper_star_lower_plus = [&](size_t s) -> size_t {
+        size_t i = s;
+        while (is_upper_class(i)) {
+            i++;
+        }
+        if (is_lower_class(i)) {
+            while (is_lower_class(i)) {
+                i++;
+            }
+            return i;
+        }
+        for (size_t k = i; k > s; --k) {
+            if (is_lower_class(k - 1)) {
+                return k;
+            }
+        }
+        return k_no_match;
+    };
+    // UPPER+ LOWER* starting at `s`.
+    auto match_upper_plus_lower_star = [&](size_t s) -> size_t {
+        if (!is_upper_class(s)) {
+            return k_no_match;
+        }
+        size_t i = s;
+        while (is_upper_class(i)) {
+            i++;
+        }
+        while (is_lower_class(i)) {
+            i++;
+        }
+        return i;
+    };
+
+    size_t prev      = begin;
+    auto   push_upto = [&](size_t p) {
+        assert(prev <= p && p <= end);
+        if (p > prev) {
+            out.push_back(p);
+            prev = p;
+        }
+    };
+
+    size_t pos = begin;
+    while (pos < end) {
+        const uint32_t cpt   = get_cpt(pos);
+        const CptFlags flags = get_flags(pos);
+
+        // Alternatives 1 and 2, each with an optional (greedy) prefix
+        // codepoint: tried with the prefix first, then without.
+        {
+            const bool has_prefix = is_prefix(pos);
+            size_t     e          = has_prefix ? match_upper_star_lower_plus(pos + 1) : k_no_match;
+            if (e == k_no_match) {
+                e = match_upper_star_lower_plus(pos);
+            }
+            if (e == k_no_match && has_prefix) {
+                e = match_upper_plus_lower_star(pos + 1);
+            }
+            if (e == k_no_match) {
+                e = match_upper_plus_lower_star(pos);
+            }
+            if (e != k_no_match) {
+                pos = e;
+                push_upto(pos);
+                continue;
+            }
+        }
+
+        // \p{N}
+        if (flags.is_number()) {
+            pos++;
+            push_upto(pos);
+            continue;
+        }
+
+        //  ?[^\s\p{L}\p{N}]+ [\r\n/]*
+        {
+            const size_t s = (cpt == ' ' && is_symbol(pos + 1)) ? pos + 1 : pos;
+            if (is_symbol(s)) {
+                pos = s;
+                while (is_symbol(pos)) {
+                    pos++;
+                }
+                for (uint32_t cn = get_cpt(pos); cn == '\r' || cn == '\n' || cn == '/'; cn = get_cpt(pos)) {
+                    pos++;
+                }
+                push_upto(pos);
+                continue;
+            }
+        }
+
+        // Whitespace handling: \s*[\r\n]+ | \s+(?!\S) | \s+
+        size_t ws_count      = 0;
+        size_t last_after_nl = 0;
+        while (get_flags(pos + ws_count).is_whitespace()) {
+            const uint32_t cw = get_cpt(pos + ws_count);
+            if (cw == '\r' || cw == '\n') {
+                last_after_nl = pos + ws_count + 1;
+            }
+            ws_count++;
+        }
+        if (last_after_nl > 0) {
+            pos = last_after_nl;
+            push_upto(pos);
+            continue;
+        }
+        if (ws_count > 1 && get_cpt(pos + ws_count) != OOR) {
+            pos += ws_count - 1;
+            push_upto(pos);
+            continue;
+        }
+        if (ws_count > 0) {
+            pos += ws_count;
+            push_upto(pos);
+            continue;
+        }
+
+        // Fallback: emit one codepoint as its own pretoken.
+        pos++;
+        push_upto(pos);
+    }
+
+    return out;
+}
+
+}  // namespace
+
+std::vector<std::string> pretokenize_tekken(const std::string & text) {
+    std::vector<std::string> out;
+    if (text.empty()) {
+        return out;
+    }
+    const auto cpts = cpts_from_utf8(text);
+    const auto ends = tekken_split_offsets(cpts, 0, cpts.size());
+
+    out.reserve(ends.size());
+    size_t prev = 0;
+    for (size_t e : ends) {
+        std::string encoded;
+        encoded.reserve((e - prev) * 2);
+        for (size_t i = prev; i < e; ++i) {
+            const std::string u = cpt_to_utf8(cpts[i]);
+            for (char c : u) {
+                encoded += byte_to_unicode(static_cast<uint8_t>(c));
+            }
+        }
+        out.emplace_back(std::move(encoded));
+        prev = e;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // GPT-2 pretokenizer.
 // ---------------------------------------------------------------------------
 //

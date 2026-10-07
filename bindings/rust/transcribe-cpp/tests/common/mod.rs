@@ -60,9 +60,9 @@ pub fn smoke_streaming_model() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// A per-family streaming-extension canary: env override or the in-repo GGUF,
-/// `None` when neither is present (clean skip). Not in the CI fetch-canary set,
-/// so these run locally and skip in CI.
+/// A feature-specific canary: env override or the in-repo GGUF, `None` when
+/// neither is present (clean skip). CI exports the lightweight shared canaries;
+/// heavyweight models such as Voxtral remain local-only.
 fn family_model(env_var: &str, default_rel: &str) -> Option<PathBuf> {
     ensure_backends();
     let path = std::env::var_os(env_var)
@@ -93,6 +93,39 @@ pub fn smoke_voxtral_model() -> Option<PathBuf> {
         "TRANSCRIBE_SMOKE_VOXTRAL_MODEL",
         "models/Voxtral-Mini-4B-Realtime-2602/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf",
     )
+}
+
+/// Canary model whose generic PNC run parameter changes the prompt.
+pub fn smoke_pnc_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_PNC_MODEL",
+        "models/canary-180m-flash/canary-180m-flash-Q8_0.gguf",
+    )
+}
+
+/// SenseVoice model whose generic ITN parameter changes text normalization.
+pub fn smoke_itn_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_ITN_MODEL",
+        "models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf",
+    )
+}
+
+/// Sortformer diarizer (DIARIZE role only) plus its two-speaker sample, or
+/// `None` (with a skip note) when either is absent.
+pub fn smoke_sortformer_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
+    let model = family_model(
+        "TRANSCRIBE_SMOKE_SORTFORMER_MODEL",
+        "models/diar_streaming_sortformer_4spk-v2.1/diar_streaming_sortformer_4spk-v2.1-F32.gguf",
+    );
+    let audio = repo_root().join("samples/sortformer-2spk-mix.wav");
+    match model {
+        Some(m) if audio.is_file() => Some((m, load_wav(&audio))),
+        _ => {
+            eprintln!("skip {test}: sortformer model/audio absent (set TRANSCRIBE_SMOKE_SORTFORMER_MODEL)");
+            None
+        }
+    }
 }
 
 /// Both fixtures together; prints a skip note and returns `None` if either is

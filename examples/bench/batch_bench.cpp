@@ -49,6 +49,9 @@ transcribe_backend_request parse_backend(const char * s) {
     if (!std::strcmp(s, "cuda")) {
         return TRANSCRIBE_BACKEND_CUDA;
     }
+    if (!std::strcmp(s, "rocm")) {
+        return TRANSCRIBE_BACKEND_ROCM;
+    }
     return TRANSCRIBE_BACKEND_AUTO;
 }
 

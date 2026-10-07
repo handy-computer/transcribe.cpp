@@ -42,12 +42,14 @@ WER is on LibriSpeech test-clean for the **Q8_0** preset, measured by
 transcribe.cpp's WER pipeline. See each per-variant doc for the full
 quant matrix.
 
-| Variant | Decode mode | Params | Q8_0 size | WER (Q8_0) | Languages | Extras | Doc |
-| --- | --- | ---: | ---: | ---: | --- | --- | --- |
-| `granite-4.0-1b-speech`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.44% | en, fr, de, es, pt, ja | translate (en ↔ ASR langs; en → it/zh) | [granite-4.0-1b-speech.md](granite-4.0-1b-speech.md) |
-| `granite-speech-4.1-2b`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.32% | en, fr, de, es, pt, ja | translate (en ↔ ASR langs; en → it/zh) | [granite-speech-4.1-2b.md](granite-speech-4.1-2b.md) |
-| `granite-speech-4.1-2b-plus` | AR (audio-LLM) | ~3B† | 2.35 GB | 1.50% | en, fr, de, es, pt     | word timestamps (ASR only)  | [granite-speech-4.1-2b-plus.md](granite-speech-4.1-2b-plus.md) |
-| `granite-speech-4.1-2b-nar`  | NAR (editor)   | ~3B† | 2.33 GB | 1.29% | en, fr, de, es, pt     | (ASR only)                  | [granite-speech-4.1-2b-nar.md](granite-speech-4.1-2b-nar.md) |
+<!-- catalog:family variants=granite-4.0-1b-speech,granite-speech-4.1-2b,granite-speech-4.1-2b-plus,granite-speech-4.1-2b-nar -->
+| Variant                      | Params | Languages   | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities             | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `granite-4.0-1b-speech`      |   2.3B | 6 languages |   2.56 GB | LibriSpeech test-clean (WER) | 1.44% | translate                | [granite-4.0-1b-speech.md](granite-4.0-1b-speech.md) |
+| `granite-speech-4.1-2b`      |   2.3B | 6 languages |   2.56 GB | LibriSpeech test-clean (WER) | 1.32% | translate                | [granite-speech-4.1-2b.md](granite-speech-4.1-2b.md) |
+| `granite-speech-4.1-2b-plus` |   2.1B | 5 languages |   2.35 GB | LibriSpeech test-clean (WER) | 1.50% | diarize, word timestamps | [granite-speech-4.1-2b-plus.md](granite-speech-4.1-2b-plus.md) |
+| `granite-speech-4.1-2b-nar`  |   2.3B | 5 languages |   2.50 GB | LibriSpeech test-clean (WER) | 1.29% | -                        | [granite-speech-4.1-2b-nar.md](granite-speech-4.1-2b-nar.md) |
+<!-- /catalog -->
 
 † Parameter counts include the Conformer audio encoder, the projector,
 and the Granite-4.0-1b text LM. The "1b" / "2b" in IBM's variant names

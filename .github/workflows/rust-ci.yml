@@ -78,6 +78,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0  # for the python gate scripts
+        with:
+          version: "0.12.19"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -164,6 +166,8 @@ jobs:
         with:
           components: clippy
       - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary fetches via uvx
+        with:
+          version: "0.12.19"
       - name: Enable ccache compiler launcher (non-Windows)
         # CMake reads these at first configure, so build.rs's cmake-crate build
         # picks up ccache with no -D plumbing. NOT set on Windows: ccache isn't
@@ -244,11 +248,16 @@ jobs:
             echo "=== example: $ex ==="
             cargo run -p transcribe-cpp --example "$ex" ${{ matrix.features }}
           done
+      - name: Serde feature tests
+        # Pure Rust, no model needed; one leg suffices.
+        if: matrix.label == 'linux-static'
+        run: cargo test -p transcribe-cpp --features serde --test serde
       - name: Clippy (deny warnings)
         # Once is enough; the linux-static leg covers it (clippy on another
         # leg would force a second full native build for no extra lint signal).
+        # `serde` on so the cfg_attr derives and tests/serde.rs are linted too.
         if: matrix.label == 'linux-static'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --features transcribe-cpp/serde -- -D warnings
       - name: ccache stats
         if: runner.os == 'Linux'
         run: ccache -s | head -8

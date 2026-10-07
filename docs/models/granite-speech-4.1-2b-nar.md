@@ -1,12 +1,18 @@
 # Granite Speech 4.1-2b NAR
 
-IBM's [`ibm-granite/granite-speech-4.1-2b-nar`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar)
-ported to transcribe.cpp. The non-autoregressive editor variant of
-Granite-Speech. Shares the Conformer audio encoder with the AR Granite-
-Speech family but pairs it with a custom MLP-with-attention projector and
-the Granite-4.0-1b LLM used as a bidirectional editor (causal mask
-disabled). One forward pass produces logits over the full transcript;
-CTC decode yields the final text — no token-by-token loop.
+<!-- catalog:intro -->
+Upstream: [`ibm-granite/granite-speech-4.1-2b-nar`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar) at [`99a4df9`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/99a4df9).
+
+Offline multilingual speech-to-text in a single non-autoregressive editor
+pass. IBM Granite Speech 4.1-2b NAR shares the Conformer audio encoder
+with the AR Granite-Speech family but pairs it with a custom MLP-with-
+attention projector and the Granite-4.0-1b LLM used as a bidirectional
+editor (causal mask disabled). One forward pass produces logits over the
+full transcript; CTC decode yields the final text. No token-by-token loop.
+Takes a 16 kHz mono WAV and produces a transcript. English plus French,
+German, Spanish, and Portuguese; ASR only (no translation, no
+timestamps).
+<!-- /catalog -->
 
 ## What it's for
 
@@ -17,33 +23,53 @@ only — no translation, no timestamps, no diarization.
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`99a4df9`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/99a4df9007ac5682f9daa093fb7008ff606e9a5d),
-pinned 2026-05-24 (single-file `modeling_granite_speech_nar.py` snapshot —
-the README's canonical inference target).
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`99a4df9`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/99a4df9), pinned 2026-05-24. Validated against the Transformers reference at transcribe.cpp commit [`c53af2c`](https://github.com/handy-computer/transcribe.cpp/tree/c53af2c) on 2026-05-24.
+<!-- /catalog -->
+
+The pinned revision is the single-file `modeling_granite_speech_nar.py`
+snapshot, the README's canonical inference target.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [granite-speech-4.1-2b-nar-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-BF16.gguf)     | 4.20 GB | 1.29% |
-| F16    | [granite-speech-4.1-2b-nar-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-F16.gguf)       | 4.21 GB | 1.29% |
-| Q8_0   | [granite-speech-4.1-2b-nar-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q8_0.gguf)     | 2.33 GB | 1.29% |
-| Q6_K   | [granite-speech-4.1-2b-nar-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q6_K.gguf)     | 1.84 GB | 1.29% |
-| Q5_K_M | [granite-speech-4.1-2b-nar-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q5_K_M.gguf) | 1.66 GB | 1.25% |
-| Q4_K_M | [granite-speech-4.1-2b-nar-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q4_K_M.gguf) | 1.45 GB | 1.35% |
+| BF16         | [granite-speech-4.1-2b-nar-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-BF16.gguf) | 4.51 GB | 1.29% |
+| F16          | [granite-speech-4.1-2b-nar-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-F16.gguf) | 4.52 GB | 1.29% |
+| Q8_0         | [granite-speech-4.1-2b-nar-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q8_0.gguf) | 2.50 GB | 1.29% |
+| Q6_K         | [granite-speech-4.1-2b-nar-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q6_K.gguf) | 1.98 GB | 1.29% |
+| Q5_K_M       | [granite-speech-4.1-2b-nar-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q5_K_M.gguf) | 1.78 GB | 1.28% |
+| Q4_K_M       | [granite-speech-4.1-2b-nar-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q4_K_M.gguf) | 1.56 GB | 1.34% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances).
-BF16 reference baseline (transformers `model.transcribe`, MPS, re-run
-locally): 1.28% — matches the upstream model card's 1.29% to within
-sampling noise. Text normalizer: Whisper `EnglishTextNormalizer`. F16,
-Q8_0, and Q6_K all score the same 1.29% as BF16 — the editor is very
-robust to weight quantization down through Q5_K_M, where the WER
-actually dips slightly (1.25%, within overlapping 95% CI of REF).
-Reference reproduction follows the model card path verbatim
-(`AutoProcessor` + `AutoModel.transcribe` + `processor.batch_decode`)
-at HF revision `99a4df9`; the older snapshot's bidirectional-mask patch
-is obsolete in this snapshot.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+BF16 reference baseline (transformers `model.transcribe`, MPS, re-run locally):
+1.28% — matches the upstream model card's 1.29% to within sampling noise. Text
+normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+Leaderboard uses. Reference reproduction follows the model card path verbatim
+(`AutoProcessor` + `AutoModel.transcribe` + `processor.batch_decode`) at HF revision
+`99a4df9` (single-file `modeling_granite_speech_nar.py` snapshot, the README's
+canonical target); no mask patching is required because the NAR LM uses
+`create_bidirectional_mask()` natively. F16, Q8_0, and Q6_K all match BF16's 1.29%;
+Q5_K_M dips slightly to 1.25% (within overlapping CIs).
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 6.07% |
+| en       | WER    | 5.33% |
+| es       | WER    | 4.08% |
+| fr       | WER    | 6.76% |
+| pt       | WER    | 5.57% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -68,64 +94,35 @@ editor handles language detection implicitly.
 
 ## Performance
 
-Cells are wall-clock latency, with speedup over realtime in parentheses.
-NAR is faster than the AR variants on GPU backends because there is no
-autoregressive step loop — a single bidirectional forward through 40 LLM
-layers replaces the per-token decode graph.
-
 ### Apple M4 Max
 
-Mean over 3 iterations after 1 warmup.
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-**Metal**
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 149 ms (73.82×) | 153 ms (71.92×) |
+| Metal   | dots (35.3s) | 466 ms (75.73×) | 466 ms (75.88×) |
+| CPU     | jfk (11.0s)  |  1.59 s (6.92×) |  1.67 s (6.60×) |
+| CPU     | dots (35.3s) |  5.27 s (6.70×) |  5.75 s (6.15×) |
 
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |    209 ms (53×)  |    196 ms (56×)  |
-| dots (35.3s) |    664 ms (53×)  |    635 ms (56×)  |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   1.87 s (5.9×)  |   1.99 s (5.5×)  |
-| dots (35.3s) |   6.50 s (5.4×)  |   7.71 s (4.6×)  |
-
-macOS 26.4, transcribe.cpp `de05c43`.
-
-### Apple M4
-
-Mean over 5 iterations after 2 warmups. Q8_0.
-
-| Backend | Sample      |       Q8_0        |
-| ------- | ----------- | ----------------: |
-| Metal   | jfk (11.0s) |    614 ms (18×)   |
-| CPU     | jfk (11.0s) |   2.55 s (4×)     |
-
-macOS 26.1, transcribe.cpp `275332d`.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
-Mean over 3 iterations after 1 warmup.
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-**Vulkan (RADV)**
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  2.68 s (4.10×) |  2.77 s (3.96×) |
+| Vulkan  | dots (35.3s) |  9.09 s (3.89×) |  9.02 s (3.92×) |
+| CPU     | jfk (11.0s)  |  4.76 s (2.31×) |  4.98 s (2.21×) |
+| CPU     | dots (35.3s) | 17.88 s (1.98×) | 17.84 s (1.98×) |
 
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   3.16 s (3.5×)  |   3.06 s (3.6×)  |
-| dots (35.3s) |   9.85 s (3.6×)  |   9.57 s (3.7×)  |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   5.71 s (1.9×)  |   7.05 s (1.6×)  |
-| dots (35.3s) |  20.39 s (1.7×)  |  24.81 s (1.4×)  |
-
-Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`. NAR's Vulkan RTF stays
-flat across short and long samples (jfk and dots both ~3.6×) because the
-single bidirectional LLM pass dominates over the encoder; on CPU the
-encoder dominates so RTF tapers slightly with sequence length.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 ## Capabilities
 

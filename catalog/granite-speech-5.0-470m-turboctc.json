@@ -1,0 +1,70 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "granite-speech-5.0-470m-turboctc",
+  "family": "granite5_ctc",
+  "display_name": "Granite Speech 5.0 470M TurboCTC",
+  "params": 473014752,
+  "license": {
+    "spdx": "apache-2.0",
+    "display": "Apache-2.0"
+  },
+  "upstream_repo": "ibm-granite/granite-speech-5.0-470m-turboctc",
+  "upstream_commit": "18ca3c1",
+  "published_repo": "handy-computer/granite-speech-5.0-470m-turboctc-gguf",
+  "docs_page": "granite-speech-5.0-turboctc.md",
+  "languages": ["en"],
+  "language_tag_form": "bare-bcp47",
+  "long_form_strategy": "soft-window",
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":false}
+  },
+  "downloads": [
+    {"quant":"BF16","filename":"granite-speech-5.0-470m-turboctc-BF16.gguf","size_bytes":947824480},
+    {"quant":"F16","filename":"granite-speech-5.0-470m-turboctc-F16.gguf","size_bytes":947824480},
+    {"quant":"Q8_0","filename":"granite-speech-5.0-470m-turboctc-Q8_0.gguf","size_bytes":505606496},
+    {"quant":"Q6_K","filename":"granite-speech-5.0-470m-turboctc-Q6_K.gguf","size_bytes":391836000},
+    {"quant":"Q5_K_M","filename":"granite-speech-5.0-470m-turboctc-Q5_K_M.gguf","size_bytes":335737184},
+    {"quant":"Q4_K_M","filename":"granite-speech-5.0-470m-turboctc-Q4_K_M.gguf","size_bytes":279114080}
+  ],
+  "accuracy_benchmarks": [
+    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"BF16","metric":"wer","err_pct":1.34,"ci95":[1.21,1.47],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":529,"del":87,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
+    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"F16","metric":"wer","err_pct":1.33,"ci95":[1.2,1.47],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":527,"del":87,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
+    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q8_0","metric":"wer","err_pct":1.33,"ci95":[1.2,1.46],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":527,"del":85,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
+    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q6_K","metric":"wer","err_pct":1.33,"ci95":[1.2,1.46],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":524,"del":88,"ins":93},"empty_hyp":0,"utts_over_50pct":2},
+    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q5_K_M","metric":"wer","err_pct":1.34,"ci95":[1.21,1.47],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":531,"del":86,"ins":93},"empty_hyp":0,"utts_over_50pct":2},
+    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q4_K_M","metric":"wer","err_pct":1.35,"ci95":[1.22,1.49],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":533,"del":91,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
+    {"dataset":"fleurs","split":"test","language":"en","language_hint":"en","backend":"cuda","quant":"Q8_0","metric":"wer","err_pct":4.61,"ci95":[4.19,5.07],"n_utts":647,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":477,"del":115,"ins":79},"empty_hyp":0,"utts_over_50pct":1}
+  ],
+  "headline_benchmark": {
+    "dataset": "librispeech",
+    "split": "test-clean",
+    "language": "en",
+    "metric": "wer",
+    "batch_size": null,
+    "timestamps": "none"
+  },
+  "speed_benchmarks": [
+    {"machine":"m4-max","backend":"cpu","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":769.2,"xrt_compute":45.93,"wall_ms":771.4,"xrt_wall":45.8,"load_ms":100.3,"mel_ms":2.3,"encode_ms":753.1,"decode_ms":13.9,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"cpu","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":254.1,"xrt_compute":43.29,"wall_ms":255.5,"xrt_wall":43.06,"load_ms":88.0,"mel_ms":0.7,"encode_ms":249.2,"decode_ms":4.2,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":752.5,"xrt_compute":46.95,"wall_ms":754.7,"xrt_wall":46.82,"load_ms":148.4,"mel_ms":2.2,"encode_ms":736.4,"decode_ms":13.8,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":243.4,"xrt_compute":45.19,"wall_ms":244.7,"xrt_wall":44.95,"load_ms":136.4,"mel_ms":0.8,"encode_ms":239.0,"decode_ms":3.6,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":95.2,"xrt_compute":371.09,"wall_ms":100.0,"xrt_wall":353.45,"load_ms":105.0,"mel_ms":2.1,"encode_ms":80.6,"decode_ms":12.4,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"metal","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":38.7,"xrt_compute":284.51,"wall_ms":40.9,"xrt_wall":268.73,"load_ms":91.1,"mel_ms":0.8,"encode_ms":34.5,"decode_ms":3.4,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":86.1,"xrt_compute":410.2,"wall_ms":90.9,"xrt_wall":388.76,"load_ms":151.2,"mel_ms":2.1,"encode_ms":71.6,"decode_ms":12.5,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"m4-max","backend":"metal","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":36.5,"xrt_compute":301.3,"wall_ms":38.6,"xrt_wall":284.88,"load_ms":138.9,"mel_ms":0.7,"encode_ms":32.5,"decode_ms":3.3,"engine_sha":"77b0c93","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":2139.7,"xrt_compute":16.51,"wall_ms":2158.6,"xrt_wall":16.37,"load_ms":354.8,"mel_ms":43.4,"encode_ms":2077.4,"decode_ms":18.9,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":651.9,"xrt_compute":16.87,"wall_ms":657.9,"xrt_wall":16.72,"load_ms":211.1,"mel_ms":13.3,"encode_ms":635.1,"decode_ms":3.5,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":2131.2,"xrt_compute":16.58,"wall_ms":2150.7,"xrt_wall":16.43,"load_ms":643.3,"mel_ms":43.4,"encode_ms":2068.7,"decode_ms":19.1,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":614.7,"xrt_compute":17.9,"wall_ms":621.0,"xrt_wall":17.71,"load_ms":365.4,"mel_ms":13.5,"encode_ms":597.5,"decode_ms":3.6,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q4_K_M","sample":"dots","sample_duration_s":35.332,"total_ms":1313.9,"xrt_compute":26.89,"wall_ms":1487.8,"xrt_wall":23.75,"load_ms":132.6,"mel_ms":45.0,"encode_ms":1254.0,"decode_ms":15.0,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q4_K_M","sample":"jfk","sample_duration_s":11.0,"total_ms":587.5,"xrt_compute":18.72,"wall_ms":648.6,"xrt_wall":16.96,"load_ms":131.1,"mel_ms":14.8,"encode_ms":569.2,"decode_ms":3.4,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"dots","sample_duration_s":35.332,"total_ms":1306.7,"xrt_compute":27.04,"wall_ms":1484.3,"xrt_wall":23.8,"load_ms":219.5,"mel_ms":44.9,"encode_ms":1247.1,"decode_ms":14.7,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"},
+    {"machine":"ryzen-4750u","backend":"vulkan","quant":"Q8_0","sample":"jfk","sample_duration_s":11.0,"total_ms":588.5,"xrt_compute":18.69,"wall_ms":649.3,"xrt_wall":16.94,"load_ms":217.4,"mel_ms":14.1,"encode_ms":571.0,"decode_ms":3.5,"engine_sha":"cd0ea568","measured_on":"2026-09-14","thermal_gated":null,"publication_profile":"asr-publication-v2"}
+  ]
+}

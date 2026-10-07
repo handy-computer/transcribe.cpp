@@ -132,14 +132,6 @@ Bridge validation:
 Things the first port intentionally does not do; tracked as follow-
 up work rather than shipped-and-broken.
 
-- **Language hinting is rejected.** `transcribe_run_params.language == NULL`
-  is the supported mode and triggers the model's built-in auto-detect
-  (it prefixes the transcript with `language X`, which we strip before
-  returning). Any non-null hint, including a language in the
-  capability list, returns `TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE`. The
-  `caps.languages` list documents the model's auto-detect coverage,
-  not what callers may hint — rendering caller-supplied hints into the
-  chat template is a future change.
 - **Streaming** (`stream_transcribe` / chunk rollback) is out of scope
   for this port. Upstream Qwen3-ASR may be architecturally usable in a
   streaming mode, but the transcribe.cpp library does not expose or
@@ -179,9 +171,11 @@ code alone.
   back to `token_embd.weight` with `TENSOR_DUPLICATED` (same as
   llama.cpp and the existing Cohere decoder path).
 - **Prompt template.** The Qwen3 chat template (in
-  `chat_template.json`) carries language and hotword context fields.
-  The rendered prompt is embedded into the GGUF as a string KV; at
-  inference the caller-provided language/context is spliced into it.
+  `chat_template.json`) has no dedicated hotword field: context is just
+  the system message, and a language hint is the `language X<asr_text>`
+  assistant prefix. The rendered prompt is embedded into the GGUF as a
+  string KV; at inference the caller-provided language/context is
+  spliced into it.
   The tokenizer merge table and special-token ids are the durable part;
   the template is a separate KV.
 - **Reuse Cohere's mel frontend.** Same underlying Whisper

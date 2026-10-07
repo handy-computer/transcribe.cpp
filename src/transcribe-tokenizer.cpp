@@ -18,10 +18,13 @@
 #include "transcribe-unicode.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <queue>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace transcribe {
@@ -89,13 +92,32 @@ const std::string & Tokenizer::token(int id) const {
     return tokens_[static_cast<size_t>(id)];
 }
 
-bool Tokenizer::is_control(int id) const {
-    // llama.cpp / scripts/lib/gguf_common.py convention.
-    constexpr int32_t k_token_type_control = 3;
+bool Tokenizer::has_token_type(int id, int32_t type) const {
     if (id < 0 || static_cast<size_t>(id) >= token_type_.size()) {
         return false;
     }
-    return token_type_[static_cast<size_t>(id)] == k_token_type_control;
+    return token_type_[static_cast<size_t>(id)] == type;
+}
+
+// Token-type values follow the llama.cpp / scripts/lib/gguf_common.py
+// convention: 1 NORMAL, 2 UNKNOWN, 3 CONTROL.
+bool Tokenizer::is_control(int id) const {
+    constexpr int32_t k_token_type_control = 3;
+    return has_token_type(id, k_token_type_control);
+}
+
+bool Tokenizer::is_unknown(int id) const {
+    constexpr int32_t k_token_type_unknown = 2;
+    return has_token_type(id, k_token_type_unknown);
+}
+
+bool Tokenizer::is_strippable_special(int id) const {
+    // The "<unk>" piece match mirrors encode_sentencepiece_bpe's unk
+    // detection and covers aggregate-tokenizer GGUFs (canary-1b,
+    // canary-1b-flash, canary-180m-flash) converted before each
+    // per-language <unk> was typed UNKNOWN. token() returns "" for
+    // out-of-range ids.
+    return is_control(id) || is_unknown(id) || (id >= 0 && id == unk_id_) || token(id) == "<unk>";
 }
 
 int Tokenizer::find(const std::string & piece) const {
@@ -466,6 +488,136 @@ transcribe_status encode_tiktoken_raw_bytes(const std::string &                 
 
 }  // namespace
 
+transcribe_status Tokenizer::encode_sentencepiece_bpe(const std::string &    text,
+                                                      std::vector<int32_t> & out_ids,
+                                                      int                    lo,
+                                                      int                    hi,
+                                                      bool                   remove_extra_whitespaces) const {
+    out_ids.clear();
+    const int n_vocab = static_cast<int>(tokens_.size());
+    if (model_ != "unigram" && model_ != "bpe") {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    lo = std::max(lo, 0);
+    hi = (hi < 0 || hi > n_vocab) ? n_vocab : hi;
+
+    // nmt_nfkc, approximated: the common NFKC compatibility mappings
+    // (ellipsis, no-break / ideographic space, full-width ASCII, f-ligatures)
+    // and whitespace handling -- tabs and newlines are spaces; optionally
+    // collapse runs and trim; then the dummy prefix, and every space becomes
+    // U+2581. Other NFKC mappings are not applied.
+    static const std::string k_space = "\xe2\x96\x81";
+    std::string              ws;
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c0 = static_cast<unsigned char>(text[i]);
+        if (c0 < 0x80) {
+            ws += (c0 == '\t' || c0 == '\n' || c0 == '\r') ? ' ' : static_cast<char>(c0);
+            ++i;
+            continue;
+        }
+        size_t len = 1;
+        while (i + len < text.size() && (static_cast<unsigned char>(text[i + len]) & 0xC0) == 0x80) {
+            ++len;
+        }
+        uint32_t cp = len == 2 ? (c0 & 0x1Fu) : len == 3 ? (c0 & 0x0Fu) : (c0 & 0x07u);
+        for (size_t k = 1; k < len; ++k) {
+            cp = (cp << 6) | (static_cast<unsigned char>(text[i + k]) & 0x3Fu);
+        }
+        if (cp == 0x2026) {
+            ws += "...";
+        } else if (cp == 0x00A0 || cp == 0x3000) {
+            ws += ' ';
+        } else if (cp >= 0xFF01 && cp <= 0xFF5E) {
+            ws += static_cast<char>(cp - 0xFF01 + 0x21);
+        } else if (cp >= 0xFB00 && cp <= 0xFB04) {
+            static const char * const k_lig[] = { "ff", "fi", "fl", "ffi", "ffl" };
+            ws += k_lig[cp - 0xFB00];
+        } else {
+            ws.append(text, i, len);
+        }
+        i += len;
+    }
+    if (remove_extra_whitespaces) {
+        std::string collapsed;
+        for (const char c : ws) {
+            if (c == ' ' && (collapsed.empty() || collapsed.back() == ' ')) {
+                continue;
+            }
+            collapsed += c;
+        }
+        while (!collapsed.empty() && collapsed.back() == ' ') {
+            collapsed.pop_back();
+        }
+        ws = collapsed;
+    }
+    if (ws.empty()) {
+        return TRANSCRIBE_OK;
+    }
+    std::vector<std::string> symbols{ k_space };
+    for (size_t i = 0; i < ws.size();) {
+        size_t j = i + 1;
+        while (j < ws.size() && (static_cast<unsigned char>(ws[j]) & 0xC0) == 0x80) {
+            ++j;
+        }
+        symbols.push_back(ws[i] == ' ' ? k_space : ws.substr(i, j - i));
+        i = j;
+    }
+
+    // Mergeable pieces in range; a lower id is a higher merge priority (a
+    // SentencePiece BPE score is minus the merge rank, and pieces are stored
+    // in rank order). Control / unknown pieces never match text.
+    constexpr int32_t                        k_type_unknown = 2;
+    constexpr int32_t                        k_type_control = 3;
+    std::unordered_map<std::string, int32_t> pieces;
+    int32_t                                  unk = -1;
+    for (int id = lo; id < hi; ++id) {
+        const std::string & piece = tokens_[static_cast<size_t>(id)];
+        const int32_t       type  = token_type_.empty() ? 1 : token_type_[static_cast<size_t>(id)];
+        if (type == k_type_unknown || piece == "<unk>") {
+            unk = unk < 0 ? id : unk;
+            continue;
+        }
+        if (type != k_type_control && !piece.empty()) {
+            pieces.emplace(piece, id);
+        }
+    }
+    if (unk < 0) {
+        unk = unk_id_;
+    }
+    if (unk < 0) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // Greedy merges: the highest-priority adjacent pair, leftmost on ties.
+    for (;;) {
+        size_t  best_at = symbols.size();
+        int32_t best_id = std::numeric_limits<int32_t>::max();
+        for (size_t i = 0; i + 1 < symbols.size(); ++i) {
+            const auto it = pieces.find(symbols[i] + symbols[i + 1]);
+            if (it != pieces.end() && it->second < best_id) {
+                best_id = it->second;
+                best_at = i;
+            }
+        }
+        if (best_at == symbols.size()) {
+            break;
+        }
+        symbols[best_at] += symbols[best_at + 1];
+        symbols.erase(symbols.begin() + static_cast<std::ptrdiff_t>(best_at) + 1);
+    }
+
+    // As SentencePiece: a run of unknown symbols is one unknown piece.
+    for (const std::string & sym : symbols) {
+        const auto    it = pieces.find(sym);
+        const int32_t id = it != pieces.end() ? it->second : unk;
+        if (id == unk && !out_ids.empty() && out_ids.back() == unk) {
+            continue;
+        }
+        out_ids.push_back(id);
+    }
+    return TRANSCRIBE_OK;
+}
+
 transcribe_status Tokenizer::encode(const std::string & text, std::vector<int32_t> & out_ids) const {
     out_ids.clear();
 
@@ -507,6 +659,8 @@ transcribe_status Tokenizer::encode(const std::string & text, std::vector<int32_
         words = unicode::pretokenize_gpt2(text);
     } else if (pre_ == "granite") {
         words = unicode::pretokenize_granite(text);
+    } else if (pre_ == "tekken") {
+        words = unicode::pretokenize_tekken(text);
     } else {
         if (pre_ != "qwen2" && !pre_.empty()) {
             log_msg(TRANSCRIBE_LOG_LEVEL_WARN,

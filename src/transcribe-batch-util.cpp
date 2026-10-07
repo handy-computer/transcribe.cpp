@@ -5,6 +5,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe-log.h"
+#include "transcribe-repetition-guard.h"
 #include "transcribe-session.h"
 
 #include <algorithm>
@@ -109,15 +110,7 @@ bool parallel_for_all(int n, int n_threads, const std::function<bool(int)> & wor
         }
     };
 
-    std::vector<std::thread> pool;
-    pool.reserve(static_cast<size_t>(n_threads - 1));
-    for (int w = 0; w < n_threads - 1; ++w) {
-        pool.emplace_back(worker);
-    }
-    worker();  // the calling thread participates
-    for (auto & th : pool) {
-        th.join();
-    }
+    run_on_threads(n_threads, [&](int) { worker(); });  // the calling thread participates
 
     return all_ok.load(std::memory_order_relaxed);
 }
@@ -197,6 +190,46 @@ transcribe_status decode_batch_slices(transcribe_session * session,
     return TRANSCRIBE_OK;
 }
 
+transcribe_status run_batch_serial(transcribe_session *  session,
+                                   const float * const * pcm,
+                                   const int *           n_samples,
+                                   int                   n,
+                                   const RunOneFn &      run_one) {
+    bool any_truncated = false;
+    for (int i = 0; i < n; ++i) {
+        if (session->poll_abort()) {
+            session->was_truncated = any_truncated;
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+        session->clear_result();
+        session->t_mel_us              = 0;
+        session->t_encode_us           = 0;
+        session->t_decode_us           = 0;
+        session->was_truncated         = false;
+        session->stopped_on_repetition = false;
+
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG : run_one(pcm[i], n_samples[i]);
+        any_truncated =
+            any_truncated || st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED || st == TRANSCRIBE_ERR_OUTPUT_REPETITION;
+        // The slot was cleared above, so has_result means this utterance wrote
+        // it: keep partials (truncated, aborted), never a stale snapshot.
+        if (st == TRANSCRIBE_OK || session->has_result) {
+            session->batch_results.push_back(session->capture_result(st));
+        } else {
+            transcribe_session::ResultSet rs;
+            rs.status = st;
+            session->batch_results.push_back(std::move(rs));
+        }
+        if (st == TRANSCRIBE_ERR_ABORTED) {
+            session->was_truncated = any_truncated;
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+    }
+    session->was_truncated = any_truncated;
+    return TRANSCRIBE_OK;
+}
+
 transcribe_status run_batched_encdec_step_loop(transcribe_session *                session,
                                                ggml_backend_sched_t                sched,
                                                const EncDecRebuildFn &             rebuild,
@@ -210,21 +243,22 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
                                                const std::vector<char> &           valid,
                                                std::vector<std::vector<int32_t>> & generated,
                                                int *                               n_steps_out,
-                                               std::vector<char> *                 truncated_out) {
+                                               std::vector<char> *                 stop_out) {
     const int         n        = n_batch;
     const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity());
 
     int          kv_window = init_window;
     EncDecStepIO io{};
-    if (!rebuild(kv_window, io)) {
-        return TRANSCRIBE_ERR_GGUF;
+    if (const transcribe_status st = rebuild(kv_window, io); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     std::vector<ggml_fp16_t> smask(static_cast<size_t>(kv_window) * n, f16_ninf);
     std::vector<int32_t>     tok_buf(n, 0), pos_buf(n, 0), argmax_buf(n, 0);
     std::vector<int64_t>     kvidx_buf(n, 0);
     std::vector<char>        finished(n, 0);
+    std::vector<char>        repeating(n, 0);
     std::vector<int32_t>     next_tok(n, 0);
     for (int b = 0; b < n; ++b) {
         if (!valid[b]) {
@@ -243,8 +277,10 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         ggml_backend_tensor_set(io.pos_ids, pos_buf.data(), 0, n * sizeof(int32_t));
         ggml_backend_tensor_set(io.kv_idx, kvidx_buf.data(), 0, n * sizeof(int64_t));
         ggml_backend_tensor_set(io.self_mask, smask.data(), 0, smask.size() * sizeof(ggml_fp16_t));
-        if (ggml_backend_sched_graph_compute(sched, io.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const ggml_status gs = ggml_backend_sched_graph_compute(sched, io.graph); gs != GGML_STATUS_SUCCESS) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "batched decode: step compute failed (%d)",
+                                static_cast<int>(gs));
+            return TRANSCRIBE_ERR_BACKEND;
         }
         ggml_backend_tensor_get(io.argmax, argmax_buf.data(), 0, n * sizeof(int32_t));
         ++n_steps;
@@ -252,9 +288,9 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
     };
 
     // Grow the read window (rebuild graph + widen mask) so position `posv` fits.
-    auto ensure_window = [&](int posv) -> bool {
+    auto ensure_window = [&](int posv) -> transcribe_status {
         if (posv + 1 <= kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         int win = kv_window;
         while (win < posv + 1 && win < max_n_kv) {
@@ -264,7 +300,7 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
             win = max_n_kv;
         }
         if (win == kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * n, f16_ninf);
         for (int b = 0; b < n; ++b) {
@@ -282,17 +318,19 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         if (session->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
-        if (!ensure_window(pos)) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "batched decode: step graph allocation failed — out of memory. "
-                                "Lower transcribe_session_params.n_ctx or the batch size.");
-            return TRANSCRIBE_ERR_OOM;
+        if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+            if (st == TRANSCRIBE_ERR_OOM) {
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                    "batched decode: step graph allocation failed — out of memory. "
+                                    "Lower transcribe_session_params.n_ctx or the batch size.");
+            }
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             tok_buf[b] = prompt_ids[static_cast<size_t>(pos)];
         }
-        if (run_step(pos) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
     }
     // argmax from the last prompt position = first generated token.
@@ -323,17 +361,19 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
         if (all_done || pos + 1 > max_n_kv) {
             break;
         }
-        if (!ensure_window(pos)) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "batched decode: step graph allocation failed — out of memory. "
-                                "Lower transcribe_session_params.n_ctx or the batch size.");
-            return TRANSCRIBE_ERR_OOM;
+        if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+            if (st == TRANSCRIBE_ERR_OOM) {
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                    "batched decode: step graph allocation failed — out of memory. "
+                                    "Lower transcribe_session_params.n_ctx or the batch size.");
+            }
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             tok_buf[b] = finished[b] ? eos_id : next_tok[b];
         }
-        if (run_step(pos) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             if (finished[b]) {
@@ -344,6 +384,10 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
                 finished[b] = 1;
             } else {
                 generated[b].push_back(next_tok[b]);
+                if (stop_on_repetition(generated[b], "batched decode")) {
+                    finished[b]  = 1;
+                    repeating[b] = 1;
+                }
             }
         }
     }
@@ -353,13 +397,22 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
     }
 
     // A valid row that never reached eos was cut off at the generation budget
-    // or the context window — report it as truncated so the family can return
-    // per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED. See docs/input-limits.md.
-    if (truncated_out != nullptr) {
-        truncated_out->assign(n, 0);
-        for (int b = 0; b < n; ++b) {
-            (*truncated_out)[b] = (valid[b] && !finished[b]) ? 1 : 0;
+    // or context window, or by the repetition guard. Report why, so the family
+    // can return the per-utterance status. See docs/input-limits.md.
+    std::vector<char> stop(n, k_stop_eos);
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) {
+            continue;
         }
+        if (repeating[b]) {
+            stop[b] = k_stop_repetition;
+        } else if (!finished[b]) {
+            stop[b] = k_stop_budget;
+            trim_repetition_at_budget_stop(generated[b], "batched decode");
+        }
+    }
+    if (stop_out != nullptr) {
+        *stop_out = std::move(stop);
     }
     return TRANSCRIBE_OK;
 }

@@ -77,6 +77,7 @@ final class CancelTests: XCTestCase {
             }
         }
         XCTAssertTrue(session.wasAborted)
+        XCTAssertNil(session.cancelToken, "the bridged token is removed after the call")
     }
 
     /// The bridge must never clobber a caller-installed token: there is a single

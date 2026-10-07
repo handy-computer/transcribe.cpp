@@ -57,6 +57,11 @@ KV emitted:
     stt.moss.audio_token_id / audio_tokens_per_second /
       time_marker_every_seconds / enable_time_marker  (audio-span +
       time-marker construction — see modeling/processing notes)
+    stt.moss.prompt_prefix_tokens / prompt_suffix_tokens / digit_tokens
+                           baked fixed prompt around the audio span
+    stt.moss.prompt_instruction / prompt_instruction_head_tokens /
+      prompt_instruction_tail_tokens  (the suffix split around the
+      instruction text, for runtime hotword prompting)
     stt.frontend.*         Whisper frontend parameters
 
 CLI:
@@ -396,6 +401,20 @@ def compute_prompt_tokens(model_dir: Path) -> dict:
     prefix_ids = [int(i) for i in tokenizer.encode(before_audio, add_special_tokens=False)]
     suffix_ids = [int(i) for i in tokenizer.encode(after_audio, add_special_tokens=False)]
 
+    # The suffix again, split around the instruction text, so the runtime can
+    # re-encode the instruction with an appended hotword list (upstream
+    # examples/prompts.md: "...语音范围。热词提示：{terms}"). The instruction is
+    # stored as text because a suffix changes its last BPE pretoken. Checked
+    # here: head + encode(instruction) + tail must equal the baked suffix.
+    if after_audio.count(DEFAULT_PROMPT) != 1:
+        raise ValueError("instruction text not found exactly once after the audio placeholder")
+    head_text, tail_text = after_audio.split(DEFAULT_PROMPT, maxsplit=1)
+    instr_head_ids = [int(i) for i in tokenizer.encode(head_text, add_special_tokens=False)]
+    instr_tail_ids = [int(i) for i in tokenizer.encode(tail_text, add_special_tokens=False)]
+    instr_ids = [int(i) for i in tokenizer.encode(DEFAULT_PROMPT, add_special_tokens=False)]
+    if instr_head_ids + instr_ids + instr_tail_ids != suffix_ids:
+        raise ValueError("instruction split does not reproduce the baked prompt suffix")
+
     digit_ids = []
     for d in "0123456789":
         ids = tokenizer.encode(d, add_special_tokens=False)
@@ -405,7 +424,8 @@ def compute_prompt_tokens(model_dir: Path) -> dict:
 
     print(f"Prompt tokens: prefix={len(prefix_ids)} suffix={len(suffix_ids)} "
           f"digits={digit_ids}")
-    return {"prefix_ids": prefix_ids, "suffix_ids": suffix_ids, "digit_ids": digit_ids}
+    return {"prefix_ids": prefix_ids, "suffix_ids": suffix_ids, "digit_ids": digit_ids,
+            "instr_head_ids": instr_head_ids, "instr_tail_ids": instr_tail_ids}
 
 
 def compute_size_label(total_params: int) -> str:
@@ -547,6 +567,13 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         writer.add_array("stt.moss.prompt_prefix_tokens", prompt["prefix_ids"])
         writer.add_array("stt.moss.prompt_suffix_tokens", prompt["suffix_ids"])
         writer.add_array("stt.moss.digit_tokens",         prompt["digit_ids"])
+        # The suffix split around the instruction (see compute_prompt_tokens):
+        # prompt_suffix_tokens == instruction_head + encode(instruction) +
+        # instruction_tail. The runtime appends the hotword list to the
+        # instruction; GGUFs without these keys keep the fixed prompt.
+        writer.add_string("stt.moss.prompt_instruction",               DEFAULT_PROMPT)
+        writer.add_array("stt.moss.prompt_instruction_head_tokens",    prompt["instr_head_ids"])
+        writer.add_array("stt.moss.prompt_instruction_tail_tokens",    prompt["instr_tail_ids"])
 
         # ---- stt.frontend.* (Whisper feature extractor) ----
         writer.add_string("stt.frontend.type",          "mel")

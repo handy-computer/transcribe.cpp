@@ -3,8 +3,12 @@
 
 mod common;
 
-use transcribe_cpp::{Model, RunOptions, StreamExtension, StreamOptions, StreamState};
+use transcribe_cpp::{Error, Model, RunOptions, StreamExtension, StreamOptions, StreamState};
 use transcribe_cpp::{MoonshineStreamingOptions, Stream};
+
+const RUN_BUSY: &str = "a stream is active on this model; finish or drop it before run()";
+const BATCH_BUSY: &str = "a stream is active on this model; finish or drop it before run_batch()";
+const STREAM_BUSY: &str = "a stream is already active on this model";
 
 /// Partial-decode cadence for the mechanics tests that only assert the
 /// post-finalize text. Aligned to the model, not an arbitrary number: the
@@ -24,6 +28,20 @@ fn feed_in_chunks(stream: &mut Stream<'_>, pcm: &[f32], chunk: usize) {
     }
 }
 
+fn expect_busy<T: std::fmt::Debug>(r: transcribe_cpp::Result<T>, want: &str) {
+    match r {
+        Err(Error::Busy(msg)) => assert_eq!(msg, want),
+        other => panic!("expected Error::Busy({want:?}), got {other:?}"),
+    }
+}
+
+fn wrong_family_stream() -> StreamOptions {
+    StreamOptions {
+        family: Some(StreamExtension::ParakeetStream(Default::default())),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn streams_jfk_committed_text() {
     let (Some(model_path), Some(pcm)) = (common::smoke_streaming_model(), common::smoke_audio())
@@ -33,7 +51,7 @@ fn streams_jfk_committed_text() {
     };
     let model = Model::load(&model_path).unwrap();
     assert!(
-        model.capabilities().supports_streaming,
+        model.capabilities().unwrap().supports_streaming,
         "model does not advertise streaming"
     );
 
@@ -62,6 +80,17 @@ fn streams_jfk_committed_text() {
         "stream text: {:?}",
         text.full
     );
+
+    let snapshot = stream.snapshot();
+    assert!(!snapshot.text.is_empty(), "structured snapshot is empty");
+    if let Some(language) = &snapshot.language {
+        assert!(!language.is_empty(), "detected language must not be empty");
+    }
+    assert!(
+        !snapshot.segments.is_empty(),
+        "structured segments are empty"
+    );
+    let _ = (&snapshot.words, &snapshot.tokens);
 }
 
 #[test]
@@ -150,22 +179,32 @@ fn concurrent_compute_on_one_model_is_refused() {
     let model = Model::load(&model_path).unwrap();
     let mut s1 = model.session().unwrap();
     let mut s2 = model.session().unwrap();
+    let chunk = &pcm[..pcm.len().min(1600)];
 
+    // A failed begin does not take the lease.
+    assert!(s1
+        .stream(&RunOptions::default(), &wrong_family_stream())
+        .is_err());
     let mut stream1 = s1
         .stream(&RunOptions::default(), &StreamOptions::default())
         .unwrap();
-    stream1.feed(&pcm[..pcm.len().min(1600)]).unwrap();
+    stream1.feed(chunk).unwrap();
 
-    // Second stream on the same model while the first is live -> Busy.
-    match s2.stream(&RunOptions::default(), &StreamOptions::default()) {
-        Err(transcribe_cpp::Error::Busy(_)) => {}
-        other => panic!("expected Error::Busy for a second stream, got {other:?}"),
-    }
-    // An offline run on the same model while a stream is live -> Busy too.
-    match s2.run(&pcm, &RunOptions::default()) {
-        Err(transcribe_cpp::Error::Busy(_)) => {}
-        other => panic!("expected Error::Busy for a run mid-stream, got {other:?}"),
-    }
+    // Each refusal names the refused call; the busy check precedes native
+    // validation of a (wrong-family) stream begin.
+    expect_busy(s2.run(&pcm, &RunOptions::default()), RUN_BUSY);
+    expect_busy(s2.run_batch(&[&pcm], &RunOptions::default()), BATCH_BUSY);
+    expect_busy(
+        s2.stream(&RunOptions::default(), &StreamOptions::default()),
+        STREAM_BUSY,
+    );
+    expect_busy(
+        s2.stream(&RunOptions::default(), &wrong_family_stream()),
+        STREAM_BUSY,
+    );
+    // The refusals did not disturb the live stream.
+    stream1.feed(chunk).unwrap();
+    assert_eq!(stream1.state(), StreamState::Active);
 
     // Dropping the first stream releases the model's compute lease; now s2 can
     // begin its own stream.
@@ -241,10 +280,46 @@ fn stream_family_extension_accepted_or_rejected() {
     drop(ok);
 
     // Wrong-family extension is rejected.
-    let wrong = StreamOptions {
-        family: Some(StreamExtension::ParakeetStream(Default::default())),
-        ..Default::default()
+    let err = session.stream(&RunOptions::default(), &wrong_family_stream());
+    assert!(matches!(err, Err(Error::InvalidArgument(_))), "{err:?}");
+}
+
+#[test]
+fn ended_stream_never_releases_another_sessions_lease() {
+    // After finalize() the lease belongs to whoever takes it next; a later
+    // reset() or drop of the ended stream must not free that other lease.
+    let (Some(model_path), Some(pcm)) = (common::smoke_streaming_model(), common::smoke_audio())
+    else {
+        return;
     };
-    let err = session.stream(&RunOptions::default(), &wrong);
-    assert!(err.is_err(), "wrong-family ext should be rejected");
+    let model = Model::load(&model_path).unwrap();
+    let mut s1 = model.session().unwrap();
+    let mut s2 = model.session().unwrap();
+    let mut s3 = model.session().unwrap();
+
+    let mut stream1 = s1
+        .stream(&RunOptions::default(), &StreamOptions::default())
+        .unwrap();
+    stream1.feed(&pcm[..pcm.len().min(1600)]).unwrap();
+    stream1.finalize().unwrap();
+    let stream2 = s2
+        .stream(&RunOptions::default(), &StreamOptions::default())
+        .unwrap();
+    stream1.reset();
+    expect_busy(
+        s3.stream(&RunOptions::default(), &StreamOptions::default()),
+        STREAM_BUSY,
+    );
+    drop(stream1);
+    expect_busy(
+        s3.stream(&RunOptions::default(), &StreamOptions::default()),
+        STREAM_BUSY,
+    );
+
+    // Releasing the real holder frees the model.
+    drop(stream2);
+    let stream3 = s3
+        .stream(&RunOptions::default(), &StreamOptions::default())
+        .unwrap();
+    assert_eq!(stream3.state(), StreamState::Active);
 }

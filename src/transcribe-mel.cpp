@@ -329,6 +329,13 @@ int MelFrontend::n_frames_for(size_t n_samples) const {
                                 static_cast<size_t>(cfg_.hop_length)) +
                1;
     }
+    // Newer NeMo (e.g. Sortformer) computes ceil(n / hop); the legacy
+    // families use floor(n / hop) + 1. They differ only when n is an exact
+    // multiple of hop, where ceil drops the trailing center frame.
+    if (cfg_.nemo_seq_len_ceil) {
+        return static_cast<int>((n_samples + static_cast<size_t>(cfg_.hop_length) - 1) /
+                                static_cast<size_t>(cfg_.hop_length));
+    }
     // Matches NeMo features_lens = (waveforms_lens / hop_length) + 1.
     // The +1 accounts for the centered first frame.
     return static_cast<int>(n_samples / static_cast<size_t>(cfg_.hop_length)) + 1;
@@ -339,7 +346,8 @@ transcribe_status MelFrontend::compute(const float *        pcm,
                                        std::vector<float> & out_mel,
                                        int &                out_n_mels,
                                        int &                out_n_frames,
-                                       int                  n_threads) const {
+                                       int                  n_threads,
+                                       int                  out_frames) const {
     if (pcm == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -351,11 +359,7 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     const int  pad    = n_fft / 2;
     const bool no_pad = (cfg_.pad_mode == "none");
 
-    const int n_frames =
-        no_pad ? (static_cast<int>(n_samples) < win ?
-                      0 :
-                      static_cast<int>((n_samples - static_cast<size_t>(win)) / static_cast<size_t>(hop)) + 1) :
-                 static_cast<int>(n_samples / static_cast<size_t>(hop)) + 1;
+    const int n_frames = n_frames_for(n_samples);
 
     // Per-feature normalize divides by (n_frames - 1) and the
     // reflect pad needs at least pad+1 input samples to reflect
@@ -486,21 +490,10 @@ transcribe_status MelFrontend::compute(const float *        pcm,
 
     // Per-thread worker dispatcher. Strided frame assignment (stride =
     // stft_threads) keeps load balanced and per-thread memory access
-    // patterns mostly sequential.
+    // patterns mostly sequential. run_on_threads joins every thread and
+    // hands worker exceptions back to the caller.
     auto run_threaded = [&](auto && worker) {
-        if (stft_threads <= 1) {
-            worker(0);
-            return;
-        }
-        std::vector<std::thread> pool;
-        pool.reserve(static_cast<size_t>(stft_threads - 1));
-        for (int tid = 1; tid < stft_threads; ++tid) {
-            pool.emplace_back(worker, tid);
-        }
-        worker(0);
-        for (auto & th : pool) {
-            th.join();
-        }
+        run_on_threads(stft_threads, worker);
     };
 
     if (!n_fft_is_pow2) {
@@ -575,6 +568,14 @@ transcribe_status MelFrontend::compute(const float *        pcm,
         FFTSetupD    fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
         const size_t half_n    = static_cast<size_t>(n_fft / 2);
 
+        // Destroyed on every exit, including a worker exception rethrown by
+        // run_threaded.
+        struct FftSetupGuard {
+            FFTSetupD setup;
+
+            ~FftSetupGuard() { vDSP_destroy_fftsetupD(setup); }
+        } fft_setup_guard{ fft_setup };
+
         auto worker = [&](int tid) {
             std::vector<double>   fft_real(half_n);
             std::vector<double>   fft_imag(half_n);
@@ -599,7 +600,6 @@ transcribe_status MelFrontend::compute(const float *        pcm,
             }
         };
         run_threaded(worker);
-        vDSP_destroy_fftsetupD(fft_setup);
 #else
         // Hand-rolled radix-2 Cooley-Tukey FFT fallback for non-Apple.
         auto worker = [&](int tid) {
@@ -736,8 +736,11 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     // clamp to max - 8.0, then scale (x + 4) / 4. Drops the trailing
     // center-pad STFT frame (output has n_samples / hop_length frames).
     if (cfg_.normalize == "per_utterance") {
-        const int n_out = n_frames - 1;
-        if (n_out <= 0) {
+        // out_frames (when > 0) overrides the default drop-the-last-frame
+        // rule; see the header. The normalization max below is taken over
+        // exactly the emitted frames either way.
+        const int n_out = (out_frames > 0) ? out_frames : (n_frames - 1);
+        if (n_out <= 0 || n_out > n_frames) {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
 
@@ -776,8 +779,8 @@ transcribe_status MelFrontend::compute(const float *        pcm,
     // (global_log_mel_max), making per-frame normalization causal/
     // streaming-safe. Drops the trailing center-pad frame.
     if (cfg_.normalize == "global") {
-        const int n_out = n_frames - 1;
-        if (n_out <= 0) {
+        const int n_out = (out_frames > 0) ? out_frames : (n_frames - 1);
+        if (n_out <= 0 || n_out > n_frames) {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
         const double floor_val = static_cast<double>(cfg_.global_log_mel_max) - 8.0;

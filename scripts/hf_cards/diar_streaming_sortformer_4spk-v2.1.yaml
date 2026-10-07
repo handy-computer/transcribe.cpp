@@ -1,0 +1,73 @@
+# Spec for the HF README of handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+#
+# Diarizer family: metric is DER (not WER); pipeline_tag follows the
+# upstream NVIDIA card's diarization tagging rather than ASR.
+
+pin_date: 2026-07-19
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: NeMo
+  commit: d42c3bb
+  date: 2026-07-22
+
+pipeline_tag: voice-activity-detection
+tags:
+  - gguf
+  - transcribe.cpp
+  - speaker-diarization
+  - diarization
+  - streaming
+  - sortformer
+  - fastconformer
+
+summary: |
+  Streaming speaker diarization: who spoke when, for up to 4 speakers.
+  A FastConformer encoder with an 18-layer Transformer head emitting
+  per-frame speaker-activity probabilities, running online with an
+  Arrival-Order Speaker Cache (AOSC) + FIFO. NOT a transcription model:
+  a run produces speaker segments (start, end, speaker id in arrival
+  order), no text. Takes 16 kHz mono WAV.
+
+usage: |
+  Build transcribe.cpp from source:
+
+  ```bash
+  git clone git@github.com:handy-computer/transcribe.cpp.git
+  cd transcribe.cpp
+  cmake -B build && cmake --build build
+  ```
+
+  Run on a 16 kHz mono WAV. This is a diarizer, not a transcription model:
+  the CLI prints speaker segments.
+
+  ```bash
+  build/bin/transcribe-cli -m diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf input.wav
+  # speaker segments: 5
+  #   [   0.32 ->    2.40] S1
+  #   ...
+  ```
+
+  From the C API, use the DIARIZE role (`include/transcribe/diarize.h`),
+  and select the streaming operating point (latency / accuracy trade-off)
+  with the extension in `include/transcribe/sortformer.h`.
+
+  If your audio isn't already 16 kHz mono WAV, convert it first:
+
+  ```bash
+  ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+  ```
+
+  See the [transcribe.cpp model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/diar_streaming_sortformer_4spk-v2.1.md) for performance
+  numbers, numerical validation, and reproduction steps.
+
+wer:
+  notes: |
+    Scored against forced-alignment RTTMs with dihard3-dev post-processing, collar 0.0,
+    overlap scored, at the very_high_latency operating point. Measured NeMo reference
+    under the identical protocol: 14.83% DER / 19.89% JER; the C++ F32 port scores
+    14.59% / 19.51%. Published DER numbers vary with RTTM source and post-processing;
+    compare like with like. Only near-reference tiers ship for this family (k-quant
+    tiers withdrawn; see the transcribe.cpp family doc, "Quant policy (Stage 7)").

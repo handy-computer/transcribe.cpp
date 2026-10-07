@@ -1,8 +1,10 @@
 # Parakeet CTC 1.1B
 
-NVIDIA's [`nvidia/parakeet-ctc-1.1b`](https://huggingface.co/nvidia/parakeet-ctc-1.1b)
-ported to transcribe.cpp. A 1.1B-parameter FastConformer-XL encoder with a
-linear CTC head.
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-ctc-1.1b`](https://huggingface.co/nvidia/parakeet-ctc-1.1b) at [`a707e81`](https://huggingface.co/nvidia/parakeet-ctc-1.1b/commit/a707e81).
+
+Offline English speech-to-text with greedy CTC decoding. A FastConformer-XL encoder with a linear CTC head. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -18,22 +20,39 @@ LibriSpeech test-clean over the 0.6B sibling.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-ctc-1.1b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`a707e81`](https://huggingface.co/nvidia/parakeet-ctc-1.1b/commit/a707e818195cb97c8f7da2fc36b221a29f69a5db),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`a707e81`](https://huggingface.co/nvidia/parakeet-ctc-1.1b/commit/a707e81), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [parakeet-ctc-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-F32.gguf) | 4.25 GB |                        1.85% |
-| F16    | [parakeet-ctc-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-F16.gguf) | 2.13 GB |                        1.85% |
-| Q8_0   | [parakeet-ctc-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q8_0.gguf) | 1.26 GB |                        1.85% |
-| Q6_K   | [parakeet-ctc-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q6_K.gguf) | 1.04 GB |                        1.85% |
-| Q5_K_M | [parakeet-ctc-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q5_K_M.gguf) |  929 MB |                        1.84% |
-| Q4_K_M | [parakeet-ctc-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q4_K_M.gguf) |  818 MB |                        1.90% |
+| F32          | [parakeet-ctc-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-F32.gguf) | 4.25 GB | 1.85% |
+| F16          | [parakeet-ctc-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-F16.gguf) | 2.13 GB | 1.85% |
+| Q8_0         | [parakeet-ctc-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q8_0.gguf) | 1.26 GB | 1.85% |
+| Q6_K         | [parakeet-ctc-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q6_K.gguf) | 1.04 GB | 1.85% |
+| Q5_K_M       | [parakeet-ctc-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q5_K_M.gguf) |  929 MB | 1.84% |
+| Q4_K_M       | [parakeet-ctc-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-ctc-1.1b-gguf/resolve/main/parakeet-ctc-1.1b-Q4_K_M.gguf) |  818 MB | 1.90% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline: 1.85%. NVIDIA's self-reported number on the same split is 1.83% (from the [HF model card](https://huggingface.co/nvidia/parakeet-ctc-1.1b)).
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy CTC decoding, no external LM. F32 reference baseline: 1.85%. NVIDIA's
+self-reported number on the same split is 1.83%.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 5.61% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -54,43 +73,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
-
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |   91 ms (121×) |   93 ms (118×) |
-| Metal   | dots (35.3s) |  224 ms (158×) |  224 ms (158×) |
-| CPU     | jfk (11.0s)  |  602 ms (18×)  |  501 ms (22×)  |
-| CPU     | dots (35.3s) | 2.04 s (17×)   | 1.70 s (21×)   |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `a6c097e`.
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  79 ms (140.04×) |  80 ms (136.77×) |
+| Metal   | dots (35.3s) | 177 ms (200.12×) | 180 ms (195.92×) |
+| CPU     | jfk (11.0s)  |  458 ms (24.00×) |  502 ms (21.92×) |
+| CPU     | dots (35.3s) |  1.58 s (22.32×) |  1.70 s (20.80×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  825 ms (13×) |  822 ms (13×) |
-| Vulkan  | dots (35.3s) |  2.34 s (15×) |  2.33 s (15×) |
-| CPU     | jfk (11.0s)  |  1.75 s (6×)  |  1.38 s (8×)  |
-| CPU     | dots (35.3s) |  6.08 s (6×)  |  5.12 s (7×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `57997dc`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 691 ms (15.92×) | 711 ms (15.47×) |
+| Vulkan  | dots (35.3s) | 2.00 s (17.65×) | 2.02 s (17.49×) |
+| CPU     | jfk (11.0s)  |  1.10 s (9.97×) |  1.21 s (9.06×) |
+| CPU     | dots (35.3s) |  4.48 s (7.88×) |  4.63 s (7.63×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-ctc-1.1b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-ctc-1.1b-publication
+uv run scripts/bench/run.py --profile --models parakeet-ctc-1.1b
 ```
 
 ## Numerical Validation

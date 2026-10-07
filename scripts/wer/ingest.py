@@ -44,60 +44,7 @@ from urllib.request import urlretrieve
 import numpy as np
 import soundfile as sf
 
-
-# -------- BCP-47 → FLEURS config mapping ---------------------------------
-#
-# FLEURS uses underscore-region codes. Region-ambiguous BCP-47 codes
-# (zh, no) pick a sensible default; explicit regional aliases live
-# alongside (zh-cn). FLEURS only ships one regional variant for
-# most languages, so most entries are unambiguous.
-#
-# Full FLEURS coverage (102 languages). Add aliases here when a new
-# BCP-47 → config shorthand is wanted.
-FLEURS_LANGS: dict[str, str] = {
-    # African
-    "af": "af_za", "am": "am_et", "ff": "ff_sn", "ha": "ha_ng",
-    "ig": "ig_ng", "kam": "kam_ke", "kea": "kea_cv", "lg": "lg_ug",
-    "ln": "ln_cd", "luo": "luo_ke", "nso": "nso_za", "ny": "ny_mw",
-    "om": "om_et", "sn": "sn_zw", "so": "so_so", "sw": "sw_ke",
-    "umb": "umb_ao", "wo": "wo_sn", "xh": "xh_za", "yo": "yo_ng",
-    "zu": "zu_za",
-    # Arabic, Hebrew, Persian, Kurdish
-    "ar": "ar_eg", "he": "he_il", "fa": "fa_ir", "ckb": "ckb_iq",
-    "ps": "ps_af", "ur": "ur_pk",
-    # South Asian
-    "as": "as_in", "bn": "bn_in", "gu": "gu_in", "hi": "hi_in",
-    "kn": "kn_in", "ml": "ml_in", "mr": "mr_in", "ne": "ne_np",
-    "or": "or_in", "pa": "pa_in", "sd": "sd_in", "ta": "ta_in",
-    "te": "te_in",
-    # East / Southeast Asian
-    "my": "my_mm", "fil": "fil_ph", "tl": "fil_ph",  # tl alias
-    "id": "id_id", "ja": "ja_jp", "jv": "jv_id", "km": "km_kh",
-    "ko": "ko_kr", "lo": "lo_la", "ms": "ms_my", "th": "th_th",
-    "vi": "vi_vn", "ceb": "ceb_ph",
-    # Chinese / Cantonese
-    "zh": "cmn_hans_cn",           # simplified Mandarin (default)
-    "zh-cn": "cmn_hans_cn",        # simplified Mandarin (explicit)
-    # FLEURS has no Traditional Mandarin, so zh-tw is intentionally unmapped.
-    # Traditional-script models are scored against cmn_hans_cn with both sides
-    # OpenCC-folded to one script; see docs/tools/wer.md.
-    "yue": "yue_hant_hk",          # Cantonese (traditional)
-    # Central Asian
-    "az": "az_az", "kk": "kk_kz", "ky": "ky_kg", "mn": "mn_mn",
-    "tg": "tg_tj", "uz": "uz_uz", "hy": "hy_am", "ka": "ka_ge",
-    # European
-    "ast": "ast_es", "be": "be_by", "bg": "bg_bg", "bs": "bs_ba",
-    "ca": "ca_es", "cs": "cs_cz", "cy": "cy_gb", "da": "da_dk",
-    "de": "de_de", "el": "el_gr", "en": "en_us", "es": "es_419",
-    "et": "et_ee", "fi": "fi_fi", "fr": "fr_fr", "ga": "ga_ie",
-    "gl": "gl_es", "hr": "hr_hr", "hu": "hu_hu", "is": "is_is",
-    "it": "it_it", "lb": "lb_lu", "lt": "lt_lt", "lv": "lv_lv",
-    "mi": "mi_nz", "mk": "mk_mk", "mt": "mt_mt", "nb": "nb_no",
-    "no": "nb_no",                 # Norwegian macro → Bokmål
-    "nl": "nl_nl", "oc": "oc_fr", "pl": "pl_pl", "pt": "pt_br",
-    "ro": "ro_ro", "ru": "ru_ru", "sk": "sk_sk", "sl": "sl_si",
-    "sr": "sr_rs", "sv": "sv_se", "tr": "tr_tr", "uk": "uk_ua",
-}
+from languages import FLEURS_LANGS
 
 
 # -------- Shared helpers --------------------------------------------------
@@ -375,12 +322,57 @@ def ingest_eka_medical_asr(repo: Path, args: argparse.Namespace) -> int:
     return 0
 
 
+# -------- TED-LIUM 3 long-form (11 full test talks) -----------------------
+#
+# https://huggingface.co/datasets/distil-whisper/tedlium-long-form
+# Full recordings (10-20 min) with concatenated, lowercased references.
+# Schema: `audio`, `text`, `speaker_id`. No clip is under 30 s.
+
+def ingest_tedlium_longform(repo: Path, args: argparse.Namespace) -> int:
+    out_dir = repo / "samples/wer/tedlium-longform"
+    manifest = repo / "samples/wer/tedlium-longform.manifest.jsonl"
+
+    if manifest.exists() and not args.force:
+        n_existing = sum(1 for _ in open(manifest))
+        print(f"OK already exists: {manifest} ({n_existing} talks). "
+              f"Pass --force to regenerate.")
+        return 0
+
+    print("loading distil-whisper/tedlium-long-form split=test")
+    from datasets import load_dataset
+
+    ds = load_dataset("distil-whisper/tedlium-long-form", split="test")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    entries: list[dict] = []
+    for row in ds:
+        utt_id = f"tedlium-longform-{row['speaker_id']}"
+        wav_path = out_dir / f"{utt_id}.wav"
+        if not wav_path.exists():
+            audio = row["audio"]
+            write_wav_16k_mono(np.asarray(audio["array"], dtype=np.float32),
+                               int(audio["sampling_rate"]), wav_path)
+        entries.append({
+            "id": utt_id,
+            "audio": str(wav_path),
+            "ref_text": " ".join(row["text"].split()),
+            "language": "en",
+        })
+
+    entries.sort(key=lambda e: e["id"])
+    write_manifest(entries, manifest)
+    print(f"manifest: {manifest}")
+    print(f"  {len(entries)} talks")
+    return 0
+
+
 # -------- Dispatch --------------------------------------------------------
 
 SOURCES = {
     "librispeech": ingest_librispeech,
     "fleurs": ingest_fleurs,
     "eka-medical-asr": ingest_eka_medical_asr,
+    "tedlium-longform": ingest_tedlium_longform,
 }
 
 
@@ -392,7 +384,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = p.add_subparsers(dest="source", required=True,
-                           metavar="{librispeech,fleurs,eka-medical-asr}")
+                           metavar="{librispeech,fleurs,eka-medical-asr,tedlium-longform}")
 
     p_ls = sub.add_parser("librispeech",
                           help="LibriSpeech split (English-only).")
@@ -420,6 +412,12 @@ def main() -> int:
                       help="dataset split (default: test — the only split "
                            "ekacare publishes)")
     p_ek.add_argument("--force", action="store_true",
+                      help="Regenerate even if manifest already exists.")
+
+    p_tl = sub.add_parser("tedlium-longform",
+                          help="distil-whisper/tedlium-long-form: the 11 full "
+                               "TED-LIUM 3 test talks (long-form).")
+    p_tl.add_argument("--force", action="store_true",
                       help="Regenerate even if manifest already exists.")
 
     args = p.parse_args()

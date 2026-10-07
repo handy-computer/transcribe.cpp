@@ -41,6 +41,10 @@ struct transcribe_model {
     // for per-call dispatch (init_context, run).
     const transcribe::Arch * arch = nullptr;
 
+    // transcribe_role bits; set by load() (0 = ASR when the arch has ASR
+    // hooks) and validated by resolve_roles.
+    uint32_t roles = 0;
+
     // Identification, both surfaced via the public string accessors.
     // variant is whatever the family decided (loader leaves it empty if
     // stt.variant was absent; the family supplies a default).
@@ -62,7 +66,7 @@ struct transcribe_model {
     // The resolved primary compute backend this model runs on (the handle
     // that owns the weight buffer). Set by per-family load() right where it
     // sets `backend`, from BackendPlan::primary. Used by the public
-    // transcribe_model_get_device() accessor to recover the device — and its
+    // transcribe_model_device() accessor to recover the device — and its
     // live memory — without exposing the per-family BackendPlan. nullptr
     // until a family binds it.
     ggml_backend_t primary_backend = nullptr;
@@ -85,7 +89,7 @@ struct transcribe_model {
 
     // Basis for the session-level limits query (transcribe_session_get_limits).
     // A hard-context-cap family fills this at load() — the same place it
-    // computes caps.max_audio_ms — so the generic query in transcribe.cpp can
+    // computes caps.max_audio_ms — so the generic query in transcribe-asr.cpp can
     // recompute the effective limits for any session n_ctx without a
     // per-family hook. Left zero by unbounded / soft-window families (which
     // have no decoder context cap): zero model_max_ctx => the query reports

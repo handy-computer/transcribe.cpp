@@ -12,7 +12,16 @@
 
 #include "transcribe.h"
 
+#include <cstdint>
+#include <vector>
+
 namespace transcribe::whisper {
+
+// Synthesize the generation-time suppression list omitted by the legacy
+// format. English-only and multilingual .bin files carry different tokenizers,
+// so their non-speech token ids differ. Special-token ids additionally shift
+// with the multilingual language count.
+std::vector<int32_t> synthesize_bin_suppress_tokens(bool is_multilingual, int n_vocab);
 
 // Load a legacy whisper.cpp `.bin` (single magic 0x67676d6c) and
 // produce a populated transcribe_model* compatible with the rest of

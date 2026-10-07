@@ -17,14 +17,16 @@ For Mistral's **streaming** sibling, see
 
 ## Variants
 
-| Variant | Text decoder | BF16 WER (test-clean) | Card | GGUF |
-| --- | --- | ---: | --- | --- |
-| `voxtral-mini-3b-2507` | Ministral-3B (30L, `d=3072`) | 1.88% | [card](voxtral-mini-3b-2507.md) | [HF](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-GGUF) |
-| `voxtral-small-24b-2507` | Mistral-Small-24B (40L, `d=5120`) | 1.56% | [card](voxtral-small-24b-2507.md) | [HF](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-GGUF) |
+<!-- catalog:family variants=voxtral-mini-3b-2507,voxtral-small-24b-2507 -->
+| Variant                  | Params | Languages                 | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `voxtral-mini-3b-2507`   |   4.7B | 8 languages + auto-detect |   5.00 GB | LibriSpeech test-clean (WER) | 1.87% | translate    | [voxtral-mini-3b-2507.md](voxtral-mini-3b-2507.md) |
+| `voxtral-small-24b-2507` |  24.3B | 8 languages + auto-detect |  25.81 GB | LibriSpeech test-clean (WER) | 1.56% | translate    | [voxtral-small-24b-2507.md](voxtral-small-24b-2507.md) |
+<!-- /catalog -->
 
 WER on the full LibriSpeech `test-clean` split (2620 utterances), Whisper
 English normalizer. Both match the HuggingFace `transformers` reference
-within rounding (3B 1.87%, 24B 1.57%). See each variant's card for the full
+within rounding. See each variant's card for the full
 quant matrix, per-quant WER, and quick-start commands.
 
 ## Input limits

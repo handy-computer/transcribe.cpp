@@ -158,6 +158,58 @@ func withStreamExtension<R>(
     }
 }
 
+// MARK: - DIARIZE_RUN-slot extensions
+
+/// Sortformer streaming operating point (latency / accuracy trade-off).
+/// The menu is discrete (jointly-tuned bundles), not a latency dial;
+/// `.default` keeps the GGUF-shipped checkpoint configuration.
+/// `.veryHighLatency` (~30 s lookahead) is the offline-file operating
+/// point; `.lowLatency` (~1 s) is the real-time point.
+public enum SortformerPreset: Sendable {
+    case `default`
+    case veryHighLatency
+    case highLatency
+    case lowLatency
+
+    var cValue: transcribe_sortformer_preset {
+        switch self {
+        case .default: return TRANSCRIBE_SORTFORMER_PRESET_DEFAULT
+        case .veryHighLatency: return TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY
+        case .highLatency: return TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY
+        case .lowLatency: return TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY
+        }
+    }
+}
+
+/// Sortformer options for `DiarizeSession.run`.
+public struct SortformerDiarizeOptions: Sendable {
+    public var preset: SortformerPreset?
+    public init(preset: SortformerPreset? = nil) { self.preset = preset }
+}
+
+public enum DiarizeExtension: Sendable {
+    case sortformer(SortformerDiarizeOptions)
+
+    var kind: UInt32 {
+        switch self {
+        case .sortformer: return TRANSCRIBE_EXT_KIND_SORTFORMER_DIARIZE
+        }
+    }
+}
+
+func withDiarizeExtension<R>(
+    _ ext: DiarizeExtension?, _ body: (UnsafePointer<transcribe_ext>?) throws -> R
+) rethrows -> R {
+    guard let ext else { return try body(nil) }
+    switch ext {
+    case .sortformer(let o):
+        var c = transcribe_sortformer_diarize_ext()
+        transcribe_sortformer_diarize_ext_init(&c)
+        if let v = o.preset { c.preset = v.cValue }
+        return try withUnsafePointer(to: &c.ext) { try body($0) }
+    }
+}
+
 // MARK: - Acceptance probe
 
 extension Model {
@@ -168,5 +220,9 @@ extension Model {
     /// Whether this model accepts the given stream extension on the STREAM slot.
     public func accepts(_ family: StreamExtension) -> Bool {
         transcribe_model_accepts_ext_kind(ptr, TRANSCRIBE_EXT_SLOT_STREAM, family.kind)
+    }
+    /// Whether this model accepts the given extension on the DIARIZE_RUN slot.
+    public func accepts(_ family: DiarizeExtension) -> Bool {
+        transcribe_model_accepts_ext_kind(ptr, TRANSCRIBE_EXT_SLOT_DIARIZE_RUN, family.kind)
     }
 }

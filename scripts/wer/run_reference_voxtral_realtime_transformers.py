@@ -108,6 +108,13 @@ def main() -> int:
     processor = AutoProcessor.from_pretrained(
         args.model, revision=revision, local_files_only=local_only,
     )
+    if args.num_delay_tokens is not None:
+        cfg = processor.mistral_common_audio_config
+        cfg.transcription_delay_ms = args.num_delay_tokens * (1000.0 / cfg.frame_rate)
+        if int(processor.num_delay_tokens) != args.num_delay_tokens:
+            print("error: failed to apply --num-delay-tokens", file=sys.stderr)
+            return 1
+        print(f"num_delay_tokens: {args.num_delay_tokens}")
     dtype = {"bf16": torch.bfloat16, "f16": torch.float16, "f32": torch.float32}[args.dtype]
     model = VoxtralRealtimeForConditionalGeneration.from_pretrained(
         args.model, revision=revision, local_files_only=local_only,

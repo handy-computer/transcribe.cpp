@@ -13,9 +13,18 @@ export const MODEL = process.env.TRANSCRIBE_SMOKE_MODEL || "";
 export const STREAMING_MODEL = process.env.TRANSCRIBE_SMOKE_STREAMING_MODEL || "";
 export const PARAKEET_STREAM_MODEL = process.env.TRANSCRIBE_SMOKE_PARAKEET_STREAM_MODEL || "";
 export const PARAKEET_BUFFERED_MODEL = process.env.TRANSCRIBE_SMOKE_PARAKEET_BUFFERED_MODEL || "";
+export const PNC_MODEL =
+  process.env.TRANSCRIBE_SMOKE_PNC_MODEL ||
+  path.resolve(HERE, "../../../models/canary-180m-flash/canary-180m-flash-Q8_0.gguf");
+export const ITN_MODEL =
+  process.env.TRANSCRIBE_SMOKE_ITN_MODEL ||
+  path.resolve(HERE, "../../../models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf");
 // Voxtral realtime is local-only (~2.5 GB+, too heavy for the CI canary set):
 // its env var is NOT exported by fetch-canary, so this skips cleanly in CI.
 export const VOXTRAL_MODEL = process.env.TRANSCRIBE_SMOKE_VOXTRAL_MODEL || "";
+// Sortformer (DIARIZE role only): fetch-canary exports the Q8_0 canary.
+export const SORTFORMER_MODEL = process.env.TRANSCRIBE_SMOKE_SORTFORMER_MODEL || "";
+export const SORTFORMER_AUDIO = path.resolve(HERE, "../../../samples/sortformer-2spk-mix.wav");
 
 // jfk.wav ships in-repo; fetch-canary exports only the model paths.
 export const AUDIO =

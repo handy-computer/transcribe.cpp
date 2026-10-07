@@ -14,6 +14,7 @@
 namespace transcribe {
 
 class Loader;
+struct DiarizeOps;
 
 // Per-family trait. Function pointers may be null when an entry point is
 // not yet implemented; the central dispatch converts null entries into
@@ -129,10 +130,21 @@ struct Arch {
     // out of the guarantee). NULL is skipped; the generic header-size + kind
     // checks remain in force.
     transcribe_status (*run_validate)(const struct transcribe_session * ctx, const transcribe_run_params * params);
+
+    // Ops tables for the non-ASR roles; nullptr = role not implemented.
+    const DiarizeOps * diarize;
 };
 
 // Look up an architecture by name. Returns nullptr if no registered
 // family matches.
 const Arch * find_arch(const char * name);
+
+// Called once on a freshly loaded model, before it reaches the caller.
+// Defaults roles to ASR when the family left it 0 and the arch has ASR hooks,
+// then checks that the mask is non-zero, has no unknown bits, and that every
+// set role is backed by the arch (init_context + run for ASR, a non-null ops
+// table otherwise). A violation is a family wiring bug: it is logged and the
+// load fails with TRANSCRIBE_ERR_NOT_IMPLEMENTED.
+transcribe_status resolve_roles(struct transcribe_model * model);
 
 }  // namespace transcribe

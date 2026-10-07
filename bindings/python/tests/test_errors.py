@@ -13,6 +13,8 @@ Two layers, both model-free:
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 import transcribe_cpp as t
@@ -39,6 +41,8 @@ def test_every_status_maps_to_documented_subclass():
         errors.ERR_UNSUPPORTED_ITN: t.UnsupportedRequest,
         errors.ERR_INPUT_TOO_LONG: t.InputTooLong,
         errors.ERR_OUTPUT_TRUNCATED: t.OutputTruncated,
+        errors.ERR_OUTPUT_REPETITION: t.OutputRepetition,
+        errors.ERR_UNSUPPORTED_ROLE: t.UnsupportedRole,
     }
     # The mapping table covers every non-OK status the header defines, and
     # nothing else (a new C status must be mapped deliberately, not by
@@ -60,6 +64,20 @@ def test_unknown_status_degrades_to_base_class():
     exc = errors.exception_for_status(999, "mystery")
     assert type(exc) is t.TranscribeError
     assert exc.status == 999
+
+
+def test_output_repetition_is_an_output_truncated():
+    # A handler that keeps the partial of an incomplete transcript catches both.
+    exc = errors.exception_for_status(errors.ERR_OUTPUT_REPETITION, "looped", "run")
+    assert isinstance(exc, t.OutputRepetition)
+    assert isinstance(exc, t.OutputTruncated)
+    assert exc.partial_result is None
+
+
+def test_unsupported_role_is_its_own_type():
+    # A role mismatch is a property of the loaded model, not of a run option:
+    # it must not be caught by an UnsupportedRequest handler.
+    assert not issubclass(t.UnsupportedRole, t.UnsupportedRequest)
 
 
 def test_exception_for_status_builds_without_raising():
@@ -102,3 +120,53 @@ def test_invalid_spec_k_drafts_rejected_before_native_call():
         _build_run_params("transcribe", None, None, "none", False, -2)
     with pytest.raises(t.InvalidArgument, match="spec_k_drafts"):
         _build_run_params("transcribe", None, None, "none", False, "many")
+
+
+def test_pnc_and_itn_modes_map_to_native_run_params():
+    from transcribe_cpp import _build_run_params, _generated
+
+    modes = {
+        "default": (
+            _generated.TRANSCRIBE_PNC_MODE_DEFAULT,
+            _generated.TRANSCRIBE_ITN_MODE_DEFAULT,
+        ),
+        "off": (
+            _generated.TRANSCRIBE_PNC_MODE_OFF,
+            _generated.TRANSCRIBE_ITN_MODE_OFF,
+        ),
+        "on": (
+            _generated.TRANSCRIBE_PNC_MODE_ON,
+            _generated.TRANSCRIBE_ITN_MODE_ON,
+        ),
+    }
+    for mode, (pnc, itn) in modes.items():
+        params = _build_run_params(
+            "transcribe", None, None, "none", False, -1, pnc=mode, itn=mode
+        )
+        assert params.pnc == pnc
+        assert params.itn == itn
+
+    for name in ("pnc", "itn"):
+        with pytest.raises(t.InvalidArgument, match=name):
+            _build_run_params(
+                "transcribe", None, None, "none", False, -1, **{name: "maybe"}
+            )
+
+
+def test_public_run_surfaces_cover_every_generic_option():
+    common = {
+        "task", "language", "target_language", "timestamps", "pnc", "itn",
+        "diarize", "keep_special_tags", "family",
+    }
+    expected = {
+        t.Session.run: common | {"spec_k_drafts"},
+        t.Session.run_batch: common | {"spec_k_drafts"},
+        # Speculative decoding is explicitly offline-only.
+        t.Session.stream: common,
+        t.transcribe: common | {"spec_k_drafts"},
+    }
+    for callable_, required in expected.items():
+        parameters = inspect.signature(callable_).parameters
+        assert required <= parameters.keys()
+    assert "Pnc" in t.__all__
+    assert "Itn" in t.__all__

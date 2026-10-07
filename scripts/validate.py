@@ -153,6 +153,24 @@ def case_language(case) -> str | None:
     return "en"
 
 
+def case_stages(case, default: list[str]) -> list[str]:
+    """Per-case dumper subcommands. Dict cases may set `stages` (e.g. a
+    `longform` path instead of whole-clip encoder/decode)."""
+    if isinstance(case, dict) and "stages" in case:
+        stages = case["stages"]
+        if not isinstance(stages, list) or not all(isinstance(s, str) for s in stages):
+            raise SystemExit(f"error: case stages must be a list of strings: {case!r}")
+        return list(stages)
+    return list(default)
+
+
+def manifest_env_dir(repo: Path, manifest: dict[str, Any], family: str) -> Path:
+    """Reference env: scripts/envs/<reference.env>, else scripts/envs/<family>.
+    A variant whose reference framework differs from the family's names its own."""
+    env = (manifest.get("reference") or {}).get("env") or family
+    return repo / "scripts" / "envs" / str(env)
+
+
 def case_transcript_compare(manifest: dict[str, Any], case) -> str:
     value = manifest.get("transcript_compare", "exact")
     if isinstance(case, dict) and "transcript_compare" in case:
@@ -347,7 +365,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         raise SystemExit("error: no model specified and none in manifest")
 
     dump_script = manifest_dump_script(repo, manifest)
-    env_dir = repo / "scripts" / "envs" / args.family
+    env_dir = manifest_env_dir(repo, manifest, args.family)
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
@@ -379,7 +397,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # family's dumper accepts --revision. The dumper itself ignores
         # --revision when --model resolves to a local directory.
         hf_revision = (manifest.get("source_model") or {}).get("hf_revision")
-        if hf_revision and args.family in ("qwen3_asr", "granite_nar"):
+        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc"):
             common_args += ["--revision", str(hf_revision)]
 
         # Forward any manifest-declared dumper args verbatim. Used today
@@ -403,8 +421,24 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # decoder intermediates across subcommands (parakeet). Running
         # both is safe — if a tensor is dumped by both, the decode
         # pass overwrites the encoder pass (same values).
-        for stage in ["encoder", "decode"]:
-            cmd = base_args + [stage] + common_args
+        #
+        # Sortformer is an encoder-diarizer: the offline forward (encoder
+        # subcommand) emits the offline gate tensors; the streaming `diarize`
+        # subcommand emits diar.probs (AOSC/FIFO path). VALIDATE_SORTFORMER_PRESET
+        # selects a matching streaming operating point on both the reference
+        # (--preset) and the C++ side (TRANSCRIBE_SORTFORMER_STREAM_PRESET in
+        # cmd_cpp); unset -> the checkpoint-shipped cfg (single chunk on the
+        # short oracle, i.e. diar.probs == diar.preds_offline).
+        if args.family == "sortformer":
+            stages = ["encoder", "diarize"]
+        else:
+            stages = case_stages(case, ["encoder", "decode"])
+        sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
+        for stage in stages:
+            stage_args = list(common_args)
+            if args.family == "sortformer" and stage == "diarize" and sf_preset:
+                stage_args += ["--preset", sf_preset]
+            cmd = base_args + [stage] + stage_args
             run_cmd(
                 cmd,
                 repo,
@@ -438,6 +472,21 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
+
+        # Sortformer: keep the C++ streaming operating point in lockstep with
+        # the reference `diarize --preset` (see cmd_ref) so the diar.probs
+        # tensors are comparable. Also enable the offline full-context forward
+        # so the enc.* / diar.preds_offline parity tensors are dumped (it is
+        # gated off by default because it is O(T^2) over the whole clip and
+        # would OOM on long DER audio).
+        if args.family == "sortformer":
+            env["TRANSCRIBE_SORTFORMER_OFFLINE_DUMP"] = "1"
+            sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
+            if sf_preset:
+                env["TRANSCRIBE_SORTFORMER_STREAM_PRESET"] = sf_preset
 
         # Whisper: by default, exercise the production C++ MelFrontend so
         # the per-tensor compare covers the full mel→encoder→decoder
@@ -481,6 +530,20 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             # strips these by default, so the validate dump must pass
             # --raw-tokens to keep them and match the reference exactly.
             cmd += ["--raw-tokens"]
+        if args.family in ("sensevoice", "funasr_nano"):
+            # Pin ITN off rather than inheriting the run-time default, which
+            # is per-family and can change (sensevoice already defaults to ITN
+            # *on* so an unconfigured caller gets readable text; funasr_nano
+            # follows upstream's `itn=False`). The reference dumpers always run
+            # `itn=False`, and ITN is not cosmetic on either side: sensevoice
+            # selects a different textnorm prefix *embedding* prepended to the
+            # encoder input, and funasr_nano changes the prompt token
+            # sequence. Inheriting the default would compare C++ ITN-on
+            # tensors against ITN-off reference tensors and fail the gate for
+            # a reason that has nothing to do with numerics. Explicit for both
+            # families so a future default flip cannot silently break the
+            # gate. Same pin, same reason, as scripts/wer/run.py.
+            cmd += ["--no-itn"]
         cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)
@@ -506,6 +569,8 @@ def cmd_cpp(args: argparse.Namespace) -> int:
                 f"with exit code {result.returncode}"
             )
         transcript = parse_cli_transcript(result.stdout or "")
+        if transcript is None and "speaker segments:" in (result.stdout or ""):
+            continue  # a diarizer has no transcript
         if transcript is None:
             raise SystemExit(
                 f"error: cpp dump [{args.family}/{case_name}] did not emit a transcript line"
@@ -599,8 +664,13 @@ def cmd_compare(args: argparse.Namespace) -> int:
         # Transcript comparison: if the reference produced a transcript.json,
         # verify the C++ transcript. Manifests can opt into normalized compare
         # for models whose generation differs only in punctuation/casing.
+        #
+        # Sortformer is a diarizer: it has no text transcript (the C++ CLI
+        # emits speaker segments, not `text`). Its behavioral artifact is the
+        # diar.probs tensor, gated above; the `diarize` stage's segment lines
+        # are informational only, so skip the text-transcript comparison.
         ref_transcript = ref_dir / "transcript.json"
-        if ref_transcript.exists():
+        if ref_transcript.exists() and args.family != "sortformer":
             transcript_compare = case_transcript_compare(manifest, case)
             ref_data = json.loads(ref_transcript.read_text())
             ref_text = str(ref_data.get("text", ""))
@@ -689,6 +759,9 @@ def cmd_mel(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
         env.pop("TRANSCRIBE_MEL_FROM_REF", None)
 
         cmd = [

@@ -9,12 +9,18 @@ use transcribe_cpp_sys as sys;
 
 /// The task a run performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Task {
     /// Transcribe speech in its source language.
     #[default]
     Transcribe,
     /// Translate speech into the target language (model must support it).
     Translate,
+    /// `RunOptions::prompt` replaces the task instruction; the output is free
+    /// text in `text` / `raw_text` (model must support `Feature::Instruct`;
+    /// offline only).
+    Instruct,
 }
 
 impl Task {
@@ -22,12 +28,14 @@ impl Task {
         match self {
             Task::Transcribe => sys::transcribe_task::TRANSCRIBE_TASK_TRANSCRIBE,
             Task::Translate => sys::transcribe_task::TRANSCRIBE_TASK_TRANSLATE,
+            Task::Instruct => sys::transcribe_task::TRANSCRIBE_TASK_INSTRUCT,
         }
     }
 }
 
 /// Requested (or returned) timestamp granularity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TimestampKind {
     /// Text only, no alignment data.
     None,
@@ -69,6 +77,7 @@ impl TimestampKind {
 
 /// K/V activation precision for the decoder's flash-attention path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KvType {
     /// f16 for quantized weights, f32 for f32 weights. The best default.
     #[default]
@@ -92,6 +101,7 @@ impl KvType {
 
 /// Punctuation + capitalization runtime toggle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Pnc {
     /// The family's shipped default (what its published WER was measured at).
     #[default]
@@ -115,6 +125,7 @@ impl Pnc {
 
 /// Inverse-text-normalization runtime toggle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Itn {
     /// The family's shipped default.
     #[default]
@@ -127,6 +138,7 @@ pub enum Itn {
 
 /// Speaker-attribution runtime toggle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Diarize {
     /// Library default: speaker attribution is disabled for every family.
     #[default]
@@ -161,6 +173,7 @@ impl Itn {
 
 /// Which compute backend to request when loading a model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Backend {
     /// Best available device; CPU is the always-present fallback. The default.
     #[default]
@@ -175,6 +188,8 @@ pub enum Backend {
     Vulkan,
     /// Require CUDA; errors if this build has no CUDA.
     Cuda,
+    /// Require ROCm; errors if this build has no ROCm.
+    Rocm,
 }
 
 impl Backend {
@@ -187,14 +202,17 @@ impl Backend {
             Backend::Metal => B::TRANSCRIBE_BACKEND_METAL,
             Backend::Vulkan => B::TRANSCRIBE_BACKEND_VULKAN,
             Backend::Cuda => B::TRANSCRIBE_BACKEND_CUDA,
+            Backend::Rocm => B::TRANSCRIBE_BACKEND_ROCM,
         }
     }
 }
 
 /// A yes/no model capability probe (`transcribe_model_supports`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Feature {
-    /// Accepts a free-text/token decode prompt (whisper today).
+    /// The whisper run extension's initial prompt / prompt tokens.
     InitialPrompt,
     /// Runs a multi-tier temperature fallback loop (whisper today).
     TemperatureFallback,
@@ -208,6 +226,14 @@ pub enum Feature {
     Itn,
     /// Produces structured speaker attribution.
     Diarization,
+    /// `RunOptions::vocabulary` is formatted for this model.
+    Vocabulary,
+    /// `RunOptions::prompt` reaches a transcription-conditioning slot.
+    ContextPrompt,
+    /// Supports `Task::Instruct`.
+    Instruct,
+    /// Honors `RunOptions::prefix` as forced decoder text.
+    TranscriptPrefix,
 }
 
 impl Feature {
@@ -221,12 +247,17 @@ impl Feature {
             Feature::Pnc => F::TRANSCRIBE_FEATURE_PNC,
             Feature::Itn => F::TRANSCRIBE_FEATURE_ITN,
             Feature::Diarization => F::TRANSCRIBE_FEATURE_DIARIZATION,
+            Feature::Vocabulary => F::TRANSCRIBE_FEATURE_VOCABULARY,
+            Feature::ContextPrompt => F::TRANSCRIBE_FEATURE_CONTEXT_PROMPT,
+            Feature::Instruct => F::TRANSCRIBE_FEATURE_INSTRUCT,
+            Feature::TranscriptPrefix => F::TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX,
         }
     }
 }
 
 /// When the UI-facing committed text grows during a stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommitPolicy {
     /// The family's stable-prefix implementation. The default.
     #[default]
@@ -250,6 +281,7 @@ impl CommitPolicy {
 
 /// Stream lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StreamState {
     Idle,
     Active,
@@ -271,6 +303,7 @@ impl StreamState {
 
 /// A public ABI struct, for size/alignment introspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AbiStruct {
     ModelLoadParams,
     SessionParams,
@@ -285,8 +318,12 @@ pub enum AbiStruct {
     StreamText,
     SessionLimits,
     Ext,
-    BackendDevice,
+    DeviceInfo,
     SpeakerSegment,
+    BackendInitParams,
+    DiarizeInfo,
+    DiarizeSessionParams,
+    DiarizeParams,
 }
 
 impl AbiStruct {
@@ -306,19 +343,27 @@ impl AbiStruct {
             AbiStruct::StreamText => A::TRANSCRIBE_ABI_STREAM_TEXT,
             AbiStruct::SessionLimits => A::TRANSCRIBE_ABI_SESSION_LIMITS,
             AbiStruct::Ext => A::TRANSCRIBE_ABI_EXT,
-            AbiStruct::BackendDevice => A::TRANSCRIBE_ABI_BACKEND_DEVICE,
+            AbiStruct::DeviceInfo => A::TRANSCRIBE_ABI_DEVICE_INFO,
             AbiStruct::SpeakerSegment => A::TRANSCRIBE_ABI_SPEAKER_SEGMENT,
+            AbiStruct::BackendInitParams => A::TRANSCRIBE_ABI_BACKEND_INIT_PARAMS,
+            AbiStruct::DiarizeInfo => A::TRANSCRIBE_ABI_DIARIZE_INFO,
+            AbiStruct::DiarizeSessionParams => A::TRANSCRIBE_ABI_DIARIZE_SESSION_PARAMS,
+            AbiStruct::DiarizeParams => A::TRANSCRIBE_ABI_DIARIZE_PARAMS,
         }
     }
 }
 
 /// The slot a family extension is pointed at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ExtSlot {
     /// `transcribe_run_params::family`.
     Run,
     /// `transcribe_stream_params::family`.
     Stream,
+    /// `transcribe_diarize_params::family`.
+    DiarizeRun,
 }
 
 impl ExtSlot {
@@ -327,6 +372,39 @@ impl ExtSlot {
         match self {
             ExtSlot::Run => E::TRANSCRIBE_EXT_SLOT_RUN,
             ExtSlot::Stream => E::TRANSCRIBE_EXT_SLOT_STREAM,
+            ExtSlot::DiarizeRun => E::TRANSCRIBE_EXT_SLOT_DIARIZE_RUN,
         }
+    }
+}
+
+/// A kind of work a model can do (`transcribe_role`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Role {
+    /// Transcription: [`Session`](crate::Session).
+    Asr,
+    /// Speaker diarization: [`DiarizeSession`](crate::DiarizeSession).
+    Diarize,
+}
+
+/// The set of [`Role`]s a model serves ([`Model::roles`](crate::Model::roles)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Roles(pub(crate) u32);
+
+impl Roles {
+    /// Whether the model serves `role`.
+    pub fn contains(self, role: Role) -> bool {
+        let bit = match role {
+            Role::Asr => sys::transcribe_role::TRANSCRIBE_ROLE_ASR,
+            Role::Diarize => sys::transcribe_role::TRANSCRIBE_ROLE_DIARIZE,
+        };
+        self.0 & bit.0 != 0
+    }
+
+    /// The raw `transcribe_role` bitmask (`TRANSCRIBE_ROLE_*` bits).
+    pub fn bits(self) -> u32 {
+        self.0
     }
 }

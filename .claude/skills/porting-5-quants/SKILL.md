@@ -1,14 +1,14 @@
 ---
 name: porting-5-quants
-description: Produces the shipped quant matrix from the reference-dtype GGUF, smoke-tests each, publishes the matrix to a private HF repo, and takes a tentative WER read (Modal or local) for human review. Use after porting-4-cpp has finalized tolerances and passed validate.py + the full ref-dtype WER gate. Input: models/<variant>/<variant>-<REFDTYPE>.gguf. Output: F16, Q8_0, Q6_K, Q5_K_M, Q4_K_M alongside the reference-dtype GGUF; a CLI smoke pass per file; quants pushed to a private HF repo; tentative per-quant WER. Authoritative quant WER is Stage 7. No tensor-level numerical comparison is required for quant acceptance — that is intentional.
+description: Produces the shipped quant matrix from the reference-dtype GGUF, smoke-tests each, publishes the matrix to a private HF repo, and takes a preliminary 512-utterance WER read (Modal or local) for human review. Use after porting-4-cpp has finalized tolerances and passed validate.py + the full ref-dtype WER gate. Input: models/<variant>/<variant>-<REFDTYPE>.gguf. Output: F16, Q8_0, Q6_K, Q5_K_M, Q4_K_M alongside the reference-dtype GGUF; a CLI smoke pass per file; quants pushed to a private HF repo; preliminary per-quant WER. Authoritative full-split quant WER is Stage 7. No tensor-level numerical comparison is required for quant acceptance — that is intentional.
 ---
 
 # porting-5-quants
 
 Stage 5 of the porting pipeline. Builds the quantizer, runs
 `scripts/quantize-all.py`, smoke-tests each GGUF, publishes the matrix to a
-private HF repo, and takes a tentative WER read for human review.
-Authoritative quant WER is Stage 7.
+private HF repo, and takes a preliminary 512-utterance WER read for human
+review. Authoritative full-split quant WER is Stage 7.
 
 ## Preconditions
 
@@ -21,7 +21,7 @@ Authoritative quant WER is Stage 7.
 - `build/bin/transcribe-cli` and `build/bin/transcribe-quantize` are
   buildable.
 - `hf` authenticated for the target org (private upload). Modal optional
-  for the tentative WER sweep.
+  for the preliminary 512-utterance WER sweep.
 
 ## Workflow
 
@@ -31,7 +31,7 @@ Quants progress:
 - [ ] Step 2: Run quantize-all
 - [ ] Step 3: CLI output-validity smoke per produced GGUF
 - [ ] Step 4: Publish quants to a private HF repo
-- [ ] Step 5: Tentative WER sweep (Modal or local)
+- [ ] Step 5: Preliminary 512-utterance WER sweep (Modal or local)
 - [ ] Step 6: Sign-off review
 ```
 
@@ -81,27 +81,32 @@ hf repo create <org>/<variant>-gguf --repo-type model --private  # if absent
 hf upload <org>/<variant>-gguf models/<variant> . --repo-type model
 ```
 
-### Step 5: Tentative WER sweep (execute)
+### Step 5: Preliminary 512-utterance WER sweep (execute)
 
-Per-quant WER for human review on the **full acceptance manifest**, not
-a subset. "Tentative" here means "not the published number" (Stage 7
-re-runs and confirms), NOT "small N". Use Modal if credentials are
-available; otherwise run locally. Do not pass `--n-utts` unless you have
-a specific debugging reason and call it out in the sign-off.
+Run each quant on the first 512 utterances of the acceptance manifest. This is
+a bring-up signal only: it catches a clearly bad quant before benchmarking,
+while Stage 7 remains the authoritative full-split publication run. Subset
+artifacts carry `.n512` in their names and are never ingested into the catalog.
+Use Modal if credentials are available; otherwise run locally.
 
 ```bash
-# Modal: sweeps the private repo from Step 4 on GPU (full dataset)
+# Modal: the output paths include .n512.
 modal run scripts/wer/remote/modal_sweep.py::sweep \
-  --models <org>/<variant>-gguf --quants ""
-# local
+  --models <org>/<variant>-gguf --quants "" --n-utts 512
+
+# Local: materialize a separately named subset manifest and output.
+mkdir -p build/wer
+head -n 512 "$MANIFEST" > build/wer/<variant>.<dataset>.n512.manifest.jsonl
 for q in F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
   uv run scripts/wer/run.py --model models/<variant>/<variant>-$q.gguf \
-    --manifest "$MANIFEST" --out reports/wer/<variant>-$q.<dataset>.jsonl
-  uv run scripts/wer/score.py reports/wer/<variant>-$q.<dataset>.jsonl
+    --manifest build/wer/<variant>.<dataset>.n512.manifest.jsonl \
+    --out reports/wer/<variant>-$q.<dataset>.n512.jsonl
+  uv run scripts/wer/score.py reports/wer/<variant>-$q.<dataset>.n512.jsonl
 done
 ```
 
-Report the per-quant WER table for user review before Stage 6.
+Report the preliminary per-quant table for user review before Stage 6. Do not
+copy these rows into `catalog/<variant>.json`; Stage 7 owns published accuracy.
 
 ### Step 6: Sign-off
 
@@ -109,7 +114,7 @@ Report:
 - Every produced GGUF with file size.
 - Any GGUF that failed the CLI smoke (with the failing output).
 - The private HF repo the matrix was pushed to.
-- Tentative per-quant WER table (preliminary; Stage 7 authoritative).
+- Preliminary 512-utterance per-quant WER table (Stage 7 authoritative).
 
 **Do not commit.**
 
@@ -123,8 +128,11 @@ Report:
 - No tensor-level numerical comparison is required (or expected) for
   quant acceptance.
 - Quant matrix pushed to a private HF repo (`<org>/<variant>-gguf`).
-- Tentative per-quant WER produced and reviewed; authoritative WER is
-  Stage 7.
+- Preliminary 512-utterance per-quant WER produced and reviewed; authoritative
+  full-split WER is Stage 7, and only Stage 7 results enter the catalog.
+- The GGUFs are now the input Stage 6 seeds `catalog/<variant>.json` from
+  (`scripts/catalog/new_record.py`), so a wrong capability KV or licence
+  read propagates into the catalog. Fix it here, not in the record.
 
 ## Pointers (read, not execute)
 

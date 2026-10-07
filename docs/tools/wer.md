@@ -39,11 +39,48 @@ LibriSpeech WER:
 | Fallback thresholds | compression `2.4`, logprob `-1.0`, no-speech `0.6` | Library defaults (`transcribe_whisper_run_ext_init`). |
 | Condition on prev | **off** | Library default; long-form conditioning is not part of short-form WER. |
 | Normalization | `EnglishTextNormalizer` (en) / `BasicTextNormalizer` (other) | Applied to both ref and hyp at score time (`score.py`). |
+| ITN | **off** (`--no-itn`) | Spoken form, matching what the reference runs produce (`run_reference_sensevoice.py` / `run_reference_funasr_nano.py` default `--use-itn` off). Only `sensevoice` and `funasr_nano` have a runtime ITN toggle; every other family ignores the flag. |
 | Dataset | full LibriSpeech `test-clean` (2620 utts) | — |
 
 The recipe is **stamped into the hyp JSONL `batch_header`** (`recipe` field)
 by `run.py`, so every artifact is self-describing and a methodology drift
 shows up in the file rather than silently shifting the number.
+
+## Publication profile
+
+[`catalog/_benchmark_profiles.json`](../../catalog/_benchmark_profiles.json)
+is the executable publication contract. For accuracy it requires LibriSpeech
+test-clean at every downloaded quant for English-capable models, plus FLEURS
+test Q8_0 for every supported language represented by FLEURS. Run missing
+cells on Modal without restating datasets, quants, batching, language prompts,
+or GPU as flags:
+
+```bash
+modal run scripts/wer/remote/modal_sweep.py::publication_sweep \
+  --models <variant>                 # add --plan-only to inspect the expansion
+```
+
+Score the JSONLs named by the sweep, then ingest and enforce the model's exact
+published set:
+
+```bash
+uv run scripts/catalog/ingest_accuracy.py --models <variant>
+uv run scripts/catalog/check.py --publication-profile --models <variant>
+```
+
+Arbitrary `run.py` and `modal_sweep.py::sweep` invocations remain useful for
+experiments, but only profile-stamped full-split reports can be ingested as
+published accuracy.
+Batch size is not part of a cell's identity: the profile recommends batch 8
+because it is faster and cheaper, a cell measured at batch 1 still satisfies
+it, and the catalog row records whichever was run.
+
+> **ITN is pinned, not inherited.** The runtime ITN default is per-family
+> (`sensevoice` resolves it on, `funasr_nano` keeps upstream's `itn=False`),
+> but the benchmark follows neither: `run.py` always passes `--no-itn` because
+> the reference runs it is scored against produce spoken form. If a family
+> default ever flips, the pin stays unless the reference side is re-run to
+> match. `scripts/validate.py` pins `--no-itn` for the same two families.
 
 **What does and doesn't move WER (measured on whisper-medium F16):**
 

@@ -159,6 +159,28 @@ void check_toy_vocab(const transcribe::Tokenizer * tok) {
     CHECK(tok->eos_id() == 2);
     CHECK(tok->blank_id() == 15);
 
+    // Token-type accessors. The fixture marks <unk> UNKNOWN (2) like the
+    // real parakeet/canary converters, and the other specials CONTROL (3).
+    CHECK(tok->is_unknown(0));
+    CHECK(!tok->is_control(0));
+    CHECK(tok->is_control(1));
+    CHECK(!tok->is_unknown(1));
+    // Out-of-range ids are false for both, not a read past the array.
+    CHECK(!tok->is_unknown(-1));
+    CHECK(!tok->is_unknown(10000));
+    CHECK(!tok->is_control(-1));
+    CHECK(!tok->is_control(10000));
+
+    // is_strippable_special drives display-text stripping in parakeet and
+    // canary. <unk> must be in the set: narrowing it back to CONTROL-only
+    // reintroduces literal "<unk>" in transcripts (Handy #2145).
+    CHECK(tok->is_strippable_special(0));   // <unk> (UNKNOWN)
+    CHECK(tok->is_strippable_special(1));   // <s> (CONTROL)
+    CHECK(tok->is_strippable_special(15));  // blank (CONTROL)
+    CHECK(!tok->is_strippable_special(3));  // \u2581hello (NORMAL)
+    CHECK(!tok->is_strippable_special(-1));
+    CHECK(!tok->is_strippable_special(10000));
+
     CHECK_STR_EQ(tok->model_type(), "unigram");
 
     // Decode: SentencePiece word-boundary marker becomes ASCII space.

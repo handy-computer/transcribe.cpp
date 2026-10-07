@@ -30,8 +30,8 @@ extern "C" {
  *
  *     Transcription delay in 12.5 Hz audio tokens (80 ms each). The model
  *     emits the token for audio position t after observing audio through
- *     t + num_delay_tokens, trading latency for accuracy. The publisher
- *     default (and the value this port validates against) is 6 (= 480 ms).
+ *     t + num_delay_tokens, trading latency for accuracy. The streaming
+ *     default is 6 (= 480 ms); offline inference uses 30 (= 2400 ms).
  *
  *     The accepted values are the publisher's validated set (model card +
  *     mistral-common): a delay that is a multiple of 80 ms in [80, 1200]
@@ -51,7 +51,7 @@ extern "C" {
  *     accumulated buffer, so this knob bounds partial-decode compute at the
  *     cost of less frequent tentative transcripts. stream_finalize always
  *     performs the final decode regardless of this throttle, and that final
- *     decode is byte-identical to the offline transcribe_run path.
+ *     decode is byte-identical to offline inference when both use delay 30.
  *
  *     -1 (default): use the family default cadence.
  *     < -1:         caller bug; transcribe_stream_begin returns

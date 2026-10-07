@@ -1,9 +1,10 @@
 # Parakeet TDT-CTC 1.1B
 
-NVIDIA's [`nvidia/parakeet-tdt_ctc-1.1b`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b)
-ported to transcribe.cpp. A hybrid 1.1B-parameter FastConformer-XL encoder
-with both TDT and CTC heads sharing the same encoder; transcribe.cpp uses
-the TDT head by default.
+<!-- catalog:intro -->
+Upstream: [`nvidia/parakeet-tdt_ctc-1.1b`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b) at [`675e786`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b/commit/675e786).
+
+Offline English speech-to-text with punctuation and capitalization. A FastConformer-XL encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -18,22 +19,39 @@ to duration-aware frame skipping.
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed CC-BY-4.0. Ported from upstream commit
-[`675e786`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b/commit/675e786),
-pinned 2026-05-10.
+<!-- catalog:pin -->
+Licensed CC-BY-4.0. Ported from upstream commit [`675e786`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b/commit/675e786), pinned 2026-05-10. Validated against the NeMo reference at transcribe.cpp commit [`42528dd`](https://github.com/handy-computer/transcribe.cpp/tree/42528dd) on 2026-05-10.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [parakeet-tdt_ctc-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F32.gguf) | 4.28 GB |                        1.87% |
-| F16    | [parakeet-tdt_ctc-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F16.gguf) | 2.15 GB |                        1.87% |
-| Q8_0   | [parakeet-tdt_ctc-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q8_0.gguf) | 1.27 GB |                        1.87% |
-| Q6_K   | [parakeet-tdt_ctc-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q6_K.gguf) | 1.04 GB |                        1.87% |
-| Q5_K_M | [parakeet-tdt_ctc-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf) |  936 MB |                        1.87% |
-| Q4_K_M | [parakeet-tdt_ctc-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf) |  825 MB |                        1.91% |
+| F32          | [parakeet-tdt_ctc-1.1b-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F32.gguf) | 4.28 GB | 1.87% |
+| F16          | [parakeet-tdt_ctc-1.1b-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-F16.gguf) | 2.15 GB | 1.87% |
+| Q8_0         | [parakeet-tdt_ctc-1.1b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q8_0.gguf) | 1.27 GB | 1.87% |
+| Q6_K         | [parakeet-tdt_ctc-1.1b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q6_K.gguf) | 1.04 GB | 1.87% |
+| Q5_K_M       | [parakeet-tdt_ctc-1.1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf) |  936 MB | 1.87% |
+| Q4_K_M       | [parakeet-tdt_ctc-1.1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-1.1b-gguf/resolve/main/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf) |  825 MB | 1.91% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT decoding and no external LM. F32 reference baseline: 1.87%. NVIDIA's self-reported number on the same split is 1.82% (from the [HF model card](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b)).
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy TDT/RNN-T transducer decoding, no external LM. F32 reference baseline: 1.87%.
+NVIDIA's self-reported number on the same split is 1.82%.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 4.68% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -54,43 +72,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
-
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  97 ms (113×) | 101 ms (109×) |
-| Metal   | dots (35.3s) | 256 ms (138×) | 258 ms (137×) |
-| CPU     | jfk (11.0s)  |  603 ms (18×) |  510 ms (22×) |
-| CPU     | dots (35.3s) |  1.87 s (19×) |  1.55 s (23×) |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  72 ms (153.68×) |  73 ms (150.60×) |
+| Metal   | dots (35.3s) | 184 ms (191.86×) | 188 ms (188.19×) |
+| CPU     | jfk (11.0s)  |  458 ms (24.01×) |  509 ms (21.62×) |
+| CPU     | dots (35.3s) |  1.44 s (24.54×) |  1.57 s (22.56×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  979 ms (11×) |  993 ms (11×) |
-| Vulkan  | dots (35.3s) |  3.14 s (11×) |  3.14 s (11×) |
-| CPU     | jfk (11.0s)  |  1.88 s (6×)  |  1.53 s (7×)  |
-| CPU     | dots (35.3s) |  6.54 s (5×)  |  5.63 s (6×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 698 ms (15.76×) | 706 ms (15.59×) |
+| Vulkan  | dots (35.3s) | 1.93 s (18.32×) | 1.96 s (18.06×) |
+| CPU     | jfk (11.0s)  | 1.10 s (10.03×) |  1.20 s (9.18×) |
+| CPU     | dots (35.3s) |  4.11 s (8.60×) |  4.23 s (8.35×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models parakeet-tdt_ctc-1.1b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name parakeet-tdt_ctc-1.1b-publication
+uv run scripts/bench/run.py --profile --models parakeet-tdt_ctc-1.1b
 ```
 
 ## Numerical Validation

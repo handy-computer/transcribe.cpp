@@ -5,7 +5,8 @@
 //! every field is an `Option`, and only the fields you set override the
 //! defaults the C `*_init()` stamps. A [`RunExtension`] attaches to
 //! [`RunOptions`](crate::RunOptions); a [`StreamExtension`] attaches to
-//! [`StreamOptions`](crate::StreamOptions).
+//! [`StreamOptions`](crate::StreamOptions); a [`DiarizeExtension`] attaches to
+//! [`DiarizeOptions`](crate::DiarizeOptions).
 //!
 //! Probe [`Model::accepts_ext`](crate::Model::accepts_ext) to learn whether a
 //! loaded model accepts a given kind on a slot; an unaccepted extension is
@@ -19,7 +20,13 @@ use crate::error::Result;
 
 /// Whisper run-extension knobs (run slot): initial prompt, temperature
 /// fallback, and decode thresholds. `None` keeps the family default.
+/// `initial_prompt` cannot be combined with `RunOptions::vocabulary` / `prompt`.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct WhisperRunOptions {
     pub initial_prompt: Option<String>,
     pub condition_on_prev_tokens: Option<bool>,
@@ -35,18 +42,33 @@ pub struct WhisperRunOptions {
 
 /// Moonshine-streaming stream-extension knobs (stream slot).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct MoonshineStreamingOptions {
     pub min_decode_interval_ms: Option<i32>,
 }
 
 /// Parakeet cache-aware streaming knobs (stream slot).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct ParakeetStreamOptions {
     pub att_context_right: Option<i32>,
 }
 
 /// Parakeet chunked-attention buffered streaming knobs (stream slot).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct ParakeetBufferedStreamOptions {
     pub left_ms: Option<i32>,
     pub chunk_ms: Option<i32>,
@@ -55,14 +77,106 @@ pub struct ParakeetBufferedStreamOptions {
 
 /// Voxtral-realtime streaming knobs (stream slot).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct VoxtralRealtimeStreamOptions {
     pub num_delay_tokens: Option<i32>,
     pub min_decode_interval_ms: Option<i32>,
 }
 
+/// Sortformer streaming operating point (latency / accuracy trade-off).
+/// The menu is discrete (jointly-tuned bundles), not a latency dial;
+/// `Default` keeps the GGUF-shipped checkpoint configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SortformerPreset {
+    #[default]
+    Default,
+    /// ~30.4 s algorithmic lookahead; the offline-file operating point.
+    VeryHighLatency,
+    /// ~10.0 s lookahead.
+    HighLatency,
+    /// ~1.04 s lookahead; the real-time point (compute-heavy per audio
+    /// second — many small windows).
+    LowLatency,
+}
+
+impl SortformerPreset {
+    fn to_sys(self) -> sys::transcribe_sortformer_preset {
+        match self {
+            SortformerPreset::Default => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_DEFAULT
+            }
+            SortformerPreset::VeryHighLatency => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY
+            }
+            SortformerPreset::HighLatency => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_HIGH_LATENCY
+            }
+            SortformerPreset::LowLatency => {
+                sys::transcribe_sortformer_preset::TRANSCRIBE_SORTFORMER_PRESET_LOW_LATENCY
+            }
+        }
+    }
+}
+
+/// Sortformer diarize-extension knobs (diarize-run slot). `None` keeps the
+/// family default (the GGUF-shipped cfg).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
+pub struct SortformerDiarizeOptions {
+    pub preset: Option<SortformerPreset>,
+}
+
+/// A family extension for the diarize-run slot
+/// ([`DiarizeSession::run`](crate::DiarizeSession::run)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum DiarizeExtension {
+    Sortformer(SortformerDiarizeOptions),
+}
+
+/// Owns a materialized diarize-slot C extension struct.
+pub(crate) enum DiarizeExtRaw {
+    Sortformer(Box<sys::transcribe_sortformer_diarize_ext>),
+}
+
+impl DiarizeExtRaw {
+    pub(crate) fn ext_ptr(&self) -> *const sys::transcribe_ext {
+        match self {
+            DiarizeExtRaw::Sortformer(e) => {
+                (&**e) as *const sys::transcribe_sortformer_diarize_ext
+                    as *const sys::transcribe_ext
+            }
+        }
+    }
+}
+
+impl DiarizeExtension {
+    pub(crate) fn materialize(&self) -> DiarizeExtRaw {
+        match self {
+            DiarizeExtension::Sortformer(o) => {
+                let mut e: sys::transcribe_sortformer_diarize_ext = unsafe { std::mem::zeroed() };
+                unsafe { sys::transcribe_sortformer_diarize_ext_init(&mut e) };
+                set(&mut e.preset, o.preset.map(SortformerPreset::to_sys));
+                DiarizeExtRaw::Sortformer(Box::new(e))
+            }
+        }
+    }
+}
+
 /// A family extension for the run slot (offline `run`/`run_batch`).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RunExtension {
     Whisper(WhisperRunOptions),
 }
@@ -70,6 +184,7 @@ pub enum RunExtension {
 /// A family extension for the stream slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StreamExtension {
     ParakeetStream(ParakeetStreamOptions),
     ParakeetBuffered(ParakeetBufferedStreamOptions),

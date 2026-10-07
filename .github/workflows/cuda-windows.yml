@@ -81,6 +81,8 @@ jobs:
           use-local-cache: false
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}

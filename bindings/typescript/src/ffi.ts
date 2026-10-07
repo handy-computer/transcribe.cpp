@@ -11,6 +11,15 @@
 import koffi from "koffi";
 import { defineTypes } from "./_generated.js";
 
+// Koffi defaults async FFI workers to a 128 KiB stack. That is too small for
+// ggml Vulkan model initialization on Windows for AMD and Intel GPU's. 
+// Raise it to 2MB.
+const MIN_ASYNC_STACK_SIZE = 2 * 1024 * 1024;
+const koffiConfig = koffi.config();
+if ((koffiConfig.async_stack_size ?? 0) < MIN_ASYNC_STACK_SIZE) {
+  koffi.config({ async_stack_size: MIN_ASYNC_STACK_SIZE });
+}
+
 export interface Bound {
   koffi: typeof koffi;
   lib: ReturnType<typeof koffi.load>;
@@ -39,13 +48,14 @@ export function bindLibrary(libraryPath: string): Bound {
     // backends
     initBackends: lib.func("transcribe_init_backends", "int", ["str"]),
     initBackendsDefault: lib.func("transcribe_init_backends_default", "int", []),
-    backendDeviceCount: lib.func("transcribe_backend_device_count", "int", []),
-    backendDeviceInit: lib.func("transcribe_backend_device_init", "void", [
-      outp(T.transcribe_backend_device),
+    deviceCount: lib.func("transcribe_device_count", "int", []),
+    deviceGet: lib.func("transcribe_device_get", "void *", ["int"]),
+    deviceInfoInit: lib.func("transcribe_device_info_init", "void", [
+      outp(T.transcribe_device_info),
     ]),
-    getBackendDevice: lib.func("transcribe_get_backend_device", "int", [
-      "int",
-      iop(T.transcribe_backend_device),
+    deviceGetInfo: lib.func("transcribe_device_get_info", "int", [
+      "void *",
+      iop(T.transcribe_device_info),
     ]),
     backendAvailable: lib.func("transcribe_backend_available", "bool", ["int"]),
 
@@ -65,11 +75,9 @@ export function bindLibrary(libraryPath: string): Bound {
     modelArch: lib.func("transcribe_model_arch_string", "str", ["void *"]),
     modelVariant: lib.func("transcribe_model_variant_string", "str", ["void *"]),
     modelBackend: lib.func("transcribe_model_backend", "str", ["void *"]),
-    modelGetDevice: lib.func("transcribe_model_get_device", "int", [
-      "void *",
-      iop(T.transcribe_backend_device),
-    ]),
+    modelDevice: lib.func("transcribe_model_device", "void *", ["void *"]),
     modelSupports: lib.func("transcribe_model_supports", "bool", ["void *", "int"]),
+    modelRoles: lib.func("transcribe_model_roles", "uint32", ["void *"]),
     tokenize: lib.func("transcribe_tokenize", "int", ["void *", "str", "int32_t *", "size_t"]),
     capabilitiesInit: lib.func("transcribe_capabilities_init", "void", [
       outp(T.transcribe_capabilities),
@@ -165,6 +173,51 @@ export function bindLibrary(libraryPath: string): Bound {
     ]),
     voxtralRealtimeStreamExtInit: lib.func("transcribe_voxtral_realtime_stream_ext_init", "void", [
       outp(T.transcribe_voxtral_realtime_stream_ext),
+    ]),
+    sortformerDiarizeExtInit: lib.func("transcribe_sortformer_diarize_ext_init", "void", [
+      outp(T.transcribe_sortformer_diarize_ext),
+    ]),
+
+    // diarize role
+    diarizeInfoInit: lib.func("transcribe_diarize_info_init", "void", [
+      outp(T.transcribe_diarize_info),
+    ]),
+    diarizeGetInfo: lib.func("transcribe_diarize_get_info", "int", [
+      "void *",
+      iop(T.transcribe_diarize_info),
+    ]),
+    diarizeSessionParamsInit: lib.func("transcribe_diarize_session_params_init", "void", [
+      outp(T.transcribe_diarize_session_params),
+    ]),
+    diarizeSessionInit: lib.func("transcribe_diarize_session_init", "int", [
+      "void *",
+      inp(T.transcribe_diarize_session_params),
+      handleOut,
+    ]),
+    diarizeSessionFree: lib.func("transcribe_diarize_session_free", "void", ["void *"]),
+    diarizeSetAbortCallback: lib.func("transcribe_diarize_set_abort_callback", "void", [
+      "void *",
+      "void *",
+      "void *",
+    ]),
+    diarizeParamsInit: lib.func("transcribe_diarize_params_init", "void", [
+      outp(T.transcribe_diarize_params),
+    ]),
+    diarizeRun: lib.func("transcribe_diarize_run", "int", [
+      "void *",
+      inp("float"),
+      "int",
+      inp(T.transcribe_diarize_params),
+    ]),
+    diarizeNSegments: lib.func("transcribe_diarize_n_segments", "int", ["void *"]),
+    diarizeGetSegment: lib.func("transcribe_diarize_get_segment", "int", [
+      "void *",
+      "int",
+      iop(T.transcribe_speaker_segment),
+    ]),
+    diarizeGetTimings: lib.func("transcribe_diarize_get_timings", "int", [
+      "void *",
+      iop(T.transcribe_timings),
     ]),
 
     // batch (offline)

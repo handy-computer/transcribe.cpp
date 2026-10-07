@@ -52,6 +52,42 @@ PrefillBuild build_prefill_graph(ggml_context *                   ctx,
                                  bool                             use_flash,
                                  bool                             slice_last);
 
+// ---------- Chunked prefill ----------
+//
+// One chunk of a long prompt, run against the KV already written by earlier
+// chunks. Used instead of build_prefill_graph when T_prompt exceeds
+// causal_lm::prefill_chunk_size(); a prompt that fits in one chunk still goes
+// through build_prefill_graph unchanged, so every existing golden dump and
+// tolerance keeps pinning exactly the graph it was recorded against.
+//
+// Bounds two things that a single-shot prefill does not: the flash-attention
+// query-row count (Metal asserts ne01 < 65536) and the causal mask, which is
+// [n_past + T_chunk, T_chunk] here instead of [T_prompt, T_prompt].
+struct PrefillChunkBuild {
+    ggml_tensor * input_ids_in   = nullptr;  // [T_chunk] i32
+    ggml_tensor * audio_dense_in = nullptr;  // [hidden, T_chunk] f32
+    ggml_tensor * keep_mask_in   = nullptr;  // [1, T_chunk] f32
+    ggml_tensor * positions_in   = nullptr;  // [T_chunk] i32
+    ggml_tensor * kv_idx_in      = nullptr;  // [T_chunk] i64
+    ggml_tensor * mask_in        = nullptr;  // [max_n_kv, T_chunk] f16
+    ggml_tensor * out            = nullptr;  // [vocab] last-position logits (final chunk only)
+    ggml_cgraph * graph          = nullptr;
+    int           T_chunk        = 0;
+    int           max_n_kv       = 0;
+};
+
+// `want_logits` is true only for the chunk containing the final prompt
+// position: earlier chunks exist purely to populate the KV cache, so building
+// the tied lm_head for them would cost a [vocab, T_chunk] matmul for nothing.
+PrefillChunkBuild build_prefill_chunk_graph(ggml_context *                   ctx,
+                                            const MossWeights &              weights,
+                                            const MossHParams &              hp,
+                                            transcribe::causal_lm::KvCache & kv_cache,
+                                            int                              T_chunk,
+                                            int                              max_n_kv,
+                                            bool                             use_flash,
+                                            bool                             want_logits);
+
 struct StepBuild {
     ggml_tensor * input_id_in = nullptr;  // [1] i32
     ggml_tensor * position_in = nullptr;  // [1] i32

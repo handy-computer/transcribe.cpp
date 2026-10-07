@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.12.19"
       - name: clang-format gate
         # Our C/C++ must match the pinned clang-format. Scope (vendored excluded)
         # and the pinned version both live in scripts/ci/clang-format.sh.

@@ -1,0 +1,45 @@
+# Spec for the HF README of handy-computer/parakeet-ultra-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+
+pin_date: 2026-10-04
+
+validation:
+  reference: kestrel 0.9.1 (Photon)
+  commit: 08f9e6f0
+  date: 2026-10-05
+
+pipeline_tag: automatic-speech-recognition
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - tdt
+  - multilingual
+  - long-form
+
+summary: |
+  Moondream's post-trained parakeet-tdt-0.6b-v3. Offline multilingual
+  speech-to-text over the same 25 European languages, with lower error rates
+  than v3 on English and on every FLEURS language we measured. A FastConformer
+  encoder with a TDT transducer decoder, plus a small voice-activity head that
+  the model uses to cut long recordings at pauses into segments of at most
+  30 seconds. Takes 16 kHz mono WAV and produces a punctuated, cased
+  transcript with optional token-level timestamps. A drop-in replacement for
+  v3: same size, languages and API. Not a streaming model and does not
+  translate.
+
+wer:
+  notes: |
+    Greedy transducer decoding, no external LM. The reference is Moondream's
+    own runtime (kestrel 0.9.1, the engine behind Photon), not transformers.
+    On this manifest kestrel scores 1.80% and the C++ F32 build matches it.
+
+    Moondream's card reports 1.41% on the same split, scored with the Open
+    ASR Leaderboard normalizer.
+
+    Long-form: on 11 full TED-LIUM 3 talks, segmented by the model's
+    voice-activity head exactly as kestrel does it, F32 scores 2.22%, identical
+    to kestrel, and every quant stays within 0.05pp.

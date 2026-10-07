@@ -130,9 +130,27 @@ struct EncoderBuild {
     // (1 on valid time frames, 0 on padded). Null unless variable-length
     // batching on a non-causal pre-encode. The driver fills them from the
     // per-utterance valid length downsampled to each stage.
-    ggml_tensor * pre_encode_mask_s1_in = nullptr;  // after relu0
-    ggml_tensor * pre_encode_mask_s2_in = nullptr;  // after relu3
-    ggml_tensor * pre_encode_mask_s3_in = nullptr;  // after relu6
+    ggml_tensor * pre_encode_mask_s1_in   = nullptr;  // after relu0
+    ggml_tensor * pre_encode_mask_s2_in   = nullptr;  // after relu3
+    ggml_tensor * pre_encode_mask_s3_in   = nullptr;  // after relu6
+    ggml_tensor * pre_encode_extent_s2_in = nullptr;  // kestrel masking, batched (see PreEncodeValidMasks)
+    ggml_tensor * pre_encode_extent_s3_in = nullptr;
+
+    // Multitalker speaker-kernel supervision inputs, ne=[1, T_enc] f32
+    // each. Null unless build_encoder_graph was called with
+    // spk_supervision on a speaker-kernel variant (n_batch == 1). The
+    // driver fills spk_mask_in with the target speaker's per-frame
+    // activity (raw diarizer sigmoids) and bg_mask_in with the binarized
+    // union of the other active speakers, both aligned to encoder frames.
+    ggml_tensor * spk_mask_in = nullptr;
+    ggml_tensor * bg_mask_in  = nullptr;
+
+    // Kernel-mode chunk gating (multitalker): I32 ne=[T_keep] gather
+    // indices into the pre_encode output, filled by the driver with the
+    // target speaker's active-chunk encoder frames. Null unless
+    // build_encoder_graph was called with mt_keep_frames > 0. When
+    // present, spk_mask_in/bg_mask_in/out are sized T_keep, not T_enc.
+    ggml_tensor * mt_keep_in = nullptr;
 
     // Encoder forward output, ne=[d_model, T_enc, 1, 1] f32. Equal
     // to dumps.final_out; provided as a separate field so callers
@@ -189,16 +207,49 @@ EncoderBuild build_encoder_graph(ggml_context *                     compute_ctx,
                                  const ParakeetWeights &            weights,
                                  const ParakeetHParams &            hp,
                                  int                                n_mel_frames,
-                                 ggml_type                          kv_type       = GGML_TYPE_COUNT,
-                                 const char *                       backend_name  = "",
-                                 const BufferedStreamMaskOverride * buf_mask      = nullptr,
-                                 int                                n_batch       = 1,
+                                 ggml_type                          kv_type         = GGML_TYPE_COUNT,
+                                 const char *                       backend_name    = "",
+                                 const BufferedStreamMaskOverride * buf_mask        = nullptr,
+                                 int                                n_batch         = 1,
                                  // When true and n_batch > 1, allocate the
                                  // variable-length batch masks (attn_pad_mask_in
                                  // + conv_pad_mask_in sized for the batch) and
                                  // wire them into every conformer block. The
                                  // driver fills them from per-utterance lengths.
-                                 bool                               batch_var_len = false);
+                                 bool                               batch_var_len   = false,
+                                 // Multitalker bundle (n_batch == 1 only): expose
+                                 // per-frame speaker/background supervision masks
+                                 // as graph inputs (EncoderBuild::spk_mask_in /
+                                 // bg_mask_in) consumed by the layer-0
+                                 // speaker-kernel injection.
+                                 bool                               spk_supervision = false,
+                                 // Kernel-mode chunk gating: > 0 gathers that many
+                                 // pre_encode frames (driver-filled indices in
+                                 // EncoderBuild::mt_keep_in) before injection and
+                                 // the conformer blocks. 0 = no gather.
+                                 int                                mt_keep_frames  = 0);
+
+// Speech-head graph: pre_encode subsampler, then the VAD head. One utterance
+// (a scan block); the driver fills the subsampler masks like the encoder's.
+struct VadBuild {
+    ggml_tensor * mel_in          = nullptr;  // ne=[T_mel, n_mels, 1, 1]
+    ggml_tensor * pe_mask_s1_in   = nullptr;
+    ggml_tensor * pe_mask_s2_in   = nullptr;
+    ggml_tensor * pe_mask_s3_in   = nullptr;
+    ggml_tensor * pe_extent_s2_in = nullptr;  // single utterance: filled all ones
+    ggml_tensor * pe_extent_s3_in = nullptr;
+    ggml_tensor * pre_encode_out  = nullptr;  // ne=[d_model, T]
+    ggml_tensor * proj_out        = nullptr;  // ne=[H, T], after SiLU
+    ggml_tensor * ctx_out         = nullptr;  // ne=[H, T], after SiLU
+    ggml_tensor * prob            = nullptr;  // ne=[1, T], sigmoid
+    ggml_cgraph * graph           = nullptr;
+};
+
+VadBuild build_vad_graph(ggml_context *          compute_ctx,
+                         const ParakeetWeights & w,
+                         const ParakeetHParams & hp,
+                         int                     n_mel_frames,
+                         const char *            backend_name);
 
 // Per-layer streaming cache I/O for the streaming encoder graph.
 // The inputs are persistent backend tensors (allocated outside the
@@ -269,7 +320,12 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            compute_ctx
                                            int                       n_mel_chunk_frames,
                                            int                       drop_extra_pre_encoded,
                                            StreamingEncoderCacheIO & cache_io,
-                                           ggml_type                 kv_type      = GGML_TYPE_COUNT,
-                                           const char *              backend_name = "");
+                                           ggml_type                 kv_type         = GGML_TYPE_COUNT,
+                                           const char *              backend_name    = "",
+                                           // Multitalker streaming pass: expose the
+                                           // per-chunk speaker/background supervision
+                                           // masks (ne=[1, T_q_new]) as graph inputs
+                                           // for the layer-0 kernel injection.
+                                           bool                      spk_supervision = false);
 
 }  // namespace transcribe::parakeet

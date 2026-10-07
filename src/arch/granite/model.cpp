@@ -11,6 +11,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-decode-budget.h"
 #include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -18,6 +19,8 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-prompting.h"
+#include "transcribe-repetition-guard.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -41,14 +44,6 @@ static_assert(std::is_base_of_v<transcribe_session, GraniteSession>);
 GraniteSession::~GraniteSession() {
     kv.free();
     kv_batch.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 GraniteModel::~GraniteModel() {
@@ -88,9 +83,10 @@ constexpr float      kBnEps              = 1e-5f;
 // Over-length input is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG
 // rather than silently aliasing RoPE past the trained range.
 
-// Generation budget reserved per run. Also the KV grow-to-fit step budget,
-// so an accepted clip always has room for up to this many output tokens.
-constexpr int k_gen_budget = 256;
+// Generation reserve: what the input gate keeps free, and the decode-budget floor.
+constexpr int k_gen_reserve            = 256;
+// Representative non-audio prompt overhead (chat affixes); advisory.
+constexpr int k_prompt_overhead_tokens = 64;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
 // optionally lowered — never raised — by the caller's session n_ctx knob.
@@ -115,7 +111,7 @@ int granite_num_queries(const GraniteHParams & hp) {
 // audio tokens, a representative prompt, and the generation reserve still fit
 // the context ceiling. This is the input bound the gate enforces; transcripts
 // of long-but-fitting audio may still truncate (transcribe_was_truncated)
-// because the per-run output is bounded by k_gen_budget. Returns 0 ("unknown
+// because the per-run output is bounded by the decode budget. Returns 0 ("unknown
 // / unbounded") if the rate constants are missing, so a misconfigured model
 // is never advertised with a wrong finite number.
 int64_t granite_max_audio_ms(const GraniteHParams & hp) {
@@ -124,9 +120,7 @@ int64_t granite_max_audio_ms(const GraniteHParams & hp) {
         hp.dec_max_position_embeddings <= 0) {
         return 0;
     }
-    // Representative non-audio prompt overhead (chat affixes); advisory.
-    constexpr int k_prompt_overhead = 64;
-    const int     max_audio_tokens  = hp.dec_max_position_embeddings - k_prompt_overhead - k_gen_budget;
+    const int max_audio_tokens = hp.dec_max_position_embeddings - k_prompt_overhead_tokens - k_gen_reserve;
     if (max_audio_tokens <= 0) {
         return 0;
     }
@@ -271,6 +265,26 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         }
         transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_DIARIZATION, diar);
     }
+    // Generic prompting, variant-scoped the same way: the converter writes
+    // stt.capability.vocabulary (keyword-list biasing, build_granite_affixes)
+    // and stt.capability.transcript_prefix (-plus's prefix_text) for the
+    // variants whose model cards document them. Absent keys mean unsupported.
+    {
+        bool vocabulary = false;
+        bool prefix     = false;
+        if (const transcribe_status st =
+                read_optional_bool_kv(loader.gguf(), "stt.capability.vocabulary", "granite", false, vocabulary);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (const transcribe_status st =
+                read_optional_bool_kv(loader.gguf(), "stt.capability.transcript_prefix", "granite", false, prefix);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_VOCABULARY, vocabulary);
+        transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, prefix);
+    }
 
     if (const transcribe_status st = read_languages_kv(loader.gguf(), *m); st != TRANSCRIBE_OK) {
         return st;
@@ -312,8 +326,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
             m->hparams.fe_sample_rate > 0 && m->hparams.dec_max_position_embeddings > 0) {
             m->limits.has_context_cap    = true;
             m->limits.model_max_ctx      = m->hparams.dec_max_position_embeddings;
-            m->limits.prompt_overhead    = 64;  // match granite_max_audio_ms's k_prompt_overhead
-            m->limits.gen_reserve        = k_gen_budget;
+            m->limits.prompt_overhead    = k_prompt_overhead_tokens;
+            m->limits.gen_reserve        = k_gen_reserve;
             // ms per audio token: granite emits num_queries tokens per
             // window_size encoder frames; t_enc = mel_frames/2;
             // mel_frames = ms*sr/(hop*1000). Inverting granite_max_audio_ms's
@@ -397,7 +411,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     // Backend plan.
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "granite", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "granite", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
@@ -409,7 +423,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -438,10 +452,12 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({ b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w });
         }
-        if (!transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
-                                                 entries, m->packed_gate_up, "granite")) {
+        if (const transcribe_status st =
+                transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
+                                                    entries, m->packed_gate_up, "granite");
+            st != TRANSCRIBE_OK) {
             m->packed_gate_up.free();
-            return TRANSCRIBE_ERR_GGUF;
+            return st;
         }
     }
 
@@ -513,13 +529,40 @@ static const char * granite_target_language_name(const char * code_or_name) {
     return nullptr;
 }
 
+// Whether this run uses IBM's word-timestamps task (-plus only; other variants
+// advertise NONE): an explicit WORD request. AUTO does not request it.
+static bool granite_word_timestamps(const transcribe_model * m, const transcribe_run_params * params) {
+    return params != nullptr && m->caps.max_timestamp_kind == TRANSCRIBE_TIMESTAMPS_WORD &&
+           params->task == TRANSCRIBE_TASK_TRANSCRIBE && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD;
+}
+
+// Predicted transcript length for the decode budget. The word-timestamps task
+// follows every word with a "[T:N]" marker (about four more tokens), so it
+// gets three times the plain-text prediction; the budget is only a ceiling.
+static int granite_predicted_tokens(const GraniteModel * cm, const transcribe_run_params * params, int n_audio) {
+    const int plain = transcribe::predict_transcript_tokens(n_audio, cm->limits.ms_per_audio_token);
+    return granite_word_timestamps(cm, params) ? 3 * plain : plain;
+}
+
+// Token room for the vocabulary's keyword list alongside `n_audio` audio
+// tokens: what the context window leaves after the generation reserve and the
+// representative prompt overhead. run() passes its clip; run_batch() passes 0.
+static int granite_keyword_room(int ceiling, int n_audio) {
+    return ceiling - k_gen_reserve - n_audio - k_prompt_overhead_tokens;
+}
+
 // Build the prompt prefix/suffix token-id lists from the shared run params and
 // model variant (the audio tokens splice in between). Single source of truth
-// for run() and run_batch().
+// for run() and run_batch(). `keyword_room` bounds the vocabulary's tokens;
+// `n_keyword_tokens` (optional) receives how many the fitted list took.
 static transcribe_status build_granite_affixes(GraniteModel *                cm,
                                                const transcribe_run_params * params,
+                                               int                           keyword_room,
                                                std::vector<int32_t> &        prefix_ids,
-                                               std::vector<int32_t> &        suffix_ids) {
+                                               std::vector<int32_t> &        suffix_ids,
+                                               size_t *                      n_keyword_tokens = nullptr) {
+    const bool  is_plus  = cm->hparams.variant == "granite-speech-4.1-2b-plus";
+    bool        asr_mode = true;  // plain transcription instruction (no task swap)
     std::string instruction;
     if (cm->hparams.variant == "granite-speech-4.1-2b") {
         instruction = "transcribe the speech with proper punctuation and capitalization.";
@@ -540,11 +583,12 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
                         params->target_language);
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
-            instruction = std::string("can you translate the speech into ") + lang_name + "?";
-        } else if (params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
-            // -plus only (1b/2b advertise NONE, gated out upstream). AUTO does
-            // NOT request timestamps. IBM's verbatim prompt; the model emits
-            // per-word "[T:N]" centisecond markers (parsed in run()).
+            instruction = std::string("translate the speech to ") + lang_name + ".";
+            asr_mode    = false;
+        } else if (granite_word_timestamps(cm, params)) {
+            // -plus only (see granite_word_timestamps). IBM's verbatim prompt;
+            // the model emits per-word "[T:N]" centisecond markers (parsed in
+            // run()).
             if (diarize_requested(cm, params)) {
                 // Upstream defines timestamps and speaker attribution as
                 // separate tasks (one instruction each); they do not compose.
@@ -556,23 +600,61 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
             instruction =
                 " Timestamps: Transcribe the speech. After each word, add a timestamp tag "
                 "showing the end time in centiseconds, e.g. hello [T:45] world [T:82]";
+            asr_mode = false;
         } else if (diarize_requested(cm, params)) {
             // -plus only (the DIARIZATION feature bit gates this). IBM's
             // verbatim speaker-attribution instruction; the model emits
             // "[Speaker N]:" tags before turns (split after decode).
             instruction = k_saa_instruction;
+            asr_mode    = false;
+        }
+    }
+
+    // Generic vocabulary as IBM's keyword-list biasing: " Keywords: {terms}"
+    // (", ") appended to the instruction. On -plus the documented KWB form of
+    // the ASR instruction is capitalized ("Can you ..."). Translate + keywords
+    // is IBM-documented for 4.1 and measured usable there; granite-4.0 drops
+    // the translation for most inputs when keywords are added, and keywords
+    // with -plus timestamps / speaker attribution are untested, so those
+    // combinations ignore the vocabulary.
+    if (const std::vector<std::string> terms = transcribe::prompting::terms(params); !terms.empty()) {
+        const bool translate = params->task == TRANSCRIBE_TASK_TRANSLATE;
+        if (translate && cm->hparams.variant != "granite-speech-4.1-2b") {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                    "granite: vocabulary is not supported with translation on this variant; ignoring %zu term(s)",
+                    terms.size());
+        } else if (!translate && !asr_mode) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                    "granite: vocabulary applies to plain transcription only (not word timestamps or speaker "
+                    "attribution); ignoring %zu term(s)",
+                    terms.size());
+        } else {
+            transcribe::prompting::FittedPrompt fit;
+            if (const transcribe_status st = transcribe::prompting::fit_terms_and_context(
+                    cm->tok, terms, { " Keywords: ", ", ", "" }, "", keyword_room, "granite", fit);
+                st != TRANSCRIBE_OK) {
+                return st;
+            }
+            if (fit.n_terms > 0) {
+                if (is_plus && !translate) {
+                    instruction = " Can you transcribe the speech into a written format?";
+                }
+                instruction += fit.terms_text;
+            }
+            if (n_keyword_tokens != nullptr) {
+                *n_keyword_tokens = fit.n_tokens();
+            }
         }
     }
 
     const bool use_granite4_chat = cm->chat_template.find("<|start_of_role|>") != std::string::npos &&
                                    cm->chat_tokens.start_of_role >= 0 && cm->chat_tokens.end_of_role >= 0;
     if (use_granite4_chat) {
-        const char *         system_content = (cm->hparams.variant == "granite-speech-4.1-2b-plus") ?
-                                                  "Knowledge Cutoff Date: April 2024.\n"
-                                                  "Today's Date: December 19, 2024.\n"
-                                                  "You are Granite, developed by IBM. You are a helpful AI assistant" :
-                                                  "You are a helpful assistant. Please ensure responses "
-                                                  "are professional, accurate, and safe.";
+        const char * system_content = is_plus ? "Knowledge Cutoff Date: April 2024.\n"
+                                                "Today's Date: December 19, 2024.\n"
+                                                "You are Granite, developed by IBM. You are a helpful AI assistant" :
+                                                "You are a helpful assistant. Please ensure responses "
+                                                "are professional, accurate, and safe.";
         std::vector<int32_t> text_a, text_b;
         if (const transcribe_status st = cm->tok.encode("system", text_a); st != TRANSCRIBE_OK) {
             return st;
@@ -614,6 +696,26 @@ static transcribe_status build_granite_affixes(GraniteModel *                cm,
         }
         suffix_ids.insert(suffix_ids.end(), asst_ids.begin(), asst_ids.end());
         suffix_ids.push_back(cm->chat_tokens.end_of_role);
+
+        // Transcript prefix (IBM's prefix_text; the dispatcher passes one only
+        // when stt.capability.transcript_prefix is set): the assistant turn
+        // opens with it verbatim. Its composition with the word-timestamp and
+        // speaker-attribution tasks is untested, so those reject it.
+        if (params != nullptr && params->prefix != nullptr) {
+            if (!asr_mode) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "granite: a transcript prefix is supported in plain transcription only (not word timestamps "
+                        "or speaker attribution)");
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
+            std::vector<int32_t> transcript_prefix_ids;
+            if (const transcribe_status st =
+                    transcribe::prompting::encode_plain(cm->tok, params->prefix, transcript_prefix_ids, "prefix");
+                st != TRANSCRIBE_OK) {
+                return st;
+            }
+            suffix_ids.insert(suffix_ids.end(), transcript_prefix_ids.begin(), transcript_prefix_ids.end());
+        }
     } else {
         const std::string prefix_text = "USER: ";
         const std::string suffix_text = instruction + "\n ASSISTANT:";
@@ -755,7 +857,7 @@ void finalize_granite_result(GraniteModel *                cm,
                              int64_t                       audio_ms,
                              Result &                      out) {
     out.raw_text = raw_text;  // pre-parse marker text, via transcribe_raw_text
-    if (params != nullptr && params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
+    if (granite_word_timestamps(cm, params)) {
         out.full_text = parse_granite_word_timestamps(raw_text, audio_ms, out.words, out.segments);
         if (!out.words.empty()) {
             out.result_kind = TRANSCRIBE_TIMESTAMPS_WORD;
@@ -849,7 +951,7 @@ transcribe_status run(transcribe_session *          ctx_base,
                                            static_cast<int>(cm->plan.scheduler_list.size()), 32768, false, true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite run: ggml_backend_sched_new failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
@@ -864,9 +966,9 @@ transcribe_status run(transcribe_session *          ctx_base,
     // [input_dim, T_enc] (ne[0]=input_dim is innermost).
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(), 0, cc->mel_buf.size() * sizeof(float));
 
-    // Shaw attention_dists. Row-major over (c, r) with int32 indices.
-    std::vector<int32_t> dists = precompute_attention_dists(cm->hparams.enc_context_size, cm->hparams.enc_max_pos_emb);
-    ggml_backend_tensor_set(eb.attention_dists, dists.data(), 0, dists.size() * sizeof(int32_t));
+    // Shaw positional-bias rows, one int32 rel_pos_emb row per relative offset.
+    std::vector<int32_t> dists = precompute_pos_rows(cm->hparams.enc_context_size, cm->hparams.enc_max_pos_emb);
+    ggml_backend_tensor_set(eb.pos_rows, dists.data(), 0, dists.size() * sizeof(int32_t));
 
     // last_block_mask: [context_size, context_size, n_blocks_local].
     // All zeros except the last slice when t_enc is not a multiple of
@@ -899,7 +1001,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite run: encoder graph compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->t_encode_us = ggml_time_us() - t_enc_start;
 
@@ -977,7 +1079,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite run: projector graph compute failed (%d)", static_cast<int>(gs));
         ggml_free(proj_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     try_dump("proj.qformer.out", pb.dumps.qformer_out, "projector");
@@ -1015,17 +1117,20 @@ transcribe_status run(transcribe_session *          ctx_base,
     //                                       PLUS a Granite-specific system prompt (see use_granite4_chat below).
     //   word-timestamps task (-plus)     : IBM's verbatim timestamps prompt; the model emits
     //                                       per-word "[T:N]" centisecond markers (1b/2b: NONE).
-    //   translate task                   : "can you translate the speech into <Language>?"
+    //   translate task                   : "translate the speech to <Language>." (IBM model card)
     std::vector<int32_t> prefix_ids;
     std::vector<int32_t> suffix_ids;
-    if (const transcribe_status st = build_granite_affixes(cm, params, prefix_ids, suffix_ids); st != TRANSCRIBE_OK) {
+    const int            n_audio_tokens = cc->n_audio_tokens;
+    const int            ceiling        = granite_context_ceiling(cc->n_ctx, cm->hparams);
+    if (const transcribe_status st =
+            build_granite_affixes(cm, params, granite_keyword_room(ceiling, n_audio_tokens), prefix_ids, suffix_ids);
+        st != TRANSCRIBE_OK) {
         return st;
     }
 
-    const int n_audio_tokens = cc->n_audio_tokens;
-    const int prefix_len     = static_cast<int>(prefix_ids.size());
-    const int suffix_len     = static_cast<int>(suffix_ids.size());
-    const int T_prompt       = prefix_len + n_audio_tokens + suffix_len;
+    const int prefix_len = static_cast<int>(prefix_ids.size());
+    const int suffix_len = static_cast<int>(suffix_ids.size());
+    const int T_prompt   = prefix_len + n_audio_tokens + suffix_len;
 
     // Reference quirk: HF replaces audio_token_id with 0 before the
     // embed_tokens lookup (those rows are overwritten by the audio scatter
@@ -1046,16 +1151,18 @@ transcribe_status run(transcribe_session *          ctx_base,
     // autoregressive decode, instead of growing the cache unboundedly and
     // aliasing RoPE past the trained range. Reserving the full generation
     // budget means an accepted clip always has room for a real transcript.
-    const int ceiling = granite_context_ceiling(cc->n_ctx, cm->hparams);
-    if (T_prompt + k_gen_budget > ceiling) {
+    if (T_prompt + k_gen_reserve > ceiling) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite run: input too long — %d audio + %d prompt tokens leave "
                             "no room for output within the %d-token context (need %d). "
-                            "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
-                            "split it into segments.",
-                            n_audio_tokens, prefix_len + suffix_len, ceiling, T_prompt + k_gen_budget);
+                            "Shorten the audio (see transcribe_capabilities.max_audio_ms), "
+                            "split it into segments, or shorten the transcript prefix.",
+                            n_audio_tokens, prefix_len + suffix_len, ceiling, T_prompt + k_gen_reserve);
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
+
+    const int gen_budget = transcribe::pick_decode_budget(granite_predicted_tokens(cm, params, n_audio_tokens),
+                                                          k_gen_reserve, T_prompt, ceiling);
 
     // Size the KV cache dynamically: T_prompt + room for the longest
     // generation we'll emit, clamped to the context ceiling. Matches the
@@ -1065,7 +1172,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     // so back-to-back runs of similar audio lengths don't keep
     // re-allocating.
     constexpr int kKvBucket    = 256;
-    const int     needed_raw   = std::min(T_prompt + k_gen_budget, ceiling);
+    const int     needed_raw   = std::min(T_prompt + gen_budget, ceiling);
     const int     needed_n_ctx = ((needed_raw + kKvBucket - 1) / kKvBucket) * kKvBucket;
 
     if (cc->kv.self_k != nullptr && cc->kv.n_ctx < needed_n_ctx) {
@@ -1157,7 +1264,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, dec.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite run: decoder prefill compute failed (%d)", static_cast<int>(gs));
         ggml_free(dec_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 
@@ -1204,10 +1311,9 @@ transcribe_status run(transcribe_session *          ctx_base,
     // n_ctx of the KV cache bounds the max generation length we can
     // attend over.
     const int max_n_kv  = cc->kv.n_ctx;
-    // Bound generation by the step budget, the allocated cache, AND the
-    // context ceiling (the gate guarantees ceiling - T_prompt >= k_gen_budget,
-    // so for in-spec input this stays k_gen_budget and decode is unchanged).
-    const int max_steps = std::min({ k_gen_budget, max_n_kv - T_prompt, ceiling - T_prompt });
+    // gen_budget is already clamped to ceiling - T_prompt; the other two terms
+    // guard the cache the bucket rounding actually gave us.
+    const int max_steps = std::min({ gen_budget, max_n_kv - T_prompt, ceiling - T_prompt });
 
     ggml_context * step_ctx = nullptr;
     {
@@ -1216,6 +1322,9 @@ transcribe_status run(transcribe_session *          ctx_base,
         ip.mem_buffer = nullptr;
         ip.no_alloc   = true;
         step_ctx      = ggml_init(ip);
+        if (step_ctx == nullptr) {
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
     StepBuild step = build_step_graph(step_ctx, cm->weights, cm->hparams, cc->kv, max_n_kv, cc->decoder_use_flash);
     if (step.graph == nullptr) {
@@ -1239,11 +1348,17 @@ transcribe_status run(transcribe_session *          ctx_base,
     // valid positions get zeroed per step.
     std::vector<uint16_t> step_mask(max_n_kv, 0xFC00);
 
+    bool repeating = false;
     for (int step_i = 0; step_i < max_steps; ++step_i) {
         if (next_id == eos_id) {
             break;
         }
         gen_ids.push_back(next_id);
+        if (transcribe::stop_on_repetition(gen_ids, "granite run")) {
+            cc->mark_repetition_stop();
+            repeating = true;
+            break;
+        }
 
         const int32_t pos      = T_prompt + step_i;  // RoPE position
         const int64_t kv_idx   = pos;                // KV write row
@@ -1264,7 +1379,7 @@ transcribe_status run(transcribe_session *          ctx_base,
         if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, step.graph); gs != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite run: step compute failed (%d)", static_cast<int>(gs));
             ggml_free(step_ctx);
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
 
         int32_t amax = 0;
@@ -1279,30 +1394,43 @@ transcribe_status run(transcribe_session *          ctx_base,
     // The decode stopped either at EOS (complete) or at the generation
     // budget / context ceiling (truncated). Surface the latter via
     // transcribe_was_truncated() and a WARN rather than handing back a
-    // silently shortened transcript.
-    if (next_id != eos_id) {
+    // silently shortened transcript; a repetition stop has already done both.
+    if (!repeating && next_id != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                             "granite run: output truncated at %d tokens — decode reached the "
                             "generation budget before end-of-stream; the transcript may be "
                             "incomplete.",
                             static_cast<int>(gen_ids.size()));
+        transcribe::trim_repetition_at_budget_stop(gen_ids, "granite run");
     }
 
     // Detokenize.
-    const std::string raw_text = cm->tok.decode(gen_ids.data(), static_cast<int>(gen_ids.size()));
+    std::string   raw_text = cm->tok.decode(gen_ids.data(), static_cast<int>(gen_ids.size()));
     const int64_t audio_ms = static_cast<int64_t>(n_samples) * 1000 / static_cast<int64_t>(cm->hparams.fe_sample_rate);
+
+    // Under a transcript prefix the decode is the continuation: the text
+    // fields hold it (without the joining space), raw_text leads with the
+    // prefix.
+    const bool has_prefix = params != nullptr && params->prefix != nullptr;
+    if (has_prefix) {
+        const size_t lead = raw_text.find_first_not_of(' ');
+        raw_text.erase(0, lead == std::string::npos ? raw_text.size() : lead);
+    }
 
     cc->has_result = true;
     // -plus word timestamps / speaker attribution / plain text; shared with
     // the run_batch capture loop via finalize_granite_result.
     finalize_granite_result(cm, params, raw_text, audio_ms, *cc);
+    if (has_prefix) {
+        cc->raw_text = std::string(params->prefix) + cm->tok.decode(gen_ids.data(), static_cast<int>(gen_ids.size()));
+    }
 
     // Output truncation (decode hit the generation budget / context ceiling
     // before EOS) is a hard status, not a silent success: surface it so the
     // caller can distinguish a complete transcript from one cut short. The
     // partial transcript is still attached above for inspection.
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // Offline batched decode (transcribe_run_batch). Serial mel + Conformer
@@ -1321,7 +1449,7 @@ transcribe_status reset_ctx_g(GraniteSession * cc, int mb) {
     ip.mem_buffer   = nullptr;
     ip.no_alloc     = true;
     cc->compute_ctx = ggml_init(ip);
-    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_GGUF;
+    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_OOM;
 }
 
 void apply_threads_g(GraniteSession * cc) {
@@ -1360,7 +1488,7 @@ transcribe_status encode_one(GraniteSession *           cc,
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
                                            static_cast<int>(cm->plan.scheduler_list.size()), 32768, false, true);
         if (cc->sched == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
@@ -1372,8 +1500,8 @@ transcribe_status encode_one(GraniteSession *           cc,
     }
 
     ggml_backend_tensor_set(eb.mel_in, mel_buf.data(), 0, mel_buf.size() * sizeof(float));
-    std::vector<int32_t> dists = precompute_attention_dists(hp.enc_context_size, hp.enc_max_pos_emb);
-    ggml_backend_tensor_set(eb.attention_dists, dists.data(), 0, dists.size() * sizeof(int32_t));
+    std::vector<int32_t> dists = precompute_pos_rows(hp.enc_context_size, hp.enc_max_pos_emb);
+    ggml_backend_tensor_set(eb.pos_rows, dists.data(), 0, dists.size() * sizeof(int32_t));
     {
         const int          ctx_size = hp.enc_context_size;
         const size_t       plane    = static_cast<size_t>(ctx_size) * ctx_size;
@@ -1394,7 +1522,7 @@ transcribe_status encode_one(GraniteSession *           cc,
 
     const int64_t t_enc0 = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     enc_us += ggml_time_us() - t_enc0;
 
@@ -1438,7 +1566,7 @@ transcribe_status encode_one(GraniteSession *           cc,
     const int64_t t_enc1 = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
         ggml_free(proj_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     enc_us += ggml_time_us() - t_enc1;
     n_audio_out = pb.n_audio_tokens;
@@ -1455,21 +1583,8 @@ transcribe_status run_batch_serial(GraniteSession *              cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 }  // namespace
@@ -1478,7 +1593,20 @@ transcribe_status run_batch_serial(GraniteSession *              cc,
 // and cannot be composed. Validate the mode-dependent timestamp contract before
 // the dispatcher clears the previous result snapshot.
 transcribe_status run_validate(const transcribe_session * ctx, const transcribe_run_params * params) {
-    if (ctx == nullptr || ctx->model == nullptr || params == nullptr || !diarize_requested(ctx->model, params)) {
+    if (ctx == nullptr || ctx->model == nullptr || params == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+    // A transcript prefix only composes with plain transcription (see
+    // build_granite_affixes); reject the untested task combinations here,
+    // before the previous result is cleared.
+    if (params->prefix != nullptr &&
+        (params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD || diarize_requested(ctx->model, params))) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite: a transcript prefix is supported in plain transcription only "
+                "(not word timestamps or speaker attribution)");
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (!diarize_requested(ctx->model, params)) {
         return TRANSCRIBE_OK;
     }
     if (params->task != TRANSCRIBE_TASK_TRANSCRIBE) {
@@ -1511,9 +1639,14 @@ transcribe_status run_batch(transcribe_session *          session,
     transcribe::debug::init();
     const auto & hp = cm->hparams;
 
-    // Shared prompt affixes (one run_params across the batch).
+    // Shared prompt affixes (one run_params across the batch), with the
+    // keyword list fitted as if there were no audio. A row whose own room is
+    // smaller than that fit would get fewer keywords from run(), so the batch
+    // then goes serial (see fit_terms_and_context: otherwise the fits match).
     std::vector<int32_t> prefix_ids, suffix_ids;
-    if (build_granite_affixes(cm, params, prefix_ids, suffix_ids) != TRANSCRIBE_OK) {
+    size_t               n_keyword_tokens = 0;
+    if (build_granite_affixes(cm, params, granite_keyword_room(granite_context_ceiling(cc->n_ctx, hp), 0), prefix_ids,
+                              suffix_ids, &n_keyword_tokens) != TRANSCRIBE_OK) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     const int prefix_len = static_cast<int>(prefix_ids.size());
@@ -1572,6 +1705,9 @@ transcribe_status run_batch(transcribe_session *          session,
         if (n_audio[b] <= 0) {
             continue;
         }
+        if (n_keyword_tokens > static_cast<size_t>(std::max(granite_keyword_room(ceiling, n_audio[b]), 0))) {
+            return run_batch_serial(cc, pcm, n_samples, n, params);
+        }
         prompt_ids[b] = prefix_ids;
         for (int i = 0; i < n_audio[b]; ++i) {
             prompt_ids[b].push_back(0);  // placeholder
@@ -1580,13 +1716,13 @@ transcribe_status run_batch(transcribe_session *          session,
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
 
         // Input-length gate, mirroring the single-shot run() gate.
-        if (T_prompt[b] + k_gen_budget > ceiling) {
+        if (T_prompt[b] + k_gen_reserve > ceiling) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "granite run_batch: utterance %d input too long — %d audio + %d "
                                 "prompt tokens leave no room for output within the %d-token "
                                 "context (need %d). Shorten the audio (see "
                                 "transcribe_capabilities.max_audio_ms) or split it.",
-                                b, n_audio[b], T_prompt[b] - n_audio[b], ceiling, T_prompt[b] + k_gen_budget);
+                                b, n_audio[b], T_prompt[b] - n_audio[b], ceiling, T_prompt[b] + k_gen_reserve);
             fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
             continue;
         }
@@ -1608,8 +1744,9 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         return TRANSCRIBE_OK;
     }
-    n_audio_max        = std::max(1, n_audio_max);
-    const int max_new  = 256;
+    n_audio_max       = std::max(1, n_audio_max);
+    const int max_new = transcribe::pick_decode_budget(granite_predicted_tokens(cm, params, n_audio_max), k_gen_reserve,
+                                                       max_T_prompt, ceiling);
     int       max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) {
         max_n_kv *= 2;
@@ -1717,7 +1854,7 @@ transcribe_status run_batch(transcribe_session *          session,
         ggml_backend_tensor_set(pb.last_idx_in, lidx.data(), 0, lidx.size() * sizeof(int32_t));
         apply_threads_g(cc);
         if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         std::vector<int32_t> amax(n, 0);
         ggml_backend_tensor_get(pb.out, amax.data(), 0, amax.size() * sizeof(int32_t));
@@ -1812,11 +1949,12 @@ transcribe_status run_batch(transcribe_session *          session,
         finalize_granite_result(cm, params, transcript, audio_ms, rs);
         // Per-utterance truncation parity with single-shot run(): a row cut at
         // the generation budget / KV window before eos reports
-        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
-        // override a TRANSCRIBE_OK status, never a worse one.
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED, and one the repetition guard stopped
+        // reports TRANSCRIBE_ERR_OUTPUT_REPETITION (partial transcript retained
+        // either way). Only override a TRANSCRIBE_OK status, never a worse one.
         if (b < static_cast<int>(truncated.size()) && truncated[b] && rs.status == TRANSCRIBE_OK) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;

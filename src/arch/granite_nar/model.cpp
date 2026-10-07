@@ -52,16 +52,7 @@ extern const Arch arch;
 static_assert(std::is_base_of_v<transcribe_model, GraniteNarModel>);
 static_assert(std::is_base_of_v<transcribe_session, GraniteNarSession>);
 
-GraniteNarSession::~GraniteNarSession() {
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
-}
+GraniteNarSession::~GraniteNarSession() = default;
 
 GraniteNarModel::~GraniteNarModel() {
     if (bn_fused_ctx != nullptr) {
@@ -340,7 +331,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "granite_nar", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "granite_nar", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
@@ -352,7 +343,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar: alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -469,7 +460,7 @@ transcribe_status run(transcribe_session *          ctx_base,
                                            static_cast<int>(cm->plan.scheduler_list.size()), 32768, false, true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar run: sched_new failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(cc->sched);
@@ -482,9 +473,8 @@ transcribe_status run(transcribe_session *          ctx_base,
     // Upload encoder inputs.
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(), 0, cc->mel_buf.size() * sizeof(float));
     {
-        std::vector<int32_t> dists =
-            precompute_attention_dists(cm->hparams.enc_context_size, cm->hparams.enc_max_pos_emb);
-        ggml_backend_tensor_set(eb.attention_dists, dists.data(), 0, dists.size() * sizeof(int32_t));
+        std::vector<int32_t> dists = precompute_pos_rows(cm->hparams.enc_context_size, cm->hparams.enc_max_pos_emb);
+        ggml_backend_tensor_set(eb.pos_rows, dists.data(), 0, dists.size() * sizeof(int32_t));
     }
     {
         const int          ctx_size = cm->hparams.enc_context_size;
@@ -508,7 +498,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar run: encoder compute failed (%d)", static_cast<int>(gs));
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->t_encode_us = ggml_time_us() - t_enc_start;
 
@@ -633,7 +623,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar run: projector compute failed (%d)", static_cast<int>(gs));
         ggml_free(proj_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     try_dump("proj.qformer.out", pb.dumps.qformer_out, "projector");
@@ -734,7 +724,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, fb.graph); gs != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar run: decoder compute failed (%d)", static_cast<int>(gs));
         ggml_free(dec_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 

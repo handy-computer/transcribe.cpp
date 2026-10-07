@@ -1,58 +1,44 @@
-// Model-gated tier: device selection on load. Skips cleanly when the canary
-// GGUF is absent (modelTest), otherwise loads it and exercises model.device
-// plus the gpuDevice/backend validation surface.
+// Exact opaque-device selection tests.
+
 import assert from "node:assert/strict";
-import { modelTest, MODEL } from "./common.mjs";
-import { TranscribeModel, getAvailableBackends, InvalidArgument } from "../dist/index.js";
+import test from "node:test";
+import {
+  backendAvailable,
+  getAvailableBackends,
+  InvalidArgument,
+  TranscribeModel,
+} from "../dist/index.js";
+import { MODEL, modelTest } from "./common.mjs";
 
-modelTest("model.device reports an index-less device that matches a registry entry", MODEL, async () => {
-  const m = await TranscribeModel.load(MODEL);
+modelTest("an enumerated device can be selected exactly", MODEL, async () => {
+  const device = getAvailableBackends().find((d) => d.deviceType !== "accel");
+  if (!device) return;
   try {
-    const dev = m.device;
-    assert.equal(typeof dev, "object");
-    assert.notEqual(dev, null);
-    // model.device comes from transcribe_model_get_device, which does not expose
-    // a registry index — the binding reports it as null (see types.ts).
-    assert.equal(dev.index, null);
-
-    // It must correspond to a device the registry enumerates: match by name, and
-    // by deviceId too when the backend reports a stable hardware id.
-    const backends = getAvailableBackends();
-    const match = backends.find(
-      (b) =>
-        b.name === dev.name &&
-        (dev.deviceId === null || b.deviceId === dev.deviceId),
-    );
-    assert.ok(
-      match,
-      `model.device (${JSON.stringify({ name: dev.name, deviceId: dev.deviceId })}) ` +
-        `should match a getAvailableBackends() entry`,
-    );
-  } finally {
-    m.dispose();
+    const model = await TranscribeModel.load(MODEL, { device });
+    try {
+      assert.equal(model.device.name, device.name);
+      assert.equal(model.device.deviceId, device.deviceId);
+    } finally {
+      model.dispose();
+    }
+  } catch (error) {
+    // A registered device can still fail driver initialization. The important
+    // contract is that native selection fails rather than moving elsewhere.
+    assert.match(String(error), /backend/i);
   }
 });
 
-modelTest("negative gpuDevice is rejected with InvalidArgument", MODEL, async () => {
+modelTest("explicit backend must match exact device", MODEL, async () => {
+  const gpu = getAvailableBackends().find(
+    (d) => d.deviceType === "gpu" || d.deviceType === "igpu",
+  );
+  if (!gpu) return;
   await assert.rejects(
-    () => TranscribeModel.load(MODEL, { gpuDevice: -1 }),
-    (e) => e instanceof InvalidArgument,
+    () => TranscribeModel.load(MODEL, { backend: "cpu", device: gpu }),
+    InvalidArgument,
   );
 });
 
-modelTest("out-of-range gpuDevice is rejected with InvalidArgument", MODEL, async () => {
-  const outOfRange = getAvailableBackends().length + 1000;
-  await assert.rejects(
-    () => TranscribeModel.load(MODEL, { gpuDevice: outOfRange }),
-    (e) => e instanceof InvalidArgument,
-  );
-});
-
-modelTest("selecting a GPU index under the cpu backend is rejected", MODEL, async () => {
-  // Hardware-independent: the cpu backend has no GPU device 1 to select, so the
-  // pairing must be rejected regardless of what GPUs the host actually has.
-  await assert.rejects(
-    () => TranscribeModel.load(MODEL, { backend: "cpu", gpuDevice: 1 }),
-    (e) => e instanceof InvalidArgument,
-  );
+test("automatic backend probing remains available", () => {
+  assert.equal(typeof backendAvailable("auto"), "boolean");
 });

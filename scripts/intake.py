@@ -84,6 +84,11 @@ def _guess_architecture(config: dict) -> list[str]:
         candidates.append("encoder-decoder")
     if any(t in blob for t in ["audiolm", "audio_llm", "qwen2audio", "qwen3asr"]):
         candidates.append("audio-llm")
+    if any(t in blob for t in ["sortformer", "diariz", "eend", "enclabel"]):
+        # Frame-level end-to-end neural diarizers: encoder + per-frame
+        # multi-label sigmoid over a fixed max-speaker count (Sortformer,
+        # EEND/EEND-EDA, pyannote segmentation). Not a transcription head.
+        candidates.append("encoder-diarizer")
     return candidates or ["encoder-decoder"]  # default guess; human confirms
 
 

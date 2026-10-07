@@ -123,9 +123,6 @@ struct MoonshineModel final : public transcribe_model {
 };
 
 struct MoonshineSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     // Host-side mirror of the encoder output. Required because the
     // cross-KV graph runs in a fresh compute_ctx that does not share
     // tensor handles with the encoder graph.

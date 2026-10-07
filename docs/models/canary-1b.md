@@ -1,14 +1,17 @@
 # Canary 1B
 
-NVIDIA's [`nvidia/canary-1b`](https://huggingface.co/nvidia/canary-1b)
-ported to transcribe.cpp. A 1B-parameter multitask AED with a 24-layer
-FastConformer encoder and a 24-layer Transformer decoder — the original
-canary release.
+<!-- catalog:intro -->
+Upstream: [`nvidia/canary-1b`](https://huggingface.co/nvidia/canary-1b) at [`1698acf`](https://huggingface.co/nvidia/canary-1b/commit/1698acf).
 
-> **License: CC-BY-NC-4.0 (non-commercial only).** This is the only
-> canary variant under a non-commercial license. Every shipped GGUF
-> carries `general.license: CC-BY-NC-4.0` in its KV metadata so
-> downstream tooling can detect this without re-reading the model card.
+Offline multilingual speech-to-text and translation. A multitask AED
+with a 24-layer FastConformer encoder and a 24-layer Transformer
+decoder — the original canary release. Supports automatic speech
+recognition in English, German, Spanish, and French, and translation
+between supported pairs. Takes a 16 kHz mono WAV and produces a
+transcript. Not a streaming model. **License: CC-BY-NC-4.0
+(non-commercial only)** — the only canary variant under a
+non-commercial license.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -21,26 +24,44 @@ Offline multilingual speech-to-text and translation. The model takes a
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b)
 for training data, intended use, and upstream evaluation methodology.
 
-Ported from upstream commit
-[`1698acf`](https://huggingface.co/nvidia/canary-1b/commit/1698acf1700ed316ffce1cb42d79437c7e360cfa),
-pinned 2026-05-08.
+<!-- catalog:pin -->
+Licensed CC-BY-NC-4.0. Ported from upstream commit [`1698acf`](https://huggingface.co/nvidia/canary-1b/commit/1698acf), pinned 2026-05-08. Validated against the NeMo reference at transcribe.cpp commit [`db53eda`](https://github.com/handy-computer/transcribe.cpp/tree/db53eda) on 2026-05-08.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [canary-1b-F32.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F32.gguf)       | 3.8 GB | 1.55% |
-| F16    | [canary-1b-F16.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F16.gguf)       | 1.9 GB | 1.55% |
-| Q8_0   | [canary-1b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q8_0.gguf)     | 1.1 GB | 1.55% |
-| Q6_K   | [canary-1b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q6_K.gguf)     | 891 MB | 1.57% |
-| Q5_K_M | [canary-1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q5_K_M.gguf) | 799 MB | 1.57% |
-| Q4_K_M | [canary-1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q4_K_M.gguf) | 696 MB | 1.55% |
+| F32          | [canary-1b-F32.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F32.gguf) | 4.09 GB | 1.55% |
+| F16          | [canary-1b-F16.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F16.gguf) | 2.05 GB | 1.55% |
+| Q8_0         | [canary-1b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q8_0.gguf) | 1.16 GB | 1.55% |
+| Q6_K         | [canary-1b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q6_K.gguf) |  934 MB | 1.57% |
+| Q5_K_M       | [canary-1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q5_K_M.gguf) |  838 MB | 1.57% |
+| Q4_K_M       | [canary-1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q4_K_M.gguf) |  730 MB | 1.55% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620 utterances)
-with greedy decoding and no external LM. F32 reference baseline: 1.55%.
-NVIDIA's self-reported number on the upstream model card is 1.48%.
-Likely this is due to differences in how we score WER based on the results
-we have from Canary 180m.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy decoding, no external LM. F32 reference baseline: 1.55%. NVIDIA's
+self-reported number on the upstream model card is 1.48%; likely this is due to
+differences in how we score WER, based on the results we have from
+canary-180m-flash.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 6.45% |
+| en       | WER    | 4.44% |
+| es       | WER    | 6.06% |
+| fr       | WER    | 7.44% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -78,10 +99,6 @@ CLI flags specific to canary:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 The 24-layer decoder makes this the slowest canary variant for decode-bound
 workloads — roughly 1.5× the wall time of canary-1b-flash on the same
 backend, and the GPU win over CPU is smaller here than on the *flash
@@ -91,37 +108,38 @@ overhead.
 
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 216.0 ms (50.9×) | 198.1 ms (55.5×) |
-| Metal   | dots (35.3s) |   1.03 s (34.2×) | 937.2 ms (37.7×) |
-| CPU     | jfk (11.0s)  | 511.1 ms (21.5×) | 426.2 ms (25.8×) |
-| CPU     | dots (35.3s) |   2.05 s (17.3×) |   1.72 s (20.6×) |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `19b3b87`.
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Metal   | jfk (11.0s)  | 207.3 ms (53.07×) | 187.5 ms (58.67×) |
+| Metal   | dots (35.3s) |   1.01 s (34.96×) | 930.9 ms (37.95×) |
+| CPU     | jfk (11.0s)  | 425.7 ms (25.84×) | 430.2 ms (25.57×) |
+| CPU     | dots (35.3s) |   1.79 s (19.74×) |   1.73 s (20.41×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |           Q8_0 |           Q4_K_M |
-| ------- | ------------ | -------------: | ---------------: |
-| Vulkan  | jfk (11.0s)  | 1.07 s (10.2×) | 923.4 ms (11.9×) |
-| Vulkan  | dots (35.3s) |  4.63 s (7.6×) |    3.87 s (9.1×) |
-| CPU     | jfk (11.0s)  |  1.71 s (6.4×) |    1.24 s (8.9×) |
-| CPU     | dots (35.3s) |  7.59 s (4.7×) |    5.97 s (5.9×) |
+<!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora Linux 43, transcribe.cpp `4d44530`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Vulkan  | jfk (11.0s)  | 962.2 ms (11.43×) | 879.4 ms (12.51×) |
+| Vulkan  | dots (35.3s) |    4.36 s (8.10×) |    3.81 s (9.28×) |
+| CPU     | jfk (11.0s)  |    1.40 s (7.88×) |    1.26 s (8.73×) |
+| CPU     | dots (35.3s) |    6.96 s (5.08×) |    6.26 s (5.65×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models canary-1b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name canary-1b-publication
+uv run scripts/bench/run.py --profile --models canary-1b
 ```
 
 ## Numerical Validation

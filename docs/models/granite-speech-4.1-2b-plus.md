@@ -1,12 +1,24 @@
 # Granite Speech 4.1-2b-plus
 
-IBM's [`ibm-granite/granite-speech-4.1-2b-plus`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus)
-ported to transcribe.cpp. The timestamp-and-diarization variant of the
+<!-- catalog:intro -->
+Upstream: [`ibm-granite/granite-speech-4.1-2b-plus`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus) at [`edd3bf5`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus/commit/edd3bf5).
+
+Offline multilingual speech-to-text with word-level timestamps. IBM Granite
+Speech 4.1-2b-plus is the timestamp-and-diarization variant of the
 Granite-Speech family. Same architecture as the base 4.1-2b (Conformer
 encoder, BLIP-2 Q-Former projector, Granite-4.0-1b autoregressive LLM
 decoder) with two changes: the encoder concatenates mid-layer (idx 3) and
-final-layer hidden states (doubling the projector K/V input from 1024 to
-2048), and the LM token embeddings are tied with the lm_head.
+final-layer hidden states (`cat_hidden_layers=[3]`, doubling the projector
+K/V input from 1024 to 2048), and the LM token embeddings are tied with
+the lm_head. Takes a 16 kHz mono WAV and produces a transcript, with
+`--timestamps word` returning structured per-word timestamps (parsed from the
+model's `[T:N]` centisecond markers), or `--diarize` returning structured
+speaker-attributed turns from its separate SAA prompt. Those two prompt tasks
+cannot be combined. Transcribes English,
+French, German, Spanish, and Portuguese (no Japanese on this variant).
+This variant is transcription-only: unlike the base granite-speech-4.1-2b,
+it does not perform speech translation.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -21,33 +33,55 @@ This variant is transcription-only. Unlike the base
 [`granite-speech-4.1-2b`](granite-speech-4.1-2b.md), it does not perform
 speech translation.
 
+**Prompting:** vocabulary (`--vocabulary`, `Keywords:` list biasing) and transcript prefix (`--prefix`), in plain transcription mode only. With word timestamps or speaker attribution the vocabulary is ignored with a warning and a prefix is rejected. Needs a GGUF converted with the `stt.capability.*` prompting keys; older GGUFs report no prompting support.
+
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`edd3bf5`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus/commit/edd3bf54fbb06d8e263aa0c1939321d67b073f86),
-pinned 2026-05-17.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`edd3bf5`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus/commit/edd3bf5), pinned 2026-05-17. Validated against the Transformers reference at transcribe.cpp commit [`275332d`](https://github.com/handy-computer/transcribe.cpp/tree/275332d) on 2026-05-17.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [granite-speech-4.1-2b-plus-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-BF16.gguf)     | 4.23 GB | 1.49% |
-| F16    | [granite-speech-4.1-2b-plus-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-F16.gguf)       | 4.23 GB | 1.48% |
-| Q8_0   | [granite-speech-4.1-2b-plus-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q8_0.gguf)     | 2.35 GB | 1.50% |
-| Q6_K   | [granite-speech-4.1-2b-plus-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q6_K.gguf)     | 1.86 GB | 1.46% |
-| Q5_K_M | [granite-speech-4.1-2b-plus-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q5_K_M.gguf) | 1.69 GB | 1.48% |
-| Q4_K_M | [granite-speech-4.1-2b-plus-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q4_K_M.gguf) | 1.49 GB | 1.56% |
+| BF16         | [granite-speech-4.1-2b-plus-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-BF16.gguf) | 4.23 GB | 1.49% |
+| F16          | [granite-speech-4.1-2b-plus-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-F16.gguf) | 4.23 GB | 1.48% |
+| Q8_0         | [granite-speech-4.1-2b-plus-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q8_0.gguf) | 2.35 GB | 1.50% |
+| Q6_K         | [granite-speech-4.1-2b-plus-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q6_K.gguf) | 1.86 GB | 1.46% |
+| Q5_K_M       | [granite-speech-4.1-2b-plus-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q5_K_M.gguf) | 1.69 GB | 1.48% |
+| Q4_K_M       | [granite-speech-4.1-2b-plus-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-plus-gguf/resolve/main/granite-speech-4.1-2b-plus-Q4_K_M.gguf) | 1.49 GB | 1.56% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-greedy decoding and the model-card chat template (system prompt + leading-
-space user instruction + `add_generation_prompt=True`). BF16 reference
-baseline (transformers, re-run locally with that exact prompt): 1.48%;
-0.04pp above upstream's published 1.44%, within bootstrap CI overlap and
-likely a chat-template / normalization difference on the publisher side.
-Text normalizer: Whisper `EnglishTextNormalizer`. The transcribe.cpp runtime
-hard-codes the correct chat template; the WER quoted here is what the C++
-runtime actually scores.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy decoding with the model-card chat template (system prompt + leading-space
+user instruction + `add_generation_prompt=True`). BF16 reference baseline (re-run
+locally with that exact prompt): 1.48%; 0.04pp above upstream's published 1.44%,
+within bootstrap CI overlap and likely a chat-template / normalization difference on
+the publisher side. Text normalizer: Whisper `EnglishTextNormalizer`, the same
+normalizer Open ASR Leaderboard uses. The `add_generation_prompt=True` is
+load-bearing — without it the model emits 25-27 empty hypotheses on short test-clean
+clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the prompt
+correctly; this note only matters if you reproduce the reference.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |   Q8_0 |
+| --- | --- | ---: |
+| de       | WER    |  8.06% |
+| en       | WER    |  4.46% |
+| es       | WER    |  6.53% |
+| fr       | WER    |  8.82% |
+| pt       | WER    | 10.61% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -93,58 +127,35 @@ words: 22
 
 ## Performance
 
-Cells are wall-clock latency, with speedup over realtime in parentheses.
-
 ### Apple M4 Max
 
-Mean over 3 iterations after 1 warmup.
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-**Metal**
+| Backend | Sample       |             Q8_0 |          Q4_K_M |
+| ------- | ------------ | ---------------: | --------------: |
+| Metal   | jfk (11.0s)  |  134 ms (82.33×) | 137 ms (80.36×) |
+| Metal   | dots (35.3s) | 350 ms (100.92×) | 353 ms (99.98×) |
+| CPU     | jfk (11.0s)  |   1.47 s (7.46×) |  1.50 s (7.33×) |
+| CPU     | dots (35.3s) |   3.85 s (9.18×) |  4.14 s (8.54×) |
 
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |    280 ms (39×)  |    308 ms (36×)  |
-| dots (35.3s) |   1.02 s (34×)   |   1.18 s (30×)   |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   1.87 s (5.9×)  |   2.04 s (5.4×)  |
-| dots (35.3s) |   5.71 s (6.2×)  |   6.91 s (5.1×)  |
-
-macOS 26.4, transcribe.cpp `de05c43`.
-
-### Apple M4
-
-Mean over 5 iterations after 2 warmups. Q8_0.
-
-| Backend | Sample      |       Q8_0        |
-| ------- | ----------- | ----------------: |
-| Metal   | jfk (11.0s) |   1.00 s (11×)    |
-| CPU     | jfk (11.0s) |   2.44 s (5×)     |
-
-macOS 26.1, transcribe.cpp `275332d`.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
-Mean over 3 iterations after 1 warmup.
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-**Vulkan (RADV)**
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  2.58 s (4.27×) |  2.58 s (4.26×) |
+| Vulkan  | dots (35.3s) |  7.04 s (5.02×) |  7.53 s (4.69×) |
+| CPU     | jfk (11.0s)  |  4.32 s (2.55×) |  4.34 s (2.53×) |
+| CPU     | dots (35.3s) | 13.35 s (2.65×) | 13.10 s (2.70×) |
 
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   3.63 s (3.0×)  |   3.85 s (2.9×)  |
-| dots (35.3s) |  12.29 s (2.9×)  |  13.42 s (2.6×)  |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   6.08 s (1.8×)  |   7.80 s (1.4×)  |
-| dots (35.3s) |  20.45 s (1.7×)  |  26.23 s (1.3×)  |
-
-Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 ## Capabilities
 

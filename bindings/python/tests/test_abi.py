@@ -66,9 +66,9 @@ _STATUS_NAMES = [n for n in dir(errors) if n == "OK" or n.startswith("ERR_")]
 
 
 def test_status_constants_discovered():
-    # transcribe_status has OK + 18 error codes as of this writing; never let
+    # transcribe_status has OK + 20 error codes as of this writing; never let
     # this collapse to a near-empty set that would make the checks vacuous.
-    assert len(_STATUS_NAMES) >= 19
+    assert len(_STATUS_NAMES) >= 21
 
 
 def test_every_generated_status_is_aliased_and_mapped():

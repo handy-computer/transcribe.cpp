@@ -16,6 +16,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-decode-budget.h"
 #include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -23,6 +24,8 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-prompting.h"
+#include "transcribe-repetition-guard.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -98,14 +101,6 @@ static_assert(std::is_base_of_v<transcribe_session, MossSession>);
 MossSession::~MossSession() {
     kv_cache.free();
     kv_cache_batch.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 MossModel::~MossModel() {
@@ -177,10 +172,11 @@ void build_audio_span(const MossHParams &    hp,
     }
 }
 
-void build_prompt_tokens(const MossHParams &    hp,
-                         int                    audio_seq_len,
-                         std::vector<int32_t> & out_ids,
-                         std::vector<int32_t> & out_audio_positions) {
+void build_prompt_tokens(const MossHParams &          hp,
+                         int                          audio_seq_len,
+                         std::vector<int32_t> &       out_ids,
+                         std::vector<int32_t> &       out_audio_positions,
+                         const std::vector<int32_t> * suffix) {
     out_ids.clear();
     out_audio_positions.clear();
 
@@ -195,13 +191,85 @@ void build_prompt_tokens(const MossHParams &    hp,
         out_audio_positions.push_back(prefix_len + off);
     }
 
-    out_ids.insert(out_ids.end(), hp.prompt_suffix_tokens.begin(), hp.prompt_suffix_tokens.end());
+    const std::vector<int32_t> & tail = suffix != nullptr ? *suffix : hp.prompt_suffix_tokens;
+    out_ids.insert(out_ids.end(), tail.begin(), tail.end());
 }
 
 namespace {
 
+// True when the GGUF carries the instruction split and it reproduces the
+// baked suffix with this tokenizer, i.e. the runtime can re-encode the
+// instruction with a hotword list appended.
+bool moss_supports_hotwords(const MossModel & m) {
+    const MossHParams & hp = m.hparams;
+    if (hp.prompt_instruction.empty() || !m.tok.has_encoder()) {
+        return false;
+    }
+    std::vector<int32_t> ids = hp.prompt_instruction_head_tokens;
+    std::vector<int32_t> instr;
+    if (m.tok.encode(hp.prompt_instruction, instr) != TRANSCRIBE_OK) {
+        return false;
+    }
+    ids.insert(ids.end(), instr.begin(), instr.end());
+    ids.insert(ids.end(), hp.prompt_instruction_tail_tokens.begin(), hp.prompt_instruction_tail_tokens.end());
+    return ids == hp.prompt_suffix_tokens;
+}
+
+// Prompt suffix for the run: the baked one, or with the generic vocabulary
+// appended to the instruction as upstream's hotword hint
+// (examples/prompts.md) in the instruction's language: "热词提示：{terms}"
+// after a Chinese instruction, " Hotwords: {terms}" otherwise (", "-joined).
+// Terms are fitted to `budget` tokens; `n_hint_tokens` receives how many the
+// fitted hint took (0 without terms).
+transcribe_status moss_prompt_suffix(const MossModel &             m,
+                                     const transcribe_run_params * params,
+                                     int                           budget,
+                                     std::vector<int32_t> &        out,
+                                     size_t &                      n_hint_tokens) {
+    const MossHParams &            hp    = m.hparams;
+    const std::vector<std::string> terms = transcribe::prompting::terms(params);
+    out                                  = hp.prompt_suffix_tokens;
+    n_hint_tokens                        = 0;
+    if (terms.empty()) {
+        return TRANSCRIBE_OK;
+    }
+    bool cjk = false;
+    for (size_t i = 0; i + 2 < hp.prompt_instruction.size() && !cjk; ++i) {
+        const unsigned char b = static_cast<unsigned char>(hp.prompt_instruction[i]);
+        cjk                   = b >= 0xE4 && b <= 0xE9;  // lead bytes of U+4E00..U+9FFF
+    }
+    const std::string lead =
+        cjk ? "\xE7\x83\xAD\xE8\xAF\x8D\xE6\x8F\x90\xE7\xA4\xBA\xEF\xBC\x9A" /* 热词提示： */ : " Hotwords: ";
+    transcribe::prompting::FittedPrompt fit;
+    if (const transcribe_status st =
+            transcribe::prompting::fit_terms_and_context(m.tok, terms, { lead, ", ", "" }, "", budget, "moss run", fit);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    n_hint_tokens = fit.n_tokens();
+    if (fit.n_terms == 0) {
+        return TRANSCRIBE_OK;
+    }
+    std::vector<int32_t> instr;
+    if (const transcribe_status st = m.tok.encode(hp.prompt_instruction + fit.terms_text, instr); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    out = hp.prompt_instruction_head_tokens;
+    out.insert(out.end(), instr.begin(), instr.end());
+    out.insert(out.end(), hp.prompt_instruction_tail_tokens.begin(), hp.prompt_instruction_tail_tokens.end());
+    return TRANSCRIBE_OK;
+}
+
 constexpr const char k_default_variant[] = "moss-transcribe-diarize";
 constexpr int        k_max_new           = 256;
+
+// Token room for the hotword hint: what the context window leaves after the
+// generation reserve and a prompt of `base_prompt_len` tokens built with the
+// baked suffix. run() passes its clip's prompt; run_batch() passes one
+// without audio.
+int moss_hint_budget(int ceiling, int base_prompt_len) {
+    return ceiling - k_max_new - base_prompt_len;
+}
 
 int moss_context_ceiling(int32_t n_ctx_knob, const MossHParams & hp) {
     int ceiling = hp.dec_max_position_embeddings;
@@ -239,6 +307,9 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (const transcribe_status st = read_moss_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK) {
         return st;
     }
+    // Generic vocabulary needs the instruction split, which GGUFs converted
+    // before it lack; those keep the fixed prompt and do not advertise it.
+    transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_VOCABULARY, moss_supports_hotwords(*m));
 
     m->hparams.vocab_size   = m->tok.n_tokens();
     m->hparams.bos_token_id = m->tok.bos_id();
@@ -313,7 +384,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, (params != nullptr) ? params->gpu_device : 0, "moss", m->plan);
+            backend_req, (params != nullptr) ? params->device : nullptr, "moss", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
@@ -325,7 +396,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -344,10 +415,12 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({ b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w });
         }
-        if (!transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
-                                                 entries, m->packed_gate_up, "moss")) {
+        if (const transcribe_status st =
+                transcribe::causal_lm::pack_gate_up(m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
+                                                    entries, m->packed_gate_up, "moss");
+            st != TRANSCRIBE_OK) {
             m->packed_gate_up.free();
-            return TRANSCRIBE_ERR_GGUF;
+            return st;
         }
     }
 
@@ -396,7 +469,7 @@ transcribe_status ensure_sched(MossSession * cc, MossModel * cm) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
                                            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
         if (cc->sched == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
     }
     return TRANSCRIBE_OK;
@@ -412,7 +485,7 @@ transcribe_status reset_compute_ctx(MossSession * cc, int mb) {
     ip.mem_buffer   = nullptr;
     ip.no_alloc     = true;
     cc->compute_ctx = ggml_init(ip);
-    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_GGUF;
+    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_OOM;
 }
 
 // Fills enc_out [dec_hidden, T_enc]; returns T_enc via out_T_enc. `dumps` marks
@@ -484,7 +557,7 @@ transcribe_status encode_one(MossSession *        cc,
         const int64_t t_enc0 = ggml_time_us();
         if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss encode: encoder graph compute failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         enc_us += ggml_time_us() - t_enc0;
 
@@ -543,7 +616,7 @@ transcribe_status encode_one(MossSession *        cc,
     const int64_t t_enc1 = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, ab.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss encode: adaptor graph compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     enc_us += ggml_time_us() - t_enc1;
 
@@ -565,6 +638,93 @@ transcribe_status encode_one(MossSession *        cc,
 
 // Build audio_dense [hidden, T_prompt] + keep_mask [1, T_prompt] host-side by
 // scattering enc_out columns into the audio-pad prompt positions.
+// Chunked prefill: push the prompt through the decoder in blocks against the
+// growing KV cache, and return the final position's logits.
+//
+// A single-shot prefill runs every prompt token as one flash-attention call
+// (Metal asserts ne01 < 65536, so ~82 min of audio aborts the process) with a
+// dense [T_prompt, T_prompt] f16 mask (17 GB at 2 h, twice over counting the
+// host copy). Chunking bounds the query rows to `chunk_size` and the mask to
+// [n_past + T_chunk, T_chunk]. Prompts that fit in one chunk never come here
+// — see run() — so the numerics recorded by the golden dumps are untouched.
+transcribe_status prefill_chunked(MossSession *                cc,
+                                  MossModel *                  cm,
+                                  const std::vector<int32_t> & prompt_ids,
+                                  const std::vector<float> &   audio_dense,
+                                  const std::vector<float> &   keep_mask,
+                                  int                          chunk_size,
+                                  std::vector<float> &         out_logits) {
+    const int T_prompt = static_cast<int>(prompt_ids.size());
+    const int hidden   = cm->hparams.dec_hidden;
+    const int n_chunks = (T_prompt + chunk_size - 1) / chunk_size;
+
+    // Sized for the widest chunk we will build (the last chunk sees the whole
+    // KV window), then refilled in place — one allocation, not one per chunk.
+    std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * std::min(chunk_size, T_prompt));
+    std::vector<int32_t>     positions(chunk_size);
+    std::vector<int64_t>     kv_idx(chunk_size);
+
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "moss prefill: %d tokens in %d chunks of %d", T_prompt, n_chunks, chunk_size);
+
+    for (int c = 0; c < n_chunks; ++c) {
+        const int  n_past   = c * chunk_size;
+        const int  T_chunk  = std::min(chunk_size, T_prompt - n_past);
+        const int  max_n_kv = n_past + T_chunk;
+        const bool last     = (c == n_chunks - 1);
+
+        if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        PrefillChunkBuild pb = build_prefill_chunk_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
+                                                         T_chunk, max_n_kv, cc->decoder_use_flash, last);
+        if (pb.graph == nullptr || (last && pb.out == nullptr)) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss prefill: chunk %d/%d graph alloc failed", c + 1, n_chunks);
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data() + n_past, 0,
+                                static_cast<size_t>(T_chunk) * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.audio_dense_in, audio_dense.data() + static_cast<size_t>(n_past) * hidden, 0,
+                                static_cast<size_t>(T_chunk) * hidden * sizeof(float));
+        ggml_backend_tensor_set(pb.keep_mask_in, keep_mask.data() + n_past, 0,
+                                static_cast<size_t>(T_chunk) * sizeof(float));
+
+        for (int i = 0; i < T_chunk; ++i) {
+            positions[i] = n_past + i;
+            kv_idx[i]    = n_past + i;
+        }
+        ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, static_cast<size_t>(T_chunk) * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.kv_idx_in, kv_idx.data(), 0, static_cast<size_t>(T_chunk) * sizeof(int64_t));
+
+        causal_lm::fill_prefill_chunk_mask(mask.data(), max_n_kv, T_chunk, n_past);
+        ggml_backend_tensor_set(pb.mask_in, mask.data(), 0,
+                                static_cast<size_t>(max_n_kv) * T_chunk * sizeof(ggml_fp16_t));
+
+        if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss prefill: chunk %d/%d compute failed", c + 1, n_chunks);
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+
+        cc->kv_cache.n    = max_n_kv;
+        cc->kv_cache.head = max_n_kv;
+
+        if (last) {
+            if (transcribe::debug::enabled()) {
+                // The one dump point chunked prefill can honour: same tensor,
+                // same shape, same meaning as the single-shot path, which is
+                // what the chunked-vs-single parity check compares.
+                transcribe::debug::dump_tensor("dec.logits_raw", pb.out, "dec.logits_raw");
+            }
+            ggml_backend_tensor_get(pb.out, out_logits.data(), 0, out_logits.size() * sizeof(float));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
 void build_injection(int                          hidden,
                      int                          T_prompt,
                      const std::vector<float> &   enc_out,
@@ -665,6 +825,20 @@ transcribe_status run(transcribe_session *          session,
     std::vector<int32_t> prompt_ids;
     std::vector<int32_t> audio_positions;
     build_prompt_tokens(cm->hparams, T_enc, prompt_ids, audio_positions);
+    if (params != nullptr && params->n_vocabulary > 0) {
+        // The suffix follows the audio, so swapping it leaves audio_positions.
+        std::vector<int32_t> suffix;
+        size_t               n_hint_tokens = 0;
+        if (const transcribe_status st = moss_prompt_suffix(
+                *cm, params,
+                moss_hint_budget(moss_context_ceiling(cc->n_ctx, cm->hparams), static_cast<int>(prompt_ids.size())),
+                suffix, n_hint_tokens);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        prompt_ids.resize(prompt_ids.size() - cm->hparams.prompt_suffix_tokens.size());
+        prompt_ids.insert(prompt_ids.end(), suffix.begin(), suffix.end());
+    }
     const int T_prompt = static_cast<int>(prompt_ids.size());
     if (static_cast<int>(audio_positions.size()) != T_enc) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss run: audio_positions(%zu) != T_enc(%d)", audio_positions.size(),
@@ -680,19 +854,14 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // Generation budget scales with audio length: the emergent transcript
-    // (text + [start]/[Sxx]/[end] markers) tracks the audio-token count, which
-    // for long-form far exceeds the k_max_new floor. Clamp to the context.
-    const int gen_budget = std::min(ceiling - T_prompt, std::max(k_max_new, 2 * T_enc + 128));
+    // Above the plain audio-token count: the transcript carries [start]/[Sxx]/[end] markers.
+    const int gen_budget = transcribe::pick_decode_budget(2 * T_enc + 128, k_max_new, T_prompt, ceiling);
 
-    // KV cache (grow-to-fit, pow2, clamped to ceiling).
-    int want_n_ctx = 1024;
-    while (want_n_ctx < T_prompt + gen_budget) {
-        want_n_ctx *= 2;
-    }
-    if (want_n_ctx > ceiling) {
-        want_n_ctx = ceiling;
-    }
+    // KV cache (grow-to-fit, clamped to ceiling). Short inputs retain the old
+    // 1K/2K/4K buckets; longer ones grow in 4K steps so crossing 32K does not
+    // jump straight to the full 131072-token, ~14 GiB worst case. Still
+    // grow-only, so repeat runs on one session reuse the largest allocation.
+    const int want_n_ctx = causal_lm::pick_kv_cache_context(T_prompt + gen_budget, ceiling);
     if (cc->kv_cache.ctx != nullptr && cc->kv_cache.n_ctx < want_n_ctx) {
         cc->kv_cache.free();
     }
@@ -711,77 +880,93 @@ transcribe_status run(transcribe_session *          session,
         cc->kv_cache.head = 0;
     }
 
-    // Prefill.
-    if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK) {
-        return st;
-    }
-    const bool   slice_last = !dumps_on;
-    PrefillBuild pb         = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
-                                                  cc->decoder_use_flash, slice_last);
-    if (pb.graph == nullptr || pb.out == nullptr) {
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        return TRANSCRIBE_ERR_OOM;
-    }
+    // Prefill. Prompts that fit in one chunk keep the original single-shot
+    // graph verbatim — that is the graph every golden dump and tolerance was
+    // recorded against. Longer prompts go chunk-by-chunk, which is the only
+    // way they run at all: a single flash-attention call is capped at 65535
+    // query rows on Metal (~82 min of audio), and the dense [T, T] mask is
+    // O(T^2) on both the host and the device.
+    const int          vocab      = cm->hparams.dec_vocab_size;
+    const int          chunk_size = causal_lm::prefill_chunk_size();
+    std::vector<float> logits(vocab);
+    std::vector<float> audio_dense, keep_mask;
+    build_injection(cm->hparams.dec_hidden, T_prompt, cc->enc_host, audio_positions, audio_dense, keep_mask);
 
-    ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(), 0, prompt_ids.size() * sizeof(int32_t));
-    {
-        std::vector<float> audio_dense, keep_mask;
-        build_injection(cm->hparams.dec_hidden, T_prompt, cc->enc_host, audio_positions, audio_dense, keep_mask);
+    int64_t t_prefill_us = 0;
+    if (T_prompt > chunk_size) {
+        if (dumps_on) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                    "moss run: T_prompt=%d exceeds the %d-token prefill chunk — only dec.logits_raw is dumped "
+                    "(per-chunk hidden states have no single-shot counterpart)",
+                    T_prompt, chunk_size);
+        }
+        const int64_t t_pf0 = perf_debug ? ggml_time_us() : 0;
+        if (const transcribe_status st =
+                prefill_chunked(cc, cm, prompt_ids, audio_dense, keep_mask, chunk_size, logits);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        t_prefill_us = perf_debug ? (ggml_time_us() - t_pf0) : 0;
+    } else {
+        if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        const bool   slice_last = !dumps_on;
+        PrefillBuild pb         = build_prefill_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_prompt,
+                                                      cc->decoder_use_flash, slice_last);
+        if (pb.graph == nullptr || pb.out == nullptr) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            return TRANSCRIBE_ERR_OOM;
+        }
+
+        ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(), 0, prompt_ids.size() * sizeof(int32_t));
         ggml_backend_tensor_set(pb.audio_dense_in, audio_dense.data(), 0, audio_dense.size() * sizeof(float));
         ggml_backend_tensor_set(pb.keep_mask_in, keep_mask.data(), 0, keep_mask.size() * sizeof(float));
-    }
-    {
-        std::vector<int32_t> positions(T_prompt);
-        for (int i = 0; i < T_prompt; ++i) {
-            positions[i] = i;
-        }
-        ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, positions.size() * sizeof(int32_t));
-    }
-    {
-        const ggml_fp16_t        mz = ggml_fp32_to_fp16(0.0f);
-        const ggml_fp16_t        mn = ggml_fp32_to_fp16(-INFINITY);
-        std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * T_prompt, mn);
-        for (int r = 0; r < T_prompt; ++r) {
-            for (int c = 0; c <= r; ++c) {
-                mask[static_cast<size_t>(r) * T_prompt + c] = mz;
-            }
-        }
-        ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
-    }
-
-    const int64_t t_pf0 = perf_debug ? ggml_time_us() : 0;
-    if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss run: prefill compute failed");
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    const int64_t t_prefill_us = perf_debug ? (ggml_time_us() - t_pf0) : 0;
-    cc->kv_cache.n             = T_prompt;
-    cc->kv_cache.head          = T_prompt;
-
-    if (dumps_on) {
-        auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
-            if (t != nullptr) {
-                transcribe::debug::dump_tensor(name, t, stage);
-            }
-        };
-        try_dump("dec.token_emb", pb.dumps.token_emb, "dec.token_emb");
-        try_dump("dec.audio_injected", pb.dumps.audio_injected, "dec.audio_injected");
-        try_dump("dec.block.0.out", pb.dumps.block_0_out, "dec.block.0");
         {
-            char nm[64];
-            std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers - 1);
-            try_dump(nm, pb.dumps.block_last_out, "dec.block.last");
+            std::vector<int32_t> positions(T_prompt);
+            for (int i = 0; i < T_prompt; ++i) {
+                positions[i] = i;
+            }
+            ggml_backend_tensor_set(pb.positions_in, positions.data(), 0, positions.size() * sizeof(int32_t));
         }
-        try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
-        try_dump("dec.logits_raw", pb.dumps.logits_raw, "dec.logits_raw");
-    }
+        {
+            std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * T_prompt);
+            causal_lm::fill_prefill_chunk_mask(mask.data(), T_prompt, T_prompt, /*n_past=*/0);
+            ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
+        }
 
-    const int          vocab = cm->hparams.dec_vocab_size;
-    std::vector<float> logits(vocab);
-    ggml_backend_tensor_get(pb.out, logits.data(), 0, logits.size() * sizeof(float));
+        const int64_t t_pf0 = perf_debug ? ggml_time_us() : 0;
+        if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss run: prefill compute failed");
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+        t_prefill_us      = perf_debug ? (ggml_time_us() - t_pf0) : 0;
+        cc->kv_cache.n    = T_prompt;
+        cc->kv_cache.head = T_prompt;
+
+        if (dumps_on) {
+            auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
+                if (t != nullptr) {
+                    transcribe::debug::dump_tensor(name, t, stage);
+                }
+            };
+            try_dump("dec.token_emb", pb.dumps.token_emb, "dec.token_emb");
+            try_dump("dec.audio_injected", pb.dumps.audio_injected, "dec.audio_injected");
+            try_dump("dec.block.0.out", pb.dumps.block_0_out, "dec.block.0");
+            {
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers - 1);
+                try_dump(nm, pb.dumps.block_last_out, "dec.block.last");
+            }
+            try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
+            try_dump("dec.logits_raw", pb.dumps.logits_raw, "dec.logits_raw");
+        }
+
+        ggml_backend_tensor_get(pb.out, logits.data(), 0, logits.size() * sizeof(float));
+    }
 
     std::vector<int32_t> generated_ids;
     int32_t              next_tok = argmax_vec(logits);
@@ -829,6 +1014,7 @@ transcribe_status run(transcribe_session *          session,
         per_step_us.reserve(512);
     }
 
+    bool repeating = false;
     while (next_tok != eos_id && static_cast<int32_t>(generated_ids.size()) < gen_budget && cur_past + 1 <= max_n_kv) {
         const int64_t t_i0 = perf_debug ? ggml_time_us() : 0;
         ggml_backend_tensor_set(sb.input_id_in, &next_tok, 0, sizeof(int32_t));
@@ -849,7 +1035,7 @@ transcribe_status run(transcribe_session *          session,
 
         if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss step: graph compute failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         if (perf_debug) {
             const int64_t dt = ggml_time_us() - t_c0;
@@ -877,15 +1063,21 @@ transcribe_status run(transcribe_session *          session,
         cur_past += 1;
         cc->kv_cache.n    = cur_past + 1;
         cc->kv_cache.head = cur_past + 1;
+        if (next_tok != eos_id && transcribe::stop_on_repetition(generated_ids, "moss run")) {
+            cc->mark_repetition_stop();
+            repeating = true;
+            break;
+        }
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
     }
 
-    if (next_tok != eos_id) {
+    if (!repeating && next_tok != eos_id) {
         cc->was_truncated = true;
         log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "moss run: output truncated at %d tokens",
                 static_cast<int>(generated_ids.size()));
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "moss run");
     }
     if (!generated_ids.empty() && generated_ids.back() == eos_id) {
         generated_ids.pop_back();
@@ -931,7 +1123,7 @@ transcribe_status run(transcribe_session *          session,
     install_transcript(*cc, params, raw_text, audio_ms);
     cc->has_result = true;
 
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // ---------------------------------------------------------------------------
@@ -961,30 +1153,8 @@ transcribe_status run_batch_serial(MossSession *                 cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    bool any_truncated = false;
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        cc->clear_result();
-        cc->t_mel_us      = 0;
-        cc->t_encode_us   = 0;
-        cc->t_decode_us   = 0;
-        cc->was_truncated = false;
-
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        any_truncated              = any_truncated || st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
-        if (st == TRANSCRIBE_OK || cc->has_result) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    cc->was_truncated = any_truncated;
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 transcribe_status run_batch(transcribe_session *          session,
@@ -1004,6 +1174,47 @@ transcribe_status run_batch(transcribe_session *          session,
     if (!cc->decoder_use_flash || transcribe::debug::enabled() || n == 1) {
         return run_batch_serial(cc, pcm, n_samples, n, params);
     }
+    // The batched prefill is still single-shot ([T_max, T_max] mask, every
+    // query row in one flash-attention call), so a long utterance would trip
+    // the same 65535-query-row limit chunked prefill exists to avoid. Prompt
+    // length is a pure function of the sample count, so predict it here — no
+    // encoder pass needed — and hand the whole batch to the serial path,
+    // which goes through run() and therefore chunks.
+    // Shared hotword-extended suffix (one run_params per batch), fitted as if
+    // there were no audio. A row whose own budget is smaller than that fit
+    // would get fewer hotwords from run(), so the batch then goes serial (see
+    // fit_terms_and_context: otherwise the fits match); checked below with
+    // the predicted prompt length.
+    const int            ceiling = moss_context_ceiling(cc->n_ctx, cm->hparams);
+    std::vector<int32_t> suffix;
+    size_t               n_hint_tokens = 0;
+    if (moss_prompt_suffix(*cm, params,
+                           moss_hint_budget(ceiling, static_cast<int>(cm->hparams.prompt_prefix_tokens.size() +
+                                                                      cm->hparams.prompt_suffix_tokens.size())),
+                           suffix, n_hint_tokens) != TRANSCRIBE_OK) {
+        return run_batch_serial(cc, pcm, n_samples, n, params);
+    }
+    {
+        const int chunk_size = causal_lm::prefill_chunk_size();
+        for (int b = 0; b < n; ++b) {
+            if (pcm[b] == nullptr || n_samples[b] <= 0) {
+                continue;
+            }
+            std::vector<int32_t> ids, positions;
+            build_prompt_tokens(cm->hparams, audio_token_length(n_samples[b], cm->hparams), ids, positions, &suffix);
+            const int base_len = static_cast<int>(ids.size() - suffix.size() + cm->hparams.prompt_suffix_tokens.size());
+            if (static_cast<int>(n_hint_tokens) > std::max(moss_hint_budget(ceiling, base_len), 0)) {
+                return run_batch_serial(cc, pcm, n_samples, n, params);
+            }
+            if (static_cast<int>(ids.size()) > chunk_size) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                        "moss run_batch: utterance %d needs %zu prompt tokens (> %d) — running the batch serially so "
+                        "prefill can chunk",
+                        b, ids.size(), chunk_size);
+                return run_batch_serial(cc, pcm, n_samples, n, params);
+            }
+        }
+    }
     transcribe::debug::init();
 
     const int hidden = cm->hparams.dec_hidden;
@@ -1018,9 +1229,8 @@ transcribe_status run_batch(transcribe_session *          session,
     std::vector<transcribe_status>    fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     int64_t                           mel_us = 0, enc_us = 0;
 
-    const int ceiling      = moss_context_ceiling(cc->n_ctx, cm->hparams);
-    int       max_T_prompt = 0;
-    int       max_T_enc    = 0;
+    int max_T_prompt = 0;
+    int max_T_enc    = 0;
     for (int b = 0; b < n; ++b) {
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
@@ -1036,7 +1246,7 @@ transcribe_status run_batch(transcribe_session *          session,
             continue;
         }
         T_enc[b] = te;
-        build_prompt_tokens(cm->hparams, te, prompt_ids[b], audio_positions[b]);
+        build_prompt_tokens(cm->hparams, te, prompt_ids[b], audio_positions[b], &suffix);
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
         if (T_prompt[b] + k_max_new > ceiling) {
             fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
@@ -1055,9 +1265,7 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
 
-    // Batch-wide generation budget: covers the longest utterance's transcript
-    // (scales with its audio tokens), clamped to the context.
-    const int batch_budget = std::min(ceiling - max_T_prompt, std::max(k_max_new, 2 * max_T_enc + 128));
+    const int batch_budget = transcribe::pick_decode_budget(2 * max_T_enc + 128, k_max_new, max_T_prompt, ceiling);
 
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + batch_budget) {
@@ -1169,7 +1377,7 @@ transcribe_status run_batch(transcribe_session *          session,
 
         transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
         if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         std::vector<int32_t> amax(n, 0);
         ggml_backend_tensor_get(pb.out, amax.data(), 0, amax.size() * sizeof(int32_t));
@@ -1227,7 +1435,7 @@ transcribe_status run_batch(transcribe_session *          session,
         transcribe_session::ResultSet rs = finalize_utterance(cm, params, generated[b], n_samples[b]);
         if (b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
-            rs.status         = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+            rs.status         = transcribe::decode_stop_status(truncated[b]);
         }
         cc->batch_results.push_back(std::move(rs));
     }

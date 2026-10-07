@@ -1,36 +1,23 @@
 #!/bin/bash
 #
-# Automated release script for ggml.
+# Release preparation script for ggml.
 #
-# Note: Sync from llama.cpp should be done separately via PR process
-# prior to running this script.
+# Bumps the version in CMakeLists.txt on a release candidate branch.
+# The branch should then be pushed and a PR created, reviewed, and
+# merged. After the PR is merged and the build-cpu workflow has
+# completed successfully, the release is finalized by the make-release
+# workflow (.github/workflows/make-release.yml), which creates the tag.
 #
 # Usage:
-#   ./scripts/release.sh prepare [major|minor|patch] [--dry-run]
-#   ./scripts/release.sh finalize [--dry-run]
+#   ./scripts/release.sh [major|minor|patch] [--dry-run]
 #
-# Two-stage release process:
+# Example:
+#   $ ./scripts/release.sh minor
 #
-# Stage 1 - Prepare:
-# $ ./scripts/release.sh prepare minor
-# This creates a release candidate branch with version bump and removes -dev suffix.
-# The branch should then be manually pushed and a PR created, reviewed, and merged.
-#
-# Stage 2 - Finalize:
-# $ ./scripts/release.sh finalize
-# After the RC PR is merged, this reads the current version from CMakeLists.txt,
-# creates the release tag, and prepares the next development cycle.
-#
-# Prepare stage:
-# 1. Creates release candidate branch
-# 2. Updates version and removes -dev suffix
+# The script:
+# 1. Creates a release candidate branch (ggml-rc-v<major>.<minor>.<patch>)
+# 2. Bumps the version in CMakeLists.txt
 # 3. Commits the version bump
-#
-# Finalize stage:
-# 1. Reads current release version from CMakeLists.txt
-# 2. Creates signed git tag on master
-# 3. Adds -dev suffix back for next development cycle
-# 4. Creates branch and commit for development version
 #
 
 set -e
@@ -41,61 +28,27 @@ if [ ! -f "CMakeLists.txt" ] || [ ! -d "scripts" ]; then
 fi
 
 # Parse command line arguments
-COMMAND=""
 VERSION_TYPE=""
 DRY_RUN=false
 
-# First argument should be the command
-if [ $# -eq 0 ]; then
-    echo "Error: Missing command"
-    echo "Usage: $0 prepare [major|minor|patch] [--dry-run]"
-    echo "       $0 finalize [--dry-run]"
-    exit 1
-fi
-
-COMMAND="$1"
-shift
-
-# Parse remaining arguments
 for arg in "$@"; do
     case $arg in
         --dry-run)
             DRY_RUN=true
             ;;
         major|minor|patch)
-            if [ "$COMMAND" = "prepare" ]; then
-                VERSION_TYPE="$arg"
-            else
-                echo "Error: Version type only valid for 'prepare' command"
-                exit 1
-            fi
+            VERSION_TYPE="$arg"
             ;;
         *)
             echo "Error: Unknown argument '$arg'"
-            echo "Usage: $0 prepare [major|minor|patch] [--dry-run]"
-            echo "       $0 finalize [--dry-run]"
+            echo "Usage: $0 [major|minor|patch] [--dry-run]"
             exit 1
             ;;
     esac
 done
 
-# Validate command
-if [[ ! "$COMMAND" =~ ^(prepare|finalize)$ ]]; then
-    echo "Error: Command must be 'prepare' or 'finalize'"
-    echo "Usage: $0 prepare [major|minor|patch] [--dry-run]"
-    echo "       $0 finalize [--dry-run]"
-    exit 1
-fi
-
-# For prepare command, default to patch if no version type specified
-if [ "$COMMAND" = "prepare" ]; then
-    VERSION_TYPE="${VERSION_TYPE:-patch}"
-    if [[ ! "$VERSION_TYPE" =~ ^(major|minor|patch)$ ]]; then
-        echo "Error: Version type must be 'major', 'minor', or 'patch'"
-        echo "Usage: $0 prepare [major|minor|patch] [--dry-run]"
-        exit 1
-    fi
-fi
+# Default to patch if no version type specified
+VERSION_TYPE="${VERSION_TYPE:-patch}"
 
 # Common validation functions
 check_git_status() {
@@ -233,64 +186,10 @@ prepare_release() {
         echo "Next steps:"
         echo "  • Push branch to remote: git push origin $RC_BRANCH"
         echo "  • Create a Pull Request from $RC_BRANCH to master"
-        echo "  • After PR is merged, run: ./scripts/release.sh finalize"
+        echo "  • After the PR is merged and the build-cpu workflow has passed,"
+        echo "    create the release with the make-release workflow"
+        echo "    (.github/workflows/make-release.yml)"
     fi
 }
 
-finalize_release() {
-    if [ "$DRY_RUN" = true ]; then
-        echo "[dry-run] Finalizing release (no changes will be made)"
-    else
-        echo "Starting release finalization..."
-    fi
-    echo ""
-
-    check_git_status
-    check_master_branch
-    check_master_up_to_date
-
-    # Read current version from CMakeLists.txt
-    echo "Step 1: Reading current release version..."
-    MAJOR=$(grep "set(GGML_VERSION_MAJOR" CMakeLists.txt | sed 's/.*MAJOR \([0-9]*\).*/\1/')
-    MINOR=$(grep "set(GGML_VERSION_MINOR" CMakeLists.txt | sed 's/.*MINOR \([0-9]*\).*/\1/')
-    PATCH=$(grep "set(GGML_VERSION_PATCH" CMakeLists.txt | sed 's/.*PATCH \([0-9]*\).*/\1/')
-
-    RELEASE_VERSION="$MAJOR.$MINOR.$PATCH"
-    echo "Release version: $RELEASE_VERSION"
-    echo ""
-
-    # Create git tag
-    echo "Step 2: Creating signed git tag..."
-    if [ "$DRY_RUN" = true ]; then
-        echo "  [dry-run] Would create signed tag: v$RELEASE_VERSION with message 'Release version $RELEASE_VERSION'"
-    else
-        git tag -s "v$RELEASE_VERSION" -m "Release version $RELEASE_VERSION"
-        echo "✓ Created signed tag: v$RELEASE_VERSION"
-    fi
-    echo ""
-
-
-    echo ""
-    if [ "$DRY_RUN" = true ]; then
-        echo "[dry-run] Summary (no changes were made):"
-        echo "  • Would have created tag: v$RELEASE_VERSION"
-    else
-        echo "Release finalization completed!"
-        echo "Summary:"
-        echo "  • Created signed tag: v$RELEASE_VERSION"
-        echo ""
-        echo "Next steps:"
-        echo "  • Push tag to remote: git push origin v$RELEASE_VERSION"
-        echo "  • The release is now complete!"
-    fi
-}
-
-# Execute the appropriate command
-case $COMMAND in
-    prepare)
-        prepare_release
-        ;;
-    finalize)
-        finalize_release
-        ;;
-esac
+prepare_release

@@ -27,7 +27,7 @@ or an object) with the contract fields:
 Selecting a provider picks which native artifact loads into the process; the
 per-model ``backend=`` request is a *separate* axis resolved inside it. Selection
 policy: explicit ``provider`` argument → ``TRANSCRIBE_NATIVE_PROVIDER`` env var →
-best accelerated (CUDA/Metal, then Vulkan) → CPU. A discovered provider whose
+best accelerated (CUDA/ROCm/Metal, then Vulkan) → CPU. A discovered provider whose
 declared version or header hash disagrees with this binding is a hard error
 *before* dlopen — pip pins are not enough; this runtime check is the backstop.
 
@@ -55,7 +55,7 @@ ENTRY_POINT_GROUP = "transcribe_cpp.native"
 
 #: Backend-kind preference when auto-selecting among installed providers. Higher
 #: wins; a provider's rank is the max over the kinds it advertises.
-_BACKEND_RANK = {"cuda": 3, "metal": 3, "vulkan": 2, "cpu_accel": 1, "cpu": 1}
+_BACKEND_RANK = {"cuda": 3, "rocm": 3, "metal": 3, "vulkan": 2, "cpu_accel": 1, "cpu": 1}
 
 #: Set after a successful load so the package can surface it for diagnostics.
 #: None means the library came from the dev-tree / explicit-path fallback.

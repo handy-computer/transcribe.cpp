@@ -1,8 +1,10 @@
 # Nemotron Speech Streaming EN 0.6B
 
-NVIDIA's [`nvidia/nemotron-speech-streaming-en-0.6b`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)
-ported to transcribe.cpp. A 0.6B-parameter cache-aware streaming
-FastConformer encoder with an RNN-T transducer decoder.
+<!-- catalog:intro -->
+Upstream: [`nvidia/nemotron-speech-streaming-en-0.6b`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b) at [`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40).
+
+English speech-to-text with punctuation and capitalization. A cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in both offline and cache-aware streaming modes. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -28,27 +30,39 @@ See NVIDIA's [model card](https://huggingface.co/nvidia/nemotron-speech-streamin
 for training data, intended use, streaming methodology, and the full
 latency-vs-accuracy table.
 
-Licensed under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/).
-Ported from upstream commit
-[`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4),
-pinned 2026-05-11.
+<!-- catalog:pin -->
+Licensed [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/). Ported from upstream commit [`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40), pinned 2026-05-11. Validated against the NeMo reference at transcribe.cpp commit [`12f1076`](https://github.com/handy-computer/transcribe.cpp/tree/12f1076) on 2026-05-11.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean, offline) |
+<!-- catalog:downloads label="LibriSpeech test-clean, offline" -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean, offline) |
 | --- | --- | ---: | ---: |
-| F32    | [nemotron-speech-streaming-en-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F32.gguf) | 2.30 GB | 2.31% |
-| F16    | [nemotron-speech-streaming-en-0.6b-F16.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F16.gguf) | 1.16 GB | 2.31% |
-| Q8_0   | [nemotron-speech-streaming-en-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q8_0.gguf) |  696 MB | 2.31% |
-| Q6_K   | [nemotron-speech-streaming-en-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q6_K.gguf) |  573 MB | 2.29% |
-| Q5_K_M | [nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf) |  514 MB | 2.34% |
-| Q4_K_M | [nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf) |  453 MB | 2.38% |
+| F32          | [nemotron-speech-streaming-en-0.6b-F32.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F32.gguf) | 2.47 GB | 2.31% |
+| F16          | [nemotron-speech-streaming-en-0.6b-F16.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-F16.gguf) | 1.24 GB | 2.31% |
+| Q8_0         | [nemotron-speech-streaming-en-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q8_0.gguf) |  730 MB | 2.31% |
+| Q6_K         | [nemotron-speech-streaming-en-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q6_K.gguf) |  600 MB | 2.29% |
+| Q5_K_M       | [nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf) |  539 MB | 2.34% |
+| Q4_K_M       | [nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-speech-streaming-en-0.6b-gguf/resolve/main/nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf) |  475 MB | 2.38% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620
-utterances) with greedy RNN-T decoding. F32 reference baseline: 2.31%.
-NVIDIA's self-reported number on the same split at
-`att_context_size=[70, 13]` (1.12s chunk, w/o PnC) is 2.32% (from the
-[HF model card](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)).
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy RNN-T decoding. F32 reference baseline: 2.31%. NVIDIA's self-reported number
+on the same split at att_context_size=[70, 13] (1.12s chunk, w/o PnC) is 2.32%.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 6.43% |
+<!-- /catalog -->
 
 ## Streaming WER
 
@@ -95,43 +109,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
-
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  73 ms (151×) |  73 ms (151×) |
-| Metal   | dots (35.3s) | 224 ms (158×) | 221 ms (160×) |
-| CPU     | jfk (11.0s)  |  329 ms (33×) |  330 ms (33×) |
-| CPU     | dots (35.3s) |  1.12 s (31×) |  1.12 s (31×) |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `12f1076`.
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  53 ms (206.74×) |  55 ms (200.58×) |
+| Metal   | dots (35.3s) | 157 ms (225.20×) | 158 ms (223.33×) |
+| CPU     | jfk (11.0s)  |  327 ms (33.64×) |  335 ms (32.81×) |
+| CPU     | dots (35.3s) |  1.10 s (32.03×) |  1.11 s (31.89×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  812 ms (14×) |  813 ms (14×) |
-| Vulkan  | dots (35.3s) |  2.93 s (12×) |  2.98 s (12×) |
-| CPU     | jfk (11.0s)  |  1.39 s (8×)  |  1.22 s (9×)  |
-| CPU     | dots (35.3s) |  5.21 s (7×)  |  4.76 s (7×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 424 ms (25.97×) | 426 ms (25.83×) |
+| Vulkan  | dots (35.3s) | 1.25 s (28.32×) | 1.26 s (28.01×) |
+| CPU     | jfk (11.0s)  | 743 ms (14.81×) | 788 ms (13.96×) |
+| CPU     | dots (35.3s) | 2.86 s (12.33×) | 2.93 s (12.06×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models nemotron-speech-streaming-en-0.6b \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name nemotron-speech-streaming-en-0.6b-publication
+uv run scripts/bench/run.py --profile --models nemotron-speech-streaming-en-0.6b
 ```
 
 ## Numerical Validation
@@ -205,7 +216,7 @@ degradation beyond what the offline parakeet WER gate already covers.
 Reference is NeMo's `conformer_stream_step` per chunk on CPU/fp32
 (`scripts/wer/run_reference_parakeet_streaming_nemo.py`); cpp side is
 `build/bin/transcribe-cli --stream-chunk-ms 500 --stream-att-right R`
-on Metal. Test plan: [`docs/plans/nemotron-streaming-wer-plan.md`](../plans/nemotron-streaming-wer-plan.md).
+on Metal.
 Reproduce / refresh the table from score sidecars:
 
 ```bash

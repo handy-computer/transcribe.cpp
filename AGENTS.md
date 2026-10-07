@@ -44,7 +44,7 @@ scripts/ci/clang-format.sh --check    # verify, no changes
 No C++ exception may escape a public entry point.
 
 - A new public entry point must either route through an `api_guard_*`
-  wrapper (`src/transcribe.cpp`) or be nothrow by construction. Device and
+  wrapper (`src/transcribe-api-guard.h`) or be nothrow by construction. Device and
   registry queries are not pure reads; guard them.
 - Entry points with ownership out-params enforce "non-OK => `*out == NULL`,
   nothing leaked" in their forwarders on every error return.

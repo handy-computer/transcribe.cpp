@@ -1,0 +1,193 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "oruk/orukeet",
+  "hf_revision": "b59c13a733fce5cf193230d0fa317ee7f145a108",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "nemo_archive",
+      "path": "orukeet-v0.1.0.nemo:model_config.yaml#preprocessor",
+      "status": "found",
+      "detail": "AudioToMelSpectrogramPreprocessor: 16 kHz, 128 mels, n_fft 512, win 0.025 s, hop 0.01 s, hann, per_feature, dither 1e-5. Section is identical to nvidia/parakeet-tdt-0.6b-v3."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    }
+  },
+  "variants": [
+    {
+      "name": "orukeet",
+      "memory_gb": 2.5,
+      "files": [
+        "orukeet-v0.1.0.nemo",
+        "model.safetensors",
+        "config.json",
+        "tokenizer.json"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "architectures": [
+        "ParakeetForTDT"
+      ],
+      "hidden_act": "relu",
+      "model_type": "parakeet_tdt",
+      "vocab_size": 8193
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "config",
+    "evidence": "config.dtype=float32; safetensors header F32=699 / I64=24, identical distribution to v3. .nemo model_weights.ckpt is the F32 source; converted GGUF is orukeet-F32.gguf.",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "I64": 24,
+        "F32": 699
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 8192,
+    "special_tokens": {
+      "pad": 2,
+      "blank": 8192,
+      "decoder_start": 8192
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "7c21c04ff6ff2f806ca43a8420479091479c805d2b7952825ae2acc4fec9424d"
+  },
+  "capabilities": {
+    "languages": [
+      "bg",
+      "hr",
+      "cs",
+      "da",
+      "nl",
+      "en",
+      "et",
+      "fi",
+      "fr",
+      "de",
+      "el",
+      "hu",
+      "it",
+      "lv",
+      "lt",
+      "mt",
+      "pl",
+      "pt",
+      "ro",
+      "ru",
+      "sk",
+      "sl",
+      "es",
+      "sv",
+      "uk"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.46,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/oruk/orukeet",
+      "notes": "NeMo greedy-batch TDT, FP32 weights + BF16 CUDA autocast, publisher's pinned normalizer. Parakeet v3 = 1.53 on the same pipeline. Acceptance dataset."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.86,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/oruk/orukeet",
+      "notes": "v3 = 3.14. CAUTION: the r3 final adaptation trained on 2,939 LibriSpeech test-other recordings and used test-other for checkpoint selection, so this split is not held out."
+    },
+    {
+      "dataset": "FLEURS test, English",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.82,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/oruk/orukeet",
+      "notes": "v3 = 4.28"
+    },
+    {
+      "dataset": "FLEURS test, 25 languages (pooled)",
+      "language": null,
+      "metric": "wer",
+      "score": 9.85,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/oruk/orukeet",
+      "notes": "Pooled (errors / reference words), not averaged; v3 = 11.01 on the same pipeline. Per-language table in docs/current-checkpoint-benchmarks.md on the repo."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "Orukeet is a weights-only fine-tune of nvidia/parakeet-tdt-0.6b-v3 (model_config.yaml encoder/decoder/joint/preprocessor/decoding sections and the SentencePiece tokenizer are byte-for-byte those of v3). The publisher's benchmark numbers are produced with NeMo (nemo_toolkit[asr] 3.0.0, ASRModel.restore_from on orukeet-v0.1.0.nemo, greedy-batch TDT), so NeMo on the .nemo archive is the oracle, same as the v3 port. The repo also ships a transformers ParakeetForTDT export, a sherpa-onnx INT8 export, Core ML bundles and a 'native' NeMo-Speech.cpp GGUF; those are downstream exports with their own validation, not the reference. The publisher also ships a transcribe.cpp Q8_0 GGUF built with our own convert-parakeet.py at 585b98f7 plus a 20-line profile patch; that file is a cross-check, not an input.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Weights-only fine-tune of v3: architecture, hyperparameters, tokenizer and frontend are identical, so src/arch/parakeet needs no changes. The only converter change is a VARIANT_PROFILES entry (slug 'orukeet' from --repo-id oruk/orukeet). Any Stage 4 tensor drift beyond the v3 tolerances is therefore a converter or reference-dump problem, not a runtime one.",
+    "Tokenizer: SentencePiece BPE 8192 + blank. tokenizer.model / tokenizer.vocab / vocab.txt inside the .nemo are byte-identical (SHA-256) to nvidia/parakeet-tdt-0.6b-v3. No tokenizer work.",
+    "12,288 of the 24,576 encoder depthwise-conv taps (9-tap, 1024 ch x 24 layers) are frozen fitted Gabor values rather than trained weights. They are stored as ordinary F32 conv weights, so no runtime support is needed, but quantization of conv_dw tensors could move these taps more than trained ones would; the Q4_K_M/Q5_K_M quant WER read in Stage 5/7 is the check.",
+    "Checkpoint selection and the final 168-step adaptation used LibriSpeech test-other, so test-other is contaminated. test-clean (the acceptance dataset) was not used for training per the card, but treat the publisher's test-other number as non-held-out and do not use test-other as a gate.",
+    "Publisher's own 120-clip FLEURS check with our runtime (transcribe-cpp/validation.json) shows Q8_0 worse than stock v3 on de (4.07 vs 3.56), fr (4.50 vs 4.07) and uk (11.60 vs 9.40) and better on en/es/ru. The card's '61 of 74 splits' claim is on their NeMo pipeline; our full FLEURS Q8_0 sweep decides what the model card says.",
+    "License is CC-BY-SA-4.0 (ShareAlike), unlike the CC-BY-4.0 of every other parakeet variant we ship. The HF card YAML, catalog record and GGUF general.license must carry cc-by-sa-4.0 and retain the NVIDIA attribution from NOTICE.md.",
+    "Publisher reports four sub-block tensor probes exceeding strict tolerances at sequence boundaries (attributed to padding-path differences) while standard probes pass v3 tolerances. Unverified; Stage 4 validate.py against a NeMo dump settles it.",
+    "The .nemo is 2.5 GB; use the converter's direct-archive path (prefer_direct_load) to avoid NeMo's extract-to-tmp doubling disk use. Spillover dir is /Volumes/port/models/transcribe.cpp/orukeet.",
+    "Multilingual SentencePiece vocab (8192 + blank). Some scripts (Cyrillic, Greek) have higher byte-fallback rates; tokenizer round-trip tests should cover non-Latin samples, not just English.",
+    "Long-form audio: v3 model card recommends chunking >35 s clips; the C++ port handles long audio via internal chunking. Boundary handling differs from NeMo's chunked decoder; transcripts can drift at chunk edges if overlap is wrong."
+  ],
+  "intake_gaps": []
+}

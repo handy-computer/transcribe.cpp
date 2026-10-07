@@ -5,7 +5,7 @@
 //
 // Forward shape per block:
 //   x = 0.5 * ff1(x) + x                 (macaron half FFN, SiLU)
-//   x = shaw_block_attn(x, dists) + x    (block-local attention with
+//   x = shaw_block_attn(x, pos_rows) + x (block-local attention with
 //                                         context_size=200 blocks and a
 //                                         Shaw learned-position bias)
 //   x = conv_module(x) + x               (LN → pw expand → GLU → dw → BN
@@ -61,8 +61,9 @@ transcribe_status compute_mel_encoder_input(const transcribe::MelFrontend & mel,
 struct EncoderBuild {
     // Graph inputs (caller uploads at compute time).
     ggml_tensor * mel_in          = nullptr;  // [input_dim, T_enc]
-    ggml_tensor * attention_dists = nullptr;  // [context_size, context_size]
-                                              //  int32, Shaw bias indices
+    ggml_tensor * pos_rows        = nullptr;  // [2*context_size - 1] int32,
+                                              //  Shaw bias rows, one per
+                                              //  relative offset
     ggml_tensor * last_block_mask = nullptr;  // [context_size, context_size]
                                               //  f32 additive mask, all
                                               //  zeros except final-block
@@ -86,7 +87,7 @@ struct EncoderBuild {
     } dumps;
 
     // Padding bookkeeping computed at build (caller uploads matching
-    // attention_dists / last_block_mask shapes).
+    // pos_rows / last_block_mask shapes).
     int n_blocks_local = 0;  // ceil(T_enc / context_size)
     int last_block_rem = 0;  // T_enc % context_size (== 0 means no pad)
 };
@@ -102,16 +103,19 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  int                    T_enc,
                                  bool                   use_flash);
 
-// Host-side precomputation of the Shaw attention_dists matrix.
-// attention_dists[c, r] = clamp(c - r, -context_size, context_size) + max_pos_emb,
-// where c is the key/column index and r is the query/row index (matches the
-// reference `seq.view(-1,1) - seq.view(1,-1)`; see precompute_attention_dists
-// in encoder.cpp). Flattened to row-major int32 [context_size * context_size].
-// Caller uploads this once per encode into EncoderBuild::attention_dists.
+// Host-side precomputation of the Shaw positional-bias rows.
 //
-// The same matrix is reused across every encoder block and every batch
+// The reference's `seq.view(-1,1) - seq.view(1,-1)` builds a
+// [context_size, context_size] table whose entry at (ne0 = key, ne1 = query)
+// is clamp(query - key, +/- context_size) + max_pos_emb. Every entry is a
+// function of (query - key) alone, so only the 2*context_size - 1 reachable
+// offsets are stored; shaw_block_attn's skew path expands them. See
+// shaw_attn.h for why the collapsed form is the fast one.
+// Caller uploads this once per encode into EncoderBuild::pos_rows.
+//
+// The same vector is reused across every encoder block and every batch
 // element (and across decode calls if the encoder shape is unchanged).
-std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_emb);
+std::vector<int32_t> precompute_pos_rows(int context_size, int max_pos_emb);
 
 // Host-side build of the last-block additive mask. For T_enc that is
 // not a multiple of context_size, the last block is right-padded with

@@ -22,12 +22,14 @@ from ._generated import (
     TRANSCRIBE_ERR_INVALID_ARG as ERR_INVALID_ARG,
     TRANSCRIBE_ERR_NOT_IMPLEMENTED as ERR_NOT_IMPLEMENTED,
     TRANSCRIBE_ERR_OOM as ERR_OOM,
+    TRANSCRIBE_ERR_OUTPUT_REPETITION as ERR_OUTPUT_REPETITION,
     TRANSCRIBE_ERR_OUTPUT_TRUNCATED as ERR_OUTPUT_TRUNCATED,
     TRANSCRIBE_ERR_SAMPLE_RATE as ERR_SAMPLE_RATE,
     TRANSCRIBE_ERR_UNSUPPORTED_ARCH as ERR_UNSUPPORTED_ARCH,
     TRANSCRIBE_ERR_UNSUPPORTED_ITN as ERR_UNSUPPORTED_ITN,
     TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE as ERR_UNSUPPORTED_LANGUAGE,
     TRANSCRIBE_ERR_UNSUPPORTED_PNC as ERR_UNSUPPORTED_PNC,
+    TRANSCRIBE_ERR_UNSUPPORTED_ROLE as ERR_UNSUPPORTED_ROLE,
     TRANSCRIBE_ERR_UNSUPPORTED_TASK as ERR_UNSUPPORTED_TASK,
     TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS as ERR_UNSUPPORTED_TIMESTAMPS,
     TRANSCRIBE_ERR_UNSUPPORTED_VARIANT as ERR_UNSUPPORTED_VARIANT,
@@ -82,12 +84,25 @@ class UnsupportedRequest(TranscribeError):
     """Task / language / timestamp granularity the model does not support."""
 
 
+class UnsupportedRole(TranscribeError):
+    """The model does not serve the role the call needs, e.g. opening a
+    transcription session on, or reading the (ASR) capabilities of, a model
+    without the ASR role. A property of the loaded model, not of the request
+    options, so retrying with different run options cannot succeed."""
+
+
 class AbiError(TranscribeError):
     """Caller-owned struct layout did not match the library (struct_size)."""
 
 
 class InputTooLong(TranscribeError):
     pass
+
+
+class Busy(TranscribeError):
+    """A stream is active on this model, so the call was refused instead of
+    started (see ``Model``). Finalize or reset the stream first, or use one
+    Model per worker. Raised by the binding, so ``status`` is 0."""
 
 
 class Aborted(TranscribeError):
@@ -113,6 +128,17 @@ class OutputTruncated(TranscribeError):
     partial_result: "Optional[Result]" = None
 
 
+class OutputRepetition(OutputTruncated):
+    """The decode was stopped because the output began repeating itself —
+    the transcript is incomplete by contract.
+
+    A subclass of :class:`OutputTruncated`, so a handler for incomplete
+    transcripts catches both. ``partial_result`` holds the partial transcript
+    with the repeats dropped (one copy kept), or None when the status surfaced
+    outside a result-bearing call.
+    """
+
+
 _STATUS_TO_EXC = {
     ERR_INVALID_ARG: InvalidArgument,
     ERR_NOT_IMPLEMENTED: NotImplementedByModel,
@@ -132,6 +158,8 @@ _STATUS_TO_EXC = {
     ERR_UNSUPPORTED_ITN: UnsupportedRequest,
     ERR_INPUT_TOO_LONG: InputTooLong,
     ERR_OUTPUT_TRUNCATED: OutputTruncated,
+    ERR_OUTPUT_REPETITION: OutputRepetition,
+    ERR_UNSUPPORTED_ROLE: UnsupportedRole,
 }
 
 

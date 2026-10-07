@@ -74,9 +74,6 @@ struct FunAsrNanoModel final : public transcribe_model {
 };
 
 struct FunAsrNanoSession final : public transcribe_session {
-    ggml_context *       compute_ctx = nullptr;
-    ggml_backend_sched_t sched       = nullptr;
-
     transcribe::causal_lm::KvCache kv_cache;
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).

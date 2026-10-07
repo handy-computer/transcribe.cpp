@@ -4,9 +4,12 @@ Raw native FFI bindings for
 [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), a C/C++
 speech-to-text library built on ggml.
 
-> **Status: in development (0.0.1).** This crate exposes the unsafe, generated
+> **Status: in development (0.2.0).** This crate exposes the unsafe, generated
 > FFI surface. Most users want the safe wrapper,
 > [`transcribe-cpp`](https://crates.io/crates/transcribe-cpp).
+
+Raw-FFI consumers upgrading from 0.1 should follow the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md).
 
 ## What it does
 
@@ -25,16 +28,28 @@ vcpkg setup is required on any platform. The static link is the default; the
 
 ## Features
 
-- `metal` (default on Apple), `vulkan`, `cuda`, `openmp` — each forwards to the
-  matching `TRANSCRIBE_*` CMake option.
+- `metal` (default on Apple), `vulkan`, `cuda`, `rocm`, `openmp` — each forwards
+  to the matching `TRANSCRIBE_*` CMake option (`rocm` enables `TRANSCRIBE_HIP`).
 - `shared` — link a shared `libtranscribe` (`.so`/`.dylib`/`.dll`) loaded at
   runtime instead of statically baking it in. The default is a self-contained
   static link.
 - `dynamic-backends` — additionally ship each compute backend (the per-ISA CPU
-  tiers, Vulkan, CUDA, …) as a loadable module next to the library, selected at
+  tiers, Vulkan, CUDA, ROCm, …) as a loadable module next to the library, selected at
   runtime by `transcribe_init_backends_default()` when the modules sit next to
   `libtranscribe`, or `transcribe_init_backends(dir)` for a custom provider
   directory. Implies `shared`.
+
+## ROCm builds
+
+Install ROCm 6.1 or newer, then enable the first-class `rocm` feature:
+
+```sh
+cargo build --no-default-features --features rocm
+```
+
+The build detects the attached AMD GPU. To target a specific architecture, pass
+it through CMake, for example
+`TRANSCRIBE_CMAKE_ARGS="-DAMDGPU_TARGETS=gfx1201"`.
 
 ## Windows Vulkan builds
 
@@ -60,6 +75,27 @@ target directory to avoid `MAX_PATH` in that case:
 $env:CARGO_TARGET_DIR = "C:\tc-target"
 cargo build --features vulkan
 ```
+
+## Linking a prebuilt install
+
+Set `TRANSCRIBE_DIR` (OPENSSL_DIR-style) to skip the source build and link an
+existing install prefix instead:
+
+```bash
+cmake -B build -DTRANSCRIBE_INSTALL=ON [-DTRANSCRIBE_BUILD_SHARED=ON ...]
+cmake --build build
+cmake --install build --prefix /opt/transcribe
+TRANSCRIBE_DIR=/opt/transcribe cargo build
+```
+
+The prefix must contain the installed `lib*/transcribe-link.json` manifest;
+the link line is reconstructed from it exactly as in a source build. Cargo
+features (`shared`, `vulkan`, ...) do not apply on this path — the prebuilt
+already fixed its configuration, and the manifest records it (including
+static vs shared). For a shared-library prefix, running consumer binaries
+may additionally need the prefix's lib dir on the loader path (e.g.
+`LD_LIBRARY_PATH=$TRANSCRIBE_DIR/lib`): the rpath the build emits does not
+propagate to downstream binaries.
 
 ## Build-flag escape hatch
 

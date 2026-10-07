@@ -54,14 +54,14 @@ def source_fingerprint(root: Path) -> str:
 
 
 def hyp_extra_hash(root: Path) -> str:
-    """Hash of the Python pieces that affect hyp output: run.py + ingest.py.
+    """Hash of the Python pieces that affect hyp output and manifests.
 
     Folded with SRC_FP into the hyp cache key. Edits to the dispatcher
     (modal_sweep.py) or to local-only scripts (score.py) do NOT invalidate
     the hyp cache because they cannot change what the cell produces.
     """
     h = hashlib.sha256()
-    for name in ("run.py", "ingest.py"):
+    for name in ("run.py", "ingest.py", "languages.py"):
         p = root / "scripts" / "wer" / name
         if p.is_file():
             h.update(name.encode()); h.update(b"\0")

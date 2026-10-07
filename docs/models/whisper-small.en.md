@@ -1,35 +1,56 @@
 # Whisper small.en
 
-OpenAI's [`openai/whisper-small.en`](https://huggingface.co/openai/whisper-small.en) ported to transcribe.cpp. A 244M-parameter
-encoder-decoder transformer (audio encoder + autoregressive text decoder with
-cross-attention).
+<!-- catalog:intro -->
+Upstream: [`openai/whisper-small.en`](https://huggingface.co/openai/whisper-small.en) at [`e872752`](https://huggingface.co/openai/whisper-small.en/commit/e872752).
+
+OpenAI Whisper small.en — converted to GGUF for transcribe.cpp. English-only; faster than the multilingual model at the same size. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
+<!-- /catalog -->
 
 ## What it's for
 
 Offline English speech-to-text. The model takes a 16 kHz mono WAV and returns a transcript. English-only checkpoints are typically faster and slightly more accurate than the multilingual model at the same parameter count, but they cannot transcribe other languages and cannot translate. Long audio is handled via 30-second chunked decoding.
 
+**Prompting:** vocabulary (`--vocabulary`, rendered as `Glossary: …`), context prompt (`--prompt`) and transcript prefix (`--prefix`, first 30 s window only) through the generic `transcribe_run_params` fields; vocabulary and context share Whisper's 223-token prompt budget and cannot be combined with the Whisper extension's `initial_prompt` / `prompt_tokens`. A prefix does not compose with segment timestamps: `AUTO` falls back to none and an explicit segment request is an error.
+
 See the [upstream model card](https://huggingface.co/openai/whisper-small.en) for training data, intended
 use, and the original evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`e872752`](https://huggingface.co/openai/whisper-small.en/commit/e872752),
-pinned 2026-04-25. Validated against the transformers reference at
-transcribe.cpp commit
-[`5.6.1`](https://github.com/handy-computer/transcribe.cpp/tree/5.6.1)
-on 2026-04-26.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`e872752`](https://huggingface.co/openai/whisper-small.en/commit/e872752), pinned 2026-04-25. Validated against the transformers reference at transcribe.cpp commit [`0a26478`](https://github.com/handy-computer/transcribe.cpp/tree/0a26478) on 2026-09-13.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-small.en-F32.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-F32.gguf) | 924 MB | 3.09% |
-| F16    | [whisper-small.en-F16.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-F16.gguf) | 470 MB | 2.97% |
-| Q8_0   | [whisper-small.en-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q8_0.gguf) | 257 MB | 3.09% |
-| Q6_K   | [whisper-small.en-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q6_K.gguf) | 202 MB | 2.97% |
-| Q5_K_M | [whisper-small.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q5_K_M.gguf) | 185 MB | 3.12% |
-| Q4_K_M | [whisper-small.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q4_K_M.gguf) | 164 MB | 3.08% |
+| F32          | [whisper-small.en-F32.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-F32.gguf) | 969 MB | 3.11% |
+| F16          | [whisper-small.en-F16.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-F16.gguf) | 493 MB | 2.97% |
+| Q8_0         | [whisper-small.en-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q8_0.gguf) | 270 MB | 3.09% |
+| Q6_K         | [whisper-small.en-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q6_K.gguf) | 212 MB | 2.97% |
+| Q5_K_M       | [whisper-small.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q5_K_M.gguf) | 194 MB | 3.11% |
+| Q4_K_M       | [whisper-small.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q4_K_M.gguf) | 172 MB | 3.09% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with transcribe.cpp's default greedy decode and segment timestamps enabled — the same runs summarized in the [Whisper family table](whisper.md#all-variants). Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions add ~0.1pp of run-to-run variance on the noise floor, and quantization is otherwise generally WER-neutral. See the [WER methodology](../tools/wer.md) for the harness.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+OpenAI's self-reported number on the same split is 3.05%. Both are
+short-form WER decoded without timestamps; OpenAI does not publish its exact
+evaluation configuration, so small differences are expected. Single-run
+figures: GPU reductions can shift corpus WER by about 0.1pp between runs,
+mostly on short-clip hallucination outcomes at the noise floor.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 6.14% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -50,62 +71,52 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mel + encode + decode, mean over the recorded
-iterations after warmup), with speedup over realtime in parentheses. Units:
-`ms` below 1 s, `s` above (2 decimal places). Decode latency dominates as
-model size grows; the encoder is only run once per 30-second window.
-
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 107.1 ms (102.7×) | 102.6 ms (107.2×) |
-| Metal   | dots (35.3s) | 333.0 ms (106.1×) | 329.3 ms (107.3×) |
-| CPU     | jfk (11.0s)  |    1.31 s (8.4×) |    1.13 s (9.8×) |
-| CPU     | dots (35.3s) |   2.89 s (12.2×) |   2.52 s (14.0×) |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `e0fa0f6`.
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Metal   | jfk (11.0s)  | 119.2 ms (92.31×) | 114.0 ms (96.47×) |
+| Metal   | dots (35.3s) | 384.3 ms (91.93×) | 387.5 ms (91.18×) |
+| CPU     | jfk (11.0s)  | 597.0 ms (18.42×) | 953.9 ms (11.53×) |
+| CPU     | dots (35.3s) |   1.39 s (25.39×) |   1.60 s (22.10×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-small.en \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu \
-  --iters 3 --warmup 1 \
-  --name whisper-small.en-publication
+uv run scripts/bench/run.py --profile --models whisper-small.en
 ```
 
 ### AMD Ryzen 7 PRO 4750U
 
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
+
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  970 ms (11.3×) |  883 ms (12.5×) |
-| Vulkan  | dots (35.3s) |  2.48 s (14.3×) |  2.36 s (15.0×) |
-| CPU     | jfk (11.0s)  |  3.68 s (3.0×)  |  2.95 s (3.7×)  |
-| CPU     | dots (35.3s) |  8.38 s (4.2×)  |  7.16 s (4.9×)  |
+| Vulkan  | jfk (11.0s)  | 961 ms (11.44×) | 926 ms (11.89×) |
+| Vulkan  | dots (35.3s) | 2.62 s (13.51×) | 2.56 s (13.82×) |
+| CPU     | jfk (11.0s)  |  1.98 s (5.57×) |  1.90 s (5.79×) |
+| CPU     | dots (35.3s) |  5.09 s (6.95×) |  4.96 s (7.12×) |
 
-Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models whisper-small.en \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name whisper-small.en-publication
+uv run scripts/bench/run.py --profile --models whisper-small.en
 ```
 
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against the transformers reference (`WhisperForConditionalGeneration`, fp32 CPU) on the manifest's case (`samples/jfk.wav`). All 23 checkpointed tensors fall within per-variant tolerance. Tolerance budget lives at
-[`tests/tolerances/whisper-small.en.json`](https://github.com/handy-computer/transcribe.cpp/blob/main/tests/tolerances/whisper-small.en.json). Last validated at commit [`1854f57`](https://github.com/handy-computer/transcribe.cpp/tree/1854f57).
+[`tests/tolerances/whisper-small.en.json`](https://github.com/handy-computer/transcribe.cpp/blob/main/tests/tolerances/whisper-small.en.json).
 
 | Field | Value |
 | --- | --- |
@@ -113,24 +124,6 @@ transcribe.cpp is validated tensor-by-tensor against the transformers reference 
 | Manifest | `tests/golden/whisper/whisper-small.en.manifest.json` |
 | Tolerance file | `tests/tolerances/whisper-small.en.json` |
 | Command | `uv run scripts/validate.py all --family whisper --variant whisper-small.en` |
-
-Selected tensors (worst observed across cases; see tolerance file for per-tensor budgets):
-
-| Tensor                 | Max abs diff | Mean abs diff | Notes |
-| ---------------------- | ---: | ---: | --- |
-| `enc.mel.in`           |  `2.229e-05` |   `3.381e-08` | fp32 mixed-radix FFT vs torch fp64 frontend |
-| `enc.conv1.out`        |  `5.901e-06` |   `4.686e-08` | fp32 conv stem |
-| `enc.conv2.out`        |  `1.574e-05` |   `2.770e-07` | stride-2 conv stem (matches enc.embed.out) |
-| `enc.block.0.out`      |  `1.985e-05` |   `6.654e-07` | first encoder block |
-| `enc.block.11.out`     |  `1.855e-02` |   `5.759e-06` | final encoder block (peak signal grows with depth) |
-| `enc.final`            |  `2.106e-03` |   `3.011e-06` | post-LN encoder output |
-| `dec.token_emb`        |  `0.000e+00` |   `0.000e+00` | exact zero-drift (`ggml_get_rows` on the F32 GGUF) |
-| `dec.block.0.out`      |  `1.621e-05` |   `6.581e-07` | first decoder block, prompt pass |
-| `dec.block.11.out`     |  `8.678e-05` |   `3.321e-06` | final decoder block (accumulated) |
-| `dec.out_before_head`  |  `2.718e-04` |   `1.375e-05` | post final LN, pre-vocab projection |
-| `dec.logits_raw`       |  `5.913e-05` |   `1.444e-05` | vocab projection (raw logits) |
-| `dec.logits`           |  `6.914e-05` |   `2.368e-05` | log-softmax over vocab |
-| `dec.logits_raw.gen20` |  `1.717e-05` |   `2.999e-06` | step-20 logits (KV-cached path) |
 
 The C++ mel frontend (Slaney filterbank + Hann periodic window +
 whisper-style log-mel compression) drives `enc.mel.in` to fp32-vs-fp64

@@ -1,12 +1,17 @@
 # Voxtral Mini 3B (2507)
 
-Mistral's [`mistralai/Voxtral-Mini-3B-2507`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507)
-ported to transcribe.cpp. An offline audio-LLM: a Whisper-large-v3
-bidirectional audio encoder (32 layers, `d_model=1280`, 20 heads) feeds
-a 4-frame-group projector (375 audio tokens per 30 s chunk) into a
-Ministral-3B causal LM (30 layers, `hidden_size=3072`,
-`intermediate_size=8192`, GQA 32 q / 8 kv heads, NEOX RoPE, SwiGLU) via
-audio-token injection at the `audio_token_id=24` positions in the prompt.
+<!-- catalog:intro -->
+Upstream: [`mistralai/Voxtral-Mini-3B-2507`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507) at [`3060fe3`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/commit/3060fe3).
+
+Offline audio-LLM speech-to-text and speech translation. A Whisper-large-v3
+bidirectional audio encoder feeds a 4-frame-group projector (375 audio tokens
+per 30 s chunk) into a Ministral-3B causal LM (30 layers, GQA 32/8, NEOX RoPE,
+SwiGLU) via audio-token injection. Takes a 16 kHz mono WAV and produces a
+transcript via greedy decoding; speech translation runs through the
+mistral-common instruct template. The smaller sibling of Voxtral Small 24B —
+same encoder, projector, log-mel frontend, and tekken tokenizer, with a 3B
+decoder in place of Mistral-Small-24B.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -20,30 +25,54 @@ mono WAV and produces a transcript via greedy decoding.
   mistral-common instruct template ("Translate this to {Language}.") to
   translate non-English speech into the target language's text.
 
+**Prompting:** `--task instruct --prompt "<instruction>"` replaces the transcription request with a free-text instruction (summaries, questions, reformatting); the output is free text.
+
 See Mistral's [model card](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507)
 for training data, intended use, and upstream evaluation.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`3060fe3`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/commit/3060fe34b35ba5d44202ce9ff3c097642914f8f3),
-pinned 2026-06-06.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`3060fe3`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/commit/3060fe3), pinned 2026-06-06. Validated against the Transformers reference at transcribe.cpp commit [`483c122`](https://github.com/handy-computer/transcribe.cpp/tree/483c122) on 2026-06-06.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [Voxtral-Mini-3B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-BF16.gguf)     | 9.37 GB | 1.88% |
-| F16    | [Voxtral-Mini-3B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-F16.gguf)       | 9.38 GB | 1.89% |
-| Q8_0   | [Voxtral-Mini-3B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q8_0.gguf)     | 5.00 GB | 1.87% |
-| Q6_K   | [Voxtral-Mini-3B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q6_K.gguf)     | 3.87 GB | 1.87% |
-| Q5_K_M | [Voxtral-Mini-3B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q5_K_M.gguf) | 3.46 GB | 1.91% |
-| Q4_K_M | [Voxtral-Mini-3B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q4_K_M.gguf) | 2.98 GB | 1.94% |
+| BF16         | [Voxtral-Mini-3B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-BF16.gguf) | 9.37 GB | 1.88% |
+| F16          | [Voxtral-Mini-3B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-F16.gguf) | 9.38 GB | 1.89% |
+| Q8_0         | [Voxtral-Mini-3B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q8_0.gguf) | 5.00 GB | 1.87% |
+| Q6_K         | [Voxtral-Mini-3B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q6_K.gguf) | 3.87 GB | 1.87% |
+| Q5_K_M       | [Voxtral-Mini-3B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q5_K_M.gguf) | 3.46 GB | 1.91% |
+| Q4_K_M       | [Voxtral-Mini-3B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Mini-3B-2507-gguf/resolve/main/Voxtral-Mini-3B-2507-Q4_K_M.gguf) | 2.98 GB | 1.94% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
-with the Whisper-style English text normalizer, batch size 8 on an NVIDIA
-L40S. The same-machine HuggingFace `transformers` reference run
-(`VoxtralForConditionalGeneration`, BF16, `attn_implementation=eager`,
-greedy) lands at **1.87%**, and the BF16 GGUF matches it (1.87% at batch
-1).
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Scored with the Whisper English text normalizer on an NVIDIA L40S. Same-machine
+HuggingFace transformers reference (VoxtralForConditionalGeneration, BF16,
+attn_implementation=eager, greedy): 1.87%; the BF16 GGUF matches within rounding.
+The BF16-vs-reference parity is the family's tensor-level numerical gate — 43
+checkpointed tensors within tolerance, transcript byte-exact.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 4.71% |
+| en       | WER    | 3.89% |
+| es       | WER    | 3.52% |
+| fr       | WER    | 4.51% |
+| hi       | WER    | 8.93% |
+| it       | WER    | 2.56% |
+| nl       | WER    | 6.57% |
+| pt       | WER    | 3.84% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -81,41 +110,40 @@ CLI flags:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 727.3 ms (15.1×) | 656.8 ms (16.7×) |
-| Metal   | dots (35.3s) |   2.40 s (14.7×) |   1.90 s (18.6×) |
-| CPU     | jfk (11.0s)  |   6.06 s (1.8×)  |   6.76 s (1.6×)  |
-| CPU     | dots (35.3s) |  16.60 s (2.1×)  |  15.31 s (2.3×)  |
+<!-- catalog:perf machine=m4-max dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
+
+| Backend | Sample       |              Q8_0 |            Q4_K_M |
+| ------- | ------------ | ----------------: | ----------------: |
+| Metal   | jfk (11.0s)  | 862.3 ms (12.76×) | 769.4 ms (14.30×) |
+| Metal   | dots (35.3s) |   2.51 s (14.08×) |   2.09 s (16.90×) |
+| CPU     | jfk (11.0s)  |    5.83 s (1.89×) |    6.12 s (1.80×) |
+| CPU     | dots (35.3s) |   14.94 s (2.36×) |   14.18 s (2.49×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Vulkan  | jfk (11.0s)  |   9.57 s (1.2×)  |   9.37 s (1.2×)  |
-| Vulkan  | dots (35.3s) |  26.49 s (1.3×)  |  23.82 s (1.5×)  |
-| CPU     | jfk (11.0s)  |  26.15 s (0.4×)  |  19.39 s (0.6×)  |
-| CPU     | dots (35.3s) |  63.96 s (0.6×)  |  45.92 s (0.8×)  |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora Linux 43, transcribe.cpp `91af262`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 11.11 s (0.99×) | 10.58 s (1.04×) |
+| Vulkan  | dots (35.3s) | 30.04 s (1.18×) | 27.46 s (1.29×) |
+| CPU     | jfk (11.0s)  | 22.37 s (0.49×) | 20.88 s (0.53×) |
+| CPU     | dots (35.3s) | 55.99 s (0.63×) | 49.49 s (0.71×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models Voxtral-Mini-3B-2507 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name voxtral-mini-3b-2507-publication
+uv run scripts/bench/run.py --profile --models voxtral-mini-3b-2507
 ```
 
 ## Numerical Validation
@@ -148,11 +176,3 @@ are pinned in `tests/tolerances/voxtral.json`.
 | Tolerances | `tests/tolerances/voxtral.json` |
 | Command | `uv run scripts/validate.py all --family voxtral --variant voxtral-mini-3b-2507` |
 
-Selected tensors (observed on CPU, strict backend; see tolerance file
-for budgets):
-
-| Tensor | Shape | Max abs diff | Mean abs diff | Notes |
-| --- | --- | ---: | ---: | --- |
-| `enc.mel.in` | `[128,3000]` | `2.229e-05` | `4.060e-08` | In-process log-mel vs reference `WhisperFeatureExtractor` — the frontend-parity gate |
-| `enc.out`    | `[1500,1280]` | `1.414e+01` | `1.121e-02` | Final encoder LayerNorm; the drift here is the reference's BF16 activation rounding (cpp-vs-F32-ref is ~4× tighter) |
-| `proj.out`   | `[375,3072]`  | `3.493e-01` | `3.158e-03` | Projector output (the audio embeddings injected into the LM) |

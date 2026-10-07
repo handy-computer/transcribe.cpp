@@ -1,0 +1,21 @@
+[project]
+name = "transcribe-parakeet-kestrel-env"
+version = "0.1.0"
+description = "Python env for parakeet-ultra reference dumps via kestrel (Photon's engine)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "kestrel==0.9.1",
+    "kestrel-kernels==0.7.4",
+    "kestrel-native==0.1.8",
+    "torch>=2.8",
+    "huggingface-hub>=0.20",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+]
+
+# Laptop dumps on darwin (CPUKernelRuntime), Modal sweeps on linux/cuda.
+[tool.uv]
+environments = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'linux'",
+]

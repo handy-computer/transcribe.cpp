@@ -1,11 +1,16 @@
 # MOSS-Transcribe-Diarize
 
-OpenMOSS's [`OpenMOSS-Team/MOSS-Transcribe-Diarize`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize)
-ported to transcribe.cpp. A 0.9B audio-LLM: a 24-layer Whisper-Medium audio
-encoder (`d_model=1024`, GELU, LayerNorm) feeds a 4x temporal merge
-(1024 -> 4096) and a VQAdaptor MLP bridge into a Qwen3-0.6B causal decoder
-(28 layers, `hidden_size=1024`, GQA 16/8 heads, `rope_theta=1e6`) via
-audio-token injection at `<|audio_pad|>` positions.
+<!-- catalog:intro -->
+Upstream: [`OpenMOSS-Team/MOSS-Transcribe-Diarize`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize) at [`d7231bb`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/commit/d7231bb).
+
+Offline English/Chinese speech-to-text with speaker diarization. A 0.9B
+audio-LLM: a Whisper-Medium encoder (24 layers, d_model=1024) feeds a
+4x temporal merge + VQAdaptor bridge into a Qwen3-0.6B decoder (28 layers)
+via audio-token injection. The model emits `[start][Sxx]text[end]`; the
+runtime parses those generated markers into clean text and segment rows.
+Speaker attribution is opt-in (`--diarize`) and returns structured speaker
+ids/turns. Not a streaming model.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -16,14 +21,16 @@ emergent text markers into clean `full_text`, segment rows, and—when
 `diarize=ON`—speaker IDs and speaker-turn rows. Built for long-form,
 multi-speaker audio. No translation; not a streaming model.
 
+**Prompting:** vocabulary (`--vocabulary`) as the upstream `热词提示：` hotword hint. It needs a GGUF converted with the instruction split; older GGUFs report no vocabulary support.
+
 See OpenMOSS's [model card](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize)
 for training data, intended use, and upstream evaluation. All of OpenMOSS's
 published metrics are Chinese multi-speaker diarization CER/cpCER; LibriSpeech
 test-clean is used here only as an English acceptance set.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`d7231bb`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/commit/d7231bbae2587a4af278735eb765b318c4f64edd),
-pinned 2026-07-12.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`d7231bb`](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/commit/d7231bb), pinned 2026-07-12. Validated against the MOSS author repo (OpenMOSS/MOSS-Transcribe-Diarize) reference at transcribe.cpp commit [`3f5e15c`](https://github.com/handy-computer/transcribe.cpp/tree/3f5e15c) on 2026-07-12.
+<!-- /catalog -->
 
 ## Memory and length
 
@@ -37,33 +44,47 @@ into shorter pieces.
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [MOSS-Transcribe-Diarize-BF16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-BF16.gguf)     | 1.83 GB | 2.08% |
-| F16    | [MOSS-Transcribe-Diarize-F16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-F16.gguf)       | 1.83 GB | 2.07% |
-| Q8_0   | [MOSS-Transcribe-Diarize-Q8_0.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q8_0.gguf)     | 987 MB  | 1.93% |
-| Q6_K   | [MOSS-Transcribe-Diarize-Q6_K.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q6_K.gguf)     | 768 MB  | 1.96% |
-| Q5_K_M | [MOSS-Transcribe-Diarize-Q5_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q5_K_M.gguf) | 700 MB  | 1.99% |
-| Q4_K_M | [MOSS-Transcribe-Diarize-Q4_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q4_K_M.gguf) | 617 MB  | 2.59% |
+| BF16         | [MOSS-Transcribe-Diarize-BF16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-BF16.gguf) | 1.83 GB | 2.08% |
+| F16          | [MOSS-Transcribe-Diarize-F16.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-F16.gguf) | 1.83 GB | 2.07% |
+| Q8_0         | [MOSS-Transcribe-Diarize-Q8_0.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q8_0.gguf) |  987 MB | 1.93% |
+| Q6_K         | [MOSS-Transcribe-Diarize-Q6_K.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q6_K.gguf) |  768 MB | 1.96% |
+| Q5_K_M       | [MOSS-Transcribe-Diarize-Q5_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q5_K_M.gguf) |  700 MB | 1.99% |
+| Q4_K_M       | [MOSS-Transcribe-Diarize-Q4_K_M.gguf](https://huggingface.co/handy-computer/MOSS-Transcribe-Diarize-gguf/resolve/main/MOSS-Transcribe-Diarize-Q4_K_M.gguf) |  617 MB | 2.59% |
+<!-- /catalog -->
 
-These WER values describe this dataset only, not a general quality ranking. A
-quant that scores slightly better here is not necessarily better in real-world
-use; dataset-specific decoding near-ties can make quantization noise help or
-hurt individual utterances.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech `test-clean` split (2620 utterances) with
-the Whisper-style English normalizer and jiwer 3.x. MOSS emits the diarized
-format `[start][Sxx]text[end]`; the bracket spans are metadata and are
-de-diarized to a space (for both hypothesis and reference) before scoring,
-matching the author-repo reference runner. The same-manifest MOSS author-repo
-reference (bf16, greedy) lands at **2.07%**, 95% bootstrap CI [1.82%, 2.40%];
-the BF16 port lands at 2.08%, within `+0.01pp` of the reference and well inside
-the CI. Q4_K_M's higher 2.59% is not broad degradation but a handful of 4-bit
-tail failures (6 empty outputs, 5 English->Chinese language-drift utterances,
-1 timestamp-token repetition loop); prefer Q5_K_M or higher if those matter.
-The runtime applies the same marker removal to `full_text`, so WER scoring and
-the public transcript agree. The pre-parsed inline marker string remains
-available verbatim via `transcribe_raw_text()`.
+<!-- catalog:prose field=wer.notes -->
+Scored with the Whisper-style English text normalizer and jiwer 3.x. MOSS emits the
+diarized format `[start][Sxx]text[end]`; the bracket spans are metadata and are
+de-diarized to a space (for both hypothesis and reference) before scoring, matching
+the author-repo reference runner. These values describe this dataset only, not a
+general quality ranking: a quant that scores slightly better here is not necessarily
+better in real-world use, because dataset-specific decoding near-ties can make
+quantization noise help or hurt individual utterances. The same-manifest MOSS
+author-repo reference (bf16, greedy) lands at **2.07%** with 95% bootstrap CI
+[1.82%, 2.40%]. The BF16 port lands at 2.08% (within +0.01 of the reference, well
+inside the CI band); the lower-bit presets sit between 1.93% and 1.99% (statistical
+noise) except Q4_K_M at 2.59%, whose excess is a handful of 4-bit tail failures (6
+empty outputs, 5 English->Chinese language-drift utterances, 1 timestamp-token
+repetition loop) rather than broad degradation. Prefer Q5_K_M or higher if those
+tail failures matter. Reproduce with `scripts/wer/run.py` + `scripts/wer/score.py
+--dediarize`; public `full_text` applies equivalent marker removal.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| en       | WER    | 5.13% |
+| zh       | CER    | 9.23% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -95,43 +116,40 @@ CLI flags:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  | 388 ms (28.3×) | 369 ms (29.8×) |
-| Metal   | dots (35.3s) | 1.27 s (27.8×) | 1.17 s (30.1×) |
-| CPU     | jfk (11.0s)  | 2.06 s (5.3×)  | 2.37 s (4.6×)  |
-| CPU     | dots (35.3s) | 5.71 s (6.2×)  | 5.84 s (6.0×)  |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.5.1, transcribe.cpp `e745720`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 393 ms (27.98×) | 382 ms (28.82×) |
+| Metal   | dots (35.3s) | 1.40 s (25.17×) | 1.22 s (29.01×) |
+| CPU     | jfk (11.0s)  |  2.08 s (5.28×) |  2.20 s (5.00×) |
+| CPU     | dots (35.3s) |  5.43 s (6.50×) |  5.47 s (6.46×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  3.88 s (2.8×) |  3.68 s (3.0×) |
-| Vulkan  | dots (35.3s) | 11.38 s (3.1×) | 10.68 s (3.3×) |
-| CPU     | jfk (11.0s)  |  7.49 s (1.5×) |  7.06 s (1.6×) |
-| CPU     | dots (35.3s) | 21.20 s (1.7×) | 19.22 s (1.8×) |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora Linux 43, transcribe.cpp `e745720`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  3.73 s (2.95×) |  3.48 s (3.16×) |
+| Vulkan  | dots (35.3s) | 11.09 s (3.18×) |  9.95 s (3.55×) |
+| CPU     | jfk (11.0s)  |  7.54 s (1.46×) |  6.90 s (1.59×) |
+| CPU     | dots (35.3s) | 21.08 s (1.68×) | 19.24 s (1.84×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `218aeae3` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models moss-transcribe-diarize \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name moss-transcribe-diarize-publication
+uv run scripts/bench/run.py --profile --models moss-transcribe-diarize
 ```
 
 ## Numerical Validation
@@ -140,15 +158,14 @@ transcribe.cpp is validated tensor-by-tensor against the MOSS author repo
 (`scripts/dump_reference_moss_author.py`, `trust_remote_code`) on
 `samples/jfk.wav` with the strict CPU backend. The reference runs BF16 (torch,
 eager attention); the C++ path dequantizes BF16 weights to F32 and computes in
-F32, so C++ is the *more* precise side and the residual gap is a constant
-~1-3% relative bf16-vs-f32 drift, not a bug. The transcript compare is
-`dediarized` (bracket metadata stripped to a space). Confirmed WER-neutral: on
-the first 100 test-clean utterances the C++ ref-dtype WER (1.40%) is
-bit-identical to the Oracle reference on the same subset (1.40%). Tolerances
-are pinned in `tests/tolerances/moss.json` with a `_comment` block naming the
-precision regime, the large-pre-normalization-activation maxes, and the encoder
-padding-trim contract. Last validated at commit
-[`3f5e15c`](https://github.com/handy-computer/transcribe.cpp/tree/3f5e15c).
+F32, so C++ is the *more* precise side and the residual gap is a constant ~1-3%
+relative bf16-vs-f32 drift, not a bug. The transcript compare is `dediarized`
+(bracket metadata stripped to a space). Confirmed WER-neutral: on the first 100
+test-clean utterances the C++ ref-dtype WER (1.40%) is bit-identical to the
+Oracle reference on the same subset (1.40%). Tolerances are pinned in
+`tests/tolerances/moss.json` with a `_comment` block naming the precision
+regime, the large-pre-normalization-activation maxes, and the encoder
+padding-trim contract.
 
 | Field | Value |
 | --- | --- |
@@ -157,26 +174,6 @@ padding-trim contract. Last validated at commit
 | Manifest | `tests/golden/moss/moss-transcribe-diarize.manifest.json` |
 | Tolerances | `tests/tolerances/moss.json` |
 | Command | `uv run scripts/validate.py all --family moss --variant moss-transcribe-diarize` |
-
-Selected tensors (observed on CPU, strict backend; see the tolerance file for
-budgets and per-tensor notes):
-
-| Tensor | Max abs diff | Mean abs diff | Notes |
-| --- | ---: | ---: | --- |
-| `enc.mel.in`          | `9.872e-05` | `5.150e-06` | C++ MelFrontend vs reference feature extractor |
-| `enc.pos_add.out`     | `5.000e-02` | `2.200e-03` | Encoder input + positional embedding |
-| `enc.block.0.out`     | `1.200e-01` | `4.000e-03` | First Whisper encoder block |
-| `enc.block.23.out`    | `3.100e+03` | `8.000e-02` | Pre-final-LN residual; ref \|max\| ~3.6e3, bf16 rel error dominates max_abs (renormalized by `enc.ln_post`) |
-| `enc.ln_post.out`     | `1.300e+01` | `3.000e-03` | Encoder output LayerNorm |
-| `enc.merge.out`       | `1.500e+00` | `3.000e-03` | 4x temporal merge |
-| `enc.adaptor.out`     | `4.000e-01` | `1.200e-02` | VQAdaptor decoder handoff (rel_mean ~0.96%) |
-| `dec.audio_injected`  | `4.000e-01` | `7.000e-03` | Audio tokens scattered into the prompt |
-| `dec.block.0.out`     | `7.500e-01` | `9.500e-03` | First Qwen3 decoder block |
-| `dec.block.27.out`    | `3.200e+02` | `2.600e-01` | Pre-final-RMSNorm residual (bf16 accumulation over 28 layers) |
-| `dec.out_before_head` | `8.500e+00` | `8.000e-02` | Pre-head hidden state |
-| `dec.logits_raw`      | `4.800e-01` | `7.200e-02` | Prefill logits; argmax preserved (transcript exact) |
-| `dec.logits_raw.gen8` | `5.000e-01` | `6.500e-02` | Greedy step 8 logits (KV-cache decode coverage) |
-| `dec.token_emb`       | `0.000e+00` | `0.000e+00` | Pure embedding lookup (pinned exact) |
 
 For the full porting writeup, see
 [`docs/porting/families/moss.md`](../porting/families/moss.md).

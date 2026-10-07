@@ -1,0 +1,72 @@
+{
+  "default": "asr-publication-v2",
+  "profiles": {
+    "asr-publication-v2": {
+      "description": "The complete benchmark set published for transcription models. v2: accuracy on L40S; batch_size is the recommended setting for new runs, and a cell is satisfied at any batch size (the row records the one used).",
+      "accuracy": [
+        {
+          "dataset": "librispeech",
+          "split": "test-clean",
+          "languages": "english-if-supported",
+          "quants": "all-downloads",
+          "batch_size": 8,
+          "sort_by_length": true,
+          "timestamps": "none",
+          "gpu": "L40S",
+          "backend": "cuda"
+        },
+        {
+          "dataset": "fleurs",
+          "split": "test",
+          "languages": "supported-intersect-fleurs",
+          "quants": [
+            "Q8_0"
+          ],
+          "batch_size": 8,
+          "sort_by_length": true,
+          "timestamps": "none",
+          "gpu": "L40S",
+          "backend": "cuda"
+        }
+      ],
+      "speed": {
+        "quants": [
+          "Q8_0",
+          "Q4_K_M"
+        ],
+        "samples": [
+          "jfk",
+          "dots"
+        ],
+        "iterations": 3,
+        "warmup": 1,
+        "targets": [
+          {
+            "machine": "m4-max",
+            "display": "Apple M4 Max",
+            "backends": [
+              "cpu",
+              "metal"
+            ]
+          },
+          {
+            "machine": "ryzen-4750u",
+            "display": "AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR)",
+            "backends": [
+              "cpu",
+              "vulkan"
+            ],
+            "cooldown_tctl_c": 55.0
+          }
+        ],
+        "single_language_samples": {
+          "pattern": [
+            "{lang}-short",
+            "{lang}-long"
+          ],
+          "reason": "A variant that supports exactly one non-English language is benched on that language at the same two clip lengths as jfk/dots. English jfk/dots decode out of distribution on a single-language fine-tune and can loop until the position cap, and whether that happens differs between CPU and GPU, so the figure would not be comparable."
+        }
+      }
+    }
+  }
+}

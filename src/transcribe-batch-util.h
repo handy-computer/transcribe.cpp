@@ -13,7 +13,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
+#include <thread>
 #include <vector>
 
 struct ggml_tensor;
@@ -31,6 +33,55 @@ namespace transcribe {
 // stop the other indices (the caller handles partial failure — typically by
 // falling back to the per-utterance path).
 bool parallel_for_all(int n, int n_threads, const std::function<bool(int)> & work);
+
+// Run `fn(tid)` once for every tid in [0, n_threads): tid 0 on the calling
+// thread, the rest on their own threads. Every launched thread is joined on
+// every path, and exceptions reach the caller instead of std::terminate:
+//   - a thread that fails to launch stops further launches, tid 0 is not run,
+//     and the launch error is rethrown once the launched threads have joined;
+//   - otherwise, if any fn(tid) threw, the lowest tid's exception is rethrown
+//     after all threads have joined.
+// n_threads <= 1 runs fn(0) inline. `Thread` is a test seam (fault injection
+// for thread launch); production code uses the default.
+template <typename Thread = std::thread, typename Fn> void run_on_threads(int n_threads, Fn && fn) {
+    if (n_threads <= 1) {
+        fn(0);
+        return;
+    }
+    std::vector<std::exception_ptr> errors(static_cast<size_t>(n_threads));
+    auto                            guarded = [&fn, &errors](int tid) {
+        try {
+            fn(tid);
+        } catch (...) {
+            errors[static_cast<size_t>(tid)] = std::current_exception();
+        }
+    };
+    std::vector<Thread> pool;
+    pool.reserve(static_cast<size_t>(n_threads - 1));
+    std::exception_ptr launch_error;
+    for (int tid = 1; tid < n_threads; ++tid) {
+        try {
+            pool.emplace_back(guarded, tid);
+        } catch (...) {
+            launch_error = std::current_exception();
+            break;
+        }
+    }
+    if (!launch_error) {
+        guarded(0);
+    }
+    for (auto & th : pool) {
+        th.join();
+    }
+    if (launch_error) {
+        std::rethrow_exception(launch_error);
+    }
+    for (const auto & e : errors) {
+        if (e) {
+            std::rethrow_exception(e);
+        }
+    }
+}
 
 // Default CPU thread count for the ggml backends and the host parallel-for
 // when the caller passes n_threads <= 0. Counts the CPUs the process may
@@ -102,6 +153,22 @@ transcribe_status decode_batch_slices(transcribe_session * session,
                                       int64_t              total_mel_us,
                                       const std::function<transcribe_status(int b, const float * slice)> & decode_fn);
 
+// Serial run_batch fallback: runs each utterance through `run_one` (a family's
+// single-utterance run()) and snapshots it into session->batch_results. The
+// per-run state transcribe_run resets (result slot, timings, truncation flag)
+// is reset before every utterance, so one truncated utterance cannot mark the
+// rest. A truncated, repetition-stopped, or aborted utterance keeps its partial
+// result, as it does from transcribe_run; a null pcm or n_samples <= 0 is
+// recorded as INVALID_ARG. session->was_truncated ends true if any utterance
+// truncated or stopped on repetition.
+// Returns TRANSCRIBE_ERR_ABORTED once an utterance aborts, else OK.
+using RunOneFn = std::function<transcribe_status(const float * pcm, int n_samples)>;
+transcribe_status run_batch_serial(transcribe_session *  session,
+                                   const float * const * pcm,
+                                   const int *           n_samples,
+                                   int                   n,
+                                   const RunOneFn &      run_one);
+
 // ---------------------------------------------------------------------------
 // Batched encoder-decoder greedy step loop (cohere / canary / moonshine)
 //
@@ -128,23 +195,28 @@ struct EncDecStepIO {
 
 // Build (or rebuild) the step graph for self-attention window `win`: allocate a
 // fresh compute graph, build it, reset+alloc the scheduler, upload the static
-// cross-attention mask, and fill `io`. Returns false on any failure. Called once
-// at the initial window and again whenever the window must grow.
-using EncDecRebuildFn = std::function<bool(int win, EncDecStepIO & io)>;
+// cross-attention mask, and fill `io`. Returns the failure status (OOM for an
+// allocation failure) or TRANSCRIBE_OK. Called once at the initial window and
+// again whenever the window must grow.
+using EncDecRebuildFn = std::function<transcribe_status(int win, EncDecStepIO & io)>;
 
 // Run the shared greedy enc-dec step loop. Feeds `prompt_ids[0..prompt_len)` as
-// uniform lockstep tokens, then generates until each row emits eos_id, the batch
-// reaches `max_new` produced tokens, or the position fills `max_n_kv`. Manages
+// uniform lockstep tokens, then generates until each row emits eos_id or starts
+// repeating (transcribe-repetition-guard.h), the batch reaches `max_new`
+// produced tokens, or the position fills `max_n_kv`. Manages
 // the self-attention key mask and dynamic window growth (via `rebuild`), and
 // appends generated tokens to generated[b] (invalid rows are skipped, finished
 // rows keep stepping into their own KV slab). Polls session->poll_abort() each
 // step. Returns TRANSCRIBE_ERR_ABORTED / TRANSCRIBE_ERR_GGUF / TRANSCRIBE_OK;
 // *n_steps_out (if non-null) receives the number of compute steps run.
 //
-// truncated_out (if non-null) is sized to n_batch and set per row: 1 when that
-// (valid) row hit the generation budget (max_new) or the context window
-// (max_n_kv) BEFORE emitting eos_id (transcript truncated), else 0. Lets a
-// family report per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED from run_batch.
+// stop_out (if non-null) is sized to n_batch and set per row to why that
+// row stopped (transcribe::DecodeStop): k_stop_budget when a valid row hit the
+// generation budget (max_new) or the context window (max_n_kv) before eos_id,
+// k_stop_repetition when the repetition guard stopped it, else k_stop_eos.
+// Non-zero means the transcript was cut off; decode_stop_status maps it to the
+// per-utterance status. A budget-stopped row has its repeating tail trimmed
+// (trim_repetition_at_budget_stop).
 transcribe_status run_batched_encdec_step_loop(transcribe_session *                session,
                                                ggml_backend_sched_t                sched,
                                                const EncDecRebuildFn &             rebuild,
@@ -157,7 +229,7 @@ transcribe_status run_batched_encdec_step_loop(transcribe_session *             
                                                int                                 n_batch,
                                                const std::vector<char> &           valid,
                                                std::vector<std::vector<int32_t>> & generated,
-                                               int *                               n_steps_out   = nullptr,
-                                               std::vector<char> *                 truncated_out = nullptr);
+                                               int *                               n_steps_out = nullptr,
+                                               std::vector<char> *                 stop_out    = nullptr);
 
 }  // namespace transcribe

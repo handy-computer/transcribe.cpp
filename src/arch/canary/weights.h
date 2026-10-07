@@ -51,7 +51,13 @@ struct CanaryHParams {
     // render an empty decoder-context slot as a leading whitespace
     // marker (`▁`) in the canary2 prompt — adds one token to the prompt
     // length. Aggregate tokenizers skip the empty slot entirely.
-    bool tokenizer_single_sp = false;
+    bool                     tokenizer_single_sp = false;
+    // Aggregate tokenizers: per-language sub-vocab id ranges
+    // (stt.canary.tokenizer.lang_codes / lang_offsets / lang_sizes). Empty
+    // for single-SP tokenizers.
+    std::vector<std::string> tok_lang_codes;
+    std::vector<int32_t>     tok_lang_offsets;
+    std::vector<int32_t>     tok_lang_sizes;
 
     // Token IDs (filled from tokenizer at load time).
     int32_t bos_token_id = -1;

@@ -1,17 +1,15 @@
 # Voxtral Small 24B (2507)
 
-Mistral's [`mistralai/Voxtral-Small-24B-2507`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507)
-ported to transcribe.cpp. An offline audio-LLM: a Whisper-large-v3
-bidirectional audio encoder (32 layers, `d_model=1280`, 20 heads) feeds
-a 4-frame-group projector (375 audio tokens per 30 s chunk) into a
-Mistral-Small-24B causal LM (40 layers, `hidden_size=5120`,
-`intermediate_size=32768`, GQA 32 q / 8 kv heads, NEOX RoPE, SwiGLU) via
-audio-token injection at the `audio_token_id=24` positions in the prompt.
+<!-- catalog:intro -->
+Upstream: [`mistralai/Voxtral-Small-24B-2507`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507) at [`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b424).
 
-It is the larger sibling of [Voxtral Mini 3B](voxtral-mini-3b-2507.md):
-the audio encoder, projector pattern, log-mel frontend, and tekken
-tokenizer are identical — only the text decoder is scaled up (Mistral-Small-24B
-in place of Ministral-3B).
+Offline audio-LLM speech-to-text and speech translation. A Whisper-large-v3
+bidirectional audio encoder feeds a 4-frame-group projector (375 audio tokens
+per 30 s chunk) into a Mistral-Small-24B causal LM (40 layers, GQA 32/8, NEOX
+RoPE, SwiGLU) via audio-token injection. Takes a 16 kHz mono WAV and produces a
+transcript via greedy decoding. The larger sibling of Voxtral Mini 3B — same
+encoder, projector, frontend, and tokenizer, with a scaled-up decoder.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -25,29 +23,55 @@ mono WAV and produces a transcript via greedy decoding.
   mistral-common instruct template ("Translate this to {Language}.") to
   translate non-English speech into the target language's text.
 
+**Prompting:** `--task instruct --prompt "<instruction>"` replaces the transcription request with a free-text instruction (summaries, questions, reformatting); the output is free text.
+
 See Mistral's [model card](https://huggingface.co/mistralai/Voxtral-Small-24B-2507)
 for training data, intended use, and upstream evaluation.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b42409f279fdd92febee0511a6c32828569c1),
-pinned 2026-06-05.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b424), pinned 2026-06-05. Validated against the Transformers reference at transcribe.cpp commit [`dac22fa`](https://github.com/handy-computer/transcribe.cpp/tree/dac22fa) on 2026-06-05.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |     Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [Voxtral-Small-24B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-BF16.gguf)     | 48.54 GB | 1.56% |
-| F16    | [Voxtral-Small-24B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-F16.gguf)       | 48.55 GB | 1.57% |
-| Q8_0   | [Voxtral-Small-24B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q8_0.gguf)     | 25.81 GB | 1.56% |
-| Q6_K   | [Voxtral-Small-24B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q6_K.gguf)     | 19.94 GB | 1.58% |
-| Q5_K_M | [Voxtral-Small-24B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q5_K_M.gguf) | 17.14 GB | 1.60% |
-| Q4_K_M | [Voxtral-Small-24B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q4_K_M.gguf) | 14.30 GB | 2.11% |
+| BF16         | [Voxtral-Small-24B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-BF16.gguf) | 48.54 GB | 1.56% |
+| F16          | [Voxtral-Small-24B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-F16.gguf) | 48.55 GB | 1.57% |
+| Q8_0         | [Voxtral-Small-24B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q8_0.gguf) | 25.81 GB | 1.56% |
+| Q6_K         | [Voxtral-Small-24B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q6_K.gguf) | 19.94 GB | 1.58% |
+| Q5_K_M       | [Voxtral-Small-24B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q5_K_M.gguf) | 17.14 GB | 1.60% |
+| Q4_K_M       | [Voxtral-Small-24B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q4_K_M.gguf) | 14.30 GB | 2.11% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
-with the Whisper-style English text normalizer, batch size 8 on an NVIDIA
-A100 80 GB. The same-split HuggingFace `transformers` reference run
-(`VoxtralForConditionalGeneration`, BF16, greedy) lands at **1.57%**, and
-the BF16 GGUF matches it at **1.56%**.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy decoding scored with the Whisper English text normalizer on an NVIDIA A100 80
+GB. Same-machine HuggingFace transformers reference
+(VoxtralForConditionalGeneration, BF16, greedy): 1.57%; the BF16 GGUF matches at
+1.56%. Validation for this variant is end-to-end by WER — the family's tensor-level
+numerical parity is established by the Voxtral Mini 3B sibling (identical
+architecture).
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 3.29% |
+| en       | WER    | 3.55% |
+| es       | WER    | 2.86% |
+| fr       | WER    | 3.86% |
+| hi       | WER    | 7.40% |
+| it       | WER    | 2.69% |
+| nl       | WER    | 5.12% |
+| pt       | WER    | 3.74% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -87,16 +111,18 @@ CLI flags:
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
-speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |             Q8_0 |           Q4_K_M |
-| ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  |   3.36 s (3.3×)  |   2.62 s (4.2×)  |
-| Metal   | dots (35.3s) |  11.20 s (3.2×)  |   8.95 s (3.9×)  |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
+
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  |  4.45 s (2.47×) |  3.96 s (2.77×) |
+| Metal   | dots (35.3s) | 14.68 s (2.41×) | 12.93 s (2.73×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 A 24B is a GPU-class model; on Apple Silicon it runs at **~3–4× realtime**
 on Metal (the 3B sibling is ~15–18×). CPU is impractical at this size and is
@@ -105,13 +131,7 @@ not benchmarked. transcribe.cpp `96adddb`.
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models Voxtral-Small-24B-2507 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal \
-  --iters 3 --warmup 1 \
-  --name voxtral-small-24b-2507-publication
+uv run scripts/bench/run.py --profile --models voxtral-small-24b-2507
 ```
 
 ## Notes

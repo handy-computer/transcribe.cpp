@@ -14,6 +14,11 @@ use crate::types::TimestampKind;
 
 /// A fully-materialized transcription result.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Transcript {
     /// The full transcript text.
     pub text: String,
@@ -41,6 +46,11 @@ pub struct Transcript {
 
 /// One segment row. Times are milliseconds relative to the original audio.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Segment {
     pub t0_ms: i64,
     pub t1_ms: i64,
@@ -56,15 +66,29 @@ pub struct Segment {
 /// One diarized speaker turn. Zero times mean the model attributed text but
 /// did not provide turn timing; `p` is NaN when unavailable.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct SpeakerSegment {
     pub t0_ms: i64,
     pub t1_ms: i64,
     pub speaker_id: i32,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "nan", deserialize_with = "nan_from_null")
+    )]
     pub p: f32,
 }
 
 /// One word row.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Word {
     pub t0_ms: i64,
     pub t1_ms: i64,
@@ -77,8 +101,17 @@ pub struct Word {
 /// One token row. `p` is a per-token confidence hint (NaN when the family
 /// produces none); its exact meaning is family-specific.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Token {
     pub id: i32,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default = "nan", deserialize_with = "nan_from_null")
+    )]
     pub p: f32,
     pub t0_ms: i64,
     pub t1_ms: i64,
@@ -89,11 +122,34 @@ pub struct Token {
 
 /// Per-run stage timings, in milliseconds. Zero means "unknown / not measured".
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct Timings {
     pub load_ms: f32,
     pub mel_ms: f32,
     pub encode_ms: f32,
     pub decode_ms: f32,
+}
+
+/// A missing confidence means "none reported" (NaN), not 0.0.
+#[cfg(feature = "serde")]
+fn nan() -> f32 {
+    f32::NAN
+}
+
+/// JSON writes NaN as `null`; read it back as NaN. Binary formats carry the
+/// raw `f32`.
+#[cfg(feature = "serde")]
+fn nan_from_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    use serde::Deserialize;
+    if d.is_human_readable() {
+        Ok(Option::<f32>::deserialize(d)?.unwrap_or(f32::NAN))
+    } else {
+        f32::deserialize(d)
+    }
 }
 
 /// Copy a borrowed C string into an owned `String` (empty for NULL).

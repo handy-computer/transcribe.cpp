@@ -2,10 +2,14 @@
 
 import type { TranscribeError } from "./errors.js";
 
-export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "vulkan" | "metal";
+export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "rocm" | "vulkan" | "metal";
 export type KvType = "auto" | "f32" | "f16";
-export type Task = "transcribe" | "translate";
+/** "instruct": `prompt` replaces the task instruction and the output is free
+ *  text ("instruct" feature; offline only). */
+export type Task = "transcribe" | "translate" | "instruct";
 export type TimestampKind = "none" | "auto" | "segment" | "word" | "token";
+export type Pnc = "default" | "off" | "on";
+export type Itn = "default" | "off" | "on";
 export type Diarize = "default" | "off" | "on";
 export type Feature =
   | "initial_prompt"
@@ -14,7 +18,11 @@ export type Feature =
   | "cancellation"
   | "pnc"
   | "itn"
-  | "diarization";
+  | "diarization"
+  | "vocabulary"
+  | "context_prompt"
+  | "instruct"
+  | "transcript_prefix";
 
 /** Mono float32 PCM at the model's native sample rate (16 kHz for v1). */
 export type PcmLike = Float32Array | number[] | ArrayBuffer | Buffer;
@@ -83,12 +91,13 @@ export interface SessionLimits {
   maxKvBytes: number;
 }
 
-export interface TranscriptionResult {
+export interface Transcript {
   text: string;
   /** The model's decoded output before family post-processing (diarization
    *  markers, timestamp/special tokens, tag filtering, whitespace trims).
    *  Equal to `text` modulo whitespace for families that emit clean text. */
   rawText: string;
+  /** Model-detected language, or an empty string when none applies. */
   language: string;
   timestampKind: TimestampKind;
   segments: Segment[];
@@ -96,6 +105,10 @@ export interface TranscriptionResult {
   words: Word[];
   tokens: Token[];
   timings: Timings;
+}
+
+/** An offline transcript plus terminal run status flags. */
+export interface TranscriptionResult extends Transcript {
   aborted: boolean;
   truncated: boolean;
 }
@@ -120,22 +133,18 @@ export interface BackendInfo {
    *  unreported. Re-query (via {@link getAvailableBackends} or `model.device`)
    *  to refresh; backend-defined and not comparable across device kinds. */
   memoryFree: number;
-  /** Registry index of this device — the value to pass as
-   *  {@link ModelOptions.gpuDevice} to select it (0 means auto: discrete
-   *  GPUs are probed before integrated). `null` when this came from
-   *  `model.device`, since `transcribe_model_get_device` does not expose an
-   *  index; correlate such a device back to {@link getAvailableBackends} by
-   *  `deviceId` / `name` instead. Order-dependent and not stable across
-   *  driver updates or hosts. */
+  /** Process-local registry index for display. Pass this object via
+   *  {@link ModelOptions.device} for exact selection; persist `deviceId`, not
+   *  the index. */
   index: number | null;
 }
 
 export interface ModelOptions {
   /** "auto" (default), or an explicit backend. */
   backend?: Backend;
-  /** GPU device registry index. 0 means auto: the first device that
-   *  initializes, probing discrete GPUs before integrated. */
-  gpuDevice?: number;
+  /** Exact device returned by {@link getAvailableBackends}. Omit for the
+   *  backend's automatic policy. Exact selection never falls back. */
+  device?: BackendInfo;
 }
 
 export interface SessionOptions {
@@ -152,6 +161,10 @@ export interface TranscribeOptions {
   targetLanguage?: string;
   /** Default "auto" (richest the model supports, per-family). */
   timestamps?: TimestampKind;
+  /** Punctuation and capitalization control; default preserves the family default. */
+  pnc?: Pnc;
+  /** Inverse text normalization control; default preserves the family default. */
+  itn?: Itn;
   /** Default "default" (speaker attribution off for every family). */
   diarize?: Diarize;
   keepSpecialTags?: boolean;
@@ -161,6 +174,16 @@ export interface TranscribeOptions {
   signal?: AbortSignal;
   /** A run-slot family extension (e.g. whisper). */
   family?: FamilyExtension;
+  /** Custom terms in priority order, formatted per family ("vocabulary"
+   *  feature; ignored with a warning elsewhere). */
+  vocabulary?: readonly string[];
+  /** Context text under transcribe/translate ("context_prompt" feature); the
+   *  required instruction under task "instruct". */
+  prompt?: string;
+  /** Transcript text the model continues from ("transcript_prefix" feature;
+   *  an error elsewhere, and in runBatch). `text` holds only the continuation;
+   *  `rawText` leads with the prefix. */
+  prefix?: string;
 }
 
 /** One result of a batch run: success carries the transcript, failure the error.
@@ -174,7 +197,7 @@ export type BatchItem =
 
 export type CommitPolicy = "auto" | "on_finalize" | "stable_prefix";
 export type StreamState = "idle" | "active" | "finished" | "failed";
-export type ExtSlot = "run" | "stream";
+export type ExtSlot = "run" | "stream" | "diarize_run";
 
 export interface StreamUpdate {
   resultChanged: boolean;
@@ -201,10 +224,16 @@ export interface StreamOptions {
   language?: string;
   targetLanguage?: string;
   timestamps?: TimestampKind;
+  pnc?: Pnc;
+  itn?: Itn;
   diarize?: Diarize;
   keepSpecialTags?: boolean;
   commitPolicy?: CommitPolicy;
   stablePrefixAgreementN?: number;
+  /** Custom terms in priority order (see TranscribeOptions.vocabulary). */
+  vocabulary?: readonly string[];
+  /** Context text (see TranscribeOptions.prompt). */
+  prompt?: string;
   /** A stream-slot family extension (moonshine, parakeet, voxtral). */
   family?: FamilyExtension;
 }
@@ -238,10 +267,48 @@ export interface VoxtralRealtimeStreamOptions {
   numDelayTokens?: number;
   minDecodeIntervalMs?: number;
 }
+/** Sortformer streaming operating point (latency / accuracy trade-off).
+ *  "default" keeps the GGUF-shipped checkpoint configuration;
+ *  "very_high_latency" (~30 s lookahead) is the offline-file operating
+ *  point; "low_latency" (~1 s) is the real-time point. */
+export type SortformerPreset =
+  | "default"
+  | "very_high_latency"
+  | "high_latency"
+  | "low_latency";
+/** Sortformer options for {@link DiarizeOptions.family} (diarize_run slot). */
+export interface SortformerDiarizeOptions {
+  preset?: SortformerPreset;
+}
 
 export type FamilyExtension =
   | ({ kind: "whisper" } & WhisperRunOptions)
   | ({ kind: "moonshine" } & MoonshineStreamingOptions)
   | ({ kind: "parakeet" } & ParakeetStreamOptions)
   | ({ kind: "parakeet_buffered" } & ParakeetBufferedStreamOptions)
-  | ({ kind: "voxtral" } & VoxtralRealtimeStreamOptions);
+  | ({ kind: "voxtral" } & VoxtralRealtimeStreamOptions)
+  | ({ kind: "sortformer_diarize" } & SortformerDiarizeOptions);
+
+// ---- roles -----------------------------------------------------------------
+
+/** What a model serves: "asr" (transcription) and/or "diarize" (speaker turns). */
+export type Role = "asr" | "diarize";
+
+export interface DiarizeInfo {
+  /** Input PCM rate. */
+  sampleRate: number;
+  /** Speaker ids are in [1, maxSpeakers]. */
+  maxSpeakers: number;
+}
+
+export interface DiarizeSessionOptions {
+  /** CPU threads for CPU-side ops; 0 = library default. */
+  nThreads?: number;
+}
+
+export interface DiarizeOptions {
+  /** Cancel the run cooperatively. */
+  signal?: AbortSignal;
+  /** A diarize_run-slot family extension (e.g. sortformer_diarize). */
+  family?: FamilyExtension;
+}

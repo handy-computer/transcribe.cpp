@@ -11,6 +11,12 @@ final class StreamingTests: XCTestCase {
         let stream = try session.stream()
         try Fixtures.drive(stream, pcm: pcm)
         XCTAssertTrue(stream.text.full.lowercased().contains("country"), stream.text.full)
+        let snapshot = stream.snapshot
+        XCTAssertFalse(snapshot.text.isEmpty)
+        if let language = snapshot.language { XCTAssertFalse(language.isEmpty) }
+        XCTAssertFalse(snapshot.segments.isEmpty)
+        _ = snapshot.words
+        _ = snapshot.tokens
     }
 
     func testOnFinalizePolicyCommitsAtFinalize() throws {
@@ -73,48 +79,6 @@ final class StreamingTests: XCTestCase {
 
     // MARK: - Compute lease (C contract: one in-flight run/stream per model)
 
-    /// Regression for the streaming compute lease. The C library allows at most
-    /// one in-flight run/stream across ALL sessions of a model, and an active
-    /// stream spans begin..finalize/reset/drop. Before the lease, a second
-    /// stream — or an offline run — on another session of the same model began
-    /// concurrently and raced into the documented UB (corrupted decodes / Metal
-    /// command-buffer failures); now it is refused with `.busy`. Mirrors Rust's
-    /// `concurrent_compute_on_one_model_is_refused`.
-    func testConcurrentComputeOnOneModelIsRefused() throws {
-        let (path, pcm) = try Fixtures.streamingModelAndAudio()
-        let model = try Model(path: path)
-        let s1 = try model.session()
-        let s2 = try model.session()
-
-        let stream1 = try s1.stream()
-        _ = try stream1.feed(Array(pcm.prefix(1600)))  // s1's stream is ACTIVE
-
-        // A second stream on the same model while the first is live -> .busy.
-        XCTAssertThrowsError(try s2.stream()) { error in
-            guard case TranscribeError.busy = error else {
-                return XCTFail("expected .busy for a second stream, got \(error)")
-            }
-        }
-        // An offline run on the same model while a stream is live -> .busy too.
-        XCTAssertThrowsError(try s2.run(pcm)) { error in
-            guard case TranscribeError.busy = error else {
-                return XCTFail("expected .busy for a run mid-stream, got \(error)")
-            }
-        }
-        // runBatch is gated on the same lease.
-        XCTAssertThrowsError(try s2.runBatch([pcm])) { error in
-            guard case TranscribeError.busy = error else {
-                return XCTFail("expected .busy for a runBatch mid-stream, got \(error)")
-            }
-        }
-
-        // Releasing the first stream frees the lease; s2 can now stream.
-        stream1.reset()
-        XCTAssertFalse(model.streamActive)
-        let stream2 = try s2.stream()
-        stream2.reset()
-    }
-
     /// 2b: a `Stream` dropped without `finalize()`/`reset()` must reset the
     /// session and release the model's compute lease in `deinit` — otherwise
     /// the session is wedged ACTIVE forever and the model stays `.busy`.
@@ -166,5 +130,32 @@ final class StreamingTests: XCTestCase {
             stream2.reset()
             _ = stream1
         }
+    }
+
+    /// While a stream is active, run / runBatch / stream on any session of the
+    /// model throw `.busy`.
+    func testActiveStreamRefusesSiblingCompute() throws {
+        let (path, pcm) = try Fixtures.streamingModelAndAudio()
+        let model = try Model(path: path)
+        let s1 = try model.session()
+        let s2 = try model.session()
+        let active = try s1.stream()
+        _ = try active.feed(Array(pcm.prefix(1600)))
+
+        let cases: [(String, () throws -> Void)] = [
+            ("a stream is active on this model; finish or drop it before run()", { _ = try s2.run(pcm) }),
+            ("a stream is active on this model; finish or drop it before runBatch()",
+             { _ = try s2.runBatch([pcm]) }),
+            ("a stream is already active on this model", { _ = try s2.stream() }),
+        ]
+        for (message, call) in cases {
+            XCTAssertThrowsError(try call()) { error in
+                guard case TranscribeError.busy(let got) = error else {
+                    return XCTFail("expected .busy, got \(error)")
+                }
+                XCTAssertEqual(got, message)
+            }
+        }
+        active.reset()
     }
 }

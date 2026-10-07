@@ -50,7 +50,8 @@ Tokenizer:
     stt.canary.tokenizer.* so a future C++ encoder can route text-side
     encoding to the right sub-vocab. SP scores are emitted when the
     underlying SP processor exposes them; CONTROL is used for every entry
-    in CanaryTokenizer.special_tokens (and id 0 = <unk>).
+    in CanaryTokenizer.special_tokens, and UNKNOWN for each
+    sub-tokenizer's <unk> (id 0 plus one per language offset).
 """
 
 from __future__ import annotations
@@ -182,7 +183,19 @@ def _extract_aggregate(tk) -> dict:
     aggregate over spl_tokens + per-language SP. Routing info is real
     (lang_codes / lang_offsets / lang_sizes)."""
     vocab_size = int(tk.vocab_size)
-    special_ids = set(tk.special_tokens.values()) | {0}  # id 0 is <unk>
+    # Every sub-tokenizer (spl_tokens and each language SP) carries its
+    # own <unk>, placed at that sub-tokenizer's offset in the flat id
+    # space. NeMo's text_to_ids adds the offset, so a model trained on
+    # text with characters outside a language's vocab predicts *that*
+    # language's <unk> (e.g. 1152 for en in canary-180m-flash), not id 0.
+    # Type them all UNKNOWN so the runtime can recognize them.
+    unk_ids = {
+        int(tk.token_id_offset[name]) + int(sub.unk_id)
+        for name, sub in tk.tokenizers_dict.items()
+    }
+    if 0 not in unk_ids:
+        raise RuntimeError(f"expected <unk> at id 0, got unk ids {sorted(unk_ids)}")
+    special_ids = set(tk.special_tokens.values())
 
     tokens, scores, types = [], [], []
     for i in range(vocab_size):
@@ -190,7 +203,7 @@ def _extract_aggregate(tk) -> dict:
             piece = tk.ids_to_tokens([i])[0]
         except Exception:
             piece = f"<unused_{i}>"
-        if i == 0:
+        if i in unk_ids:
             ttype = TOKEN_TYPE_UNKNOWN
         elif i in special_ids:
             ttype = TOKEN_TYPE_CONTROL

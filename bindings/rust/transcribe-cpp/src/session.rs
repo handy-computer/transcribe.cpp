@@ -27,6 +27,11 @@ use crate::types::{Diarize, Itn, Pnc, StreamState, Task, TimestampKind};
 
 /// Per-run parameters.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct RunOptions {
     pub task: Task,
     pub timestamps: TimestampKind,
@@ -43,6 +48,17 @@ pub struct RunOptions {
     pub spec_k_drafts: i32,
     /// Optional family-specific run extension (e.g. whisper decode knobs).
     pub family: Option<RunExtension>,
+    /// Custom terms in priority order, formatted per family
+    /// (`Feature::Vocabulary`; ignored with a warning elsewhere).
+    pub vocabulary: Vec<String>,
+    /// Context text under `Task::Transcribe`/`Translate`
+    /// (`Feature::ContextPrompt`); the required instruction under
+    /// `Task::Instruct`.
+    pub prompt: Option<String>,
+    /// Transcript text the model continues from (`Feature::TranscriptPrefix`;
+    /// an error elsewhere, and in batch and streaming runs). `text` holds only
+    /// the continuation; `raw_text` leads with the prefix.
+    pub prefix: Option<String>,
 }
 
 impl Default for RunOptions {
@@ -58,6 +74,9 @@ impl Default for RunOptions {
             keep_special_tags: false,
             spec_k_drafts: -1,
             family: None,
+            vocabulary: Vec::new(),
+            prompt: None,
+            prefix: None,
         }
     }
 }
@@ -137,43 +156,34 @@ impl Session {
         unsafe { sys::transcribe_was_aborted(self.ptr) }
     }
 
-    /// Whether the most recent decode stopped at the generation budget before
-    /// end-of-stream (the transcript is incomplete).
+    /// Whether the most recent decode stopped before end-of-stream, at the
+    /// generation budget or because the output began repeating (the transcript
+    /// is incomplete).
     pub fn was_truncated(&self) -> bool {
         unsafe { sys::transcribe_was_truncated(self.ptr) }
     }
 
     /// Transcribe one buffer of 16 kHz mono float32 PCM in `[-1, 1]`.
     ///
-    /// On an aborted or truncated decode the partial transcript is preserved
-    /// on the returned [`Error::Aborted`] / [`Error::OutputTruncated`].
+    /// On an aborted, truncated, or repetition-stopped decode the partial
+    /// transcript is preserved on the returned [`Error::Aborted`] /
+    /// [`Error::OutputTruncated`] / [`Error::OutputRepetition`].
     pub fn run(&mut self, pcm: &[f32], options: &RunOptions) -> Result<Transcript> {
-        let (params, _lang, _target, _family) = build_run_params(options)?;
+        let (params, _lang, _target, _family, _prompting) = build_run_params(options)?;
         let n = clamp_len(pcm.len())?;
 
-        // The compute path is serialized per model; hold the lock for the native
-        // call, then materialize this session's own result storage. Refuse a run
-        // that would overlap an active stream on another session (the C contract).
-        let status = {
-            let guard = self
-                .model
-                .compute_lock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if *guard {
-                return Err(Error::Busy(
-                    "a stream is active on this model; finish or drop it before run()".into(),
-                ));
-            }
-            unsafe { sys::transcribe_run(self.ptr, pcm.as_ptr(), n, &params) }
-        };
+        let status = self.model.with_compute(
+            Some("a stream is active on this model; finish or drop it before run()"),
+            |_| unsafe { sys::transcribe_run(self.ptr, pcm.as_ptr(), n, &params) },
+        )?;
 
         match status {
             s if s == sys::transcribe_status::TRANSCRIBE_OK => Ok(self.materialize_run()),
             s if s == sys::transcribe_status::TRANSCRIBE_ERR_ABORTED
-                || s == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_TRUNCATED =>
+                || s == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                || s == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_REPETITION =>
             {
-                // Partial transcript is preserved by the C API for both.
+                // Partial transcript is preserved by the C API for all three.
                 let partial = Box::new(self.materialize_run());
                 Err(attach_partial(error_for_status(s, "run"), partial))
             }
@@ -191,7 +201,7 @@ impl Session {
         pcms: &[&[f32]],
         options: &RunOptions,
     ) -> Result<Vec<Result<Transcript>>> {
-        let (params, _lang, _target, _family) = build_run_params(options)?;
+        let (params, _lang, _target, _family, _prompting) = build_run_params(options)?;
         let ptrs: Vec<*const f32> = pcms.iter().map(|p| p.as_ptr()).collect();
         let lens: Vec<i32> = pcms
             .iter()
@@ -199,19 +209,12 @@ impl Session {
             .collect::<Result<_>>()?;
         let n = clamp_len(pcms.len())?;
 
-        let status = {
-            let guard = self
-                .model
-                .compute_lock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if *guard {
-                return Err(Error::Busy(
-                    "a stream is active on this model; finish or drop it before run_batch()".into(),
-                ));
-            }
-            unsafe { sys::transcribe_run_batch(self.ptr, ptrs.as_ptr(), lens.as_ptr(), n, &params) }
-        };
+        let status = self.model.with_compute(
+            Some("a stream is active on this model; finish or drop it before run_batch()"),
+            |_| unsafe {
+                sys::transcribe_run_batch(self.ptr, ptrs.as_ptr(), lens.as_ptr(), n, &params)
+            },
+        )?;
 
         // OK and ABORTED both populate one per-utterance slot per input; fold
         // the batch-level abort into the per-utterance view (the C contract).
@@ -229,6 +232,7 @@ impl Session {
                 results.push(Ok(self.materialize_batch(i)));
             } else if st == sys::transcribe_status::TRANSCRIBE_ERR_ABORTED
                 || st == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                || st == sys::transcribe_status::TRANSCRIBE_ERR_OUTPUT_REPETITION
             {
                 let partial = Box::new(self.materialize_batch(i));
                 let err = attach_partial(error_for_status(st, "run_batch utterance"), partial);
@@ -262,33 +266,28 @@ impl Session {
 
     /// Begin a streaming run, returning a [`Stream`] that borrows this session
     /// for its lifetime (so the session can't be used for an offline `run`
-    /// while a stream is active). `run` supplies task / language / timestamps;
+    /// while a stream is active). `run` supplies task / language / timestamps /
+    /// vocabulary / prompt;
     /// `stream` supplies the commit policy and any stream-slot family extension.
     /// Dropping the returned `Stream` abandons it and returns the session to
     /// idle.
     pub fn stream(&mut self, run: &RunOptions, stream: &StreamOptions) -> Result<Stream<'_>> {
-        let (run_params, _lang, _target, _family) = build_run_params(run)?;
+        let (run_params, _lang, _target, _family, _prompting) = build_run_params(run)?;
         let (stream_params, _stream_family) = build_stream_params(stream);
-        {
-            // Claim the model's compute lease for the whole stream lifetime: a
-            // stream spans begin..drop, so per-call locking alone would let a
-            // second stream (or a run) on another session race it.
-            let mut guard = self
-                .model
-                .compute_lock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if *guard {
-                return Err(Error::Busy(
-                    "a stream is already active on this model".into(),
-                ));
-            }
-            check(
-                unsafe { sys::transcribe_stream_begin(self.ptr, &run_params, &stream_params) },
-                "stream begin",
-            )?;
-            *guard = true; // released at finalize/reset, or by Stream::drop
-        }
+        // Claim the model's compute lease for the whole stream lifetime: a
+        // stream spans begin..drop, so per-call locking alone would let a
+        // second stream (or a run) on another session race it.
+        self.model.with_compute(
+            Some("a stream is already active on this model"),
+            |lease| -> Result<()> {
+                check(
+                    unsafe { sys::transcribe_stream_begin(self.ptr, &run_params, &stream_params) },
+                    "stream begin",
+                )?;
+                *lease = true; // released at finalize/reset, or by Stream::drop
+                Ok(())
+            },
+        )??;
         Ok(Stream {
             session: self,
             holds_lease: true,
@@ -423,7 +422,16 @@ type RunParamsBundle = (
     Option<CString>,
     Option<CString>,
     Option<RunExtRaw>,
+    PromptingKeepalive,
 );
+
+/// Owns the buffers behind the prompting pointers of a `transcribe_run_params`.
+struct PromptingKeepalive {
+    _terms: Vec<CString>,
+    _term_ptrs: Vec<*const std::os::raw::c_char>,
+    _prompt: Option<CString>,
+    _prefix: Option<CString>,
+}
 
 /// Build `transcribe_run_params` from options. The returned keepalives own the
 /// buffers the params' pointers borrow, so the caller must hold them for the
@@ -452,16 +460,39 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
         .transpose()?;
     params.family = family.as_ref().map_or(std::ptr::null(), |f| f.ext_ptr());
 
-    Ok((params, lang, target, family))
+    let terms = o
+        .vocabulary
+        .iter()
+        .map(|t| CString::new(t.as_str()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let term_ptrs: Vec<*const std::os::raw::c_char> = terms.iter().map(|c| c.as_ptr()).collect();
+    let prompt = o.prompt.as_deref().map(CString::new).transpose()?;
+    let prefix = o.prefix.as_deref().map(CString::new).transpose()?;
+    params.vocabulary = if term_ptrs.is_empty() {
+        std::ptr::null()
+    } else {
+        term_ptrs.as_ptr()
+    };
+    params.n_vocabulary = clamp_len(term_ptrs.len())?;
+    params.prompt = prompt.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    params.prefix = prefix.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let prompting = PromptingKeepalive {
+        _terms: terms,
+        _term_ptrs: term_ptrs,
+        _prompt: prompt,
+        _prefix: prefix,
+    };
+
+    Ok((params, lang, target, family, prompting))
 }
 
 /// PCM/utterance lengths cross the ABI as `int`; reject anything that overflows.
-fn clamp_len(len: usize) -> Result<i32> {
+pub(crate) fn clamp_len(len: usize) -> Result<i32> {
     i32::try_from(len).map_err(|_| Error::InvalidArgument(format!("length {len} exceeds i32::MAX")))
 }
 
-/// Replace the (partial-less) Aborted/OutputTruncated error with one carrying
-/// the materialized partial transcript.
+/// Replace the (partial-less) Aborted/OutputTruncated/OutputRepetition error
+/// with one carrying the materialized partial transcript.
 fn attach_partial(err: Error, partial: Box<Transcript>) -> Error {
     match err {
         Error::Aborted { message, .. } => Error::Aborted {
@@ -469,6 +500,10 @@ fn attach_partial(err: Error, partial: Box<Transcript>) -> Error {
             partial: Some(partial),
         },
         Error::OutputTruncated { message, .. } => Error::OutputTruncated {
+            message,
+            partial: Some(partial),
+        },
+        Error::OutputRepetition { message, .. } => Error::OutputRepetition {
             message,
             partial: Some(partial),
         },
@@ -482,6 +517,20 @@ fn attach_partial(err: Error, partial: Box<Transcript>) -> Error {
 /// [`Stream::text`], and end input with [`Stream::finalize`]. Dropping the
 /// `Stream` (without finalizing) abandons it and returns the session to idle.
 /// `Send` but not `Sync`, like the session it borrows.
+///
+/// The borrow means a session can't be freed while its stream (or any other
+/// call on it) is still in use, so no native free ever races a compute:
+///
+/// ```compile_fail,E0505
+/// use transcribe_cpp::{Model, RunOptions, StreamOptions};
+/// let model = Model::load("model.gguf").unwrap();
+/// let mut session = model.session().unwrap();
+/// let mut stream = session
+///     .stream(&RunOptions::default(), &StreamOptions::default())
+///     .unwrap();
+/// drop(session); // error[E0505]: cannot move out of `session` while borrowed
+/// stream.feed(&[0.0; 160]).unwrap();
+/// ```
 pub struct Stream<'a> {
     session: &'a mut Session,
     // True while this stream holds the model's compute lease. Set at begin,
@@ -502,20 +551,7 @@ impl std::fmt::Debug for Stream<'_> {
 
 impl Drop for Stream<'_> {
     fn drop(&mut self) {
-        // Abandon any unfinalized stream (reset is idempotent and safe from any
-        // state) and release the lease IF this stream still holds it — under the
-        // lock. After finalize/reset the lease is already gone (and may now be
-        // another session's), so only clear it when holds_lease is still true.
-        let mut guard = self
-            .session
-            .model
-            .compute_lock
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        unsafe { sys::transcribe_stream_reset(self.session.ptr) };
-        if self.holds_lease {
-            *guard = false;
-        }
+        self.reset()
     }
 }
 
@@ -525,17 +561,24 @@ impl Stream<'_> {
         let n = clamp_len(pcm.len())?;
         let mut update: sys::transcribe_stream_update = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_stream_update_init(&mut update) };
-        let status = {
-            // This stream already holds the model's compute lease (it is in
-            // flight); the lock here just serializes the native call.
-            let _guard = self
-                .session
-                .model
-                .compute_lock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            unsafe { sys::transcribe_stream_feed(self.session.ptr, pcm.as_ptr(), n, &mut update) }
-        };
+        // This stream already holds the model's compute lease (it is in
+        // flight); the lock here just serializes the native call. A feed that
+        // ends the stream (FAILED) frees the lease, as finalize does; a feed
+        // rejected before the native hook (e.g. NaN) leaves it ACTIVE and keeps it.
+        let ptr = self.session.ptr;
+        let held = self.holds_lease;
+        let (status, ended) = self.session.model.with_compute(None, |lease| {
+            let st = unsafe { sys::transcribe_stream_feed(ptr, pcm.as_ptr(), n, &mut update) };
+            let ended = unsafe { sys::transcribe_stream_get_state(ptr) }
+                == sys::transcribe_stream_state::TRANSCRIBE_STREAM_FAILED;
+            if held && ended {
+                *lease = false;
+            }
+            (st, ended)
+        })?;
+        if ended {
+            self.holds_lease = false;
+        }
         check(status, "stream feed")?;
         Ok(StreamUpdate::from_raw(&update))
     }
@@ -545,22 +588,16 @@ impl Stream<'_> {
     pub fn finalize(&mut self) -> Result<StreamUpdate> {
         let mut update: sys::transcribe_stream_update = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_stream_update_init(&mut update) };
-        let status = {
-            let mut guard = self
-                .session
-                .model
-                .compute_lock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+        let status = self.session.model.with_compute(None, |lease| {
             let st = unsafe { sys::transcribe_stream_finalize(self.session.ptr, &mut update) };
             // Finalize ends the active stream (Finished, or Failed on error);
             // either way it is no longer active, so free the model's compute
             // lease now rather than holding other sessions off until drop.
             if self.holds_lease {
-                *guard = false;
+                *lease = false;
             }
             st
-        };
+        })?;
         self.holds_lease = false;
         check(status, "stream finalize")?;
         Ok(StreamUpdate::from_raw(&update))
@@ -571,16 +608,13 @@ impl Stream<'_> {
     /// active), so other sessions of the model can proceed without waiting for
     /// this `Stream` to drop.
     pub fn reset(&mut self) {
-        let mut guard = self
-            .session
-            .model
-            .compute_lock
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        unsafe { sys::transcribe_stream_reset(self.session.ptr) };
-        if self.holds_lease {
-            *guard = false;
-        }
+        // Releases the lease only if this stream holds it (it may be another session's).
+        let _ = self.session.model.with_compute(None, |lease| {
+            unsafe { sys::transcribe_stream_reset(self.session.ptr) };
+            if self.holds_lease {
+                *lease = false;
+            }
+        });
         self.holds_lease = false;
     }
 

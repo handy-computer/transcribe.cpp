@@ -24,7 +24,7 @@ final class TranscribeTests: XCTestCase {
     func testFinerThanSupportedTimestampsIsUnsupported() throws {
         let (path, pcm) = try Fixtures.modelAndAudio()
         let model = try Model(path: path)
-        guard let finer = finerThanSupported(model.capabilities.maxTimestampKind) else {
+        guard let finer = finerThanSupported(try model.capabilities.maxTimestampKind) else {
             throw XCTSkip("model already supports the finest timestamps")
         }
         let session = try model.session()
@@ -61,7 +61,48 @@ final class TranscribeTests: XCTestCase {
         let model = try Model(path: path)
         XCTAssertFalse(model.arch.isEmpty)
         XCTAssertFalse(model.backend.isEmpty)
-        XCTAssertGreaterThan(model.capabilities.nativeSampleRate, 0)
+        XCTAssertGreaterThan(try model.capabilities.nativeSampleRate, 0)
+    }
+
+    func testPncChangesCanaryPrompt() throws {
+        guard let path = Fixtures.pncModelPath(), let audio = Fixtures.audioPath() else {
+            throw XCTSkip("PNC model/audio unavailable")
+        }
+        let model = try Model(path: path, options: ModelOptions(backend: .cpu))
+        XCTAssertTrue(model.supports(.pnc))
+        let session = try model.session()
+        let pcm = try Fixtures.loadWav(audio)
+        let run = { (pnc: Pnc) in
+            try session.run(pcm, options: RunOptions(pnc: pnc, language: "en")).text
+        }
+        let defaultText = try run(.default)
+        let enabled = try run(.on)
+        let disabled = try run(.off)
+        XCTAssertEqual(defaultText, enabled)
+        XCTAssertNotEqual(disabled, enabled)
+        XCTAssertEqual(disabled, disabled.lowercased())
+    }
+
+    func testItnChangesSenseVoiceTextNormalization() throws {
+        guard let path = Fixtures.itnModelPath(), let audio = Fixtures.audioPath() else {
+            throw XCTSkip("ITN model/audio unavailable")
+        }
+        let model = try Model(path: path, options: ModelOptions(backend: .cpu))
+        XCTAssertTrue(model.supports(.itn))
+        let session = try model.session()
+        let pcm = try Fixtures.loadWav(audio)
+        let run = { (itn: Itn) in
+            try session.run(pcm, options: RunOptions(itn: itn, language: "en"))
+        }
+        let defaultResult = try run(.default)
+        let disabled = try run(.off)
+        let enabled = try run(.on)
+        XCTAssertEqual(defaultResult.text, enabled.text)
+        XCTAssertEqual(defaultResult.rawText, enabled.rawText)
+        XCTAssertNotEqual(enabled.text, disabled.text)
+        XCTAssertEqual(disabled.text, disabled.text.lowercased())
+        XCTAssertTrue(disabled.rawText.contains("<|woitn|>"))
+        XCTAssertTrue(enabled.rawText.contains("<|withitn|>"))
     }
 
     func testSessionLimitsAreSane() throws {
@@ -84,12 +125,16 @@ final class TranscribeTests: XCTestCase {
         let (path, pcm) = try Fixtures.modelAndAudio()
         // Drop the local Model reference; the Session's strong ref must keep the
         // native model alive (close-ordering safety under ARC).
-        let session: Session = try {
+        weak var weakModel: Model?
+        var session: Session? = try {
             let model = try Model(path: path)
+            weakModel = model
             return try model.session()
         }()
-        let transcript = try session.run(pcm)
-        XCTAssertTrue(transcript.text.lowercased().contains("country"))
+        XCTAssertNotNil(weakModel, "a live Session must keep its Model alive")
+        XCTAssertTrue(try session!.run(pcm).text.lowercased().contains("country"))
+        session = nil
+        XCTAssertNil(weakModel, "the Model is freed once its last Session is")
     }
 
     func testSharedModelAcrossThreadsSerializes() throws {

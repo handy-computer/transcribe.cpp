@@ -36,6 +36,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
+#include "transcribe-repetition-guard.h"
 #include "transcribe/moonshine_streaming.h"
 #include "weights.h"
 
@@ -60,14 +61,6 @@ static_assert(std::is_base_of_v<transcribe_session, MoonshineStreamingSession>);
 
 MoonshineStreamingSession::~MoonshineStreamingSession() {
     kv_cache.free();
-    if (sched != nullptr) {
-        safe_sched_free(sched);
-        sched = nullptr;
-    }
-    if (compute_ctx != nullptr) {
-        ggml_free(compute_ctx);
-        compute_ctx = nullptr;
-    }
 }
 
 MoonshineStreamingModel::~MoonshineStreamingModel() {
@@ -266,7 +259,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0,
+    if (auto st = transcribe::load_common::init_backends(backend_req, (params != nullptr) ? params->device : nullptr,
                                                          "moonshine_streaming", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
@@ -279,7 +272,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
     m->backend_buffer = weights_buffer;
     ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
@@ -372,7 +365,7 @@ transcribe_status ensure_sched(MoonshineStreamingSession * cc, MoonshineStreamin
                                        static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
     if (cc->sched == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming: ggml_backend_sched_new failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     return TRANSCRIBE_OK;
 }
@@ -511,7 +504,7 @@ transcribe_status encode_window_to_host(MoonshineStreamingSession * cc,
 
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming encode_window: encoder compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     if (emit_dumps) {
@@ -606,7 +599,7 @@ transcribe_status apply_adapter_window(MoonshineStreamingSession * cc,
 
     if (ggml_backend_sched_graph_compute(cc->sched, ab.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming adapter: compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     if (emit_dumps) {
@@ -689,7 +682,7 @@ transcribe_status project_cross_kv_window(MoonshineStreamingSession *       cc,
 
     if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv_proj: compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     const size_t       per_slice_floats = static_cast<size_t>(dec_h) * static_cast<size_t>(n_frames);
@@ -815,7 +808,7 @@ transcribe_status commit_cross_kv_from_host(MoonshineStreamingSession *         
 
     if (ggml_backend_sched_graph_compute(cc->sched, cb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming cross_kv_commit: compute failed");
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_BACKEND;
     }
     cc->kv_cache.cross_populated = true;
 
@@ -831,7 +824,8 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
                                        MoonshineStreamingModel *     cm,
                                        int                           T_enc,
                                        const transcribe_run_params * params,
-                                       bool                          emit_dumps) {
+                                       bool                          emit_dumps,
+                                       bool                          interim) {
     (void) params;
 
     if (cc->poll_abort()) {
@@ -850,6 +844,15 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
 
     const auto &  hp             = cm->hparams;
     const int64_t t_decode_start = ggml_time_us();
+
+    // The truncation flags describe the transcript this decode produces: a
+    // stream re-decodes from BOS on each feed, and after finalize the flags
+    // must reflect the final transcript, not an earlier partial. An interim
+    // (per-feed) decode logs its stop at DEBUG; stream_finalize warns once
+    // for the transcript it keeps.
+    cc->was_truncated                         = false;
+    cc->stopped_on_repetition                 = false;
+    const transcribe_log_level stop_log_level = interim ? TRANSCRIBE_LOG_LEVEL_DEBUG : TRANSCRIBE_LOG_LEVEL_WARN;
 
     auto try_dump = [emit_dumps](const char * name, ggml_tensor * t, const char * stage) {
         if (!emit_dumps || t == nullptr) {
@@ -922,7 +925,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         if (ggml_backend_sched_graph_compute(cc->sched, db.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming decode: decoder compute failed (n_past=%d)",
                     n_past_in);
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
 
         if (dump_prompt) {
@@ -985,6 +988,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
     // dec.logits_raw.gen20 dumps the logits that predict the 20th
     // emitted token (n_past == 20 at that step). Matches moonshine.
     constexpr int k_mid_gen_step = 20;
+    bool          repeating      = false;
     while (next_token != eos && n_past < gen_cap) {
         if (cc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
@@ -1002,20 +1006,26 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         }
         if (next_token != eos) {
             generated_ids.push_back(next_token);
+            if (transcribe::stop_on_repetition(generated_ids, "moonshine_streaming run", stop_log_level)) {
+                cc->mark_repetition_stop();
+                repeating = true;
+                break;
+            }
         }
     }
 
     // Non-EOS after the loop means gen_cap stopped decode before EOS. gen_cap
     // is either the position cap or the tighter duration budget.
-    if (next_token != eos) {
+    if (!repeating && next_token != eos) {
         cc->was_truncated              = true;
         const bool hit_duration_budget = (gen_cap < max_pos) || (max_pos <= 0);
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+        transcribe::log_msg(stop_log_level,
                             "moonshine run: output truncated at %d tokens — decode reached the "
                             "%s (%d) before end-of-stream; the transcript may be incomplete. "
                             "See transcribe_capabilities.max_audio_ms.",
                             static_cast<int>(generated_ids.size()),
                             hit_duration_budget ? "generation budget" : "position cap", gen_cap);
+        transcribe::trim_repetition_at_budget_stop(generated_ids, "moonshine_streaming run", stop_log_level);
     }
 
     cc->t_decode_us += ggml_time_us() - t_decode_start;
@@ -1127,14 +1137,14 @@ transcribe_status decode_from_committed_enc(MoonshineStreamingSession *   cc,
         ggml_backend_tensor_set(cross_db.encoder_out_in, adapter_host.data(), 0, adapter_host.size() * sizeof(float));
         if (ggml_backend_sched_graph_compute(cc->sched, cross_db.graph) != GGML_STATUS_SUCCESS) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming decode: cross_kv compute failed");
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         cc->kv_cache.cross_populated = true;
         cc->t_decode_us += ggml_time_us() - t_xkv_start;
     }
 
     // 4. AR decoder loop.
-    return decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps);
+    return decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, /*interim=*/false);
 }
 
 // Internal one-shot inference helper. Encoder over the full PCM, then
@@ -1201,7 +1211,7 @@ transcribe_status run(transcribe_session *          session,
     // Remap truncation to a hard status only at this offline entry:
     // decode_from_kv_cache returns OK (it's shared with the streaming finalize
     // path, which must NOT surface OUTPUT_TRUNCATED). Partial text stays readable.
-    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    return cc->truncation_status();
 }
 
 // Streaming hooks.
@@ -1260,7 +1270,8 @@ void reset_result_text_only(MoonshineStreamingSession * cc) {
 transcribe_status decode_partial(MoonshineStreamingSession *   cc,
                                  MoonshineStreamingModel *     cm,
                                  const transcribe_run_params * params,
-                                 bool                          emit_dumps) {
+                                 bool                          emit_dumps,
+                                 bool                          interim) {
     const int T_enc = cc->stream_T_emitted;
     if (T_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1275,7 +1286,7 @@ transcribe_status decode_partial(MoonshineStreamingSession *   cc,
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps); st != TRANSCRIBE_OK) {
+    if (auto st = decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, interim); st != TRANSCRIBE_OK) {
         return st;
     }
     cc->stream_last_decoded_T = T_enc;
@@ -1624,7 +1635,7 @@ transcribe_status stream_feed(transcribe_session *       session,
             const std::string prev_full_text = cc->full_text;
 
             if (auto st = decode_partial(cc, cm, &cc->stream_run_params,
-                                         /*emit_dumps=*/false);
+                                         /*emit_dumps=*/false, /*interim=*/true);
                 st != TRANSCRIBE_OK) {
                 return st;
             }
@@ -1742,11 +1753,19 @@ transcribe_status stream_finalize(transcribe_session * session, transcribe_strea
     const std::string prev_full_text = cc->full_text;
     if (T_enc > cc->stream_last_decoded_T || !cc->has_result) {
         if (auto st = decode_partial(cc, cm, &cc->stream_run_params,
-                                     /*emit_dumps=*/true);
+                                     /*emit_dumps=*/true, /*interim=*/false);
             st != TRANSCRIBE_OK) {
             write_update(st);
             return st;
         }
+    } else if (cc->was_truncated) {
+        // The last feed's interim decode is the final transcript, and it only
+        // logged its stop at DEBUG.
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_WARN,
+            "moonshine_streaming stream: the final transcript %s before end-of-stream; it may be "
+            "incomplete.",
+            cc->stopped_on_repetition ? "stopped when the output began repeating" : "reached the generation budget");
     }
 
     // Commit the entire result at finalize: tokens, words, and
@@ -1809,21 +1828,8 @@ transcribe_status run_batch_serial(MoonshineStreamingSession *   cc,
                                    const int *                   n_samples,
                                    int                           n,
                                    const transcribe_run_params * params) {
-    for (int i = 0; i < n; ++i) {
-        if (cc->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-        const transcribe_status st = (pcm[i] == nullptr || n_samples[i] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG :
-                                                                                run(cc, pcm[i], n_samples[i], params);
-        if (st == TRANSCRIBE_OK) {
-            cc->batch_results.push_back(cc->capture_result(st));
-        } else {
-            transcribe_session::ResultSet rs;
-            rs.status = st;
-            cc->batch_results.push_back(std::move(rs));
-        }
-    }
-    return TRANSCRIBE_OK;
+    return transcribe::run_batch_serial(cc, pcm, n_samples, n,
+                                        [&](const float * p, int ns) { return run(cc, p, ns, params); });
 }
 
 transcribe_status run_batch(transcribe_session *          session,
@@ -1958,7 +1964,7 @@ transcribe_status run_batch(transcribe_session *          session,
         }
         ggml_backend_tensor_set(cross.encoder_out_in, packed.data(), 0, packed.size() * sizeof(float));
         if (ggml_backend_sched_graph_compute(cc->sched, cross.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         cc->kv_cache.cross_populated = true;
     }
@@ -1989,36 +1995,37 @@ transcribe_status run_batch(transcribe_session *          session,
     }
 
     StepBuildBatched sb{};
-    auto             rebuild_step = [&](int win) -> bool {
+    auto             rebuild_step = [&](int win) -> transcribe_status {
         if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming run_batch: compute context allocation "
                                 "failed (step) — out of memory.");
-            return false;
+            return TRANSCRIBE_ERR_OOM;
         }
         sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp, cc->kv_cache, win, T_enc_max, n,
                                       /*use_flash=*/true);
         if (sb.graph == nullptr || sb.argmax_out == nullptr) {
-            return false;
+            return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming run_batch: step graph allocation failed — "
                                 "out of memory.");
-            return false;
+            return TRANSCRIBE_ERR_OOM;
         }
         ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0, cmask.size() * sizeof(ggml_fp16_t));
-        return true;
+        return TRANSCRIBE_OK;
     };
-    if (!rebuild_step(kv_window)) {
-        return TRANSCRIBE_ERR_GGUF;
+    if (const transcribe_status st = rebuild_step(kv_window); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     std::vector<ggml_fp16_t>          smask(static_cast<size_t>(kv_window) * n, f16_ninf);
     std::vector<int32_t>              tok_buf(n, 0), pos_buf(n, 0), argmax_buf(n, 0);
     std::vector<int64_t>              kvidx_buf(n, 0);
     std::vector<char>                 finished(n, 0);
+    std::vector<char>                 repeating(n, 0);
     std::vector<std::vector<int32_t>> generated(n);
     std::vector<int32_t>              next_tok(n, 0);
     for (int b = 0; b < n; ++b) {
@@ -2038,16 +2045,16 @@ transcribe_status run_batch(transcribe_session *          session,
         ggml_backend_tensor_set(sb.kv_idx_in, kvidx_buf.data(), 0, n * sizeof(int64_t));
         ggml_backend_tensor_set(sb.self_mask_in, smask.data(), 0, smask.size() * sizeof(ggml_fp16_t));
         if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
+            return TRANSCRIBE_ERR_BACKEND;
         }
         ggml_backend_tensor_get(sb.argmax_out, argmax_buf.data(), 0, n * sizeof(int32_t));
         return TRANSCRIBE_OK;
     };
 
     // Grow the window (and rebuild the graph + mask) so position `pos` fits.
-    auto ensure_window = [&](int pos) -> bool {
+    auto ensure_window = [&](int pos) -> transcribe_status {
         if (pos + 1 <= kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         int win = kv_window;
         while (win < pos + 1 && win < n_ctx_cap) {
@@ -2057,7 +2064,7 @@ transcribe_status run_batch(transcribe_session *          session,
             win = n_ctx_cap;
         }
         if (win == kv_window) {
-            return true;
+            return TRANSCRIBE_OK;
         }
         // Re-fill a wider mask: positions [0, pos) already written for all b.
         std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * n, f16_ninf);
@@ -2074,8 +2081,8 @@ transcribe_status run_batch(transcribe_session *          session,
     for (int b = 0; b < n; ++b) {
         tok_buf[b] = decoder_start;
     }
-    if (run_step(0) != TRANSCRIBE_OK) {
-        return TRANSCRIBE_ERR_GGUF;
+    if (const transcribe_status st = run_step(0); st != TRANSCRIBE_OK) {
+        return st;
     }
     for (int b = 0; b < n; ++b) {
         if (finished[b]) {
@@ -2102,14 +2109,14 @@ transcribe_status run_batch(transcribe_session *          session,
         if (all_done || pos + 1 > n_ctx_cap) {
             break;
         }
-        if (!ensure_window(pos)) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = ensure_window(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             tok_buf[b] = finished[b] ? eos : next_tok[b];
         }
-        if (run_step(pos) != TRANSCRIBE_OK) {
-            return TRANSCRIBE_ERR_GGUF;
+        if (const transcribe_status st = run_step(pos); st != TRANSCRIBE_OK) {
+            return st;
         }
         for (int b = 0; b < n; ++b) {
             if (finished[b]) {
@@ -2120,6 +2127,11 @@ transcribe_status run_batch(transcribe_session *          session,
                 finished[b] = 1;
             } else {
                 generated[b].push_back(next_tok[b]);
+                if (transcribe::stop_on_repetition(generated[b], "moonshine_streaming run_batch")) {
+                    cc->was_truncated = true;
+                    finished[b]       = 1;
+                    repeating[b]      = 1;
+                }
             }
         }
     }
@@ -2127,12 +2139,13 @@ transcribe_status run_batch(transcribe_session *          session,
 
     // Batched truncation: a valid row that never reached eos exhausted the
     // output budget (n_ctx_cap = position cap clamped to cache capacity).
-    // Mirror the serial path (WARN + flag).
+    // Mirror the serial path (WARN + flag + repeating-tail trim).
     {
         int n_truncated = 0;
         for (int b = 0; b < n; ++b) {
             if (valid[b] && !finished[b]) {
                 ++n_truncated;
+                transcribe::trim_repetition_at_budget_stop(generated[b], "moonshine_streaming run_batch");
             }
         }
         if (n_truncated > 0) {
@@ -2168,7 +2181,9 @@ transcribe_status run_batch(transcribe_session *          session,
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result  = true;
         // Per-utterance truncation parity (offline run_batch, not streaming).
-        rs.status      = !finished[b] ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+        rs.status      = repeating[b] ? TRANSCRIBE_ERR_OUTPUT_REPETITION :
+                         !finished[b] ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED :
+                                        TRANSCRIBE_OK;
         rs.t_mel_us    = 0;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = dec_us / valid_count;

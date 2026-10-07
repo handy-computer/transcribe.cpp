@@ -15,14 +15,14 @@ see the family doc at
 
 ## Choosing a variant
 
-- **Smallest footprint.** `moonshine-streaming-tiny` (34M params) at
-  Q8_0 is 48 MB. Decodes well above realtime on Apple Silicon and
-  Vulkan-class GPUs; CPU is also viable for live use.
-- **Better accuracy, modest cost.** `moonshine-streaming-small` (123M
-  params) at Q8_0 is 189 MB. Roughly halves WER vs tiny.
-- **Best accuracy in the family.** `moonshine-streaming-medium` (245M
-  params) at Q8_0 is 282 MB. Keep an eye on decode latency — the
-  14-layer decoder dominates wall time on long utterances.
+- **Smallest footprint.** `moonshine-streaming-tiny` decodes well above
+  realtime on Apple Silicon and Vulkan-class GPUs; CPU is also viable
+  for live use.
+- **Better accuracy, modest cost.** `moonshine-streaming-small` roughly
+  halves WER vs tiny.
+- **Best accuracy in the family.** `moonshine-streaming-medium` has the
+  most accuracy headroom. Keep an eye on decode latency; the 14-layer
+  decoder dominates wall time on long utterances.
 - **Non-streaming, batch-only workloads.** Use the
   [`moonshine`](moonshine.md) family instead — it's smaller for the
   same WER on offline audio because it doesn't carry the streaming
@@ -50,11 +50,13 @@ upstream-reported numbers is a scoring / text-normalization difference,
 not a numerical drift in the port. The K-tier presets (Q6_K / Q5_K_M /
 Q4_K_M) are not currently shipped for this family.
 
-| Variant | Params | Q8_0 size | WER (Q8_0) | Doc |
-| --- | ---: | ---: | ---: | --- |
-| `moonshine-streaming-tiny`   |  34M |  48 MB | 4.52% | [moonshine-streaming-tiny.md](moonshine-streaming-tiny.md) |
-| `moonshine-streaming-small`  | 123M | 189 MB | 2.54% | [moonshine-streaming-small.md](moonshine-streaming-small.md) |
-| `moonshine-streaming-medium` | 245M | 282 MB | 2.16% | [moonshine-streaming-medium.md](moonshine-streaming-medium.md) |
+<!-- catalog:family variants=moonshine-streaming-tiny,moonshine-streaming-small,moonshine-streaming-medium -->
+| Variant                      | Params | Languages | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `moonshine-streaming-tiny`   |    44M | en        |     50 MB | LibriSpeech test-clean (WER) | 4.52% | streaming    | [moonshine-streaming-tiny.md](moonshine-streaming-tiny.md) |
+| `moonshine-streaming-small`  |   140M | en        |    199 MB | LibriSpeech test-clean (WER) | 2.54% | streaming    | [moonshine-streaming-small.md](moonshine-streaming-small.md) |
+| `moonshine-streaming-medium` |   266M | en        |    296 MB | LibriSpeech test-clean (WER) | 2.16% | streaming    | [moonshine-streaming-medium.md](moonshine-streaming-medium.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

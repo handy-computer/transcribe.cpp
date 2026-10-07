@@ -50,17 +50,16 @@ public final class Session {
 
     /// Transcribe one utterance. `pcm` is mono float32 at 16 kHz in [-1, 1].
     public func run(_ pcm: [Float], options: RunOptions = .init()) throws -> Transcript {
-        model.runLock.lock()
-        defer { model.runLock.unlock() }
-        if model.streamActive {
-            throw TranscribeError.busy(
-                "a stream is active on this model; finish or drop it before run()")
-        }
-        return try options.withCParams { params in
-            let status = pcm.withUnsafeBufferPointer {
-                transcribe_run(ptr, $0.baseAddress, Int32($0.count), params)
+        try options.checkCStrings()
+        return try model.withCompute(
+            busyIfStreaming: "a stream is active on this model; finish or drop it before run()"
+        ) {
+            try options.withCParams { params in
+                let status = pcm.withUnsafeBufferPointer {
+                    transcribe_run(ptr, $0.baseAddress, Int32($0.count), params)
+                }
+                return try makeTranscript(status, context: "run")
             }
-            return try makeTranscript(status, context: "run")
         }
     }
 
@@ -70,43 +69,48 @@ public final class Session {
     public func runBatch(
         _ inputs: [[Float]], options: RunOptions = .init()
     ) throws -> [Result<Transcript, Error>] {
-        model.runLock.lock()
-        defer { model.runLock.unlock() }
-        if model.streamActive {
-            throw TranscribeError.busy(
-                "a stream is active on this model; finish or drop it before runBatch()")
-        }
-        return try options.withCParams { params in
-            let counts = inputs.map { Int32($0.count) }
-            let status = withPCMPointers(inputs[...], []) { pointers in
-                pointers.withUnsafeBufferPointer { pp in
-                    counts.withUnsafeBufferPointer { cc in
-                        transcribe_run_batch(
-                            ptr, pp.baseAddress, cc.baseAddress, Int32(inputs.count), params)
+        try options.checkCStrings()
+        return try model.withCompute(
+            busyIfStreaming: "a stream is active on this model; finish or drop it before runBatch()"
+        ) {
+            try options.withCParams { params in
+                let counts = inputs.map { Int32($0.count) }
+                let status = withPCMPointers(inputs[...], []) { pointers in
+                    pointers.withUnsafeBufferPointer { pp in
+                        counts.withUnsafeBufferPointer { cc in
+                            transcribe_run_batch(
+                                ptr, pp.baseAddress, cc.baseAddress, Int32(inputs.count), params)
+                        }
                     }
                 }
-            }
-            if status != TRANSCRIBE_OK && status != TRANSCRIBE_ERR_ABORTED {
-                throw TranscribeError.make(status, context: "run_batch")
-            }
-            let n = Int(transcribe_batch_n_results(ptr))
-            return (0..<n).map { i in
-                let s = transcribe_batch_status(ptr, Int32(i))
-                let context = "utterance \(i)"
-                switch s {
-                case TRANSCRIBE_OK:
-                    return .success(batchTranscript(i))
-                // Per-utterance abort/truncation preserves a readable partial
-                // (C contract) — attach it, mirroring `run` and the Rust/Python
-                // batch paths, instead of dropping it on the floor.
-                case TRANSCRIBE_ERR_ABORTED:
-                    return .failure(TranscribeError.aborted(
-                        message: TranscribeError.message(s, context), partial: batchTranscript(i)))
-                case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
-                    return .failure(TranscribeError.outputTruncated(
-                        message: TranscribeError.message(s, context), partial: batchTranscript(i)))
-                default:
-                    return .failure(TranscribeError.make(s, context: context))
+                if status != TRANSCRIBE_OK && status != TRANSCRIBE_ERR_ABORTED {
+                    throw TranscribeError.make(status, context: "run_batch")
+                }
+                let n = Int(transcribe_batch_n_results(ptr))
+                return (0..<n).map { i in
+                    let s = transcribe_batch_status(ptr, Int32(i))
+                    let context = "utterance \(i)"
+                    switch s {
+                    case TRANSCRIBE_OK:
+                        return .success(batchTranscript(i))
+                    // Per-utterance abort/truncation preserves a readable partial
+                    // (C contract) — attach it, mirroring `run` and the Rust/Python
+                    // batch paths, instead of dropping it on the floor.
+                    case TRANSCRIBE_ERR_ABORTED:
+                        return .failure(TranscribeError.aborted(
+                            message: TranscribeError.message(s, context),
+                            partial: batchTranscript(i)))
+                    case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
+                        return .failure(TranscribeError.outputTruncated(
+                            message: TranscribeError.message(s, context),
+                            partial: batchTranscript(i)))
+                    case TRANSCRIBE_ERR_OUTPUT_REPETITION:
+                        return .failure(TranscribeError.outputRepetition(
+                            message: TranscribeError.message(s, context),
+                            partial: batchTranscript(i)))
+                    default:
+                        return .failure(TranscribeError.make(s, context: context))
+                    }
                 }
             }
         }
@@ -176,12 +180,15 @@ public final class Session {
         case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
             throw TranscribeError.outputTruncated(
                 message: TranscribeError.message(status, context), partial: readTranscript())
+        case TRANSCRIBE_ERR_OUTPUT_REPETITION:
+            throw TranscribeError.outputRepetition(
+                message: TranscribeError.message(status, context), partial: readTranscript())
         default:
             throw TranscribeError.make(status, context: context)
         }
     }
 
-    private func readTranscript() -> Transcript {
+    func readTranscript() -> Transcript {
         var segments: [Segment] = []
         for i in 0..<Int(transcribe_n_segments(ptr)) {
             var s = transcribe_segment(); transcribe_segment_init(&s)

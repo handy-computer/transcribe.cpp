@@ -4,8 +4,13 @@ Safe, idiomatic Rust bindings for
 [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), a C/C++
 speech-to-text library built on ggml.
 
-> **Status: in development (0.0.1).** Core model, session, run, stream,
+> **Status: in development (0.2.0).** Core model, session, run, stream,
 > cancellation, backend, and family-extension APIs are implemented and tested.
+
+Upgrading from 0.1? See the
+[0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
+including the replacement of `ModelOptions::gpu_device` with exact `Device`
+handles.
 
 ## Install
 
@@ -31,6 +36,63 @@ println!("{}", result.text);
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+### Punctuation, capitalization, and text normalization
+
+`RunOptions::pnc` and `RunOptions::itn` default to preserving each model
+family's shipped behavior. Probe `model.supports(Feature::Pnc)` or
+`Feature::Itn` before selecting `Pnc::Off`/`On` or `Itn::Off`/`On`. The same
+`RunOptions` is used by single runs, batches, streams, and `transcribe()`.
+
+```rust
+use transcribe_cpp::{Itn, Pnc, RunOptions};
+let options = RunOptions { pnc: Pnc::Off, itn: Itn::On, ..Default::default() };
+let result = session.run(&pcm, &options)?;
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
+### Prompting
+
+`RunOptions::vocabulary` (custom terms), `prompt` (context, or the instruction
+under `Task::Instruct`) and `prefix` (text the model continues from) take
+effect where `model.supports()` reports `Feature::Vocabulary`,
+`ContextPrompt`, `Instruct` or `TranscriptPrefix`.
+
+```rust
+use transcribe_cpp::RunOptions;
+let options = RunOptions { vocabulary: vec!["Kubernetes".into()], ..Default::default() };
+let result = session.run(&pcm, &options)?;
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
+Streaming exposes both UI-stable text and a fully materialized structured
+snapshot:
+
+```rust
+let mut stream = session.stream(&RunOptions::default(), &Default::default())?;
+stream.feed(&chunk)?;
+println!("{}", stream.text().committed);
+stream.finalize()?;
+let transcript = stream.snapshot(); // language, segments, words, tokens, timings
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
+### Diarization (who spoke when)
+
+A model whose `roles()` contain `Role::Diarize` (e.g. Sortformer) opens a
+`DiarizeSession` that returns speaker turns; calls for a role the model lacks
+return `Error::UnsupportedRole`.
+
+```rust
+use transcribe_cpp::{DiarizeOptions, Model, Role};
+let model = Model::load("diarizer.gguf")?;
+assert!(model.roles().contains(Role::Diarize));
+let mut diarize = model.diarize_session()?;
+for turn in diarize.run(&pcm, &DiarizeOptions::default())? {
+    println!("speaker {}: {}..{} ms", turn.speaker_id, turn.t0_ms, turn.t1_ms);
+}
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Runnable examples:
 
 ```sh
@@ -48,7 +110,7 @@ is the safe wrapper.
 ## Backends
 
 Backends are selected with cargo features forwarded to `transcribe-cpp-sys`:
-`metal` (default on Apple), `vulkan`, `cuda`, and `openmp`.
+`metal` (default on Apple), `vulkan`, `cuda`, `rocm`, and `openmp`.
 
 On Windows, `vulkan` requires the Vulkan SDK. Deep Cargo output paths are
 shortened automatically during the native build; see the
@@ -59,6 +121,18 @@ The default link is static and self-contained. Advanced packaging modes are
 available through `shared` and `dynamic-backends`; see the `transcribe-cpp-sys`
 README if you need runtime-loaded backend modules or custom
 `TRANSCRIBE_CMAKE_ARGS`.
+
+## Exact device selection
+
+`devices()` returns process-local `Device` handles. Leave
+`ModelOptions::device` as `None` for the backend's automatic policy, or pass
+`Some(device)` to select that exact primary device with no fallback. Handles
+are not stable across processes; persist `device_id` when it is `Some`,
+otherwise `kind` + `name` + `description` (e.g. Metal), and later re-find the
+device in `devices()` after backend initialization. In dynamic-backend builds,
+finish `init_backends()` or `init_backends_default()` before any thread
+enumerates devices, queries backend availability, or loads a model; native
+registry mutation is a startup-only operation and must not race those calls.
 
 ## Packaging a distributable (`shared` / `dynamic-backends`)
 
@@ -141,6 +215,7 @@ fn main() {
 - `Session` is `Send` but not `Sync`; mutating calls take `&mut self`.
 - In 0.x the C library allows at most one in-flight run across all sessions of a
   model; this crate enforces it with a per-model mutex, so concurrent calls
-  queue rather than race. For real parallelism, use one `Model` per worker.
+  queue rather than race. `DiarizeSession`s share the same lock. For real
+  parallelism, use one `Model` per worker.
 
 - License: MIT

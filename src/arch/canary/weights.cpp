@@ -127,6 +127,18 @@ transcribe_status read_canary_hparams(const gguf_context * gguf, CanaryHParams &
         st != TRANSCRIBE_OK) {
         return st;
     }
+    // Sub-vocab ranges are optional: only the canary2 transcript prefix
+    // encodes text, and it is not advertised without them.
+    if (!hp.tokenizer_single_sp &&
+        read_string_array_kv(gguf, "stt.canary.tokenizer.lang_codes", hp.tok_lang_codes) == KvResult::Ok &&
+        (read_int32_array_kv(gguf, "stt.canary.tokenizer.lang_offsets", hp.tok_lang_offsets) != KvResult::Ok ||
+         read_int32_array_kv(gguf, "stt.canary.tokenizer.lang_sizes", hp.tok_lang_sizes) != KvResult::Ok ||
+         hp.tok_lang_offsets.size() != hp.tok_lang_codes.size() ||
+         hp.tok_lang_sizes.size() != hp.tok_lang_codes.size())) {
+        hp.tok_lang_codes.clear();
+        hp.tok_lang_offsets.clear();
+        hp.tok_lang_sizes.clear();
+    }
 
     auto require_special = [&](const char * key, int32_t & out) -> transcribe_status {
         const auto r = read_token_id_required(gguf, key, out);

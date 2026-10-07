@@ -1,7 +1,10 @@
 # GigaAM-v3 e2e-RNN-T
 
-ai-sage's [`ai-sage/GigaAM-v3`](https://huggingface.co/ai-sage/GigaAM-v3)
-(main (= v3_e2e_rnnt) branch) ported to transcribe.cpp. A 16-layer Conformer encoder (768-d, 16 heads, rotary positional embeddings, conv1d ×4 subsampling) feeding an RNN-T transducer head (single LSTM-320 predictor + joint network). Vocabulary is 1024 SentencePiece pieces + blank, covering cased Cyrillic plus `.,?!` directly.
+<!-- catalog:intro -->
+Upstream: [`ai-sage/GigaAM-v3`](https://huggingface.co/ai-sage/GigaAM-v3) at [`ec1dc1f`](https://huggingface.co/ai-sage/GigaAM-v3/commit/ec1dc1f).
+
+Offline Russian speech-to-text with greedy RNN-T decoding. 16-layer Conformer encoder paired with an RNN-T transducer head. Output is cased Russian with punctuation, decoded from a 1024-piece SentencePiece tokenizer. Not a streaming model and does not translate. Short-form only (≤25 s per utterance).
+<!-- /catalog -->
 
 ## What it's for
 
@@ -25,23 +28,35 @@ across heads). Variants in this family:
 See ai-sage's [model card](https://huggingface.co/ai-sage/GigaAM-v3)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed MIT. Ported from upstream commit
-[`ec1dc1f`](https://huggingface.co/ai-sage/GigaAM-v3/commit/ec1dc1f01d0d627ab2c0d3acc1e235702300d95e),
-pinned 2026-05-12.
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`ec1dc1f`](https://huggingface.co/ai-sage/GigaAM-v3/commit/ec1dc1f), pinned 2026-05-12. Validated against the gigaam author package reference at transcribe.cpp commit [`42b96d9`](https://github.com/handy-computer/transcribe.cpp/tree/42b96d9) on 2026-05-12.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (FLEURS ru) |
+<!-- catalog:downloads -->
+| Quantization | Download |   Size | WER (FLEURS ru) |
 | --- | --- | ---: | ---: |
-| F32    | [gigaam-v3-e2e-rnnt-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-F32.gguf) |  849 MB |   5.35% |
-| F16    | [gigaam-v3-e2e-rnnt-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-F16.gguf) |  431 MB |   5.35% |
-| Q8_0   | [gigaam-v3-e2e-rnnt-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q8_0.gguf) |  261 MB |   5.36% |
-| Q6_K   | [gigaam-v3-e2e-rnnt-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q6_K.gguf) |  217 MB |   5.37% |
-| Q5_K_M | [gigaam-v3-e2e-rnnt-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q5_K_M.gguf) |  197 MB |   5.42% |
-| Q4_K_M | [gigaam-v3-e2e-rnnt-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q4_K_M.gguf) |  175 MB |   5.36% |
+| F32          | [gigaam-v3-e2e-rnnt-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-F32.gguf) | 890 MB | 5.35% |
+| F16          | [gigaam-v3-e2e-rnnt-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-F16.gguf) | 452 MB | 5.35% |
+| Q8_0         | [gigaam-v3-e2e-rnnt-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q8_0.gguf) | 274 MB | 5.35% |
+| Q6_K         | [gigaam-v3-e2e-rnnt-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q6_K.gguf) | 228 MB | 5.37% |
+| Q5_K_M       | [gigaam-v3-e2e-rnnt-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q5_K_M.gguf) | 206 MB | 5.42% |
+| Q4_K_M       | [gigaam-v3-e2e-rnnt-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-e2e-rnnt-gguf/resolve/main/gigaam-v3-e2e-rnnt-Q4_K_M.gguf) | 184 MB | 5.36% |
+<!-- /catalog -->
 
-WER is measured on the full FLEURS ru test split (775 utterances) with
-greedy decoding and no external LM. F32 reference baseline: **5.35%**.
+<!-- catalog:recipe -->
+WER on the full FLEURS ru split (775 utterances), batch sizes 1 and 8, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy decoding, no external LM. F32 reference baseline: 5.35%. Upstream `gigaam`
+author package measured on the same manifest: 6.78%; the 1.4 pp gap is upstream
+rejecting 5 long (>25 s) utterances with `Too long wav file, use
+'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt
+subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not
+publish a FLEURS ru WER; this number is measured here.
+<!-- /catalog -->
 
 Upstream (`gigaam` author package at `6e4b027c`) measured on the same
 manifest: **6.78%**. The 1.4 pp gap is the upstream package
@@ -73,39 +88,40 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample     |         Q8_0 |       Q4_K_M |
-| ------- | ---------- | -----------: | -----------: |
-| Metal   | ru (4.5s)  |  51 ms (88×) |  51 ms (89×) |
-| CPU     | ru (4.5s)  | 177 ms (25×) | 172 ms (26×) |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `ef55b52`.
+| Backend | Sample           |            Q8_0 |          Q4_K_M |
+| ------- | ---------------- | --------------: | --------------: |
+| Metal   | ru-short (11.0s) | 30 ms (360.53×) | 30 ms (360.92×) |
+| Metal   | ru-long (33.8s)  | 74 ms (458.32×) | 75 ms (449.86×) |
+| CPU     | ru-short (11.0s) | 379 ms (28.99×) | 368 ms (29.88×) |
+| CPU     | ru-long (33.8s)  | 1.18 s (28.71×) | 1.26 s (26.90×) |
+
+Apple M4 Max: transcribe.cpp `94f1f45` on 2026-09-15.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample     |         Q8_0 |       Q4_K_M |
-| ------- | ---------- | -----------: | -----------: |
-| Vulkan  | ru (4.5s)  | 202 ms (22×) | 205 ms (22×) |
-| CPU     | ru (4.5s)  | 552 ms (8×)  | 444 ms (10×) |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora Linux 43, transcribe.cpp `ef55b52`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
+| Backend | Sample           |            Q8_0 |          Q4_K_M |
+| ------- | ---------------- | --------------: | --------------: |
+| Vulkan  | ru-short (11.0s) | 797 ms (13.78×) | 800 ms (13.73×) |
+| Vulkan  | ru-long (33.8s)  | 2.08 s (16.26×) | 2.08 s (16.24×) |
+| CPU     | ru-short (11.0s) |  1.30 s (8.47×) |  1.40 s (7.87×) |
+| CPU     | ru-long (33.8s)  |  4.65 s (7.28×) |  4.85 s (6.98×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `522ccd68` on 2026-09-15.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models gigaam-v3-ctc,gigaam-v3-rnnt,gigaam-v3-e2e-ctc,gigaam-v3-e2e-rnnt \
-  --quants q8_0,q4_k_m \
-  --samples ru \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name gigaam-publication
+uv run scripts/bench/run.py --profile --models gigaam-v3-e2e-rnnt
 ```
 
 ## Numerical Validation

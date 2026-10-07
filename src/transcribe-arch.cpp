@@ -6,6 +6,9 @@
 
 #include "transcribe-arch.h"
 
+#include "transcribe-log.h"
+#include "transcribe-model.h"
+
 #include <cstring>
 
 namespace transcribe {
@@ -75,7 +78,15 @@ namespace granite_nar {
 extern const Arch arch;
 }
 
+namespace granite5_ctc {
+extern const Arch arch;
+}
+
 namespace medasr {
+extern const Arch arch;
+}
+
+namespace sortformer {
 extern const Arch arch;
 }
 
@@ -85,10 +96,10 @@ const Arch * find_arch(const char * name) {
     }
 
     static const Arch * const k_archs[] = {
-        &parakeet::arch,         &cohere::arch,      &canary::arch,  &qwen3_asr::arch, &voxtral::arch,
-        &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch, &moonshine::arch, &moonshine_streaming::arch,
-        &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,  &granite::arch,   &granite_nar::arch,
-        &medasr::arch,           &moss::arch,
+        &parakeet::arch,         &cohere::arch,      &canary::arch,     &qwen3_asr::arch,    &voxtral::arch,
+        &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch,    &moonshine::arch,    &moonshine_streaming::arch,
+        &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,     &granite::arch,      &granite_nar::arch,
+        &medasr::arch,           &moss::arch,        &sortformer::arch, &granite5_ctc::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 
@@ -102,6 +113,38 @@ const Arch * find_arch(const char * name) {
         }
     }
     return nullptr;
+}
+
+transcribe_status resolve_roles(transcribe_model * model) {
+    if (model == nullptr || model->arch == nullptr) {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    const Arch & arch        = *model->arch;
+    const char * name        = arch.name != nullptr ? arch.name : "(unknown)";
+    const bool   has_asr     = arch.init_context != nullptr && arch.run != nullptr;
+    const bool   has_diarize = arch.diarize != nullptr;
+
+    if (model->roles == 0 && has_asr) {
+        model->roles = TRANSCRIBE_ROLE_ASR;
+    }
+
+    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE;
+    const char *   why   = nullptr;
+    if (model->roles == 0) {
+        why = "serves no role";
+    } else if ((model->roles & ~known) != 0) {
+        why = "sets an unknown role bit";
+    } else if ((model->roles & TRANSCRIBE_ROLE_ASR) != 0 && !has_asr) {
+        why = "sets the ASR role without init_context / run hooks";
+    } else if ((model->roles & TRANSCRIBE_ROLE_DIARIZE) != 0 && !has_diarize) {
+        why = "sets the DIARIZE role without a diarize ops table";
+    }
+    if (why != nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: arch '%s' %s (roles 0x%x)", name, why,
+                static_cast<unsigned>(model->roles));
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    return TRANSCRIBE_OK;
 }
 
 }  // namespace transcribe

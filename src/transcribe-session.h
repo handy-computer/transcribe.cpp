@@ -10,16 +10,14 @@
 
 #pragma once
 
+#include "transcribe-session-core.h"
 #include "transcribe.h"
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <string>
 #include <vector>
-
-struct transcribe_model;
 
 // Read transcribe_session_params::n_ctx with a struct_size guard. n_ctx is
 // a trailing field appended after kv_type, so an older caller's smaller
@@ -39,12 +37,9 @@ inline int32_t transcribe_session_params_n_ctx(const struct transcribe_session_p
     return params->n_ctx;
 }
 
-struct transcribe_session {
-    // The model this session was constructed from. Borrowed pointer:
-    // the caller is required (per the public threading contract) to keep
-    // the model alive for the lifetime of every derived session.
-    transcribe_model * model = nullptr;
-
+// Common members (model, n_threads, timings, abort callback, compute
+// scratch) live on transcribe::SessionCore; see transcribe-session-core.h.
+struct transcribe_session : transcribe::SessionCore {
     // True only for sessions created via transcribe_open(), which loads
     // and therefore owns its model. Both transcribe_session_free() and
     // transcribe_close() (now an alias) read this flag and free the
@@ -52,10 +47,6 @@ struct transcribe_session {
     // transcribe_session_init() leave this false and their model is
     // freed independently by the caller via transcribe_model_free().
     bool owns_model = false;
-
-    // Cached n_threads value the caller passed at init time. 0 means
-    // "library picks a sensible default" (matches the factory).
-    int n_threads = 0;
 
     // Cached n_ctx value the caller passed at init time (decoder context
     // cap in tokens). 0 means "use the model's true maximum from GGUF".
@@ -72,13 +63,6 @@ struct transcribe_session {
     // this from params; the families resolve AUTO to f16 for the KV cache, so
     // for byte accounting only F32 differs (4 bytes/elem vs 2).
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
-
-    // Per-call timings, populated by the most recent transcribe_run.
-    // Surfaced via the public transcribe_get_timings accessor; reset
-    // by transcribe_reset_timings.
-    int64_t t_mel_us    = 0;
-    int64_t t_encode_us = 0;
-    int64_t t_decode_us = 0;
 
     // Result storage (family-agnostic; populated by per-family run()).
     // A flat backing array per level (segments / words / tokens) with
@@ -117,16 +101,9 @@ struct transcribe_session {
         int32_t     speaker_id  = 0;  // 1-based; 0 = no attribution
     };
 
-    // "Who spoke when" rows (diarization). Populated only when a run
-    // resolves diarize ON for a supporting family; may overlap in time.
-    // t0_ms == t1_ms == 0 means the family attributes text but has no
-    // timing information for the turn.
-    struct SpeakerSegmentEntry {
-        int64_t t0_ms      = 0;
-        int64_t t1_ms      = 0;
-        int32_t speaker_id = 0;  // 1-based
-        float   p          = NAN;
-    };
+    // Hoisted to transcribe::SpeakerSegmentEntry so every session type
+    // that reports speaker segments shares one row type.
+    using SpeakerSegmentEntry = transcribe::SpeakerSegmentEntry;
 
     std::vector<TokenEntry>          tokens;
     std::vector<WordEntry>           words;
@@ -210,24 +187,6 @@ struct transcribe_session {
     transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     bool                      has_result  = false;
 
-    // Abort / cancellation (set via transcribe_set_abort_callback).
-    // run() drivers call poll_abort() at chunk / decode-step boundaries;
-    // a callback returning true sets was_aborted and the run returns
-    // TRANSCRIBE_ERR_ABORTED with partial segments preserved. was_aborted
-    // is cleared at the top of every transcribe_run, NOT by clear_result
-    // (the partial result may be deliberately retained).
-    transcribe_abort_callback abort_cb       = nullptr;
-    void *                    abort_userdata = nullptr;
-    bool                      was_aborted    = false;
-
-    bool poll_abort() {
-        if (abort_cb != nullptr && abort_cb(abort_userdata)) {
-            was_aborted = true;
-            return true;
-        }
-        return false;
-    }
-
     // Set by a run() driver when decode stops at the model's context /
     // position cap before end-of-stream (output truncated; partial result
     // retained). Surfaced via transcribe_was_truncated(); cleared at the
@@ -235,6 +194,24 @@ struct transcribe_session {
     // up-front TRANSCRIBE_ERR_INPUT_TOO_LONG rejection (couldn't finish vs
     // couldn't start). See docs/input-limits.md.
     bool was_truncated = false;
+
+    // Set with was_truncated when the repetition guard stopped the decode
+    // (transcribe-repetition-guard.h) rather than the budget, so the run
+    // reports TRANSCRIBE_ERR_OUTPUT_REPETITION. Cleared with was_truncated.
+    bool stopped_on_repetition = false;
+
+    void mark_repetition_stop() {
+        was_truncated         = true;
+        stopped_on_repetition = true;
+    }
+
+    // Status of a run() whose decode finished: OK, or the stop that cut it short.
+    transcribe_status truncation_status() const {
+        if (stopped_on_repetition) {
+            return TRANSCRIBE_ERR_OUTPUT_REPETITION;
+        }
+        return was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
+    }
 
     // Streaming state. Lifecycle (stream_state) is separated from the
     // result snapshot so clear_result() can wipe per-call data without
@@ -261,8 +238,12 @@ struct transcribe_session {
     // storage (the public contract lets the caller free its params pointers
     // the moment begin returns). Stable for the stream's lifetime; only the
     // next begin mutates them.
-    std::string stream_language_owned;
-    std::string stream_target_language_owned;
+    std::string               stream_language_owned;
+    std::string               stream_target_language_owned;
+    // Generic prompting strings for the stream's run-params view.
+    std::vector<std::string>  stream_vocabulary_owned;
+    std::vector<const char *> stream_vocabulary_ptrs;
+    std::string               stream_prompt_owned;
 
     // UI-facing streaming text state. `full_text` above remains the raw
     // model hypothesis. `stream_committed_text` is the append-only public
@@ -277,7 +258,7 @@ struct transcribe_session {
     void clear_result();
 
     transcribe_session() = default;
-    virtual ~transcribe_session();
+    ~transcribe_session() override;
 
     transcribe_session(const transcribe_session &)             = delete;
     transcribe_session & operator=(const transcribe_session &) = delete;

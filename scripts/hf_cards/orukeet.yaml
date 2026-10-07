@@ -1,0 +1,33 @@
+# Spec for the HF README of handy-computer/orukeet-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+
+pin_date: 2026-10-06
+
+validation:
+  reference: NeMo
+  commit: 65856fac
+  date: 2026-10-06
+
+pipeline_tag: automatic-speech-recognition
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - tdt
+  - multilingual
+  - gabor
+
+summary: |
+  A tuned version of parakeet-tdt-0.6b-v3 from Oruk AI. Turns speech into
+  text in 25 European languages, works offline, and runs as fast as v3. Give
+  it a 16 kHz mono WAV and it gives you back text with punctuation and
+  capitals. Swap it in anywhere you use v3. Does not stream and does not
+  translate.
+
+wer:
+  notes: |
+    A bit more accurate than v3 on English and on 20 of the 25 languages.
+    parakeet-ultra is more accurate than both on almost everything.

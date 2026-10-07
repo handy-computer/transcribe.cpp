@@ -26,6 +26,13 @@ void apply_family_invariants(transcribe_model & model) {
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_LONG_FORM, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+    // Generic vocabulary (`Glossary: {terms}`) and context prompt, both in the
+    // <|startofprev|> slot (prompting A/B, notes/prompting-ab-results.md).
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_VOCABULARY, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CONTEXT_PROMPT, true);
+    // Transcript prefix after the SOT sequence (openai DecodingOptions.prefix),
+    // first window only.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, true);
 }
 
 }  // namespace transcribe::whisper

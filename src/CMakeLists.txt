@@ -12,6 +12,8 @@
 
 add_library(transcribe
     transcribe.cpp
+    transcribe-asr.cpp
+    transcribe-diarize.cpp
     transcribe-loader.cpp
     transcribe-arch.cpp
     transcribe-meta.cpp
@@ -19,6 +21,7 @@ add_library(transcribe
     transcribe-mel.cpp
     transcribe-model.cpp
     transcribe-tokenizer.cpp
+    transcribe-prompting.cpp
     transcribe-unicode.cpp
     transcribe-unicode-data.cpp
     transcribe-debug.cpp
@@ -34,6 +37,8 @@ add_library(transcribe
     causal_lm/causal_lm.cpp
     granite_conformer/shaw_attn.cpp
     arch/parakeet/model.cpp
+    arch/parakeet/longform.cpp
+    arch/parakeet/multitalker.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp
     arch/parakeet/encoder.cpp
@@ -59,6 +64,9 @@ add_library(transcribe
     arch/moss/weights.cpp
     arch/moss/encoder.cpp
     arch/moss/decoder.cpp
+    arch/sortformer/model.cpp
+    arch/sortformer/stream.cpp
+    arch/sortformer/weights.cpp
     arch/voxtral/model.cpp
     arch/voxtral/capabilities.cpp
     arch/voxtral/weights.cpp
@@ -114,6 +122,11 @@ add_library(transcribe
     arch/granite/encoder.cpp
     arch/granite/projector.cpp
     arch/granite/decoder.cpp
+    arch/granite5_ctc/model.cpp
+    arch/granite5_ctc/capabilities.cpp
+    arch/granite5_ctc/weights.cpp
+    arch/granite5_ctc/encoder.cpp
+    arch/granite5_ctc/decoder.cpp
     arch/granite_nar/model.cpp
     arch/granite_nar/capabilities.cpp
     arch/granite_nar/weights.cpp

@@ -1,0 +1,67 @@
+# Spec for the HF README of handy-computer/cohere-transcribe-arabic-07-2026-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+
+pin_date: 2026-07-07
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: Transformers
+  commit: d89ecb7
+  date: 2026-07-07
+
+pipeline_tag: automatic-speech-recognition
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - cohere
+  - conformer
+  - encoder-decoder
+  - arabic
+
+summary: |
+  Offline Arabic speech-to-text, including dialectal Arabic and
+  Arabic-English code-switching, with English as a secondary language. An
+  Arabic-focused adaptation of the Cohere Transcribe 03-2026 architecture:
+  a Conformer encoder with a Transformer encoder-decoder head
+  (cross-attention, tied token embedding). Takes a 16 kHz mono WAV and a
+  language flag (`-l ar` or `-l en`) and produces a transcript. Decoding
+  is autoregressive.
+
+usage: |
+  Build transcribe.cpp from source:
+
+  ```bash
+  git clone git@github.com:handy-computer/transcribe.cpp.git
+  cd transcribe.cpp
+  cmake -B build && cmake --build build
+  ```
+
+  Run on a 16 kHz mono WAV:
+
+  ```bash
+  build/bin/transcribe-cli \
+    -m cohere-transcribe-arabic-07-2026-Q8_0.gguf \
+    -l ar \
+    input.wav
+  ```
+
+  If your audio isn't already 16 kHz mono WAV, convert it first:
+
+  ```bash
+  ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+  ```
+
+  See the [transcribe.cpp model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-arabic-07-2026.md) for performance
+  numbers, numerical validation, and reproduction steps.
+
+wer:
+  notes: |
+    Greedy decoding, no external LM, scored with the Whisper BasicTextNormalizer; the
+    FLEURS Arabic split is `ar_eg`, Egyptian-dialect speech. BF16 reference baseline,
+    measured with native Transformers on the same manifest: 11.00%; the BF16 port scores
+    11.02%, and every quant falls inside the reference's 95% confidence interval. FLEURS
+    Arabic is Egyptian-dialect speech; upstream numbers published on other Arabic test
+    sets are not directly comparable.

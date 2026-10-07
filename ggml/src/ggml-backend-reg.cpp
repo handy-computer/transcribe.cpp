@@ -3,6 +3,7 @@
 #include "ggml-backend-dl.h"
 #include "ggml-impl.h"
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -86,6 +87,10 @@
 #include "ggml-openvino.h"
 #endif
 
+#ifdef GGML_USE_ET
+#include "ggml-et.h"
+#endif
+
 namespace fs = std::filesystem;
 
 static std::string path_str(const fs::path & path) {
@@ -103,6 +108,17 @@ static std::string path_str(const fs::path & path) {
     }
 }
 
+static std::atomic<ggml_backend_reg_filter_t> g_reg_filter{nullptr};
+
+static bool reg_allowed(const char * name) {
+    ggml_backend_reg_filter_t filter = g_reg_filter.load();
+    return filter == nullptr || filter(name);
+}
+
+void ggml_backend_set_reg_filter(ggml_backend_reg_filter_t filter) {
+    g_reg_filter.store(filter);
+}
+
 struct ggml_backend_reg_entry {
     ggml_backend_reg_t reg;
     dl_handle_ptr handle;
@@ -114,55 +130,95 @@ struct ggml_backend_registry {
 
     ggml_backend_registry() {
 #ifdef GGML_USE_CUDA
-        register_backend(ggml_backend_cuda_reg());
+        // HIP/MUSA reuse the CUDA backend; filter under their module name.
+#if defined(GGML_USE_HIP)
+        if (reg_allowed("hip")) {
+#elif defined(GGML_USE_MUSA)
+        if (reg_allowed("musa")) {
+#else
+        if (reg_allowed("cuda")) {
+#endif
+            register_backend(ggml_backend_cuda_reg());
+        }
 #endif
 #ifdef GGML_USE_METAL
-        register_backend(ggml_backend_metal_reg());
+        if (reg_allowed("metal")) {
+            register_backend(ggml_backend_metal_reg());
+        }
 #endif
 #ifdef GGML_USE_SYCL
-        register_backend(ggml_backend_sycl_reg());
+        if (reg_allowed("sycl")) {
+            register_backend(ggml_backend_sycl_reg());
+        }
 #endif
 #ifdef GGML_USE_VULKAN
     // Add runtime disable check
-    if (getenv("GGML_DISABLE_VULKAN") == nullptr) {
-        register_backend(ggml_backend_vk_reg());
-    } else {
+    if (getenv("GGML_DISABLE_VULKAN") != nullptr) {
         GGML_LOG_DEBUG("Vulkan backend disabled by GGML_DISABLE_VULKAN environment variable\n");
+    } else if (reg_allowed("vulkan")) {
+        register_backend(ggml_backend_vk_reg());
     }
 #endif
 #ifdef GGML_USE_WEBGPU
-        register_backend(ggml_backend_webgpu_reg());
+        if (reg_allowed("webgpu")) {
+            register_backend(ggml_backend_webgpu_reg());
+        }
 #endif
 #ifdef GGML_USE_ZDNN
-        register_backend(ggml_backend_zdnn_reg());
+        if (reg_allowed("zdnn")) {
+            register_backend(ggml_backend_zdnn_reg());
+        }
 #endif
 #ifdef GGML_USE_VIRTGPU_FRONTEND
-        register_backend(ggml_backend_virtgpu_reg());
+        if (reg_allowed("virtgpu")) {
+            register_backend(ggml_backend_virtgpu_reg());
+        }
 #endif
 
 #ifdef GGML_USE_OPENCL
-        register_backend(ggml_backend_opencl_reg());
+        if (reg_allowed("opencl")) {
+            register_backend(ggml_backend_opencl_reg());
+        }
 #endif
 #ifdef GGML_USE_ZENDNN
-        register_backend(ggml_backend_zendnn_reg());
+        if (reg_allowed("zendnn")) {
+            register_backend(ggml_backend_zendnn_reg());
+        }
 #endif
 #ifdef GGML_USE_HEXAGON
-        register_backend(ggml_backend_hexagon_reg());
+        if (reg_allowed("hexagon")) {
+            register_backend(ggml_backend_hexagon_reg());
+        }
 #endif
 #ifdef GGML_USE_CANN
-        register_backend(ggml_backend_cann_reg());
+        if (reg_allowed("cann")) {
+            register_backend(ggml_backend_cann_reg());
+        }
 #endif
 #ifdef GGML_USE_BLAS
-        register_backend(ggml_backend_blas_reg());
+        if (reg_allowed("blas")) {
+            register_backend(ggml_backend_blas_reg());
+        }
 #endif
 #ifdef GGML_USE_RPC
-        register_backend(ggml_backend_rpc_reg());
+        if (reg_allowed("rpc")) {
+            register_backend(ggml_backend_rpc_reg());
+        }
 #endif
 #ifdef GGML_USE_OPENVINO
-        register_backend(ggml_backend_openvino_reg());
+        if (reg_allowed("openvino")) {
+            register_backend(ggml_backend_openvino_reg());
+        }
+#endif
+#ifdef GGML_USE_ET
+        if (reg_allowed("et")) {
+            register_backend(ggml_backend_et_reg());
+        }
 #endif
 #ifdef GGML_USE_CPU
-        register_backend(ggml_backend_cpu_reg());
+        if (reg_allowed("cpu")) {
+            register_backend(ggml_backend_cpu_reg());
+        }
 #endif
     }
 
@@ -471,6 +527,10 @@ static fs::path backend_filename_extension() {
 }
 
 static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent, const char * user_search_path) {
+    if (!reg_allowed(name)) {
+        return nullptr;
+    }
+
     // enumerate all the files that match [lib]ggml-name-*.[so|dll] in the search paths
     const fs::path name_path = fs::u8path(name);
     const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + fs::u8path("-").native();
@@ -483,7 +543,13 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
 #endif
         // default search paths: executable directory, current directory
         search_paths.push_back(get_executable_path());
-        search_paths.push_back(fs::current_path());
+        std::error_code cwd_ec;
+        const fs::path cwd = fs::current_path(cwd_ec);
+        if (cwd_ec) {
+            GGML_LOG_DEBUG("%s: current_path() failure, error-message: %s\n", __func__, cwd_ec.message().c_str());
+        } else {
+            search_paths.push_back(cwd);
+        }
     } else {
         search_paths.push_back(fs::u8path(user_search_path));
     }
@@ -501,8 +567,14 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
             }
             continue;
         }
-        fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
-        for (const auto & entry : dir_it) {
+        std::error_code dir_ec;
+        fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied, dir_ec);
+        if (dir_ec) {
+            GGML_LOG_DEBUG("%s: failed to enumerate %s: %s\n", __func__, path_str(search_path).c_str(), dir_ec.message().c_str());
+            continue;
+        }
+        for (const fs::directory_iterator end; dir_it != end; dir_it.increment(dir_ec)) {
+            const auto & entry = *dir_it;
             if (entry.is_regular_file(ec)) {
                 auto filename = entry.path().filename();
                 auto ext = entry.path().extension();
@@ -580,7 +652,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("cpu", silent, dir_path);
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend
     const char * backend_path = std::getenv("GGML_BACKEND_PATH");
-    if (backend_path) {
+    if (backend_path && reg_allowed("external")) {
         ggml_backend_load(backend_path);
     }
 }

@@ -1,13 +1,24 @@
 # Fun-ASR-MLT-Nano
 
-Alibaba / FunAudioLLM's [`FunAudioLLM/Fun-ASR-MLT-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512)
-ported to transcribe.cpp — the multilingual sibling of
-[Fun-ASR-Nano](fun-asr-nano-2512.md). Identical architecture
-(SenseVoiceEncoderSmall + 2-layer audio adaptor + bundled Qwen3-0.6B LLM,
-~800M trainable parameters), trained on a smaller corpus
+<!-- catalog:intro -->
+Upstream: [`FunAudioLLM/Fun-ASR-MLT-Nano-2512`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512) at [`cf67a93`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a93).
+
+Offline speech-to-text covering 31 languages, with focused optimization
+on East and Southeast Asian languages: Chinese, English, Cantonese,
+Japanese, Korean, Vietnamese, Indonesian, Thai, Malay, Filipino, plus
+Arabic, Hindi, and 19 European languages (Bulgarian, Croatian, Czech,
+Danish, Dutch, Estonian, Finnish, Greek, Hungarian, Irish, Latvian,
+Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian,
+Swedish). Same architecture as Fun-ASR-Nano-2512 (~800M trainable
+parameters: frozen SenseVoiceEncoderSmall + 2-layer audio adaptor +
+bundled Qwen3-0.6B LLM); trained on a smaller multilingual corpus
 ("hundreds of thousands of hours" per the model card, vs Nano's
-"tens of millions") with broad multilingual coverage instead of
-Mandarin-dialect depth.
+"tens of millions"). Takes a 16 kHz mono WAV and emits text. Not
+streaming, no translation, no timestamps. ITN (inverse text
+normalization) is supported by the model and exposed via the
+`--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
+in the library API.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -33,36 +44,79 @@ For Mandarin-only / dialect-heavy use, the regular
 [Fun-ASR-Nano](fun-asr-nano-2512.md) was trained on a much larger
 zh/en/ja corpus and may give better Chinese accuracy.
 
+**Prompting:** vocabulary (`--vocabulary`) as the upstream hotword list (`热词列表：[…]`).
+
 See FunAudioLLM's [model card](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed under the **FunASR Model Open Source License Agreement v1.1**
-([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
-Ported from upstream commit
-[`cf67a93`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a938bf2829959d08fdfb84e186eff02a67ff),
-pinned 2026-05-06.
+<!-- catalog:pin -->
+Licensed [FunASR Model Open Source License Agreement v1.1](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). Ported from upstream commit [`cf67a93`](https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512/commit/cf67a93), pinned 2026-05-06. Validated against the FunASR reference at transcribe.cpp commit [`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28) on 2026-05-06.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [Fun-ASR-MLT-Nano-2512-BF16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-BF16.gguf)     | 1590 MB | 1.74% |
-| F16    | [Fun-ASR-MLT-Nano-2512-F16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-F16.gguf)       | 1590 MB | 1.74% |
-| Q8_0   | [Fun-ASR-MLT-Nano-2512-Q8_0.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q8_0.gguf)     |  850 MB | 1.74% |
-| Q6_K   | [Fun-ASR-MLT-Nano-2512-Q6_K.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q6_K.gguf)     |  659 MB | 1.69% |
-| Q5_K_M | [Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf) |  602 MB | 1.77% |
-| Q4_K_M | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  531 MB | 1.89% |
+| BF16         | [Fun-ASR-MLT-Nano-2512-BF16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-BF16.gguf) | 1.67 GB | 1.74% |
+| F16          | [Fun-ASR-MLT-Nano-2512-F16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-F16.gguf) | 1.67 GB | 1.74% |
+| Q8_0         | [Fun-ASR-MLT-Nano-2512-Q8_0.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q8_0.gguf) |  891 MB | 1.74% |
+| Q6_K         | [Fun-ASR-MLT-Nano-2512-Q6_K.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q6_K.gguf) |  691 MB | 1.69% |
+| Q5_K_M       | [Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf) |  631 MB | 1.77% |
+| Q4_K_M       | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  557 MB | 1.89% |
+<!-- /catalog -->
 
-WER is measured on the full LibriSpeech test-clean split (2620
-utterances) with greedy LLM decoding via the bundled Qwen3-0.6B head.
-The publisher does **not** report a numerical LibriSpeech WER for the MLT
-variant specifically (the shared Fun-ASR README's per-model table covers
-the regular Fun-ASR-Nano only). Gate baseline is our own FunASR 1.3.1
-reference run on the same manifest: 1.76% (95% CI [1.60%, 1.93%]).
-transcribe.cpp's BF16 port matches that baseline within -0.02
-percentage-points; F16/Q8_0 are numerically indistinguishable. Q4_K_M is
-the only quant with a visible regression (+0.13 pp); F16/Q8_0/Q6_K/Q5_K_M
-are within bootstrap noise of BF16.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances). Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy LLM decoding via the bundled Qwen3-0.6B head. The publisher does not report a
+numerical LibriSpeech WER for the MLT variant specifically (the shared README's
+per-model table covers Fun-ASR-Nano only). Gate baseline is our own FunASR 1.3.1
+reference run on the same manifest: 1.76% (95% CI [1.60%, 1.93%]). transcribe.cpp's
+BF16 port matches that baseline within -0.02 percentage-points. LibriSpeech is
+English only; the strength of the MLT variant is multilingual coverage, not English
+accuracy. For the other 30 languages, run your own representative manifest.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |    Q8_0 |
+| --- | --- | ---: |
+| ar       | WER    |  25.79% |
+| bg       | WER    |  84.98% |
+| cs       | WER    |  53.56% |
+| da       | WER    |  69.93% |
+| el       | WER    | 103.55% |
+| en       | WER    |   4.90% |
+| et       | WER    |  64.22% |
+| fi       | WER    |  68.16% |
+| fil      | WER    |  15.62% |
+| ga       | WER    | 100.08% |
+| hi       | WER    |  43.96% |
+| hr       | WER    |  61.07% |
+| hu       | WER    | 113.21% |
+| id       | WER    |   7.52% |
+| ja       | CER    |   2.32% |
+| ko       | CER    |   5.20% |
+| lt       | WER    |  78.42% |
+| lv       | WER    |  56.71% |
+| ms       | WER    |   9.92% |
+| mt       | WER    |  91.71% |
+| nl       | WER    |  42.97% |
+| pl       | WER    |  59.34% |
+| pt       | WER    |  28.24% |
+| ro       | WER    |  74.39% |
+| sk       | WER    |  64.01% |
+| sl       | WER    |  75.22% |
+| sv       | WER    |  75.36% |
+| th       | CER    |   7.99% |
+| vi       | WER    |   8.32% |
+| yue      | CER    |  12.72% |
+| zh       | CER    |   8.64% |
+<!-- /catalog -->
 
 LibriSpeech is English only and is not the strength of this model. For
 the other 30 languages, run your own representative manifest. CommonVoice
@@ -96,55 +150,49 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places).
-
 ### Apple M4 Max
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |   156 ms (70×)  |   144 ms (76×)  |
-| Metal   | dots (35.3s) |   539 ms (66×)  |   499 ms (71×)  |
-| CPU     | jfk (11.0s)  |   661 ms (17×)  |   575 ms (19×)  |
-| CPU     | dots (35.3s) |   2.36 s (15×)  |   2.12 s (17×)  |
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-macOS 26.4.1, transcribe.cpp `f094d28`. MLT is ~10–15% slower than
-Fun-ASR-Nano on the same hardware; the gap is from per-step LLM
-generation cost (different decoded transcript lengths between the two
-variants).
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 146 ms (75.38×) | 136 ms (80.64×) |
+| Metal   | dots (35.3s) | 546 ms (64.69×) | 489 ms (72.22×) |
+| CPU     | jfk (11.0s)  | 533 ms (20.65×) | 537 ms (20.50×) |
+| CPU     | dots (35.3s) | 1.92 s (18.43×) | 1.93 s (18.28×) |
+
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  | 1.14 s (10×)   | 1.03 s (11×)   |
-| Vulkan  | dots (35.3s) | 4.48 s (8×)    | 3.92 s (9×)    |
-| CPU     | jfk (11.0s)  | 2.35 s (5×)    | 1.84 s (6×)    |
-| CPU     | dots (35.3s) | 8.60 s (4×)    | 6.97 s (5×)    |
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-Fedora 43, transcribe.cpp `8635bd1`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+| Backend | Sample       |           Q8_0 |          Q4_K_M |
+| ------- | ------------ | -------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 1.13 s (9.74×) | 1.04 s (10.61×) |
+| Vulkan  | dots (35.3s) | 4.45 s (7.93×) |  4.03 s (8.78×) |
+| CPU     | jfk (11.0s)  | 1.79 s (6.16×) |  1.77 s (6.20×) |
+| CPU     | dots (35.3s) | 7.40 s (4.78×) |  6.94 s (5.09×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 Benchmark reproduction:
 
 ```bash
-uv run scripts/bench/run.py \
-  --models Fun-ASR-MLT-Nano-2512 \
-  --quants q8_0,q4_k_m \
-  --samples jfk,dots \
-  --backends metal,cpu,vulkan \
-  --iters 3 --warmup 1 \
-  --name fun-asr-mlt-nano-2512-publication
+uv run scripts/bench/run.py --profile --models fun-asr-mlt-nano-2512
 ```
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1
-on `samples/jfk.wav`. All 22 checkpointed tensors fall within family
+transcribe.cpp is validated tensor-by-tensor against FunASR 1.3.1 on
+`samples/jfk.wav`. All 22 checkpointed tensors fall within family
 tolerance, and the final transcript matches the FunASR reference verbatim
 ("and so my fellow americans ask not what your country can do for you ask
-what you can do for your country"). Last validated at commit
-[`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28).
+what you can do for your country").
 
 | Field | Value |
 | --- | --- |

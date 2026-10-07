@@ -13,9 +13,8 @@ see the family doc at
 
 ## Choosing a variant
 
-- **Smaller, faster, near-realtime CPU.** `qwen3-asr-0.6b` — 600M
-  parameters, 811 MB at Q8_0. 18-layer encoder + Qwen3 LM with
-  `hidden_size=1024`. ~2.1% WER on LibriSpeech test-clean.
+- **Smaller, faster, near-realtime CPU.** `qwen3-asr-0.6b` pairs an
+  18-layer encoder with a Qwen3 LM at `hidden_size=1024`.
 - **Accuracy headroom.** `qwen3-asr-1.7b` widens both halves of the
   model (24-layer encoder, LM `hidden_size=2048`,
   `intermediate_size=6144`) for ~0.5pp WER improvement at ~2.5× the
@@ -29,10 +28,12 @@ WER is on LibriSpeech test-clean for the **Q8_0** preset, measured by
 transcribe.cpp's WER pipeline. See each per-variant doc for the full
 quant matrix.
 
-| Variant | Params | Q8_0 size | WER (Q8_0) | Languages | Doc |
-| --- | ---: | ---: | ---: | --- | --- |
-| `qwen3-asr-0.6b` | ~600M | 811 MB  | 2.11% | 30 (auto-detect) | [qwen3-asr-0.6b.md](qwen3-asr-0.6b.md) |
-| `qwen3-asr-1.7b` | ~1.7B | 2.08 GB | 1.61% | 30 (auto-detect) | [qwen3-asr-1.7b.md](qwen3-asr-1.7b.md) |
+<!-- catalog:family variants=qwen3-asr-0.6b,qwen3-asr-1.7b -->
+| Variant          | Params | Languages                  | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `qwen3-asr-0.6b` |   782M | 30 languages + auto-detect |    850 MB | LibriSpeech test-clean (WER) | 2.11% | -            | [qwen3-asr-0.6b.md](qwen3-asr-0.6b.md) |
+| `qwen3-asr-1.7b` |     2B | 30 languages + auto-detect |   2.19 GB | LibriSpeech test-clean (WER) | 1.62% | -            | [qwen3-asr-1.7b.md](qwen3-asr-1.7b.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

@@ -145,6 +145,11 @@ def load_reference(args: argparse.Namespace):
         f"transformers {transformers.__version__}, device={args.device})..."
     )
     processor = AutoProcessor.from_pretrained(model_id, local_files_only=local_only)
+    if args.num_delay_tokens is not None:
+        cfg = processor.mistral_common_audio_config
+        cfg.transcription_delay_ms = args.num_delay_tokens * (1000.0 / cfg.frame_rate)
+        if int(processor.num_delay_tokens) != args.num_delay_tokens:
+            raise SystemExit("failed to apply --num-delay-tokens")
     dtype = {
         "bf16": torch.bfloat16,
         "f16": torch.float16,
@@ -358,7 +363,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
               "is auto-detect only (TranscriptionRequest language=None).")
 
     inputs = processor(audio=pcm, is_streaming=False, return_tensors="pt")
-    num_delay_tokens = int(inputs["num_delay_tokens"]) if args.num_delay_tokens is None else args.num_delay_tokens
+    num_delay_tokens = int(inputs["num_delay_tokens"])
     model_dt = next(model.parameters()).dtype
 
     def _cast(v):
@@ -513,7 +518,7 @@ def cmd_stream(args: argparse.Namespace) -> int:
         audio=audio[: processor.num_samples_first_audio_chunk],
         is_streaming=True, is_first_audio_chunk=True, return_tensors="pt",
     )
-    num_delay_tokens = int(first["num_delay_tokens"]) if args.num_delay_tokens is None else args.num_delay_tokens
+    num_delay_tokens = int(first["num_delay_tokens"])
     first = {k: (v.to(args.device, dtype=dtype) if (hasattr(v, "to") and torch.is_floating_point(v))
                  else (v.to(args.device) if hasattr(v, "to") else v))
              for k, v in first.items()}

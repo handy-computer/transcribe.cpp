@@ -14,6 +14,12 @@ language:
 {%- for lang in languages %}
   - {{ lang }}
 {%- endfor %}
+{%- if languages_bcp47 %}
+language_bcp47:
+{%- for lang in languages_bcp47 %}
+  - {{ lang }}
+{%- endfor %}
+{%- endif %}
 tags:
 {%- for tag in tags %}
   - {{ tag }}
@@ -42,13 +48,18 @@ on {{ validation.date }}.
 | Quantization | Download | Size | {{ metric|default("WER") }} ({{ wer.source }}){% if wer.source2 is defined %} | {{ metric2|default("CER") }} ({{ wer.source2 }}){% endif %} |
 | --- | --- | ---: | ---:{% if wer.source2 is defined %} | ---:{% endif %} |
 {%- for q in quants %}
-| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer }}{% if wer.source2 is defined %} | {{ q.wer2 }}{% endif %} |
+| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer | default("-") }}{% if wer.source2 is defined %} | {{ q.wer2 | default("-") }}{% endif %} |
 {%- endfor %}
+
+{{ wer.recipe }}
 
 {{ wer.notes }}
 
 ## Usage
 
+{% if usage is defined -%}
+{{ usage.rstrip() }}
+{% else -%}
 Build transcribe.cpp from source:
 
 ```bash
@@ -61,7 +72,7 @@ Run on a 16 kHz mono WAV:
 
 ```bash
 build/bin/transcribe-cli \
-  -m {{ quants[default_quant_index].filename }} \
+  -m {{ default_quant_filename }} \
   input.wav
 ```
 
@@ -73,7 +84,7 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 See the [transcribe.cpp model page]({{ transcribe_docs_url }}) for performance
 numbers, numerical validation, and reproduction steps.
-
+{% endif %}
 ## License
 
 Inherited from the base model: **{{ license_display }}**. See the

@@ -1,9 +1,17 @@
 # Granite Speech 4.0-1b
 
-IBM's [`ibm-granite/granite-4.0-1b-speech`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech)
-ported to transcribe.cpp. An audio-LLM: a Conformer encoder with block-local
-Shaw attention, a BLIP-2 Q-Former projector, and the Granite-4.0-1b-base LLM
-as an autoregressive decoder.
+<!-- catalog:intro -->
+Upstream: [`ibm-granite/granite-4.0-1b-speech`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech) at [`bd87ab8`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech/commit/bd87ab8).
+
+Offline multilingual speech-to-text. IBM Granite Speech 4.0-1b is an
+audio-LLM: a Conformer encoder with block-local Shaw attention, a BLIP-2
+Q-Former projector, and the Granite-4.0-1b-base LLM as an autoregressive
+decoder. Takes a 16 kHz mono WAV and produces a transcript; the LLM half is
+what writes the text. Transcribes English, French, German, Spanish,
+Portuguese, and Japanese. Translates between English and each of those
+five other languages in either direction (en ↔ fr, en ↔ de, en ↔ es,
+en ↔ pt, en ↔ ja) — always via English, no direct fr↔de etc.
+<!-- /catalog -->
 
 ## What it's for
 
@@ -17,30 +25,51 @@ English-to-Mandarin. Always via English — there is no direct fr↔de, fr↔es,
 etc. Pass the target language as a BCP-47 code via `--translate
 --target-language <code>`; the source language is inferred from the audio.
 
+**Prompting:** vocabulary (`--vocabulary`) as IBM's `Keywords:` list biasing on transcription; it is ignored under translation, where keywords make this model drop the translation. Needs a GGUF converted with the `stt.capability.*` prompting keys; older GGUFs report no prompting support.
+
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-4.0-1b-speech)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed Apache-2.0. Ported from upstream commit
-[`bd87ab8`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech/commit/bd87ab862416353633ea431fe49b1614003623c5),
-pinned 2026-05-17.
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`bd87ab8`](https://huggingface.co/ibm-granite/granite-4.0-1b-speech/commit/bd87ab8), pinned 2026-05-17. Validated against the Transformers reference at transcribe.cpp commit [`275332d`](https://github.com/handy-computer/transcribe.cpp/tree/275332d) on 2026-05-17.
+<!-- /catalog -->
 
 ## Download
 
-| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+<!-- catalog:downloads -->
+| Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [granite-4.0-1b-speech-BF16.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-BF16.gguf)     | 4.63 GB | 1.42% |
-| F16    | [granite-4.0-1b-speech-F16.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-F16.gguf)       | 4.63 GB | 1.42% |
-| Q8_0   | [granite-4.0-1b-speech-Q8_0.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q8_0.gguf)     | 2.56 GB | 1.44% |
-| Q6_K   | [granite-4.0-1b-speech-Q6_K.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q6_K.gguf)     | 2.02 GB | 1.41% |
-| Q5_K_M | [granite-4.0-1b-speech-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q5_K_M.gguf) | 1.83 GB | 1.42% |
-| Q4_K_M | [granite-4.0-1b-speech-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q4_K_M.gguf) | 1.60 GB | 1.48% |
+| BF16         | [granite-4.0-1b-speech-BF16.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-BF16.gguf) | 4.63 GB | 1.42% |
+| F16          | [granite-4.0-1b-speech-F16.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-F16.gguf) | 4.63 GB | 1.42% |
+| Q8_0         | [granite-4.0-1b-speech-Q8_0.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q8_0.gguf) | 2.56 GB | 1.44% |
+| Q6_K         | [granite-4.0-1b-speech-Q6_K.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q6_K.gguf) | 2.02 GB | 1.41% |
+| Q5_K_M       | [granite-4.0-1b-speech-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q5_K_M.gguf) | 1.83 GB | 1.42% |
+| Q4_K_M       | [granite-4.0-1b-speech-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-4.0-1b-speech-gguf/resolve/main/granite-4.0-1b-speech-Q4_K_M.gguf) | 1.60 GB | 1.48% |
+<!-- /catalog -->
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with
-greedy decoding. The BF16 reference baseline (transformers, re-run locally
-with the model-card prompt `USER: <|audio|>can you transcribe the speech
-into a written format?\n ASSISTANT:`) is 1.42%, matching IBM's published
-Open ASR Leaderboard number exactly. Text normalizer: Whisper
-`EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
+<!-- catalog:recipe -->
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 1, timestamps none. Figures without a commit were published before provenance was recorded.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+Greedy decoding. BF16 reference baseline (re-run locally with the model card's exact
+prompt): 1.42% — matches the upstream Open ASR Leaderboard number exactly. Text
+normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+Leaderboard uses.
+<!-- /catalog -->
+
+<!-- catalog:accuracy -->
+**FLEURS test**
+
+| Language | Metric |  Q8_0 |
+| --- | --- | ---: |
+| de       | WER    | 7.29% |
+| en       | WER    | 4.66% |
+| es       | WER    | 5.91% |
+| fr       | WER    | 8.44% |
+| ja       | CER    | 6.44% |
+| pt       | WER    | 9.60% |
+<!-- /catalog -->
 
 ## Quick Start
 
@@ -70,58 +99,35 @@ build/bin/transcribe-cli \
 
 ## Performance
 
-Cells are wall-clock latency, with speedup over realtime in parentheses.
-
 ### Apple M4 Max
 
-Mean over 3 iterations after 1 warmup.
+<!-- catalog:perf machine=m4-max -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-**Metal**
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 136 ms (80.65×) | 169 ms (65.11×) |
+| Metal   | dots (35.3s) | 502 ms (70.32×) | 472 ms (74.81×) |
+| CPU     | jfk (11.0s)  |  1.32 s (8.31×) |  1.39 s (7.94×) |
+| CPU     | dots (35.3s) |  4.20 s (8.41×) |  4.23 s (8.36×) |
 
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |    254 ms (43×)  |    284 ms (39×)  |
-| dots (35.3s) |    928 ms (38×)  |   1.05 s (34×)   |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   1.48 s (7.4×)  |   1.80 s (6.1×)  |
-| dots (35.3s) |   5.15 s (6.9×)  |   5.96 s (5.9×)  |
-
-macOS 26.4, transcribe.cpp `de05c43`.
-
-### Apple M4
-
-Mean over 5 iterations after 2 warmups. Q8_0.
-
-| Backend | Sample      |       Q8_0        |
-| ------- | ----------- | ----------------: |
-| Metal   | jfk (11.0s) |    959 ms (11×)   |
-| CPU     | jfk (11.0s) |   2.44 s (5×)     |
-
-macOS 26.1, transcribe.cpp `275332d`.
+Apple M4 Max: transcribe.cpp `77b0c93` on 2026-09-14.
+<!-- /catalog -->
 
 ### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
 
-Mean over 3 iterations after 1 warmup.
+<!-- catalog:perf machine=ryzen-4750u -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `asr-publication-v2`: mean over 3 iterations after 1 warmup.
 
-**Vulkan (RADV)**
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  2.54 s (4.33×) |  2.54 s (4.32×) |
+| Vulkan  | dots (35.3s) |  7.15 s (4.94×) |  6.84 s (5.16×) |
+| CPU     | jfk (11.0s)  |  3.96 s (2.78×) |  3.90 s (2.82×) |
+| CPU     | dots (35.3s) | 12.93 s (2.73×) | 12.72 s (2.78×) |
 
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   3.47 s (3.2×)  |   3.71 s (3.0×)  |
-| dots (35.3s) |  11.37 s (3.1×)  |  12.30 s (2.9×)  |
-
-**CPU**
-
-| Sample       |     Q4_K_M       |       Q8_0       |
-| ------------ | ---------------: | ---------------: |
-| jfk (11.0s)  |   5.21 s (2.1×)  |   6.72 s (1.6×)  |
-| dots (35.3s) |  18.08 s (1.9×)  |  24.21 s (1.5×)  |
-
-Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `cd0ea568` on 2026-09-14.
+<!-- /catalog -->
 
 ## Capabilities
 

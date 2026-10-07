@@ -22,6 +22,7 @@ ALL_OPTION_TYPES = [
     t.MoonshineStreamingOptions,
     t.ParakeetStreamOptions,
     t.ParakeetBufferedStreamOptions,
+    t.SortformerDiarizeOptions,
     t.VoxtralRealtimeStreamOptions,
 ]
 
@@ -34,7 +35,7 @@ def test_build_stamps_kind_and_size(cls):
     ext = cls()._build()
     assert ext.ext.kind == cls._kind
     assert ext.ext.size == ctypes.sizeof(cls._struct)
-    assert cls._slot in ("run", "stream")
+    assert cls._slot in t._EXT_SLOTS
 
 
 @pytest.mark.parametrize("cls", ALL_OPTION_TYPES)
@@ -71,6 +72,19 @@ def test_parakeet_buffered_partial_overrides():
     assert built.chunk_ms == 2000
     assert built.left_ms == fresh.left_ms       # untouched -> family default
     assert built.right_ms == fresh.right_ms
+
+
+def test_sortformer_unknown_preset_rejected():
+    with pytest.raises(ValueError, match="preset"):
+        t.SortformerDiarizeOptions(preset="ultra_low_latency")  # type: ignore[arg-type]
+
+
+def test_sortformer_diarize_preset_maps_to_enum_value():
+    built = t.SortformerDiarizeOptions(preset="very_high_latency")._build()
+    assert built.preset == _generated.TRANSCRIBE_SORTFORMER_PRESET_VERY_HIGH_LATENCY
+    # None keeps the init default (DEFAULT = GGUF-shipped cfg).
+    default = t.SortformerDiarizeOptions()._build()
+    assert default.preset == _generated.TRANSCRIBE_SORTFORMER_PRESET_DEFAULT
 
 
 # --- model-gated: resolve_family validation + a real extension run ----------

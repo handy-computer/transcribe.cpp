@@ -56,6 +56,9 @@ KV emitted (consumed by Stage 4 read_granite_hparams):
 
   stt.variant            = e.g. "granite-4.0-1b-speech"
   stt.capability.translate   = bool (true for 1b/2b; false for plus)
+  stt.capability.word_timestamps / speaker_diarization = bool (plus only)
+  stt.capability.vocabulary        = bool (all three variants)
+  stt.capability.transcript_prefix = bool (plus only)
   stt.translation.target_languages = BCP-47 target list when translation is true
 
   tokenizer.ggml.model   = "gpt2"        (BPE with byte-level pre-tokenizer)
@@ -703,6 +706,19 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         writer.add_bool("stt.capability.word_timestamps",
                         variant == "granite-speech-4.1-2b-plus")
         writer.add_bool("stt.capability.speaker_diarization",
+                        variant == "granite-speech-4.1-2b-plus")
+        # Generic prompting (transcribe_run_params). Keyword-list biasing
+        # (the vocabulary field) is documented on each of these model cards
+        # and measured on all three; the transcript prefix (IBM's
+        # prefix_text) only on -plus. Unknown variants advertise neither.
+        vocabulary_caps = {
+            "granite-4.0-1b-speech":      True,
+            "granite-speech-4.1-2b":      True,
+            "granite-speech-4.1-2b-plus": True,
+        }
+        writer.add_bool("stt.capability.vocabulary",
+                        bool(vocabulary_caps.get(variant, False)))
+        writer.add_bool("stt.capability.transcript_prefix",
                         variant == "granite-speech-4.1-2b-plus")
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----

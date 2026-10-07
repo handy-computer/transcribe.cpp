@@ -36,12 +36,14 @@ WER is on FLEURS Russian (`fleurs-ru`) for the **Q8_0** preset,
 measured by transcribe.cpp's WER pipeline. See each per-variant doc
 for the full quant matrix.
 
-| Variant | Decoder | Output | Params | Q8_0 size | WER (Q8_0) | Doc |
-| --- | --- | --- | ---: | ---: | ---: | --- |
-| `gigaam-v3-e2e-rnnt` | RNN-T | cased + punctuated         | ~180M | 261 MB | 5.36% | [gigaam-v3-e2e-rnnt.md](gigaam-v3-e2e-rnnt.md) |
-| `gigaam-v3-e2e-ctc`  | CTC   | cased + punctuated         | ~180M | 260 MB | 5.50% | [gigaam-v3-e2e-ctc.md](gigaam-v3-e2e-ctc.md) |
-| `gigaam-v3-rnnt`     | RNN-T | lowercased, no-punctuation | ~180M | 260 MB | 8.08% | [gigaam-v3-rnnt.md](gigaam-v3-rnnt.md) |
-| `gigaam-v3-ctc`      | CTC   | lowercased, no-punctuation | ~180M | 259 MB | 8.40% | [gigaam-v3-ctc.md](gigaam-v3-ctc.md) |
+<!-- catalog:family variants=gigaam-v3-e2e-rnnt,gigaam-v3-e2e-ctc,gigaam-v3-rnnt,gigaam-v3-ctc -->
+| Variant              | Params | Languages | Q8_0 size | Benchmark       |  Q8_0 | Capabilities     | Doc |
+| --- | ---: | --- | ---: | --- | ---: | --- | --- |
+| `gigaam-v3-e2e-rnnt` |   223M | ru        |    274 MB | FLEURS ru (WER) | 5.35% | token timestamps | [gigaam-v3-e2e-rnnt.md](gigaam-v3-e2e-rnnt.md) |
+| `gigaam-v3-e2e-ctc`  |   221M | ru        |    272 MB | FLEURS ru (WER) | 5.53% | token timestamps | [gigaam-v3-e2e-ctc.md](gigaam-v3-e2e-ctc.md) |
+| `gigaam-v3-rnnt`     |   222M | ru        |    273 MB | FLEURS ru (WER) | 8.07% | token timestamps | [gigaam-v3-rnnt.md](gigaam-v3-rnnt.md) |
+| `gigaam-v3-ctc`      |   221M | ru        |    272 MB | FLEURS ru (WER) | 8.42% | token timestamps | [gigaam-v3-ctc.md](gigaam-v3-ctc.md) |
+<!-- /catalog -->
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
