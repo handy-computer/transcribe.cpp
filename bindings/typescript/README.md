@@ -154,13 +154,26 @@ using session = model.createSession();
 Disposing a model disposes its sessions; disposing a stream resets it (releasing
 the model lease). Disposal is idempotent and order-independent.
 
+## Startup and UI responsiveness
+
+Initializing compute backends can take seconds (on Metal it compiles the GPU
+shader library). `TranscribeModel.load()` does this on a worker thread, so the
+event loop keeps running. To pay the cost up front, call `await initialize()`
+at startup; `backendState()` reports its progress.
+
+Use `getAvailableBackendsAsync()` / `backendAvailableAsync()` in UI processes.
+The sync variants initialize backends on the calling thread if needed, and
+throw `BackendInitializing` while `initialize()` is running. A failed backend
+initialization is permanent for the process; later calls rethrow its
+`BackendError`.
+
 ## Backend selection
 
 ```ts
-import { getAvailableBackends, backendAvailable } from "transcribe-cpp";
+import { getAvailableBackendsAsync, backendAvailableAsync } from "transcribe-cpp";
 
-const devices = getAvailableBackends();
-backendAvailable("rocm"); // boolean — never throws
+const devices = await getAvailableBackendsAsync();
+await backendAvailableAsync("rocm"); // boolean
 
 // Policy selection: first matching ROCm device.
 const automatic = await TranscribeModel.load("model.gguf", { backend: "rocm" });

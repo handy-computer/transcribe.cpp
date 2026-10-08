@@ -7,8 +7,14 @@
  */
 
 import {
-  native,
+  backendState,
+  callAsync,
+  initialize,
+  loadLibrary,
+  nativeAsync,
+  nativeReady,
   setLogHandler,
+  type BackendState,
   type LogHandler,
   type Native,
 } from "./native.js";
@@ -70,7 +76,7 @@ import type {
 
 export * from "./types.js";
 export * from "./errors.js";
-export { setLogHandler, type LogHandler };
+export { backendState, initialize, setLogHandler, type BackendState, type LogHandler };
 
 // ---- enum maps -------------------------------------------------------------
 
@@ -248,14 +254,6 @@ function deferFree(lock: Mutex, fn: () => void, after?: () => void): void {
   });
 }
 
-function callAsync<T = number>(fn: any, ...args: any[]): Promise<T> {
-  return new Promise((resolve, reject) =>
-    fn.async(...args, (err: Error | null, res: T) =>
-      err ? reject(err) : resolve(res),
-    ),
-  );
-}
-
 // Coerce caller PCM to a Float32Array. A Float32Array is returned AS-IS (no
 // copy): the buffer is borrowed across the async native call, which reads it on
 // a worker thread, so callers must not mutate it until the promise resolves
@@ -315,18 +313,17 @@ class Mutex {
 
 // ---- module-level introspection -------------------------------------------
 //
-// Note: these (like every public entry point) trigger the lazy native bootstrap
-// on first call — they dlopen the library, verify the ABI, and init backends.
-// There is no way to probe the binding without loading the native library, with
-// one exception: `headerHash` below is the compile-time PUBLIC_HEADER_HASH and
-// is the value the binding *expects*, not one read from the loaded library.
+// Native bootstrap is two-phase (see native.ts). `version()` and
+// `libraryPath()` only load the library and never initialize a backend.
+// `headerHash` is the compile-time PUBLIC_HEADER_HASH: the value the binding
+// *expects*, not one read from the loaded library.
 
 export function version(): {
   version: string;
   commit: string;
   headerHash: string;
 } {
-  const n = native();
+  const n = loadLibrary();
   return {
     version: n.F.version(),
     commit: n.F.versionCommit(),
@@ -335,7 +332,7 @@ export function version(): {
 }
 
 export function libraryPath(): string {
-  return native().libraryPath;
+  return loadLibrary().libraryPath;
 }
 
 /**
@@ -385,8 +382,12 @@ function deviceFromRaw(
   return info;
 }
 
+/**
+ * Every registered compute device. Initializes backends on the calling thread
+ * if needed; throws `BackendInitializing` while {@link initialize} runs.
+ */
 export function getAvailableBackends(): BackendInfo[] {
-  const n = native();
+  const n = nativeReady();
   const count = n.F.deviceCount();
   const out: BackendInfo[] = [];
   for (let i = 0; i < count; i++) {
@@ -400,9 +401,37 @@ export function getAvailableBackends(): BackendInfo[] {
   return out;
 }
 
+/** {@link getAvailableBackends} without blocking the event loop. */
+export async function getAvailableBackendsAsync(): Promise<BackendInfo[]> {
+  const n = await nativeAsync();
+  const count = n.F.deviceCount();
+  const out: BackendInfo[] = [];
+  for (let i = 0; i < count; i++) {
+    const handle = n.F.deviceGet(i);
+    if (!handle) continue;
+    const dev: any = {};
+    n.F.deviceInfoInit(dev);
+    const st = await callAsync<number>(n.F.deviceGetInfo, handle, dev);
+    check(n, st, `reading backend device ${i}`);
+    out.push(deviceFromRaw(dev, handle, i));
+  }
+  return out;
+}
+
+/**
+ * Whether some registered device can satisfy `backend`. Same initialization
+ * behavior as {@link getAvailableBackends}.
+ */
 export function backendAvailable(backend: Backend): boolean {
-  const n = native();
-  return n.F.backendAvailable(lookup(BACKENDS, backend, "backend"));
+  const raw = lookup(BACKENDS, backend, "backend");
+  return nativeReady().F.backendAvailable(raw);
+}
+
+/** {@link backendAvailable} without blocking the event loop. */
+export async function backendAvailableAsync(backend: Backend): Promise<boolean> {
+  const raw = lookup(BACKENDS, backend, "backend");
+  const n = await nativeAsync();
+  return n.F.backendAvailable(raw);
 }
 
 // ---- result materialization ------------------------------------------------
@@ -1563,11 +1592,12 @@ export class TranscribeModel {
     ensureExitHook();
   }
 
+  /** Load a GGUF model. Awaits {@link initialize}, so it never blocks the event loop. */
   static async load(
     path: string,
     opts: ModelOptions = {},
   ): Promise<TranscribeModel> {
-    const n = native();
+    const n = await nativeAsync();
     const p: any = {};
     n.F.modelLoadParamsInit(p);
     if ("gpuDevice" in opts) {
