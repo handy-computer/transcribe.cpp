@@ -41,6 +41,12 @@ def parse_dataset_spec(spec: str) -> tuple[str, str]:
                 "eka-medical-asr: requires a language, e.g. eka-medical-asr:en"
             )
         return "eka-medical-asr", val
+    if kind == "tedlium-longform":
+        return "tedlium-longform", ""
+    if kind == "mtedx-longform":
+        if not val:
+            raise ValueError("mtedx-longform: requires a language, e.g. mtedx-longform:de")
+        return "mtedx-longform", val
     raise ValueError(f"unknown dataset kind: {spec!r}")
 
 
@@ -79,6 +85,28 @@ def dataset_spec_info(spec: str) -> DatasetSpecInfo:
             split="test",
             default_language=val,
             ingest_args=["eka-medical-asr", "--lang", val],
+        )
+    if kind == "tedlium-longform":
+        return DatasetSpecInfo(
+            requested=spec,
+            kind=kind,
+            value=val,
+            dataset_id="tedlium-longform",
+            source="distil-whisper/tedlium-long-form",
+            split="test",
+            default_language="en",
+            ingest_args=["tedlium-longform"],
+        )
+    if kind == "mtedx-longform":
+        return DatasetSpecInfo(
+            requested=spec,
+            kind=kind,
+            value=val,
+            dataset_id=ds_id,
+            source="openslr/100",
+            split="test",
+            default_language=val,
+            ingest_args=["mtedx-longform", "--lang", val],
         )
     raise ValueError(spec)
 

@@ -245,6 +245,15 @@ def load_model(args: argparse.Namespace):
                 raise last
 
     model.eval()
+    att_context = getattr(args, "att_context", None)
+    if att_context:
+        left, right = (int(x) for x in att_context.split(","))
+        style = str(getattr(model.cfg.encoder, "att_context_style", "regular"))
+        if style != "regular":
+            raise SystemExit(f"--att-context applies to regular-style encoders; this one is {style!r}")
+        model.change_attention_model(self_attention_model="rel_pos_local_attn",
+                                     att_context_size=[left, right])
+        print(f"attention: rel_pos_local_attn [{left}, {right}]")
     return model
 
 
@@ -1507,6 +1516,17 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
             "models like nemotron-speech-streaming-en-0.6b — those must run "
             "with their native chunked_limited mask to reproduce published WER. "
             "Default off: preserve the model's native att_context_style."
+        ),
+    )
+    p.add_argument(
+        "--att-context",
+        default=None,
+        help=(
+            "Switch a regular-style encoder to rel_pos_local_attn with this "
+            "'L,R' window before dumping (model.change_attention_model), e.g. "
+            "'256,256': the window transcribe.cpp runs by default on "
+            "full-attention Parakeet checkpoints. Unset = the checkpoint's own "
+            "attention."
         ),
     )
 
