@@ -1,0 +1,107 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "parakeet-ultra",
+  "source_model": {
+    "hf_repo": "moondream/parakeet-ultra",
+    "hf_revision": "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "config",
+  "reference": {
+    "kind": "author_repo_kestrel",
+    "source": "https://pypi.org/project/kestrel/",
+    "revision": "kestrel==0.9.1, kestrel-kernels==0.7.4",
+    "entrypoint": "scripts/dump_reference_parakeet_kestrel.py",
+    "env": "parakeet-kestrel",
+    "dump_args": [
+      "--revision",
+      "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b"
+    ]
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_symmetric",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": "slaney",
+    "win_length": 400
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": 8193,
+    "special_tokens": {
+      "pad": 2,
+      "blank": 8192,
+      "decoder_start": 8192
+    }
+  },
+  "capabilities": {
+    "languages": [
+      "en",
+      "de",
+      "fr",
+      "es",
+      "it",
+      "pt",
+      "ru",
+      "uk",
+      "hr",
+      "sl",
+      "lv",
+      "lt",
+      "et",
+      "fi",
+      "sv",
+      "da",
+      "nl",
+      "pl",
+      "cs",
+      "sk",
+      "hu",
+      "ro",
+      "bg",
+      "el",
+      "mt"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/parakeet-ultra.json",
+  "cases": [
+    {
+      "audio": "jfk",
+      "language": null
+    },
+    {
+      "audio": "dots",
+      "language": null,
+      "stages": [
+        "longform"
+      ]
+    },
+    {
+      "audio": "dots-full",
+      "language": null,
+      "stages": [
+        "longform"
+      ]
+    }
+  ],
+  "cpp_env": {
+    "TRANSCRIBE_NO_FLASH": "1"
+  }
+}

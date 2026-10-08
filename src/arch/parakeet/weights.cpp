@@ -501,6 +501,87 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         }
     }
 
+    // kestrel-runtime semantics. Both optional; absent keeps the NeMo behavior.
+    {
+        std::string masking;
+        if (auto st = read_optional_string_kv(gguf, "stt.parakeet.encoder.length_masking", kFamilyTag, "none", masking);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (masking != "none" && masking != "kestrel") {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: unsupported encoder.length_masking \"%s\"", masking.c_str());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        hp.kestrel_length_masking = (masking == "kestrel");
+
+        std::string budget;
+        if (auto st = read_optional_string_kv(gguf, "stt.parakeet.tdt.symbol_budget", kFamilyTag, "per_frame", budget);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (budget != "per_frame" && budget != "global") {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: unsupported tdt.symbol_budget \"%s\"", budget.c_str());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        hp.tdt_global_symbol_budget = (budget == "global");
+    }
+
+    // VAD head + long-form segmenter. Presence of stt.parakeet.vad.hidden is
+    // the gate; every other key is then required.
+    if (gguf_find_key(gguf, "stt.parakeet.vad.hidden") >= 0) {
+        hp.has_vad_head = true;
+        std::string activation;
+
+        const struct {
+            const char * key;
+            float *      out;
+        } f32_keys[] = {
+            { "stt.parakeet.vad.speech_threshold",          &hp.vad_speech_threshold    },
+            { "stt.parakeet.vad.min_speech_seconds",        &hp.vad_min_speech_seconds  },
+            { "stt.parakeet.vad.min_gap_seconds",           &hp.vad_min_gap_seconds     },
+            { "stt.parakeet.segmenter.max_segment_seconds", &hp.seg_max_segment_seconds },
+            { "stt.parakeet.segmenter.min_segment_seconds", &hp.seg_min_segment_seconds },
+            { "stt.parakeet.segmenter.min_pause_seconds",   &hp.seg_min_pause_seconds   },
+            { "stt.parakeet.segmenter.scan_block_seconds",  &hp.seg_scan_block_seconds  },
+        };
+
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.vad.hidden", kFamilyTag, hp.vad_hidden);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.vad.context_kernel", kFamilyTag, hp.vad_context_kernel);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (auto st = read_required_string_kv(gguf, "stt.parakeet.vad.activation", kFamilyTag, activation);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+        for (const auto & k : f32_keys) {
+            if (auto st = read_required_f32_kv(gguf, k.key, kFamilyTag, *k.out); st != TRANSCRIBE_OK) {
+                return st;
+            }
+        }
+        if (activation != "silu" || hp.vad_hidden <= 0 || hp.vad_context_kernel <= 0 ||
+            (hp.vad_context_kernel % 2) == 0 || hp.seg_max_segment_seconds <= hp.seg_min_segment_seconds ||
+            hp.seg_scan_block_seconds < hp.seg_max_segment_seconds) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "parakeet: unsupported vad/segmenter config (activation \"%s\", hidden %d, kernel %d)",
+                    activation.c_str(), hp.vad_hidden, hp.vad_context_kernel);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    if ((hp.kestrel_length_masking || hp.has_vad_head) &&
+        hp.enc_att_context_style != ParakeetHParams::AttContextStyle::Regular) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: kestrel masking / VAD head require regular attention");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.tdt_global_symbol_budget && hp.head_kind != HeadKind::TDT) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: tdt.symbol_budget=global requires a TDT head");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
     // Speaker-kernel metadata is optional; absent means no injection.
     if (gguf_find_key(gguf, "stt.parakeet.encoder.spk_kernel_layers") >= 0) {
         switch (read_int32_array_kv(gguf, "stt.parakeet.encoder.spk_kernel_layers", hp.spk_kernel_layers)) {
@@ -936,6 +1017,18 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
             }
             weights.spk_kernels.push_back(kernel);
         }
+    }
+
+    // ----- optional VAD head -----
+    if (hp.has_vad_head) {
+        const int h  = hp.vad_hidden;
+        const int kc = hp.vad_context_kernel;
+        GET_CONV(weights.vad.proj_w, "vad.proj.weight", 1, d_model, h);
+        GET_F32(weights.vad.proj_b, "vad.proj.bias", h);
+        GET_CONV(weights.vad.ctx_w, "vad.ctx.weight", kc, h, h);
+        GET_F32(weights.vad.ctx_b, "vad.ctx.bias", h);
+        GET_CONV(weights.vad.out_w, "vad.out.weight", 1, h, 1);
+        GET_F32(weights.vad.out_b, "vad.out.bias", 1);
     }
 
     return TRANSCRIBE_OK;

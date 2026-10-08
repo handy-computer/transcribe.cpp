@@ -42,6 +42,8 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
+constexpr int kWindowedChunkMinWindowCount = 12;
+
 // ----- Per-family depthwise dispatch policy -----
 //
 // In-block depthwise conv uses the direct conv_2d_dw path on every
@@ -323,17 +325,19 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     if (n_batch < 1) {
         n_batch = 1;
     }
-    const bool       var_len_masks = batch_var_len && n_batch > 1;
+    const bool       var_len_masks = batch_var_len && (n_batch > 1 || hp.kestrel_length_masking);
     conf::ConvPolicy policy{};
-    policy.direct_pw                  = conf::detect_direct_pw(backend_name);
-    policy.direct_conv0_in_pre_encode = true;
-    policy.direct_dw_in_block         = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode    = detect_direct_dw_in_pre_encode(backend_name);
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
+    policy.direct_pw                    = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode   = true;
+    policy.direct_dw_in_block           = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode      = detect_direct_dw_in_pre_encode(backend_name);
     // Cache-aware streaming (NeMo causal_downsampling=true) uses
     // CausalConv2D for the pre-encode subsample (left=k-1, right=stride-1).
     // Inferred from the attention style — only ChunkedLimited is causal.
     // Independent of the conformer conv-module's conv_context.
-    policy.causal_pre_encode          = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
+    policy.causal_pre_encode = (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb{};
 
@@ -385,9 +389,11 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
                                              /*name_prefix=*/"enc.pre_encode",
                                              /*error_tag=*/"parakeet", mask_pre_encode ? &pe_masks : nullptr);
     if (mask_pre_encode) {
-        eb.pre_encode_mask_s1_in = pe_masks.mask_s1;
-        eb.pre_encode_mask_s2_in = pe_masks.mask_s2;
-        eb.pre_encode_mask_s3_in = pe_masks.mask_s3;
+        eb.pre_encode_mask_s1_in   = pe_masks.mask_s1;
+        eb.pre_encode_mask_s2_in   = pe_masks.mask_s2;
+        eb.pre_encode_mask_s3_in   = pe_masks.mask_s3;
+        eb.pre_encode_extent_s2_in = pe_masks.mask_s2_extent;
+        eb.pre_encode_extent_s3_in = pe_masks.mask_s3_extent;
     }
     if (x == nullptr) {
         // build_pre_encode already logged the diagnostic.
@@ -460,26 +466,46 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         // pos_emb input, ne = [d_model, pos_len, 1, 1] (numpy
         // (pos_len, d_model)), filled by the driver. Local attention
         // (Regular, both contexts >= 0) shortens pos_len to (left+right+1)
-        // (NeMo LocalAttRelPositionalEncoding); ChunkedLimited keeps the
-        // full 2T-1 and uses a separate mask. ChunkedLimitedWithRc engages
-        // the mask only when buf_mask is non-null (offline runs full attn).
+        // (NeMo LocalAttRelPositionalEncoding). Long single-utterance
+        // ChunkedLimited runs use the exact bounded query/key geometry;
+        // shorter and batched runs retain the dense reference graph.
+        // ChunkedLimitedWithRc engages its dense mask only when buf_mask is
+        // non-null (offline runs full attention).
         const bool is_chunked =
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited) ||
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc && buf_mask != nullptr);
-        const bool    is_local_pe = (!is_chunked) && (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
-        const int64_t pos_len     = is_local_pe ?
-                                        static_cast<int64_t>(hp.enc_att_context_left + hp.enc_att_context_right + 1) :
-                                        (2 * T_enc - 1);
-        eb.pos_emb_in             = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.enc_d_model, pos_len);
+        const int  chunk_size       = hp.enc_att_context_right + 1;
+        const int  left_chunks      = chunk_size > 0 ? hp.enc_att_context_left / chunk_size : 0;
+        const int  chunk_window     = (left_chunks + 1) * chunk_size;
+        // Window materialization has a fixed reshape/im2col cost. Keep the
+        // dense graph below the measured crossover so short requests do not
+        // regress; long requests replace quadratic attention with O(T*W).
+        const bool windowed_chunked = hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited &&
+                                      n_batch == 1 && !var_len_masks && chunk_size > 0 &&
+                                      hp.enc_att_context_left >= 0 &&
+                                      T_enc > kWindowedChunkMinWindowCount * chunk_window;
+        eb.chunked_windowed         = windowed_chunked;
+        const bool    is_local_pe   = (!is_chunked) && (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
+        const int64_t pos_len =
+            windowed_chunked ? static_cast<int64_t>(chunk_window + chunk_size - 1) :
+            is_local_pe      ? static_cast<int64_t>(hp.enc_att_context_left + hp.enc_att_context_right + 1) :
+                               (2 * T_enc - 1);
+        eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.enc_d_model, pos_len);
         ggml_set_name(eb.pos_emb_in, "pos_emb.in");
         ggml_set_input(eb.pos_emb_in);
 
-        // ChunkedLimited mask. [T_enc, T_enc, 1, 1] F32; the driver
-        // fills it host-side after the compute buffer is allocated.
-        // Broadcasts across heads inside rel_pos_mhsa.
+        // ChunkedLimited mask. The dense reference graph uses
+        // [T_enc,T_enc,1,1]. The bounded graph uses
+        // [chunk_window,chunk_size,1,n_chunks], including only prefix/tail
+        // padding masks; its chunk topology supplies the interior band.
         ggml_tensor * chunked_mask_in = nullptr;
         if (is_chunked) {
-            chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, T_enc, 1, 1);
+            if (windowed_chunked) {
+                const int64_t n_chunks = (T_enc + chunk_size - 1) / chunk_size;
+                chunked_mask_in        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, chunk_window, chunk_size, 1, n_chunks);
+            } else {
+                chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, T_enc, 1, 1);
+            }
             ggml_set_name(chunked_mask_in, "attn.chunked_mask.in");
             ggml_set_input(chunked_mask_in);
             eb.chunked_mask_in = chunked_mask_in;
@@ -532,6 +558,7 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         bparams.att_context_right  = hp.enc_att_context_right;
         bparams.att_context_style  = is_chunked ? conf::BlockParams::AttContextStyle::ChunkedLimited :
                                                   conf::BlockParams::AttContextStyle::Regular;
+        bparams.chunked_windowed   = windowed_chunked;
         bparams.attn_chunked_mask  = chunked_mask_in;
         bparams.attn_pad_mask      = attn_pad_mask_in;
         bparams.conv_context_left  = hp.enc_conv_context_left;
@@ -980,6 +1007,79 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
         ggml_build_forward_expand(eb.graph, eb.dumps.final_out);
     }
     return eb;
+}
+
+VadBuild build_vad_graph(ggml_context *          ctx,
+                         const ParakeetWeights & w,
+                         const ParakeetHParams & hp,
+                         int                     n_mel_frames,
+                         const char *            backend_name) {
+    VadBuild vb{};
+    if (ctx == nullptr || n_mel_frames <= 0 || !hp.has_vad_head || w.vad.proj_w == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet vad: invalid arg (no vad head or empty mel)");
+        return vb;
+    }
+    // Same subsampler policy as build_encoder_graph on this model, so the
+    // head sees exactly the pre_encode output the encoder would.
+    conf::ConvPolicy policy{};
+    policy.direct_pw                    = conf::detect_direct_pw(backend_name);
+    policy.direct_conv0_in_pre_encode   = true;
+    policy.direct_dw_in_block           = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode      = detect_direct_dw_in_pre_encode(backend_name);
+    policy.causal_pre_encode            = false;
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
+
+    vb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_mel_frames, hp.fe_num_mels, 1, 1);
+    ggml_set_name(vb.mel_in, "vad.mel.in");
+    ggml_set_input(vb.mel_in);
+
+    conf::PreEncodeValidMasks pe_masks;
+    ggml_tensor *             x =
+        conf::build_pre_encode(ctx, to_view(w.pre_encode), vb.mel_in, policy, /*name_prefix=*/"vad.pre_encode",
+                               /*error_tag=*/"parakeet vad", hp.kestrel_length_masking ? &pe_masks : nullptr);
+    if (x == nullptr) {
+        return vb;
+    }
+    vb.pe_mask_s1_in   = pe_masks.mask_s1;
+    vb.pe_mask_s2_in   = pe_masks.mask_s2;
+    vb.pe_mask_s3_in   = pe_masks.mask_s3;
+    vb.pe_extent_s2_in = pe_masks.mask_s2_extent;
+    vb.pe_extent_s3_in = pe_masks.mask_s3_extent;
+    vb.pre_encode_out  = x;  // [d_model, T]
+
+    const int64_t d_model = x->ne[0];
+    const int64_t H       = hp.vad_hidden;
+    const int     K       = hp.vad_context_kernel;
+
+    // proj: Conv1d(d_model -> H, k=1) == mul_mat over channels. [1, d, H] -> [d, H].
+    ggml_tensor * h = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, w.vad.proj_w, d_model, H), x);  // [H, T]
+    h               = ggml_add(ctx, h, w.vad.proj_b);
+    h               = ggml_silu(ctx, h);
+    vb.proj_out     = conf::named(h, "vad.proj");
+
+    // conv_1d_f32 takes [T, IC] data and returns [T, OC].
+    ggml_tensor * t = ggml_cont(ctx, ggml_transpose(ctx, h));                                     // [T, H]
+    t = conf::conv_1d_f32(ctx, w.vad.ctx_w, t, /*stride=*/1, /*padding=*/K / 2, /*dilation=*/1);  // [T, H]
+    t = ggml_add(ctx, t, ggml_reshape_2d(ctx, w.vad.ctx_b, 1, H));
+    t = ggml_silu(ctx, t);
+    ggml_tensor * c = ggml_cont(ctx, ggml_transpose(ctx, t));  // [H, T]
+    vb.ctx_out      = conf::named(c, "vad.ctx");
+
+    ggml_tensor * o = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, w.vad.out_w, H, 1), c);  // [1, T]
+    o               = ggml_add(ctx, o, w.vad.out_b);
+    vb.prob         = conf::named(ggml_sigmoid(ctx, o), "vad.prob");
+
+    vb.graph = ggml_new_graph_custom(ctx, /*size=*/1024, /*grads=*/false);
+    if (vb.graph == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet vad: ggml_new_graph_custom failed");
+        return vb;
+    }
+    ggml_build_forward_expand(vb.graph, vb.prob);
+    for (ggml_tensor * keep : { vb.pre_encode_out, vb.proj_out, vb.ctx_out }) {
+        transcribe::debug::mark_tensor_for_dump(keep);
+    }
+    return vb;
 }
 
 }  // namespace transcribe::parakeet

@@ -122,6 +122,16 @@ def main() -> int:
     # fallbacks when the abstract dispatcher fails.
     from nemo.collections.asr.models import ASRModel
     local = Path(args.model).expanduser()
+    # `org/repo:path/to/file.nemo` pins one .nemo inside an HF repo whose
+    # layout NeMo's from_pretrained cannot resolve (it wants `<repo>.nemo`
+    # at the root, else it snapshots the whole repo). Needed for publisher
+    # repos that bundle ONNX / Core ML / GGUF exports next to the .nemo
+    # (oruk/orukeet).
+    if not local.exists() and args.model.count(":") == 1 and args.model.endswith(".nemo"):
+        from huggingface_hub import hf_hub_download
+        repo_id, filename = args.model.split(":", 1)
+        local = Path(hf_hub_download(repo_id=repo_id, filename=filename))
+        print(f"resolved {args.model} -> {local}")
     is_local = local.exists()
     loader = "restore_from" if is_local else "from_pretrained"
     try:

@@ -168,6 +168,33 @@ struct ParakeetHParams {
     // frame, forces a +1 advance. 0 disables.
     int32_t tdt_max_symbols = 10;
 
+    // tdt_global_symbol_budget: kestrel's greedy loop. No per-frame cap;
+    // every decode step, blank or not, spends from one budget of
+    // tdt_max_symbols * T_valid, and a blank with duration 0 advances one
+    // frame. KV stt.parakeet.tdt.symbol_budget = "global"; absent /
+    // "per_frame" keeps the NeMo loop above.
+    bool tdt_global_symbol_budget = false;
+
+    // kestrel_length_masking: valid lengths from n_samples / hop, masks at
+    // every batch size (see ConvPolicy::pre_encode_mask_after_stride). KV
+    // stt.parakeet.encoder.length_masking = "kestrel"; absent / "none" keeps
+    // the NeMo behavior (masks only in variable-length batches).
+    bool kestrel_length_masking = false;
+
+    // Speech head on the subsampler output and the long-form pause
+    // segmenter it drives. has_vad_head is set when stt.parakeet.vad.hidden
+    // is present.
+    bool    has_vad_head            = false;
+    int32_t vad_hidden              = 0;
+    int32_t vad_context_kernel      = 0;
+    float   vad_speech_threshold    = 0.5f;
+    float   vad_min_speech_seconds  = 0.1f;
+    float   vad_min_gap_seconds     = 0.1f;
+    float   seg_max_segment_seconds = 30.0f;
+    float   seg_min_segment_seconds = 1.0f;
+    float   seg_min_pause_seconds   = 0.2f;
+    float   seg_scan_block_seconds  = 120.0f;
+
     // Frontend (mel feature extractor). The complete stt.frontend.* set
     // the converter emits and the C++ frontend reads; the loader gates on
     // it. CMVN/LFR fields are omitted (no published Parakeet variant uses
@@ -373,6 +400,17 @@ struct ParakeetSpkKernel {
     ParakeetSpkKernelFF bg;   // enc.bg_spk_kernel.<L>.* (add_bg_spk_kernel)
 };
 
+// Speech head. PyTorch Conv1d [out, in, k] -> ggml ne
+// [k, in, out]: proj [1, d_model, H], ctx [K, H, H], out [1, H, 1].
+struct ParakeetVadHead {
+    ggml_tensor * proj_w = nullptr;
+    ggml_tensor * proj_b = nullptr;  // [H]
+    ggml_tensor * ctx_w  = nullptr;
+    ggml_tensor * ctx_b  = nullptr;  // [H]
+    ggml_tensor * out_w  = nullptr;
+    ggml_tensor * out_b  = nullptr;  // [1]
+};
+
 struct ParakeetWeights {
     ParakeetPreEncode              pre_encode;
     std::vector<ParakeetBlock>     blocks;       // hp.enc_n_layers entries
@@ -381,6 +419,7 @@ struct ParakeetWeights {
     ParakeetCtcHead                ctc_head;     // populated when head_kind=CTC
     ParakeetPromptMlp              prompt;       // populated when hp.has_prompt
     std::vector<ParakeetSpkKernel> spk_kernels;  // populated when hp.has_spk_kernel
+    ParakeetVadHead                vad;          // populated when hp.has_vad_head
 };
 
 // Walk the canonical tensor list, look up each tensor by name, validate

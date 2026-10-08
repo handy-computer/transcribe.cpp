@@ -1,0 +1,239 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "moondream/parakeet-ultra",
+  "hf_revision": "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "reference_code",
+      "path": "transformers ParakeetFeatureExtractor defaults; kestrel/models/parakeet_tdt/features.py",
+      "status": "accepted_gap",
+      "detail": "No preprocessor_config.json in the repo. kestrel's parakeet_features is the NeMo frontend (n_fft=512, hop=160, win=400, 128 mel, preemph 0.97, per-feature norm, log guard 2^-24); identical to v3, so carried from the v3 intake."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "kestrel==0.9.1 (PyPI) kestrel/models/parakeet_tdt/{model,features,vad,segment,longform,runtime,decode_graph}.py + kestrel-kernels==0.7.4",
+      "status": "found",
+      "detail": "Publisher's runtime (Photon). Readable Python modeling, VAD head and pause segmenter; fused ops come from kestrel_kernels, which ships macOS arm64 wheels with a CPUKernelRuntime (smoke-tested 2026-10-04: get_runtime(cpu) and (mps) both load). transformers ParakeetForTDT is not used as an oracle."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/moondream/parakeet-ultra",
+      "status": "found",
+      "detail": "Languages, benchmark tables, long-form segmentation description; .eval_results/open_asr_leaderboard.yaml"
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-ultra",
+      "memory_gb": 1.5,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "architectures": [
+        "ParakeetForTDT"
+      ],
+      "hidden_act": "relu",
+      "model_type": "parakeet_tdt",
+      "vocab_size": 8193,
+      "encoder.num_hidden_layers": 24,
+      "encoder.hidden_size": 1024,
+      "encoder.num_attention_heads": 8,
+      "encoder.conv_kernel_size": 9,
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.num_mel_bins": 128,
+      "encoder.scale_input": false,
+      "decoder_hidden_size": 640,
+      "num_decoder_layers": 2,
+      "durations": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "blank_token_id": 8192,
+      "vad_head": "proj Conv1d(1024->128,k1)+SiLU, ctx Conv1d(128->128,k5,pad2)+SiLU, out Conv1d(128->1,k1), sigmoid; input = subsampler output"
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "config",
+    "evidence": "config.dtype=float32 and both references (transformers ParakeetForTDT, kestrel load_model dtype=float32) compute in F32. Storage is mixed: every matmul/conv weight and the whole vad_head are F16 at rest (356 tensors), norms/biases/BN stats F32 (349). So the F32 GGUF is the parity artifact and an F16 GGUF is lossless at rest (F16 storage is the precision ceiling; the card's 'full precision' is not literal).",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "I64": 24,
+        "F32": 349,
+        "F16": 356
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_symmetric",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 8192,
+    "special_tokens": {
+      "pad": 2,
+      "blank": 8192,
+      "decoder_start": 8192
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "7c21c04ff6ff2f806ca43a8420479091479c805d2b7952825ae2acc4fec9424d"
+  },
+  "capabilities": {
+    "languages": [
+      "en",
+      "de",
+      "fr",
+      "es",
+      "it",
+      "pt",
+      "ru",
+      "uk",
+      "hr",
+      "sl",
+      "lv",
+      "lt",
+      "et",
+      "fi",
+      "sv",
+      "da",
+      "nl",
+      "pl",
+      "cs",
+      "sk",
+      "hu",
+      "ro",
+      "bg",
+      "el",
+      "mt"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.41,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/moondream/parakeet-ultra",
+      "notes": "Photon on NVIDIA GPU, Open ASR Leaderboard normalizer. v3 = 1.52 on same pipeline."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.98,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/moondream/parakeet-ultra",
+      "notes": "v3 = 3.13"
+    },
+    {
+      "dataset": "Open ASR Leaderboard, 7 English sets (average)",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.8,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/moondream/parakeet-ultra",
+      "notes": "v3 = 6.26"
+    },
+    {
+      "dataset": "FLEURS test, 25 languages (average)",
+      "language": null,
+      "metric": "wer",
+      "score": 9.55,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/moondream/parakeet-ultra",
+      "notes": "v3 = 11.62; per-language table on card"
+    },
+    {
+      "dataset": "TED-LIUM 3, 11 full talks (long-form)",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.94,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/moondream/parakeet-ultra",
+      "notes": "Uses Photon's VAD-head segmenter (<=30 s pause-cut segments). v3 = 2.71 via NeMo's long-audio path. Not comparable to a single-pass full-attention run."
+    }
+  ],
+  "reference_framework": "author_repo_kestrel",
+  "reference_rationale": "The publisher's runtime is the source of truth: every number on the card is Photon, which runs kestrel. kestrel owns the full pipeline we must reproduce: NeMo-style frontend (features.py), FastConformer + TDT greedy decode (model.py via kestrel_kernels CPUKernelRuntime), the vad_head forward (vad.py), and the long-form pause segmenter and segment stitching (segment.py, longform.py, runtime.py). It runs locally on CPU (kestrel 0.9.1 / kestrel-kernels 0.7.4, cp312 arm64). transformers ParakeetForTDT drops vad_head and is not used. NeMo cannot load this checkpoint (no .nemo).",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Long-form recipe is in scope and must match kestrel exactly: audio >30 s is cut at VAD-head pauses into <=30 s segments (no overlap, no context margins), each segment decoded independently, texts joined with a single space, timestamps shifted by segment start. Our parakeet runtime today runs the whole clip through one full-attention pass (max_audio_ms=0); ultra needs a new segmented path, gated on the presence of vad_head tensors.",
+    "vad_head.* (proj Conv1d 1024->128 k1 + SiLU, ctx Conv1d 128->128 k5 pad2 + SiLU, out Conv1d 128->1 k1, sigmoid) runs on the subsampler output only (post-linear, pre rel-pos/xscale/conformer). Needs converter support, GGUF tensors and a subsampler-only graph. kestrel scans in 120 s blocks; this is valid because the subsampler is local, but block-edge frames must match kestrel's per-block feature normalization.",
+    "Segmenter is host-side logic in kestrel/segment.py: speech = sigmoid >= 0.5 at 80 ms frames, bridge gaps <0.1 s, drop runs <0.1 s, pauses >=0.2 s, cut at midpoint of the last pause fully inside (1 s, 30 s), else midpoint-in-window, else hard cut at 30 s; segments with no speech are skipped; VAD scanned in 120 s blocks (valid because the subsampler is local). Stage 4 must reproduce this exactly for long-form parity.",
+    "Checkpoint is HF-transformers naming (encoder.subsampling.layers.*, self_attn.q_proj/relative_k_proj, decoder.lstm, joint.head, encoder_projector); scripts/convert-parakeet.py only reads NeMo state dicts. Needs an HF->NeMo key remap (or a transformers-input path) plus fused-joint handling.",
+    "Weights are F16 at rest despite config.dtype=float32. F32 GGUF is a pure upcast used for parity; F16 GGUF loses nothing at rest and is the natural shipping 'full' file. Quant WER deltas should be read against the F16 file, and F16-vs-F32 GGUF differences reflect ggml F16 compute only.",
+    "Same TDT joint/duration-head and FastConformer rel-pos risks as v3; language_detection is implicit (no LID tokens), inherited from v3.",
+    "Photon's per-segment output joins segment texts with a single space and shifts timestamps by segment start; segment-boundary punctuation/casing may differ from a single-pass decode.",
+    "Per-feature normalization is computed per call in kestrel: the VAD scan normalizes over each 120 s block, while ASR normalizes over each segment. Our frontend must reproduce both scopes; normalizing over the whole file would shift VAD probabilities and segment features.",
+    "kestrel is the oracle but runs fused kestrel_kernels ops (CPUKernelRuntime). Tensor dumps need hooks around kestrel modules rather than a transformers-style output_hidden_states; check CPU vs CUDA kernel numerics before treating CPU dumps as ground truth for the card's GPU numbers.",
+    "Short-clip behavior: clips that fit in 30 s bypass VAD and segmentation entirely (fits_one_segment), so LibriSpeech/FLEURS never exercise the new path; a dedicated long-form set (card: TED-LIUM 3, 11 talks) is required for acceptance."
+  ],
+  "intake_gaps": [
+    {
+      "field": "frontend",
+      "reason": "No preprocessor_config.json; carried from v3 and confirmed against kestrel features.py. Accepted."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "Estimated from F16 safetensors size (1.26 GB); not measured."
+    }
+  ]
+}

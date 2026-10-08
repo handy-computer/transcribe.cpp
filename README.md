@@ -23,12 +23,12 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Multitalker Parakeet Streaming 0.6B v1 | `multitalker-parakeet-streaming-0.6b-v1` | diarize, streaming, token timestamps | [docs/models/multitalker-parakeet-streaming-0.6b-v1.md](docs/models/multitalker-parakeet-streaming-0.6b-v1.md) |
 | Nemotron 3.5 ASR Streaming 0.6B | `nemotron-3.5-asr-streaming-0.6b` | streaming, token timestamps | [docs/models/nemotron-3.5-asr-streaming-0.6b.md](docs/models/nemotron-3.5-asr-streaming-0.6b.md) |
 | Nemotron Speech Streaming EN 0.6B | `nemotron-speech-streaming-en-0.6b` | streaming, token timestamps | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
-| Parakeet | `parakeet-ctc-0.6b`, `parakeet-ctc-1.1b`, `parakeet-primeline`, `parakeet-rnnt-0.6b`, `parakeet-rnnt-1.1b`, `parakeet-tdt-0.6b-v2`, `parakeet-tdt-0.6b-v3`, `parakeet-tdt-1.1b`, `parakeet-tdt_ctc-1.1b`, `parakeet-tdt_ctc-110m`, `parakeet-unified-en-0.6b` | streaming, token timestamps | [docs/models/parakeet.md](docs/models/parakeet.md) |
+| Parakeet | `parakeet-ctc-0.6b`, `parakeet-ctc-1.1b`, `parakeet-primeline`, `parakeet-rnnt-0.6b`, `parakeet-rnnt-1.1b`, `parakeet-tdt-0.6b-v2`, `parakeet-tdt-0.6b-v3`, `parakeet-tdt-1.1b`, `parakeet-tdt_ctc-1.1b`, `parakeet-tdt_ctc-110m`, `parakeet-ultra`, `parakeet-unified-en-0.6b`, `orukeet` | streaming, token timestamps | [docs/models/parakeet.md](docs/models/parakeet.md) |
 | Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | - | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
 | SenseVoice Small | `sensevoice-small` | - | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
 | Voxtral (2507) | `voxtral-mini-3b-2507`, `voxtral-small-24b-2507` | translate | [docs/models/voxtral.md](docs/models/voxtral.md) |
 | Voxtral Realtime (2602) | `voxtral-mini-4b-realtime-2602` | streaming | [docs/models/voxtral-realtime.md](docs/models/voxtral-realtime.md) |
-| Whisper | `breeze-asr-25`, `whisper-base`, `whisper-base.en`, `whisper-large`, `whisper-large-v2`, `whisper-large-v3`, `whisper-large-v3-turbo`, `whisper-medium`, `whisper-medium.en`, `whisper-small`, `whisper-small.en`, `whisper-tiny`, `whisper-tiny.en` | segment timestamps, translate | [docs/models/whisper.md](docs/models/whisper.md) |
+| Whisper | `whisper-base`, `whisper-base.en`, `whisper-large`, `whisper-large-v2`, `whisper-large-v3`, `whisper-large-v3-turbo`, `whisper-medium`, `whisper-medium.en`, `whisper-small`, `whisper-small.en`, `whisper-tiny`, `whisper-tiny.en`, `breeze-asr-25` | segment timestamps, translate | [docs/models/whisper.md](docs/models/whisper.md) |
 <!-- /catalog -->
 
 **Speaker diarization models** (no transcription; verified by DER/JER rather than WER):

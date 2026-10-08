@@ -24,6 +24,10 @@ inline bool ends_with(const std::string & s, const char * suffix) {
     return s.size() >= n && std::memcmp(s.data() + s.size() - n, suffix, n) == 0;
 }
 
+inline bool starts_with(const std::string & s, const char * prefix) {
+    return s.rfind(prefix, 0) == 0;
+}
+
 // Case-insensitive C-string equality.
 bool iequals(const char * a, const char * b) {
     while (*a && *b) {
@@ -191,6 +195,13 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
          ends_with(name, ".conv_pointwise1.weight") || ends_with(name, ".conv_pointwise2.weight")) &&
         contains(name, "enc.blocks.")) {
         return ne0 == 1 || ne0 < 0 ? Bucket::ConvPw : Bucket::Linear;
+    }
+    // Parakeet VAD head: three Conv1d kernels on the subsampler
+    // output (vad.{proj,ctx,out}.weight). Conv keeps them F32 in every
+    // preset: the head is 0.2M params, and a quantized head could move
+    // speech-threshold crossings and with them the long-form cut points.
+    if (starts_with(name, "vad.") && ends_with(name, ".weight")) {
+        return Bucket::Conv;
     }
     // Conv kernels: enc.pre_encode.conv.{0,2,3,5,6}.weight and
     // enc.blocks.{i}.conv.depthwise.weight.

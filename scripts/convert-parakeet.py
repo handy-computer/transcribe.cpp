@@ -59,6 +59,15 @@ transcribe::parakeet::read_parakeet_hparams):
   stt.parakeet.tdt.{durations,max_symbols}
   stt.frontend.{type,num_mels,sample_rate,n_fft,win_length,hop_length,
                 window,normalize,dither,pre_emphasis,f_min,f_max}
+  stt.parakeet.vad.{hidden,context_kernel,activation,speech_threshold,
+                    min_speech_seconds,min_gap_seconds}       (vad_head variants)
+  stt.parakeet.segmenter.{max_segment_seconds,min_segment_seconds,
+                          min_pause_seconds,scan_block_seconds} (vad_head variants)
+  stt.parakeet.encoder.length_masking = "kestrel",
+  stt.parakeet.tdt.symbol_budget      = "global"            (kestrel_runtime variants)
+
+parakeet-ultra is the one HF-safetensors source (no .nemo); see
+load_hf_safetensors_model().
 """
 
 from __future__ import annotations
@@ -121,6 +130,22 @@ V3_LANGUAGES = [
 ]
 
 VARIANT_PROFILES: dict[str, dict] = {
+    "orukeet": {
+        "variant": "tdt-0.6b-orukeet",
+        "display_name": "Orukeet",
+        "version": "v0.1.0",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
+        "languages": V3_LANGUAGES,
+        "lang_detect": True,
+        "author": "Oruk",
+        "organization": "oruk",
+        "prefer_direct_load": True,
+        "license": "cc-by-sa-4.0",
+        "license_name": "Creative Commons Attribution-ShareAlike 4.0",
+        "license_link": "https://creativecommons.org/licenses/by-sa/4.0/",
+    },
     # v2: 0.6B English-only TDT.
     "parakeet-tdt-0.6b-v2": {
         "variant": "tdt-0.6b-v2",
@@ -397,6 +422,29 @@ VARIANT_PROFILES: dict[str, dict] = {
         "license_name": "nvidia-open-model-license",
         "license_link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
     },
+    # Post-trained parakeet-tdt-0.6b-v3 plus a `vad_head`. HF safetensors
+    # only (F16 at rest, upcast to F32); see load_hf_safetensors_model().
+    "parakeet-ultra": {
+        "variant": "tdt-0.6b-ultra",
+        "display_name": "Parakeet Ultra",
+        "version": "v1",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
+        # Same 25 languages as v3, in the moondream model card's order.
+        "languages": ["en", "de", "fr", "es", "it", "pt", "ru", "uk", "hr", "sl", "lv", "lt", "et", "fi", "sv", "da", "nl", "pl", "cs", "sk", "hu", "ro", "bg", "el", "mt"],
+        "lang_detect": True,
+        "source_format": "hf_safetensors",
+        "hf_revision": "73175eb7aeb0d82f1e2a6b53b3aabc10a90bcd0b",
+        "has_vad_head": True,
+        # kestrel length masking + global TDT symbol budget (see the KV notes).
+        "kestrel_runtime": True,
+        "author": "Moondream",
+        "organization": "moondream",
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
+    },
 }
 
 
@@ -523,8 +571,6 @@ def load_nemo_model(model_spec: str, prefer_direct: bool = False):
     transiently doubles disk usage; the direct path streams entries
     out of the archive at near-zero transient cost.
     """
-    from nemo.collections.asr.models import ASRModel
-
     local = Path(model_spec).expanduser()
 
     if prefer_direct:
@@ -534,6 +580,8 @@ def load_nemo_model(model_spec: str, prefer_direct: bool = False):
             cfg, sd, sp_proto = _load_nemo_archive_directly(nemo_direct)
             return _DirectNemoArchive(cfg, sd, sp_proto)
         # else fall through to NeMo path
+
+    from nemo.collections.asr.models import ASRModel
 
     nemo_path: Path | None = None
     if local.exists():
@@ -566,6 +614,227 @@ def load_nemo_model(model_spec: str, prefer_direct: bool = False):
     print(f"  loading directly from .nemo: {nemo_path}")
     cfg, sd, sp_proto = _load_nemo_archive_directly(nemo_path)
     return _DirectNemoArchive(cfg, sd, sp_proto)
+
+
+# ---------------------------------------------------------------------------
+# HF-transformers safetensors loading
+# ---------------------------------------------------------------------------
+# A ParakeetForTDT checkpoint is mapped onto _DirectNemoArchive's surface
+# (NeMo-shaped cfg, NeMo-named fp32 state_dict, GGUF tokenizer payload).
+
+# HF name -> NeMo name. Anything not matched is an error, so a new
+# tensor in a future checkpoint fails loudly instead of being dropped.
+_HF_TO_NEMO_RULES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^encoder\.subsampling\.layers\.(\d+)\.(weight|bias)$"), r"encoder.pre_encode.conv.\1.\2"),
+    (re.compile(r"^encoder\.subsampling\.linear\.(weight|bias)$"),        r"encoder.pre_encode.out.\1"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.self_attn\.q_proj\.weight$"),  r"encoder.layers.\1.self_attn.linear_q.weight"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.self_attn\.k_proj\.weight$"),  r"encoder.layers.\1.self_attn.linear_k.weight"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.self_attn\.v_proj\.weight$"),  r"encoder.layers.\1.self_attn.linear_v.weight"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.self_attn\.o_proj\.weight$"),  r"encoder.layers.\1.self_attn.linear_out.weight"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.self_attn\.relative_k_proj\.weight$"),
+                                                                          r"encoder.layers.\1.self_attn.linear_pos.weight"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.self_attn\.bias_([uv])$"),     r"encoder.layers.\1.self_attn.pos_bias_\2"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.conv\.norm\.(.+)$"),           r"encoder.layers.\1.conv.batch_norm.\2"),
+    (re.compile(r"^encoder\.layers\.(\d+)\.((?:feed_forward[12]\.linear[12]|norm_feed_forward[12]|norm_self_att|"
+                r"norm_conv|norm_out|conv\.pointwise_conv[12]|conv\.depthwise_conv)\.(?:weight|bias))$"),
+                                                                          r"encoder.layers.\1.\2"),
+    (re.compile(r"^decoder\.embedding\.weight$"),                         r"decoder.prediction.embed.weight"),
+    (re.compile(r"^decoder\.lstm\.(.+)$"),                                r"decoder.prediction.dec_rnn.lstm.\1"),
+    (re.compile(r"^decoder\.decoder_projector\.(weight|bias)$"),          r"joint.pred.\1"),
+    (re.compile(r"^encoder_projector\.(weight|bias)$"),                   r"joint.enc.\1"),
+    (re.compile(r"^joint\.head\.(weight|bias)$"),                         r"joint.joint_net.2.\1"),
+    (re.compile(r"^(vad_head\.(?:proj|ctx|out)\.(?:weight|bias))$"),      r"\1"),
+]
+
+
+def _hf_to_nemo_key(key: str) -> str:
+    for pattern, repl in _HF_TO_NEMO_RULES:
+        if pattern.match(key):
+            return pattern.sub(repl, key)
+    raise KeyError(f"unmapped HF tensor name: {key!r}")
+
+
+class _HfBpeAsSpm:
+    """The SentencePieceProcessor surface extract_tokenizer() reads, built
+    from an HF tokenizer.json that was exported from a SentencePiece BPE
+    model (NeMo's multilingual parakeet vocab).
+
+    SPM BPE scores are 0 for the user-defined pieces at the front of the
+    vocab and -(rank) for merged pieces after them; tokenizer.json drops
+    scores but keeps both orders, so they are reconstructed exactly. Every
+    non-unk piece is NORMAL, as in that SPM model.
+    """
+
+    def __init__(self, tok: dict, blank_id: int):
+        model = tok["model"]
+        if model.get("type") != "BPE":
+            raise ValueError(f"expected a BPE tokenizer.json, got {model.get('type')!r}")
+        vocab = model["vocab"]
+        self._pieces = [None] * len(vocab)
+        for piece, idx in vocab.items():
+            self._pieces[idx] = piece
+        if any(p is None for p in self._pieces):
+            raise ValueError("tokenizer.json vocab ids are not contiguous")
+        added = sorted(a["id"] for a in tok.get("added_tokens", []) if a["id"] != blank_id)
+        if added != list(range(len(added))):
+            raise ValueError("tokenizer.json added tokens are not a contiguous prefix of the vocab")
+        self._first_merged = len(added)
+        self._unk = vocab[model["unk_token"]]
+
+    def vocab_size(self) -> int:
+        return len(self._pieces)
+
+    def id_to_piece(self, i: int) -> str:
+        return self._pieces[i]
+
+    def get_score(self, i: int) -> float:
+        return 0.0 if i < self._first_merged else -float(i - self._first_merged)
+
+    def is_unknown(self, i: int) -> bool:
+        return i == self._unk
+
+    def is_control(self, i: int) -> bool:
+        return False
+
+    def is_unused(self, i: int) -> bool:
+        return False
+
+    def is_byte(self, i: int) -> bool:
+        return False
+
+    def unk_id(self) -> int:
+        return self._unk
+
+    def bos_id(self) -> int:
+        return -1
+
+    def eos_id(self) -> int:
+        return -1
+
+
+class _HfSafetensorsModel:
+    """Same surface as _DirectNemoArchive, plus `.gguf_tokenizer` (the
+    extract_tokenizer() payload, since there is no SPM proto)."""
+
+    def __init__(self, cfg: dict, state_dict, gguf_tokenizer: dict):
+        from omegaconf import OmegaConf
+
+        self.cfg = OmegaConf.create(cfg)
+        self._sd = state_dict
+        self.gguf_tokenizer = gguf_tokenizer
+        self.joint = None  # resolve_runtime_hparams reads cfg + state_dict
+
+    def state_dict(self):
+        return self._sd
+
+    def eval(self):
+        return self
+
+
+def _nemo_cfg_from_hf_config(hf: dict) -> dict:
+    """NeMo-shaped cfg for read_hparams() from a ParakeetForTDT config.json.
+    Structural fields the C++ port hard-codes are asserted. The frontend is
+    the NeMo mel preprocessor kestrel reproduces; dither 0 (kestrel never dithers)."""
+    enc = hf["encoder_config"]
+    checks = {
+        "model_type": (hf.get("model_type"), "parakeet_tdt"),
+        "encoder.hidden_act": (enc.get("hidden_act"), "silu"),
+        "hidden_act (joint)": (hf.get("hidden_act"), "relu"),
+        "encoder.subsampling_conv_kernel_size": (enc.get("subsampling_conv_kernel_size"), 3),
+        "encoder.subsampling_conv_stride": (enc.get("subsampling_conv_stride"), 2),
+        "encoder.num_key_value_heads": (enc.get("num_key_value_heads"), enc.get("num_attention_heads")),
+        "encoder.attention_bias": (enc.get("attention_bias"), False),
+        "encoder.convolution_bias": (enc.get("convolution_bias"), False),
+    }
+    bad = {k: v for k, v in checks.items() if v[0] != v[1]}
+    if bad:
+        raise ValueError(f"config.json departs from the parakeet TDT shape the port supports: {bad}")
+    if enc["intermediate_size"] % enc["hidden_size"]:
+        raise ValueError("encoder intermediate_size is not a multiple of hidden_size")
+    durations = list(hf["durations"])
+    return {
+        "encoder": {
+            "n_layers": enc["num_hidden_layers"],
+            "d_model": enc["hidden_size"],
+            "n_heads": enc["num_attention_heads"],
+            "ff_expansion_factor": enc["intermediate_size"] // enc["hidden_size"],
+            "conv_kernel_size": enc["conv_kernel_size"],
+            "subsampling_factor": enc["subsampling_factor"],
+            "subsampling_conv_channels": enc["subsampling_conv_channels"],
+            "pos_emb_max_len": enc["max_position_embeddings"],
+            "xscaling": bool(enc["scale_input"]),
+            "att_context_size": [-1, -1],
+            "att_context_style": "regular",
+            "conv_norm_type": "batch_norm",
+            "conv_context_size": None,
+        },
+        "preprocessor": {
+            "_target_": "nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor",
+            "sample_rate": 16000,
+            "window_size": 0.025,
+            "window_stride": 0.01,
+            "features": enc["num_mel_bins"],
+            "n_fft": 512,
+            "window": "hann",
+            "normalize": "per_feature",
+            "dither": 0.0,
+        },
+        "decoder": {
+            "vocab_size": hf["vocab_size"] - 1,
+            "prednet": {"pred_hidden": hf["decoder_hidden_size"], "pred_rnn_layers": hf["num_decoder_layers"]},
+        },
+        "joint": {
+            "num_extra_outputs": len(durations),
+            "jointnet": {"joint_hidden": hf["decoder_hidden_size"], "activation": hf["hidden_act"]},
+        },
+        "decoding": {"durations": durations, "greedy": {"max_symbols": hf["max_symbols_per_step"]}},
+    }
+
+
+def load_hf_safetensors_model(model_spec: str, revision: str | None) -> _HfSafetensorsModel:
+    """Load an HF ParakeetForTDT checkpoint (repo id or local snapshot dir)
+    into NeMo naming. F16 tensors are upcast to F32, which is exact."""
+    import json
+    import torch
+    from safetensors.torch import load_file
+
+    local = Path(model_spec).expanduser()
+    if local.is_dir():
+        root = local
+    else:
+        from huggingface_hub import snapshot_download
+
+        root = Path(snapshot_download(
+            model_spec, revision=revision,
+            allow_patterns=["config.json", "model.safetensors", "tokenizer.json"],
+        ))
+    print(f"Loading Parakeet from HF safetensors: {root}")
+    hf_cfg = json.loads((root / "config.json").read_text())
+    cfg = _nemo_cfg_from_hf_config(hf_cfg)
+
+    raw = load_file(str(root / "model.safetensors"), device="cpu")
+    sd = {}
+    n_upcast = 0
+    for key, tensor in raw.items():
+        name = _hf_to_nemo_key(key)
+        if tensor.is_floating_point():
+            if tensor.dtype == torch.float16:
+                n_upcast += 1
+            elif tensor.dtype != torch.float32:
+                raise ValueError(f"{key}: unsupported source dtype {tensor.dtype}")
+            tensor = tensor.to(torch.float32)
+        sd[name] = tensor
+    print(f"  {len(sd)} tensors, {n_upcast} upcast F16 -> F32 (lossless)")
+
+    blank_id = int(hf_cfg["blank_token_id"])
+    tok_json = json.loads((root / "tokenizer.json").read_text())
+    blank_piece = next((a["content"] for a in tok_json.get("added_tokens", []) if a["id"] == blank_id), None)
+    if blank_piece != "<blank>":
+        raise ValueError(f"tokenizer.json id {blank_id} is {blank_piece!r}, expected '<blank>'")
+    sp = _HfBpeAsSpm(tok_json, blank_id)
+    if sp.vocab_size() != blank_id:
+        raise ValueError(f"blank_token_id {blank_id} != BPE vocab size {sp.vocab_size()}")
+    return _HfSafetensorsModel(cfg, sd, extract_tokenizer(sp))
 
 
 # ---------------------------------------------------------------------------
@@ -1215,6 +1484,19 @@ PROMPT_MLP_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# Speech head on the subsampler output:
+# proj Conv1d(d_model->H, k=1) + SiLU, ctx Conv1d(H->H, k, pad k//2) + SiLU,
+# out Conv1d(H->1, k=1), sigmoid. F32 in every preset (see policy.cpp).
+VAD_HEAD_TABLE: list[tuple[str, str]] = [
+    ("vad_head.proj.weight", "vad.proj.weight"),
+    ("vad_head.proj.bias",   "vad.proj.bias"),
+    ("vad_head.ctx.weight",  "vad.ctx.weight"),
+    ("vad_head.ctx.bias",    "vad.ctx.bias"),
+    ("vad_head.out.weight",  "vad.out.weight"),
+    ("vad_head.out.bias",    "vad.out.bias"),
+]
+
+
 # Speaker kernels are top-level NeMo Sequential modules. Only the two
 # Linear slots (.0 and .3) carry tensors.
 def spk_kernel_table(layer: int) -> list[tuple[str, str]]:
@@ -1294,7 +1576,8 @@ def tensor_to_fp32_numpy(t) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None:
+def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
+            revision: str | None = None) -> None:
     from omegaconf import OmegaConf
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
@@ -1322,7 +1605,11 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
           f"{', prompt=on' if has_prompt else ''}"
           f"{', spk_kernels=on' if has_spk_kernels else ''})")
 
-    model = load_nemo_model(model_spec, prefer_direct=prefer_direct)
+    has_vad_head = bool(profile.get("has_vad_head", False))
+    if profile.get("source_format") == "hf_safetensors":
+        model = load_hf_safetensors_model(model_spec, revision or profile.get("hf_revision"))
+    else:
+        model = load_nemo_model(model_spec, prefer_direct=prefer_direct)
 
     config = OmegaConf.to_container(model.cfg, resolve=True)
     hp = read_hparams(config)
@@ -1408,11 +1695,13 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
     # SPM instance NeMo hands out through model.tokenizer.tokenizer has
     # vocab_size monkey-patched to a property-like int on some builds,
     # which breaks the extract_tokenizer() contract.
-    import sentencepiece as spm
-    proto = model.tokenizer.tokenizer.serialized_model_proto()
-    sp = spm.SentencePieceProcessor()
-    sp.LoadFromSerializedProto(proto)
-    tok = extract_tokenizer(sp)
+    tok = getattr(model, "gguf_tokenizer", None)
+    if tok is None:
+        import sentencepiece as spm
+        proto = model.tokenizer.tokenizer.serialized_model_proto()
+        sp = spm.SentencePieceProcessor()
+        sp.LoadFromSerializedProto(proto)
+        tok = extract_tokenizer(sp)
     if len(tok["tokens"]) != hp["pred_vocab"]:
         raise ValueError(
             f"tokenizer length mismatch: {len(tok['tokens'])} tokens "
@@ -1685,6 +1974,36 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
     writer.add_float32("stt.frontend.f_min",        hp["fe_f_min"])
     writer.add_float32("stt.frontend.f_max",        hp["fe_f_max"])
 
+    # kestrel-runtime semantics. Absent on every NeMo-validated variant.
+    if profile.get("kestrel_runtime"):
+        writer.add_string("stt.parakeet.encoder.length_masking", "kestrel")
+        writer.add_string("stt.parakeet.tdt.symbol_budget", "global")
+
+    # VAD head shape from the checkpoint; segmenter constants are kestrel's
+    # runtime policy, written here so the C++ does not hard-code a copy.
+    if has_vad_head:
+        vad_proj = sd["vad_head.proj.weight"]
+        vad_ctx = sd["vad_head.ctx.weight"]
+        vad_out = sd["vad_head.out.weight"]
+        vad_hidden = int(vad_proj.shape[0])
+        if (tuple(vad_proj.shape) != (vad_hidden, hp["enc_d_model"], 1)
+                or tuple(vad_ctx.shape[:2]) != (vad_hidden, vad_hidden)
+                or vad_ctx.shape[2] % 2 != 1
+                or tuple(vad_out.shape) != (1, vad_hidden, 1)):
+            raise ValueError(
+                f"unexpected vad_head shapes: proj {tuple(vad_proj.shape)}, "
+                f"ctx {tuple(vad_ctx.shape)}, out {tuple(vad_out.shape)}")
+        writer.add_uint32 ("stt.parakeet.vad.hidden",         vad_hidden)
+        writer.add_uint32 ("stt.parakeet.vad.context_kernel", int(vad_ctx.shape[2]))
+        writer.add_string ("stt.parakeet.vad.activation",     "silu")
+        writer.add_float32("stt.parakeet.vad.speech_threshold",     0.5)
+        writer.add_float32("stt.parakeet.vad.min_speech_seconds",   0.1)
+        writer.add_float32("stt.parakeet.vad.min_gap_seconds",      0.1)
+        writer.add_float32("stt.parakeet.segmenter.max_segment_seconds", 30.0)
+        writer.add_float32("stt.parakeet.segmenter.min_segment_seconds", 1.0)
+        writer.add_float32("stt.parakeet.segmenter.min_pause_seconds",   0.2)
+        writer.add_float32("stt.parakeet.segmenter.scan_block_seconds",  120.0)
+
     # ----- tensors -----
     consumed: set[str] = set()
     n_added = 0
@@ -1776,6 +2095,11 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
         for nemo_name, gguf_name in JOINT_TABLE:
             add(nemo_name, gguf_name)
 
+    # VAD head: three Conv1d layers, PyTorch [out, in, k] layout.
+    if has_vad_head:
+        for nemo_name, gguf_name in VAD_HEAD_TABLE:
+            add(nemo_name, gguf_name)
+
     # Prompt MLP. Shapes were already validated above when the prompt
     # KVs were emitted; here we just copy the tensors verbatim.
     if has_prompt:
@@ -1814,12 +2138,14 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
         spk_tensors = len(spk_kernel_layers) * per_spk_layer
     else:
         spk_tensors = 0
+    vad_tensors = len(VAD_HEAD_TABLE) if has_vad_head else 0
     expected = (
         len(PRE_ENCODE_TABLE)
         + hp["enc_n_layers"] * per_layer_tensors
         + head_tensors
         + prompt_tensors
         + spk_tensors
+        + vad_tensors
     )
     if n_added != expected:
         raise RuntimeError(
@@ -1858,7 +2184,8 @@ def main(argv: list[str]) -> int:
     p.add_argument(
         "model",
         type=str,
-        help="HF repo id (e.g. nvidia/parakeet-tdt-0.6b-v2) or local .nemo path",
+        help="HF repo id (e.g. nvidia/parakeet-tdt-0.6b-v2), local .nemo path, "
+             "or local HF snapshot dir (HF-safetensors variants)",
     )
     p.add_argument(
         "out_path",
@@ -1873,6 +2200,13 @@ def main(argv: list[str]) -> int:
         default=None,
         help="HF repo id used to derive the output slug when converting "
              "from a local path. Ignored if out_path is given.",
+    )
+    p.add_argument(
+        "--revision",
+        type=str,
+        default=None,
+        help="HF revision for HF-safetensors variants (parakeet-ultra); "
+             "defaults to the profile's pinned revision.",
     )
     args = p.parse_args(argv[1:])
 
@@ -1894,7 +2228,7 @@ def main(argv: list[str]) -> int:
     repo_id = args.repo_id
     if repo_id is None and "/" in args.model and not Path(args.model).exists():
         repo_id = args.model
-    convert(args.model, out_path, repo_id=repo_id)
+    convert(args.model, out_path, repo_id=repo_id, revision=args.revision)
     return 0
 
 

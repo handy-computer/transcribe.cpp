@@ -766,10 +766,11 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model, HostDe
     }
 
     // ----- TDT params -----
-    out.tdt_durations   = hp.tdt_durations;
-    out.tdt_max_symbols = hp.tdt_max_symbols;
-    out.n_vocab         = hp.pred_vocab - 1;  // raw SP vocab size
-    out.blank_id        = hp.pred_vocab - 1;  // blank lives at vocab_size
+    out.tdt_durations            = hp.tdt_durations;
+    out.tdt_max_symbols          = hp.tdt_max_symbols;
+    out.tdt_global_symbol_budget = hp.tdt_global_symbol_budget;
+    out.n_vocab                  = hp.pred_vocab - 1;  // raw SP vocab size
+    out.blank_id                 = hp.pred_vocab - 1;  // blank lives at vocab_size
 
     return TRANSCRIBE_OK;
 }
@@ -1096,7 +1097,11 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     // the unconditional path.
     bool predictor_dirty = true;
 
-    while (step < T_enc && iter < max_iters) {
+    // See ParakeetHParams::tdt_global_symbol_budget.
+    const bool global_budget   = w.tdt_global_symbol_budget;
+    int64_t    steps_remaining = static_cast<int64_t>(w.tdt_max_symbols) * T_enc;
+
+    while (step < T_enc && iter < max_iters && (!global_budget || steps_remaining > 0)) {
         ++iter;
 
         // ----- Predictor (one LSTM step) -----
@@ -1169,6 +1174,12 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
             predictor_dirty = true;
         }
 
+        if (global_budget) {
+            step += (is_blank && duration == 0) ? 1 : duration;
+            --steps_remaining;
+            continue;
+        }
+
         // Step / stuck advance. Matches the reference:
         //   step += duration
         //   new_symbols += 1
@@ -1204,7 +1215,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
             t_joint_us / 1000.0, t_conf_us / 1000.0, (t_enc_proj_us + t_pred_us + t_joint_us + t_conf_us) / 1000.0,
             static_cast<double>(t_pred_us + t_joint_us) / std::max(iter, 1));
 
-    if (iter >= max_iters) {
+    if (iter >= max_iters && !global_budget) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "parakeet decoder: hit iteration cap (%d) — pathological "
                 "logits or loop bug",

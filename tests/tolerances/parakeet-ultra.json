@@ -1,0 +1,260 @@
+{
+  "_comment": [
+    "parakeet-ultra per-tensor tolerances for compare_tensors.py (finalized Stage 4, 2026-10-04).",
+    "",
+    "CORRECTNESS REGIME",
+    "- Reference: kestrel 0.9.1 / kestrel-kernels 0.7.4 (Photon's engine), CPU, float32, torch threads 1,",
+    "  via scripts/dump_reference_parakeet_kestrel.py at moondream/parakeet-ultra@73175eb.",
+    "- C++: models/parakeet-ultra/parakeet-ultra-F32.gguf, --backend cpu --threads 1, F32 compute.",
+    "- Attention: TRANSCRIBE_NO_FLASH=1 (manifest cpp_env). The flash path casts the rel-pos score bias",
+    "  to F16 (~1e-3 rel on enc.final); it is the production speed path and is gated by WER, not here.",
+    "- KV dtype: F32 (AUTO resolves F32 on F32 weights).",
+    "- Mel: production C++ MelFrontend (no injection).",
+    "- Cases: jfk (encoder + decode), dots (35 s) and dots-full (306 s) through the long-form path",
+    "  (VAD head per 120 s block, pause segmentation, per-segment encoder).",
+    "",
+    "DOMINANT DRIFT SOURCES",
+    "- Frontend: the C++ mel is within 2.4e-6 of an fp64 recompute of kestrel's parakeet_features;",
+    "  kestrel's own float32 torch.stft is off by up to 2.6e-4 in near-silent bins (raw log-mel ~-16,",
+    "  where log amplifies float32 FFT error in tiny powers). All *.mel / *.mel.in drift is that",
+    "  reference-side noise.",
+    "- Encoder: float32 accumulation order (kestrel fused CPU kernels vs ggml). With an identical",
+    "  mel input, seg.6.enc.final still differs by 1.6e-5 at one element (6e-5 rel; mean 5e-8).",
+    "",
+    "WIDENED VS STAGE-2 PROVISIONAL (recipe: max(1.5 x observed, provisional, 1e-6))",
+    "- enc.mel.in: 0.000263 -> 0.000395 (observed 0.000264). Mechanism: reference float32 STFT noise (see frontend above).",
+    "- seg.0.enc.mel.in: 0.00025 -> 0.000524 (observed 0.000349). Mechanism: reference float32 STFT noise (see frontend above).",
+    "- seg.5.enc.final: 9.56e-06 -> 1.17e-05 (observed 7.78e-06). Mechanism: float32 accumulation order (see encoder above); localized to a few rows, mean_abs ~5e-8.",
+    "- seg.6.enc.final: 9.29e-06 -> 3.38e-05 (observed 2.25e-05). Mechanism: float32 accumulation order (see encoder above); localized to a few rows, mean_abs ~5e-8.",
+    "- vad.b0.mel: 0.00026 -> 0.000511 (observed 0.00034). Mechanism: reference float32 STFT noise (see frontend above).",
+    "",
+    "TIGHTENED (1.5 x observed): dec.joint.0 (observed 8.4e-5 / 4.0e-5); dec.lstm.* to the family 1e-6/1e-7 (observed <= 1.8e-7).",
+    "",
+    "EXACT ENTRIES",
+    "- dec.embed.0: blank-row embedding lookup (zeros on both sides).",
+    "- longform.segments: segment cut points (start sample, count); the segmenter must match kestrel",
+    "  sample for sample.",
+    "",
+    "STRUCTURAL FIXES FOUND IN STAGE 4 (not absorbed into tolerances)",
+    "- Subsampler masking: kestrel zeroes the padded time tail after each strided conv, before the",
+    "  pointwise conv, at every batch size (KV stt.parakeet.encoder.length_masking=kestrel).",
+    "- Pre_encode pointwise convs ran ggml_conv_2d's F16 im2col (3.3e-4 rel); ultra uses conv_2d_f32.",
+    "- Valid lengths from n_samples//hop; a trailing invalid encoder frame is masked and not decoded."
+  ],
+  "dec.embed.0": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "dec.enc_out": {
+    "max_abs": 8.73e-06,
+    "mean_abs": 1e-06
+  },
+  "dec.joint.0": {
+    "max_abs": 0.00013,
+    "mean_abs": 6.1e-05
+  },
+  "dec.lstm.0.c.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.lstm.0.h.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.lstm.1.c.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.lstm.1.h.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "enc.block.0.attn": {
+    "max_abs": 0.1345,
+    "mean_abs": 0.00383
+  },
+  "enc.block.0.conv": {
+    "max_abs": 0.1277,
+    "mean_abs": 0.00382
+  },
+  "enc.block.0.ff1": {
+    "max_abs": 0.1391,
+    "mean_abs": 0.00398
+  },
+  "enc.block.0.ff2": {
+    "max_abs": 0.1255,
+    "mean_abs": 0.00373
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.003343,
+    "mean_abs": 9.838e-05
+  },
+  "enc.block.12.out": {
+    "max_abs": 0.00363,
+    "mean_abs": 0.0001133
+  },
+  "enc.block.23.out": {
+    "max_abs": 8.73e-06,
+    "mean_abs": 1e-06
+  },
+  "enc.final": {
+    "max_abs": 8.73e-06,
+    "mean_abs": 1e-06
+  },
+  "enc.mel.in": {
+    "max_abs": 0.0003952,
+    "mean_abs": 9.991e-06
+  },
+  "enc.pos_emb": {
+    "max_abs": 0.0001,
+    "mean_abs": 7.071e-06
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 0.1332,
+    "mean_abs": 0.003786
+  },
+  "longform.segments": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "seg.0.enc.final": {
+    "max_abs": 9.665e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.0.enc.mel.in": {
+    "max_abs": 0.0005235,
+    "mean_abs": 9.997e-06
+  },
+  "seg.1.enc.final": {
+    "max_abs": 9.671e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.1.enc.mel.in": {
+    "max_abs": 0.0002647,
+    "mean_abs": 9.996e-06
+  },
+  "seg.10.enc.final": {
+    "max_abs": 9.105e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.10.enc.mel.in": {
+    "max_abs": 0.0002532,
+    "mean_abs": 9.996e-06
+  },
+  "seg.2.enc.final": {
+    "max_abs": 9.217e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.2.enc.mel.in": {
+    "max_abs": 0.0002663,
+    "mean_abs": 9.996e-06
+  },
+  "seg.3.enc.final": {
+    "max_abs": 1.02e-05,
+    "mean_abs": 1e-06
+  },
+  "seg.3.enc.mel.in": {
+    "max_abs": 0.0002681,
+    "mean_abs": 9.996e-06
+  },
+  "seg.4.enc.final": {
+    "max_abs": 9.487e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.4.enc.mel.in": {
+    "max_abs": 0.0002531,
+    "mean_abs": 9.996e-06
+  },
+  "seg.5.enc.final": {
+    "max_abs": 1.167e-05,
+    "mean_abs": 1e-06
+  },
+  "seg.5.enc.mel.in": {
+    "max_abs": 0.0002627,
+    "mean_abs": 9.996e-06
+  },
+  "seg.6.enc.final": {
+    "max_abs": 3.375e-05,
+    "mean_abs": 1e-06
+  },
+  "seg.6.enc.mel.in": {
+    "max_abs": 0.0002563,
+    "mean_abs": 9.997e-06
+  },
+  "seg.7.enc.final": {
+    "max_abs": 9.294e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.7.enc.mel.in": {
+    "max_abs": 0.0002527,
+    "mean_abs": 9.997e-06
+  },
+  "seg.8.enc.final": {
+    "max_abs": 9.178e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.8.enc.mel.in": {
+    "max_abs": 0.000256,
+    "mean_abs": 9.996e-06
+  },
+  "seg.9.enc.final": {
+    "max_abs": 9.379e-06,
+    "mean_abs": 1e-06
+  },
+  "seg.9.enc.mel.in": {
+    "max_abs": 0.0002346,
+    "mean_abs": 9.997e-06
+  },
+  "vad.b0.ctx": {
+    "max_abs": 0.01971,
+    "mean_abs": 0.0003352
+  },
+  "vad.b0.mel": {
+    "max_abs": 0.0005107,
+    "mean_abs": 9.999e-06
+  },
+  "vad.b0.pre_encode": {
+    "max_abs": 0.1404,
+    "mean_abs": 0.003832
+  },
+  "vad.b0.proj": {
+    "max_abs": 0.06315,
+    "mean_abs": 0.001473
+  },
+  "vad.b1.ctx": {
+    "max_abs": 0.01855,
+    "mean_abs": 0.0003185
+  },
+  "vad.b1.mel": {
+    "max_abs": 0.0002578,
+    "mean_abs": 9.999e-06
+  },
+  "vad.b1.pre_encode": {
+    "max_abs": 0.1379,
+    "mean_abs": 0.003835
+  },
+  "vad.b1.proj": {
+    "max_abs": 0.06226,
+    "mean_abs": 0.001481
+  },
+  "vad.b2.ctx": {
+    "max_abs": 0.01804,
+    "mean_abs": 0.0003066
+  },
+  "vad.b2.mel": {
+    "max_abs": 0.0002376,
+    "mean_abs": 9.998e-06
+  },
+  "vad.b2.pre_encode": {
+    "max_abs": 0.1386,
+    "mean_abs": 0.003776
+  },
+  "vad.b2.proj": {
+    "max_abs": 0.05961,
+    "mean_abs": 0.001443
+  },
+  "vad.prob": {
+    "max_abs": 0.0001,
+    "mean_abs": 9.161e-06
+  }
+}

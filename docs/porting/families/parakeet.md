@@ -160,6 +160,65 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | multitalker-parakeet-streaming-0.6b-v1 | Speaker diarization (produce speaker turns) | diarization | same bundle smoke; inspect `transcribe_n_speaker_segments` | non-empty 1-based speaker turns, independent of transcript rows | PASS on bundle GGUFs — embedded Sortformer predictions populate speaker segments; plain GGUFs intentionally retain the single-speaker capability surface. |
 | all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |
 
+### parakeet-ultra (moondream/parakeet-ultra)
+
+Post-trained v3 (same arch/tokenizer/frontend) plus a `vad_head` on the
+subsampler that the publisher's runtime (Photon/kestrel) uses to cut long
+audio at pauses into <=30 s segments. Reference is kestrel 0.9.1 for
+everything (frontend, ASR, VAD head, segmenter); transformers is not used. Intake:
+`reports/porting/parakeet/parakeet-ultra/intake.json`.
+
+Oracle (env `scripts/envs/parakeet-kestrel`, selected by the manifest's
+`reference.env`). jfk runs `encoder` + `decode`; `dots` (35 s) and
+`dots-full` (306 s) run `longform`, which records every VAD scan block,
+cut point and per-segment decode in `segments.json`:
+
+```bash
+uv run scripts/validate.py ref --family parakeet --variant parakeet-ultra
+uv run --project scripts/envs/parakeet-kestrel scripts/wer/run_reference_parakeet_kestrel.py \
+  --manifest samples/wer/librispeech-test-clean.manifest.jsonl \
+  --out reports/wer/parakeet-ultra-REF.librispeech-test-clean.jsonl
+uv run scripts/wer/ingest.py tedlium-longform   # 11 TED-LIUM 3 talks
+uv run --project scripts/envs/parakeet-kestrel scripts/wer/run_reference_parakeet_kestrel.py \
+  --manifest samples/wer/tedlium-longform.manifest.jsonl \
+  --out reports/wer/parakeet-ultra-REF.tedlium-longform.jsonl
+```
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|---|---|---|---|---|---|
+| Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf --language en samples/jfk.wav` | English transcript with PnC; LibriSpeech test-clean WER within Stage 7 band of the kestrel oracle | MUST PASS | PASS — jfk byte-equal to kestrel; LibriSpeech test-clean 1.8028% = kestrel REF 1.8028% (2620 utts) |
+| Transcribe | auto | `build/bin/transcribe-cli -m models/parakeet-ultra/parakeet-ultra-F32.gguf samples/jfk.wav` | English transcript, no hint | MUST PASS | PASS — no-hint jfk byte-equal to kestrel |
+| Transcribe | explicit non-English (de/es FLEURS clip) | `… --language de <fleurs-de clip>` | transcript in source language | MUST PASS | PASS — german.wav and fleurs-es-1001146817223348054 byte-equal to kestrel, with and without --language |
+| Offline batch | batch | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --golden-in tests/golden/batch/parakeet-ultra.cpu.json --batch-sizes 2,4,8 --backend cpu` | per-item transcripts equal to serial | MUST PASS | PASS — run_batch parallel encoder (kestrel masks + per-utterance extent masks); text byte-equal serial vs 2/4/8 on 13 clips incl. 5 long-form (golden tests/golden/batch/parakeet-ultra.cpu.json); same-length CPU tensor parity bit-exact; batch-8 LibriSpeech hyps identical to batch-1 (1.8028%). Batches containing a >30 s clip run per utterance |
+| Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | PASS — word times identical to kestrel (jfk 22, dots 103, dots-full 809 words, 10 ms print precision), monotonic, shifted by segment start on long-form |
+| VAD head (`vad_head.*`) speech probabilities | tensor parity | dump `vad.prob` per 80 ms frame vs kestrel `ParakeetTdt.speech_probabilities` (120 s block scan) on long clips | per-frame parity; identical speech regions after threshold 0.5 / 0.1 s bridge / 0.1 s min run | MUST PASS | PASS — vad.b<k>.{mel,pre_encode,proj,ctx,prob} within finalized tolerances on 4 blocks; vad.prob max_abs 1.9e-6 |
+| Long-form pause segmentation (>30 s) | long audio | TED-LIUM 3 eleven-talk set, one `transcribe_run` per talk | segment boundaries (sample indices) identical to kestrel `pause_segments` with the VAD head as pause source; stitched text and shifted timestamps match kestrel; WER within Stage 7 band of the kestrel oracle | MUST PASS | PASS — longform.segments exact (0.0) on dots (2 segs) and dots-full (11 segs, 3 scan blocks); stitched transcripts exact; TED-LIUM long-form 2.2195% = kestrel REF 2.2195% (11/11 hyps identical); segmenter unit test vs kestrel fixtures |
+| Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE — no streaming training; publisher's live mode is window re-decoding, not cache-aware | SKIP — not exposed by runtime (offline-only model) |
+| Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | SKIP — not exposed by runtime |
+| Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | SKIP — not exposed by runtime |
+
+### orukeet (oruk/orukeet)
+
+Weights-only fine-tune of `parakeet-tdt-0.6b-v3` (Oruk AI, r3 checkpoint).
+Half of the encoder's 9-tap depthwise conv taps are frozen fitted Gabor
+values, stored as ordinary F32 conv weights; architecture, tokenizer and
+frontend are byte-for-byte v3, so no runtime work. Reference is NeMo on
+the `.nemo` archive (the publisher's benchmark pipeline), same env as v3.
+License is CC-BY-SA-4.0, not CC-BY-4.0. Intake:
+`reports/porting/parakeet/orukeet/intake.json`.
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|---|---|---|---|---|---|
+| Transcribe | explicit en | `build/bin/transcribe-cli -m models/orukeet/orukeet-F32.gguf --language en samples/jfk.wav` | English transcript with PnC; LibriSpeech test-clean WER within Stage 7 band of the NeMo oracle | MUST PASS | PASS — jfk byte-equal to NeMo (validate.py compare 18/18 within the finalized parakeet tolerances, transcript exact); LibriSpeech test-clean gate in Stage 7 |
+| Transcribe | auto | `build/bin/transcribe-cli -m models/orukeet/orukeet-F32.gguf samples/jfk.wav` | English transcript, no hint | MUST PASS | PASS — no-hint jfk byte-equal to NeMo |
+| Transcribe | explicit non-English (de/ru/uk clips) | `… --language de samples/german.wav` | transcript in source language with correct script | MUST PASS | PASS — german.wav identical with and without --language de; ru-short / uk-short correct Cyrillic transcripts |
+| Language detection | auto, non-English | `build/bin/transcribe-cli -m models/orukeet/orukeet-F32.gguf samples/ru-short.wav` (no `--language`) | Russian transcript without a hint; same dispatcher path as v3 | MUST PASS | PASS — ru-short / uk-short / german transcribed in-language with no hint (same dispatcher path as v3) |
+| Offline batch | batch | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --batch-sizes 2,4,8 --backend cpu` | per-item transcripts equal to serial | MUST PASS | PASS — text byte-equal serial vs 2/4/8 on 7 clips incl. dots (35 s), CPU (golden tests/golden/batch/orukeet.cpu.json, list tests/golden/batch/orukeet.list). product-names.wav (56 s) flips one near-tie token ('QuidQuil' vs 'Quid Quill') at batch 4/8 in a mixed-length batch; parakeet-tdt-0.6b-v3 Q8_0 shows the identical flip on the same clip, so it is a pre-existing runtime property of the family on long padded clips, not this checkpoint, and the clip is excluded from the golden |
+| Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | PASS — 22 monotonic word spans on jfk, same TDT duration math as v3 |
+| Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE — no streaming training | SKIP — not exposed by runtime (offline-only model) |
+| Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | SKIP — not exposed by runtime |
+| Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | SKIP — not exposed by runtime |
+
 ## Open decisions before Stage 3 (convert)
 
 These decisions block converter design for the new variants and should
@@ -266,10 +325,54 @@ overrides; non-NeMo families are unaffected.
   unified, ctc) are not locked at intake time; they are read from the
   archive during Stage 3 convert. Each intake's `intake_gaps`
   enumerates this.
+- Two F16 roundings found while porting `parakeet-ultra` apply to every
+  parakeet variant but are fixed or bypassed for ultra only: the vendored
+  `ggml_conv_2d` im2cols the subsampler's pointwise convs to F16 (~3e-4 rel
+  at `enc.pre_encode.out`; ultra opts into `ConvPolicy::pre_encode_f32_pointwise`),
+  and flash attention casts the rel-pos score bias to F16 (~1e-3 rel at
+  `enc.final`; ultra's tensor regime sets `TRANSCRIBE_NO_FLASH=1`). The other
+  variants' tolerances were measured with both in place. Before tightening
+  them, enable the F32 pointwise path and the no-flash regime and re-validate.
+  See the forward map's ultra notes.
 
 ## Stage 3 conversion notes
 
 Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
+
+### `parakeet-ultra`
+
+- **HF-safetensors input path** — moondream ships only `config.json` +
+  `model.safetensors` + `tokenizer.json` (no `.nemo`).
+  `load_hf_safetensors_model()` renames HF keys to NeMo keys through an
+  explicit rule table (an unmapped name is an error), builds a NeMo-shaped
+  cfg from `config.json` (asserting silu FF, relu joint, k=3/s=2
+  subsampling, no attention/conv bias), and hands the shared NeMo write
+  path the same surface `_DirectNemoArchive` does. Key renames:
+  `subsampling.layers.N`→`pre_encode.conv.N`, `subsampling.linear`→
+  `pre_encode.out`, `{q,k,v,o}_proj`→`linear_{q,k,v,out}`,
+  `relative_k_proj`→`linear_pos`, `bias_{u,v}`→`pos_bias_{u,v}`,
+  `conv.norm`→`conv.batch_norm`, `encoder_projector`→`joint.enc`,
+  `decoder.decoder_projector`→`joint.pred`, `joint.head`→`joint.joint_net.2`.
+- **F16 at rest → F32 GGUF** — 356 F16 tensors are upcast (exact). The
+  F32 GGUF is the parity artifact; F16 loses nothing at rest.
+- **Tokenizer from `tokenizer.json`** — `_HfBpeAsSpm` rebuilds the
+  SentencePiece surface: scores are 0 for the 274 user-defined pieces and
+  `-(id-274)` after; every non-unk piece NORMAL. The emitted
+  tokens/scores/types equal the v3 `.nemo` tokenizer.model exactly
+  (8193 entries incl. `<blank>`, checked against the cached v3 archive).
+- **VAD head** — emitted as `vad.{proj,ctx,out}.{weight,bias}`, PyTorch
+  `[out, in, k]` layout. `policy.cpp` and `reference_dtype_for` route
+  `vad.*.weight` to the Conv bucket, so the head stays F32 in every quant
+  preset (0.2M params; quantizing it could move cut points).
+- **Segmenter constants in the GGUF** — kestrel's VAD threshold (0.5),
+  min speech/gap (0.1 s), min pause (0.2 s), segment cap (30 s), min
+  segment (1 s) and scan block (120 s) are written as
+  `stt.parakeet.vad.*` / `stt.parakeet.segmenter.*` so the C++ segmenter
+  reads them rather than hard-coding a second copy.
+- **Frontend** — `stt.frontend.dither = 0` (kestrel never dithers; the C++
+  frontend reads but does not apply dither). Window `hann` (symmetric, as
+  NeMo and kestrel use).
+- **Languages** — same 25 as v3, written in the moondream card's order.
 
 ### `parakeet-tdt-1.1b`
 

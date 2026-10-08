@@ -66,7 +66,7 @@ pub use backend::{
 };
 pub use cancel::CancelToken;
 pub use diarize::{DiarizeInfo, DiarizeOptions, DiarizeSession, DiarizeSessionOptions};
-pub use error::{Error, Result};
+pub use error::{Error, ErrorKind, ErrorReport, Result};
 pub use family::{
     DiarizeExtension, MoonshineStreamingOptions, ParakeetBufferedStreamOptions,
     ParakeetStreamOptions, RunExtension, SortformerDiarizeOptions, SortformerPreset,

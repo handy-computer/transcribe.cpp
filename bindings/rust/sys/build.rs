@@ -22,6 +22,8 @@
 //!   `cuda`             -> TRANSCRIBE_CUDA=ON
 //!   `rocm`             -> TRANSCRIBE_HIP=ON
 //!   `openmp`           -> TRANSCRIBE_USE_OPENMP=ON
+//! macOS builds pin a portable CPU floor (GGML_NATIVE=OFF; x86_64 adds
+//! SSE4.2 + AVX + F16C); `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=ON` overrides.
 //! Official-artifact hygiene flags (OpenMP/BLAS off) are deliberately NOT
 //! forced here: a source build is the consumer's build (same philosophy as
 //! the Python sdist).
@@ -182,6 +184,24 @@ fn main() {
             cfg.define("GGML_METAL_EMBED_LIBRARY", "ON");
         } else {
             cfg.define("TRANSCRIBE_METAL", "OFF");
+        }
+    }
+    // macOS CPU floor: never tune to the build host. An M2+ native build SIGILLs
+    // on M1 and compiles out llamafile sgemm (1.2-2.1x slower). x86_64 pins the
+    // macOS 10.15 ISA floor; a dynamic-backends build picks ISA at runtime.
+    if target_os == "macos" {
+        cfg.define("GGML_NATIVE", "OFF");
+        if target_arch == "x86_64" && !dynamic_backends {
+            for (opt, value) in [
+                ("GGML_SSE42", "ON"),
+                ("GGML_AVX", "ON"),
+                ("GGML_F16C", "ON"),
+                ("GGML_AVX2", "OFF"),
+                ("GGML_FMA", "OFF"),
+                ("GGML_BMI2", "OFF"),
+            ] {
+                cfg.define(opt, value);
+            }
         }
     }
     if feature("VULKAN") {

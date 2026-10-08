@@ -112,6 +112,18 @@ ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
     return y;
 }
 
+// f32 Conv2D (see conformer.h).
+ggml_tensor *
+conv_2d_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1, int d0, int d1) {
+    ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, s1, p0, p1, d0, d1, /*is_2D=*/true,
+                                       GGML_TYPE_F32);  // [N, OH, OW, IC * KH * KW]
+    ggml_tensor * result =
+        ggml_mul_mat(ctx, ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]),
+                     ggml_reshape_2d(ctx, a, a->ne[0] * a->ne[1] * a->ne[2], a->ne[3]));
+    result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], im2col->ne[3], a->ne[3]);  // [OC, N, OH, OW]
+    return ggml_cont(ctx, ggml_permute(ctx, result, 0, 1, 3, 2));                                  // [N, OC, OH, OW]
+}
+
 // f32-friendly Conv1D (mirrors ggml_conv_1d but passes the kernel's real
 // type to im2col instead of forcing f16). Vendored ggml's ggml_conv_1d
 // hardcodes GGML_TYPE_F16 for the im2col output and asserts on an f32 kernel.
@@ -622,6 +634,138 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     }
     ggml_tensor * p = pos_proj == nullptr ? ggml_mul_mat(ctx, b.attn_pos_w, pos_emb) : nullptr;
 
+    // Long offline ChunkedLimited utterances have a block mask: every
+    // chunk of C queries attends to the current chunk plus a fixed number
+    // of complete chunks on its left. Reframe those blocks as a batch of
+    // rectangular attention problems instead of materializing T-by-T
+    // scores. Q/K/V projections still run once over the whole utterance;
+    // only the bounded attention windows are replicated.
+    if (params.chunked_windowed) {
+        const int64_t C           = att_context_right + 1;
+        const int64_t left_chunks = C > 0 ? att_context_left / C : 0;
+        const int64_t W           = (left_chunks + 1) * C;
+        const int64_t T           = x->ne[1];
+        const int64_t N           = C > 0 ? (T + C - 1) / C : 0;
+        const int64_t T_pad       = N * C;
+        const int64_t pad_right   = T_pad - T;
+
+        if (rect || B != 1 || C <= 0 || W <= 0 || N <= 0 || pos_len != W + C - 1 ||
+            params.attn_chunked_mask == nullptr || params.attn_chunked_mask->ne[0] != W ||
+            params.attn_chunked_mask->ne[1] != C || params.attn_chunked_mask->ne[3] != N) {
+            std::fprintf(stderr,
+                         "conformer rel_pos_mhsa: invalid windowed chunk "
+                         "geometry (T=%lld C=%lld W=%lld N=%lld pos=%lld)\n",
+                         (long long) T, (long long) C, (long long) W, (long long) N, (long long) pos_len);
+            return nullptr;
+        }
+
+        q                 = ggml_reshape_4d(ctx, q, head_dim, n_head, T, 1);
+        ggml_tensor * q_u = ggml_add(ctx, q, b.attn_pos_u);
+        ggml_tensor * q_v = ggml_add(ctx, q, b.attn_pos_v);
+
+        // Pad on the time axis while it is ne[2], then move time next to
+        // head_dim and reinterpret query chunks as batch N.
+        q_u = ggml_pad_ext(ctx, q_u, 0, 0, 0, 0, 0, static_cast<int>(pad_right), 0, 0);
+        q_v = ggml_pad_ext(ctx, q_v, 0, 0, 0, 0, 0, static_cast<int>(pad_right), 0, 0);
+        q_u = ggml_cont(ctx, ggml_permute(ctx, q_u, 0, 2, 1, 3));
+        q_v = ggml_cont(ctx, ggml_permute(ctx, q_v, 0, 2, 1, 3));
+        q_u = ggml_reshape_4d(ctx, q_u, head_dim, C, N, n_head);
+        q_v = ggml_reshape_4d(ctx, q_v, head_dim, C, N, n_head);
+        q_u = ggml_cont(ctx, ggml_permute(ctx, q_u, 0, 1, 3, 2));
+        q_v = ggml_cont(ctx, ggml_permute(ctx, q_v, 0, 1, 3, 2));
+
+        // Materialize overlapping K/V windows with the existing 1-D
+        // im2col op. Pad the ragged tail to a complete chunk first;
+        // symmetric left-context padding then produces a few unused windows
+        // on the right, which are sliced before [head_dim,W,head,N].
+        const int left_pad       = static_cast<int>(left_chunks * C);
+        ggml_type window_kv_type = GGML_TYPE_F32;
+        if (use_flash) {
+            window_kv_type = kv_type;
+            if (window_kv_type == GGML_TYPE_COUNT) {
+                window_kv_type = (b.attn_k_w->type != GGML_TYPE_F32) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+            }
+            if (window_kv_type != GGML_TYPE_F16 && window_kv_type != GGML_TYPE_F32) {
+                window_kv_type = GGML_TYPE_F32;
+            }
+        }
+        auto window_kv = [&](ggml_tensor * t) -> ggml_tensor * {
+            t = ggml_reshape_4d(ctx, t, head_dim, n_head, T, 1);
+            if (pad_right > 0) {
+                t = ggml_pad_ext(ctx, t, 0, 0, 0, 0, 0, static_cast<int>(pad_right), 0, 0);
+            }
+            t = ggml_cont(ctx, ggml_permute(ctx, t, 0, 2, 1, 3));
+            t = ggml_cont(ctx, ggml_permute(ctx, t, 1, 0, 2, 3));  // [T,head_dim,n_head]
+
+            ggml_tensor * kernel_shape =
+                ggml_new_tensor_3d(ctx, window_kv_type, W, head_dim, 1);  // shape-only im2col source
+            ggml_tensor * cols = ggml_im2col(ctx, kernel_shape, t, static_cast<int>(C), 0, left_pad, 0, 1, 0,
+                                             /*is_2D=*/false, window_kv_type);
+            if (cols->ne[1] < N) {
+                return nullptr;
+            }
+            if (cols->ne[1] > N) {
+                cols = ggml_view_4d(ctx, cols, head_dim * W, N, n_head, 1, cols->nb[1], cols->nb[2], cols->nb[3], 0);
+                cols = ggml_cont(ctx, cols);
+            }
+            cols = ggml_reshape_4d(ctx, cols, W, head_dim, N, n_head);
+            return ggml_cont(ctx, ggml_permute(ctx, cols, 1, 0, 3, 2));
+        };
+        k = window_kv(k);
+        v = window_kv(v);
+        if (k == nullptr || v == nullptr) {
+            std::fprintf(stderr, "conformer rel_pos_mhsa: im2col produced too few chunk windows\n");
+            return nullptr;
+        }
+
+        p = ggml_reshape_4d(ctx, p, head_dim, n_head, pos_len, 1);
+        p = ggml_cont(ctx, ggml_permute(ctx, p, 0, 2, 1, 3));
+
+        // Position scores [pos_len, C, n_head, N]. The relative shift is the
+        // same strided view as shifted_view below, with the rectangular
+        // [W, C] geometry: out[k, q] = in[k - q + C - 1, q].
+        ggml_tensor * scores       = ggml_mul_mat(ctx, p, q_v);
+        const size_t  query_stride = C == 1 ? static_cast<size_t>(W) * scores->nb[0] : scores->nb[1] - scores->nb[0];
+        ggml_tensor * matrix_bd = ggml_view_4d(ctx, scores, W, C, n_head, N, query_stride, scores->nb[2], scores->nb[3],
+                                               /*offset=*/(C - 1) * scores->nb[0]);
+
+        ggml_tensor * o = nullptr;
+        if (use_flash) {
+            matrix_bd = ggml_cont(ctx, matrix_bd);
+            matrix_bd = ggml_add(ctx, matrix_bd, params.attn_chunked_mask);
+            matrix_bd = ggml_scale(ctx, matrix_bd, scale);
+            matrix_bd = ggml_cast(ctx, matrix_bd, GGML_TYPE_F16);
+
+            o = ggml_flash_attn_ext(ctx, q_u, k, v, matrix_bd, scale, /*max_bias=*/0.0f,
+                                    /*logit_softcap=*/0.0f);
+        } else {
+            // The strided view is a valid broadcast operand; the mask adds
+            // onto the contiguous result.
+            ggml_tensor * kq      = ggml_mul_mat(ctx, k, q_u);
+            kq                    = ggml_add(ctx, kq, matrix_bd);
+            kq                    = ggml_add(ctx, kq, params.attn_chunked_mask);
+            ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr, scale, /*max_bias=*/0.0f);
+            ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+            o                     = ggml_mul_mat(ctx, v_t, kq_soft);
+            o                     = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
+        }
+
+        // Both branches now have [head_dim,n_head,C,N]. Merge heads and
+        // flatten chunk batch back to the original time axis, dropping the
+        // padded tail before the output projection/residual.
+        o = ggml_reshape_3d(ctx, o, d_model, C, N);
+        o = ggml_reshape_3d(ctx, o, d_model, T_pad, 1);
+        if (pad_right > 0) {
+            o = ggml_view_3d(ctx, o, d_model, T, 1, o->nb[1], o->nb[2], 0);
+            o = ggml_cont(ctx, o);
+        }
+        o = ggml_mul_mat(ctx, b.attn_out_w, o);
+        if (b.attn_out_b != nullptr) {
+            o = ggml_add(ctx, o, b.attn_out_b);
+        }
+        return o;
+    }
+
     // Split heads: [head_dim, n_head, T, B] (batch at ne[3]). pos_bias_u/v
     // broadcast onto this BEFORE the permute that moves T past n_head.
     q                 = ggml_reshape_4d(ctx, q, head_dim, n_head, T_q, B);
@@ -1074,19 +1218,29 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                            /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                            /*d0=*/1, /*d1=*/1);
     }
-    x = add_conv_bias(ctx, x, pe.conv2_b);
-    x = name_prefixed(x, name_prefix, "conv2");
+    x                       = add_conv_bias(ctx, x, pe.conv2_b);
+    x                       = name_prefixed(x, name_prefix, "conv2");
+    const bool after_stride = policy.pre_encode_mask_after_stride;
+    if (after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+    }
 
     // conv3 (pointwise: channels -> channels, k=1 s=1 p=0)
-    x = ggml_conv_2d(ctx, pe.conv3_w, x,
-                     /*s0=*/1, /*s1=*/1,
-                     /*p0=*/0, /*p1=*/0,
-                     /*d0=*/1, /*d1=*/1);
+    x = policy.pre_encode_f32_pointwise ?
+            conv_2d_f32(ctx, pe.conv3_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
+            ggml_conv_2d(ctx, pe.conv3_w, x,
+                         /*s0=*/1, /*s1=*/1,
+                         /*p0=*/0, /*p1=*/0,
+                         /*d0=*/1, /*d1=*/1);
     x = add_conv_bias(ctx, x, pe.conv3_b);
     x = name_prefixed(x, name_prefix, "conv3");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu3");
-    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+    if (!after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+    } else {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2_extent : nullptr, "pre_encode.extent_mask.s2");
+    }
 
     // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
     x = pad_causal(x);
@@ -1103,16 +1257,25 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     }
     x = add_conv_bias(ctx, x, pe.conv5_b);
     x = name_prefixed(x, name_prefix, "conv5");
+    if (after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+    }
 
-    x = ggml_conv_2d(ctx, pe.conv6_w, x,
-                     /*s0=*/1, /*s1=*/1,
-                     /*p0=*/0, /*p1=*/0,
-                     /*d0=*/1, /*d1=*/1);
+    x = policy.pre_encode_f32_pointwise ?
+            conv_2d_f32(ctx, pe.conv6_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
+            ggml_conv_2d(ctx, pe.conv6_w, x,
+                         /*s0=*/1, /*s1=*/1,
+                         /*p0=*/0, /*p1=*/0,
+                         /*d0=*/1, /*d1=*/1);
     x = add_conv_bias(ctx, x, pe.conv6_b);
     x = name_prefixed(x, name_prefix, "conv6");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu6");
-    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+    if (!after_stride) {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+    } else {
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3_extent : nullptr, "pre_encode.extent_mask.s3");
+    }
 
     // At this point ne = [F'=16, T_enc, channels=256, 1] where
     // T_enc = floor(T_mel / 8). Flatten (F', C) into one feature axis

@@ -34,8 +34,9 @@ openmp = ["transcribe-cpp-sys/openmp"]
 # via the -sys feature). See notes/rust-dynamic-backends-plan.md.
 shared = ["transcribe-cpp-sys/shared"]
 dynamic-backends = ["shared", "transcribe-cpp-sys/dynamic-backends"]
-# Serialize/Deserialize on the plain-data option and result types (not handles
-# or Error). No native-build impact.
+# Serialize/Deserialize on the plain-data option and result types (not handles),
+# Serialize on Error, and Serialize/Deserialize on its ErrorReport snapshot. No
+# native-build impact.
 serde = ["dep:serde"]
 
 [dependencies]

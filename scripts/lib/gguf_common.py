@@ -212,7 +212,9 @@ def reference_dtype_for(
         and "enc.blocks." in name
     )
     is_conv = ".conv." in name and name.endswith(".weight")
-    if is_convpw or is_conv:
+    # parakeet-ultra VAD head kernels (vad.{proj,ctx,out}.weight).
+    is_vad = name.startswith("vad.") and name.endswith(".weight")
+    if is_convpw or is_conv or is_vad:
         if reference_type == GGMLQuantizationType.BF16:
             return GGMLQuantizationType.F16  # loader has no BF16 conv kernel
         return reference_type

@@ -136,3 +136,99 @@ fn missing_fields_take_defaults() {
     let speaker: SpeakerSegment = serde_json::from_str(r#"{"speaker_id":2}"#).unwrap();
     assert!(speaker.p.is_nan(), "missing p decoded as {}", speaker.p);
 }
+
+mod errors {
+    use transcribe_cpp::{Error, ErrorKind, ErrorReport, Transcript};
+
+    fn json(err: &Error) -> serde_json::Value {
+        serde_json::to_value(err).unwrap()
+    }
+
+    #[test]
+    fn error_serializes_kind_message_status() {
+        let err = Error::ModelFileNotFound("load x.gguf: file not found (status 3)".into());
+        let v = json(&err);
+        assert_eq!(v["kind"], "model_file_not_found");
+        assert_eq!(v["message"], err.to_string());
+        assert_eq!(v["status"], err.raw_status());
+        assert!(v["partial"].is_null(), "no partial expected: {v}");
+    }
+
+    #[test]
+    fn rust_side_errors_serialize_with_status_zero() {
+        let nul: Error = std::ffi::CString::new("a\0b").unwrap_err().into();
+        let v = json(&nul);
+        assert_eq!(v["kind"], "nul");
+        assert_eq!(v["status"], 0);
+
+        let busy = json(&Error::Busy("stream active".into()));
+        assert_eq!(busy["kind"], "busy");
+        assert_eq!(busy["status"], 0);
+    }
+
+    #[test]
+    fn partial_transcript_round_trips_through_report() {
+        let partial = Transcript {
+            text: "and so my fellow".into(),
+            ..Default::default()
+        };
+        let err = Error::Aborted {
+            message: "run aborted".into(),
+            partial: Some(Box::new(partial.clone())),
+        };
+        let wire = serde_json::to_string(&err).unwrap();
+        let report: ErrorReport = serde_json::from_str(&wire).unwrap();
+        assert_eq!(report.kind, ErrorKind::Aborted);
+        assert_eq!(report.message, err.to_string());
+        assert_eq!(report.status, err.raw_status());
+        assert_eq!(report.partial.as_ref(), Some(&partial));
+        // Serializing the Error and its report produce the same document.
+        assert_eq!(
+            serde_json::to_string(&ErrorReport::from(&err)).unwrap(),
+            wire
+        );
+    }
+
+    #[test]
+    fn unknown_kind_deserializes_as_other() {
+        let report: ErrorReport =
+            serde_json::from_str(r#"{"kind":"from_the_future","message":"m"}"#).unwrap();
+        assert_eq!(report.kind, ErrorKind::Other);
+        assert_eq!(report.status, 0);
+        assert!(report.partial.is_none());
+    }
+
+    /// Every kind's wire name round-trips (and is snake_case).
+    #[test]
+    fn every_kind_round_trips() {
+        let kinds = [
+            ErrorKind::InvalidArgument,
+            ErrorKind::NotImplemented,
+            ErrorKind::ModelFileNotFound,
+            ErrorKind::ModelLoad,
+            ErrorKind::OutOfMemory,
+            ErrorKind::Backend,
+            ErrorKind::Unsupported,
+            ErrorKind::BadStructSize,
+            ErrorKind::InputTooLong,
+            ErrorKind::Aborted,
+            ErrorKind::OutputTruncated,
+            ErrorKind::OutputRepetition,
+            ErrorKind::UnsupportedRole,
+            ErrorKind::VersionMismatch,
+            ErrorKind::Nul,
+            ErrorKind::Busy,
+            ErrorKind::Other,
+        ];
+        for kind in kinds {
+            let s = serde_json::to_string(&kind).unwrap();
+            assert!(
+                s.trim_matches('"')
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{kind:?} -> {s}"
+            );
+            assert_eq!(serde_json::from_str::<ErrorKind>(&s).unwrap(), kind);
+        }
+    }
+}

@@ -119,6 +119,16 @@ struct ConvPolicy {
     // path, and shifts both the freq and time output dims. False on every
     // offline variant; true on nemotron-speech-streaming-en.
     bool causal_pre_encode = false;
+
+    // Where the pre_encode valid-length masks apply. false (NeMo): after each
+    // stage's ReLU. true (kestrel / HF Subsampling): right after each strided
+    // conv, so the padded tail carries ReLU(pointwise bias) into the next
+    // strided conv as the reference does. Stage 1 is the same either way.
+    bool pre_encode_mask_after_stride = false;
+
+    // Run the pre_encode pointwise convs (conv3, conv6) via conv_2d_f32.
+    // Other variants were validated on the F16 im2col and keep it.
+    bool pre_encode_f32_pointwise = false;
 };
 
 // Resolve a conv-dispatch toggle from its env overrides. The DIRECT var forces
@@ -161,8 +171,8 @@ struct BlockParams {
     //     T <= 2W+1 and remains correct (band-restricted) when T
     //     exceeds the window. Default for every offline variant.
     //
-    //   ChunkedLimited  — pos_emb stays at the full 2T-1 length and
-    //     the caller supplies a precomputed F16 mask of shape
+    //   ChunkedLimited  — pos_emb normally stays at the full 2T-1 length
+    //     and the caller supplies a precomputed F32 mask of shape
     //     [T_k, T_q, 1, 1] in `attn_chunked_mask` that
     //     rel_pos_mhsa adds onto matrix_bd before flash_attn. Chunk
     //     size = right+1, left_chunks = left/chunk_size; the mask is
@@ -171,8 +181,15 @@ struct BlockParams {
     enum class AttContextStyle { Regular, ChunkedLimited };
     AttContextStyle att_context_style = AttContextStyle::Regular;
 
+    // Offline ChunkedLimited optimization. When true, attention reshapes
+    // one utterance into a batch of fixed-size query chunks and overlapping
+    // bounded K/V windows. This is mathematically the same mask as the dense
+    // [T,T] path, but its work and temporary storage are linear in T.
+    // attn_chunked_mask is [window, chunk, 1, n_chunks] in this mode.
+    bool chunked_windowed = false;
+
     // Optional precomputed mask for ChunkedLimited. The caller builds
-    // this as a graph input shape [T_k, T_q, 1, 1] F16 (broadcasts
+    // this as a graph input shape [T_k, T_q, 1, 1] F32 (broadcasts
     // across heads) and uploads the host-computed pattern after the
     // compute buffer is allocated. Ignored for AttContextStyle::Regular.
     ggml_tensor * attn_chunked_mask = nullptr;
@@ -283,6 +300,11 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
 // [pos_len, T_q, H, 1] score matrix into a [pos_len, T_q, H, 1]
 // matrix rotated so column k holds the score for relative offset k.
 ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x);
+
+// ggml_conv_2d with an F32 im2col. The vendored op rounds the activations to
+// F16 in im2col unless the kernel is BF16 (~5e-4 rel on parakeet pre_encode).
+ggml_tensor *
+conv_2d_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1, int d0, int d1);
 
 // f32-friendly Conv1D. Use instead of ggml_conv_1d for fp32 kernels on
 // Metal (see conv_2d_dw_f32 in conformer.cpp).
@@ -426,9 +448,14 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
 // (one per ReLU stage), applies them, and writes the handles back for the
 // driver to fill. Offline (non-causal) pre_encode only.
 struct PreEncodeValidMasks {
-    ggml_tensor * mask_s1 = nullptr;  // after relu0
-    ggml_tensor * mask_s2 = nullptr;  // after relu3
-    ggml_tensor * mask_s3 = nullptr;  // after relu6
+    ggml_tensor * mask_s1        = nullptr;  // after relu0
+    ggml_tensor * mask_s2        = nullptr;  // after relu3 (after conv2 with pre_encode_mask_after_stride)
+    ggml_tensor * mask_s3        = nullptr;  // after relu6 (after conv5 with pre_encode_mask_after_stride)
+    // pre_encode_mask_after_stride only: zero positions past each utterance's
+    // single-run extent after relu3 / relu6, so a padded batch stays
+    // bit-identical to single runs (which never see the ReLU(bias) tail).
+    ggml_tensor * mask_s2_extent = nullptr;
+    ggml_tensor * mask_s3_extent = nullptr;
 };
 
 // DwStridingSubsampling pre_encode stack. Returns the final

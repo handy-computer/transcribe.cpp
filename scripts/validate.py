@@ -153,6 +153,24 @@ def case_language(case) -> str | None:
     return "en"
 
 
+def case_stages(case, default: list[str]) -> list[str]:
+    """Per-case dumper subcommands. Dict cases may set `stages` (e.g. a
+    `longform` path instead of whole-clip encoder/decode)."""
+    if isinstance(case, dict) and "stages" in case:
+        stages = case["stages"]
+        if not isinstance(stages, list) or not all(isinstance(s, str) for s in stages):
+            raise SystemExit(f"error: case stages must be a list of strings: {case!r}")
+        return list(stages)
+    return list(default)
+
+
+def manifest_env_dir(repo: Path, manifest: dict[str, Any], family: str) -> Path:
+    """Reference env: scripts/envs/<reference.env>, else scripts/envs/<family>.
+    A variant whose reference framework differs from the family's names its own."""
+    env = (manifest.get("reference") or {}).get("env") or family
+    return repo / "scripts" / "envs" / str(env)
+
+
 def case_transcript_compare(manifest: dict[str, Any], case) -> str:
     value = manifest.get("transcript_compare", "exact")
     if isinstance(case, dict) and "transcript_compare" in case:
@@ -357,7 +375,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         raise SystemExit("error: no model specified and none in manifest")
 
     dump_script = manifest_dump_script(repo, manifest)
-    env_dir = repo / "scripts" / "envs" / args.family
+    env_dir = manifest_env_dir(repo, manifest, args.family)
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
@@ -430,7 +448,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         elif args.family == "ecapa_tdnn":
             stages = ["encoder"]
         else:
-            stages = ["encoder", "decode"]
+            stages = case_stages(case, ["encoder", "decode"])
         sf_preset = os.environ.get("VALIDATE_SORTFORMER_PRESET")
         for stage in stages:
             stage_args = list(common_args)
@@ -470,6 +488,9 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
 
         # Sortformer: keep the C++ streaming operating point in lockstep with
         # the reference `diarize --preset` (see cmd_ref) so the diar.probs
@@ -788,6 +809,9 @@ def cmd_mel(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        # Manifest-declared C++ env for the correctness regime (e.g. NO_FLASH).
+        for key, value in (manifest.get("cpp_env") or {}).items():
+            env[str(key)] = str(value)
         env.pop("TRANSCRIBE_MEL_FROM_REF", None)
 
         cmd = [

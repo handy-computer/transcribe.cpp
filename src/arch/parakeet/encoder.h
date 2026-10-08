@@ -91,18 +91,23 @@ struct EncoderBuild {
     // ne[0]=fastest convention for this 2-D tensor).
     ggml_tensor * mel_in = nullptr;
 
-    // Sinusoidal positional embedding handle, ne=[d_model, 2*T_enc-1, 1, 1].
-    // The driver computes the buffer host-side from T_enc (read from
-    // out->ne[1] after build) and uploads via ggml_backend_tensor_set.
+    // Sinusoidal positional embedding handle, normally
+    // ne=[d_model, 2*T_enc-1, 1, 1]. Bounded ChunkedLimited attention uses
+    // ne=[d_model, window+chunk-1, 1, 1]. The driver computes the buffer
+    // host-side and uploads via ggml_backend_tensor_set.
     ggml_tensor * pos_emb_in = nullptr;
 
-    // ChunkedLimited attention mask, ne=[T_enc, T_enc, 1, 1] f32. Null
-    // for every variant on the regular / local-attention path; populated
-    // only when the hparams declare att_context_style="chunked_limited"
-    // (today: nemotron-speech-streaming-en-0.6b). Driver fills with 0
-    // on allowed (q, k) pairs and -INF outside, then ggml broadcasts
-    // across heads inside rel_pos_mhsa.
+    // ChunkedLimited attention mask, normally ne=[T_enc,T_enc,1,1] f32;
+    // bounded offline attention uses ne=[window,chunk,1,n_chunks]. Null for
+    // every variant on the regular/local-attention path. The driver fills
+    // it with 0 on allowed (q,k) pairs and -INF outside, then ggml
+    // broadcasts across heads inside rel_pos_mhsa.
     ggml_tensor * chunked_mask_in = nullptr;
+
+    // True when the graph took the bounded [window,chunk,1,n_chunks]
+    // ChunkedLimited geometry; the driver sizes its host mask and places
+    // the zero-offset pos_emb row accordingly.
+    bool chunked_windowed = false;
 
     // Buffered-streaming conv valid-frame mask, ne=[T_enc, 1, 1, 1] f32.
     // Null unless the buffered path has pre_encode overhang frames that
@@ -130,9 +135,11 @@ struct EncoderBuild {
     // (1 on valid time frames, 0 on padded). Null unless variable-length
     // batching on a non-causal pre-encode. The driver fills them from the
     // per-utterance valid length downsampled to each stage.
-    ggml_tensor * pre_encode_mask_s1_in = nullptr;  // after relu0
-    ggml_tensor * pre_encode_mask_s2_in = nullptr;  // after relu3
-    ggml_tensor * pre_encode_mask_s3_in = nullptr;  // after relu6
+    ggml_tensor * pre_encode_mask_s1_in   = nullptr;  // after relu0
+    ggml_tensor * pre_encode_mask_s2_in   = nullptr;  // after relu3
+    ggml_tensor * pre_encode_mask_s3_in   = nullptr;  // after relu6
+    ggml_tensor * pre_encode_extent_s2_in = nullptr;  // kestrel masking, batched (see PreEncodeValidMasks)
+    ggml_tensor * pre_encode_extent_s3_in = nullptr;
 
     // Multitalker speaker-kernel supervision inputs, ne=[1, T_enc] f32
     // each. Null unless build_encoder_graph was called with
@@ -226,6 +233,28 @@ EncoderBuild build_encoder_graph(ggml_context *                     compute_ctx,
                                  // EncoderBuild::mt_keep_in) before injection and
                                  // the conformer blocks. 0 = no gather.
                                  int                                mt_keep_frames  = 0);
+
+// Speech-head graph: pre_encode subsampler, then the VAD head. One utterance
+// (a scan block); the driver fills the subsampler masks like the encoder's.
+struct VadBuild {
+    ggml_tensor * mel_in          = nullptr;  // ne=[T_mel, n_mels, 1, 1]
+    ggml_tensor * pe_mask_s1_in   = nullptr;
+    ggml_tensor * pe_mask_s2_in   = nullptr;
+    ggml_tensor * pe_mask_s3_in   = nullptr;
+    ggml_tensor * pe_extent_s2_in = nullptr;  // single utterance: filled all ones
+    ggml_tensor * pe_extent_s3_in = nullptr;
+    ggml_tensor * pre_encode_out  = nullptr;  // ne=[d_model, T]
+    ggml_tensor * proj_out        = nullptr;  // ne=[H, T], after SiLU
+    ggml_tensor * ctx_out         = nullptr;  // ne=[H, T], after SiLU
+    ggml_tensor * prob            = nullptr;  // ne=[1, T], sigmoid
+    ggml_cgraph * graph           = nullptr;
+};
+
+VadBuild build_vad_graph(ggml_context *          compute_ctx,
+                         const ParakeetWeights & w,
+                         const ParakeetHParams & hp,
+                         int                     n_mel_frames,
+                         const char *            backend_name);
 
 // Per-layer streaming cache I/O for the streaming encoder graph.
 // The inputs are persistent backend tensors (allocated outside the
