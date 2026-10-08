@@ -23,7 +23,7 @@ See SpeechBrain's [model card](https://huggingface.co/speechbrain/lang-id-voxlin
 for training data and the label list.
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa/commit/0253049), pinned 2026-10-05. Validated against the SpeechBrain reference at transcribe.cpp commit [`2fdb5c95`](https://github.com/handy-computer/transcribe.cpp/tree/2fdb5c95) on 2026-10-07.
+Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa/commit/0253049), pinned 2026-10-05. Validated against the SpeechBrain reference at transcribe.cpp commit [`aa4d0f47`](https://github.com/handy-computer/transcribe.cpp/tree/aa4d0f47) on 2026-10-08.
 <!-- /catalog -->
 
 ## Download
