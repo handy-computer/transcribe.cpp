@@ -93,6 +93,29 @@ exception is `parakeet-ultra`, which cuts audio over 30 s into segments at pause
 found by its voice-activity head; length is still unbounded. See
 the [input-length contract](../input-limits.md).
 
+### Long-form audio
+
+Variants whose checkpoint uses full self-attention (`parakeet-tdt-0.6b-v2`,
+`parakeet-tdt-0.6b-v3`, `orukeet`, `parakeet-primeline`, the 1.1B and 110M
+TDT/RNN-T/CTC variants) run NeMo's `rel_pos_local_attn` window of
+`[256, 256]` encoder frames (20.5 s each side), the long-audio mode NVIDIA
+documents for the family. Every clip up to 20.5 s is processed exactly as
+under full attention; beyond that, encoder time and memory grow linearly with
+length instead of quadratically, so a 25-minute talk runs on a 16 GB laptop
+and multi-hour recordings fit. `parakeet-tdt_ctc-1.1b` ships its own
+`[128, 128]` window and `parakeet-ultra` keeps full attention inside its 30 s
+segments; the streaming variants keep their chunked attention.
+
+Measured on full TED-LIUM 3 talks (10 to 25 min, Q8_0): `parakeet-tdt-0.6b-v3`
+2.71% WER with the window vs 2.87% under full attention; `parakeet-tdt-0.6b-v2`
+3.11% vs 3.20%. On non-English long-form (Multilingual TEDx full talks) the
+window is equal or better on German, Greek, Italian, Portuguese and Spanish
+and worse on French (17.7% vs 12.4%); NeMo reproduces both numbers, so this is
+the model, not the port. `parakeet-tdt-0.6b-v3` and its fine-tunes can drift
+into English on accented spontaneous speech in either mode; under full
+attention that drift can take over a whole talk, under the window it is
+confined to the window.
+
 ## Quick start
 
 Pick a variant and run:

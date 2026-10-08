@@ -466,11 +466,11 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         // pos_emb input, ne = [d_model, pos_len, 1, 1] (numpy
         // (pos_len, d_model)), filled by the driver. Local attention
         // (Regular, both contexts >= 0) shortens pos_len to (left+right+1)
-        // (NeMo LocalAttRelPositionalEncoding). Long single-utterance
-        // ChunkedLimited runs use the exact bounded query/key geometry;
-        // shorter and batched runs retain the dense reference graph.
-        // ChunkedLimitedWithRc engages its dense mask only when buf_mask is
-        // non-null (offline runs full attention).
+        // (NeMo LocalAttRelPositionalEncoding). Long ChunkedLimited and
+        // Regular-local runs, batched or not, use the exact bounded
+        // query/key geometry; shorter runs retain the dense reference
+        // graph. ChunkedLimitedWithRc engages its dense mask only when
+        // buf_mask is non-null (offline runs full attention).
         const bool is_chunked =
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited) ||
             (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc && buf_mask != nullptr);
@@ -504,8 +504,7 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         // scratch at 305 s), so it only stays dense while the band still
         // covers most of the sequence.
         const int64_t min_windows = is_local_hp ? 1 : kWindowedChunkMinWindowCount;
-        const bool    windowed =
-            win_chunk > 0 && n_batch == 1 && !var_len_masks && T_enc > min_windows * static_cast<int64_t>(win_keys);
+        const bool    windowed    = win_chunk > 0 && T_enc > min_windows * static_cast<int64_t>(win_keys);
         if (!windowed) {
             win_chunk = win_left = win_keys = 0;
         }
@@ -525,13 +524,14 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
 
         // Attention mask. The dense ChunkedLimited graph uses
         // [T_enc,T_enc,1,1]. The bounded graph (chunked or local) uses
-        // [win_keys,win_chunk,1,n_chunks] and carries the band plus the
-        // sequence edges; the driver fills it host-side.
+        // [win_keys,win_chunk,1,n_chunks*n_batch], one slab per utterance,
+        // and carries the band, the sequence edges and each utterance's
+        // padded tail; the driver fills it host-side.
         ggml_tensor * chunked_mask_in = nullptr;
         if (is_chunked || windowed) {
             if (windowed) {
                 const int64_t n_chunks = (T_enc + win_chunk - 1) / win_chunk;
-                chunked_mask_in        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, win_keys, win_chunk, 1, n_chunks);
+                chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, win_keys, win_chunk, 1, n_chunks * n_batch);
             } else {
                 chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, T_enc, 1, 1);
             }
@@ -553,6 +553,8 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         // each utterance's padded tail from corrupting its real frames:
         //   - attn_pad_mask_in [T_enc, 1, 1, n_batch]: additive (-INF on
         //     padded keys) so real queries never attend to padded keys.
+        //     The bounded-window graph has no [T, T] scores to add it to;
+        //     its per-utterance window mask masks the padded tail instead.
         //   - conv_pad_mask_in [T_enc, 1, n_batch, 1]: 0/1 valid-frame mask
         //     that zeroes padded frames after pw1+GLU and before the
         //     depthwise conv (same role as the buffered-streaming mask, but
@@ -560,10 +562,12 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         //     buffered path is mutually exclusive with offline batching.
         ggml_tensor * attn_pad_mask_in = nullptr;
         if (var_len_masks) {
-            attn_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, 1, 1, n_batch);
-            ggml_set_name(attn_pad_mask_in, "attn.pad_mask.in");
-            ggml_set_input(attn_pad_mask_in);
-            eb.attn_pad_mask_in = attn_pad_mask_in;
+            if (!windowed) {
+                attn_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, 1, 1, n_batch);
+                ggml_set_name(attn_pad_mask_in, "attn.pad_mask.in");
+                ggml_set_input(attn_pad_mask_in);
+                eb.attn_pad_mask_in = attn_pad_mask_in;
+            }
 
             conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, 1, n_batch, 1);
             ggml_set_name(conv_pad_mask_in, "conv.pad_mask.batch.in");

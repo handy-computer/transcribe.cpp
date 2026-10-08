@@ -1334,9 +1334,9 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         const bool         windowed = eb.window_chunk > 0;
         std::vector<float> mask_buf(static_cast<size_t>(T_k) * T_q * N, -std::numeric_limits<float>::infinity());
         if (windowed && pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited) {
-            compute_chunked_limited_window_mask(mask_buf.data(), T_enc, chunk_size, left_chunks);
+            compute_chunked_limited_window_mask(mask_buf.data(), T_enc, T_enc, chunk_size, left_chunks);
         } else if (windowed) {
-            compute_local_window_mask(mask_buf.data(), T_enc, eb.window_chunk, pm->hparams.enc_att_context_left,
+            compute_local_window_mask(mask_buf.data(), T_enc, T_enc, eb.window_chunk, pm->hparams.enc_att_context_left,
                                       pm->hparams.enc_att_context_right);
         } else {
             // Dense reference layout [T_k,T_q,1,1].
@@ -1918,7 +1918,9 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
         const bool is_chunked = (pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited);
         const bool is_local_pe =
             (!is_chunked) && (pm->hparams.enc_att_context_left >= 0 && pm->hparams.enc_att_context_right >= 0);
-        const int zero_index = is_local_pe ? pm->hparams.enc_att_context_left : (pos_len - 1) / 2;
+        const int zero_index = eb.window_chunk > 0 ? eb.window_left + eb.window_chunk - 1 :
+                               is_local_pe         ? pm->hparams.enc_att_context_left :
+                                                     (pos_len - 1) / 2;
         pc->pos_buf.assign(static_cast<size_t>(pos_len) * d_model, 0.0f);
         pc->pos_div_term.resize(static_cast<size_t>(d_model / 2));
         const float ln_10000 = std::log(10000.0f);
@@ -1965,10 +1967,32 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
         ggml_backend_tensor_set(eb.prompt_one_hot_in, one_hot_buf.data(), 0, one_hot_buf.size() * sizeof(float));
     }
 
-    // ChunkedLimited attention mask (cache-aware variants), same as
-    // run_one_shot_inner. The pattern depends only on T_enc, shared
-    // across the batch, so one mask broadcasts.
-    if (eb.chunked_mask_in != nullptr) {
+    // Attention mask, same as run_one_shot_inner. Dense ChunkedLimited
+    // (cache-aware variants): the pattern depends only on T_enc, shared
+    // across the batch, so one mask broadcasts and attn_pad_mask_in masks
+    // each utterance's padded keys. Bounded-window graphs: one
+    // [W, C, 1, N] slab per utterance at its own valid length, so the
+    // padded tail is masked here and the graph carries no key-pad mask.
+    if (eb.chunked_mask_in != nullptr && eb.window_chunk > 0) {
+        const int    C          = eb.window_chunk;
+        const int    W          = static_cast<int>(eb.chunked_mask_in->ne[0]);
+        const int    N          = (T_enc + C - 1) / C;
+        const size_t slab       = static_cast<size_t>(W) * C * N;
+        const bool   is_chunked = pm->hparams.enc_att_context_style == ParakeetHParams::AttContextStyle::ChunkedLimited;
+        std::vector<float> mask_buf(slab * n);
+        for (int b = 0; b < n; ++b) {
+            const int T_b = std::max(1, real_tenc[static_cast<size_t>(b)]);
+            if (is_chunked) {
+                const int chunk_size  = pm->hparams.enc_att_context_right + 1;
+                const int left_chunks = (chunk_size > 0) ? (pm->hparams.enc_att_context_left / chunk_size) : 0;
+                compute_chunked_limited_window_mask(mask_buf.data() + slab * b, T_b, T_enc, chunk_size, left_chunks);
+            } else {
+                compute_local_window_mask(mask_buf.data() + slab * b, T_b, T_enc, C, pm->hparams.enc_att_context_left,
+                                          pm->hparams.enc_att_context_right);
+            }
+        }
+        ggml_backend_tensor_set(eb.chunked_mask_in, mask_buf.data(), 0, mask_buf.size() * sizeof(float));
+    } else if (eb.chunked_mask_in != nullptr) {
         const int          Tk          = static_cast<int>(eb.chunked_mask_in->ne[0]);
         const int          chunk_size  = pm->hparams.enc_att_context_right + 1;
         const int          left_chunks = (chunk_size > 0) ? (pm->hparams.enc_att_context_left / chunk_size) : 0;
@@ -2378,15 +2402,16 @@ void compute_chunked_limited_with_rc_mask(float * out_buf,
     }
 }
 
-void compute_chunked_limited_window_mask(float * out_buf, int T, int chunk_size, int left_chunks) {
+void compute_chunked_limited_window_mask(float * out_buf, int T, int T_alloc, int chunk_size, int left_chunks) {
     assert(out_buf != nullptr);
     assert(T >= 1);
+    assert(T_alloc >= T);
     assert(chunk_size >= 1);
     assert(left_chunks >= 0);
 
     const int C = chunk_size;
     const int W = (left_chunks + 1) * C;
-    const int N = (T + C - 1) / C;
+    const int N = (T_alloc + C - 1) / C;
 
     std::fill(out_buf, out_buf + static_cast<size_t>(W) * C * N, -std::numeric_limits<float>::infinity());
     for (int n = 0; n < N; ++n) {
@@ -2410,15 +2435,16 @@ void compute_chunked_limited_window_mask(float * out_buf, int T, int chunk_size,
     }
 }
 
-void compute_local_window_mask(float * out_buf, int T, int chunk_size, int left, int right) {
+void compute_local_window_mask(float * out_buf, int T, int T_alloc, int chunk_size, int left, int right) {
     assert(out_buf != nullptr);
     assert(T >= 1);
+    assert(T_alloc >= T);
     assert(chunk_size >= 1);
     assert(left >= 0 && right >= 0);
 
     const int C = chunk_size;
     const int W = left + C + right;
-    const int N = (T + C - 1) / C;
+    const int N = (T_alloc + C - 1) / C;
 
     std::fill(out_buf, out_buf + static_cast<size_t>(W) * C * N, -std::numeric_limits<float>::infinity());
     for (int n = 0; n < N; ++n) {

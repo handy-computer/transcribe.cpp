@@ -70,17 +70,19 @@ void compute_chunked_limited_with_rc_mask(float * out_buf,
 // left plus itself. This helper emits the equivalent compact layout used by
 // rel_pos_mhsa: [window, chunk_size, 1, n_chunks], contiguous in `window`,
 // where window = (left_chunks + 1)*chunk_size and
-// n_chunks = ceil(T/chunk_size). Prefix/tail K padding is -INF. Padded query
-// rows retain one finite cell to avoid an all-masked softmax; those rows are
-// removed from the graph output before the residual path.
-void compute_chunked_limited_window_mask(float * out_buf, int T, int chunk_size, int left_chunks);
+// n_chunks = ceil(T_alloc/chunk_size). T is the utterance's valid length and
+// T_alloc >= T the graph's padded length (the batch T_max; T itself when
+// unpadded): keys and queries at or past T are the utterance's padded tail
+// and are -INF. Padded query rows retain one finite cell to avoid an
+// all-masked softmax; those rows never reach the residual path.
+void compute_chunked_limited_window_mask(float * out_buf, int T, int T_alloc, int chunk_size, int left_chunks);
 
 // Bounded Regular-local mask (NeMo rel_pos_local_attn / att_context
 // [left, right]): query q attends to keys k with q - left <= k <= q + right.
-// Same compact layout as above with window = left + chunk_size + right,
-// block n's keys starting at n*chunk_size - left; sequence edges are -INF,
-// padded query rows keep one finite cell.
-void compute_local_window_mask(float * out_buf, int T, int chunk_size, int left, int right);
+// Same compact layout and T / T_alloc contract as above with
+// window = left + chunk_size + right and block n's keys starting at
+// n*chunk_size - left.
+void compute_local_window_mask(float * out_buf, int T, int T_alloc, int chunk_size, int left, int right);
 
 // Family defaults — applied before transcribe::read_capability_kv runs
 // (KV present overrides, KV absent leaves the default). Defined in

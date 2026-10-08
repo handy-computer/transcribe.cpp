@@ -38,7 +38,7 @@ void run_case(int T, int C, int left_chunks) {
     }
 
     std::vector<float> compact(static_cast<size_t>(W) * C * N);
-    transcribe::parakeet::compute_chunked_limited_window_mask(compact.data(), T, C, left_chunks);
+    transcribe::parakeet::compute_chunked_limited_window_mask(compact.data(), T, T, C, left_chunks);
 
     for (int n = 0; n < N; ++n) {
         const int key_start = (n - left_chunks) * C;
@@ -103,7 +103,7 @@ void run_local_case(int T, int C, int left, int right) {
     const int N = (T + C - 1) / C;
 
     std::vector<float> compact(static_cast<size_t>(W) * C * N);
-    transcribe::parakeet::compute_local_window_mask(compact.data(), T, C, left, right);
+    transcribe::parakeet::compute_local_window_mask(compact.data(), T, T, C, left, right);
 
     for (int n = 0; n < N; ++n) {
         const int key_start = n * C - left;
@@ -144,9 +144,59 @@ void run_local_case(int T, int C, int left, int right) {
     }
 }
 
+// Batched geometry: an utterance of T valid frames inside a graph padded to
+// T_alloc. Blocks covering its valid frames must match the unpadded mask of
+// the same utterance exactly; everything at or past T is a padded key
+// (-INF) or a padded query (sentinel row), never a valid cell.
+void run_padded_case(int T, int T_alloc, int C, int left, int right, bool chunked) {
+    const int W     = chunked ? (left + 1) * C : left + C + right;
+    const int N     = (T_alloc + C - 1) / C;
+    const int N_own = (T + C - 1) / C;
+
+    std::vector<float> padded(static_cast<size_t>(W) * C * N);
+    std::vector<float> own(static_cast<size_t>(W) * C * N_own);
+    if (chunked) {
+        transcribe::parakeet::compute_chunked_limited_window_mask(padded.data(), T, T_alloc, C, left);
+        transcribe::parakeet::compute_chunked_limited_window_mask(own.data(), T, T, C, left);
+    } else {
+        transcribe::parakeet::compute_local_window_mask(padded.data(), T, T_alloc, C, left, right);
+        transcribe::parakeet::compute_local_window_mask(own.data(), T, T, C, left, right);
+    }
+    const int tag = chunked ? -left : left * 1000 + right;
+    for (int n = 0; n < N; ++n) {
+        for (int q_local = 0; q_local < C; ++q_local) {
+            const int     q_abs = n * C + q_local;
+            const float * row   = padded.data() + (static_cast<size_t>(n) * C + q_local) * W;
+            if (n < N_own) {
+                const float * ref = own.data() + (static_cast<size_t>(n) * C + q_local) * W;
+                for (int k = 0; k < W; ++k) {
+                    if ((row[k] == 0.0f) != (ref[k] == 0.0f)) {
+                        fail_case("padded batch equivalence", T, C, tag, q_abs, k);
+                    }
+                }
+                continue;
+            }
+            for (int k = 0; k < W; ++k) {
+                if ((row[k] == 0.0f) != (k == 0) || (row[k] != 0.0f && !is_masked(row[k]))) {
+                    fail_case("padded batch sentinel", T, C, tag, q_abs, k);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
+    for (int T = 1; T <= 40; T += 3) {
+        for (int T_alloc = T; T_alloc <= T + 37; T_alloc += 7) {
+            for (int C = 1; C <= 16; C += 5) {
+                run_padded_case(T, T_alloc, C, /*left=*/8, /*right=*/5, /*chunked=*/false);
+                run_padded_case(T, T_alloc, C, /*left_chunks=*/2, /*right=*/0, /*chunked=*/true);
+            }
+        }
+    }
+
     for (int T = 1; T <= 97; ++T) {
         for (int C = 1; C <= 16; C += 3) {
             for (int left = 0; left <= 20; left += 4) {

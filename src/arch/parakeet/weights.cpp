@@ -213,31 +213,6 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         }
     }
 
-    // Experimental long-form knob: TRANSCRIBE_PARAKEET_ATT_CONTEXT="L,R"
-    // narrows a full-attention (Regular, -1/-1) GGUF to NeMo's
-    // rel_pos_local_attn window at load, the same post-hoc switch as
-    // model.change_attention_model("rel_pos_local_attn", [L, R]). The
-    // streaming styles keep their trained menus. Numerics follow the
-    // existing Regular-local path (LocalAttRelPositionalEncoding).
-    if (const char * ov = std::getenv("TRANSCRIBE_PARAKEET_ATT_CONTEXT");
-        ov != nullptr && ov[0] != '\0' && hp.enc_att_context_style == ParakeetHParams::AttContextStyle::Regular) {
-        int l = -1, r = -1;
-        if (std::sscanf(ov, "%d,%d", &l, &r) != 2 || l < -1 || r < -1 || ((l < 0) != (r < 0))) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                    "parakeet: TRANSCRIBE_PARAKEET_ATT_CONTEXT=\"%s\" is not \"L,R\" "
-                    "with both >= 0 (or both -1 for full attention)",
-                    ov);
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        if (l != hp.enc_att_context_left || r != hp.enc_att_context_right) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "parakeet: att_context override (%d, %d) -> (%d, %d)",
-                    hp.enc_att_context_left, hp.enc_att_context_right, l, r);
-            hp.enc_att_context_left  = l;
-            hp.enc_att_context_right = r;
-            hp.enc_att_context_size_choices.assign(1, std::make_pair(l, r));
-        }
-    }
-
     // Conv module: per-side depthwise padding and norm type. Optional;
     // defaults -1 (centred (k-1)/2) and "batch_norm" (fused BN with
     // running_mean / running_var).
@@ -550,6 +525,51 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         }
         hp.tdt_global_symbol_budget = (budget == "global");
     }
+
+    // Long-form attention window. A full-attention GGUF (Regular,
+    // att_context (-1, -1)) runs NeMo's rel_pos_local_attn window
+    // [256, 256] by default: the same post-hoc switch as
+    // model.change_attention_model("rel_pos_local_attn", [256, 256]),
+    // which is the long-audio mode NVIDIA documents for the family. The
+    // band covers every clip up to 256 encoder frames (20.5 s) exactly;
+    // beyond that the encoder's work and scratch stay linear in T instead
+    // of quadratic. Numerics follow the Regular-local path
+    // (LocalAttRelPositionalEncoding), the same one parakeet-tdt_ctc-1.1b
+    // ships with. kestrel-masked checkpoints (parakeet-ultra) keep full
+    // attention: they cut long audio at pauses and their contract is
+    // kestrel's output. The streaming styles keep their trained menus.
+    constexpr int kLongformAttContext = 256;
+    if (hp.enc_att_context_style == ParakeetHParams::AttContextStyle::Regular && hp.enc_att_context_left < 0 &&
+        hp.enc_att_context_right < 0 && !hp.kestrel_length_masking) {
+        hp.enc_att_context_left  = kLongformAttContext;
+        hp.enc_att_context_right = kLongformAttContext;
+        hp.enc_att_context_size_choices.assign(1, std::make_pair(kLongformAttContext, kLongformAttContext));
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "parakeet: full-attention checkpoint; using local attention [%d, %d]",
+                kLongformAttContext, kLongformAttContext);
+    }
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    // Validation-build sweep knob: TRANSCRIBE_PARAKEET_ATT_CONTEXT="L,R"
+    // replaces the Regular-style window (both -1 restores full attention).
+    // Not compiled into release builds.
+    if (const char * ov = std::getenv("TRANSCRIBE_PARAKEET_ATT_CONTEXT");
+        ov != nullptr && ov[0] != '\0' && hp.enc_att_context_style == ParakeetHParams::AttContextStyle::Regular) {
+        int l = -1, r = -1;
+        if (std::sscanf(ov, "%d,%d", &l, &r) != 2 || l < -1 || r < -1 || ((l < 0) != (r < 0))) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "parakeet: TRANSCRIBE_PARAKEET_ATT_CONTEXT=\"%s\" is not \"L,R\" "
+                    "with both >= 0 (or both -1 for full attention)",
+                    ov);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (l != hp.enc_att_context_left || r != hp.enc_att_context_right) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "parakeet: att_context override (%d, %d) -> (%d, %d)",
+                    hp.enc_att_context_left, hp.enc_att_context_right, l, r);
+            hp.enc_att_context_left  = l;
+            hp.enc_att_context_right = r;
+            hp.enc_att_context_size_choices.assign(1, std::make_pair(l, r));
+        }
+    }
+#endif
 
     // VAD head + long-form segmenter. Presence of stt.parakeet.vad.hidden is
     // the gate; every other key is then required.
