@@ -215,6 +215,7 @@ mod errors {
             ErrorKind::OutputTruncated,
             ErrorKind::OutputRepetition,
             ErrorKind::UnsupportedRole,
+            ErrorKind::InputTooShort,
             ErrorKind::VersionMismatch,
             ErrorKind::Nul,
             ErrorKind::Busy,
