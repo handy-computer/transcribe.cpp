@@ -1,33 +1,19 @@
 #!/usr/bin/env python3
 """
-ingest.py - build an evaluation corpus from a named dataset source.
+ingest.py - build the language ID corpus from the FLEURS test parquet at the
+pinned revision FLEURS_REVISION (read through the Hugging Face hub cache).
 
-Sources:
-  fleurs   Reads the FLEURS test parquet of each config at the pinned
-           dataset revision FLEURS_REVISION, through the Hugging Face hub
-           cache (HF_HOME honoured); a config missing from the cache is
-           downloaded.
-
-Usage:
-  uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang en
   uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang all
 
-Output (gitignored, see .gitignore `/samples/langid/`):
+Output (gitignored):
   samples/langid/fleurs-<code>/<id>.wav        16-bit PCM mono 16 kHz
   samples/langid/fleurs-<code>.manifest.jsonl  {"id","audio","language","duration_s",...}
 
-Only the FLEURS `test` split is read. Selection rule: the first N
-utterances in parquet order whose decoded duration is >= 1 s. Parquet order
-is the only ordering; no shuffling, no hashing, and the dataset revision is
-pinned, so every run produces the same manifest.
-
-Utterance ids are `fleurs-<code>-<NNNN>` where NNNN is the index among the
-selected rows, NOT the FLEURS sentence id: FLEURS records the same sentence
-with several speakers, so sentence ids repeat within a split and would
-collide as filenames. The sentence id is kept in the manifest as
-`fleurs_id` for provenance.
-
-Idempotent: an existing manifest is left alone unless --force.
+The languages are the langid publication profile's `pooled_languages`. Per
+language: the first N utterances in parquet order that last at least 1 s.
+Ids are `fleurs-<code>-<NNNN>` by selection index (FLEURS sentence ids repeat
+across speakers); the sentence id is kept as `fleurs_id`. An existing
+manifest is left alone unless --force.
 """
 
 from __future__ import annotations
@@ -38,138 +24,57 @@ import json
 import sys
 from pathlib import Path
 
-import numpy as np
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "wer"))
+from languages import FLEURS_LANGS  # noqa: E402
 
 SAMPLE_RATE = 16000
 MIN_DURATION_S = 1.0
-DEFAULT_N = 200
 SPLIT = "test"
 DATASET = "google/fleurs"
 FLEURS_REVISION = "70bb2e84b976b7e960aa89f1c648e09c59f894dd"
 LICENCE = "CC-BY-4.0"
 
-# FLEURS config -> VoxLingua107 label code, in the dataset gate's order.
-# `es_419` is Latin-American Spanish, `cmn_hans_cn` is Mandarin in simplified
-# Han, `nb_no` is Bokmal (the label set spells Norwegian `no`); VoxLingua107
-# has one label for each.
-FLEURS_LANGUAGES: list[tuple[str, str]] = [
-    ("en_us", "en"),
-    ("cmn_hans_cn", "zh"),
-    ("de_de", "de"),
-    ("fr_fr", "fr"),
-    ("es_419", "es"),
-    ("pt_br", "pt"),
-    ("ja_jp", "ja"),
-    ("ko_kr", "ko"),
-    ("ru_ru", "ru"),
-    ("cs_cz", "cs"),
-    ("sk_sk", "sk"),
-    ("nb_no", "no"),
-    ("da_dk", "da"),
-    ("id_id", "id"),
-    ("ms_my", "ms"),
-]
 
-CODE_TO_CONFIG = {code: config for config, code in FLEURS_LANGUAGES}
+def profile_languages() -> list[str]:
+    data = json.loads((REPO_ROOT / "catalog" / "_benchmark_profiles.json").read_text())
+    return data["profiles"][data["roles"]["langid"]]["accuracy"][0]["pooled_languages"]
 
 
-def fleurs_parquet(config: str) -> Path:
+def ingest_language(code: str, n: int, force: bool) -> None:
+    import pyarrow.parquet as pq
+    import soundfile as sf
     from huggingface_hub import hf_hub_download
 
-    return Path(hf_hub_download(
-        repo_id=DATASET,
-        repo_type="dataset",
-        filename=f"parquet-data/{config}/{SPLIT}-00000-of-00001.parquet",
-        revision=FLEURS_REVISION,
-    ))
-
-
-def iter_rows(path: Path):
-    """Yield parquet rows in file order without materialising the table.
-
-    FLEURS test splits carry ~400-900 utterances of ~12 s each; a whole-table
-    `to_pylist()` is a few hundred MB per language for the 200 rows we keep.
-    """
-    import pyarrow.parquet as pq
-
-    pf = pq.ParquetFile(str(path))
-    cols = set(pf.schema_arrow.names)
-    for needed in ("audio", "id"):
-        if needed not in cols:
-            raise SystemExit(
-                f"error: {path} has no {needed!r} column "
-                f"(columns: {sorted(cols)})"
-            )
-    for batch in pf.iter_batches(batch_size=16):
-        for row in batch.to_pylist():
-            yield row
-
-
-def decode_audio(row) -> tuple[np.ndarray, int]:
-    import soundfile as sf
-
-    audio = row["audio"]
-    data = audio["bytes"] if isinstance(audio, dict) else audio
-    pcm, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=False)
-    if pcm.ndim > 1:
-        pcm = pcm.mean(axis=1)
-    return np.ascontiguousarray(pcm, dtype=np.float32), int(sr)
-
-
-def resample_to_16k(pcm: np.ndarray, sr: int) -> np.ndarray:
-    """Resample to 16 kHz. Only fires if FLEURS ever ships a non-16k config.
-
-    Resampling rather than skipping the row keeps "the first N in parquet
-    order" true; skipping would silently change which utterances the
-    evaluation covers.
-    """
-    if sr == SAMPLE_RATE:
-        return pcm
-    import torch
-    import torchaudio
-
-    out = torchaudio.functional.resample(
-        torch.from_numpy(pcm).unsqueeze(0), sr, SAMPLE_RATE
-    )
-    return np.ascontiguousarray(out.squeeze(0).numpy(), dtype=np.float32)
-
-
-def write_wav(path: Path, pcm: np.ndarray) -> None:
-    import soundfile as sf
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(path), pcm, SAMPLE_RATE, subtype="PCM_16")
-
-
-def ingest_language(config: str, code: str, args) -> dict:
+    config = FLEURS_LANGS[code]
     out_dir = REPO_ROOT / "samples" / "langid" / f"fleurs-{code}"
-    manifest_path = REPO_ROOT / "samples" / "langid" / f"fleurs-{code}.manifest.jsonl"
+    manifest_path = out_dir.with_name(f"fleurs-{code}.manifest.jsonl")
+    if manifest_path.exists() and not force:
+        print(f"{code}: {manifest_path.name} exists; skipping (--force to rebuild)")
+        return
 
-    if manifest_path.exists() and not args.force:
-        rows = [json.loads(l) for l in manifest_path.read_text().splitlines() if l.strip()]
-        print(f"{code}: {manifest_path.name} exists with {len(rows)} rows; "
-              f"skipping (--force to rebuild)", file=sys.stderr)
-        return summarise(code, config, rows, manifest_path)
-
-    parquet = fleurs_parquet(config)
+    parquet = hf_hub_download(
+        repo_id=DATASET, repo_type="dataset", revision=FLEURS_REVISION,
+        filename=f"parquet-data/{config}/{SPLIT}-00000-of-00001.parquet")
+    out_dir.mkdir(parents=True, exist_ok=True)
     entries: list[dict] = []
-    n_short = 0
-    n_resampled = 0
-    for row_index, row in enumerate(iter_rows(parquet)):
-        if len(entries) >= args.n:
+    rows = (row for batch in pq.ParquetFile(parquet).iter_batches(batch_size=16)
+            for row in batch.to_pylist())
+    for row_index, row in enumerate(rows):
+        if len(entries) >= n:
             break
-        pcm, sr = decode_audio(row)
+        audio = row["audio"]
+        pcm, sr = sf.read(io.BytesIO(audio["bytes"] if isinstance(audio, dict) else audio),
+                          dtype="float32", always_2d=False)
         if sr != SAMPLE_RATE:
-            pcm = resample_to_16k(pcm, sr)
-            n_resampled += 1
+            raise SystemExit(f"error: {code} row {row_index} is {sr} Hz; FLEURS is 16 kHz")
+        if pcm.ndim > 1:
+            pcm = pcm.mean(axis=1)
         if pcm.size < MIN_DURATION_S * SAMPLE_RATE:
-            n_short += 1
             continue
         utt_id = f"fleurs-{code}-{len(entries):04d}"
         wav_path = out_dir / f"{utt_id}.wav"
-        write_wav(wav_path, pcm)
+        sf.write(str(wav_path), pcm, SAMPLE_RATE, subtype="PCM_16")
         entries.append({
             "id": utt_id,
             "audio": str(wav_path.relative_to(REPO_ROOT)),
@@ -182,97 +87,32 @@ def ingest_language(config: str, code: str, args) -> dict:
             "dataset": DATASET,
             "licence": LICENCE,
         })
-
-    if len(entries) < args.n:
-        print(f"warning: {code}: only {len(entries)} utterances of the "
-              f"requested {args.n} (split exhausted)", file=sys.stderr)
-
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(manifest_path, "w") as f:
-        for e in entries:
-            f.write(json.dumps(e) + "\n")
-
-    info = summarise(code, config, entries, manifest_path)
-    print(f"{code}: {len(entries)} utts  dur min/mean/max = "
-          f"{info['duration_min_s']:.2f}/{info['duration_mean_s']:.2f}/"
-          f"{info['duration_max_s']:.2f} s  (skipped {n_short} under "
-          f"{MIN_DURATION_S} s, resampled {n_resampled})  -> {manifest_path.name}",
-          file=sys.stderr)
-    return info
-
-
-def summarise(code: str, config: str, rows: list[dict], manifest_path: Path) -> dict:
-    durs = [r["duration_s"] for r in rows] or [0.0]
-    return {
-        "language": code,
-        "config": config,
-        "n": len(rows),
-        "duration_min_s": min(durs),
-        "duration_mean_s": sum(durs) / len(durs),
-        "duration_max_s": max(durs),
-        "total_s": sum(durs),
-        "manifest": str(manifest_path.relative_to(REPO_ROOT)),
-    }
-
-
-def cmd_fleurs(args) -> int:
-    if args.lang == "all":
-        wanted = list(FLEURS_LANGUAGES)
-    else:
-        codes = [c.strip() for c in args.lang.split(",") if c.strip()]
-        wanted = []
-        for c in codes:
-            if c in CODE_TO_CONFIG:
-                wanted.append((CODE_TO_CONFIG[c], c))
-            elif c in dict(FLEURS_LANGUAGES):
-                wanted.append((c, dict(FLEURS_LANGUAGES)[c]))
-            else:
-                raise SystemExit(
-                    f"error: unknown language {c!r}; known: "
-                    f"{', '.join(sorted(CODE_TO_CONFIG))} or 'all'"
-                )
-
-    infos = [ingest_language(config, code, args) for config, code in wanted]
-
-    print("\nlang  n     min_s  mean_s  max_s   total_s  manifest")
-    for i in infos:
-        print(f"{i['language']:<5} {i['n']:<5} {i['duration_min_s']:6.2f} "
-              f"{i['duration_mean_s']:7.2f} {i['duration_max_s']:6.2f} "
-              f"{i['total_s']:8.0f}  {i['manifest']}")
-    total = sum(i["n"] for i in infos)
-    longest = max((i["duration_max_s"] for i in infos), default=0.0)
-    print(f"\ntotal utterances: {total}  longest clip: {longest:.2f} s")
-    # The C++ context scores at most `max_audio_ms` (default 30 s) and uses
-    # the tail of longer input, while SpeechBrain scores the whole clip. If
-    # any clip is longer than 30 s the two engines would score different
-    # audio on the `full` crop unless run.py raises the limit.
-    if longest > 30.0:
-        print("note: clips longer than 30 s exist; the cpp engine needs an "
-              "explicit --max-audio-ms above the longest clip for the `full` "
-              "crop to score the same audio as SpeechBrain.")
-    else:
-        print("note: every clip is under 30 s, so the C++ default "
-              "max_audio_ms=30000 never truncates; both engines score the "
-              "same audio on every crop.")
-    return 0
+    if len(entries) < n:
+        print(f"warning: {code}: only {len(entries)} of {n} utterances", file=sys.stderr)
+    manifest_path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+    print(f"{code}: {len(entries)} utterances -> {manifest_path.relative_to(REPO_ROOT)}")
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="source", required=True)
-
     fp = sub.add_parser("fleurs", help="FLEURS parquet at the pinned revision")
     fp.add_argument("--lang", required=True,
-                    help="VoxLingua107 code, comma-separated list, or 'all'")
-    fp.add_argument("--n", type=int, default=DEFAULT_N,
-                    help=f"utterances per language (default: {DEFAULT_N})")
+                    help="comma-separated VoxLingua107 codes from the profile, or 'all'")
+    fp.add_argument("--n", type=int, default=200, help="utterances per language")
     fp.add_argument("--force", action="store_true",
                     help="rebuild even when the manifest already exists")
-    fp.set_defaults(func=cmd_fleurs)
-
     args = p.parse_args(argv)
-    return args.func(args)
+
+    known = profile_languages()
+    codes = known if args.lang == "all" else args.lang.split(",")
+    unknown = sorted(set(codes) - set(known))
+    if unknown:
+        p.error(f"unknown language(s) {unknown}; known: {', '.join(known)} or 'all'")
+    for code in codes:
+        ingest_language(code, args.n, args.force)
+    return 0
 
 
 if __name__ == "__main__":
