@@ -313,6 +313,15 @@ if(TRANSCRIBE_X86_CONSERVATIVE)
     endforeach()
 endif()
 
+# Apple Silicon defaults GGML_NATIVE to OFF, the posture of the macOS wheel,
+# the XCFramework and the Rust crate. Native tuning on an M2 or newer turns on
+# i8mm, and ggml compiles tinyBLAS out under __ARM_FEATURE_MATMUL_INT8, so a
+# native build runs F32 / F16 / Q8_0 CPU inference 1.2-2.1x slower (#194).
+# A default, not a clamp: -DGGML_NATIVE=ON still wins.
+if(TRANSCRIBE_IS_APPLE_SILICON AND NOT DEFINED CACHE{GGML_NATIVE})
+    set(GGML_NATIVE OFF CACHE BOOL "")
+endif()
+
 # OpenMP — CENTRAL POLICY.
 #
 # DEFAULT: OFF. We use ggml's native CPU threadpool everywhere; OpenMP is an
