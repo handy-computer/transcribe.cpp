@@ -1395,13 +1395,14 @@ ECAPA_LABEL_CODES  = ["aa", "bb", "cc", "dd", "ee"]
 ECAPA_LABEL_NAMES  = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
 
 
-def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str]) -> list[bytes]:
+def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str],
+                           hop_length: int = 160, win_length: int = 400) -> list[bytes]:
     return [
         _pack_kv_string("stt.frontend.type", "speechbrain_fbank"),
         _pack_kv_uint32("stt.frontend.sample_rate", 16000),
         _pack_kv_uint32("stt.frontend.n_fft", 400),
-        _pack_kv_uint32("stt.frontend.hop_length", 160),
-        _pack_kv_uint32("stt.frontend.win_length", 400),
+        _pack_kv_uint32("stt.frontend.hop_length", hop_length),
+        _pack_kv_uint32("stt.frontend.win_length", win_length),
         _pack_kv_uint32("stt.frontend.num_mels", ECAPA_N_MELS),
         _pack_kv_string("stt.frontend.window", "hamming_periodic"),
         _pack_kv_string("stt.frontend.pad_mode", "constant"),
@@ -1524,7 +1525,8 @@ def _ecapa_tdnn_q8_0(tensors: list[Tensor], as_f16: bool) -> list[Tensor]:
     return out
 
 
-def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_0: str = "") -> bytes:
+def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_0: str = "",
+                     **frontend: int) -> bytes:
     tensors = _ecapa_tdnn_tensors(len(codes))
     if q8_0:
         tensors = _ecapa_tdnn_q8_0(tensors, as_f16=(q8_0 == "as_f16"))
@@ -1533,7 +1535,7 @@ def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_
         [
             _pack_kv_string("general.architecture", "ecapa_tdnn"),
             _pack_kv_string("stt.variant", "ecapa-tdnn-toy"),
-            *_ecapa_tdnn_hparams_kv(codes, names, aliases),
+            *_ecapa_tdnn_hparams_kv(codes, names, aliases, **frontend),
         ],
         tensors,
     )
@@ -1963,6 +1965,12 @@ def emit_fixtures(out_dir: Path) -> None:
            _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="q8_0"))
     _write(out_dir / "arch_ecapa_tdnn_q8_0_as_f16.gguf",
            _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="as_f16"))
+    # Front ends the loader must reject: a zero hop divides by zero in the
+    # frame count, and win_length > n_fft overruns the padded window.
+    _write(out_dir / "arch_ecapa_tdnn_bad_hop0.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], hop_length=0))
+    _write(out_dir / "arch_ecapa_tdnn_bad_win_gt_fft.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], win_length=512))
 
 
 def main(argv: list[str]) -> int:

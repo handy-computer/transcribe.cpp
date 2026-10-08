@@ -18,7 +18,6 @@
 int transcribe_cli::run_langid_file(const cli_args &           args,
                                     transcribe_model *         model,
                                     const std::vector<float> & pcm,
-                                    double                     duration_s,
                                     std::ofstream *            output) {
     if (args.stream_chunk_ms > 0) {
         std::fprintf(stderr, "stream: the language ID path has no streaming entry point; drop --stream-chunk-ms\n");
@@ -57,11 +56,13 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
         }
     }
     std::printf("run: %s\n", transcribe_status_string(st));
-    bool output_ok = true;
+    bool   output_ok = true;
+    double scored_s  = 0.0;  // only the last max_audio_ms is scored, not the whole file
     if (st == TRANSCRIBE_OK) {
         transcribe_langid_result res;
         transcribe_langid_result_init(&res);
         transcribe_langid_get_result(session, &res);
+        scored_s = static_cast<double>(res.audio_ms) / 1000.0;
 
         std::string lines;
         for (int i = 0; i < res.n_candidates; ++i) {
@@ -88,9 +89,9 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
     transcribe_timings_init(&tm);
     transcribe_langid_get_timings(session, &tm);
     const double total_ms = tm.mel_ms + tm.encode_ms;
-    if (total_ms > 0.0 && duration_s > 0.0) {
+    if (total_ms > 0.0 && scored_s > 0.0) {
         std::printf("  realtime:   %.0fx (%.1f ms for %.1f s; mel %.1f ms, encode %.1f ms)\n",
-                    duration_s * 1000.0 / total_ms, total_ms, duration_s, static_cast<double>(tm.mel_ms),
+                    scored_s * 1000.0 / total_ms, total_ms, scored_s, static_cast<double>(tm.mel_ms),
                     static_cast<double>(tm.encode_ms));
     }
 

@@ -128,10 +128,10 @@ pub enum ErrorKind {
     OutputTruncated,
     OutputRepetition,
     UnsupportedRole,
-    InputTooShort,
     VersionMismatch,
     Nul,
     Busy,
+    InputTooShort,
     #[cfg_attr(feature = "serde", serde(other))]
     Other,
 }

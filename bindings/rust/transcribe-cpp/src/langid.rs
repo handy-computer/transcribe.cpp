@@ -60,9 +60,13 @@ pub struct LangIdOptions {
 }
 
 /// One ranked label. `code` is the model's own label (`"en"`, `"iw"`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct LangIdCandidate {
     /// Label index.
     pub index: i32,
@@ -74,9 +78,13 @@ pub struct LangIdCandidate {
 }
 
 /// The result of one [`LangIdSession::run`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(default)
+)]
 pub struct LangIdResult {
     /// Ranked by `p`, descending; ties keep label order.
     pub candidates: Vec<LangIdCandidate>,

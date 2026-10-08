@@ -77,6 +77,17 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
                 hp.sample_rate);
         return TRANSCRIBE_ERR_GGUF;
     }
+    if (hp.mel_n_fft <= 0 || hp.mel_hop <= 0 || hp.mel_win <= 0 || hp.mel_n_mels <= 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "%s: frontend dimensions must be positive (n_fft=%d hop_length=%d win_length=%d num_mels=%d)", kTag,
+                hp.mel_n_fft, hp.mel_hop, hp.mel_win, hp.mel_n_mels);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.mel_win > hp.mel_n_fft) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: frontend win_length (%d) > n_fft (%d)", kTag, hp.mel_win,
+                hp.mel_n_fft);
+        return TRANSCRIBE_ERR_GGUF;
+    }
     // MelFrontend falls back silently on unknown values.
     if (hp.mel_window != "hamming_periodic" || hp.mel_pad_mode != "constant" || hp.mel_normalize != "sentence_mean") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: unsupported front end (window=%s pad_mode=%s normalize=%s)", kTag,

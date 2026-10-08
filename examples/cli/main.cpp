@@ -626,7 +626,7 @@ int run_file(const cli_args & args, std::ofstream * output) {
         return transcribe_cli::run_asr_file(args, model, pcm, duration_s, output);
     }
     if ((roles & TRANSCRIBE_ROLE_LANGID) != 0) {
-        return transcribe_cli::run_langid_file(args, model, pcm, duration_s, output);
+        return transcribe_cli::run_langid_file(args, model, pcm, output);
     }
     return transcribe_cli::run_diarize_file(args, model, pcm, duration_s, output);
 }

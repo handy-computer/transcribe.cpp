@@ -202,6 +202,17 @@ void test_q8_0_widened_to_f16() {
     transcribe_model_free(ref);
 }
 
+// A front end the mel code cannot run (zero hop, window wider than n_fft)
+// fails the load instead of crashing at run time.
+void test_bad_frontend_rejected() {
+    for (const char * name : { "arch_ecapa_tdnn_bad_hop0.gguf", "arch_ecapa_tdnn_bad_win_gt_fft.gguf" }) {
+        transcribe_status  st = TRANSCRIBE_OK;
+        transcribe_model * m  = load_cpu(name, &st);
+        CHECK(st == TRANSCRIBE_ERR_GGUF && m == nullptr);
+        transcribe_model_free(m);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -219,6 +230,7 @@ int main() {
     transcribe_model_free(m);
 
     test_q8_0_widened_to_f16();
+    test_bad_frontend_rejected();
 
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

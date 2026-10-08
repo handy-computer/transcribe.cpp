@@ -141,7 +141,6 @@ int run_diarize_file(const cli_args &           args,
 int run_langid_file(const cli_args &           args,
                     transcribe_model *         model,
                     const std::vector<float> & pcm,
-                    double                     duration_s,
                     std::ofstream *            output);
 
 }  // namespace transcribe_cli

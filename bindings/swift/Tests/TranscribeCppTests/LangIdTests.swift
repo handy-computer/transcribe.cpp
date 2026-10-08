@@ -62,6 +62,16 @@ final class LangIdTests: XCTestCase {
         XCTAssertGreaterThan(lid.timings.encodeMs, 0)
     }
 
+    func testToyInteriorNulIsRejected() throws {
+        // C would cut "bb\0zz" to "bb"; the code must not silently narrow.
+        let model = try cpuModel(try Fixtures.langIdToyModelPath())
+        XCTAssertNil(model.langIdLabelIndex("bb\0zz"))
+        let lid = try model.langIdSession()
+        XCTAssertThrowsError(try lid.run(noise(16000), options: LangIdOptions(allowed: ["bb\0zz"]))) { error in
+            guard case TranscribeError.invalidArgument = error else { return XCTFail("\(error)") }
+        }
+    }
+
     func testToyCancelAborts() throws {
         let model = try cpuModel(try Fixtures.langIdToyModelPath())
         let lid = try model.langIdSession()

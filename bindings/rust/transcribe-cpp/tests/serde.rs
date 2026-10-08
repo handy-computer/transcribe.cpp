@@ -5,12 +5,13 @@
 
 use transcribe_cpp::{
     Backend, Capabilities, CommitPolicy, DeviceType, Diarize, DiarizeExtension, DiarizeInfo,
-    DiarizeOptions, DiarizeSessionOptions, ExtSlot, Feature, Itn, KvType,
-    MoonshineStreamingOptions, ParakeetBufferedStreamOptions, ParakeetStreamOptions, Pnc, Role,
-    Roles, RunExtension, RunOptions, Segment, SessionLimits, SessionOptions,
-    SortformerDiarizeOptions, SortformerPreset, SpeakerSegment, StreamExtension, StreamOptions,
-    StreamState, StreamText, StreamUpdate, Task, TimestampKind, Timings, Token, Transcript,
-    VoxtralRealtimeStreamOptions, WhisperRunOptions, Word,
+    DiarizeOptions, DiarizeSessionOptions, ExtSlot, Feature, Itn, KvType, LangIdCandidate,
+    LangIdInfo, LangIdOptions, LangIdResult, LangIdSessionOptions, MoonshineStreamingOptions,
+    ParakeetBufferedStreamOptions, ParakeetStreamOptions, Pnc, Role, Roles, RunExtension,
+    RunOptions, Segment, SessionLimits, SessionOptions, SortformerDiarizeOptions, SortformerPreset,
+    SpeakerSegment, StreamExtension, StreamOptions, StreamState, StreamText, StreamUpdate, Task,
+    TimestampKind, Timings, Token, Transcript, VoxtralRealtimeStreamOptions, WhisperRunOptions,
+    Word,
 };
 
 fn assert_serde<T: serde::Serialize + serde::de::DeserializeOwned>() {}
@@ -34,8 +35,11 @@ fn plain_data_types_are_serializable() {
     assert_serde::<DiarizeSessionOptions>();
     assert_serde::<DiarizeExtension>();
     assert_serde::<SortformerDiarizeOptions>();
+    assert_serde::<LangIdSessionOptions>();
+    assert_serde::<LangIdOptions>();
     // Results.
     assert_serde::<DiarizeInfo>();
+    assert_serde::<LangIdInfo>();
     assert_serde::<Transcript>();
     assert_serde::<Segment>();
     assert_serde::<SpeakerSegment>();
@@ -46,6 +50,8 @@ fn plain_data_types_are_serializable() {
     assert_serde::<StreamText>();
     assert_serde::<Capabilities>();
     assert_serde::<SessionLimits>();
+    assert_serde::<LangIdResult>();
+    assert_serde::<LangIdCandidate>();
     // Enums.
     assert_serde::<Task>();
     assert_serde::<TimestampKind>();
@@ -135,6 +141,13 @@ fn missing_fields_take_defaults() {
     assert!(token.p.is_nan(), "missing p decoded as {}", token.p);
     let speaker: SpeakerSegment = serde_json::from_str(r#"{"speaker_id":2}"#).unwrap();
     assert!(speaker.p.is_nan(), "missing p decoded as {}", speaker.p);
+
+    let langid: LangIdResult = serde_json::from_str(r#"{"n_allowed":3}"#).unwrap();
+    assert_eq!(langid.n_allowed, 3);
+    assert!(langid.candidates.is_empty());
+    let candidate: LangIdCandidate = serde_json::from_str(r#"{"code":"en"}"#).unwrap();
+    assert_eq!(candidate.code, "en");
+    assert_eq!(candidate.p, 0.0);
 }
 
 mod errors {
@@ -215,10 +228,10 @@ mod errors {
             ErrorKind::OutputTruncated,
             ErrorKind::OutputRepetition,
             ErrorKind::UnsupportedRole,
-            ErrorKind::InputTooShort,
             ErrorKind::VersionMismatch,
             ErrorKind::Nul,
             ErrorKind::Busy,
+            ErrorKind::InputTooShort,
             ErrorKind::Other,
         ];
         for kind in kinds {

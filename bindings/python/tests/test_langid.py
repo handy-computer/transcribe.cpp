@@ -93,6 +93,16 @@ def test_toy_allowed_rejections(langid_toy_model_path, noise_1s):
             lid.run(noise_1s, allowed=None)  # None is every label
 
 
+def test_toy_interior_nul_is_rejected(langid_toy_model_path, noise_1s):
+    # C would cut "bb\0zz" to "bb"; the code must not silently narrow.
+    with t.Model(langid_toy_model_path, backend="cpu") as model:
+        with pytest.raises(t.InvalidArgument):
+            model.langid_label_index("bb\0zz")
+        with model.langid_session() as lid:
+            with pytest.raises(t.InvalidArgument):
+                lid.run(noise_1s, allowed=["bb\0zz"])
+
+
 def test_toy_input_rules(langid_toy_model_path, noise_1s):
     with t.Model(langid_toy_model_path, backend="cpu") as model:
         with model.langid_session() as lid:

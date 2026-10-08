@@ -1289,14 +1289,15 @@ class Model:
         """``(code, name)`` per label index. Raises :class:`UnsupportedRole`
         without the LANGID role."""
         n = self.langid_info.n_labels
-        return tuple((_lib.transcribe_langid_label_code(self._h, i).decode("utf-8"),
-                      _lib.transcribe_langid_label_name(self._h, i).decode("utf-8"))
+        return tuple((_decode(_lib.transcribe_langid_label_code(self._h, i)),
+                      _decode(_lib.transcribe_langid_label_name(self._h, i)))
                      for i in range(n))
 
     def langid_label_index(self, code: str) -> int | None:
         """Label index of a code or alias ("he" and "iw" name the same
-        label), or None. None as well on a model without the LANGID role."""
-        i = _lib.transcribe_langid_label_index(self._h, code.encode("utf-8"))
+        label), or None. None as well on a model without the LANGID role.
+        Raises :class:`InvalidArgument` if ``code`` contains a NUL."""
+        i = _lib.transcribe_langid_label_index(self._h, _cstr(code, "code"))
         return i if i >= 0 else None
 
     def langid_session(self, *, n_threads: int = 0,
@@ -2014,7 +2015,7 @@ class LangIdSession(_SessionBase):
                 raise InvalidArgument("allowed is empty; pass None for every label")
             if not all(isinstance(c, str) for c in codes):
                 raise InvalidArgument("allowed entries must be str")
-            encoded = [c.encode("utf-8") for c in codes]
+            encoded = [_cstr(c, "allowed") for c in codes]
             arr = (ctypes.c_char_p * len(encoded))(*encoded)
             params.allowed = ctypes.cast(arr, type(params.allowed))
             params.n_allowed = len(encoded)
@@ -2036,7 +2037,7 @@ class LangIdSession(_SessionBase):
                 _check(_lib.transcribe_langid_get_candidate(h, i, _byref(c)),
                        "transcribe_langid_get_candidate")
                 rows.append(LangIdCandidate(
-                    index=c.index, code=c.code.decode("utf-8"), name=c.name.decode("utf-8"),
+                    index=c.index, code=_decode(c.code), name=_decode(c.name),
                     p=c.p, logit=c.logit))
             return LangIdResult(candidates=tuple(rows), n_allowed=res.n_allowed,
                                 allowed_mass=res.allowed_mass, audio_ms=res.audio_ms)

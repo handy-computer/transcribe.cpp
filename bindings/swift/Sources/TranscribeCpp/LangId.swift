@@ -73,8 +73,10 @@ extension Model {
     }
 
     /// Label index of a code or alias ("he" and "iw" name the same label), or
-    /// `nil` (also on a model without the LANGID role).
+    /// `nil` (also on a model without the LANGID role, or for a code with a
+    /// NUL character, which C would silently cut).
     public func langIdLabelIndex(_ code: String) -> Int32? {
+        if code.contains("\0") { return nil }
         let i = transcribe_langid_label_index(ptr, code)
         return i >= 0 ? i : nil
     }
@@ -119,6 +121,9 @@ public final class LangIdSession {
         if let allowed = options.allowed, allowed.isEmpty {
             // NULL would mean "every label", the opposite of an empty list.
             throw TranscribeError.invalidArgument("allowed is empty; pass nil for every label")
+        }
+        if let allowed = options.allowed, allowed.contains(where: { $0.contains("\0") }) {
+            throw TranscribeError.invalidArgument("allowed contains a NUL character")
         }
         // strdup'd copies stay alive until the native call returns.
         let owned: [UnsafeMutablePointer<CChar>?] = options.allowed?.map { strdup($0) } ?? []

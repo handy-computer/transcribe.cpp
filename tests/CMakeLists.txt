@@ -542,7 +542,9 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_hop0.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_win_gt_fft.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
