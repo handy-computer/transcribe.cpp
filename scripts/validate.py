@@ -697,27 +697,17 @@ def cmd_compare(args: argparse.Namespace) -> int:
         # may miss it); it is reported, never gated.
         ref_prediction = ref_dir / "prediction.json"
         if ref_prediction.exists():
-            cpp_prediction = cpp_dir / "prediction.json"
             ref_pred = json.loads(ref_prediction.read_text())
-            if not cpp_prediction.exists():
-                print(f"FAIL prediction: missing C++ artifact: {cpp_prediction}", file=sys.stderr)
-                all_passed = False
-                transcript_results.append({"case": case_name, "match": False,
-                                           "reason": "missing C++ prediction artifact"})
-                continue
-            cpp_pred = json.loads(cpp_prediction.read_text())
-            match = int(cpp_pred["label_index"]) == int(ref_pred["label_index"])
+            cpp_prediction = cpp_dir / "prediction.json"
+            cpp_pred = (json.loads(cpp_prediction.read_text()) if cpp_prediction.exists()
+                        else {"code": "<missing prediction.json>"})
+            match = cpp_pred.get("label_index") == ref_pred["label_index"]
+            all_passed = all_passed and match
+            transcript_results.append({"case": case_name, "match": match, "mode": "label",
+                                       "reference": ref_pred["code"], "cpp": cpp_pred["code"]})
             expected = case.get("expected_language") if isinstance(case, dict) else None
-            transcript_results.append({"case": case_name, "match": match,
-                                       "reference": ref_pred.get("code"), "cpp": cpp_pred.get("code"),
-                                       "expected": expected, "mode": "label"})
-            if not match:
-                print(f"\nFAIL prediction mismatch: reference {ref_pred.get('code')!r} "
-                      f"vs c++ {cpp_pred.get('code')!r}")
-                all_passed = False
-            else:
-                note = "" if expected in (None, cpp_pred.get("code")) else f" (expected {expected!r})"
-                print(f"\n  Prediction: ok {cpp_pred.get('code')!r}{note}")
+            print(f"\n  Prediction: {'ok' if match else 'FAIL'} c++ {cpp_pred['code']!r}, "
+                  f"reference {ref_pred['code']!r}, expected {expected!r}")
 
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists() and args.family != "sortformer":
@@ -934,11 +924,7 @@ def write_report_bundle(
         for tr in transcript_results:
             summary.append(f"### {tr['case']}")
             summary.append("")
-            if tr["match"] and tr.get("mode") == "label":
-                summary.append(f"- Match: **yes**")
-                summary.append(f"- Mode: `label` (top-1, C++ vs reference)")
-                summary.append(f"- label: `{tr.get('cpp', '')}` (expected `{tr.get('expected')}`)")
-            elif tr["match"]:
+            if tr["match"]:
                 summary.append(f"- Match: **yes**")
                 summary.append(f"- Mode: `{tr.get('mode', 'exact')}`")
                 summary.append(f"- text: `{tr.get('cpp', '')!r}`")
