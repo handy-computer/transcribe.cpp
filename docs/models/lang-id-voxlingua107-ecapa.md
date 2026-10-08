@@ -37,7 +37,7 @@ Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `9cfa5670` on 2026-10-08.
+Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `cf62265a` on 2026-10-08.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
@@ -56,7 +56,7 @@ transcribe.cpp model page.
 | F16  | 85.17% (84.00-86.43) | 11986 / 12000 | 0.095 |
 | Q8_0 | 86.30% (85.17-87.50) | 11706 / 12000 | 2.9 |
 
-Measured at transcribe.cpp `9cfa5670` on 2026-10-08.
+Measured at transcribe.cpp `cf62265a` on 2026-10-08.
 <!-- /catalog -->
 
 Agreement counts the scored sweep's top-1 decisions that match the
