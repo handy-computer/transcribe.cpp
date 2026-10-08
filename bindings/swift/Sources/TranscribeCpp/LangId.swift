@@ -31,8 +31,6 @@ public struct LangIdCandidate: Sendable, Equatable {
     public let name: String
     /// Softmax renormalized over the allowed set.
     public let p: Float
-    /// Softmax over every label.
-    public let pUnrestricted: Float
     public let logit: Float
 }
 
@@ -151,7 +149,7 @@ public final class LangIdSession {
                 return LangIdCandidate(
                     index: c.index, code: c.code.map { String(cString: $0) } ?? "",
                     name: c.name.map { String(cString: $0) } ?? "",
-                    p: c.p, pUnrestricted: c.p_unrestricted, logit: c.logit)
+                    p: c.p, logit: c.logit)
             }
             return LangIdResult(candidates: candidates, nAllowed: res.n_allowed,
                                 allowedMass: res.allowed_mass, audioMs: res.audio_ms)

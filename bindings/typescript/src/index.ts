@@ -1508,7 +1508,6 @@ export class LangIdSession {
           code: c.code ?? "",
           name: c.name ?? "",
           p: c.p,
-          pUnrestricted: c.p_unrestricted,
           logit: c.logit,
         });
       }

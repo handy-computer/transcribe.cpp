@@ -56,8 +56,9 @@ struct transcribe_langid_result {
     uint64_t struct_size;
     int32_t  n_candidates; /* rows readable via transcribe_langid_get_candidate */
     int32_t  n_allowed;    /* labels in the allowed set (before top_k) */
-    /* Sum of p_unrestricted over the allowed set; 1 when unrestricted. A low
-     * value means the speech is probably outside the allowed set. */
+    /* Share of the softmax over every label that falls in the allowed set;
+     * 1 when unrestricted. A low value means the speech is probably outside
+     * the allowed set. */
     float    allowed_mass;
     int64_t  audio_ms; /* audio actually scored, after the crop */
 };
@@ -69,8 +70,7 @@ struct transcribe_langid_candidate {
     int32_t      index; /* label index */
     const char * code;
     const char * name;
-    float        p;              /* softmax over the allowed set */
-    float        p_unrestricted; /* softmax over every label */
+    float        p; /* softmax over the allowed set */
     float        logit;
 };
 

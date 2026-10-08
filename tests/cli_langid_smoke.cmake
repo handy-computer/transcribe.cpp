@@ -23,7 +23,7 @@ if(NOT rc EQUAL 0 OR NOT out MATCHES "language: (aa|bb|cc|dd|ee) index=[0-4] p="
     message(FATAL_ERROR "default run: rc=${rc}\n${out}\n${err}")
 endif()
 file(READ "${_output}" written)
-if(NOT written MATCHES "^candidate: 1 [a-e][a-e] index=[0-4] p=[0-9.]+ p_unrestricted=.*candidate: 5 ")
+if(NOT written MATCHES "^candidate: 1 [a-e][a-e] index=[0-4] p=[0-9.]+ logit=.*candidate: 5 ")
     message(FATAL_ERROR "-o wrote unexpected candidates:\n${written}")
 endif()
 

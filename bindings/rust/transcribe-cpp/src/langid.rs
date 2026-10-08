@@ -70,8 +70,6 @@ pub struct LangIdCandidate {
     pub name: String,
     /// Softmax renormalized over the allowed set.
     pub p: f32,
-    /// Softmax over every label.
-    pub p_unrestricted: f32,
     pub logit: f32,
 }
 
@@ -220,7 +218,6 @@ impl LangIdSession {
                             code: owned_str(raw.code),
                             name: owned_str(raw.name),
                             p: raw.p,
-                            p_unrestricted: raw.p_unrestricted,
                             logit: raw.logit,
                         }
                     })

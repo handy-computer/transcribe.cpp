@@ -3,7 +3,7 @@
 //
 // Output lines are stable (scripts/validate.py parses `language:`):
 //   language: <code> index=<i> p=<p>
-//   candidate: <rank> <code> index=<i> p=<p> p_unrestricted=<p> logit=<z>
+//   candidate: <rank> <code> index=<i> p=<p> logit=<z>
 
 #include "transcribe/langid.h"
 
@@ -76,9 +76,8 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
                 std::printf("  audio_ms:     %lld\n", static_cast<long long>(res.audio_ms));
             }
             char line[160];
-            std::snprintf(line, sizeof(line), "candidate: %d %s index=%d p=%.6f p_unrestricted=%.6f logit=%.4f\n",
-                          i + 1, c.code, c.index, static_cast<double>(c.p), static_cast<double>(c.p_unrestricted),
-                          static_cast<double>(c.logit));
+            std::snprintf(line, sizeof(line), "candidate: %d %s index=%d p=%.6f logit=%.4f\n", i + 1, c.code, c.index,
+                          static_cast<double>(c.p), static_cast<double>(c.logit));
             std::printf("  %s", line);
             lines += line;
         }

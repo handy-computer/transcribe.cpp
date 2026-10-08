@@ -172,7 +172,7 @@ void test_ranking() {
         const transcribe_langid_candidate c = f.candidate(i);
         CHECK(c.index == want[i]);
         CHECK(c.code != nullptr && std::strcmp(c.code, g_labels.codes[want[i]].c_str()) == 0);
-        CHECK(c.p == c.p_unrestricted && c.logit == g_logits[want[i]]);
+        CHECK(c.logit == g_logits[want[i]]);
         CHECK(near(c.p, std::exp(static_cast<double>(g_logits[want[i]])) / denom));
         sum += c.p;
     }
@@ -208,7 +208,6 @@ void test_allowed_set() {
     const transcribe_langid_candidate c1 = f.candidate(1);
     CHECK(c0.index == 1 && c1.index == 3);
     CHECK(near(c0.p, e_bb / (e_bb + e_dd)) && near(c1.p, e_dd / (e_bb + e_dd)));
-    CHECK(near(c0.p_unrestricted, e_bb / all));
 
     g_run_calls = 0;
     p.n_allowed = 0;

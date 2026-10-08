@@ -19,10 +19,9 @@
 namespace transcribe {
 
 struct LangidCandidateEntry {
-    int32_t index          = 0;
-    float   p              = 0.0f;
-    float   p_unrestricted = 0.0f;
-    float   logit          = 0.0f;
+    int32_t index = 0;
+    float   p     = 0.0f;
+    float   logit = 0.0f;
 };
 
 // A model's labels. Built once at load by build_langid_labels, immutable after.

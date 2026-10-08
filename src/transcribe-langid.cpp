@@ -312,7 +312,7 @@ static transcribe_status langid_run_impl(transcribe_langid_session *      sessio
     ranked.reserve(static_cast<size_t>(n_allowed));
     for (size_t i = 0; i < logits.size(); ++i) {
         if (mask[i] != 0) {
-            ranked.push_back({ static_cast<int32_t>(i), p_allowed[i], p_open[i], logits[i] });
+            ranked.push_back({ static_cast<int32_t>(i), p_allowed[i], logits[i] });
         }
     }
     std::stable_sort(ranked.begin(), ranked.end(),
@@ -388,7 +388,6 @@ extern "C" transcribe_status transcribe_langid_get_candidate(const struct transc
         staged.code                    = transcribe_langid_label_code(session->model, c.index);
         staged.name                    = transcribe_langid_label_name(session->model, c.index);
         staged.p                       = c.p;
-        staged.p_unrestricted          = c.p_unrestricted;
         staged.logit                   = c.logit;
     }
     copy_out_prefix(out, &staged, out->struct_size, sizeof(staged));

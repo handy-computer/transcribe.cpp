@@ -38,14 +38,14 @@ From the CLI: `transcribe-cli -m lang-id-voxlingua107-ecapa-Q8_0.gguf --allow en
 
 - **`allowed`** restricts the decision to the listed labels: candidates are
   ranked by `p`, the softmax over the allowed set. The network still scores
-  every label; `p_unrestricted` is the softmax over all of them. NULL with
+  every label. NULL with
   `n_allowed == 0` means every label. A non-NULL list with `n_allowed <= 0`,
   a NULL list with `n_allowed > 0`, or a NULL element is
   `TRANSCRIBE_ERR_INVALID_ARG`; an unknown code is
   `TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE`; duplicates count once.
-- **`allowed_mass`** (`transcribe_langid_result`) is the sum of
-  `p_unrestricted` over the allowed set, 1 when unrestricted. A low value
-  means the unrestricted model puts most of its probability outside the
+- **`allowed_mass`** (`transcribe_langid_result`) is the share of the softmax
+  over every label that falls in the allowed set, 1 when unrestricted. A low
+  value means the unrestricted model puts most of its probability outside the
   allowed set.
 - **`top_k`** limits the returned candidates (0 = every allowed label). It
   does not change `p` or `allowed_mass`.

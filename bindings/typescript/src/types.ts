@@ -349,8 +349,6 @@ export interface LangIdCandidate {
   name: string;
   /** Softmax renormalized over the allowed set. */
   p: number;
-  /** Softmax over every label. */
-  pUnrestricted: number;
   logit: number;
 }
 

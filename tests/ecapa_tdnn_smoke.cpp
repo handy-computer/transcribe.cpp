@@ -127,7 +127,6 @@ void test_run(transcribe_model * m) {
     double     sum   = 0.0;
     for (size_t i = 0; i < first.size(); ++i) {
         CHECK(std::isfinite(first[i].p) && std::isfinite(first[i].logit));
-        CHECK(first[i].p == first[i].p_unrestricted);
         CHECK(first[i].code != nullptr && first[i].name != nullptr);
         if (i > 0) {
             CHECK(first[i - 1].p >= first[i].p);

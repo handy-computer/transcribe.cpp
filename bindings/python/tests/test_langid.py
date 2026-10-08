@@ -62,7 +62,6 @@ def test_toy_run_contract(langid_toy_model_path, noise_1s):
             assert math.isclose(sum(c.p for c in r.candidates), 1.0, rel_tol=1e-5)
             ps = [c.p for c in r.candidates]
             assert ps == sorted(ps, reverse=True)
-            assert all(c.p == c.p_unrestricted for c in r.candidates)
 
             restricted = lid.run(noise_1s, allowed=["bb", "dd"])
             assert {c.code for c in restricted.candidates} == {"bb", "dd"}

@@ -590,14 +590,12 @@ class LangIdInfo:
 @dataclass(frozen=True)
 class LangIdCandidate:
     """One ranked label. ``code`` is the model's own label ("en", "iw");
-    ``p`` is renormalized over the allowed set, ``p_unrestricted`` is over
-    every label."""
+    ``p`` is renormalized over the allowed set."""
 
     index: int
     code: str
     name: str
     p: float
-    p_unrestricted: float
     logit: float
 
 
@@ -2039,7 +2037,7 @@ class LangIdSession(_SessionBase):
                        "transcribe_langid_get_candidate")
                 rows.append(LangIdCandidate(
                     index=c.index, code=c.code.decode("utf-8"), name=c.name.decode("utf-8"),
-                    p=c.p, p_unrestricted=c.p_unrestricted, logit=c.logit))
+                    p=c.p, logit=c.logit))
             return LangIdResult(candidates=tuple(rows), n_allowed=res.n_allowed,
                                 allowed_mass=res.allowed_mass, audio_ms=res.audio_ms)
 

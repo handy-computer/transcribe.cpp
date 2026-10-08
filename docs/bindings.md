@@ -143,7 +143,7 @@ Rust), `model.langIdSession()` (Swift) or `model.createLangIdSession()`
 `langid_info` / `langIdInfo` / `langidInfo` (sample rate, label count,
 minimum audio) and the label table (codes, names, and alias lookup).
 `run(pcm, allowed=…, top_k=…)` returns a copied-out result: candidates ranked
-by `p` (index, code, name, `p`, `p_unrestricted`, `logit`), `n_allowed`,
+by `p` (index, code, name, `p`, `logit`), `n_allowed`,
 `allowed_mass` and the scored `audio_ms`.
 
 `allowed` is the first caller-owned `const char * const *` input. Every
