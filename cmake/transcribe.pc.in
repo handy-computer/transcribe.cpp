@@ -1,0 +1,12 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=@TRANSCRIBE_PC_LIBDIR@
+includedir=@TRANSCRIBE_PC_INCLUDEDIR@
+linkmanifest=${libdir}/transcribe-link.json
+
+Name: transcribe
+Description: C/C++ speech-to-text inference library on the ggml runtime
+Version: @PROJECT_VERSION@
+Libs: @TRANSCRIBE_PC_LIBS@
+Libs.private: @TRANSCRIBE_PC_LIBS_PRIVATE@
+Cflags: -I${includedir}
