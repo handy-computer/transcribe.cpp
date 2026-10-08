@@ -1493,8 +1493,8 @@ export class LangIdSession {
   }
 
   /**
-   * Identify the language of one clip; input longer than the session's
-   * maxAudioMs is scored on its tail. The input PCM is borrowed, not copied
+   * Identify the language of one clip; input longer than langidInfo.maxAudioMs
+   * is scored on its first maxAudioMs. The input PCM is borrowed, not copied
    * (see Session.run).
    */
   async run(pcm: PcmLike, opts: LangIdOptions = {}): Promise<LangIdResult> {
@@ -1504,7 +1504,6 @@ export class LangIdSession {
     const samples = toFloat32(pcm);
     const p: any = {};
     F.langidParamsInit(p);
-    if (opts.topK !== undefined) p.top_k = opts.topK;
     if (opts.allowed !== undefined && opts.allowed !== null) {
       const codes = opts.allowed;
       if (!Array.isArray(codes) || !codes.every((c) => typeof c === "string"))
@@ -1543,9 +1542,7 @@ export class LangIdSession {
       return {
         candidates,
         code: candidates.length > 0 ? candidates[0].code : null,
-        nAllowed: res.n_allowed,
         allowedMass: res.allowed_mass,
-        audioMs: Number(res.audio_ms),
       };
     }).finally(() => {
       if (p.allowed) {
@@ -1700,7 +1697,12 @@ export class TranscribeModel {
     const info: any = {};
     n.F.langidInfoInit(info);
     check(n, n.F.langidGetInfo(this.handle, info), "reading langid info");
-    return { sampleRate: info.sample_rate, nLabels: info.n_labels, minAudioMs: info.min_audio_ms };
+    return {
+      sampleRate: info.sample_rate,
+      nLabels: info.n_labels,
+      minAudioMs: info.min_audio_ms,
+      maxAudioMs: info.max_audio_ms,
+    };
   }
 
   /** [code, name] per label index of a "langid" model; UnsupportedRole otherwise. */
@@ -1725,7 +1727,6 @@ export class TranscribeModel {
     const p: any = {};
     n.F.langidSessionParamsInit(p);
     if (opts.nThreads !== undefined) p.n_threads = opts.nThreads;
-    if (opts.maxAudioMs !== undefined) p.max_audio_ms = opts.maxAudioMs;
     const out: any[] = [null];
     check(n, n.F.langidSessionInit(this.handle, p, out), "opening langid session");
     if (!out[0])

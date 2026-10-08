@@ -131,12 +131,13 @@ model-wide lock as other compute calls (see below).
 
 A `"langid"` model (VoxLingua107 ECAPA-TDNN) ranks its own label codes; match
 `result.code` against an ASR model's `capabilities.languages` yourself.
-Omitting `allowed` scores every label, `[]` throws `InvalidArgument`, and
-clips under `model.langidInfo.minAudioMs` throw `InputTooShort`.
+Every allowed label is returned, ranked by `p`. Omitting `allowed` scores every
+label, `[]` throws `InvalidArgument`, clips under `model.langidInfo.minAudioMs`
+throw `InputTooShort`, and input longer than `maxAudioMs` is scored on its first `maxAudioMs`.
 
 ```ts
 using lid = model.createLangIdSession();
-const result = await lid.run(pcm, { allowed: ["en", "de", "fr"], topK: 3 });
+const result = await lid.run(pcm, { allowed: ["en", "de", "fr"] });
 console.log(result.code, result.candidates[0].p, result.allowedMass);
 ```
 

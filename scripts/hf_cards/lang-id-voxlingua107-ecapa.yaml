@@ -27,7 +27,7 @@ summary: |
   ECAPA-TDNN trained on VoxLingua107. NOT a transcription model: a run
   returns the model's language labels ranked by probability, optionally
   restricted to a caller-chosen set. Takes 16 kHz mono WAV; scores up to
-  the last 30 s of a clip.
+  the first 30 s of a clip.
 
 usage: |
   Build transcribe.cpp from source:

@@ -4,11 +4,13 @@
 // Output lines are stable (scripts/validate.py parses `language:`):
 //   language: <code> index=<i> p=<p>
 //   candidate: <rank> <code> index=<i> p=<p> logit=<z>
+// --top N prints (and writes with -o) only the first N ranked candidates.
 
 #include "transcribe/langid.h"
 
 #include "cli.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -28,7 +30,6 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
     transcribe_langid_session_params sp;
     transcribe_langid_session_params_init(&sp);
     sp.n_threads                        = args.n_threads;
-    sp.max_audio_ms                     = args.langid_max_audio_ms;
     transcribe_langid_session * session = nullptr;
     transcribe_status           st      = transcribe_langid_session_init(model, &sp, &session);
     if (st != TRANSCRIBE_OK) {
@@ -45,7 +46,13 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
     transcribe_langid_params_init(&lp);
     lp.allowed   = allowed.empty() ? nullptr : allowed.data();
     lp.n_allowed = static_cast<int32_t>(allowed.size());
-    lp.top_k     = args.langid_top_k;
+
+    // Only the first info.max_audio_ms of a longer file is scored.
+    transcribe_langid_info info;
+    transcribe_langid_info_init(&info);
+    transcribe_langid_get_info(model, &info);
+    const double file_s   = static_cast<double>(pcm.size()) / 16000.0;
+    const double scored_s = std::min(file_s, static_cast<double>(info.max_audio_ms) / 1000.0);
 
     // --repeat N runs transcribe_langid_run() N times for steady-state perf
     // measurements.
@@ -56,16 +63,16 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
         }
     }
     std::printf("run: %s\n", transcribe_status_string(st));
-    bool   output_ok = true;
-    double scored_s  = 0.0;  // only the last max_audio_ms is scored, not the whole file
+    bool output_ok = true;
     if (st == TRANSCRIBE_OK) {
         transcribe_langid_result res;
         transcribe_langid_result_init(&res);
         transcribe_langid_get_result(session, &res);
-        scored_s = static_cast<double>(res.audio_ms) / 1000.0;
+        const int n_print =
+            args.langid_top > 0 ? std::min(args.langid_top, static_cast<int>(res.n_candidates)) : res.n_candidates;
 
         std::string lines;
-        for (int i = 0; i < res.n_candidates; ++i) {
+        for (int i = 0; i < n_print; ++i) {
             transcribe_langid_candidate c;
             transcribe_langid_candidate_init(&c);
             transcribe_langid_get_candidate(session, i, &c);
@@ -73,8 +80,8 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
                 std::printf("language: %s index=%d p=%.6f\n", c.code, c.index, static_cast<double>(c.p));
                 std::printf("  name:         %s\n", c.name);
                 std::printf("  allowed_mass: %.6f (%d allowed)\n", static_cast<double>(res.allowed_mass),
-                            res.n_allowed);
-                std::printf("  audio_ms:     %lld\n", static_cast<long long>(res.audio_ms));
+                            res.n_candidates);
+                std::printf("  scored:       %.2f s of %.2f s\n", scored_s, file_s);
             }
             char line[160];
             std::snprintf(line, sizeof(line), "candidate: %d %s index=%d p=%.6f logit=%.4f\n", i + 1, c.code, c.index,
@@ -89,7 +96,7 @@ int transcribe_cli::run_langid_file(const cli_args &           args,
     transcribe_timings_init(&tm);
     transcribe_langid_get_timings(session, &tm);
     const double total_ms = tm.mel_ms + tm.encode_ms;
-    if (total_ms > 0.0 && scored_s > 0.0) {
+    if (st == TRANSCRIBE_OK && total_ms > 0.0 && scored_s > 0.0) {
         std::printf("  realtime:   %.0fx (%.1f ms for %.1f s; mel %.1f ms, encode %.1f ms)\n",
                     scored_s * 1000.0 / total_ms, total_ms, scored_s, static_cast<double>(tm.mel_ms),
                     static_cast<double>(tm.encode_ms));

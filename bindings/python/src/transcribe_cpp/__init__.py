@@ -585,6 +585,7 @@ class LangIdInfo:
     sample_rate: int
     n_labels: int      # label indices are [0, n_labels)
     min_audio_ms: int  # shorter scored audio raises InputTooShort
+    max_audio_ms: int  # longer input is scored on its first max_audio_ms
 
 
 @dataclass(frozen=True)
@@ -604,12 +605,11 @@ class LangIdResult:
     """``candidates`` are ranked by ``p`` (ties keep label order).
     ``allowed_mass`` is the unrestricted probability inside the allowed set
     (1.0 when unrestricted); a low value means the speech is probably outside
-    it. ``audio_ms`` is what was scored, after the crop."""
+    it. There is one candidate per allowed label (every label when
+    unrestricted)."""
 
     candidates: tuple[LangIdCandidate, ...]
-    n_allowed: int
     allowed_mass: float
-    audio_ms: int
 
     @property
     def code(self) -> str | None:
@@ -1282,7 +1282,8 @@ class Model:
         _check(_lib.transcribe_langid_get_info(self._h, _byref(info)),
                "reading langid info")
         return LangIdInfo(sample_rate=info.sample_rate, n_labels=info.n_labels,
-                          min_audio_ms=info.min_audio_ms)
+                          min_audio_ms=info.min_audio_ms,
+                          max_audio_ms=info.max_audio_ms)
 
     @property
     def langid_labels(self) -> tuple[tuple[str, str], ...]:
@@ -1300,12 +1301,9 @@ class Model:
         i = _lib.transcribe_langid_label_index(self._h, _cstr(code, "code"))
         return i if i >= 0 else None
 
-    def langid_session(self, *, n_threads: int = 0,
-                       max_audio_ms: int = 0) -> "LangIdSession":
-        """``max_audio_ms``: longer input is scored on its last
-        ``max_audio_ms`` (0 = 30000). Raises :class:`UnsupportedRole`
-        without the LANGID role."""
-        return LangIdSession(self, n_threads=n_threads, max_audio_ms=max_audio_ms)
+    def langid_session(self, *, n_threads: int = 0) -> "LangIdSession":
+        """Raises :class:`UnsupportedRole` without the LANGID role."""
+        return LangIdSession(self, n_threads=n_threads)
 
     def close(self) -> None:
         """Free the model. Any session still open on it is closed first —
@@ -1974,12 +1972,11 @@ class LangIdSession(_SessionBase):
 
     _free_fn = "transcribe_langid_session_free"
 
-    def __init__(self, model: Model, *, n_threads: int = 0, max_audio_ms: int = 0):
+    def __init__(self, model: Model, *, n_threads: int = 0):
         self._model = model  # keep the model alive for the session's lifetime
         params = _generated.transcribe_langid_session_params()
         _lib.transcribe_langid_session_params_init(_byref(params))
         params.n_threads = n_threads
-        params.max_audio_ms = max_audio_ms
 
         handle = ctypes.c_void_p()
         _check(_lib.transcribe_langid_session_init(model._h, _byref(params), _byref(handle)),
@@ -1989,13 +1986,13 @@ class LangIdSession(_SessionBase):
         self._handle = handle
         self._arm_abort(_lib.transcribe_langid_set_abort_callback)
 
-    def run(self, pcm: PCMLike, *, allowed: "Sequence[str] | None" = None,
-            top_k: int = 0) -> LangIdResult:
+    def run(self, pcm: PCMLike, *,
+            allowed: "Sequence[str] | None" = None) -> LangIdResult:
         """Identify the language of one clip (16 kHz mono float32 PCM).
-        Longer input than the session's ``max_audio_ms`` is scored on its
-        tail. ``allowed`` restricts the decision to those codes or aliases;
-        None means every label, and an empty list is rejected. ``top_k``
-        keeps the best candidates (0 = every allowed label).
+        Input longer than ``LangIdInfo.max_audio_ms`` is scored on its first
+        ``max_audio_ms``. ``allowed`` restricts the decision to those codes
+        or aliases; None means every label, and an empty list is rejected.
+        Every allowed label is returned, ranked by ``p``.
 
         Raises :class:`InputTooShort` below ``LangIdInfo.min_audio_ms``,
         :class:`UnsupportedRequest` for an unknown code, :class:`Aborted`
@@ -2005,7 +2002,6 @@ class LangIdSession(_SessionBase):
         array, n_samples = _pcm_to_carray(pcm)
         params = _generated.transcribe_langid_params()
         _lib.transcribe_langid_params_init(_byref(params))
-        params.top_k = top_k
         if allowed is not None:
             if isinstance(allowed, (str, bytes)):
                 raise InvalidArgument("allowed must be a sequence of codes, not a string")
@@ -2039,8 +2035,7 @@ class LangIdSession(_SessionBase):
                 rows.append(LangIdCandidate(
                     index=c.index, code=_decode(c.code), name=_decode(c.name),
                     p=c.p, logit=c.logit))
-            return LangIdResult(candidates=tuple(rows), n_allowed=res.n_allowed,
-                                allowed_mass=res.allowed_mass, audio_ms=res.audio_ms)
+            return LangIdResult(candidates=tuple(rows), allowed_mass=res.allowed_mass)
 
     @property
     def timings(self) -> Timings:

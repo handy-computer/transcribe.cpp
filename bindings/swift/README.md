@@ -121,11 +121,12 @@ Language ID models (`.langId`, e.g. VoxLingua107 ECAPA-TDNN) rank the model's
 own label codes from a `LangIdSession`; match `result.code` against an ASR
 model's `capabilities.languages` yourself. `allowed: nil` scores every label,
 an empty array throws `.invalidArgument`, and clips under
-`langIdInfo.minAudioMs` throw `.inputTooShort`.
+`langIdInfo.minAudioMs` throw `.inputTooShort`. Every allowed label comes back,
+ranked by `p`; input longer than `langIdInfo.maxAudioMs` is scored on its first `maxAudioMs`.
 
 ```swift
 let model = try Model(path: "lang-id-voxlingua107-ecapa-Q8_0.gguf")
-let result = try model.langIdSession().run(pcm, options: LangIdOptions(allowed: ["en", "de"], topK: 3))
+let result = try model.langIdSession().run(pcm, options: LangIdOptions(allowed: ["en", "de"]))
 print(result.code ?? "-", result.allowedMass)
 ```
 

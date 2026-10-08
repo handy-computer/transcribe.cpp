@@ -1,5 +1,5 @@
 // transcribe-langid.cpp - LANGID role C ABI (include/transcribe/langid.h):
-// label table, allowed set, crop, softmax, ranking and top-k.
+// label table, allowed set, crop, softmax and ranking.
 
 #include "transcribe-langid.h"
 
@@ -25,10 +25,10 @@ using transcribe::LangidLabels;
 
 namespace {
 
-constexpr size_t k_min_info_size           = TRANSCRIBE_FIELD_END(transcribe_langid_info, min_audio_ms);
-constexpr size_t k_min_session_params_size = TRANSCRIBE_FIELD_END(transcribe_langid_session_params, max_audio_ms);
-constexpr size_t k_min_params_size         = TRANSCRIBE_FIELD_END(transcribe_langid_params, top_k);
-constexpr size_t k_min_result_size         = TRANSCRIBE_FIELD_END(transcribe_langid_result, audio_ms);
+constexpr size_t k_min_info_size           = TRANSCRIBE_FIELD_END(transcribe_langid_info, max_audio_ms);
+constexpr size_t k_min_session_params_size = TRANSCRIBE_FIELD_END(transcribe_langid_session_params, n_threads);
+constexpr size_t k_min_params_size         = TRANSCRIBE_FIELD_END(transcribe_langid_params, n_allowed);
+constexpr size_t k_min_result_size         = TRANSCRIBE_FIELD_END(transcribe_langid_result, allowed_mass);
 constexpr size_t k_min_candidate_size      = TRANSCRIBE_FIELD_END(transcribe_langid_candidate, logit);
 constexpr size_t k_min_timings_size        = TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
 
@@ -196,6 +196,7 @@ static transcribe_status langid_get_info_impl(const transcribe_model * model, tr
     staged.sample_rate  = 16000;
     staged.n_labels     = static_cast<int32_t>(labels->codes.size());
     staged.min_audio_ms = transcribe::k_langid_min_audio_ms;
+    staged.max_audio_ms = transcribe::k_langid_max_audio_ms;
     copy_out_prefix(out, &staged, out->struct_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }
@@ -225,15 +226,9 @@ static transcribe_status langid_session_init_impl(transcribe_model *            
     if (params->n_threads < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    const int32_t max_audio_ms =
-        params->max_audio_ms == 0 ? transcribe::k_langid_default_audio_ms : params->max_audio_ms;
-    if (max_audio_ms < transcribe::k_langid_min_audio_ms) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    *out                 = ops->new_session();
-    (*out)->model        = model;
-    (*out)->n_threads    = params->n_threads;
-    (*out)->max_audio_ms = max_audio_ms;
+    *out              = ops->new_session();
+    (*out)->model     = model;
+    (*out)->n_threads = params->n_threads;
     return TRANSCRIBE_OK;
 }
 
@@ -253,9 +248,6 @@ static transcribe_status langid_run_impl(transcribe_langid_session *      sessio
     if (const auto st = check_input_struct_size(params->struct_size, k_min_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (params->top_k < 0) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
     const transcribe::LangidOps * ops    = langid_ops(session->model);
     const LangidLabels &          labels = ops->labels(session->model);
     std::vector<uint8_t>          mask;
@@ -263,18 +255,17 @@ static transcribe_status langid_run_impl(transcribe_langid_session *      sessio
     if (const auto st = build_allowed_mask(labels, params, mask, n_allowed); st != TRANSCRIBE_OK) {
         return st;
     }
-    // Score the last max_audio_ms; the minimum applies to what is scored.
-    const int64_t max_samples = static_cast<int64_t>(session->max_audio_ms) * k_samples_per_ms;
+    // Score the first k_langid_max_audio_ms; the minimum applies to what is
+    // scored.
+    const int64_t max_samples = static_cast<int64_t>(transcribe::k_langid_max_audio_ms) * k_samples_per_ms;
     const int64_t n_used      = std::min<int64_t>(n_samples, max_samples);
     if (n_used < static_cast<int64_t>(transcribe::k_langid_min_audio_ms) * k_samples_per_ms) {
         return TRANSCRIBE_ERR_INPUT_TOO_SHORT;
     }
-    const float * pcm_used = pcm + (n_samples - n_used);
+    const float * pcm_used = pcm;
 
     session->candidates.clear();
-    session->n_allowed    = 0;
     session->allowed_mass = 0.0f;
-    session->audio_ms     = 0;
     session->t_mel_us     = 0;
     session->t_encode_us  = 0;
     session->t_decode_us  = 0;
@@ -317,14 +308,9 @@ static transcribe_status langid_run_impl(transcribe_langid_session *      sessio
     }
     std::stable_sort(ranked.begin(), ranked.end(),
                      [](const LangidCandidateEntry & a, const LangidCandidateEntry & b) { return a.p > b.p; });
-    if (params->top_k > 0 && static_cast<size_t>(params->top_k) < ranked.size()) {
-        ranked.resize(static_cast<size_t>(params->top_k));
-    }
 
     session->candidates.swap(ranked);
-    session->n_allowed    = n_allowed;
     session->allowed_mass = restricted ? static_cast<float>(mass) : 1.0f;
-    session->audio_ms     = n_used / k_samples_per_ms;
     return TRANSCRIBE_OK;
 }
 
@@ -364,9 +350,7 @@ extern "C" transcribe_status transcribe_langid_get_result(const struct transcrib
     transcribe_langid_result staged{};
     staged.struct_size  = out->struct_size;
     staged.n_candidates = static_cast<int32_t>(session->candidates.size());
-    staged.n_allowed    = session->n_allowed;
     staged.allowed_mass = session->allowed_mass;
-    staged.audio_ms     = session->audio_ms;
     copy_out_prefix(out, &staged, out->struct_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }

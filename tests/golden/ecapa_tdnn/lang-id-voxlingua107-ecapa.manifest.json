@@ -35,8 +35,7 @@
   "langid": {
     "n_labels": 107,
     "label_aliases": ["he=iw", "jv=jw", "fil=tl", "nb=no"],
-    "min_audio_ms": 500,
-    "default_max_audio_ms": 30000
+    "min_audio_ms": 500
   },
   "tolerance_file": "tests/tolerances/ecapa_tdnn.json",
   "cases": [

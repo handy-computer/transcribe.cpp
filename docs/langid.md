@@ -23,7 +23,7 @@ transcribe_langid_run(lid, pcm, n_samples, &lp);   /* 16 kHz mono float32 */
 
 struct transcribe_langid_result r;
 transcribe_langid_result_init(&r);
-transcribe_langid_get_result(lid, &r);
+transcribe_langid_get_result(lid, &r);             /* r.n_candidates == 3 */
 struct transcribe_langid_candidate c;
 transcribe_langid_candidate_init(&c);
 transcribe_langid_get_candidate(lid, 0, &c);       /* c.code, c.p, r.allowed_mass */
@@ -32,7 +32,8 @@ transcribe_langid_session_free(lid);
 transcribe_model_free(m);
 ```
 
-From the CLI: `transcribe-cli -m lang-id-voxlingua107-ecapa-Q8_0.gguf --allow en,de,fr --top 3 clip.wav`.
+From the CLI: `transcribe-cli -m lang-id-voxlingua107-ecapa-Q8_0.gguf --allow en,de,fr --top 3 clip.wav`
+(`--top N` only limits how many ranked candidates the CLI prints; 0 = all).
 
 ## Parameters and results
 
@@ -47,10 +48,13 @@ From the CLI: `transcribe-cli -m lang-id-voxlingua107-ecapa-Q8_0.gguf --allow en
   over every label that falls in the allowed set, 1 when unrestricted. A low
   value means the unrestricted model puts most of its probability outside the
   allowed set.
-- **`top_k`** limits the returned candidates (0 = every allowed label). It
-  does not change `p` or `allowed_mass`.
-- **Length.** Input longer than the session's `max_audio_ms` (default 30000)
-  is scored on its last `max_audio_ms`; `audio_ms` reports what was scored.
+- **Candidates.** Every run returns every allowed label, ranked by `p`
+  (descending; ties keep label order). `n_candidates`
+  (`transcribe_langid_result`) is the allowed-set size after duplicates
+  count once: `n_labels` when unrestricted.
+- **Length.** Input longer than `transcribe_langid_info::max_audio_ms`
+  (30000 for VoxLingua107) is scored on its first `max_audio_ms`, with no
+  error; the window is a fixed fact of the model, not a session setting.
   Scored audio shorter than `transcribe_langid_info::min_audio_ms` (500 ms)
   is `TRANSCRIBE_ERR_INPUT_TOO_SHORT`.
 - **Labels** are the model's own codes. VoxLingua107 uses `iw` (Hebrew),

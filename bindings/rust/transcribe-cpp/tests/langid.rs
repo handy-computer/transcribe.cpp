@@ -6,9 +6,7 @@
 
 mod common;
 
-use transcribe_cpp::{
-    Backend, CancelToken, Error, LangIdOptions, LangIdSessionOptions, Model, ModelOptions, Role,
-};
+use transcribe_cpp::{Backend, CancelToken, Error, LangIdOptions, Model, ModelOptions, Role};
 
 fn noise(n: usize, seed: u32) -> Vec<f32> {
     let mut s = seed | 1;
@@ -38,8 +36,13 @@ fn toy_roles_info_labels() {
     assert!(roles.contains(Role::LangId) && !roles.contains(Role::Asr));
     let info = model.langid_info().unwrap();
     assert_eq!(
-        (info.sample_rate, info.n_labels, info.min_audio_ms),
-        (16000, 5, 500)
+        (
+            info.sample_rate,
+            info.n_labels,
+            info.min_audio_ms,
+            info.max_audio_ms
+        ),
+        (16000, 5, 500, 30000)
     );
     assert_eq!(
         model.langid_labels().unwrap()[2],
@@ -64,7 +67,7 @@ fn toy_run_contract() {
     let pcm = noise(16000, 7);
 
     let r = lid.run(&pcm, &LangIdOptions::default()).unwrap();
-    assert_eq!((r.candidates.len(), r.n_allowed, r.audio_ms), (5, 5, 1000));
+    assert_eq!(r.candidates.len(), 5);
     assert_eq!(r.allowed_mass, 1.0);
     assert_eq!(r.code(), Some(r.candidates[0].code.as_str()));
     let sum: f32 = r.candidates.iter().map(|c| c.p).sum();
@@ -73,10 +76,9 @@ fn toy_run_contract() {
 
     let opts = LangIdOptions {
         allowed: Some(vec!["bb".into(), "dd".into()]),
-        top_k: 0,
     };
     let r = lid.run(&pcm, &opts).unwrap();
-    assert_eq!(r.n_allowed, 2);
+    assert_eq!(r.candidates.len(), 2);
     assert!(r
         .candidates
         .iter()
@@ -85,28 +87,13 @@ fn toy_run_contract() {
 
     let opts = LangIdOptions {
         allowed: Some(vec!["zz".into()]),
-        top_k: 0,
     };
     assert!(matches!(lid.run(&pcm, &opts), Err(Error::Unsupported(_))));
     assert!(matches!(
         lid.run(&pcm[..6400], &LangIdOptions::default()),
         Err(Error::InputTooShort(_))
     ));
-    let top = LangIdOptions {
-        allowed: None,
-        top_k: 2,
-    };
-    assert_eq!(lid.run(&pcm, &top).unwrap().candidates.len(), 2);
     assert!(lid.timings().encode_ms > 0.0);
-
-    let bad = LangIdSessionOptions {
-        n_threads: 0,
-        max_audio_ms: 400,
-    };
-    assert!(matches!(
-        model.langid_session_with(&bad),
-        Err(Error::InvalidArgument(_))
-    ));
 }
 
 #[test]
@@ -133,7 +120,8 @@ fn real_fleurs_top1() {
         return;
     };
     let model = load_cpu(&path);
-    assert_eq!(model.langid_info().unwrap().n_labels, 107);
+    let info = model.langid_info().unwrap();
+    assert_eq!((info.n_labels, info.max_audio_ms), (107, 30000));
     assert_eq!(
         model.langid_label_index("he"),
         model.langid_label_index("iw")
@@ -141,15 +129,8 @@ fn real_fleurs_top1() {
     let mut lid = model.langid_session().unwrap();
     for code in ["en", "de", "fr", "es", "ja", "zh", "ru", "id"] {
         let pcm = common::load_wav(&common::repo_root().join(format!("samples/fleurs-{code}.wav")));
-        let r = lid
-            .run(
-                &pcm,
-                &LangIdOptions {
-                    allowed: None,
-                    top_k: 3,
-                },
-            )
-            .unwrap();
+        let r = lid.run(&pcm, &LangIdOptions::default()).unwrap();
+        assert_eq!(r.candidates.len(), 107);
         assert_eq!(r.code(), Some(code), "{code}: {:?}", r.candidates);
         assert!(r.candidates[0].p >= 0.5);
     }

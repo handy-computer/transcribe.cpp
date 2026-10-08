@@ -105,12 +105,10 @@ struct cli_args {
     int spec_k_drafts        = -1;
 
     // LANGID role (language ID models). --allow restricts the decision to
-    // these labels (codes or aliases); --top keeps the best N candidates
-    // (0 = every allowed label); --max-audio-ms scores the last N ms
-    // (0 = library default, 30000).
+    // these labels (codes or aliases); --top prints only the best N ranked
+    // candidates (0 = all). The library always ranks every allowed label.
     std::vector<std::string> langid_allow;
-    int                      langid_top_k        = 0;
-    int                      langid_max_audio_ms = 0;
+    int                      langid_top = 0;
 };
 
 // -o/--output: write `text` (newline-terminated) to `output` if non-null.

@@ -142,8 +142,8 @@ fn missing_fields_take_defaults() {
     let speaker: SpeakerSegment = serde_json::from_str(r#"{"speaker_id":2}"#).unwrap();
     assert!(speaker.p.is_nan(), "missing p decoded as {}", speaker.p);
 
-    let langid: LangIdResult = serde_json::from_str(r#"{"n_allowed":3}"#).unwrap();
-    assert_eq!(langid.n_allowed, 3);
+    let langid: LangIdResult = serde_json::from_str(r#"{"allowed_mass":0.5}"#).unwrap();
+    assert_eq!(langid.allowed_mass, 0.5);
     assert!(langid.candidates.is_empty());
     let candidate: LangIdCandidate = serde_json::from_str(r#"{"code":"en"}"#).unwrap();
     assert_eq!(candidate.code, "en");

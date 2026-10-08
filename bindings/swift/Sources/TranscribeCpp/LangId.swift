@@ -9,6 +9,8 @@ public struct LangIdInfo: Sendable, Equatable {
     public let nLabels: Int32
     /// Shorter scored audio throws `.inputTooShort`.
     public let minAudioMs: Int32
+    /// Longer input is scored on its first `maxAudioMs` (30000).
+    public let maxAudioMs: Int32
 }
 
 public struct LangIdOptions: Sendable {
@@ -16,11 +18,8 @@ public struct LangIdOptions: Sendable {
     /// label; an empty array throws `.invalidArgument`, and an unknown code
     /// throws `.unsupported`.
     public var allowed: [String]?
-    /// Keep the best `topK` candidates; 0 = every allowed label.
-    public var topK: Int32
-    public init(allowed: [String]? = nil, topK: Int32 = 0) {
+    public init(allowed: [String]? = nil) {
         self.allowed = allowed
-        self.topK = topK
     }
 }
 
@@ -36,15 +35,12 @@ public struct LangIdCandidate: Sendable, Equatable {
 
 /// The result of one `LangIdSession.run`.
 public struct LangIdResult: Sendable, Equatable {
-    /// Ranked by `p`, descending; ties keep label order.
+    /// One per allowed label (every label when unrestricted), ranked by `p`,
+    /// descending; ties keep label order.
     public let candidates: [LangIdCandidate]
-    /// Labels in the allowed set (before `topK`).
-    public let nAllowed: Int32
     /// Unrestricted probability inside the allowed set (1.0 when
     /// unrestricted); a low value means the speech is probably outside it.
     public let allowedMass: Float
-    /// Audio actually scored, after the crop.
-    public let audioMs: Int64
     /// The top candidate's code, if any.
     public var code: String? { candidates.first?.code }
 }
@@ -56,7 +52,8 @@ extension Model {
             var info = transcribe_langid_info()
             transcribe_langid_info_init(&info)
             try TranscribeError.check(transcribe_langid_get_info(ptr, &info), context: "langid_get_info")
-            return LangIdInfo(sampleRate: info.sample_rate, nLabels: info.n_labels, minAudioMs: info.min_audio_ms)
+            return LangIdInfo(sampleRate: info.sample_rate, nLabels: info.n_labels,
+                              minAudioMs: info.min_audio_ms, maxAudioMs: info.max_audio_ms)
         }
     }
 
@@ -81,14 +78,12 @@ extension Model {
         return i >= 0 ? i : nil
     }
 
-    /// Create a LANGID session (`threads` 0 = library default). Longer input
-    /// than `maxAudioMs` is scored on its tail (0 = 30000). Throws
+    /// Create a LANGID session (`threads` 0 = library default). Throws
     /// `.unsupportedRole` when `roles` lacks `.langId`.
-    public func langIdSession(threads: Int32 = 0, maxAudioMs: Int32 = 0) throws -> LangIdSession {
+    public func langIdSession(threads: Int32 = 0) throws -> LangIdSession {
         var params = transcribe_langid_session_params()
         transcribe_langid_session_params_init(&params)
         params.n_threads = threads
-        params.max_audio_ms = maxAudioMs
         var out: OpaquePointer?
         try TranscribeError.check(
             transcribe_langid_session_init(ptr, &params, &out), context: "creating langid session")
@@ -116,7 +111,8 @@ public final class LangIdSession {
 
     deinit { transcribe_langid_session_free(ptr) }
 
-    /// Identify the language of one clip (16 kHz mono float32).
+    /// Identify the language of one clip (16 kHz mono float32). Input longer
+    /// than `LangIdInfo.maxAudioMs` is scored on its first `maxAudioMs`.
     public func run(_ pcm: [Float], options: LangIdOptions = .init()) throws -> LangIdResult {
         if let allowed = options.allowed, allowed.isEmpty {
             // NULL would mean "every label", the opposite of an empty list.
@@ -140,7 +136,6 @@ public final class LangIdSession {
                     params.allowed = codeBuf.baseAddress
                     params.n_allowed = Int32(codeBuf.count)
                 }
-                params.top_k = options.topK
                 return pcm.withUnsafeBufferPointer {
                     transcribe_langid_run(ptr, $0.baseAddress, Int32($0.count), &params)
                 }
@@ -156,8 +151,7 @@ public final class LangIdSession {
                     name: c.name.map { String(cString: $0) } ?? "",
                     p: c.p, logit: c.logit)
             }
-            return LangIdResult(candidates: candidates, nAllowed: res.n_allowed,
-                                allowedMass: res.allowed_mass, audioMs: res.audio_ms)
+            return LangIdResult(candidates: candidates, allowedMass: res.allowed_mass)
         }
     }
 

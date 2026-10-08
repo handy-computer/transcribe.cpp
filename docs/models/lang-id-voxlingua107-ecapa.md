@@ -7,7 +7,7 @@ Spoken language identification over 107 languages: SpeechBrain's
 ECAPA-TDNN trained on VoxLingua107. NOT a transcription model: a run
 returns the model's language labels ranked by probability, optionally
 restricted to a caller-chosen set. Takes 16 kHz mono WAV; scores up to
-the last 30 s of a clip.
+the first 30 s of a clip.
 <!-- /catalog -->
 
 ## What it's for
@@ -37,7 +37,7 @@ Licensed Apache-2.0. Ported from upstream commit [`0253049`](https://huggingface
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `2fdb5c95` on 2026-10-07.
+Top-1 accuracy on FLEURS multilingual (3,000 utterances), scored on cpu. Measured at transcribe.cpp `9cfa5670` on 2026-10-08.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
@@ -54,13 +54,14 @@ transcribe.cpp model page.
 | --- | ---: | ---: | ---: |
 | F32  | 85.23% (84.07-86.47) | 12000 / 12000 | 7.3e-05 |
 | F16  | 85.17% (84.00-86.43) | 11986 / 12000 | 0.095 |
-| Q8_0 | 86.30% (85.17-87.50) | 11705 / 12000 | 2.9 |
+| Q8_0 | 86.30% (85.17-87.50) | 11706 / 12000 | 2.9 |
 
-Measured at transcribe.cpp `2fdb5c95` on 2026-10-07.
+Measured at transcribe.cpp `9cfa5670` on 2026-10-08.
 <!-- /catalog -->
 
 Agreement counts the scored sweep's top-1 decisions that match the
-SpeechBrain reference on the same audio, over the 3 / 5 / 10 s / full crops.
+SpeechBrain reference on the same audio, over the 3 / 5 / 10 s / full crops
+(`full` is the whole clip, or its first 30 s when longer).
 
 ## Quick Start
 
@@ -148,8 +149,8 @@ reference on every clip.
   and out-of-set languages still get a top candidate.
 - **No Cantonese label**: Cantonese is classified as `zh`.
 - **Minimum 500 ms** of scored audio (`TRANSCRIBE_ERR_INPUT_TOO_SHORT`).
-- **Scores at most the last 30 s** by default
-  (`transcribe_langid_session_params::max_audio_ms`).
+- **Scores at most the first 30 s** of longer input
+  (`transcribe_langid_info::max_audio_ms`, fixed).
 - **Q8_0 weights are widened to F16 at load**, so Q8_0 computes and uses
   memory like F16.
 

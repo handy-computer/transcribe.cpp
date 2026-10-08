@@ -98,12 +98,13 @@ identify the spoken language through a langid session. `run()` returns a
 `allowed=None` scores every label; `allowed_mass` is the unrestricted
 probability the allowed set captured. An empty `allowed` list raises
 `InvalidArgument`; clips under `model.langid_info.min_audio_ms` raise
-`InputTooShort`. Locking, `Busy`, `cancel()` and `close()` work as on
-`Session`.
+`InputTooShort`, and longer ones than `max_audio_ms` are scored on their first
+`max_audio_ms`. Every allowed label comes back as a candidate. Locking,
+`Busy`, `cancel()` and `close()` work as on `Session`.
 
 ```python
 with model.langid_session() as lid:
-    result = lid.run(pcm, allowed=["en", "de", "fr"], top_k=3)
+    result = lid.run(pcm, allowed=["en", "de", "fr"])
     print(result.code, result.candidates[0].p, result.allowed_mass)
 ```
 

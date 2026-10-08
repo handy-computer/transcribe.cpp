@@ -225,6 +225,7 @@ impl Model {
             sample_rate: raw.sample_rate,
             n_labels: raw.n_labels,
             min_audio_ms: raw.min_audio_ms,
+            max_audio_ms: raw.max_audio_ms,
         })
     }
 

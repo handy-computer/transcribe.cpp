@@ -139,12 +139,12 @@ race an in-flight call.
 
 A LANGID model gets `LangIdSession` from `model.langid_session()` (Python,
 Rust), `model.langIdSession()` (Swift) or `model.createLangIdSession()`
-(TypeScript), with `max_audio_ms` / `maxAudioMs` as a session option, plus
-`langid_info` / `langIdInfo` / `langidInfo` (sample rate, label count,
-minimum audio) and the label table (codes, names, and alias lookup).
-`run(pcm, allowed=…, top_k=…)` returns a copied-out result: candidates ranked
-by `p` (index, code, name, `p`, `logit`), `n_allowed`,
-`allowed_mass` and the scored `audio_ms`.
+(TypeScript), plus `langid_info` / `langIdInfo` / `langidInfo` (sample
+rate, label count, minimum audio, and the fixed maximum: longer input is
+scored on its first `max_audio_ms`) and the label table (codes, names, and
+alias lookup). `run(pcm, allowed=…)` returns a copied-out result: every
+allowed label ranked by `p` (index, code, name, `p`, `logit`) and
+`allowed_mass`.
 
 `allowed` is the first caller-owned `const char * const *` input. Every
 binding keeps the array and each encoded string alive until the native call

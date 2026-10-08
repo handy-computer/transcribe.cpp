@@ -20,7 +20,7 @@ final class LangIdTests: XCTestCase {
     func testToyRolesInfoLabels() throws {
         let model = try cpuModel(try Fixtures.langIdToyModelPath())
         XCTAssertEqual(model.roles, .langId)
-        XCTAssertEqual(try model.langIdInfo, LangIdInfo(sampleRate: 16000, nLabels: 5, minAudioMs: 500))
+        XCTAssertEqual(try model.langIdInfo, LangIdInfo(sampleRate: 16000, nLabels: 5, minAudioMs: 500, maxAudioMs: 30000))
         let labels = try model.langIdLabels
         XCTAssertEqual(labels[2].code, "cc")
         XCTAssertEqual(labels[2].name, "Charlie")
@@ -38,17 +38,14 @@ final class LangIdTests: XCTestCase {
 
         let r = try lid.run(pcm)
         XCTAssertEqual(r.candidates.count, 5)
-        XCTAssertEqual(r.nAllowed, 5)
         XCTAssertEqual(r.allowedMass, 1.0)
-        XCTAssertEqual(r.audioMs, 1000)
         XCTAssertEqual(r.code, r.candidates[0].code)
         XCTAssertEqual(r.candidates.map(\.p).reduce(0, +), 1.0, accuracy: 1e-5)
 
         let restricted = try lid.run(pcm, options: LangIdOptions(allowed: ["bb", "dd"]))
+        XCTAssertEqual(restricted.candidates.count, 2)
         XCTAssertEqual(Set(restricted.candidates.map(\.code)), ["bb", "dd"])
         XCTAssertLessThan(restricted.allowedMass, 1.0)
-
-        XCTAssertEqual(try lid.run(pcm, options: LangIdOptions(topK: 2)).candidates.count, 2)
 
         XCTAssertThrowsError(try lid.run(pcm, options: LangIdOptions(allowed: []))) { error in
             guard case TranscribeError.invalidArgument = error else { return XCTFail("\(error)") }
@@ -88,12 +85,14 @@ final class LangIdTests: XCTestCase {
     func testRealFleursTop1() throws {
         let model = try cpuModel(try Fixtures.langIdModelPath())
         XCTAssertEqual(try model.langIdInfo.nLabels, 107)
+        XCTAssertEqual(try model.langIdInfo.maxAudioMs, 30000)
         XCTAssertEqual(model.langIdLabelIndex("he"), model.langIdLabelIndex("iw"))
         let lid = try model.langIdSession()
         for code in ["en", "de", "fr", "es", "ja", "zh", "ru", "id"] {
             let pcm = try Fixtures.loadWav(
                 Fixtures.repoRoot().appendingPathComponent("samples/fleurs-\(code).wav").path)
-            let r = try lid.run(pcm, options: LangIdOptions(topK: 3))
+            let r = try lid.run(pcm)
+            XCTAssertEqual(r.candidates.count, 107)
             XCTAssertEqual(r.code, code)
             XCTAssertGreaterThanOrEqual(r.candidates[0].p, 0.5)
         }

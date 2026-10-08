@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "d544d70a2b5acf50";
+export const PUBLIC_HEADER_HASH = "e628600daea42c4a";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -164,10 +164,10 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_diarize_info': { size: 16, align: 8, offsets: {'struct_size': 0, 'sample_rate': 8, 'max_speakers': 12} },
   'transcribe_diarize_session_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'n_threads': 8} },
   'transcribe_diarize_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'family': 8} },
-  'transcribe_langid_info': { size: 24, align: 8, offsets: {'struct_size': 0, 'sample_rate': 8, 'n_labels': 12, 'min_audio_ms': 16} },
-  'transcribe_langid_session_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'n_threads': 8, 'max_audio_ms': 12} },
-  'transcribe_langid_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'allowed': 8, 'n_allowed': 16, 'top_k': 20} },
-  'transcribe_langid_result': { size: 32, align: 8, offsets: {'struct_size': 0, 'n_candidates': 8, 'n_allowed': 12, 'allowed_mass': 16, 'audio_ms': 24} },
+  'transcribe_langid_info': { size: 24, align: 8, offsets: {'struct_size': 0, 'sample_rate': 8, 'n_labels': 12, 'min_audio_ms': 16, 'max_audio_ms': 20} },
+  'transcribe_langid_session_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'n_threads': 8} },
+  'transcribe_langid_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'allowed': 8, 'n_allowed': 16} },
+  'transcribe_langid_result': { size: 16, align: 8, offsets: {'struct_size': 0, 'n_candidates': 8, 'allowed_mass': 12} },
   'transcribe_langid_candidate': { size: 40, align: 8, offsets: {'struct_size': 0, 'index': 8, 'code': 16, 'name': 24, 'p': 32, 'logit': 36} },
   'transcribe_moonshine_streaming_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'min_decode_interval_ms': 16} },
   'transcribe_parakeet_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'att_context_right': 16} },
@@ -227,10 +227,10 @@ export function defineTypes(koffi: any): Record<string, any> {
   T['transcribe_diarize_info'] = koffi.struct({ struct_size: 'uint64_t', sample_rate: 'int32_t', max_speakers: 'int32_t' });
   T['transcribe_diarize_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int32_t' });
   T['transcribe_diarize_params'] = koffi.struct({ struct_size: 'uint64_t', family: 'void *' });
-  T['transcribe_langid_info'] = koffi.struct({ struct_size: 'uint64_t', sample_rate: 'int32_t', n_labels: 'int32_t', min_audio_ms: 'int32_t' });
-  T['transcribe_langid_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int32_t', max_audio_ms: 'int32_t' });
-  T['transcribe_langid_params'] = koffi.struct({ struct_size: 'uint64_t', allowed: 'void *', n_allowed: 'int32_t', top_k: 'int32_t' });
-  T['transcribe_langid_result'] = koffi.struct({ struct_size: 'uint64_t', n_candidates: 'int32_t', n_allowed: 'int32_t', allowed_mass: 'float', audio_ms: 'int64_t' });
+  T['transcribe_langid_info'] = koffi.struct({ struct_size: 'uint64_t', sample_rate: 'int32_t', n_labels: 'int32_t', min_audio_ms: 'int32_t', max_audio_ms: 'int32_t' });
+  T['transcribe_langid_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int32_t' });
+  T['transcribe_langid_params'] = koffi.struct({ struct_size: 'uint64_t', allowed: 'void *', n_allowed: 'int32_t' });
+  T['transcribe_langid_result'] = koffi.struct({ struct_size: 'uint64_t', n_candidates: 'int32_t', allowed_mass: 'float' });
   T['transcribe_langid_candidate'] = koffi.struct({ struct_size: 'uint64_t', index: 'int32_t', code: 'char *', name: 'char *', p: 'float', logit: 'float' });
   T['transcribe_moonshine_streaming_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], min_decode_interval_ms: 'int32_t' });
   T['transcribe_parakeet_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], att_context_right: 'int32_t' });

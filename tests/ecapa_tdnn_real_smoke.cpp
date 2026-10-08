@@ -1,6 +1,7 @@
 // ecapa_tdnn_real_smoke.cpp - the real VoxLingua107 ECAPA-TDNN GGUF through
 // the public LANGID API: label table, aliases, top-1 on committed FLEURS
-// clips, the crop on a long clip, and a clip cut to 800 ms, all on the CPU
+// clips, the crop to the first 30 s of a long clip, and a clip cut to 800 ms,
+// all on the CPU
 // backend; then, when a GPU backend loads, the stock-op GPU graph against the
 // CPU graph's logits. Gated by TRANSCRIBE_ECAPA_TDNN_GGUF (RC 77 skip).
 
@@ -10,6 +11,7 @@
 #include "wav.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -39,7 +41,7 @@ bool load_sample(const char * name, std::vector<float> & pcm) {
 }
 
 // Top-1 code and p for one clip, or "" when the run fails.
-std::string top1(transcribe_langid_session * s, const char * wav, float * p_out, int64_t * audio_ms = nullptr) {
+std::string top1(transcribe_langid_session * s, const char * wav, float * p_out) {
     std::vector<float> pcm;
     if (!load_sample(wav, pcm)) {
         return "";
@@ -50,12 +52,6 @@ std::string top1(transcribe_langid_session * s, const char * wav, float * p_out,
         ++g_failures;
         return "";
     }
-    transcribe_langid_result r;
-    transcribe_langid_result_init(&r);
-    transcribe_langid_get_result(s, &r);
-    if (audio_ms != nullptr) {
-        *audio_ms = r.audio_ms;
-    }
     transcribe_langid_candidate c;
     transcribe_langid_candidate_init(&c);
     transcribe_langid_get_candidate(s, 0, &c);
@@ -63,11 +59,9 @@ std::string top1(transcribe_langid_session * s, const char * wav, float * p_out,
     return c.code != nullptr ? c.code : "";
 }
 
-// Every label's logit for one clip, by label index; empty when the run fails.
-std::vector<float> all_logits(transcribe_langid_session * s, const char * wav) {
-    std::vector<float> pcm;
-    if (!load_sample(wav, pcm) ||
-        transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) != TRANSCRIBE_OK) {
+// Every label's logit for PCM, by label index; empty when the run fails.
+std::vector<float> all_logits(transcribe_langid_session * s, const std::vector<float> & pcm) {
+    if (pcm.empty() || transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) != TRANSCRIBE_OK) {
         return {};
     }
     transcribe_langid_result r;
@@ -83,6 +77,11 @@ std::vector<float> all_logits(transcribe_langid_session * s, const char * wav) {
         }
     }
     return out;
+}
+
+std::vector<float> all_logits(transcribe_langid_session * s, const char * wav) {
+    std::vector<float> pcm;
+    return load_sample(wav, pcm) ? all_logits(s, pcm) : std::vector<float>{};
 }
 
 // general.file_type of the GGUF (0 = all F32, 1 = F16, 7 = Q8_0), or -1.
@@ -177,7 +176,7 @@ int main() {
     transcribe_langid_info info;
     transcribe_langid_info_init(&info);
     CHECK(transcribe_langid_get_info(m, &info) == TRANSCRIBE_OK);
-    CHECK(info.n_labels == 107 && info.sample_rate == 16000 && info.min_audio_ms == 500);
+    CHECK(info.n_labels == 107 && info.sample_rate == 16000 && info.min_audio_ms == 500 && info.max_audio_ms == 30000);
     // Modern ISO codes alias the VoxLingua107 legacy labels.
     CHECK(transcribe_langid_label_index(m, "he") == transcribe_langid_label_index(m, "iw"));
     CHECK(transcribe_langid_label_index(m, "nb") == transcribe_langid_label_index(m, "no"));
@@ -209,13 +208,24 @@ int main() {
         }
     }
 
-    // Long input is scored on its last 30 s; a clip just over the minimum
-    // still runs.
-    float   p        = 0.0f;
-    int64_t audio_ms = 0;
-    top1(s, "ru-long.wav", &p, &audio_ms);
-    CHECK(audio_ms == 30000);
+    // Long input (ru-long.wav, ~33.8 s) is scored on its first max_audio_ms:
+    // the whole clip and its first-30 s slice give identical logits, the
+    // last-30 s slice does not.
     std::vector<float> pcm;
+    const size_t       max_n = static_cast<size_t>(info.max_audio_ms) * static_cast<size_t>(info.sample_rate) / 1000;
+    if (load_sample("ru-long.wav", pcm)) {
+        CHECK(pcm.size() > max_n);
+        if (pcm.size() > max_n) {
+            const std::vector<float> last(pcm.end() - static_cast<std::ptrdiff_t>(max_n), pcm.end());
+            const std::vector<float> first(pcm.begin(), pcm.begin() + static_cast<std::ptrdiff_t>(max_n));
+            const std::vector<float> l_full  = all_logits(s, pcm);
+            const std::vector<float> l_last  = all_logits(s, last);
+            const std::vector<float> l_first = all_logits(s, first);
+            CHECK(l_full.size() == 107 && l_full == l_first);
+            CHECK(l_last.size() == 107 && l_last != l_full);
+        }
+    }
+    // A clip just over the minimum still runs.
     if (load_sample("fleurs-en.wav", pcm)) {
         pcm.resize(12800);  // 800 ms
         CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
@@ -225,7 +235,7 @@ int main() {
         transcribe_langid_candidate c;
         transcribe_langid_candidate_init(&c);
         transcribe_langid_get_candidate(s, 0, &c);
-        CHECK(r.audio_ms == 800 && std::isfinite(c.p));
+        CHECK(r.n_candidates == 107 && std::isfinite(c.p));
     }
 
     transcribe_langid_session_free(s);

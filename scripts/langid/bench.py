@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
             t0 = time.perf_counter()
             model = t.Model(str(gguf), backend=backend)
             load_ms = (time.perf_counter() - t0) * 1000
-            lid = model.langid_session(n_threads=0, max_audio_ms=60000)
+            lid = model.langid_session(n_threads=0)
             for seconds in durations:
                 d = float(seconds)
                 driver.cooldown_wait(cooldown_c, 300.0, 10.0)

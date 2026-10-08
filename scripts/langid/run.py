@@ -15,10 +15,12 @@ line, then one row per (utterance, crop) with all 107 pre-softmax logits.
       --manifest samples/langid/fleurs-*.manifest.jsonl \\
       --out reports/langid/cpp-f32-untrimmed.jsonl
 
-A crop of N is the first N seconds of the clip, `full` the whole clip; a
-row's `audio_s` is what was scored. Both engines get the same float samples
-(the clips are 16-bit, so a crop is exact). SpeechBrain runs a batch of one:
-padding a batch changes its normalisation span.
+A crop of N is the first N seconds of the clip; `full` is the whole clip, or
+its first MAX_AUDIO_S when longer (transcribe.cpp always scores only the first
+transcribe_langid_info::max_audio_ms, so the script cuts it for both
+engines). A row's `audio_s` is what was scored. Both engines get the same
+float samples (the clips are 16-bit, so a crop is exact). SpeechBrain runs a
+batch of one: padding a batch changes its normalisation span.
 """
 
 from __future__ import annotations
@@ -27,7 +29,6 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
-import math
 import os
 import sys
 import time
@@ -39,6 +40,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 SAMPLE_RATE = 16000
+# transcribe_langid_info::max_audio_ms of the VoxLingua107 model: longer input
+# is scored on its first MAX_AUDIO_S.
+MAX_AUDIO_S = 30
 
 
 class SpeechBrainEngine:
@@ -83,11 +87,10 @@ class SpeechBrainEngine:
 
 
 class CppEngine:
-    """The GGUF loaded once; each clip is one LangIdSession.run with top_k 0,
+    """The GGUF loaded once; each clip is one unrestricted LangIdSession.run,
     so every label's logit comes back."""
 
-    def __init__(self, model: Path, backend: str, threads: int, max_audio_ms: int,
-                 library: Path | None) -> None:
+    def __init__(self, model: Path, backend: str, threads: int, library: Path | None) -> None:
         if library is not None:
             os.environ["TRANSCRIBE_LIBRARY"] = str(library.resolve())
         sys.path.insert(0, str(REPO_ROOT / "bindings" / "python" / "src"))
@@ -95,7 +98,7 @@ class CppEngine:
         from gguf import GGUFReader
 
         self.model = transcribe_cpp.Model(str(model), backend=backend)
-        self.session = self.model.langid_session(n_threads=threads, max_audio_ms=max_audio_ms)
+        self.session = self.model.langid_session(n_threads=threads)
         self.labels = [code for code, _name in self.model.langid_labels]
         fields = GGUFReader(str(model)).fields
         kv = lambda key: str(fields[key].contents()) if key in fields else None  # noqa: E731
@@ -104,7 +107,6 @@ class CppEngine:
         self.recipe = {
             "backend": backend,
             "threads": threads,
-            "max_audio_ms": max_audio_ms,
             "gguf_sha256": sha,
             "gguf_source_commit": kv("general.source.commit"),
             "gguf_source_repo": kv("general.name"),
@@ -115,7 +117,7 @@ class CppEngine:
 
     def logits(self, pcm: np.ndarray) -> np.ndarray:
         logits = np.zeros(len(self.labels), dtype=np.float32)
-        for c in self.session.run(pcm, top_k=0).candidates:
+        for c in self.session.run(pcm).candidates:
             logits[c.index] = c.logit
         return logits
 
@@ -156,10 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.engine == "speechbrain":
         engine = SpeechBrainEngine(args.model, args.threads)
     else:
-        # Room for the longest clip, so `full` scores the same audio as SpeechBrain.
-        max_audio_ms = int(math.ceil(longest_s / 10.0) * 10.0 * 1000)
-        engine = CppEngine(Path(args.model), args.backend, args.threads, max_audio_ms,
-                           args.library)
+        engine = CppEngine(Path(args.model), args.backend, args.threads, args.library)
 
     header = {
         "type": "header",
@@ -167,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         "model": args.model,
         "recipe": {
             "crops": [str(c) for c in crops],
+            "max_audio_s": MAX_AUDIO_S,
             "manifests": [str(m) for m in args.manifest],
             "manifest_sha256": {str(m): hashlib.sha256(m.read_bytes()).hexdigest()
                                 for m in args.manifest},
@@ -189,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
                 pcm = read_audio(REPO_ROOT / row["audio"])
                 if crop != "full":
                     pcm = pcm[: crop * SAMPLE_RATE]
+                else:
+                    pcm = pcm[:MAX_AUDIO_S * SAMPLE_RATE]
                 logits = engine.logits(pcm)
                 z = np.exp(logits.astype(np.float64) - logits.max())
                 top = int(np.argmax(z))

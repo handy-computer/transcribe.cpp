@@ -3,7 +3,7 @@
 //
 // Families compute logits over their label table; the role dispatcher
 // (transcribe-langid.cpp) crops the input, applies the allowed set, and
-// owns the softmax, ranking and top-k.
+// owns the softmax and ranking.
 
 #pragma once
 
@@ -41,9 +41,10 @@ transcribe_status build_langid_labels(std::vector<std::string>         codes,
                                       const char *                     tag,
                                       LangidLabels &                   out);
 
-// Scored-audio bounds every LANGID model shares.
-constexpr int32_t k_langid_min_audio_ms     = 500;
-constexpr int32_t k_langid_default_audio_ms = 30000;
+// Scored-audio bounds every LANGID model shares. Longer input is scored on
+// its first k_langid_max_audio_ms.
+constexpr int32_t k_langid_min_audio_ms = 500;
+constexpr int32_t k_langid_max_audio_ms = 30000;
 
 struct LangidOps {
     const LangidLabels & (*labels)(const transcribe_model * model);
@@ -60,11 +61,7 @@ struct LangidOps {
 }  // namespace transcribe
 
 struct transcribe_langid_session : transcribe::SessionCore {
-    int32_t max_audio_ms = transcribe::k_langid_default_audio_ms;
-
     // Last successful run's result; empty / zero otherwise.
     std::vector<transcribe::LangidCandidateEntry> candidates;
-    int32_t                                       n_allowed    = 0;
     float                                         allowed_mass = 0.0f;
-    int64_t                                       audio_ms     = 0;
 };

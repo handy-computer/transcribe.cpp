@@ -106,7 +106,7 @@ every label, `Some(vec![])` is `Error::InvalidArgument`, and clips under
 use transcribe_cpp::{LangIdOptions, Model};
 let model = Model::load("lang-id-voxlingua107-ecapa-Q8_0.gguf")?;
 let mut lid = model.langid_session()?;
-let opts = LangIdOptions { allowed: Some(vec!["en".into(), "de".into()]), top_k: 3 };
+let opts = LangIdOptions { allowed: Some(vec!["en".into(), "de".into()]) };
 let result = lid.run(&pcm, &opts)?;
 println!("{:?} (mass {})", result.code(), result.allowed_mass);
 # Ok::<(), transcribe_cpp::Error>(())

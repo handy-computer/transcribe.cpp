@@ -29,14 +29,12 @@ struct transcribe_langid_info {
     int32_t  sample_rate;  /* input PCM rate (16000) */
     int32_t  n_labels;     /* label indices are [0, n_labels) */
     int32_t  min_audio_ms; /* shorter scored audio is TRANSCRIBE_ERR_INPUT_TOO_SHORT */
+    int32_t  max_audio_ms; /* longer input is scored on its FIRST max_audio_ms (30000) */
 };
 
 struct transcribe_langid_session_params {
     uint64_t struct_size;
     int32_t  n_threads; /* 0 = library default */
-    /* Longer input is scored on its LAST max_audio_ms. 0 = 30000. A value
-     * below transcribe_langid_info::min_audio_ms is INVALID_ARG. */
-    int32_t  max_audio_ms;
 };
 
 struct transcribe_langid_params {
@@ -48,19 +46,18 @@ struct transcribe_langid_params {
      * is TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE. Duplicates count once. */
     const char * const * allowed;
     int32_t              n_allowed;
-    int32_t              top_k; /* keep the best top_k candidates; 0 = every allowed label */
 };
 
 /* Summary of the last run. */
 struct transcribe_langid_result {
     uint64_t struct_size;
-    int32_t  n_candidates; /* rows readable via transcribe_langid_get_candidate */
-    int32_t  n_allowed;    /* labels in the allowed set (before top_k) */
+    /* Rows readable via transcribe_langid_get_candidate: one per label in the
+     * allowed set (duplicates counted once), n_labels when unrestricted. */
+    int32_t  n_candidates;
     /* Share of the softmax over every label that falls in the allowed set;
      * 1 when unrestricted. A low value means the speech is probably outside
      * the allowed set. */
     float    allowed_mass;
-    int64_t  audio_ms; /* audio actually scored, after the crop */
 };
 
 /* One ranked label. code and name point at model-owned storage, valid until
@@ -107,11 +104,12 @@ TRANSCRIBE_API void transcribe_langid_set_abort_callback(struct transcribe_langi
 
 /*
  * Identify the language of one clip: 16 kHz mono float32 PCM, every sample
- * finite. params may be NULL for defaults. Input longer than the session's
- * max_audio_ms is scored on its last max_audio_ms. Replaces the previous
- * result. Malformed input (NULL pointers, n_samples <= 0, NaN / Inf, a bad
- * allowed list, an unknown code, scored audio shorter than min_audio_ms)
- * returns an error before the previous result is touched.
+ * finite. params may be NULL for defaults. Input longer than
+ * transcribe_langid_info::max_audio_ms is scored on its first max_audio_ms
+ * (no error). Every allowed label is ranked. Replaces the previous result.
+ * Malformed input (NULL pointers, n_samples <= 0, NaN / Inf, a bad allowed
+ * list, an unknown code, scored audio shorter than min_audio_ms) returns an
+ * error before the previous result is touched.
  */
 TRANSCRIBE_API transcribe_status transcribe_langid_run(struct transcribe_langid_session *      session,
                                                        const float *                           pcm,

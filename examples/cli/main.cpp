@@ -84,8 +84,8 @@ void print_usage(const char * argv0) {
                  "                        speaker ids; granite-plus requests its speaker task\n"
                  "  --no-diarize          disable speaker attribution (the library default)\n"
                  "  --allow CODES         (language ID) comma-separated labels to choose from\n"
-                 "  --top N               (language ID) print the best N candidates (0 = all)\n"
-                 "  --max-audio-ms N      (language ID) score the last N ms (0 = 30000)\n"
+                 "  --top N               (language ID) print only the best N ranked\n"
+                 "                        candidates (0 = all; default)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
                  "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
                  "                        N-ms PCM slices; requires model to advertise\n"
@@ -445,17 +445,11 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) {
                 return false;
             }
-            out.langid_top_k = std::atoi(v);
-            if (out.langid_top_k < 0) {
+            out.langid_top = std::atoi(v);
+            if (out.langid_top < 0) {
                 std::fprintf(stderr, "error: --top must be >= 0\n");
                 return false;
             }
-        } else if (a == "--max-audio-ms") {
-            const char * v = take_value(a.c_str());
-            if (!v) {
-                return false;
-            }
-            out.langid_max_audio_ms = std::atoi(v);
         } else if (a == "--diarize") {
             out.diarize     = true;
             out.diarize_set = true;

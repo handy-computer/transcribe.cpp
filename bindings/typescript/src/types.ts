@@ -320,13 +320,13 @@ export interface LangIdInfo {
   nLabels: number;
   /** Shorter scored audio throws InputTooShort. */
   minAudioMs: number;
+  /** Longer input is scored on its first maxAudioMs (30000). */
+  maxAudioMs: number;
 }
 
 export interface LangIdSessionOptions {
   /** CPU threads for CPU-side ops; 0 = library default. */
   nThreads?: number;
-  /** Longer input is scored on its last maxAudioMs; 0 = 30000. */
-  maxAudioMs?: number;
 }
 
 export interface LangIdOptions {
@@ -338,8 +338,6 @@ export interface LangIdOptions {
    * unknown code throws UnsupportedRequest.
    */
   allowed?: readonly string[] | null;
-  /** Keep the best topK candidates; 0 = every allowed label. */
-  topK?: number;
 }
 
 /** One ranked label; `code` is the model's own label ("en", "iw"). */
@@ -353,14 +351,13 @@ export interface LangIdCandidate {
 }
 
 export interface LangIdResult {
-  /** Ranked by p, descending; ties keep label order. */
+  /**
+   * Every allowed label (duplicates once; every label when unrestricted),
+   * ranked by p, descending; ties keep label order.
+   */
   candidates: LangIdCandidate[];
   /** The top candidate's code, or null with no candidates. */
   code: string | null;
-  /** Labels in the allowed set (before topK). */
-  nAllowed: number;
   /** Unrestricted probability inside the allowed set (1 when unrestricted). */
   allowedMass: number;
-  /** Audio actually scored, after the crop. */
-  audioMs: number;
 }

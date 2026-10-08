@@ -15,6 +15,7 @@
 #include "transcribe/langid.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -66,11 +67,10 @@ transcribe_model * load_cpu(const char * name, transcribe_status * st_out = null
     return m;
 }
 
-transcribe_langid_session * open_session(transcribe_model * m, int n_threads, int max_audio_ms = 0) {
+transcribe_langid_session * open_session(transcribe_model * m, int n_threads) {
     transcribe_langid_session_params sp;
     transcribe_langid_session_params_init(&sp);
     sp.n_threads                  = n_threads;
-    sp.max_audio_ms               = max_audio_ms;
     transcribe_langid_session * s = nullptr;
     CHECK(transcribe_langid_session_init(m, &sp, &s) == TRANSCRIBE_OK);
     return s;
@@ -102,7 +102,7 @@ void test_model_surface(transcribe_model * m) {
     transcribe_langid_info info;
     transcribe_langid_info_init(&info);
     CHECK(transcribe_langid_get_info(m, &info) == TRANSCRIBE_OK);
-    CHECK(info.sample_rate == 16000 && info.n_labels == 5 && info.min_audio_ms == 500);
+    CHECK(info.sample_rate == 16000 && info.n_labels == 5 && info.min_audio_ms == 500 && info.max_audio_ms == 30000);
     CHECK(std::strcmp(transcribe_langid_label_code(m, 2), "cc") == 0);
     CHECK(std::strcmp(transcribe_langid_label_name(m, 2), "Charlie") == 0);
     CHECK(transcribe_langid_label_index(m, "xx") == 0);  // alias from the GGUF
@@ -122,7 +122,7 @@ void test_run(transcribe_model * m) {
 
     CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
     const transcribe_langid_result r = result_of(s);
-    CHECK(r.n_candidates == 5 && r.n_allowed == 5 && r.allowed_mass == 1.0f && r.audio_ms == 1000);
+    CHECK(r.n_candidates == 5 && r.allowed_mass == 1.0f);
     const auto first = candidates_of(s);
     double     sum   = 0.0;
     for (size_t i = 0; i < first.size(); ++i) {
@@ -172,6 +172,50 @@ void test_thread_invariance(transcribe_model * m) {
     }
     transcribe_langid_session_free(s1);
     transcribe_langid_session_free(s4);
+}
+
+// Input longer than info.max_audio_ms is scored on its FIRST max_audio_ms:
+// the full clip and its first-max_audio_ms slice give bit-identical
+// candidates (the graph sees the same samples), while the last slice of
+// the same length gives different logits. The two halves are different
+// noise, so the first-vs-last check is meaningful.
+void test_crop_keeps_first(transcribe_model * m) {
+    transcribe_langid_info info;
+    transcribe_langid_info_init(&info);
+    CHECK(transcribe_langid_get_info(m, &info) == TRANSCRIBE_OK);
+    const size_t max_n = static_cast<size_t>(info.max_audio_ms) * static_cast<size_t>(info.sample_rate) / 1000;
+    const size_t extra = static_cast<size_t>(info.sample_rate) * 5;  // 5 s over the window
+    CHECK(max_n > 0 && extra > static_cast<size_t>(info.min_audio_ms) * static_cast<size_t>(info.sample_rate) / 1000);
+
+    std::vector<float>       pcm  = noise(max_n, 13);
+    const std::vector<float> tail = noise(extra, 11);
+    pcm.insert(pcm.end(), tail.begin(), tail.end());
+    const std::vector<float> last(pcm.end() - static_cast<std::ptrdiff_t>(max_n), pcm.end());
+    const std::vector<float> first(pcm.begin(), pcm.begin() + static_cast<std::ptrdiff_t>(max_n));
+
+    transcribe_langid_session * s = open_session(m, 2);
+    CHECK(transcribe_langid_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
+    const auto full = candidates_of(s);
+    CHECK(transcribe_langid_run(s, first.data(), static_cast<int>(first.size()), nullptr) == TRANSCRIBE_OK);
+    const auto from_first = candidates_of(s);
+    CHECK(transcribe_langid_run(s, last.data(), static_cast<int>(last.size()), nullptr) == TRANSCRIBE_OK);
+    const auto from_last = candidates_of(s);
+
+    CHECK(full.size() == 5 && from_first.size() == full.size() && from_last.size() == full.size());
+    for (size_t i = 0; i < full.size() && i < from_first.size(); ++i) {
+        CHECK(from_first[i].index == full[i].index);
+        CHECK(from_first[i].logit == full[i].logit && from_first[i].p == full[i].p);
+    }
+    std::vector<float> logit_full(5, 0.0f);
+    std::vector<float> logit_last(5, 0.0f);
+    for (size_t i = 0; i < full.size() && i < from_last.size(); ++i) {
+        if (full[i].index >= 0 && full[i].index < 5 && from_last[i].index >= 0 && from_last[i].index < 5) {
+            logit_full[static_cast<size_t>(full[i].index)]      = full[i].logit;
+            logit_last[static_cast<size_t>(from_last[i].index)] = from_last[i].logit;
+        }
+    }
+    CHECK(logit_full != logit_last);
+    transcribe_langid_session_free(s);
 }
 
 // Q8_0 weights are widened to F16 at load: a Q8_0 model must give exactly
@@ -227,6 +271,7 @@ int main() {
     test_model_surface(m);
     test_run(m);
     test_thread_invariance(m);
+    test_crop_keeps_first(m);
     transcribe_model_free(m);
 
     test_q8_0_widened_to_f16();

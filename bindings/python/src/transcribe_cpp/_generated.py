@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "d544d70a2b5acf50"
+PUBLIC_HEADER_HASH = "e628600daea42c4a"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -228,10 +228,10 @@ transcribe_speaker_segment._fields_ = [("struct_size", _c.c_uint64), ("t0_ms", _
 transcribe_diarize_info._fields_ = [("struct_size", _c.c_uint64), ("sample_rate", _c.c_int32), ("max_speakers", _c.c_int32)]
 transcribe_diarize_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int32)]
 transcribe_diarize_params._fields_ = [("struct_size", _c.c_uint64), ("family", _c.POINTER(transcribe_ext))]
-transcribe_langid_info._fields_ = [("struct_size", _c.c_uint64), ("sample_rate", _c.c_int32), ("n_labels", _c.c_int32), ("min_audio_ms", _c.c_int32)]
-transcribe_langid_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int32), ("max_audio_ms", _c.c_int32)]
-transcribe_langid_params._fields_ = [("struct_size", _c.c_uint64), ("allowed", _c.POINTER(_c.c_char_p)), ("n_allowed", _c.c_int32), ("top_k", _c.c_int32)]
-transcribe_langid_result._fields_ = [("struct_size", _c.c_uint64), ("n_candidates", _c.c_int32), ("n_allowed", _c.c_int32), ("allowed_mass", _c.c_float), ("audio_ms", _c.c_int64)]
+transcribe_langid_info._fields_ = [("struct_size", _c.c_uint64), ("sample_rate", _c.c_int32), ("n_labels", _c.c_int32), ("min_audio_ms", _c.c_int32), ("max_audio_ms", _c.c_int32)]
+transcribe_langid_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int32)]
+transcribe_langid_params._fields_ = [("struct_size", _c.c_uint64), ("allowed", _c.POINTER(_c.c_char_p)), ("n_allowed", _c.c_int32)]
+transcribe_langid_result._fields_ = [("struct_size", _c.c_uint64), ("n_candidates", _c.c_int32), ("allowed_mass", _c.c_float)]
 transcribe_langid_candidate._fields_ = [("struct_size", _c.c_uint64), ("index", _c.c_int32), ("code", _c.c_char_p), ("name", _c.c_char_p), ("p", _c.c_float), ("logit", _c.c_float)]
 transcribe_moonshine_streaming_stream_ext._fields_ = [("ext", transcribe_ext), ("min_decode_interval_ms", _c.c_int32)]
 transcribe_parakeet_stream_ext._fields_ = [("ext", transcribe_ext), ("att_context_right", _c.c_int32)]
@@ -291,10 +291,10 @@ STRUCT_LAYOUT = {
     'transcribe_diarize_info': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'sample_rate': 8, 'max_speakers': 12}},
     'transcribe_diarize_session_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8}},
     'transcribe_diarize_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'family': 8}},
-    'transcribe_langid_info': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'sample_rate': 8, 'n_labels': 12, 'min_audio_ms': 16}},
-    'transcribe_langid_session_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8, 'max_audio_ms': 12}},
-    'transcribe_langid_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'allowed': 8, 'n_allowed': 16, 'top_k': 20}},
-    'transcribe_langid_result': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'n_candidates': 8, 'n_allowed': 12, 'allowed_mass': 16, 'audio_ms': 24}},
+    'transcribe_langid_info': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'sample_rate': 8, 'n_labels': 12, 'min_audio_ms': 16, 'max_audio_ms': 20}},
+    'transcribe_langid_session_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8}},
+    'transcribe_langid_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'allowed': 8, 'n_allowed': 16}},
+    'transcribe_langid_result': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'n_candidates': 8, 'allowed_mass': 12}},
     'transcribe_langid_candidate': {'size': 40, 'align': 8, 'offsets': {'struct_size': 0, 'index': 8, 'code': 16, 'name': 24, 'p': 32, 'logit': 36}},
     'transcribe_moonshine_streaming_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'min_decode_interval_ms': 16}},
     'transcribe_parakeet_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'att_context_right': 16}},

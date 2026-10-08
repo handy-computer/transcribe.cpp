@@ -1,7 +1,7 @@
 // langid_dispatch_unit.cpp - LANGID role dispatcher (transcribe-langid.cpp)
 // against a fake arch: label table validation, role checks, softmax /
-// ranking / top-k, the allowed set, crop and minimum length, non-finite
-// input and logits, abort.
+// ranking, the allowed set, crop and minimum length, non-finite input and
+// logits, abort.
 
 #include "transcribe-arch.h"
 #include "transcribe-langid.h"
@@ -84,7 +84,7 @@ struct Fixture {
     transcribe_langid_session * session = nullptr;
     std::vector<float>          pcm     = std::vector<float>(16000, 0.0f);  // 1 s
 
-    explicit Fixture(int32_t max_audio_ms = 0) {
+    Fixture() {
         g_run_calls   = 0;
         g_logits      = { 1.0f, 3.0f, 2.0f, 0.0f, -1.0f };
         g_check_abort = false;
@@ -92,7 +92,6 @@ struct Fixture {
         model.roles   = TRANSCRIBE_ROLE_LANGID;
         transcribe_langid_session_params sp;
         transcribe_langid_session_params_init(&sp);
-        sp.max_audio_ms = max_audio_ms;
         CHECK(transcribe_langid_session_init(&model, &sp, &session) == TRANSCRIBE_OK);
     }
 
@@ -141,17 +140,17 @@ void test_role_checks_and_labels() {
 
     model.roles = TRANSCRIBE_ROLE_LANGID;
     CHECK(transcribe_langid_get_info(&model, &info) == TRANSCRIBE_OK);
-    CHECK(info.sample_rate == 16000 && info.n_labels == 5 && info.min_audio_ms == 500);
+    CHECK(info.sample_rate == 16000 && info.n_labels == 5 && info.min_audio_ms == 500 && info.max_audio_ms == 30000);
     CHECK(std::strcmp(transcribe_langid_label_code(&model, 1), "bb") == 0);
     CHECK(std::strcmp(transcribe_langid_label_name(&model, 4), "Ee") == 0);
     CHECK(transcribe_langid_label_index(&model, "cc") == 2);
     CHECK(transcribe_langid_label_index(&model, "xx") == 0);
     CHECK(transcribe_langid_label_index(&model, "zz") == -1);
 
-    // A window below the minimum is rejected up front.
+    // A negative thread count is rejected up front.
     transcribe_langid_session_params sp;
     transcribe_langid_session_params_init(&sp);
-    sp.max_audio_ms = 499;
+    sp.n_threads = -1;
     CHECK(transcribe_langid_session_init(&model, &sp, &s) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(s == nullptr);
 }
@@ -162,7 +161,7 @@ void test_ranking() {
     CHECK(g_run_calls == 1 && g_last_n == 16000 && g_last_pcm == f.pcm.data());
 
     const transcribe_langid_result r = f.result();
-    CHECK(r.n_candidates == 5 && r.n_allowed == 5 && r.allowed_mass == 1.0f && r.audio_ms == 1000);
+    CHECK(r.n_candidates == 5 && r.allowed_mass == 1.0f);
 
     // Logits {1, 3, 2, 0, -1} rank bb, cc, aa, dd, ee.
     const int    want[] = { 1, 2, 0, 3, 4 };
@@ -177,14 +176,15 @@ void test_ranking() {
         sum += c.p;
     }
     CHECK(near(sum, 1.0));
+    CHECK(f.candidate(5).code == nullptr && f.candidate(5).index == 0);  // out of range: zeroed row
 
-    // top_k truncates the rows but not n_allowed.
-    transcribe_langid_params p;
-    transcribe_langid_params_init(&p);
-    p.top_k = 2;
-    CHECK(f.run(&p) == TRANSCRIBE_OK);
-    CHECK(f.result().n_candidates == 2 && f.result().n_allowed == 5);
-    CHECK(f.candidate(1).index == 2 && f.candidate(2).code == nullptr);
+    // Tied p keeps label order.
+    g_logits = { 0.0f, 2.0f, 0.0f, 2.0f, 0.0f };
+    CHECK(f.run() == TRANSCRIBE_OK);
+    const int tied[] = { 1, 3, 0, 2, 4 };
+    for (int i = 0; i < 5; ++i) {
+        CHECK(f.candidate(i).index == tied[i]);
+    }
 }
 
 // The allowed set renormalizes over its members; malformed or unknown lists
@@ -199,7 +199,7 @@ void test_allowed_set() {
     p.n_allowed          = 2;
     CHECK(f.run(&p) == TRANSCRIBE_OK);
     const transcribe_langid_result r = f.result();
-    CHECK(r.n_candidates == 2 && r.n_allowed == 2);
+    CHECK(r.n_candidates == 2);
     const double e_bb = std::exp(3.0);
     const double e_dd = std::exp(0.0);
     const double all  = std::exp(1.0) + e_bb + std::exp(2.0) + e_dd + std::exp(-1.0);
@@ -209,6 +209,15 @@ void test_allowed_set() {
     CHECK(c0.index == 1 && c1.index == 3);
     CHECK(near(c0.p, e_bb / (e_bb + e_dd)) && near(c1.p, e_dd / (e_bb + e_dd)));
 
+    // n_candidates is the allowed-set size after duplicates (an alias names
+    // the same label as its code) count once.
+    const char * dups[] = { "bb", "bb", "xx", "aa" };
+    p.allowed           = dups;
+    p.n_allowed         = 4;
+    CHECK(f.run(&p) == TRANSCRIBE_OK);
+    CHECK(f.result().n_candidates == 2);
+    CHECK(f.candidate(0).index == 1 && f.candidate(1).index == 0 && f.candidate(2).code == nullptr);
+
     g_run_calls = 0;
     p.n_allowed = 0;
     CHECK(f.run(&p) == TRANSCRIBE_ERR_INVALID_ARG);
@@ -217,25 +226,30 @@ void test_allowed_set() {
     p.n_allowed            = 2;
     CHECK(f.run(&p) == TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE);
     CHECK(g_run_calls == 0);
-    CHECK(f.result().n_allowed == 2);
+    CHECK(f.result().n_candidates == 2);  // previous result kept
 }
 
-// The crop keeps the last max_audio_ms, and the minimum applies to the audio
-// actually scored.
+// The crop keeps the first info.max_audio_ms, and the minimum applies to the
+// audio actually scored.
 void test_crop_and_minimum() {
     {
-        Fixture f(500);
-        CHECK(f.run() == TRANSCRIBE_OK);  // 1 s scored as its last 500 ms
-        CHECK(g_last_n == 8000 && g_last_pcm == f.pcm.data() + 8000);
-        CHECK(f.result().audio_ms == 500);
+        Fixture f;
+        f.pcm.assign(16 * (30000 + 1000), 0.0f);  // 31 s, scored as its first 30 s
+        CHECK(f.run() == TRANSCRIBE_OK);
+        CHECK(g_last_n == 16 * 30000 && g_last_pcm == f.pcm.data());
+        CHECK(f.result().n_candidates == 5);
+        f.pcm.resize(16 * 30000);  // exactly max_audio_ms: no crop
+        CHECK(f.run() == TRANSCRIBE_OK);
+        CHECK(g_last_n == 16 * 30000 && g_last_pcm == f.pcm.data());
     }
     {
         Fixture f;
         CHECK(transcribe_langid_run(f.session, f.pcm.data(), 8000, nullptr) == TRANSCRIBE_OK);  // exactly 500 ms
+        CHECK(g_last_n == 8000);
         g_run_calls = 0;
         CHECK(transcribe_langid_run(f.session, f.pcm.data(), 7999, nullptr) == TRANSCRIBE_ERR_INPUT_TOO_SHORT);
         CHECK(g_run_calls == 0);
-        CHECK(f.result().audio_ms == 500);  // previous result kept
+        CHECK(f.result().n_candidates == 5);  // previous result kept
     }
 }
 

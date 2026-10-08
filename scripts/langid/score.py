@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 N_BOOT = 1000
 BOOT_SEED = 42
 CI = 0.95
-RECIPE_FIELDS = ("crops", "n_utterances", "logit_kind", "sample_rate", "manifest_sha256")
+RECIPE_FIELDS = ("crops", "max_audio_s", "n_utterances", "logit_kind", "sample_rate", "manifest_sha256")
 
 
 def die(msg: str) -> None:

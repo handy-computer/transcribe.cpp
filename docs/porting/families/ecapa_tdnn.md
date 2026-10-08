@@ -9,14 +9,14 @@ SERes2Net blocks, multi-layer feature aggregation, attentive statistics
 pooling, a 256-d embedding and a two-layer classifier over the VoxLingua107
 labels. It is not a transcription model. The family only produces logits; the
 LANGID role dispatcher (`src/transcribe-langid.cpp`) owns the crop to the
-last `max_audio_ms`, the allowed set, softmax, `allowed_mass`, ranking and
-top-k (`docs/langid.md`).
+first `transcribe_langid_info::max_audio_ms` (30 s), the allowed set,
+softmax, `allowed_mass` and ranking (`docs/langid.md`).
 
 Acceptance: tensor parity on eight FLEURS clips (`validate.py`), and top-1
 decision parity with SpeechBrain on FLEURS (15 languages x 200 utterances x
-3 / 5 / 10 s / full crops, C++ F32 on CPU). Shipped matrix: F32 + F16 + Q8_0.
-Each GGUF's accuracy and agreement live in the catalog and are rendered on
-[the model page](../../models/lang-id-voxlingua107-ecapa.md#accuracy). The
+3 / 5 / 10 s / full crops, `full` capped to the first 30 s, C++ F32 on CPU).
+Shipped matrix: F32 + F16 + Q8_0. Each GGUF's accuracy and agreement live in
+the catalog and are rendered on [the model page](../../models/lang-id-voxlingua107-ecapa.md#accuracy). The
 loader widens Q8_0 weights to F16 (`widen_q8_0_weights` in
 `src/arch/ecapa_tdnn/model.cpp`).
 
@@ -109,7 +109,7 @@ ASR-only) writes bench-driver reports under `reports/perf/`, which
 |------------|------|----------------|---------------------|--------|--------|
 | Language ID | open set | `build/bin/transcribe-cli -m models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-F32.gguf samples/fleurs-ja.wav` | `language: ja` | MUST PASS | PASS |
 | Language ID | allowed set | `... --allow en,de samples/fleurs-de.wav` | `language: de`, 2 candidates | MUST PASS | PASS |
-| Crop | 30 s window | `transcribe_ecapa_tdnn_real_smoke` (`ru-long.wav`) | `audio_ms == 30000` | MUST PASS | PASS |
+| Crop | first 30 s | `transcribe_ecapa_tdnn_smoke` (toy model, 35 s of noise), `transcribe_ecapa_tdnn_real_smoke` (`ru-long.wav`) | whole clip == its first `max_audio_ms` (bit-identical candidates / logits); its last `max_audio_ms` differs | MUST PASS | PASS |
 | Minimum length | 500 ms | `transcribe_ecapa_tdnn_smoke`, `transcribe_langid_dispatch_unit` | `INPUT_TOO_SHORT` below 500 ms | MUST PASS | PASS |
 | Transcribe / translate / timestamps / streaming | n/a | `transcribe_session_init` | `UNSUPPORTED_ROLE` | OUT OF SCOPE — not an ASR model | SKIP — not exposed by runtime |
 | Batch (offline) | n/a | `transcribe-cli --batch` | refused: ASR-only | OUT OF SCOPE — no batch entry points for new roles in v1 | ACCEPTED GAP — one clip per call |
