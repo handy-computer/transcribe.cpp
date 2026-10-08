@@ -6,25 +6,24 @@
 # ]
 # ///
 """
-score.py - open-set top-1 accuracy of a run.py sweep.
+score.py - open-set top-1 accuracy of a scripts/langid/run.py sweep and, with
+--ref, its top-1 agreement with the reference sweep (the dataset gate).
 
-Usage:
-    uv run scripts/langid/score.py reports/langid/ref-speechbrain-untrimmed.jsonl \\
-        --md reports/langid/ref-speechbrain-untrimmed.md
-
-    # the catalog's accuracy row for one shipped GGUF (ingest_accuracy.py)
     uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl \\
+        --ref reports/langid/ref-speechbrain-untrimmed.jsonl \\
         --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
 
-The markdown report is the open-set top-1 accuracy per language and mean,
-per crop, with a 95% bootstrap CI on the mean. Correctness is strict code
-equality (`nn` is not credited for `no`, `be` not for `ru`, `jw` not for
-`id`).
+Accuracy is the macro mean over languages of strict code equality (`nn` is
+not credited for `no`), per crop, with a 95% bootstrap CI that resamples
+utterances within each language.
 
-The mean is the MACRO mean over languages (each language weighs 1/15). The
-bootstrap resamples utterances within each language and re-averages the
-per-language accuracies, so the CI describes the same statistic the point
-estimate does.
+--json writes the score; with --ref it also writes the agreement next to it
+(`.agreement.json`); scripts/catalog/ingest_accuracy.py reads both.
+
+Agreement joins rows on (id, crop_s). Exit 1 on any top-1 disagreement or
+if the sweeps do not cover the same rows; exit 2 if they differ in labels,
+recipe or checkpoint revision. Only F32 is gated: --report-only (the quants)
+exits 1 on a coverage mismatch only.
 """
 
 from __future__ import annotations
@@ -37,284 +36,157 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-CROP_ORDER_HINT = {"3": 0, "5": 1, "10": 2, "full": 99}
 N_BOOT = 1000
 BOOT_SEED = 42
+CI = 0.95
+RECIPE_FIELDS = ("crops", "n_utterances", "logit_kind", "sample_rate", "manifest_sha256")
 
 
-# ---------------------------------------------------------------------------
-# Loading
-# ---------------------------------------------------------------------------
+def die(msg: str) -> None:
+    print(f"error: {msg}", file=sys.stderr)
+    raise SystemExit(2)
 
 
-class Run:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        lines = [l for l in path.read_text().splitlines() if l.strip()]
-        if not lines:
-            raise SystemExit(f"error: {path} is empty")
-        self.header = json.loads(lines[0])
-        if self.header.get("type") != "header":
-            raise SystemExit(f"error: {path} does not start with a header line")
-        self.labels: list[str] = self.header["labels"]
-        self.index_of = {c: i for i, c in enumerate(self.labels)}
-
-        rows = [json.loads(l) for l in lines[1:]]
-        if not rows:
-            raise SystemExit(f"error: {path} has a header but no rows")
-        self.crops = list(dict.fromkeys(str(r["crop_s"]) for r in rows))
-        self.crops.sort(key=lambda c: CROP_ORDER_HINT.get(c, float(c) if c.replace(".", "").isdigit() else 50))
-        self.languages = list(dict.fromkeys(r["language"] for r in rows))
-
-        # Per crop: a [N, 107] logit matrix plus aligned id/language vectors.
-        # One array per crop keeps every accuracy a vectorised argmax.
-        self.by_crop: dict[str, dict] = {}
-        for crop in self.crops:
-            sel = [r for r in rows if str(r["crop_s"]) == crop]
-            self.by_crop[crop] = {
-                "ids": [r["id"] for r in sel],
-                "lang": np.array([r["language"] for r in sel]),
-                "logits": np.array([r["logits"] for r in sel], dtype=np.float64),
-                "audio_s": np.array([r["audio_s"] for r in sel], dtype=np.float64),
-            }
-        self.n_rows = len(rows)
-
-    @property
-    def name(self) -> str:
-        return self.path.stem
+def rel(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
-# ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
+def load(path: Path) -> tuple[dict, dict[tuple, dict]]:
+    lines = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    if not lines or lines[0].get("type") != "header" or len(lines) < 2:
+        die(f"{path} is not a run.py sweep (header line, then rows)")
+    rows = {(r["id"], str(r["crop_s"])): r for r in lines[1:]}
+    if len(rows) != len(lines) - 1:
+        die(f"{path} has duplicate (id, crop_s) rows")
+    return lines[0], rows
 
 
-def per_language_accuracy(pred_codes: np.ndarray, langs: np.ndarray,
-                          order: list[str]) -> tuple[dict[str, float], float]:
-    acc = {}
-    for lg in order:
-        m = langs == lg
-        acc[lg] = float((pred_codes[m] == lg).mean()) if m.any() else float("nan")
-    vals = [a for a in acc.values() if a == a]
-    return acc, (sum(vals) / len(vals) if vals else float("nan"))
-
-
-def bootstrap_macro_ci(correct: np.ndarray, langs: np.ndarray, order: list[str],
-                       n_boot: int = N_BOOT, seed: int = BOOT_SEED,
-                       ci: float = 0.95) -> tuple[float, float]:
-    """95% CI on the macro-mean accuracy, stratified by language.
-
-    Utterances are resampled with replacement inside each language and the
-    per-language accuracies re-averaged, so the resampled statistic is the
-    same macro mean the point estimate reports.
-    """
-    rng = np.random.default_rng(seed)
-    blocks = []
-    for lg in order:
-        m = langs == lg
-        if m.any():
-            blocks.append(correct[m].astype(np.float64))
-    if not blocks:
-        return float("nan"), float("nan")
-    means = np.empty(n_boot, dtype=np.float64)
-    for b in range(n_boot):
+def bootstrap_ci(blocks: list[np.ndarray]) -> tuple[float, float]:
+    rng = np.random.default_rng(BOOT_SEED)
+    means = np.empty(N_BOOT, dtype=np.float64)
+    for b in range(N_BOOT):
         acc = 0.0
         for blk in blocks:
-            idx = rng.integers(0, blk.size, blk.size)
-            acc += blk[idx].mean()
+            acc += blk[rng.integers(0, blk.size, blk.size)].mean()
         means[b] = acc / len(blocks)
     means.sort()
-    lo = means[int((1 - ci) / 2 * n_boot)]
-    hi = means[min(n_boot - 1, int((1 + ci) / 2 * n_boot))]
-    return float(lo), float(hi)
+    return (float(means[int((1 - CI) / 2 * N_BOOT)]),
+            float(means[min(N_BOOT - 1, int((1 + CI) / 2 * N_BOOT))]))
 
 
-def rel(p: Path) -> str:
-    """Repo-relative path when possible; reports are read in-tree."""
-    try:
-        return str(Path(p).resolve().relative_to(REPO_ROOT))
-    except ValueError:
-        return str(p)
+def accuracy(header: dict, rows: list[dict]) -> tuple[list[str], dict]:
+    """Per crop: n, macro-mean accuracy and its CI, in percent."""
+    labels = np.array(header["labels"])
+    languages = list(dict.fromkeys(r["language"] for r in rows))
+    crops = {}
+    for crop in dict.fromkeys(str(r["crop_s"]) for r in rows):
+        sel = [r for r in rows if str(r["crop_s"]) == crop]
+        lang = np.array([r["language"] for r in sel])
+        logits = np.array([r["logits"] for r in sel], dtype=np.float64)
+        correct = (labels[np.argmax(logits, axis=1)] == lang).astype(np.float64)
+        blocks = [correct[lang == lg] for lg in languages if (lang == lg).any()]
+        mean = sum(float(blk.mean()) for blk in blocks) / len(blocks)
+        lo, hi = bootstrap_ci(blocks)
+        crops[crop] = {"n": len(sel), "acc_pct": round(100.0 * mean, 2),
+                       "ci95": [round(100.0 * lo, 2), round(100.0 * hi, 2)]}
+    return languages, crops
 
 
-def crop_head(c: str) -> str:
-    return "full" if c == "full" else f"{c} s"
-
-
-def crop_list(crops: list[str]) -> str:
-    return ", ".join(crop_head(c) for c in crops)
-
-
-def pct(x: float, digits: int = 1) -> str:
-    if x != x:
-        return "-"
-    return f"{100.0 * x:.{digits}f}"
-
-
-# ---------------------------------------------------------------------------
-# Report sections
-# ---------------------------------------------------------------------------
-
-
-def md_table(header: list[str], rows: list[list[str]]) -> list[str]:
-    out = ["| " + " | ".join(header) + " |",
-           "|" + "|".join("---" for _ in header) + "|"]
-    for r in rows:
-        out.append("| " + " | ".join(r) + " |")
-    out.append("")
-    return out
-
-
-def section_setup(run: Run) -> list[str]:
-    h = run.header
-    r = h["recipe"]
-    lines = [f"## Setup", ""]
-    lines.append(f"- Engine: `{h['engine']}`, model `{h['model']}`")
-    if "revision" in r:
-        lines.append(f"- Revision: `{r['revision']}` "
-                     f"(speechbrain {r.get('speechbrain')}, torch {r.get('torch')}, "
-                     f"{r.get('device')}, {r.get('model_dtype')}, batch "
-                     f"{r.get('batch_size')})")
-    if "backend" in r:
-        lines.append(f"- Backend `{r['backend']}`, threads {r.get('threads')}, "
-                     f"max_audio_ms {r.get('max_audio_ms')}")
-    lines.append(f"- Dataset: FLEURS `test`, {len(run.languages)} languages "
-                 f"x {r['n_utterances'] // max(len(run.languages), 1)} utterances "
-                 f"= {r['n_utterances']} clips, longest {r['longest_clip_s']:.1f} s")
-    lines.append(f"- Crops: {crop_list(run.crops)}, from the start of the clip")
-    lines.append(f"- Logits: `{r['logit_kind']}`; both engines read the same "
-                 f"16-bit crops under `{r['crop_dir']}`")
-    lines.append(f"- Bootstrap {N_BOOT} resamples, seed {BOOT_SEED}")
-    lines.append(f"- Correctness is strict label-code equality "
-                 f"(`nn` is not credited for `no`, `be` not for `ru`, `jw` not for `id`)")
-    lines.append("")
-    return lines
-
-
-def openset(run: Run) -> tuple[dict[str, dict[str, float]], dict[str, tuple[float, float, float]]]:
-    """Per crop: open-set accuracy per language, and the macro mean with its
-    bootstrap CI as (mean, lo, hi)."""
-    means: dict[str, tuple[float, float, float]] = {}
-    per_crop_acc: dict[str, dict[str, float]] = {}
-    for crop in run.crops:
-        d = run.by_crop[crop]
-        pred = np.array(run.labels)[np.argmax(d["logits"], axis=1)]
-        acc, mean = per_language_accuracy(pred, d["lang"], run.languages)
-        lo, hi = bootstrap_macro_ci(pred == d["lang"], d["lang"], run.languages)
-        means[crop] = (mean, lo, hi)
-        per_crop_acc[crop] = acc
-    return per_crop_acc, means
-
-
-def section_openset(run: Run) -> list[str]:
-    langs_order = run.languages
-    rows = []
-    per_crop_acc, means = openset(run)
-
-    for lg in langs_order:
-        rows.append([lg] + [pct(per_crop_acc[c][lg]) for c in run.crops])
-    rows.append(["**mean**"] + [f"**{pct(means[c][0])}**" for c in run.crops])
-    rows.append(["95% CI"] + [f"{pct(means[c][1])}-{pct(means[c][2])}" for c in run.crops])
-
-    lines = ["## Open-set top-1 accuracy (all 107 labels), %", ""]
-    lines += md_table(["lang"] + [crop_head(c) for c in run.crops], rows)
-    return lines
-
-
-# ---------------------------------------------------------------------------
-# Machine-readable headline (scripts/catalog/ingest_accuracy.py)
-# ---------------------------------------------------------------------------
-
-SCORE_SCHEMA = "transcribe-langid-score-v1"
-
-
-def dataset_of(recipe: dict) -> str | None:
-    """`fleurs` when every manifest is a scripts/langid/ingest.py FLEURS one
-    (`fleurs-<code>.manifest.jsonl`, test split only), else None."""
-    names = [Path(m).name for m in recipe.get("manifests", [])]
-    return "fleurs" if names and all(n.startswith("fleurs-") for n in names) else None
-
-
-def score_json(run: Run) -> dict:
-    """The open-set macro mean per crop, with what produced it. The catalog
-    takes one crop of this (the publication profile's) as a row; the run's
-    header is carried so the importer can check the recipe itself."""
-    h, r = run.header, run.header["recipe"]
-    _, means = openset(run)
+def agreement(ref: Path, header: dict, rows: dict, run: Path) -> tuple[dict, list]:
+    """The agreement JSON, and the first few disagreeing keys."""
+    rh, rrows = load(ref)
+    if rh["labels"] != header["labels"]:
+        die("the sweeps disagree on the label set")
+    differs = [f for f in RECIPE_FIELDS if rh["recipe"].get(f) != header["recipe"].get(f)]
+    if differs:
+        die(f"the sweeps' recipes differ in {differs}")
+    revisions = {h["recipe"].get("revision") or h["recipe"].get("gguf_source_commit")
+                 for h in (rh, header)}
+    if len(revisions) != 1 or None in revisions:
+        die(f"the sweeps do not trace back to one checkpoint revision: {revisions}")
+    keys = sorted(set(rrows) & set(rows))
+    if not keys:
+        die("no shared (id, crop_s) rows")
+    a = np.array([rrows[k]["logits"] for k in keys], dtype=np.float64)
+    b = np.array([rows[k]["logits"] for k in keys], dtype=np.float64)
+    if a.shape != b.shape:
+        die(f"logit shapes differ: {a.shape} vs {b.shape}")
+    agree = np.argmax(a, axis=1) == np.argmax(b, axis=1)
     return {
-        "schema": SCORE_SCHEMA,
-        "run": rel(run.path),
-        "engine": h["engine"],
-        "model": h["model"],
-        # The build the native library reports, not the checkout scoring it.
-        "engine_sha": r.get("native_commit") if r.get("native_commit") != "unknown" else None,
-        "backend": r.get("backend"),
-        "trim": r["trim"],
-        "dataset": dataset_of(r),
-        "split": "test",
-        "language": "mul",
-        "languages": run.languages,
-        "decision_space": f"open ({len(run.labels)})",
-        "created": h.get("created"),
-        "bootstrap": {"n": N_BOOT, "seed": BOOT_SEED},
-        "crops": {
-            crop: {
-                "n": int(run.by_crop[crop]["lang"].size),
-                "acc_pct": round(100.0 * mean, 2),
-                "ci95": [round(100.0 * lo, 2), round(100.0 * hi, 2)],
-            }
-            for crop, (mean, lo, hi) in means.items()
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# Driver
-# ---------------------------------------------------------------------------
-
-
-def score_run(run: Run) -> list[str]:
-    lines = [f"# Language-ID accuracy - `{run.name}`", ""]
-    lines += section_setup(run)
-    lines += section_openset(run)
-    return lines
+        "schema": "transcribe-langid-agreement-v1",
+        "reference_run": rel(ref),
+        "run": rel(run),
+        "n": len(keys),
+        "n_agree": int(agree.sum()),
+        "max_abs_logit_delta": float(np.abs(a - b).max()),
+        "disagreements": int((~agree).sum()),
+        "same_rows": set(rrows) == set(rows),
+    }, [keys[i] for i in np.flatnonzero(~agree)[:10]]
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("runs", nargs="+", type=Path, help="run.py JSONL report(s)")
-    p.add_argument("--md", type=Path,
-                   help="write the first run's markdown report here (later "
-                        "runs go next to it as <run name>.md)")
+    p.add_argument("run", type=Path, help="run.py JSONL sweep")
+    p.add_argument("--ref", type=Path, help="reference sweep to measure agreement against")
+    p.add_argument("--report-only", action="store_true",
+                   help="record agreement without gating on it (the quants)")
     p.add_argument("--json", type=Path,
-                   help="write the first run's headline (open-set accuracy "
-                        "per crop, with provenance) here, for "
-                        "scripts/catalog/ingest_accuracy.py; name it "
-                        "<gguf stem>.fleurs-mul.score.json under reports/langid/")
+                   help="write the score here: <gguf stem>.fleurs-mul.score.json "
+                        "under reports/langid/")
     args = p.parse_args(argv)
-    if args.json and len(args.runs) > 1:
-        p.error("--json takes exactly one run")
+    if args.ref and args.json and not args.json.name.endswith(".score.json"):
+        p.error("--json must end in .score.json (the agreement is written beside it)")
 
-    loaded = [Run(r) for r in args.runs]
-    scored = [(run, score_run(run)) for run in loaded]
+    header, rows = load(args.run)
+    recipe = header["recipe"]
+    languages, crops = accuracy(header, list(rows.values()))
+    for crop, c in crops.items():
+        print(f"crop {crop:>4}: {c['acc_pct']:6.2f}% "
+              f"[{c['ci95'][0]:.2f}, {c['ci95'][1]:.2f}]  n={c['n']}")
 
-    text = "\n".join(scored[0][1]) + "\n"
-    sys.stdout.write(text)
-    if args.md:
-        args.md.parent.mkdir(parents=True, exist_ok=True)
-        args.md.write_text(text)
-        print(f"wrote {args.md}", file=sys.stderr)
-        for run, lines in scored[1:]:
-            alt = args.md.with_name(f"{run.name}.md")
-            alt.write_text("\n".join(lines) + "\n")
-            print(f"wrote {alt}", file=sys.stderr)
+    status = 0
+    agr = None
+    if args.ref:
+        agr, disagreeing = agreement(args.ref, header, rows, args.run)
+        print(f"top-1 agreement with {agr['reference_run']}: {agr['n_agree']}/{agr['n']}, "
+              f"max |delta logit| {agr['max_abs_logit_delta']:.6g}")
+        if not agr["same_rows"]:
+            print("FAIL: the sweeps do not cover the same rows")
+            status = 1
+        elif agr["disagreements"] and not args.report_only:
+            print(f"FAIL: {agr['disagreements']} disagreements, e.g. {disagreeing}")
+            status = 1
+
     if args.json:
+        names = [Path(m).name for m in recipe.get("manifests", [])]
+        native = recipe.get("native_commit")
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(score_json(loaded[0]), indent=2) + "\n")
-        print(f"wrote {args.json}", file=sys.stderr)
-    return 0
+        args.json.write_text(json.dumps({
+            "schema": "transcribe-langid-score-v1",
+            "run": rel(args.run),
+            "engine": header["engine"],
+            "model": header["model"],
+            # The build the native library reports, not the checkout scoring it.
+            "engine_sha": native if native != "unknown" else None,
+            "backend": recipe.get("backend"),
+            "dataset": "fleurs" if names and all(n.startswith("fleurs-") for n in names) else None,
+            "split": "test",
+            "language": "mul",
+            "languages": languages,
+            "created": header.get("created"),
+            "bootstrap": {"n": N_BOOT, "seed": BOOT_SEED},
+            "crops": crops,
+        }, indent=2) + "\n")
+        print(f"wrote {args.json}")
+        if agr:
+            out = args.json.with_name(args.json.name.replace(".score.json", ".agreement.json"))
+            out.write_text(json.dumps(agr, indent=2) + "\n")
+            print(f"wrote {out}")
+    return status
 
 
 if __name__ == "__main__":

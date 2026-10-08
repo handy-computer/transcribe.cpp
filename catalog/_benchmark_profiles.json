@@ -73,7 +73,7 @@
     },
     "langid-publication-v1": {
       "role": "langid",
-      "description": "The benchmark set published for language ID (LANGID role) models. Accuracy: open-set top-1 over every label, the macro mean over the FLEURS test languages of scripts/langid/ingest.py, on the first crop_s seconds of each clip without silence trimming, C++ on CPU, every shipped quant; scored by scripts/langid/score.py from one scripts/langid/run.py sweep (all crops), which scripts/langid/compare.py also compares against the reference sweep for the row's agreement. Speed: scripts/langid/bench.py through the Python binding; a sample <clip>-<N>s is the first N seconds of samples/<clip>.wav.",
+      "description": "The benchmark set published for language ID (LANGID role) models. Accuracy: open-set top-1 over every label, the macro mean over the FLEURS test languages of scripts/langid/ingest.py, on the first crop_s seconds of each clip without silence trimming, C++ on CPU, every shipped quant; scored by scripts/langid/score.py from one scripts/langid/run.py sweep (all crops), which it also compares against the reference sweep (--ref) for the row's agreement. Speed: scripts/langid/bench.py through the Python binding; a sample <clip>-<N>s is the first N seconds of samples/<clip>.wav.",
       "accuracy": [
         {
           "dataset": "fleurs",
@@ -85,7 +85,6 @@
           "timestamps": "none",
           "backend": "cpu",
           "crop_s": "5",
-          "trim": "none",
           "pooled_languages": [
             "en",
             "zh",

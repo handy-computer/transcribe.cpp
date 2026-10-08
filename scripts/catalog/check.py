@@ -118,9 +118,7 @@ def pairing_pass(records: dict, selected: bool = False) -> int:
 def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> int:
     """Check publication matrices, including explicit legacy accuracy rows.
 
-    Each record is held to its role's profile (language ID has its own). A
-    profile whose speed matrix declares `pending` reports that half as TODO
-    even when enforcing, until the bench it names lands."""
+    Each record is held to its role's profile (language ID has its own)."""
     try:
         profiles.load_profile(profile_id)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -135,7 +133,6 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
         if not profile.get("role") and \
                 not record.get("capabilities", {}).get("transcribe", {}).get("supported"):
             continue
-        pending = profile["speed"].get("pending")
         accuracy_raw = profiles.expected_accuracy(record, profile)
         speed_raw = profiles.expected_speed(record, profile)
         accuracy = profiles.apply_exceptions(record, "accuracy", accuracy_raw)
@@ -226,17 +223,11 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
         for suffix in ("missing", "invalid", "extra", "duplicate"):
             totals[resolved_id][f"speed_{suffix}"] += per_model[f"speed_{suffix}"]
 
-        held = {key: value for key, value in per_model.items()
-                if value and not (pending and key.startswith("speed_"))}
-        waiting = {key: value for key, value in per_model.items()
-                   if value and key not in held}
-        if held:
-            problems += sum(held.values())
-            details = ", ".join(f"{key}={value}" for key, value in held.items())
+        count = sum(per_model.values())
+        if count:
+            problems += count
+            details = ", ".join(f"{key}={value}" for key, value in per_model.items() if value)
             print(f"  {'FAIL' if enforce else 'TODO'} {name}: {details}")
-        if waiting:
-            details = ", ".join(f"{key}={value}" for key, value in waiting.items())
-            print(f"  TODO {name}: {details} (pending: {pending})")
 
     for resolved_id, total in sorted(totals.items()):
         print(f"publication {resolved_id}: accuracy {total['accuracy_required']} required, "

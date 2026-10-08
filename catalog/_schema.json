@@ -408,7 +408,7 @@
               "n": {"type": "integer", "minimum": 1},
               "max_abs_logit_delta": {"type": ["number", "null"], "minimum": 0}
             },
-            "description": "Language ID only: top-1 decisions of the run this row was scored from that match the reference implementation on the same audio (scripts/langid/compare.py, the port's ship gate), over every crop of the sweep rather than only the scored one, and the largest logit difference seen."
+            "description": "Language ID only: top-1 decisions of the run this row was scored from that match the reference implementation on the same audio (scripts/langid/score.py --ref, the port's ship gate), over every crop of the sweep rather than only the scored one, and the largest logit difference seen."
           }
         },
         "allOf": [

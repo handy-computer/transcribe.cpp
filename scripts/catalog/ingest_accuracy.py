@@ -12,11 +12,11 @@ publication sweep writes the hypotheses; score them locally first, then run:
     uv run scripts/catalog/ingest_accuracy.py
 
 Language ID records follow their own profile (catalog/_benchmark_profiles.json
-`roles`). Their scores come from scripts/langid/score.py --json and
-compare.py --json under reports/langid/, named after the GGUF like a WER
-score (`<gguf stem>.fleurs-mul.score.json`, `.agreement.json`); the profile
-names the crop and trim, and the importer checks the sweep's own recipe
-against them instead of a stamp.
+`roles`). Their scores come from scripts/langid/score.py --ref --json under
+reports/langid/, named after the GGUF like a WER score
+(`<gguf stem>.fleurs-mul.score.json`, with its `.agreement.json`); the profile
+names the crop, and the importer checks the sweep's own recipe against it
+instead of a stamp.
 """
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def langid_row(record: dict, cell: dict, score: dict, agreement: dict | None,
         reasons.append(f"engine={score.get('engine')!r}")
     if pathlib.PurePath(str(score.get("model", ""))).name != filename:
         reasons.append(f"model={score.get('model')!r}")
-    for field in ("dataset", "split", "language", "backend", "trim"):
+    for field in ("dataset", "split", "language", "backend"):
         if score.get(field) != cell.get(field):
             reasons.append(f"{field}={score.get(field)!r}")
     if crop is None:
@@ -101,7 +101,7 @@ def langid_row(record: dict, cell: dict, score: dict, agreement: dict | None,
     if sorted(score.get("languages") or []) != sorted(cell.get("pooled_languages") or []):
         reasons.append(f"languages={score.get('languages')!r} are not the profile's pooled_languages")
     if agreement is None:
-        reasons.append("no agreement (write it with compare.py --json)")
+        reasons.append("no agreement (write it with score.py --ref --json)")
     elif agreement.get("run") != score.get("run"):
         reasons.append(f"agreement is for {agreement.get('run')!r}, not {score.get('run')!r}")
     elif not agreement.get("same_rows", False):

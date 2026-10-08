@@ -84,9 +84,7 @@ Accuracy and decision parity (FLEURS from the HF cache):
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang all
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine speechbrain ... --out reports/langid/ref-speechbrain-untrimmed.jsonl
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine cpp --library build-shared/src/libtranscribe.dylib ... --out reports/langid/cpp-f32-untrimmed.jsonl
-uv run scripts/langid/compare.py reports/langid/ref-speechbrain-untrimmed.jsonl reports/langid/cpp-f32-untrimmed.jsonl \
-  --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.agreement.json
-uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl \
+uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl --ref reports/langid/ref-speechbrain-untrimmed.jsonl \
   --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
 uv run scripts/catalog/ingest_accuracy.py --models lang-id-voxlingua107-ecapa
 ```
@@ -95,10 +93,11 @@ The catalog rows follow the `langid-publication-v1` profile
 (`catalog/_benchmark_profiles.json`): the open-set mean on the 5 s untrimmed
 crop of each shipped GGUF's sweep, with that sweep's agreement.
 
-`compare.py` fails on any top-1 disagreement or an agreement below 99.9%,
-and refuses runs whose labels, recipe, manifest hashes or checkpoint revision
-differ. Only F32 is gated: run the F16 and Q8_0 sweeps through it with
-`--report-only`, which still writes their agreement.
+`score.py --ref` fails on any top-1 disagreement with the reference sweep or
+any row the two sweeps do not share, and refuses sweeps whose labels, recipe,
+manifest hashes or checkpoint revision differ. With `--json` it writes the
+score and, beside it, the agreement. Only F32 is gated: score the F16 and Q8_0
+sweeps with `--report-only`, which still writes their agreement.
 
 Benchmarks: `scripts/langid/bench.py --profile` (`tools/transcribe-bench` is
 ASR-only) writes bench-driver reports under `reports/perf/`, which

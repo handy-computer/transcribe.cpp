@@ -140,7 +140,7 @@ reference on every clip.
 | Dump script | `scripts/dump_reference_ecapa_tdnn_speechbrain.py` |
 | Manifest | `tests/golden/ecapa_tdnn/lang-id-voxlingua107-ecapa.manifest.json` |
 | Command | `uv run scripts/validate.py all --family ecapa_tdnn` |
-| Dataset gate | `scripts/langid/compare.py` (FLEURS, every crop) |
+| Dataset gate | `scripts/langid/score.py --ref` (FLEURS, every crop) |
 
 ## Known Limitations
 
@@ -184,8 +184,8 @@ uv run scripts/validate.py all --family ecapa_tdnn
 ### Accuracy acceptance
 
 One reference sweep, then one C++ sweep per shipped GGUF (shown for F32;
-repeat with F16 and Q8_0, passing `--report-only` to `compare.py`, which gates
-F32 only).
+repeat with F16 and Q8_0, passing `--report-only` to `score.py`, which gates
+F32 only). `score.py --json` also writes the `.agreement.json` beside the score.
 
 ```bash
 uv run --project scripts/envs/ecapa_tdnn scripts/langid/ingest.py fleurs --lang all
@@ -198,10 +198,8 @@ uv run --project scripts/envs/ecapa_tdnn scripts/langid/run.py --engine cpp \
   --library build-shared/src/libtranscribe.dylib \
   --manifest samples/langid/fleurs-*.manifest.jsonl --crops 3,5,10,full \
   --out reports/langid/cpp-f32-untrimmed.jsonl
-uv run scripts/langid/compare.py reports/langid/ref-speechbrain-untrimmed.jsonl \
-  reports/langid/cpp-f32-untrimmed.jsonl \
-  --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.agreement.json
 uv run scripts/langid/score.py reports/langid/cpp-f32-untrimmed.jsonl \
+  --ref reports/langid/ref-speechbrain-untrimmed.jsonl \
   --json reports/langid/lang-id-voxlingua107-ecapa-F32.fleurs-mul.score.json
 uv run scripts/catalog/ingest_accuracy.py --models lang-id-voxlingua107-ecapa
 uv run scripts/catalog/render.py
