@@ -1,31 +1,22 @@
 /**
  * Native bootstrap, in two phases:
  *
- *   1. `loadLibrary()` — resolve -> (CUDA runtime preload) -> dlopen -> bind ->
- *      verify ABI -> version-gate -> install the log callback. Synchronous and
- *      GPU-free: it never touches the ggml backend registry. Memoized on
- *      success; a failure is NOT cached (nothing native was mutated, so the
- *      next call simply retries).
+ *   1. `loadLibrary()`: resolve -> (CUDA runtime preload) -> dlopen -> bind ->
+ *      verify ABI -> version-gate -> install the log callback. Synchronous but
+ *      GPU-free. Memoized on success; a failure is not cached.
  *
- *   2. Backend initialization — `transcribe_init_backends`, which builds the
- *      ggml backend registry and with it every backend's device bootstrap
- *      (on Metal: compiling the embedded shader library, which can take
- *      seconds). `initialize()` runs it on a koffi async worker so the event
- *      loop keeps running; concurrent callers share one attempt. A non-OK
- *      status is cached as the terminal `failed` state, because the C library
- *      documents it as not retryable in this process.
+ *   2. Backend initialization: `transcribe_init_backends` builds the ggml
+ *      backend registry, running each device's bootstrap (on Metal, the shader
+ *      library compile, which can take seconds). `initialize()` runs it on a
+ *      koffi async worker; concurrent callers share one attempt. A non-OK
+ *      status is cached as `failed`: the C library documents it as not
+ *      retryable in this process.
  *
- * Synchronous entry points that touch the registry go through `nativeReady()`:
- *
- *   - ready         -> return the binding.
- *   - failed        -> rethrow the cached bootstrap error.
- *   - initializing  -> throw BackendInitializing. It must not wait: the init
- *                      worker may be blocked delivering a log message to this
- *                      (main) thread, so waiting on it deadlocks.
- *   - uninitialized -> run backend init inline on this thread (the pre-async
- *                      behavior, kept for compatibility; this is the call that
- *                      blocks a UI thread, so UI hosts should `await
- *                      initialize()` first).
+ * Synchronous entry points that touch the registry go through `nativeReady()`.
+ * It initializes inline when uninitialized (blocking the caller, the pre-async
+ * behavior) and throws BackendInitializing while an async init is in flight.
+ * It must not wait for that init: the worker may be blocked delivering a log
+ * message to this (main) thread, so waiting would deadlock.
  */
 
 import { resolveLibrary } from "./loader.js";
@@ -120,7 +111,7 @@ export function loadLibrary(): Native {
 
 // ---- phase 2: backends ------------------------------------------------------
 
-function callAsync<T>(fn: any, ...args: any[]): Promise<T> {
+export function callAsync<T = number>(fn: any, ...args: any[]): Promise<T> {
   return new Promise((resolve, reject) =>
     fn.async(...args, (err: Error | null, res: T) => (err ? reject(err) : resolve(res))),
   );
@@ -135,17 +126,10 @@ function initFailure(n: Native, st: number): BackendError {
 }
 
 /**
- * Register backend modules package-local, falling back to the library's own
- * directory. Then query the device count: that constructs the ggml backend
- * registry (and so runs every compiled-in backend's device bootstrap, e.g. the
- * Metal shader compile) even on a path that skipped the module scan, such as
- * `transcribe_init_backends_default` on a compiled-in build. After this, no
- * registry query can trigger first-time device bootstrap on the caller.
- *
- * Zero devices is a bootstrap failure even when init returned OK: the
- * compiled-in default path does not check the count, and the guarded
- * `transcribe_device_count` reports 0 if registry construction threw. Marking
- * that `ready` would only defer the failure to a confusing model-load error.
+ * The device count after init forces registry construction (and so every device
+ * bootstrap) even on paths that skip the module scan. Zero devices is a failure
+ * even after an OK init: the compiled-in default path doesn't check the count,
+ * and `transcribe_device_count` reports 0 if registry construction threw.
  */
 function requireDevices(st: number, count: number): number {
   return st === g.TRANSCRIBE_OK && count <= 0 ? g.TRANSCRIBE_ERR_BACKEND : st;
@@ -171,11 +155,9 @@ export function backendState(): BackendState {
 }
 
 /**
- * Load the native library and initialize compute backends without blocking the
- * event loop. Idempotent: concurrent and repeated calls share one attempt and
- * resolve together; once ready it resolves immediately. A backend bootstrap
- * failure is permanent for the process and every later call rejects with it.
- * A library-load failure (missing provider, version mismatch) is not cached.
+ * Load the native library and initialize compute backends off the event loop.
+ * Idempotent; concurrent calls share one attempt. A backend init failure is
+ * permanent for the process; a library-load failure is not cached.
  */
 export function initialize(): Promise<void> {
   if (state === "ready") return Promise.resolve();
@@ -206,8 +188,8 @@ export function initialize(): Promise<void> {
       throw initError;
     },
     (e) => {
-      // koffi refused to dispatch the call (e.g. its async queue is full), so
-      // native init never ran: not a bootstrap failure, the next call retries.
+      // koffi failed to dispatch a call: not a native bootstrap status, so the
+      // next call retries (transcribe_init_backends is idempotent).
       initPromise = null;
       state = "uninitialized";
       throw e;
@@ -261,8 +243,8 @@ export function nativeReady(): Native {
  * by the handler are swallowed (never re-enter C).
  *
  * The native callback is installed once when the library loads, before backend
- * initialization. Later calls only swap this JS handler (safe at any time,
- * including during `initialize()`); they never call transcribe_log_set again.
+ * initialization. Later calls only swap this JS handler; they never call
+ * transcribe_log_set again.
  */
 export function setLogHandler(handler: LogHandler | null): void {
   logHandler = handler;

@@ -8,6 +8,7 @@
 
 import {
   backendState,
+  callAsync,
   initialize,
   loadLibrary,
   nativeAsync,
@@ -247,14 +248,6 @@ function deferFree(lock: Mutex, fn: () => void, after?: () => void): void {
   });
 }
 
-function callAsync<T = number>(fn: any, ...args: any[]): Promise<T> {
-  return new Promise((resolve, reject) =>
-    fn.async(...args, (err: Error | null, res: T) =>
-      err ? reject(err) : resolve(res),
-    ),
-  );
-}
-
 // Coerce caller PCM to a Float32Array. A Float32Array is returned AS-IS (no
 // copy): the buffer is borrowed across the async native call, which reads it on
 // a worker thread, so callers must not mutate it until the promise resolves
@@ -315,17 +308,9 @@ class Mutex {
 // ---- module-level introspection -------------------------------------------
 //
 // Native bootstrap is two-phase (see native.ts). `version()` and
-// `libraryPath()` only load and verify the library — they never initialize a
-// compute backend, so they are safe to call at any time, including while
-// `initialize()` runs. `headerHash` is the compile-time PUBLIC_HEADER_HASH: the
-// value the binding *expects*, not one read from the loaded library.
-//
-// Backend initialization (on Metal, compiling the GPU shader library: up to
-// many seconds) happens off the event loop in `initialize()`, which
-// `TranscribeModel.load()` and the `*Async` discovery functions await
-// automatically. The synchronous discovery functions block the calling thread
-// if they are the first to need backends, and throw `BackendInitializing` if
-// called while `initialize()` is in flight.
+// `libraryPath()` only load the library and never initialize a backend.
+// `headerHash` is the compile-time PUBLIC_HEADER_HASH: the value the binding
+// *expects*, not one read from the loaded library.
 
 export function version(): {
   version: string;
@@ -392,10 +377,8 @@ function deviceFromRaw(
 }
 
 /**
- * Every registered compute device. Synchronous: if backends are not yet
- * initialized this initializes them on the calling thread (which can block for
- * seconds on Metal), and it throws `BackendInitializing` while `initialize()`
- * is in flight. UI hosts should use {@link getAvailableBackendsAsync}.
+ * Every registered compute device. Initializes backends on the calling thread
+ * if needed; throws `BackendInitializing` while {@link initialize} runs.
  */
 export function getAvailableBackends(): BackendInfo[] {
   const n = nativeReady();
@@ -412,11 +395,7 @@ export function getAvailableBackends(): BackendInfo[] {
   return out;
 }
 
-/**
- * {@link getAvailableBackends} without blocking the event loop: awaits
- * {@link initialize}, then reads each device's info (a live driver memory
- * query) on a worker thread.
- */
+/** {@link getAvailableBackends} without blocking the event loop. */
 export async function getAvailableBackendsAsync(): Promise<BackendInfo[]> {
   const n = await nativeAsync();
   const count = n.F.deviceCount();
@@ -434,16 +413,15 @@ export async function getAvailableBackendsAsync(): Promise<BackendInfo[]> {
 }
 
 /**
- * Whether some registered device can satisfy `backend`. Synchronous, with the
- * same initialization behavior as {@link getAvailableBackends}; UI hosts should
- * use {@link backendAvailableAsync}.
+ * Whether some registered device can satisfy `backend`. Same initialization
+ * behavior as {@link getAvailableBackends}.
  */
 export function backendAvailable(backend: Backend): boolean {
   const raw = lookup(BACKENDS, backend, "backend");
   return nativeReady().F.backendAvailable(raw);
 }
 
-/** {@link backendAvailable} without blocking the event loop (awaits {@link initialize}). */
+/** {@link backendAvailable} without blocking the event loop. */
 export async function backendAvailableAsync(backend: Backend): Promise<boolean> {
   const raw = lookup(BACKENDS, backend, "backend");
   const n = await nativeAsync();
@@ -1504,12 +1482,7 @@ export class TranscribeModel {
     ensureExitHook();
   }
 
-  /**
-   * Load a GGUF model. Never blocks the event loop on backend initialization:
-   * it awaits {@link initialize} (sharing any in-flight init) and then loads the
-   * file on a worker thread. A failed load (missing or invalid file) affects
-   * only this call; only a failed backend initialization is permanent.
-   */
+  /** Load a GGUF model. Awaits {@link initialize}, so it never blocks the event loop. */
   static async load(
     path: string,
     opts: ModelOptions = {},

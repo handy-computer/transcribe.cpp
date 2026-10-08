@@ -143,46 +143,24 @@ the model lease). Disposal is idempotent and order-independent.
 
 ## Startup and UI responsiveness
 
-The first use of a compute backend initializes it, and that can take seconds:
-on Metal it compiles the GPU shader library. The binding does that work on a
-worker thread, so the event loop (and your UI) keeps running:
+Initializing compute backends can take seconds (on Metal it compiles the GPU
+shader library). `TranscribeModel.load()` does this on a worker thread, so the
+event loop keeps running. To pay the cost up front, call `await initialize()`
+at startup; `backendState()` reports its progress.
 
-- `await TranscribeModel.load(...)` initializes backends off the main thread
-  automatically. Concurrent loads share one initialization.
-- `await initialize()` does it ahead of time, e.g. at app startup, so the
-  first load is fast. It is idempotent; `backendState()` reports
-  `"uninitialized" | "initializing" | "ready" | "failed"`.
-- `await getAvailableBackendsAsync()` / `await backendAvailableAsync(kind)` are
-  the non-blocking device queries.
-- `version()` and `libraryPath()` never initialize backends and are safe to
-  call at any time.
-
-The synchronous `getAvailableBackends()` / `backendAvailable()` are kept for
-compatibility, with two caveats:
-
-- If they are the first call that needs backends, they initialize them on the
-  calling thread, which **blocks the event loop**. In a UI process, call
-  `await initialize()` (or use the async variants) first.
-- While `initialize()` is in flight they throw `BackendInitializing` rather
-  than wait, because waiting on the main thread can deadlock with the
-  initialization worker.
-
-A failed backend initialization (no usable compute device) is permanent for the
-process: every later backend call rethrows the same `BackendError`. A failed
-model load (missing or invalid file) affects only that call.
-
-Loading the library itself (finding it, dlopen, the ABI check) still runs
-synchronously on first use, but does no GPU work. The one potentially slow part
-is the opt-in CUDA package with `TRANSCRIBE_CUDA_RUNTIME_DIR` set, which
-preloads the CUDA runtime libraries at that point.
+Use `getAvailableBackendsAsync()` / `backendAvailableAsync()` in UI processes.
+The sync variants initialize backends on the calling thread if needed, and
+throw `BackendInitializing` while `initialize()` is running. A failed backend
+initialization is permanent for the process; later calls rethrow its
+`BackendError`.
 
 ## Backend selection
 
 ```ts
-import { getAvailableBackendsAsync, backendAvailable } from "transcribe-cpp";
+import { getAvailableBackendsAsync, backendAvailableAsync } from "transcribe-cpp";
 
 const devices = await getAvailableBackendsAsync();
-backendAvailable("rocm"); // boolean — never throws
+await backendAvailableAsync("rocm"); // boolean
 
 // Policy selection: first matching ROCm device.
 const automatic = await TranscribeModel.load("model.gguf", { backend: "rocm" });

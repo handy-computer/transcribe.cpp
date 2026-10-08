@@ -29,11 +29,15 @@ function scenario(body, env = {}) {
   return r.stdout;
 }
 
-test("version() and libraryPath() load the library without initializing backends", () => {
+test("version(), libraryPath(), and argument validation do not initialize backends", () => {
   scenario(`
     const v = t.version();
     if (!/^\\d+\\.\\d+\\.\\d+/.test(v.version)) throw new Error("bad version " + v.version);
     t.libraryPath();
+    await t.backendAvailableAsync("nope").then(
+      () => { throw new Error("expected rejection"); },
+      (e) => { if (!(e instanceof t.TranscribeError)) throw e; },
+    );
     if (t.backendState() !== "uninitialized") throw new Error("state " + t.backendState());
   `);
 });
@@ -75,16 +79,6 @@ test("async discovery initializes on demand and matches the sync view", () => {
   `);
 });
 
-test("an invalid backend name is rejected before any initialization", () => {
-  scenario(`
-    await t.backendAvailableAsync("nope").then(
-      () => { throw new Error("expected rejection"); },
-      (e) => { if (!(e instanceof t.TranscribeError)) throw e; },
-    );
-    if (t.backendState() !== "uninitialized") throw new Error("state " + t.backendState());
-  `);
-});
-
 test("TranscribeModel.load awaits initialization instead of blocking", () => {
   scenario(`
     const loads = [
@@ -107,49 +101,34 @@ test("TranscribeModel.load awaits initialization instead of blocking", () => {
   `);
 });
 
-test("the sync compatibility path still initializes on first use", () => {
-  scenario(`
-    if (!t.backendAvailable("cpu")) throw new Error("cpu unavailable");
-    if (t.backendState() !== "ready") throw new Error("state " + t.backendState());
-    await t.initialize(); // resolves immediately once ready
-  `);
-});
-
-test("log messages emitted during async initialization reach the handler", () => {
-  const out = scenario(`
-    const seen = [];
-    t.setLogHandler((level, msg) => seen.push(msg));
-    await t.initialize();
-    // Swapping the JS target after init is fine; the native callback is stable.
-    t.setLogHandler(null);
-    t.setLogHandler(() => {});
-    console.log(JSON.stringify(seen));
-  `);
-  const seen = JSON.parse(out.trim().split("\n").pop());
-  assert.ok(
-    seen.some((m) => m.includes("transcribe_init_backends")),
-    `expected the init summary in the log, got ${JSON.stringify(seen)}`,
-  );
-});
-
-test("a log handler that re-enters a sync query during inline init cannot deadlock", () => {
-  scenario(`
-    let reentered = null;
-    t.setLogHandler(() => {
-      if (reentered) return;
-      try { t.getAvailableBackends(); reentered = "no-throw"; }
-      catch (e) { reentered = e.name; }
-    });
-    t.backendAvailable("cpu"); // sync inline init; the handler fires inside it
-    if (reentered !== null && reentered !== "BackendInitializing") {
-      throw new Error("re-entrant query: " + reentered);
-    }
-  `);
-});
+// The init summary line always reaches the handler, so both re-entry tests are
+// guaranteed to exercise a sync query from inside initialization.
+for (const [mode, start] of [
+  ["async", "await t.initialize();"],
+  ["inline", "t.backendAvailable('cpu');"],
+]) {
+  test(`a log handler re-entering a sync query during ${mode} init fails fast`, () => {
+    scenario(`
+      const seen = [];
+      t.setLogHandler((level, msg) => {
+        let outcome = "no-throw";
+        try { t.getAvailableBackends(); } catch (e) { outcome = e.name; }
+        seen.push({ msg, outcome });
+      });
+      ${start}
+      if (!seen.some((s) => s.msg.includes("transcribe_init_backends"))) {
+        throw new Error("init summary not logged: " + JSON.stringify(seen));
+      }
+      const bad = seen.filter((s) => s.outcome !== "BackendInitializing");
+      if (bad.length) throw new Error("re-entrant query did not fail fast: " + JSON.stringify(bad));
+    `);
+  });
+}
 
 // A backend-init failure is permanent and cached. It needs a dynamic-backend
-// libtranscribe in a directory with no backend modules; set
-// TRANSCRIBE_TEST_NO_MODULES_LIBRARY to such a library to run this.
+// libtranscribe copied into a directory with no backend modules, so it is a
+// local-only check (CI builds compile backends in): set
+// TRANSCRIBE_TEST_NO_MODULES_LIBRARY to such a library to run it.
 const NO_MODULES = process.env.TRANSCRIBE_TEST_NO_MODULES_LIBRARY || "";
 test(
   "a failed backend initialization is cached for the process",

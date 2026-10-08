@@ -38,11 +38,8 @@ export class InputTooLong extends TranscribeError {}
 export class VersionMismatch extends TranscribeError {}
 
 /**
- * Raised by a synchronous backend query (`getAvailableBackends()`,
- * `backendAvailable()`) while `initialize()` is still running. The call fails
- * fast instead of waiting, because waiting on the main thread can deadlock
- * with the init worker. Await `initialize()` or use the async variants.
- * Binding-side error, so `status` is 0.
+ * Raised by a synchronous backend query while `initialize()` is still running
+ * (waiting could deadlock). Binding-side error, so `status` is 0.
  */
 export class BackendInitializing extends TranscribeError {}
 

@@ -7,8 +7,8 @@
 import { getAvailableBackendsAsync, backendAvailable, TranscribeModel } from "../dist/index.js";
 import { model, skip } from "./_support.mjs";
 
-// Async discovery initializes backends off the event loop (on Metal this is
-// where the shader library compiles); the sync queries below are then instant.
+// Async discovery initializes backends off the event loop; the sync queries
+// below are then instant.
 const devices = await getAvailableBackendsAsync();
 console.log("discovered devices:");
 for (const d of devices) {
