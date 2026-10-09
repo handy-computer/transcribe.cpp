@@ -32,7 +32,7 @@ namespace {
 
 constexpr size_t k_min_info_size           = TRANSCRIBE_FIELD_END(transcribe_vad_info, frame_samples);
 constexpr size_t k_min_session_params_size = TRANSCRIBE_FIELD_END(transcribe_vad_session_params, n_threads);
-constexpr size_t k_min_params_size         = TRANSCRIBE_FIELD_END(transcribe_vad_params, use_max_possible_silence);
+constexpr size_t k_min_params_size         = TRANSCRIBE_FIELD_END(transcribe_vad_params, max_speech_ms);
 constexpr size_t k_min_result_size         = TRANSCRIBE_FIELD_END(transcribe_vad_result, n_segments);
 constexpr size_t k_min_segment_size        = TRANSCRIBE_FIELD_END(transcribe_vad_segment, end_sample);
 constexpr size_t k_min_timings_size        = TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
@@ -98,20 +98,18 @@ transcribe_status transcribe::resolve_vad_params(const transcribe_vad_params * p
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (params->min_speech_ms < 0 || params->min_silence_ms < 0 || params->speech_pad_ms < 0 ||
-        params->max_speech_ms < 0 || params->min_silence_at_max_speech_ms < 0) {
+        params->max_speech_ms < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     VadSegmentParams r;
-    r.threshold                    = thr;
+    r.threshold      = thr;
     // The reference's default: max(threshold - 0.15, 0.01).
-    r.neg_threshold                = neg < 0.0 ? std::max(thr - 0.15, 0.01) : neg;
-    r.min_speech_ms                = params->min_speech_ms;
-    r.min_silence_ms               = params->min_silence_ms;
-    r.speech_pad_ms                = params->speech_pad_ms;
-    r.max_speech_ms                = params->max_speech_ms;
-    r.min_silence_at_max_speech_ms = params->min_silence_at_max_speech_ms;
-    r.use_max_possible_silence     = params->use_max_possible_silence;
-    out                            = r;
+    r.neg_threshold  = neg < 0.0 ? std::max(thr - 0.15, 0.01) : neg;
+    r.min_speech_ms  = params->min_speech_ms;
+    r.min_silence_ms = params->min_silence_ms;
+    r.speech_pad_ms  = params->speech_pad_ms;
+    r.max_speech_ms  = params->max_speech_ms;
+    out              = r;
     return TRANSCRIBE_OK;
 }
 
@@ -293,14 +291,12 @@ extern "C" void transcribe_vad_session_params_init(struct transcribe_vad_session
 extern "C" void transcribe_vad_params_init(struct transcribe_vad_params * p) {
     transcribe::init_sized(p);
     if (p != nullptr) {
-        p->threshold                    = 0.5;
-        p->neg_threshold                = -1.0;
-        p->min_speech_ms                = 250;
-        p->min_silence_ms               = 100;
-        p->speech_pad_ms                = 30;
-        p->max_speech_ms                = 0;
-        p->min_silence_at_max_speech_ms = 98;
-        p->use_max_possible_silence     = true;
+        p->threshold      = 0.5;
+        p->neg_threshold  = -1.0;
+        p->min_speech_ms  = 250;
+        p->min_silence_ms = 100;
+        p->speech_pad_ms  = 30;
+        p->max_speech_ms  = 0;
     }
 }
 

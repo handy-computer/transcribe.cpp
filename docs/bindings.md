@@ -111,13 +111,14 @@ their feeds; a binding allows one active stream per model. Starting a stream
 takes the model's stream lease, and ending it (finalize, reset, a feed that
 leaves the stream FAILED, or dropping / closing the stream) releases it.
 While the lease is held, `run`, `run_batch`, a new stream, a diarize run and
-a langid run on any session of that model raise `Busy` instead of waiting. A feed
+a langid run and a VAD run / feed / flush on any session of that model raise
+`Busy` instead of waiting. A feed
 rejected before the native call (e.g. NaN input) keeps the lease.
 
 ## Roles and the DIARIZE session
 
 Each binding exposes the role mask as `Model.roles` (Python `frozenset[Role]`,
-TypeScript `readonly ('asr' | 'diarize' | 'langid')[]`, Rust `Roles`, Swift
+TypeScript `readonly ('asr' | 'diarize' | 'langid' | 'vad')[]`, Rust `Roles`, Swift
 `Roles` option set). Status 20 surfaces as `UnsupportedRole`
 (`.unsupportedRole` in Swift), including from capabilities on a model without
 ASR. Status 21 surfaces as `InputTooShort` (`.inputTooShort` in Swift).
@@ -155,6 +156,21 @@ list raises `InvalidArgument`.
 A langid run follows the same execution rules as an ASR or diarize run:
 model-wide compute lock, `Busy` under a stream lease, results copied out
 under the lock, cancellation, and deferred frees.
+
+## The VAD session
+
+A VAD model gets `VadSession` from `model.vad_session()` (Python, Rust),
+`model.vadSession()` (Swift) or `model.createVadSession()` (TypeScript), plus
+`vad_info` / `vadInfo` (sample rate, frame size). `run(pcm, options)` returns a
+copied-out result: per-frame probabilities and speech segments. Stream feed /
+flush return the probabilities of the frames they completed and `first_frame`;
+stream reset drops the stream. `VadIterator` turns probabilities into live
+START / END events; it owns no model and takes no lock.
+
+Every VAD call takes the model-wide compute lock for that call only. A VAD
+stream is session state, not a stream lease, so ASR work on the same model may
+run between two feeds. Results are copied out under the lock, and VAD calls
+honour cancellation and deferred frees like the other roles.
 
 ## Raw text
 

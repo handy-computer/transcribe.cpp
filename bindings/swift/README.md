@@ -130,6 +130,28 @@ let result = try model.langIdSession().run(pcm, options: LangIdOptions(allowed: 
 print(result.code ?? "-", result.allowedMass)
 ```
 
+## Voice activity detection
+
+VAD models (`.vad`, e.g. Silero VAD; the whisper.cpp `ggml-silero-*.bin` files
+load too) score `vadInfo.frameSamples`-sample frames from a `VadSession`.
+`run` returns per-frame `probs` and speech `segments` in samples;
+`streamFeed` / `streamFlush` return the probabilities of the frames each call
+completed, starting at `firstFrame`. A `VadIterator` (no model) turns those
+into live START/END events; it does not emit END at end of input.
+
+```swift
+let model = try Model(path: "silero-vad-v6.2-F32.gguf")
+let vad = try model.vadSession()
+for s in try vad.run(pcm, options: VadOptions(threshold: 0.6)).segments {
+    print(s.startSample, s.endSample)
+}
+
+let iterator = try VadIterator(frameSamples: try model.vadInfo.frameSamples)
+for chunk in micChunks {
+    for e in try iterator.feed(try vad.streamFeed(chunk).probs) { print(e.kind, e.sample) }
+}
+```
+
 ## Backends
 
 Backends are compiled into the xcframework per Apple slice:

@@ -29,6 +29,7 @@ use crate::langid::{LangIdInfo, LangIdSession, LangIdSessionOptions};
 use crate::result::owned_str;
 use crate::session::Session;
 use crate::types::{Backend, ExtSlot, Feature, Roles, TimestampKind};
+use crate::vad::{VadInfo, VadSession, VadSessionOptions};
 use crate::version;
 
 /// Options for loading a model.
@@ -131,12 +132,14 @@ impl std::fmt::Debug for Model {
 }
 
 impl Model {
-    /// Load a GGUF model from disk with default options.
+    /// Load a model from disk with default options: a GGUF, or a supported
+    /// whisper.cpp `.bin` (Whisper, or Silero VAD v5.1.2 / v6.2.0). The format
+    /// is detected from the file header, not the extension.
     pub fn load(path: impl AsRef<Path>) -> Result<Model> {
         Model::load_with(path, &ModelOptions::default())
     }
 
-    /// Load a GGUF model from disk with explicit options.
+    /// Load a model from disk with explicit options (formats as for [`Model::load`]).
     pub fn load_with(path: impl AsRef<Path>, options: &ModelOptions) -> Result<Model> {
         // Pre-1.0 base-version lock against the loaded library (once).
         version::ensure_compatible()?;
@@ -249,6 +252,32 @@ impl Model {
         let c = CString::new(code).ok()?;
         let i = unsafe { sys::transcribe_langid_label_index(self.inner.ptr, c.as_ptr()) };
         (i >= 0).then_some(i)
+    }
+
+    /// Open a VAD session with default options. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Vad`](crate::Role).
+    pub fn vad_session(&self) -> Result<VadSession> {
+        self.vad_session_with(&VadSessionOptions::default())
+    }
+
+    /// Open a VAD session with explicit options.
+    pub fn vad_session_with(&self, options: &VadSessionOptions) -> Result<VadSession> {
+        VadSession::new(self, options)
+    }
+
+    /// Static facts about a VAD model. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Vad`](crate::Role).
+    pub fn vad_info(&self) -> Result<VadInfo> {
+        let mut raw: sys::transcribe_vad_info = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_vad_info_init(&mut raw) };
+        check(
+            unsafe { sys::transcribe_vad_get_info(self.inner.ptr, &mut raw) },
+            "vad info",
+        )?;
+        Ok(VadInfo {
+            sample_rate: raw.sample_rate,
+            frame_samples: raw.frame_samples,
+        })
     }
 
     /// The roles (kinds of work) this model serves.

@@ -66,6 +66,7 @@ Itn = Literal["default", "off", "on"]
 Diarize = Literal["default", "off", "on"]
 SortformerPreset = Literal["default", "very_high_latency", "high_latency", "low_latency"]
 CommitPolicy = Literal["auto", "on_finalize", "stable_prefix"]
+VadEventType = Literal["start", "end"]
 Feature = Literal[
     "initial_prompt", "temperature_fallback", "long_form",
     "cancellation", "pnc", "itn", "diarization",
@@ -83,6 +84,13 @@ __all__ = [
     "LangIdInfo",
     "LangIdResult",
     "LangIdCandidate",
+    "VadSession",
+    "VadInfo",
+    "VadResult",
+    "VadSegment",
+    "VadIterator",
+    "VadEvent",
+    "VadEventType",
     "Role",
     "Result",
     "Segment",
@@ -198,6 +206,8 @@ _Segment = _generated.transcribe_segment
 _SpeakerSegment = _generated.transcribe_speaker_segment
 _LangIdCandidate = _generated.transcribe_langid_candidate
 _LangIdResult = _generated.transcribe_langid_result
+_VadResult = _generated.transcribe_vad_result
+_VadSegment = _generated.transcribe_vad_segment
 _Word = _generated.transcribe_word
 _Token = _generated.transcribe_token
 _StreamParams = _generated.transcribe_stream_params
@@ -567,11 +577,12 @@ class Capabilities:
 class Role(enum.Enum):
     """What a model serves (``Model.roles``): ASR is ``Model.session()``,
     DIARIZE is ``Model.diarize_session()``, LANGID is
-    ``Model.langid_session()``."""
+    ``Model.langid_session()``, VAD is ``Model.vad_session()``."""
 
     ASR = _generated.TRANSCRIBE_ROLE_ASR
     DIARIZE = _generated.TRANSCRIBE_ROLE_DIARIZE
     LANGID = _generated.TRANSCRIBE_ROLE_LANGID
+    VAD = _generated.TRANSCRIBE_ROLE_VAD
 
 
 @dataclass(frozen=True)
@@ -615,6 +626,40 @@ class LangIdResult:
     def code(self) -> str | None:
         """The top candidate's code, or None when there are no candidates."""
         return self.candidates[0].code if self.candidates else None
+
+
+@dataclass(frozen=True)
+class VadInfo:
+    sample_rate: int
+    frame_samples: int  # samples per probability (512 = 32 ms at 16 kHz)
+
+
+@dataclass(frozen=True)
+class VadSegment:
+    """One speech segment in samples of the run's input: [start, end)."""
+
+    start_sample: int
+    end_sample: int
+
+
+@dataclass(frozen=True)
+class VadResult:
+    """One speech probability per frame the call scored. ``first_frame`` is
+    the stream position of ``probs[0]`` (0 after ``run()``); frame ``f``
+    covers samples ``[f * frame_samples, (f + 1) * frame_samples)``.
+    ``segments`` is filled by ``run()`` only."""
+
+    probs: tuple[float, ...]
+    first_frame: int
+    segments: tuple[VadSegment, ...]
+
+
+@dataclass(frozen=True)
+class VadEvent:
+    """A VadIterator boundary, in 16 kHz samples (not detection time)."""
+
+    type: VadEventType
+    sample: int
 
 
 @dataclass(frozen=True)
@@ -1304,6 +1349,20 @@ class Model:
     def langid_session(self, *, n_threads: int = 0) -> "LangIdSession":
         """Raises :class:`UnsupportedRole` without the LANGID role."""
         return LangIdSession(self, n_threads=n_threads)
+
+    @property
+    def vad_info(self) -> VadInfo:
+        """Raises :class:`UnsupportedRole` without the VAD role."""
+        info = _generated.transcribe_vad_info()
+        _lib.transcribe_vad_info_init(_byref(info))
+        _check(_lib.transcribe_vad_get_info(self._h, _byref(info)),
+               "reading vad info")
+        return VadInfo(sample_rate=info.sample_rate,
+                       frame_samples=info.frame_samples)
+
+    def vad_session(self, *, n_threads: int = 0) -> "VadSession":
+        """Raises :class:`UnsupportedRole` without the VAD role."""
+        return VadSession(self, n_threads=n_threads)
 
     def close(self) -> None:
         """Free the model. Any session still open on it is closed first —
@@ -2046,6 +2105,237 @@ class LangIdSession(_SessionBase):
         _check(_lib.transcribe_langid_get_timings(self._h, _byref(tm)),
                "transcribe_langid_get_timings")
         return _timings_from(tm)
+
+
+_VAD_EVENT_TYPES = {
+    _generated.TRANSCRIBE_VAD_EVENT_START: "start",
+    _generated.TRANSCRIBE_VAD_EVENT_END: "end",
+}
+
+
+def _floats_or_empty(values):
+    """Like _pcm_to_carray, but an empty input is ``(None, 0)``: the VAD
+    stream feed and the iterator feed accept zero samples."""
+    if hasattr(values, "__len__") and len(values) == 0:
+        return None, 0
+    return _pcm_to_carray(values)
+
+
+class VadSession(_SessionBase):
+    """A voice activity detection context on a model with the VAD role.
+    Compute locking and ``Busy`` rules: see ``Model``.
+
+    ``run()`` scores one clip and segments it; ``feed()`` / ``flush()`` /
+    ``reset()`` drive this session's own probability stream. That stream is
+    native per-session state, not an ASR stream: it does not take the
+    model's stream lease. Each feed/flush is one bounded compute call, so it
+    is locked and raises ``Busy`` under an ASR stream lease like a langid or
+    diarize run."""
+
+    _free_fn = "transcribe_vad_session_free"
+
+    def __init__(self, model: Model, *, n_threads: int = 0):
+        self._model = model  # keep the model alive for the session's lifetime
+        params = _generated.transcribe_vad_session_params()
+        _lib.transcribe_vad_session_params_init(_byref(params))
+        params.n_threads = n_threads
+
+        handle = ctypes.c_void_p()
+        _check(_lib.transcribe_vad_session_init(model._h, _byref(params), _byref(handle)),
+               "opening vad session")
+        if not handle.value:
+            raise TranscribeError("vad session init returned a null handle")
+        self._handle = handle
+        self._arm_abort(_lib.transcribe_vad_set_abort_callback)
+
+    @staticmethod
+    def _copy_result(h, segments: bool) -> VadResult:
+        """Copy the last call's result out. Caller holds the compute lock:
+        the probs pointer is session-owned and replaced by the next call."""
+        res = _VadResult()
+        _lib.transcribe_vad_result_init(_byref(res))
+        _check(_lib.transcribe_vad_get_result(h, _byref(res)),
+               "transcribe_vad_get_result")
+        probs: tuple[float, ...] = ()
+        if res.n_probs > 0:
+            ptr = _lib.transcribe_vad_probs(h)
+            if not ptr:
+                raise TranscribeError("vad result has probabilities but no buffer")
+            probs = tuple(ptr[:res.n_probs])
+        rows = []
+        for i in range(res.n_segments if segments else 0):
+            s = _VadSegment()
+            _lib.transcribe_vad_segment_init(_byref(s))
+            _check(_lib.transcribe_vad_get_segment(h, i, _byref(s)),
+                   "transcribe_vad_get_segment")
+            rows.append(VadSegment(start_sample=s.start_sample, end_sample=s.end_sample))
+        return VadResult(probs=probs, first_frame=res.first_frame, segments=tuple(rows))
+
+    def run(self, pcm: PCMLike, *,
+            threshold: float | None = None,
+            neg_threshold: float | None = None,
+            min_speech_ms: int | None = None,
+            min_silence_ms: int | None = None,
+            speech_pad_ms: int | None = None,
+            max_speech_ms: int | None = None) -> VadResult:
+        """Score one clip (16 kHz mono float32 PCM) from a fresh state and
+        return its per-frame probabilities and speech segments. Unset
+        options keep the native defaults (Silero's get_speech_timestamps).
+        Ends any stream in progress on this session.
+
+        Raises :class:`InvalidArgument` for out-of-range options,
+        :class:`Aborted` after :meth:`cancel`, and :class:`Busy` if a stream
+        is active on this model."""
+        self._cancel.clear()  # before the lock wait, as in Session.run()
+        array, n_samples = _pcm_to_carray(pcm)
+        params = _generated.transcribe_vad_params()
+        _lib.transcribe_vad_params_init(_byref(params))
+        for name, value in (("threshold", threshold), ("neg_threshold", neg_threshold),
+                            ("min_speech_ms", min_speech_ms),
+                            ("min_silence_ms", min_silence_ms),
+                            ("speech_pad_ms", speech_pad_ms),
+                            ("max_speech_ms", max_speech_ms)):
+            if value is not None:
+                setattr(params, name, value)
+        with self._model._exclusive(
+                "vad_run", busy="a stream is active on this model; "
+                                "finish or drop it before vad run()"):
+            h = self._h  # captured under the lock; close() defers its free
+            _check(_lib.transcribe_vad_run(h, array, n_samples, _byref(params)),
+                   "transcribe_vad_run")
+            return self._copy_result(h, segments=True)
+
+    def feed(self, pcm: PCMLike) -> VadResult:
+        """Append audio to this session's stream and return the
+        probabilities of the frames it completed (possibly none); a partial
+        frame waits for the next feed. ``first_frame`` is the stream position
+        of the first one. A failed feed (other than rejected input) resets
+        the stream. Raises like :meth:`run`."""
+        self._cancel.clear()
+        array, n_samples = _floats_or_empty(pcm)
+        with self._model._exclusive(
+                "vad_feed", busy="a stream is active on this model; "
+                                 "finish or drop it before vad feed()"):
+            h = self._h
+            _check(_lib.transcribe_vad_stream_feed(h, array, n_samples),
+                   "transcribe_vad_stream_feed")
+            return self._copy_result(h, segments=False)
+
+    def flush(self) -> VadResult:
+        """End the stream: score the buffered partial frame zero padded (one
+        probability, or none when nothing was buffered). The next feed starts
+        a new stream at frame 0. Raises like :meth:`run`."""
+        self._cancel.clear()
+        with self._model._exclusive(
+                "vad_flush", busy="a stream is active on this model; "
+                                  "finish or drop it before vad flush()"):
+            h = self._h
+            _check(_lib.transcribe_vad_stream_flush(h), "transcribe_vad_stream_flush")
+            return self._copy_result(h, segments=False)
+
+    def reset(self) -> None:
+        """Drop the stream without scoring. Never raises ``Busy``."""
+        with self._model._exclusive("vad_reset"):
+            _lib.transcribe_vad_stream_reset(self._h)
+
+    @property
+    def timings(self) -> Timings:
+        """Load time plus the last call's encode / decode time. Not locked,
+        like ``Session.limits``."""
+        tm = _Timings()
+        _lib.transcribe_timings_init(_byref(tm))
+        _check(_lib.transcribe_vad_get_timings(self._h, _byref(tm)),
+               "transcribe_vad_get_timings")
+        return _timings_from(tm)
+
+
+class VadIterator:
+    """Silero's VADIterator live policy over per-frame speech probabilities
+    (e.g. ``VadSession.feed()`` results): emits START / END events. Owns no
+    model and takes no lock; use one iterator from one thread at a time.
+    END is never emitted at end of input (as upstream); close an open
+    segment yourself from the real audio length."""
+
+    def __init__(self, frame_samples: int, *,
+                 threshold: float | None = None,
+                 min_silence_ms: int | None = None,
+                 speech_pad_ms: int | None = None):
+        params = _generated.transcribe_vad_iterator_params()
+        _lib.transcribe_vad_iterator_params_init(_byref(params))
+        if threshold is not None:
+            params.threshold = threshold
+        if min_silence_ms is not None:
+            params.min_silence_ms = min_silence_ms
+        if speech_pad_ms is not None:
+            params.speech_pad_ms = speech_pad_ms
+        handle = ctypes.c_void_p()
+        _check(_lib.transcribe_vad_iterator_init(frame_samples, _byref(params), _byref(handle)),
+               "opening vad iterator")
+        if not handle.value:
+            raise TranscribeError("vad iterator init returned a null handle")
+        self._handle = handle
+
+    @property
+    def _h(self) -> ctypes.c_void_p:
+        if self._handle is None:
+            raise TranscribeError("vad iterator is closed")
+        return self._handle
+
+    def _result(self):
+        res = _generated.transcribe_vad_iterator_result()
+        _lib.transcribe_vad_iterator_result_init(_byref(res))
+        _check(_lib.transcribe_vad_iterator_get_result(self._h, _byref(res)),
+               "transcribe_vad_iterator_get_result")
+        return res
+
+    def feed(self, probs: "Sequence[float]") -> tuple[VadEvent, ...]:
+        """Consume the next probabilities (each in [0, 1]) and return the
+        events they produced, in detection order. A failed feed leaves the
+        state intact."""
+        array, n = _floats_or_empty(probs)
+        _check(_lib.transcribe_vad_iterator_feed(self._h, array, n),
+               "transcribe_vad_iterator_feed")
+        events = []
+        for i in range(self._result().n_events):
+            e = _generated.transcribe_vad_event()
+            _lib.transcribe_vad_event_init(_byref(e))
+            _check(_lib.transcribe_vad_iterator_get_event(self._h, i, _byref(e)),
+                   "transcribe_vad_iterator_get_event")
+            events.append(VadEvent(type=_VAD_EVENT_TYPES[e.type], sample=e.sample))
+        return tuple(events)
+
+    @property
+    def current_sample(self) -> int:
+        """Probabilities consumed so far times ``frame_samples``."""
+        return self._result().current_sample
+
+    @property
+    def triggered(self) -> bool:
+        """Speech is active (possibly awaiting silence)."""
+        return bool(self._result().triggered)
+
+    def reset(self) -> None:
+        """Reset time and hysteresis; active speech is dropped without END."""
+        _lib.transcribe_vad_iterator_reset(self._h)
+
+    def close(self) -> None:
+        handle = getattr(self, "_handle", None)
+        if handle is None:
+            return
+        self._handle = None
+        _lib.transcribe_vad_iterator_free(handle)
+
+    def __enter__(self) -> "VadIterator":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 def transcribe(

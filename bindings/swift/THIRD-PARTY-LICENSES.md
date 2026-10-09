@@ -63,16 +63,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-transcribe.cpp itself is MIT-licensed; see `LICENSE`.
+## Silero VAD
 
----
-
-## Silero VAD probability policies
-
-The offline segmentation and live iterator in `src/transcribe-vad.cpp` are
-translated from `silero_vad/utils_vad.py`, pinned to silero-vad 6.2.3. The
-authoritative text is `src/third_party/silero_vad/LICENSE`; native artifacts
-include it as `LICENSE.silero_vad` (Python wheels use their license paths).
+The speech-segment and live-iterator policies, translated from silero-vad's
+`utils_vad.py`, are compiled into the native artifact.
 
 ```
 MIT License
@@ -97,3 +91,5 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+transcribe.cpp itself is MIT-licensed; see `LICENSE`.

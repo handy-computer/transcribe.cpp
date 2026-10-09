@@ -337,18 +337,10 @@ def parse_cli_language(output: str) -> dict[str, Any] | None:
     return None
 
 
-def parse_cli_segments(output: str) -> list[dict[str, int]] | None:
-    """The VAD CLI's `segment: <i> start=<sample> end=<sample> ...` lines;
-    None when the output has no VAD frame-count summary."""
-    if "  frames:" not in output:
-        return None
-    segments = []
-    for line in output.splitlines():
-        line = line.strip()
-        if line.startswith("segment: "):
-            fields = dict(p.split("=", 1) for p in line.split()[2:] if "=" in p)
-            segments.append({"start": int(fields["start"]), "end": int(fields["end"])})
-    return segments
+def parse_cli_segments(output: str) -> list[dict[str, int]]:
+    """The VAD CLI's `segment: <i> start=<sample> end=<sample> ...` lines."""
+    return [{"start": int(m[1]), "end": int(m[2])}
+            for m in re.finditer(r"^\s*segment: \d+ start=(\d+) end=(\d+)", output, re.M)]
 
 
 def write_cpp_transcript(
@@ -598,16 +590,16 @@ def cmd_cpp(args: argparse.Namespace) -> int:
                 f"error: cpp dump [{args.family}/{case_name}] failed "
                 f"with exit code {result.returncode}"
             )
-        transcript = parse_cli_transcript(result.stdout or "")
-        if transcript is None and "speaker segments:" in (result.stdout or ""):
-            continue  # a diarizer has no transcript
-        segments = parse_cli_segments(result.stdout or "") if transcript is None else None
-        if segments is not None:
+        if manifest.get("role") == "vad":
             # A VAD model: its behavioural artifact is the speech segments,
             # compared against the reference's segments.json.
+            segments = parse_cli_segments(result.stdout or "")
             (out_dir / "segments.json").write_text(json.dumps({"segments": segments}, indent=2) + "\n")
             print(f"  wrote {out_dir / 'segments.json'}", file=sys.stderr)
             continue
+        transcript = parse_cli_transcript(result.stdout or "")
+        if transcript is None and "speaker segments:" in (result.stdout or ""):
+            continue  # a diarizer has no transcript
         prediction = parse_cli_language(result.stdout or "") if transcript is None else None
         if prediction is not None:
             # A language ID model: its behavioural artifact is the top-1
@@ -731,12 +723,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
                   f"reference {ref_pred['code']!r}, expected {expected!r}")
 
         # VAD: the gate is exact speech-segment parity (sample positions).
-        ref_segments = ref_dir / "segments.json"
-        if manifest.get("role") == "vad" or args.family == "silero_vad" or ref_segments.exists():
-            ref_segs = (json.loads(ref_segments.read_text())["segments"] if ref_segments.exists() else None)
-            cpp_segments = cpp_dir / "segments.json"
-            cpp_segs = (json.loads(cpp_segments.read_text())["segments"] if cpp_segments.exists() else None)
-            match = ref_segs is not None and cpp_segs is not None and cpp_segs == ref_segs
+        # A missing artifact on either side is a failure, not a skip.
+        if manifest.get("role") == "vad":
+            ref_segs, cpp_segs = ((json.loads(f.read_text())["segments"] if f.exists() else None)
+                                  for f in (ref_dir / "segments.json", cpp_dir / "segments.json"))
+            match = ref_segs is not None and cpp_segs == ref_segs
             all_passed = all_passed and match
             transcript_results.append({"case": case_name, "match": match, "mode": "segments",
                                        "reference": ref_segs, "cpp": cpp_segs})

@@ -14,6 +14,4 @@ dependencies = [
     "numpy>=1.26",
     "soundfile>=0.12",
     "gguf>=0.10",
-    # Speed comparison against upstream's ONNX path (scripts/vad/bench_reference.py).
-    "onnxruntime>=1.18",
 ]

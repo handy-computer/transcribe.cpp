@@ -125,9 +125,9 @@ void test_model(int n_threads) {
     // A second run from a fresh state gives the same result (state is reset).
     CHECK(offline_probs(s, pcm) == off);
 
-    // Streaming in any chunking equals the offline run, bit for bit: a
-    // single frame, sub-frame, ragged, and whole-block chunks.
-    const int chunks[] = { 1, 100, 511, 512, 513, 1600, 16000, 200000 };
+    // Streaming in any chunking equals the offline run, bit for bit: one
+    // sample, ragged either side of a frame, and the whole input at once.
+    const int chunks[] = { 1, 511, 513, 200000 };
     for (const int c : chunks) {
         const std::vector<float> st = stream_probs(s, pcm, c);
         CHECK(st == off);

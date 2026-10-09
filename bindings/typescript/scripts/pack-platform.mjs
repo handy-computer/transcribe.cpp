@@ -83,7 +83,7 @@ const contract = fs.existsSync(srcContract)
 fs.writeFileSync(path.join(pkgDir, "contract.json"), JSON.stringify(contract, null, 2) + "\n");
 files.push("contract.json");
 
-// 3) Third-party license texts (ggml + miniz + Silero probability policies) — required by §5.
+// 3) Third-party license texts (ggml + miniz + Silero VAD) — required by §5.
 fs.mkdirSync(path.join(pkgDir, "licenses"), { recursive: true });
 for (const [name, rel] of [
   ["LICENSE", "LICENSE"],

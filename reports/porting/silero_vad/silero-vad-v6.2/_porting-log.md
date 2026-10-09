@@ -11,17 +11,17 @@ Surprises worth feeding back into the docs and tooling.
   frame through the scripted submodules in `VADRNNJIT.forward` order and
   asserts the result equals `model(chunk, 16000)` bit for bit, so the
   captured intermediates are provably the reference's.
-- **New role.** VAD needed `TRANSCRIBE_ROLE_VAD` (bit 3), ABI ids 24-28,
+- **New role.** VAD needed `TRANSCRIBE_ROLE_VAD` (bit 3), ABI ids 24-31,
   `include/transcribe/vad.h`, `Arch::vad`, a dispatcher and a CLI driver.
   The role dispatcher owns the segmentation so future VAD families only
   score frames.
 - **The segmentation is part of the reference contract.** Ported line for
   line, including Python truthiness of sample position 0 and float
   thresholds; the public thresholds are `double` so values like 0.6 compare
-  as the reference's Python floats do. Pinned by 360 vectors generated from
-  the reference; mutation checks showed the first vector set missed the
-  max-speech split paths, so the generator gained frame-aligned ms values and
-  a long-speech generator with tied silences.
+  as the reference's Python floats do. Pinned by 11 reference vectors picked
+  from a seeded set of 360 so they reach every reference branch and catch
+  every detectable comparison mutant (the generator needed frame-aligned ms
+  values and tied long-speech silences to reach the max-speech split paths).
 - **One mutant is equivalent.** In the max-speech split, the reference's
   `if next_start < prev_end + cur_sample` is always true once a silence was
   recorded (positions are non-negative); replacing it with `true` changes

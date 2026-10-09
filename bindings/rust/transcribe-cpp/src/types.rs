@@ -329,6 +329,14 @@ pub enum AbiStruct {
     LangIdParams,
     LangIdResult,
     LangIdCandidate,
+    VadInfo,
+    VadSessionParams,
+    VadParams,
+    VadResult,
+    VadSegment,
+    VadIteratorParams,
+    VadEvent,
+    VadIteratorResult,
 }
 
 impl AbiStruct {
@@ -359,6 +367,14 @@ impl AbiStruct {
             AbiStruct::LangIdParams => A::TRANSCRIBE_ABI_LANGID_PARAMS,
             AbiStruct::LangIdResult => A::TRANSCRIBE_ABI_LANGID_RESULT,
             AbiStruct::LangIdCandidate => A::TRANSCRIBE_ABI_LANGID_CANDIDATE,
+            AbiStruct::VadInfo => A::TRANSCRIBE_ABI_VAD_INFO,
+            AbiStruct::VadSessionParams => A::TRANSCRIBE_ABI_VAD_SESSION_PARAMS,
+            AbiStruct::VadParams => A::TRANSCRIBE_ABI_VAD_PARAMS,
+            AbiStruct::VadResult => A::TRANSCRIBE_ABI_VAD_RESULT,
+            AbiStruct::VadSegment => A::TRANSCRIBE_ABI_VAD_SEGMENT,
+            AbiStruct::VadIteratorParams => A::TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS,
+            AbiStruct::VadEvent => A::TRANSCRIBE_ABI_VAD_EVENT,
+            AbiStruct::VadIteratorResult => A::TRANSCRIBE_ABI_VAD_ITERATOR_RESULT,
         }
     }
 }
@@ -398,6 +414,8 @@ pub enum Role {
     Diarize,
     /// Language identification: [`LangIdSession`](crate::LangIdSession).
     LangId,
+    /// Voice activity detection: [`VadSession`](crate::VadSession).
+    Vad,
 }
 
 /// The set of [`Role`]s a model serves ([`Model::roles`](crate::Model::roles)).
@@ -412,6 +430,7 @@ impl Roles {
             Role::Asr => sys::transcribe_role::TRANSCRIBE_ROLE_ASR,
             Role::Diarize => sys::transcribe_role::TRANSCRIBE_ROLE_DIARIZE,
             Role::LangId => sys::transcribe_role::TRANSCRIBE_ROLE_LANGID,
+            Role::Vad => sys::transcribe_role::TRANSCRIBE_ROLE_VAD,
         };
         self.0 & bit.0 != 0
     }

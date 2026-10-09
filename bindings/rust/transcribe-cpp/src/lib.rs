@@ -58,6 +58,7 @@ mod result;
 mod session;
 mod streaming;
 mod types;
+mod vad;
 mod version;
 
 pub use backend::{
@@ -83,6 +84,10 @@ pub use streaming::{StreamOptions, StreamText, StreamUpdate};
 pub use types::{
     AbiStruct, Backend, CommitPolicy, Diarize, ExtSlot, Feature, Itn, KvType, Pnc, Role, Roles,
     StreamState, Task, TimestampKind,
+};
+pub use vad::{
+    VadEvent, VadEventKind, VadInfo, VadIterator, VadIteratorOptions, VadOptions, VadResult,
+    VadSegment, VadSession, VadSessionOptions,
 };
 pub use version::{
     abi_struct_align, abi_struct_size, compiled_version, header_hash, version, version_commit,

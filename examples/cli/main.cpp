@@ -9,9 +9,7 @@
 #include "wav.h"
 
 #include <cctype>
-#include <cerrno>
 #include <charconv>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -38,20 +36,6 @@ bool parse_device_index(const char * text, int & out) {
     return true;
 }
 
-bool parse_vad_threshold(const char * text, double & out) {
-    if (text == nullptr || text[0] == '\0' || std::isspace(static_cast<unsigned char>(text[0]))) {
-        return false;
-    }
-    char * end          = nullptr;
-    errno               = 0;
-    const double parsed = std::strtod(text, &end);
-    if (end == text || *end != '\0' || errno == ERANGE || !std::isfinite(parsed) || parsed < 0.0 || parsed > 1.0) {
-        return false;
-    }
-    out = parsed;
-    return true;
-}
-
 void print_usage(const char * argv0) {
     std::fprintf(stderr,
                  "usage: %s [options] audio.wav\n"
@@ -70,7 +54,8 @@ void print_usage(const char * argv0) {
                  "  --target-language ISO target language for translation (e.g. de, es, fr)\n"
                  "  -q, --quiet           suppress library log output\n"
                  "  -r, --repeat N        run N times per file (benchmark)\n"
-                 "  -o, --output PATH     write text or speaker segments to PATH (stdout unchanged)\n"
+                 "  -o, --output PATH     write the text, speaker segments, language candidates\n"
+                 "                        or speech segments to PATH (stdout unchanged)\n"
                  "  --threads N           CPU threads (default: all cores)\n"
                  "  --n-ctx N             session context/KV cap in tokens (bounds decoder\n"
                  "                        KV memory; cannot extend the model): 0 = model\n"
@@ -102,11 +87,12 @@ void print_usage(const char * argv0) {
                  "  --allow CODES         (language ID) comma-separated labels to choose from\n"
                  "  --top N               (language ID) print only the best N ranked\n"
                  "                        candidates (0 = all; default)\n"
-                 "  --vad-threshold P     (VAD) speech probability threshold, default 0.5\n"
+                 "  --vad-threshold P     (VAD) speech probability threshold in [0, 1]\n"
+                 "                        (default: the library's, 0.5)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
-                 "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
-                 "                        N-ms PCM slices; requires model to advertise\n"
-                 "                        supports_streaming\n"
+                 "  --stream-chunk-ms N   (ASR) single-file: drive the streaming API by\n"
+                 "                        feeding N-ms PCM slices; requires model to\n"
+                 "                        advertise supports_streaming\n"
                  "  --stream-att-right R  (parakeet streaming) pick the right-context\n"
                  "                        setting from the model's training menu;\n"
                  "                        nemotron-speech-streaming-en-0.6b accepts\n"
@@ -472,8 +458,9 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) {
                 return false;
             }
-            if (!parse_vad_threshold(v, out.vad_threshold)) {
-                std::fprintf(stderr, "error: --vad-threshold must be a finite number in [0, 1]\n");
+            out.vad_threshold = std::atof(v);
+            if (!(out.vad_threshold >= 0.0 && out.vad_threshold <= 1.0)) {
+                std::fprintf(stderr, "error: --vad-threshold must be in [0, 1]\n");
                 return false;
             }
         } else if (a == "--diarize") {

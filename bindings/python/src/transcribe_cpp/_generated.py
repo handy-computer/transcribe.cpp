@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "3e482bc8c5b7f53f"
+PUBLIC_HEADER_HASH = "d5cdefefe6191209"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -266,7 +266,7 @@ transcribe_parakeet_buffered_stream_ext._fields_ = [("ext", transcribe_ext), ("l
 transcribe_sortformer_diarize_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
 transcribe_vad_info._fields_ = [("struct_size", _c.c_uint64), ("sample_rate", _c.c_int32), ("frame_samples", _c.c_int32)]
 transcribe_vad_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int32)]
-transcribe_vad_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double), ("neg_threshold", _c.c_double), ("min_speech_ms", _c.c_int32), ("min_silence_ms", _c.c_int32), ("speech_pad_ms", _c.c_int32), ("max_speech_ms", _c.c_int32), ("min_silence_at_max_speech_ms", _c.c_int32), ("use_max_possible_silence", _c.c_bool)]
+transcribe_vad_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double), ("neg_threshold", _c.c_double), ("min_speech_ms", _c.c_int32), ("min_silence_ms", _c.c_int32), ("speech_pad_ms", _c.c_int32), ("max_speech_ms", _c.c_int32)]
 transcribe_vad_result._fields_ = [("struct_size", _c.c_uint64), ("n_probs", _c.c_int32), ("first_frame", _c.c_int64), ("n_segments", _c.c_int32)]
 transcribe_vad_segment._fields_ = [("struct_size", _c.c_uint64), ("start_sample", _c.c_int64), ("end_sample", _c.c_int64)]
 transcribe_vad_iterator_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double), ("min_silence_ms", _c.c_int32), ("speech_pad_ms", _c.c_int32)]
@@ -345,7 +345,7 @@ STRUCT_LAYOUT = {
     'transcribe_sortformer_diarize_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
     'transcribe_vad_info': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'sample_rate': 8, 'frame_samples': 12}},
     'transcribe_vad_session_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8}},
-    'transcribe_vad_params': {'size': 48, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_speech_ms': 24, 'min_silence_ms': 28, 'speech_pad_ms': 32, 'max_speech_ms': 36, 'min_silence_at_max_speech_ms': 40, 'use_max_possible_silence': 44}},
+    'transcribe_vad_params': {'size': 40, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_speech_ms': 24, 'min_silence_ms': 28, 'speech_pad_ms': 32, 'max_speech_ms': 36}},
     'transcribe_vad_result': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'n_probs': 8, 'first_frame': 16, 'n_segments': 24}},
     'transcribe_vad_segment': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'start_sample': 8, 'end_sample': 16}},
     'transcribe_vad_iterator_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8, 'min_silence_ms': 16, 'speech_pad_ms': 20}},

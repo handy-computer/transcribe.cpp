@@ -156,6 +156,22 @@ pub fn langid_toy_model(test: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+/// The toy silero_vad GGUF the C++ build generates under tests/fixtures/
+/// (random weights, 512-sample frames), or `None` (with a skip note) before
+/// the C++ test fixtures have been built.
+pub fn vad_toy_model(test: &str) -> Option<PathBuf> {
+    ensure_backends();
+    let path = repo_root().join("tests/fixtures/arch_silero_vad.gguf");
+    if !path.is_file() {
+        eprintln!(
+            "skip {test}: {} absent (build the C++ `fixtures` target)",
+            path.display()
+        );
+        return None;
+    }
+    Some(path)
+}
+
 /// Both fixtures together; prints a skip note and returns `None` if either is
 /// missing (so the caller can `return` early — the Rust equivalent of skip).
 pub fn smoke_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {

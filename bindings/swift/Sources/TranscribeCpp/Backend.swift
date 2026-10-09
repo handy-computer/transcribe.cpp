@@ -118,6 +118,14 @@ public enum AbiStruct: Sendable {
     case langIdParams
     case langIdResult
     case langIdCandidate
+    case vadInfo
+    case vadSessionParams
+    case vadParams
+    case vadResult
+    case vadSegment
+    case vadIteratorParams
+    case vadEvent
+    case vadIteratorResult
 
     var cValue: transcribe_abi_struct {
         switch self {
@@ -143,6 +151,14 @@ public enum AbiStruct: Sendable {
         case .langIdParams: return TRANSCRIBE_ABI_LANGID_PARAMS
         case .langIdResult: return TRANSCRIBE_ABI_LANGID_RESULT
         case .langIdCandidate: return TRANSCRIBE_ABI_LANGID_CANDIDATE
+        case .vadInfo: return TRANSCRIBE_ABI_VAD_INFO
+        case .vadSessionParams: return TRANSCRIBE_ABI_VAD_SESSION_PARAMS
+        case .vadParams: return TRANSCRIBE_ABI_VAD_PARAMS
+        case .vadResult: return TRANSCRIBE_ABI_VAD_RESULT
+        case .vadSegment: return TRANSCRIBE_ABI_VAD_SEGMENT
+        case .vadIteratorParams: return TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS
+        case .vadEvent: return TRANSCRIBE_ABI_VAD_EVENT
+        case .vadIteratorResult: return TRANSCRIBE_ABI_VAD_ITERATOR_RESULT
         }
     }
 }

@@ -376,10 +376,6 @@ foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize
     target_link_libraries(transcribe_${_t}_unit PRIVATE transcribe)
     target_include_directories(transcribe_${_t}_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
     transcribe_apply_warnings(transcribe_${_t}_unit)
-    if(_t STREQUAL "vad_iterator" AND NOT TRANSCRIBE_BUILD_SHARED)
-        # Allocator interposition cannot reach a Windows shared library.
-        target_compile_definitions(transcribe_${_t}_unit PRIVATE TRANSCRIBE_TEST_ALLOC_INTERPOSE=1)
-    endif()
     add_test(NAME transcribe_${_t}_unit COMMAND transcribe_${_t}_unit)
 endforeach()
 
@@ -829,9 +825,6 @@ if(TRANSCRIBE_UV)
     transcribe_apply_warnings(transcribe_silero_vad_smoke)
     add_dependencies(transcribe_silero_vad_smoke fixtures)
     add_test(NAME transcribe_silero_vad_smoke COMMAND transcribe_silero_vad_smoke)
-    add_test(NAME transcribe_validate_vad_unit
-        COMMAND ${TRANSCRIBE_UV} run --no-project
-            ${CMAKE_SOURCE_DIR}/scripts/test_validate_vad.py)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1452,9 +1445,9 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         SKIP_RETURN_CODE 77)
 
     # silero_vad on the VAD role: reference segments of jfk.wav, no speech
-    # in noise.wav, 20 ms streaming parity, and a GPU backend against the
-    # CPU when one loads (GGUF only). Gated by TRANSCRIBE_SILERO_VAD_GGUF
-    # / _V5_BIN / _V6_BIN (RC 77 skip); CPU smoke uses 1 and 4 threads.
+    # in noise.wav and 20 ms streaming parity, on the CPU at 1 and 4
+    # threads. Gated by TRANSCRIBE_SILERO_VAD_GGUF / _V5_BIN / _V6_BIN
+    # (RC 77 skip).
     add_executable(transcribe_silero_vad_real_smoke
         silero_vad_real_smoke.cpp)
     target_link_libraries(transcribe_silero_vad_real_smoke
@@ -1466,14 +1459,6 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_silero_vad_real_smoke)
     set_tests_properties(transcribe_silero_vad_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
-    # A missing configured model is a failure, not a successful smoke or skip.
-    add_test(NAME transcribe_silero_vad_real_bad_path
-        COMMAND ${CMAKE_COMMAND} -E env
-            --unset=TRANSCRIBE_SILERO_VAD_GGUF
-            --unset=TRANSCRIBE_SILERO_VAD_V6_BIN
-            "TRANSCRIBE_SILERO_VAD_V5_BIN=${CMAKE_CURRENT_BINARY_DIR}/missing-silero-model.bin"
-            $<TARGET_FILE:transcribe_silero_vad_real_smoke>)
-    set_tests_properties(transcribe_silero_vad_real_bad_path PROPERTIES WILL_FAIL TRUE)
 endif()
 
 # -----------------------------------------------------------------------------

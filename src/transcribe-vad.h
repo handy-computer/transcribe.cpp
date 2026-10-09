@@ -29,6 +29,7 @@ struct VadSegmentParams {
     int32_t min_silence_ms               = 100;
     int32_t speech_pad_ms                = 30;
     int32_t max_speech_ms                = 0;  // 0 = no limit
+    // Not public; upstream defaults. Settable only by tests.
     int32_t min_silence_at_max_speech_ms = 98;
     bool    use_max_possible_silence     = true;
 };

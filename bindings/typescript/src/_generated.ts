@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "3e482bc8c5b7f53f";
+export const PUBLIC_HEADER_HASH = "d5cdefefe6191209";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -186,7 +186,7 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_sortformer_diarize_ext': { size: 24, align: 8, offsets: {'ext': 0, 'preset': 16} },
   'transcribe_vad_info': { size: 16, align: 8, offsets: {'struct_size': 0, 'sample_rate': 8, 'frame_samples': 12} },
   'transcribe_vad_session_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'n_threads': 8} },
-  'transcribe_vad_params': { size: 48, align: 8, offsets: {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_speech_ms': 24, 'min_silence_ms': 28, 'speech_pad_ms': 32, 'max_speech_ms': 36, 'min_silence_at_max_speech_ms': 40, 'use_max_possible_silence': 44} },
+  'transcribe_vad_params': { size: 40, align: 8, offsets: {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_speech_ms': 24, 'min_silence_ms': 28, 'speech_pad_ms': 32, 'max_speech_ms': 36} },
   'transcribe_vad_result': { size: 32, align: 8, offsets: {'struct_size': 0, 'n_probs': 8, 'first_frame': 16, 'n_segments': 24} },
   'transcribe_vad_segment': { size: 24, align: 8, offsets: {'struct_size': 0, 'start_sample': 8, 'end_sample': 16} },
   'transcribe_vad_iterator_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'threshold': 8, 'min_silence_ms': 16, 'speech_pad_ms': 20} },
@@ -265,7 +265,7 @@ export function defineTypes(koffi: any): Record<string, any> {
   T['transcribe_sortformer_diarize_ext'] = koffi.struct({ ext: T['transcribe_ext'], preset: 'int' });
   T['transcribe_vad_info'] = koffi.struct({ struct_size: 'uint64_t', sample_rate: 'int32_t', frame_samples: 'int32_t' });
   T['transcribe_vad_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int32_t' });
-  T['transcribe_vad_params'] = koffi.struct({ struct_size: 'uint64_t', threshold: 'double', neg_threshold: 'double', min_speech_ms: 'int32_t', min_silence_ms: 'int32_t', speech_pad_ms: 'int32_t', max_speech_ms: 'int32_t', min_silence_at_max_speech_ms: 'int32_t', use_max_possible_silence: 'bool' });
+  T['transcribe_vad_params'] = koffi.struct({ struct_size: 'uint64_t', threshold: 'double', neg_threshold: 'double', min_speech_ms: 'int32_t', min_silence_ms: 'int32_t', speech_pad_ms: 'int32_t', max_speech_ms: 'int32_t' });
   T['transcribe_vad_result'] = koffi.struct({ struct_size: 'uint64_t', n_probs: 'int32_t', first_frame: 'int64_t', n_segments: 'int32_t' });
   T['transcribe_vad_segment'] = koffi.struct({ struct_size: 'uint64_t', start_sample: 'int64_t', end_sample: 'int64_t' });
   T['transcribe_vad_iterator_params'] = koffi.struct({ struct_size: 'uint64_t', threshold: 'double', min_silence_ms: 'int32_t', speech_pad_ms: 'int32_t' });

@@ -54,6 +54,21 @@ extension LangIdSession {
     }
 }
 
+extension VadSession {
+    /// Install a cancellation token; a cancelled run or feed throws `.aborted`.
+    public func setCancellationToken(_ token: CancellationToken) {
+        cancelToken = token
+        let context = Unmanaged.passUnretained(token).toOpaque()
+        transcribe_vad_set_abort_callback(ptr, abortTrampoline, context)
+    }
+
+    /// Remove any installed cancellation token.
+    public func clearCancellationToken() {
+        transcribe_vad_set_abort_callback(ptr, nil, nil)
+        cancelToken = nil
+    }
+}
+
 extension DiarizeSession {
     /// Install a cancellation token; a cancelled run throws `.aborted`.
     public func setCancellationToken(_ token: CancellationToken) {

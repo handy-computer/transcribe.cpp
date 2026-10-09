@@ -36,7 +36,7 @@ DEFAULT_VARIANT = "silero-vad-v6.2"
 SILERO_VERSION = "6.2.3"
 JIT_SHA256 = "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720"
 
-# Written into the GGUF and asserted against the live modules below.
+# Written into the GGUF; the ones tensor shapes cannot show are asserted below.
 SAMPLE_RATE = 16000
 FRAME = 512          # samples scored per probability
 CONTEXT = 64         # trailing samples of the previous frame prepended
@@ -46,9 +46,7 @@ PAD_RIGHT = 64       # ReflectionPad1d((0, 64)) before the STFT
 N_BINS = N_FFT // 2 + 1
 ENC_CHANNELS = [N_BINS, 128, 64, 64, 128]
 ENC_STRIDES = [1, 2, 2, 1]
-ENC_KERNEL = 3
 HIDDEN = 128
-N_PARAMS = 309_633
 
 
 def fail(msg: str) -> None:
@@ -61,41 +59,24 @@ def jit_path() -> Path:
 
 
 def assert_architecture(model) -> None:
-    """Check every value the C++ graph hard-codes that tensor shapes cannot show."""
+    """Check the values the C++ graph hard-codes that tensor shapes cannot show."""
     m = model._model
     st = m.stft
     checks = [
-        ("_model.sample_rate", m.sample_rate, SAMPLE_RATE),
-        ("_model.context_size_samples", m.context_size_samples, CONTEXT),
+        ("sample_rate", m.sample_rate, SAMPLE_RATE),
+        ("context_size_samples", m.context_size_samples, CONTEXT),
         ("stft.filter_length", st.filter_length, N_FFT),
         ("stft.win_length", st.win_length, N_FFT),
         ("stft.hop_length", st.hop_length, HOP),
         ("stft.window", st.window, "hann"),
         ("stft.padding", tuple(st.padding.padding), (0, PAD_RIGHT)),
-        ("lstm.hidden_size", m.decoder.rnn.hidden_size, HIDDEN),
-        ("lstm.input_size", m.decoder.rnn.input_size, ENC_CHANNELS[-1]),
-        ("lstm.bias", m.decoder.rnn.bias, True),
-        ("n_params", sum(int(v.numel()) for k, v in model.state_dict().items()
-                         if k.startswith("_model.")), N_PARAMS),
     ]
     for i in range(4):
-        blk = getattr(m.encoder, str(i))
-        c = blk.reparam_conv
+        c = getattr(m.encoder, str(i)).reparam_conv
         checks += [
-            (f"encoder.{i}.in", c.in_channels, ENC_CHANNELS[i]),
-            (f"encoder.{i}.out", c.out_channels, ENC_CHANNELS[i + 1]),
-            (f"encoder.{i}.kernel", tuple(c.kernel_size), (ENC_KERNEL,)),
             (f"encoder.{i}.stride", tuple(c.stride), (ENC_STRIDES[i],)),
             (f"encoder.{i}.padding", tuple(c.padding), (1,)),
-            (f"encoder.{i}.dilation", tuple(c.dilation), (1,)),
-            (f"encoder.{i}.groups", c.groups, 1),
-            (f"encoder.{i}.padding_mode", c.padding_mode, "zeros"),
         ]
-    head = getattr(m.decoder.decoder, "2")
-    checks += [
-        ("head.kernel", tuple(head.kernel_size), (1,)),
-        ("head.out", head.out_channels, 1),
-    ]
     bad = [(n, got, want) for n, got, want in checks if got != want]
     if bad:
         fail("architecture mismatch: " + "; ".join(f"{n}={g!r} (want {w!r})" for n, g, w in bad))

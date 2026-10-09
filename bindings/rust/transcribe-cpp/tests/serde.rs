@@ -10,8 +10,9 @@ use transcribe_cpp::{
     ParakeetBufferedStreamOptions, ParakeetStreamOptions, Pnc, Role, Roles, RunExtension,
     RunOptions, Segment, SessionLimits, SessionOptions, SortformerDiarizeOptions, SortformerPreset,
     SpeakerSegment, StreamExtension, StreamOptions, StreamState, StreamText, StreamUpdate, Task,
-    TimestampKind, Timings, Token, Transcript, VoxtralRealtimeStreamOptions, WhisperRunOptions,
-    Word,
+    TimestampKind, Timings, Token, Transcript, VadEvent, VadEventKind, VadInfo, VadIteratorOptions,
+    VadOptions, VadResult, VadSegment, VadSessionOptions, VoxtralRealtimeStreamOptions,
+    WhisperRunOptions, Word,
 };
 
 fn assert_serde<T: serde::Serialize + serde::de::DeserializeOwned>() {}
@@ -37,9 +38,13 @@ fn plain_data_types_are_serializable() {
     assert_serde::<SortformerDiarizeOptions>();
     assert_serde::<LangIdSessionOptions>();
     assert_serde::<LangIdOptions>();
+    assert_serde::<VadSessionOptions>();
+    assert_serde::<VadOptions>();
+    assert_serde::<VadIteratorOptions>();
     // Results.
     assert_serde::<DiarizeInfo>();
     assert_serde::<LangIdInfo>();
+    assert_serde::<VadInfo>();
     assert_serde::<Transcript>();
     assert_serde::<Segment>();
     assert_serde::<SpeakerSegment>();
@@ -52,6 +57,10 @@ fn plain_data_types_are_serializable() {
     assert_serde::<SessionLimits>();
     assert_serde::<LangIdResult>();
     assert_serde::<LangIdCandidate>();
+    assert_serde::<VadResult>();
+    assert_serde::<VadSegment>();
+    assert_serde::<VadEvent>();
+    assert_serde::<VadEventKind>();
     // Enums.
     assert_serde::<Task>();
     assert_serde::<TimestampKind>();
@@ -148,6 +157,20 @@ fn missing_fields_take_defaults() {
     let candidate: LangIdCandidate = serde_json::from_str(r#"{"code":"en"}"#).unwrap();
     assert_eq!(candidate.code, "en");
     assert_eq!(candidate.p, 0.0);
+
+    // `VadOptions::default()` is hand-written; the C defaults must survive.
+    let vad: VadOptions = serde_json::from_str(r#"{"threshold":0.6}"#).unwrap();
+    assert_eq!(
+        vad,
+        VadOptions {
+            threshold: 0.6,
+            ..Default::default()
+        }
+    );
+    assert_eq!((vad.neg_threshold, vad.min_speech_ms), (-1.0, 250));
+    let result: VadResult = serde_json::from_str(r#"{"first_frame":3}"#).unwrap();
+    assert_eq!(result.first_frame, 3);
+    assert!(result.probs.is_empty() && result.segments.is_empty());
 }
 
 mod errors {

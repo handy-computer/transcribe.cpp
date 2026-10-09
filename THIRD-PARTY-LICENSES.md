@@ -8,7 +8,7 @@ reproduced here for convenience.
 | Component | License | Vendored at | Pin |
 |-----------|---------|-------------|-----|
 | ggml      | MIT     | [`ggml/LICENSE`](ggml/LICENSE) | see [`ggml/UPSTREAM`](ggml/UPSTREAM) |
-| Silero VAD policies | MIT | [`src/third_party/silero_vad/LICENSE`](src/third_party/silero_vad/LICENSE) | see [`src/third_party/silero_vad/UPSTREAM`](src/third_party/silero_vad/UPSTREAM) |
+| Silero VAD | MIT | [`src/third_party/silero_vad/LICENSE`](src/third_party/silero_vad/LICENSE) | see [`src/third_party/silero_vad/UPSTREAM`](src/third_party/silero_vad/UPSTREAM) |
 | miniz     | MIT     | [`src/third_party/miniz/LICENSE`](src/third_party/miniz/LICENSE) | see [`src/third_party/miniz/UPSTREAM`](src/third_party/miniz/UPSTREAM) |
 
 Prebuilt artifacts (the Swift xcframework, the native Python wheels, and the
@@ -85,12 +85,12 @@ THE SOFTWARE.
 
 ---
 
-## Silero VAD probability policies
+## Silero VAD
 
 The offline segmentation and live iterator in `src/transcribe-vad.cpp` are
 translated from `silero_vad/utils_vad.py`, pinned to silero-vad 6.2.3. The
 authoritative text is `src/third_party/silero_vad/LICENSE`; native artifacts
-include it as `LICENSE.silero_vad` (Python wheels use their license paths).
+include it as `LICENSE.silero_vad`.
 
 ```
 MIT License

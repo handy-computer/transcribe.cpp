@@ -64,14 +64,9 @@ struct transcribe_vad_params {
     /* Each segment is extended by this much on both sides, or by half the
      * gap when two segments are closer than twice this (default 30). */
     int32_t  speech_pad_ms;
-    /* Segments longer than this are split; 0 (the default) = no limit. A
-     * split prefers a silence longer than min_silence_at_max_speech_ms. */
+    /* Segments longer than this are split, preferably at the longest
+     * pause inside them; 0 (the default) = no limit. */
     int32_t  max_speech_ms;
-    /* Shortest silence a max_speech_ms split may use (default 98). */
-    int32_t  min_silence_at_max_speech_ms;
-    /* At a max_speech_ms split, cut at the longest qualifying silence in
-     * the segment (true, the default) or at the last one (false). */
-    bool     use_max_possible_silence;
 };
 
 /* Summary of the last run, feed or flush. */

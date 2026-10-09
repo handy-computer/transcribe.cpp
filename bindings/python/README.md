@@ -108,6 +108,33 @@ with model.langid_session() as lid:
     print(result.code, result.candidates[0].p, result.allowed_mass)
 ```
 
+### Voice activity detection
+
+Models whose `model.roles` include `Role.VAD` (Silero VAD, GGUF or the
+whisper.cpp `.bin`) score speech probability per frame of
+`model.vad_info.frame_samples` samples through a VAD session. `run()` scores one
+clip and returns a `VadResult` with `probs` and speech `segments`
+(`start_sample`/`end_sample`; options default to Silero's
+`get_speech_timestamps`). `feed()` streams audio of any chunk size and returns
+the probabilities of the frames each call completed (`first_frame` is the
+position of the first); `flush()` scores the zero-padded remainder and ends the
+stream, `reset()` drops it. The VAD stream does not take the model's ASR stream
+lease. Locking, `Busy`, `cancel()` and `close()` work as on `Session`.
+`VadIterator` turns probabilities into live `start`/`end` events (Silero's
+`VADIterator`; no END at end of input).
+
+```python
+with model.vad_session() as vad:
+    for seg in vad.run(pcm, min_silence_ms=300).segments:
+        print(seg.start_sample, seg.end_sample)
+
+    it = transcribe_cpp.VadIterator(model.vad_info.frame_samples)
+    for chunk in chunks:
+        for event in it.feed(vad.feed(chunk).probs):
+            print(event.type, event.sample)
+    it.feed(vad.flush().probs)
+```
+
 ## Backends
 
 `Model(backend=...)` applies a backend policy (`"auto"` uses the best

@@ -3,18 +3,9 @@
 A VAD model (`transcribe_model_roles()` has `TRANSCRIBE_ROLE_VAD`) scores
 fixed-size frames of 16 kHz audio with a speech probability and turns them
 into speech segments. API: `include/transcribe/vad.h`. The shipped model is
-[Silero VAD v6.2](models/silero-vad-v6.2.md): 512-sample (32 ms) frames,
-1.2 MB.
-
-## Supported model files
-
-Besides GGUF, `transcribe_model_load_file` accepts the published
-`ggml-silero-v5.1.2.bin` and `ggml-silero-v6.2.0.bin` directly, regardless of
-extension. Only these 16 kHz binary versions are supported. Their mixed F16/F32
-weights are expanded to F32; lost precision is not restored. Both use upstream
-Silero inference and the existing 6.2.3 segmentation policy, not whisper.cpp's
-graph or legacy v5 segmentation. `AUTO` selects CPU; no VAD-to-ASR pipeline is
-added. Downloads and measured accuracy: [model page](models/silero-vad-v6.2.md).
+[Silero VAD v6.2](models/silero-vad-v6.2.md): 512-sample (32 ms) frames.
+`transcribe_model_load_file` also accepts whisper.cpp's
+`ggml-silero-v5.1.2.bin` and `ggml-silero-v6.2.0.bin`.
 
 ## Offline
 
@@ -28,7 +19,8 @@ struct transcribe_vad_session * vad = NULL;
 transcribe_vad_session_init(m, NULL, &vad);
 
 struct transcribe_vad_params vp;
-transcribe_vad_params_init(&vp);                 /* Silero's defaults */
+transcribe_vad_params_init(&vp);
+vp.threshold = 0.6;                              /* optional */
 transcribe_vad_run(vad, pcm, n_samples, &vp);    /* 16 kHz mono float32 */
 
 struct transcribe_vad_result r;
@@ -45,73 +37,48 @@ transcribe_vad_session_free(vad);
 transcribe_model_free(m);
 ```
 
-From the CLI: `transcribe-cli -m silero-vad-v6.2-F32.gguf clip.wav` prints
-one `segment:` line per segment (`--vad-threshold P` overrides the threshold).
+From the CLI: `transcribe-cli -m silero-vad-v6.2-F32.gguf --vad-threshold 0.6 clip.wav`.
 
-`transcribe_vad_run` reproduces Silero's `get_speech_timestamps(audio, model,
-...)`: the clip is scored from a fresh model state, the last frame zero
-padded, and the probabilities are segmented by a line-for-line port of
-`get_speech_timestamps_from_probs`. With the same parameters the segments are
-the reference's, sample for sample (see the model page for the evidence).
+`transcribe_vad_run` reproduces Silero's `get_speech_timestamps`: with the same
+parameters the segments match the reference sample for sample. The parameters,
+with the reference's defaults:
 
-`transcribe_vad_params` mirrors the reference's keyword arguments:
-
-| field | reference argument | default |
+| field | meaning | default |
 |---|---|---|
-| `threshold` | `threshold` | 0.5 |
-| `neg_threshold` (< 0 = default) | `neg_threshold` | `max(threshold - 0.15, 0.01)` |
-| `min_speech_ms` | `min_speech_duration_ms` | 250 |
-| `min_silence_ms` | `min_silence_duration_ms` | 100 |
-| `speech_pad_ms` | `speech_pad_ms` | 30 |
-| `max_speech_ms` (0 = no limit) | `max_speech_duration_s` | no limit |
-| `min_silence_at_max_speech_ms` | `min_silence_at_max_speech` | 98 |
-| `use_max_possible_silence` | `use_max_poss_sil_at_max_speech` | true |
+| `threshold` | a frame with `p >= threshold` starts speech | 0.5 |
+| `neg_threshold` | inside speech, `p < neg_threshold` is silence (< 0 = default) | `max(threshold - 0.15, 0.01)` |
+| `min_speech_ms` | shorter segments are dropped | 250 |
+| `min_silence_ms` | silence this long ends a segment | 100 |
+| `speech_pad_ms` | padding added to both ends of a segment | 30 |
+| `max_speech_ms` | longer segments are split at a pause (0 = no limit) | 0 |
 
 ## Streaming
 
-`transcribe_vad_stream_feed` takes audio in pieces of any size (including
-less than a frame) and scores every frame it completes, carrying the model's
-recurrent state and audio context across calls. The result holds the
-probabilities of the frames this call completed; `first_frame` is the stream
+`transcribe_vad_stream_feed` takes audio in pieces of any size and returns the
+probabilities of the frames each call completes; `first_frame` is the stream
 position of the first one. `transcribe_vad_stream_flush` scores the buffered
 remainder zero padded and ends the stream; `transcribe_vad_stream_reset` ends
-it without scoring.
+it without scoring. On CPU, stream probabilities are bit-identical to an
+offline run over the same audio.
 
 ```c
 for (;;) {
     int n = read_microphone(buf, 320);           /* 20 ms */
     transcribe_vad_stream_feed(vad, buf, n);
     transcribe_vad_get_result(vad, &r);
-    const float * p = transcribe_vad_probs(vad);
-    for (int i = 0; i < r.n_probs; ++i) {
-        /* frame r.first_frame + i covers samples
-           [(first_frame + i) * 512, (first_frame + i + 1) * 512) */
-    }
+    const float * p = transcribe_vad_probs(vad); /* frames r.first_frame .. + r.n_probs */
 }
 transcribe_vad_stream_flush(vad);
 ```
 
-On CPU, the probabilities of a stream are bit-identical to those of one
-`transcribe_vad_run` over the same audio with the same thread count, for any
-chunking (tested with 1 and 4 threads).
-Streaming still returns probabilities only. Segmenting the collected
-probabilities with the offline rules is what `transcribe_vad_run` does.
-The optional live iterator below is a separate probability policy; it never
-changes `stream_feed` or resets the model when speech ends.
-
-### Optional live START/END iterator
-
-The model-independent `transcribe_vad_iterator` matches upstream `VADIterator`
-(6.2.3) at 16 kHz. Feed every sequential probability exactly once, after each
-successful audio feed and any final audio flush. A batch can emit multiple
-events. As with the other examples, check status returns in production.
+To turn stream probabilities into live START/END events, feed them to a
+`transcribe_vad_iterator` (Silero's `VADIterator`). It owns no model:
 
 ```c
 struct transcribe_vad_iterator * it = NULL;
-transcribe_vad_iterator_init(512, NULL, &it);   /* Silero frame size */
+transcribe_vad_iterator_init(512, NULL, &it);    /* info.frame_samples */
 
-/* After each successful stream_feed/stream_flush: */
-transcribe_vad_get_result(vad, &r);
+/* after each stream_feed / stream_flush: */
 transcribe_vad_iterator_feed(it, transcribe_vad_probs(vad), r.n_probs);
 struct transcribe_vad_iterator_result ir;
 transcribe_vad_iterator_result_init(&ir);
@@ -119,38 +86,16 @@ transcribe_vad_iterator_get_result(it, &ir);
 for (int i = 0; i < ir.n_events; ++i) {
     struct transcribe_vad_event e;
     transcribe_vad_event_init(&e);
-    transcribe_vad_iterator_get_event(it, i, &e);
-    /* e.type: START or END; e.sample: boundary, not detection time */
+    transcribe_vad_iterator_get_event(it, i, &e); /* e.type START/END, e.sample */
 }
 transcribe_vad_iterator_free(it);
 ```
 
-Defaults: start threshold 0.5, minimum silence 100 ms, padding 30 ms. Exit is
-strictly below `threshold - 0.15`, without the offline 0.01 floor. Only a value
-at/above the start threshold cancels pending silence; middle-band values do
-not. There is no minimum-speech filtering or maximum-duration splitting.
+As upstream, the iterator does not emit END at end of input: close any open
+speech yourself at the real audio length.
 
-Events are in detection order; padding can overlap boundaries or put an END
-beyond received audio. **EOF does not emit END.** Close unfinished speech and
-clamp boundaries at the actual input length in application code; a zero-padded
-tail still advances a full frame. Reset the iterator when inference starts a
-new stream; it neither owns nor resets the model.
+## Backend
 
-Successful feeds replace events; empty feeds clear them without advancing time.
-Failures, including allocation failure, preserve state and previous events.
-Getters copy events. Use each iterator from one thread at a time; the full
-contract is in `include/transcribe/vad.h`. Translated policies retain the
-[Silero MIT notice](../THIRD-PARTY-LICENSES.md).
-
-## Performance
-
-The front end and the convolutional encoder, which do not depend on the
-recurrent state, run as one batched ggml graph over up to 256 frames; the
-LSTM recurrence and the output head run on the host. CPU is the default:
-`TRANSCRIBE_BACKEND_AUTO` resolves to the CPU for VAD models to preserve
-reference accuracy: the measured CPU probability error is about 7e-6,
-versus about 2e-3 on Metal. A GPU backend can still be requested
-explicitly. Measured numbers are on the model page.
-
-Threading and lifetime rules are shared with the other roles:
-[roles.md](roles.md).
+`TRANSCRIBE_BACKEND_AUTO` resolves to the CPU for VAD models; a GPU backend can
+be requested explicitly but is less accurate (see the model page). Threading
+and lifetime rules are shared with the other roles: [roles.md](roles.md).

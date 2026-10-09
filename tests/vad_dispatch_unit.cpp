@@ -154,8 +154,7 @@ void test_params() {
     transcribe_vad_params p;
     transcribe_vad_params_init(&p);
     CHECK(p.threshold == 0.5 && p.neg_threshold < 0.0 && p.min_speech_ms == 250 && p.min_silence_ms == 100 &&
-          p.speech_pad_ms == 30 && p.max_speech_ms == 0 && p.min_silence_at_max_speech_ms == 98 &&
-          p.use_max_possible_silence);
+          p.speech_pad_ms == 30 && p.max_speech_ms == 0);
 
     transcribe::VadSegmentParams r;
     CHECK(transcribe::resolve_vad_params(nullptr, r) == TRANSCRIBE_OK);
@@ -274,17 +273,12 @@ void test_failures() {
     const std::vector<float> pcm = ramp(4 * kFrame);
     CHECK(transcribe_vad_run(fx.session, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
 
-    // A backend failure zeroes the result and resets the stream.
+    // A backend failure status zeroes the result (stream cleanup on failure
+    // is covered by test_exceptions).
     g_fail_after = 0;
     CHECK(transcribe_vad_run(fx.session, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_ERR_BACKEND);
     CHECK(fx.result().n_probs == 0 && fx.result().n_segments == 0);
     g_fail_after = -1;
-    CHECK(transcribe_vad_stream_feed(fx.session, pcm.data(), kFrame + 2) == TRANSCRIBE_OK);
-    g_fail_after = static_cast<int>(g_scored.size() / kFrame);
-    CHECK(transcribe_vad_stream_feed(fx.session, pcm.data(), kFrame) == TRANSCRIBE_ERR_BACKEND);
-    g_fail_after = -1;
-    CHECK(transcribe_vad_stream_feed(fx.session, pcm.data(), kFrame) == TRANSCRIBE_OK);
-    CHECK(fx.result().first_frame == 0);  // the stream restarted
 
     // Abort.
     g_check_abort = true;
@@ -417,20 +411,21 @@ void run_segment_vectors(int & failures) {
         const SegmentVector & t = k_vectors[v];
         transcribe_vad_params p;
         transcribe_vad_params_init(&p);
-        p.threshold                    = t.threshold;
-        p.neg_threshold                = t.neg_threshold;
-        p.min_speech_ms                = t.min_speech_ms;
-        p.min_silence_ms               = t.min_silence_ms;
-        p.speech_pad_ms                = t.speech_pad_ms;
-        p.max_speech_ms                = t.max_speech_ms;
-        p.min_silence_at_max_speech_ms = t.min_silence_at_max_speech_ms;
-        p.use_max_possible_silence     = t.use_max_possible_silence;
+        p.threshold      = t.threshold;
+        p.neg_threshold  = t.neg_threshold;
+        p.min_speech_ms  = t.min_speech_ms;
+        p.min_silence_ms = t.min_silence_ms;
+        p.speech_pad_ms  = t.speech_pad_ms;
+        p.max_speech_ms  = t.max_speech_ms;
         transcribe::VadSegmentParams sp;
         if (transcribe::resolve_vad_params(&p, sp) != TRANSCRIBE_OK) {
             std::fprintf(stderr, "FAIL vector %zu: params rejected\n", v);
             ++n_bad;
             continue;
         }
+        // Not public: upstream's max-speech split knobs, pinned internally.
+        sp.min_silence_at_max_speech_ms = t.min_silence_at_max_speech_ms;
+        sp.use_max_possible_silence     = t.use_max_possible_silence;
         std::vector<float> probs;
         for (const char * c = t.probs; *c != '\0'; ++c) {
             probs.push_back(static_cast<float>(*c - 'a') / 16.0f);

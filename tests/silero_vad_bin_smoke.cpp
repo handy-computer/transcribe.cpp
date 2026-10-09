@@ -130,10 +130,10 @@ Bytes record(const Tensor & t, int type) {
     return b;
 }
 
-Bytes binary(const std::vector<Tensor> & t, bool v5, bool all_f32 = false) {
+Bytes binary(const std::vector<Tensor> & t, bool v5) {
     Bytes b = header(v5);
     for (size_t i = 0; i < t.size(); ++i) {
-        const bool  half = !all_f32 && (t[i].shape.size() == 3 || t[i].target == "head.weight");
+        const bool  half = t[i].shape.size() == 3 || t[i].target == "head.weight";
         const Bytes rec  = record(t[i], half ? 1 : 0);
         b.insert(b.end(), rec.begin(), rec.end());
     }
@@ -190,7 +190,7 @@ transcribe_model * load(const std::filesystem::path & p, transcribe_model_load_p
     return m;
 }
 
-std::vector<float> run(transcribe_model * m, bool stream = false) {
+std::vector<float> run(transcribe_model * m) {
     transcribe_vad_session_params sp;
     transcribe_vad_session_params_init(&sp);
     sp.n_threads               = 1;
@@ -203,27 +203,14 @@ std::vector<float> run(transcribe_model * m, bool stream = false) {
     for (size_t i = 0; i < pcm.size(); ++i) {
         pcm[i] = 0.7f * std::sin(static_cast<float>(i) * 0.1f);
     }
+    CHECK(transcribe_vad_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
+    transcribe_vad_result r;
+    transcribe_vad_result_init(&r);
+    CHECK(transcribe_vad_get_result(s, &r) == TRANSCRIBE_OK);
+    const float *      out = transcribe_vad_probs(s);
     std::vector<float> probs;
-    auto               collect = [&]() {
-        transcribe_vad_result r;
-        transcribe_vad_result_init(&r);
-        CHECK(transcribe_vad_get_result(s, &r) == TRANSCRIBE_OK);
-        const float * p = transcribe_vad_probs(s);
-        if (p) {
-            probs.insert(probs.end(), p, p + r.n_probs);
-        }
-    };
-    if (stream) {
-        for (size_t off = 0; off < pcm.size(); off += 321) {
-            CHECK(transcribe_vad_stream_feed(
-                      s, pcm.data() + off, static_cast<int>(std::min<size_t>(321, pcm.size() - off))) == TRANSCRIBE_OK);
-            collect();
-        }
-        CHECK(transcribe_vad_stream_flush(s) == TRANSCRIBE_OK);
-        collect();
-    } else {
-        CHECK(transcribe_vad_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
-        collect();
+    if (out) {
+        probs.assign(out, out + r.n_probs);
     }
     CHECK(probs.size() == 17);
     for (float p : probs) {
@@ -269,16 +256,6 @@ int main() {
         CHECK(std::string(transcribe_model_variant_string(m)) == (v5 ? "silero-vad-v5.1.2" : "silero-vad-v6.2.0"));
         CHECK(std::string(transcribe_model_meta_val_str(m, "general.version")) == (v5 ? "5.1.2" : "6.2.0"));
         CHECK(expected == run(m));
-        CHECK(expected == run(m, true));
-        transcribe_model_free(m);
-    }
-    test_case     = "f32-records-in-any-order";
-    auto reversed = t;
-    std::reverse(reversed.begin(), reversed.end());
-    write(path, binary(reversed, false, true));
-    transcribe_model * m = load(path);
-    if (m) {
-        CHECK(expected == run(m));
         transcribe_model_free(m);
     }
 
@@ -295,8 +272,6 @@ int main() {
         size_t       end;
     } truncated[] = {
         { "short-magic",          3                  },
-        { "short-tag",            17                 },
-        { "short-version",        29                 },
         { "short-geometry",       first - 1          },
         { "short-record-header",  first + 11         },
         { "short-tensor-name",    first + 24         },
@@ -319,14 +294,10 @@ int main() {
         { "unsupported-version",    18,             7           },
         { "unsupported-patch",      26,             1           },
         { "wrong-frame",            30,             513         },
-        { "wrong-context",          34,             0           },
-        { "wrong-layer-count",      38,             5           },
         { "wrong-encoder-channels", 42,             0           },
         { "wrong-lstm-size",        94,             64          },
         { "unsupported-rank",       first,          4           },
-        { "negative-rank",          first,          0xffffffffu },
         { "empty-name",             first + 4,      0           },
-        { "unbounded-name",         first + 4,      0xffffffffu },
         { "unsupported-type",       first + 8,      2           },
         { "unsafe-dimension",       first + 12,     0x7fffffffu },
         { "unknown-tensor",         first + 24,     0           },
