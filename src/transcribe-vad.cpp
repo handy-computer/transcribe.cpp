@@ -589,6 +589,7 @@ extern "C" void transcribe_vad_stream_reset(struct transcribe_vad_session * sess
 struct transcribe_vad_iterator {
     int32_t                           frame_samples;
     double                            threshold;
+    double                            neg_threshold;
     int64_t                           min_silence_samples;
     int64_t                           speech_pad_samples;
     int64_t                           current_sample = 0;
@@ -601,6 +602,7 @@ extern "C" void transcribe_vad_iterator_params_init(transcribe_vad_iterator_para
     transcribe::init_sized(p);
     if (p != nullptr) {
         p->threshold      = 0.5;
+        p->neg_threshold  = -1.0;
         p->min_silence_ms = 100;
         p->speech_pad_ms  = 30;
     }
@@ -630,13 +632,17 @@ static transcribe_status vad_iterator_init_impl(int32_t                         
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (!std::isfinite(params->threshold) || params->threshold < 0.0 || params->threshold > 1.0 ||
+    const double thr = params->threshold;
+    const double neg = params->neg_threshold;
+    if (!std::isfinite(thr) || !std::isfinite(neg) || thr < 0.0 || thr > 1.0 || neg > thr ||
         params->min_silence_ms < 0 || params->speech_pad_ms < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     std::unique_ptr<transcribe_vad_iterator> s(new transcribe_vad_iterator());
     s->frame_samples       = frame_samples;
-    s->threshold           = params->threshold;
+    s->threshold           = thr;
+    // VADIterator's fixed exit threshold, unless overridden.
+    s->neg_threshold       = neg < 0.0 ? thr - 0.15 : neg;
     s->min_silence_samples = int64_t{ 16 } * params->min_silence_ms;
     s->speech_pad_samples  = int64_t{ 16 } * params->speech_pad_ms;
     *out                   = s.release();
@@ -692,7 +698,7 @@ static transcribe_status vad_iterator_feed_impl(transcribe_vad_iterator * s, con
             events.push_back({ sizeof(transcribe_vad_event), TRANSCRIBE_VAD_EVENT_START, start });
             continue;
         }
-        if (prob < s->threshold - 0.15 && triggered) {
+        if (prob < s->neg_threshold && triggered) {
             if (temp_end == 0) {
                 temp_end = current_sample;
             }

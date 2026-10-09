@@ -2258,12 +2258,15 @@ class VadIterator:
 
     def __init__(self, frame_samples: int, *,
                  threshold: float | None = None,
+                 neg_threshold: float | None = None,
                  min_silence_ms: int | None = None,
                  speech_pad_ms: int | None = None):
         params = _generated.transcribe_vad_iterator_params()
         _lib.transcribe_vad_iterator_params_init(_byref(params))
         if threshold is not None:
             params.threshold = threshold
+        if neg_threshold is not None:
+            params.neg_threshold = neg_threshold
         if min_silence_ms is not None:
             params.min_silence_ms = min_silence_ms
         if speech_pad_ms is not None:

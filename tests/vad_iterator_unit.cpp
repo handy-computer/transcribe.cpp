@@ -103,19 +103,37 @@ void goldens() {
     }
 }
 
+// neg_threshold moves the exit: 0.3 is silence by default (< 0.35) but
+// not with neg_threshold 0.2.
+void neg_threshold() {
+    g_case              = "neg-threshold";
+    const float probs[] = { .9f, .3f, .3f, .3f, .3f, .3f, .3f };
+    for (const double neg : { -1.0, .2 }) {
+        transcribe_vad_iterator_params p;
+        transcribe_vad_iterator_params_init(&p);
+        p.neg_threshold              = neg;
+        transcribe_vad_iterator * it = nullptr;
+        CHECK(transcribe_vad_iterator_init(512, &p, &it) == TRANSCRIBE_OK);
+        CHECK(transcribe_vad_iterator_feed(it, probs, 7) == TRANSCRIBE_OK);
+        CHECK(result(it).triggered == (neg > 0));
+        CHECK(result(it).n_events == (neg > 0 ? 1 : 2));
+        transcribe_vad_iterator_free(it);
+    }
+}
+
 void invalid_and_ownership() {
     g_case = "validation-and-failure-rollback";
     transcribe_vad_iterator_params p;
     transcribe_vad_iterator_params_init(&p);
     CHECK(p.struct_size == sizeof(p));
-    CHECK(p.threshold == .5 && p.min_silence_ms == 100 && p.speech_pad_ms == 30);
+    CHECK(p.threshold == .5 && p.neg_threshold < 0 && p.min_silence_ms == 100 && p.speech_pad_ms == 30);
     transcribe_vad_iterator_params_init(nullptr);
     transcribe_vad_event_init(nullptr);
     transcribe_vad_iterator_result_init(nullptr);
     transcribe_vad_iterator_reset(nullptr);
     transcribe_vad_iterator_free(nullptr);
     CHECK(transcribe_vad_iterator_init(512, &p, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
-    for (int bad = 0; bad < 9; ++bad) {
+    for (int bad = 0; bad < 11; ++bad) {
         auto    q     = p;
         int32_t frame = 512;
         if (bad == 0) {
@@ -144,6 +162,12 @@ void invalid_and_ownership() {
         }
         if (bad == 8) {
             q.struct_size = 0;
+        }
+        if (bad == 9) {
+            q.neg_threshold = .6;  // above threshold
+        }
+        if (bad == 10) {
+            q.neg_threshold = std::numeric_limits<double>::quiet_NaN();
         }
         auto it = reinterpret_cast<transcribe_vad_iterator *>(uintptr_t{ 1 });
         CHECK(transcribe_vad_iterator_init(frame, &q, &it) ==
@@ -235,6 +259,7 @@ void prefix_and_large_clock() {
 
 int main() {
     goldens();
+    neg_threshold();
     invalid_and_ownership();
     prefix_and_large_clock();
     if (!g_failures) {

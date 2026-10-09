@@ -185,9 +185,12 @@ struct transcribe_vad_iterator;
 
 struct transcribe_vad_iterator_params {
     uint64_t struct_size;
-    /* Speech starts at p >= threshold; silence is p < threshold - 0.15.
-     * Double comparisons, with no offline-style 0.01 floor. [0, 1]. */
-    double   threshold;      /* default 0.5 */
+    /* Speech starts at p >= threshold. [0, 1]. */
+    double   threshold; /* default 0.5 */
+    /* Inside speech, p < neg_threshold is silence. Negative (the default,
+     * -1) means threshold - 0.15, with no offline-style 0.01 floor.
+     * Otherwise [0, threshold]. */
+    double   neg_threshold;
     int32_t  min_silence_ms; /* default 100; >= 0 */
     int32_t  speech_pad_ms;  /* default 30; >= 0 */
 };

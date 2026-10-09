@@ -198,14 +198,19 @@ public final class VadSession {
 }
 
 public struct VadIteratorOptions: Sendable {
-    /// Speech starts at `p >= threshold`; silence is `p < threshold - 0.15`. [0, 1].
+    /// Speech starts at `p >= threshold`. [0, 1].
     public var threshold: Double
+    /// Inside speech, `p < negThreshold` is silence. Negative means `threshold - 0.15`.
+    public var negThreshold: Double
     /// Silence this long ends speech.
     public var minSilenceMs: Int32
     /// Padding added to event boundaries.
     public var speechPadMs: Int32
-    public init(threshold: Double = 0.5, minSilenceMs: Int32 = 100, speechPadMs: Int32 = 30) {
+    public init(
+        threshold: Double = 0.5, negThreshold: Double = -1, minSilenceMs: Int32 = 100, speechPadMs: Int32 = 30
+    ) {
         self.threshold = threshold
+        self.negThreshold = negThreshold
         self.minSilenceMs = minSilenceMs
         self.speechPadMs = speechPadMs
     }
@@ -230,6 +235,7 @@ public final class VadIterator {
         var params = transcribe_vad_iterator_params()
         transcribe_vad_iterator_params_init(&params)
         params.threshold = options.threshold
+        params.neg_threshold = options.negThreshold
         params.min_silence_ms = options.minSilenceMs
         params.speech_pad_ms = options.speechPadMs
         var out: OpaquePointer?

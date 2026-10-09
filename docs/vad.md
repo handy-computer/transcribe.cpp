@@ -72,7 +72,9 @@ transcribe_vad_stream_flush(vad);
 ```
 
 To turn stream probabilities into live START/END events, feed them to a
-`transcribe_vad_iterator` (Silero's `VADIterator`). It owns no model:
+`transcribe_vad_iterator` (Silero's `VADIterator`). It owns no model and takes
+`threshold`, `neg_threshold` (default `threshold - 0.15`, no 0.01 floor),
+`min_silence_ms` and `speech_pad_ms`, with the same meanings as above:
 
 ```c
 struct transcribe_vad_iterator * it = NULL;

@@ -416,8 +416,10 @@ export interface VadResult {
 }
 
 export interface VadIteratorOptions {
-  /** Speech starts at p >= threshold, silence is p < threshold - 0.15 (default 0.5). */
+  /** Speech starts at p >= threshold (default 0.5). */
   threshold?: number;
+  /** Inside speech, p < negThreshold is silence (default threshold - 0.15). */
+  negThreshold?: number;
   /** Default 100. */
   minSilenceMs?: number;
   /** Default 30. */

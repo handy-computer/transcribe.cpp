@@ -108,6 +108,13 @@ final class VadTests: XCTestCase {
 
         it.reset()
         XCTAssertEqual(it.currentSample, 0)
+
+        // 0.3 is silence under the default negThreshold (0.35), not under 0.2.
+        let probs: [Float] = [0.9] + Array(repeating: 0.3, count: 6)
+        XCTAssertEqual(try VadIterator(frameSamples: 512).feed(probs).map(\.kind), [.start, .end])
+        let low = try VadIterator(frameSamples: 512, options: VadIteratorOptions(negThreshold: 0.2))
+        XCTAssertEqual(try low.feed(probs).map(\.kind), [.start])
+        XCTAssertTrue(low.triggered)
         XCTAssertThrowsError(try VadIterator(frameSamples: 0)) { error in
             guard case TranscribeError.invalidArgument = error else { return XCTFail("\(error)") }
         }

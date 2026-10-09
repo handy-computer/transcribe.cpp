@@ -105,3 +105,9 @@ def test_iterator_events():
         assert it.current_sample == 0
     with pytest.raises(t.InvalidArgument):
         t.VadIterator(0)
+    # neg_threshold is passed through: 0.3 is silence by default, speech at 0.2.
+    with t.VadIterator(512, neg_threshold=0.2, min_silence_ms=0) as it:
+        it.feed([0.9, 0.3, 0.3])
+        assert it.triggered
+    with pytest.raises(t.InvalidArgument):
+        t.VadIterator(512, neg_threshold=0.6)

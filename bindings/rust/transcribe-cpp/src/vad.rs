@@ -285,9 +285,11 @@ impl VadSession {
     serde(default)
 )]
 pub struct VadIteratorOptions {
-    /// Speech starts at `p >= threshold`; silence is `p < threshold - 0.15`
-    /// (default 0.5). `[0, 1]`.
+    /// Speech starts at `p >= threshold` (default 0.5). `[0, 1]`.
     pub threshold: f64,
+    /// Inside speech, `p < neg_threshold` is silence. Negative (default -1)
+    /// means `threshold - 0.15`.
+    pub neg_threshold: f64,
     /// Default 100.
     pub min_silence_ms: i32,
     /// Default 30.
@@ -298,6 +300,7 @@ impl Default for VadIteratorOptions {
     fn default() -> Self {
         VadIteratorOptions {
             threshold: 0.5,
+            neg_threshold: -1.0,
             min_silence_ms: 100,
             speech_pad_ms: 30,
         }
@@ -352,6 +355,7 @@ impl VadIterator {
         let mut params: sys::transcribe_vad_iterator_params = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_vad_iterator_params_init(&mut params) };
         params.threshold = options.threshold;
+        params.neg_threshold = options.neg_threshold;
         params.min_silence_ms = options.min_silence_ms;
         params.speech_pad_ms = options.speech_pad_ms;
 
@@ -473,8 +477,18 @@ mod tests {
         unsafe { sys::transcribe_vad_iterator_params_init(&mut p) };
         let d = VadIteratorOptions::default();
         assert_eq!(
-            (d.threshold, d.min_silence_ms, d.speech_pad_ms),
-            (p.threshold, p.min_silence_ms, p.speech_pad_ms)
+            (
+                d.threshold,
+                d.neg_threshold,
+                d.min_silence_ms,
+                d.speech_pad_ms
+            ),
+            (
+                p.threshold,
+                p.neg_threshold,
+                p.min_silence_ms,
+                p.speech_pad_ms
+            )
         );
     }
 }

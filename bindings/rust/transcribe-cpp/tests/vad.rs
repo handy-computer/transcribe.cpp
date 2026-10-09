@@ -147,4 +147,21 @@ fn iterator_basics() {
         VadIterator::new(0, &VadIteratorOptions::default()),
         Err(Error::InvalidArgument(_))
     ));
+    // neg_threshold is passed through: 0.3 is silence by default, speech at 0.2.
+    let opts = VadIteratorOptions {
+        neg_threshold: 0.2,
+        min_silence_ms: 0,
+        ..Default::default()
+    };
+    let mut it = VadIterator::new(512, &opts).unwrap();
+    it.feed(&[0.9, 0.3, 0.3]).unwrap();
+    assert!(it.triggered());
+    let bad = VadIteratorOptions {
+        neg_threshold: 0.6,
+        ..Default::default()
+    };
+    assert!(matches!(
+        VadIterator::new(512, &bad),
+        Err(Error::InvalidArgument(_))
+    ));
 }

@@ -110,4 +110,12 @@ test("VadIterator: START/END events and input checks", () => {
     it.dispose();
   }
   assert.throws(() => new VadIterator(0), InvalidArgument);
+  // negThreshold is passed through: 0.3 is silence by default, speech at 0.2.
+  const neg = new VadIterator(512, { negThreshold: 0.2, minSilenceMs: 0 });
+  try {
+    assert.equal(neg.feed([0.9, 0.3, 0.3]).triggered, true);
+  } finally {
+    neg.dispose();
+  }
+  assert.throws(() => new VadIterator(512, { negThreshold: 0.6 }), InvalidArgument);
 });

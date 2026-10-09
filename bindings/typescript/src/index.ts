@@ -1722,6 +1722,7 @@ export class VadIterator {
     const p: any = {};
     n.F.vadIteratorParamsInit(p);
     if (opts.threshold !== undefined) p.threshold = opts.threshold;
+    if (opts.negThreshold !== undefined) p.neg_threshold = opts.negThreshold;
     if (opts.minSilenceMs !== undefined) p.min_silence_ms = opts.minSilenceMs;
     if (opts.speechPadMs !== undefined) p.speech_pad_ms = opts.speechPadMs;
     const out: any[] = [null];

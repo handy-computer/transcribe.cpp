@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "d5cdefefe6191209"
+PUBLIC_HEADER_HASH = "06a00f2b6ea80a68"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -269,7 +269,7 @@ transcribe_vad_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_thre
 transcribe_vad_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double), ("neg_threshold", _c.c_double), ("min_speech_ms", _c.c_int32), ("min_silence_ms", _c.c_int32), ("speech_pad_ms", _c.c_int32), ("max_speech_ms", _c.c_int32)]
 transcribe_vad_result._fields_ = [("struct_size", _c.c_uint64), ("n_probs", _c.c_int32), ("first_frame", _c.c_int64), ("n_segments", _c.c_int32)]
 transcribe_vad_segment._fields_ = [("struct_size", _c.c_uint64), ("start_sample", _c.c_int64), ("end_sample", _c.c_int64)]
-transcribe_vad_iterator_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double), ("min_silence_ms", _c.c_int32), ("speech_pad_ms", _c.c_int32)]
+transcribe_vad_iterator_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double), ("neg_threshold", _c.c_double), ("min_silence_ms", _c.c_int32), ("speech_pad_ms", _c.c_int32)]
 transcribe_vad_event._fields_ = [("struct_size", _c.c_uint64), ("type", _c.c_int), ("sample", _c.c_int64)]
 transcribe_vad_iterator_result._fields_ = [("struct_size", _c.c_uint64), ("n_events", _c.c_int32), ("current_sample", _c.c_int64), ("triggered", _c.c_bool)]
 transcribe_voxtral_realtime_stream_ext._fields_ = [("ext", transcribe_ext), ("num_delay_tokens", _c.c_int32), ("min_decode_interval_ms", _c.c_int32)]
@@ -348,7 +348,7 @@ STRUCT_LAYOUT = {
     'transcribe_vad_params': {'size': 40, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_speech_ms': 24, 'min_silence_ms': 28, 'speech_pad_ms': 32, 'max_speech_ms': 36}},
     'transcribe_vad_result': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'n_probs': 8, 'first_frame': 16, 'n_segments': 24}},
     'transcribe_vad_segment': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'start_sample': 8, 'end_sample': 16}},
-    'transcribe_vad_iterator_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8, 'min_silence_ms': 16, 'speech_pad_ms': 20}},
+    'transcribe_vad_iterator_params': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_silence_ms': 24, 'speech_pad_ms': 28}},
     'transcribe_vad_event': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'type': 8, 'sample': 16}},
     'transcribe_vad_iterator_result': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'n_events': 8, 'current_sample': 16, 'triggered': 24}},
     'transcribe_voxtral_realtime_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'num_delay_tokens': 16, 'min_decode_interval_ms': 20}},
