@@ -136,28 +136,19 @@
     },
     "vad-publication-v1": {
       "role": "vad",
-      "description": "VAD streaming speed only, on CPU for every shipped quant. Native stream_feed wall-call latency over one whole love-loss pass (full calls only, tail omitted), after 32 warmup calls; mean, median and p95 per chunk. No VAD quality benchmark is required by this publication profile.",
+      "description": "VAD speed only, no accuracy suite (numerical parity is the porting gate). scripts/vad/bench.py through the Python binding, CPU, one thread, every shipped quant. <clip>: transcribe_vad_run over the whole clip. <clip>-<N>ms: one pass of transcribe_vad_stream_feed over the clip in N ms chunks; a cell is the mean time per feed call.",
       "accuracy": [],
       "speed": {
         "quants": "all-downloads",
         "samples": [
           "love-loss-32ms",
           "love-loss-128ms",
-          "love-loss-512ms"
+          "love-loss-512ms",
+          "jfk",
+          "love-loss"
         ],
-        "feed_samples": {
-          "love-loss-32ms": 512,
-          "love-loss-128ms": 2048,
-          "love-loss-512ms": 8192
-        },
-        "frame_samples": 512,
-        "sample_rate": 16000,
-        "source_sample": "love-loss",
-        "source_samples": 3154479,
-        "threads": 1,
-        "iterations": 1,
-        "warmup_calls": 32,
-        "full_calls_only": true,
+        "iterations": 10,
+        "warmup": 3,
         "targets": [
           {
             "machine": "m4",

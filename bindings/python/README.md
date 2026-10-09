@@ -120,19 +120,15 @@ the probabilities of the frames each call completed (`first_frame` is the
 position of the first); `flush()` scores the zero-padded remainder and ends the
 stream, `reset()` drops it. The VAD stream does not take the model's ASR stream
 lease. Locking, `Busy`, `cancel()` and `close()` work as on `Session`.
-`VadIterator` turns probabilities into live `start`/`end` events (Silero's
-`VADIterator`; no END at end of input).
 
 ```python
 with model.vad_session() as vad:
     for seg in vad.run(pcm, min_silence_ms=300).segments:
         print(seg.start_sample, seg.end_sample)
 
-    it = transcribe_cpp.VadIterator(model.vad_info.frame_samples)
     for chunk in chunks:
-        for event in it.feed(vad.feed(chunk).probs):
-            print(event.type, event.sample)
-    it.feed(vad.flush().probs)
+        probs = vad.feed(chunk).probs
+    probs = vad.flush().probs
 ```
 
 ## Backends

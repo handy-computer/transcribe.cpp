@@ -406,9 +406,6 @@ typedef enum {
     TRANSCRIBE_ABI_VAD_PARAMS             = 26,
     TRANSCRIBE_ABI_VAD_RESULT             = 27,
     TRANSCRIBE_ABI_VAD_SEGMENT            = 28,
-    TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS    = 29,
-    TRANSCRIBE_ABI_VAD_EVENT              = 30,
-    TRANSCRIBE_ABI_VAD_ITERATOR_RESULT    = 31,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.

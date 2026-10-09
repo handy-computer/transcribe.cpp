@@ -1557,7 +1557,7 @@ SILERO_STRIDES  = [1, 2, 2, 1]
 SILERO_HIDDEN   = 128
 
 
-def _silero_vad_gguf(frame_samples: int = 512) -> bytes:
+def _silero_vad_gguf() -> bytes:
     rng = _random.Random(1)
     tensors: list[Tensor] = []
 
@@ -1598,7 +1598,7 @@ def _silero_vad_gguf(frame_samples: int = 512) -> bytes:
             _pack_kv_uint32("stt.frontend.sample_rate", 16000),
             _pack_kv_uint32("stt.frontend.n_fft", SILERO_N_FFT),
             _pack_kv_uint32("stt.frontend.hop_length", 128),
-            _pack_kv_uint32("stt.vad.frame_samples", frame_samples),
+            _pack_kv_uint32("stt.vad.frame_samples", 512),
             _pack_kv_uint32("stt.silero_vad.context_samples", 64),
             _pack_kv_uint32("stt.silero_vad.reflect_pad", 64),
             _pack_kv_array_int32("stt.silero_vad.encoder_channels", SILERO_CHANNELS),
@@ -2040,10 +2040,8 @@ def emit_fixtures(out_dir: Path) -> None:
     _write(out_dir / "arch_ecapa_tdnn_bad_win_gt_fft.gguf",
            _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], win_length=512))
 
-    # silero_vad (VAD role): the real geometry with seeded weights, and a
-    # frame size whose encoder does not end on one time step (rejected).
+    # silero_vad (VAD role): the real geometry with seeded weights.
     _write(out_dir / "arch_silero_vad.gguf", _silero_vad_gguf())
-    _write(out_dir / "arch_silero_vad_bad_frame.gguf", _silero_vad_gguf(frame_samples=1024))
 
 
 def main(argv: list[str]) -> int:

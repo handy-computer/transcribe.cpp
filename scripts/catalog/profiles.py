@@ -8,11 +8,8 @@ all consume the same expansion logic.
 from __future__ import annotations
 
 import json
-import math
 import pathlib
-import re
 import sys
-from datetime import date
 from typing import Iterable
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -67,9 +64,9 @@ def load_profile(profile_id: str | None = None) -> tuple[str, dict]:
 def profile_for(record: dict, profile_id: str | None = None) -> tuple[str, dict]:
     """The profile that governs one record: `profile_id` when it is written
     for the record's role, else the profile its role names in `roles`, else
-    the default. ASR and diarize records share the default; language ID and VAD
-    have their own profiles, since classification accuracy
-    and per-chunk streaming latency are not cells of the ASR matrix."""
+    the default. ASR and diarize records share the default; language ID has
+    a profile of its own, since a top-1 accuracy over a pooled set and a
+    classifier's latency are not cells of the ASR matrix."""
     data = load_profiles()
     if profile_id:
         named = load_profile(profile_id)[1]
@@ -227,23 +224,12 @@ def expected_speed(record: dict, profile: dict) -> list[dict]:
         for backend in target.get("backends", []):
             for quant in _quants(spec["quants"], record):
                 for sample in samples:
-                    cell = {
+                    cells.append({
                         "machine": target["machine"],
                         "backend": backend,
                         "quant": quant,
                         "sample": sample,
-                    }
-                    if profile.get("role") == "vad":
-                        feed = spec["feed_samples"][sample]
-                        cell.update({
-                            "feed_samples": feed,
-                            "frame_samples": spec["frame_samples"],
-                            "threads": spec["threads"],
-                            "warmup_calls": spec["warmup_calls"],
-                            "n_calls": spec["source_samples"] // feed,
-                            "sample_duration_s": feed / spec["sample_rate"],
-                        })
-                    cells.append(cell)
+                    })
     return cells
 
 
@@ -271,49 +257,8 @@ def profile_key(cell: dict) -> tuple:
 
 
 def cell_key(cell: dict, kind: str) -> tuple:
-    fields = {"accuracy": ACCURACY_KEY, "speed": SPEED_KEY}[kind]
+    fields = ACCURACY_KEY if kind == "accuracy" else SPEED_KEY
     return tuple(cell.get(field) for field in fields)
-
-
-def has_vad_provenance(row: dict, profile_id: str | None = None) -> bool:
-    """VAD has no legacy measurements; require an actual build and run date."""
-    try:
-        measured = row.get("measured_on")
-        if not isinstance(measured, str) or date.fromisoformat(measured).isoformat() != measured:
-            return False
-    except ValueError:
-        return False
-    return (isinstance(row.get("engine_sha"), str)
-            and re.fullmatch(r"[0-9a-f]{7,40}", row["engine_sha"]) is not None
-            and bool(row.get("publication_profile"))
-            and (profile_id is None or row["publication_profile"] == profile_id)
-            and not row.get("measurement_provenance"))
-
-
-def _positive_number(value) -> bool:
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(value) and value > 0)
-
-
-def valid_vad_speed(row: dict, target: dict, profile_id: str) -> bool:
-    """Validate a matched speed cell's chunk recipe, provenance and statistics."""
-    if not has_vad_provenance(row, profile_id):
-        return False
-    for key in ("feed_samples", "frame_samples", "threads", "warmup_calls", "n_calls"):
-        if type(row.get(key)) is not int or row[key] != target[key]:
-            return False
-    if not _positive_number(row.get("sample_duration_s")) or not math.isclose(
-            row["sample_duration_s"], target["sample_duration_s"], rel_tol=1e-9):
-        return False
-    if not all(_positive_number(row.get(key))
-               for key in ("total_ms", "median_ms", "p95_ms", "xrt_compute")):
-        return False
-    # Quantiles must be ordered; neither can exceed the sum of all calls.
-    if not (row["median_ms"] <= row["p95_ms"] <= row["total_ms"] * row["n_calls"]):
-        return False
-    return math.isclose(row["xrt_compute"],
-                        row["sample_duration_s"] * 1000 / row["total_ms"],
-                        rel_tol=1e-6, abs_tol=0.005)
 
 
 def exception_matches(exception: dict, kind: str, cell: dict) -> bool:

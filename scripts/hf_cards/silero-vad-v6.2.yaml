@@ -13,15 +13,10 @@ tags:
   - silero-vad
 summary: |
   Voice activity detection by the Silero Team. Not a transcription model:
-  the VAD role produces speech probabilities, offline speech segments,
-  and streaming probabilities for live START/END events. CPU is the default
-  backend for reference fidelity.
-compatibility: |
-  The loader also accepts whisper.cpp's `ggml-silero-v5.1.2.bin` and
-  `ggml-silero-v6.2.0.bin`, available from
-  [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad).
-  These are third-party compatibility inputs, not this project's canonical
-  GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load.
+  the VAD role produces per-frame speech probabilities (offline or
+  streaming) and offline speech segments. CPU is the default backend for
+  reference fidelity. transcribe.cpp also loads whisper.cpp's
+  `ggml-silero-v5.1.2.bin` / `v6.2.0.bin`.
 usage: |
   Build transcribe.cpp and run on a mono WAV at the model's sample rate:
 
@@ -30,9 +25,9 @@ usage: |
   build/bin/transcribe-cli -m silero-vad-v6.2-F32.gguf input.wav
   ```
 
-  From the C API, use the VAD role (`include/transcribe/vad.h`). For live
-  audio, feed PCM through `transcribe_vad_stream_feed`, then pass the returned
-  probabilities to a `transcribe_vad_iterator` for START/END events.
+  From the C API, use the VAD role (`include/transcribe/vad.h`): offline
+  segments with `transcribe_vad_run`, live per-frame probabilities with
+  `transcribe_vad_stream_feed`.
 
   See [the model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/silero-vad-v6.2.md)
   and [VAD usage](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/vad.md).

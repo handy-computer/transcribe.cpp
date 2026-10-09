@@ -21,8 +21,7 @@ Nothing numeric or mechanical is read from the YAML; a number that belongs
 on the card belongs in the catalog first. Fetches the upstream model card at
 the pinned commit and renders template.md.j2.
 
-Default output is models/<upstream-slug>/README.md for HF sources, or
-models/<variant>/README.md for non-HF sources, alongside the GGUFs, so
+Default output is models/<upstream-slug>/README.md alongside the GGUFs, so
 `hf upload <repo> models/<upstream-slug> .` picks it up in the same call.
 
 Usage:
@@ -58,12 +57,10 @@ SPEC_KEYS = {
     "pipeline_tag",          # HF Hub pipeline tag
     "tags",                  # HF Hub tags
     "summary",               # the card's opening paragraph
-    "compatibility",         # optional loader/API compatibility prose
     "wer",                   # editorial caveats; see README.md
     "usage",                 # extra usage prose for an unusual model
     "upstream_card_commit",  # revision of the upstream card that was quoted
     "default_quant",         # override the Q8_0 default
-    "stream_perf",           # editorial notes only, no measurements
 }
 CAP_FLAGS = ("streaming", "translate", "lang_detect")
 DEFAULT_QUANT = "Q8_0"
@@ -79,11 +76,6 @@ def load_spec(path: Path) -> dict:
             f"{path.name}: {', '.join(unknown)} is not an editorial field. It is "
             f"either derived from catalog/{path.stem}.json or misspelled; remove "
             f"it. Editorial fields: {', '.join(sorted(SPEC_KEYS))}")
-    section = spec.get("stream_perf")
-    if section is not None and (not isinstance(section, dict)
-                               or set(section) - {"notes"}
-                               or not isinstance(section.get("notes", ""), str)):
-        raise SystemExit(f"{path.name}: stream_perf accepts only editorial notes")
     if "default_quant_index" in spec:
         raise SystemExit(f"{path.name}: default_quant_index is gone; the default is "
                          f"{DEFAULT_QUANT}, override with default_quant: <QUANT>")
@@ -110,9 +102,6 @@ def derive_capabilities(record: dict) -> dict:
 def derive_perf(record: dict, default_quant: str | None) -> dict:
     """Speedup over realtime per rig/backend at the card's default quant,
     averaged over the benchmark samples."""
-    # Chunk sizes must not be averaged into an ASR-style realtime headline.
-    if record.get("role") == "vad":
-        return {}
     cells: dict[tuple[str, str], list[float]] = {}
     for row in record.get("speed_benchmarks", []):
         if row["quant"] != default_quant:
@@ -229,14 +218,8 @@ def build_context(record: dict, spec: dict) -> dict:
     ctx = {
         **spec,
         "hf_repo": record["upstream_repo"],
-        "upstream_is_hf": common.upstream_is_hf(record),
         "upstream_url": common.upstream_url(record),
-        "upstream_commit_url": common.upstream_commit_url(record),
-        "source_provenance": "\n".join(common.source_provenance(record)
-                                        + common.model_geometry(record)),
-        "display_name": record["display_name"],
-        "role": record.get("role", "asr"),
-        "has_headline": bool(headline),
+        "upstream_is_hf": not record.get("upstream_url"),
         "target_repo": record.get("published_repo"),
         "upstream_commit": record["upstream_commit"],
         "license": record["license"]["spdx"],
@@ -256,18 +239,8 @@ def build_context(record: dict, spec: dict) -> dict:
     for key in ("name", "link"):
         if record["license"].get(key):
             ctx[f"license_{key}"] = record["license"][key]
-    ctx["stream_perf_tables"] = ""
-    if ctx["role"] == "vad":
-        latency = [row for row in record.get("speed_benchmarks", [])
-                   if row["quant"] == default_quant]
-        ctx["vad_metadata"] = {"params": record["params"]}
-        if record.get("vad_info"):
-            ctx["vad_metadata"]["vad_info"] = record["vad_info"]
-        ctx["vad_metadata"]["latency_benchmarks"] = latency
-        machines = sorted({row["machine"] for row in record.get("speed_benchmarks", [])})
-        ctx["stream_perf_tables"] = "\n\n".join(
-            f"### {machine}\n\n" + "\n".join(common.render_stream_perf(record, machine))
-            for machine in machines)
+    if not ctx["target_repo"]:
+        raise SystemExit(f"{record['variant']}: catalog has no published_repo")
     return ctx
 
 
@@ -280,17 +253,8 @@ def build_transcribe_cpp_block(ctx: dict) -> str:
     capability flags), entirely from the catalog record.
 
     See docs/tools/hf-metadata-schema.md. Returns "" when the catalog holds no
-    speed rows for the default quant, opting out of the block. VAD cards emit
-    a role-aware schema 3 block even while measurements are pending.
+    speed rows for the default quant, opting out of the block.
     """
-    if ctx.get("role") == "vad":
-        # Schema 3 is role-aware. Existing non-VAD cards remain schema 2,
-        # byte-for-byte, including their legacy realtime-factor names.
-        block = {"schema_version": 3, "role": "vad", **ctx["vad_metadata"],
-                 "streaming": bool(ctx["capabilities"].get("streaming")),
-                 "timestamps": ctx["capabilities"].get("timestamps", "none")}
-        return yaml.safe_dump({"transcribe_cpp": block}, sort_keys=False,
-                              default_flow_style=False).rstrip("\n")
     if not ctx["perf"]:
         return ""
 
@@ -345,12 +309,6 @@ def render(ctx: dict, upstream_card: str) -> str:
     )
 
 
-def default_output_path(record: dict) -> Path:
-    slug = (record["upstream_repo"].rsplit("/", 1)[-1]
-            if common.upstream_is_hf(record) else record["variant"])
-    return REPO_ROOT / "models" / slug / "README.md"
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("spec", type=Path, help="Path to the editorial YAML spec")
@@ -358,8 +316,7 @@ def main() -> int:
         "-o",
         "--output",
         type=Path,
-        help="Write to this path. Defaults to models/<upstream-slug>/README.md "
-             "for HF sources, models/<variant>/README.md otherwise.",
+        help="Write to this path. Defaults to models/<upstream-slug>/README.md.",
     )
     ap.add_argument(
         "--stdout",
@@ -382,14 +339,12 @@ def main() -> int:
     # `upstream_card_commit` lets a spec point the card-fetch at a
     # different revision than the catalog's upstream_commit.
     card_commit = spec.get("upstream_card_commit", ctx["upstream_commit"])
-    if not ctx["upstream_is_hf"]:
-        upstream = ""  # GitHub sources are linked, never queried through the HF API.
-    else:
-        upstream = (
-            "_(upstream card not fetched — run without --skip-upstream to include it)_"
-            if args.skip_upstream
-            else fetch_upstream_card(ctx["hf_repo"], card_commit)
-        )
+    upstream = (
+        "" if not ctx["upstream_is_hf"]  # a GitHub upstream has no HF card to quote
+        else "_(upstream card not fetched — run without --skip-upstream to include it)_"
+        if args.skip_upstream
+        else fetch_upstream_card(ctx["hf_repo"], card_commit)
+    )
     out = render(ctx, upstream)
 
     if args.stdout:
@@ -401,7 +356,8 @@ def main() -> int:
     # directory `hf upload` will publish. The kebab-cased spec stem is
     # the internal handle; the filesystem dir mirrors upstream casing
     # (matches the converter's output dir convention).
-    output = args.output or default_output_path(record)
+    upstream_slug = ctx["hf_repo"].rsplit("/", 1)[-1]
+    output = args.output or (REPO_ROOT / "models" / upstream_slug / "README.md")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(out)
     print(f"wrote {output}", file=sys.stderr)

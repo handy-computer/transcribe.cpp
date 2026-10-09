@@ -11,9 +11,7 @@ base_model: {{ hf_repo }}
 base_model_relation: quantized
 {%- endif %}
 library_name: transcribe.cpp
-{%- if pipeline_tag is defined and pipeline_tag %}
 pipeline_tag: {{ pipeline_tag }}
-{%- endif %}
 {%- if languages %}
 language:
 {%- for lang in languages %}
@@ -35,57 +33,44 @@ tags:
 {%- endif %}
 ---
 
-# {{ hf_repo.split('/')[-1] if upstream_is_hf else display_name }}: transcribe.cpp GGUF
+# {{ hf_repo.split('/')[-1] }}: transcribe.cpp GGUF
 
 GGUF conversions of [{{ hf_repo }}]({{ upstream_url }}) for use
 with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp).
 
 Ported from upstream commit
-[{{ upstream_commit }}]({{ upstream_commit_url }}),
+[{{ upstream_commit }}]({{ upstream_url }}/commit/{{ upstream_commit }}),
 pinned {{ pin_date }}.
 Validated against the {{ validation.reference }} reference at transcribe.cpp commit
 [{{ validation.commit }}](https://github.com/handy-computer/transcribe.cpp/tree/{{ validation.commit }})
 on {{ validation.date }}.
-{% if source_provenance %}
-{{ source_provenance }}
-{% endif %}
-{{ summary }}
-{% if compatibility is defined %}
-## Compatibility
 
-{{ compatibility.rstrip() }}
-{% endif %}
+{{ summary }}
+
 ## Downloads
 
-| Quantization | Download | Size{% if has_headline %} | {{ metric|default("WER") }} ({{ wer.source }}){% if wer.source2 is defined %} | {{ metric2|default("CER") }} ({{ wer.source2 }}){% endif %}{% endif %} |
-| --- | --- | ---:{% if has_headline %} | ---:{% if wer.source2 is defined %} | ---:{% endif %}{% endif %} |
+{% if wer.source -%}
+| Quantization | Download | Size | {{ metric|default("WER") }} ({{ wer.source }}){% if wer.source2 is defined %} | {{ metric2|default("CER") }} ({{ wer.source2 }}){% endif %} |
+| --- | --- | ---: | ---:{% if wer.source2 is defined %} | ---:{% endif %} |
 {%- for q in quants %}
-| {{ q.name }} | {% if target_repo %}[{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}){% else %}`{{ q.filename }}`{% endif %} | {{ q.size }}{% if has_headline %} | {{ q.wer | default("-") }}{% if wer.source2 is defined %} | {{ q.wer2 | default("-") }}{% endif %}{% endif %} |
+| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer | default("-") }}{% if wer.source2 is defined %} | {{ q.wer2 | default("-") }}{% endif %} |
 {%- endfor %}
-{%- if not target_repo %}
 
-Canonical publication pending; filenames above are local artifacts, not download links.
-This is a draft card, not an uploaded model repository.
-{% endif %}
-{% if has_headline %}
 {{ wer.recipe }}
 
-{{ wer.notes }}{% endif %}{% if role == "vad" %}
-## Streaming performance
-
-{{ stream_perf_tables or "Streaming latency measurements pending." }}
-{% if stream_perf is defined and stream_perf.notes is defined %}
-{{ stream_perf.notes.rstrip() }}
-{% endif %}
-{% endif %}
+{{ wer.notes }}
+{%- else -%}
+| Quantization | Download | Size |
+| --- | --- | ---: |
+{%- for q in quants %}
+| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} |
+{%- endfor %}
+{%- endif %}
 
 ## Usage
 
 {% if usage is defined -%}
 {{ usage.rstrip() }}
-{% elif role == "vad" -%}
-Use the VAD native API (`include/transcribe/vad.h`); this is not a transcription model.
-See the [transcribe.cpp model page]({{ transcribe_docs_url }}) for usage and reproduction steps.
 {% else -%}
 Build transcribe.cpp from source:
 
@@ -115,7 +100,7 @@ numbers, numerical validation, and reproduction steps.
 ## License
 
 Inherited from the base model: **{{ license_display }}**. See the
-[{{ "upstream model card" if upstream_is_hf else "upstream project" }}]({{ upstream_url }}) for full terms.
+[upstream model card]({{ upstream_url }}) for full terms.
 {% if upstream_is_hf %}
 ---
 

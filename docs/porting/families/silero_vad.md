@@ -9,18 +9,15 @@ The model scores 512-sample (32 ms) frames with a speech probability
 and owns its recurrent state. The VAD role dispatcher
 (`src/transcribe-vad.cpp`) owns input validation, stream buffering, zero
 padding of the last frame, and the probabilities -> segments step, a
-line-for-line port of upstream's `get_speech_timestamps_from_probs`; the live
-iterator is a port of `VADIterator`. Both keep the Silero MIT notice
-(`src/third_party/silero_vad/`).
+line-for-line port of upstream's `get_speech_timestamps_from_probs`, which
+keeps the Silero MIT notice (`src/third_party/silero_vad/`).
 
 ## Identity
 
 - Family key: `silero_vad`; variant `silero-vad-v6.2`
 - Upstream module: `silero_vad.jit` `VADRNNJITMerge._model` (16 kHz sub-model).
-  Package, source checksum, license and latency measurements come from
-  [`catalog/silero-vad-v6.2.json`](../../../catalog/silero-vad-v6.2.json) and
-  are rendered on the [model page](../../models/silero-vad-v6.2.md).
-  The golden manifest separately pins the numerical-validation reference.
+  Package and source checksum: the [model page](../../models/silero-vad-v6.2.md)
+  and the golden manifest; speed: [`catalog/silero-vad-v6.2.json`](../../../catalog/silero-vad-v6.2.json).
 - `.bin` runtime variants: `silero-vad-v5.1.2`, `silero-vad-v6.2.0`. Their
   mixed F16/F32 payloads are expanded to F32 at load.
 
@@ -81,26 +78,15 @@ uv run --project scripts/envs/silero_vad scripts/convert-silero_vad.py
 uv run scripts/preflight.py --family silero_vad --variant silero-vad-v6.2 --gate B
 uv run scripts/validate.py all --family silero_vad --variant silero-vad-v6.2
 
-# Seed publication metadata from the intake, manifest and local GGUF
-uv run scripts/catalog/new_record.py silero-vad-v6.2 \
-  --long-form chunked-unbounded --docs-page silero-vad-v6.2.md \
-  --upstream-commit 5cd7945 --unpublished
-
-# Use a shared build for the Python/native measurement tools.
-# Substitute this library path with .so or .dll on other platforms.
-cmake -B build-vad-shared -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_BUILD_EXAMPLES=OFF
-cmake --build build-vad-shared --target transcribe
-
-# Frame-aligned feed latency, following the VAD publication profile
-uv run --project scripts/envs/silero_vad scripts/vad/bench.py --profile \
-  --library build-vad-shared/src/libtranscribe.dylib
-uv run scripts/catalog/ingest_perf.py --models silero-vad-v6.2
-
-uv run scripts/catalog/check.py --publication-profile --models silero-vad-v6.2
+# Speed (shared build for the Python binding; .so / .dll elsewhere)
+cmake -B build-shared -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_BUILD_EXAMPLES=OFF
+cmake --build build-shared --target transcribe
+uv run --project scripts/envs/silero_vad scripts/vad/bench.py \
+  --library build-shared/src/libtranscribe.dylib
+uv run scripts/catalog/ingest_perf.py
 uv run scripts/catalog/render.py
-uv run scripts/hf_cards/generate.py scripts/hf_cards/silero-vad-v6.2.yaml
 
-# Regenerate the segmentation and iterator test vectors
+# Regenerate the segmentation test vectors
 uv run --project scripts/envs/silero_vad scripts/vad/gen_vectors.py
 
 # Real-model smoke (each variable optional)
@@ -115,9 +101,8 @@ TRANSCRIBE_SILERO_VAD_V6_BIN=/path/ggml-silero-v6.2.0.bin \
 | Capability | Command / test | Expected | Status |
 |---|---|---|---|
 | Offline segments | `validate.py` | identical to `get_speech_timestamps` on golden clips | PASS |
-| Segment params | `transcribe_vad_dispatch_unit` | identical to `get_speech_timestamps_from_probs` | PASS |
-| Live iterator | `transcribe_vad_iterator_unit` | identical `VADIterator` events | PASS |
+| Segment params | `transcribe_vad_segments_unit` | identical to `get_speech_timestamps_from_probs` | PASS |
 | Per-frame probabilities | `validate.py` | within `tests/tolerances/silero_vad.json` | PASS |
 | Streaming | `transcribe_silero_vad_smoke` | bit-identical to offline on CPU | PASS |
-| `.bin` loading | `transcribe_silero_vad_bin_smoke` | same probabilities as the equivalent GGUF | PASS |
+| `.bin` loading | `transcribe_silero_vad_real_smoke` | same jfk segments as upstream for v5.1.2 / v6.2.0 | PASS |
 | 8 kHz model, quantized GGUFs | - | OUT OF SCOPE | SKIP |

@@ -115,34 +115,10 @@ def pairing_pass(records: dict, selected: bool = False) -> int:
     return len(missing_cards) + len(missing_records) + len(bad_pages)
 
 
-def vad_publication_problems(record: dict, profile_id: str, profile: dict) -> collections.Counter:
-    """VAD publication requires measured streaming speed, not ASR accuracy."""
-    problems = collections.Counter()
-    info = record.get("vad_info") or {}
-    problems["vad_info_invalid"] = int(
-        info.get("sample_rate") != profile["speed"]["sample_rate"]
-        or info.get("frame_samples") != profile["speed"]["frame_samples"])
-    targets = {profiles.cell_key(cell, "speed"): cell
-               for cell in profiles.expected_speed(record, profile)}
-    rows = record.get("speed_benchmarks", [])
-    counts = collections.Counter(profiles.cell_key(row, "speed") for row in rows)
-    problems["speed_missing"] = len(targets.keys() - counts.keys())
-    problems["speed_extra"] = len(counts.keys() - targets.keys())
-    problems["speed_duplicate"] = sum(n - 1 for n in counts.values() if n > 1)
-    problems["speed_invalid"] = sum(
-        not profiles.valid_vad_speed(row, targets[profiles.cell_key(row, "speed")], profile_id)
-        or row.get("frame_samples") != info.get("frame_samples")
-        for row in rows if profiles.cell_key(row, "speed") in targets)
-    problems["accuracy_extra"] = len(record.get("accuracy_benchmarks", []))
-    problems["headline_invalid"] = int(record.get("headline_benchmark") is not None)
-    problems["exception_invalid"] = len(record.get("benchmark_exceptions") or [])
-    return problems
-
-
 def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> int:
     """Check publication matrices, including explicit legacy accuracy rows.
 
-    Each record is held to its role's profile (language ID and VAD have their own)."""
+    Each record is held to its role's profile (language ID has its own)."""
     try:
         profiles.load_profile(profile_id)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -153,15 +129,6 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
     totals: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     for name, record in records.items():
         resolved_id, profile = profiles.profile_for(record, profile_id)
-        if record.get("role") == "vad":
-            per_model = vad_publication_problems(record, resolved_id, profile)
-            count = sum(per_model.values())
-            problems += count
-            details = ", ".join(f"{key}={value}" for key, value in per_model.items() if value)
-            print(f"  {('FAIL' if enforce else 'TODO') if count else 'PASS'} {name}: "
-                  f"{resolved_id} stream-feed speed"
-                  + (f"; {details}" if details else " complete"))
-            continue
         # An ASR publication profile does not apply to standalone diarizers.
         if not profile.get("role") and \
                 not record.get("capabilities", {}).get("transcribe", {}).get("supported"):
@@ -295,11 +262,6 @@ def provenance_pass(records: dict) -> int:
                     bad += 1
                     print(f"  FAIL {name}: {kind} row has neither engine_sha nor "
                           f"measurement_provenance=legacy-published")
-        if record.get("role") == "vad":
-            for row in record.get("speed_benchmarks", []):
-                if not profiles.has_vad_provenance(row):
-                    bad += 1
-                    print(f"  FAIL {name}: VAD speed lacks build/date/profile provenance")
     print(f"provenance {total_speed - legacy_speed}/{total_speed} speed and "
           f"{total_acc - legacy_acc}/{total_acc} accuracy row(s) name a build; "
           f"{legacy_speed + legacy_acc} explicitly marked legacy-published")

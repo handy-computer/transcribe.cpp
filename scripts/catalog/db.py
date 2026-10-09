@@ -28,17 +28,12 @@ import profiles  # noqa: E402
 DEFAULT_DB = common.REPO / "build" / "catalog.db"
 
 SCHEMA = """
-PRAGMA user_version = 3;
+PRAGMA user_version = 1;
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE models(
     variant TEXT PRIMARY KEY,
     family TEXT NOT NULL,
-    role TEXT NOT NULL,
-    docs_page TEXT,
-    upstream_url TEXT,
-    source_artifact_json TEXT,
-    vad_info_json TEXT,
     display_name TEXT NOT NULL,
     params INTEGER NOT NULL,
     license_spdx TEXT NOT NULL,
@@ -156,13 +151,6 @@ CREATE TABLE speed(
     measured_on TEXT,
     thermal_gated INTEGER,
     publication_profile TEXT,
-    feed_samples INTEGER,
-    frame_samples INTEGER,
-    threads INTEGER,
-    n_calls INTEGER,
-    warmup_calls INTEGER,
-    median_ms REAL,
-    p95_ms REAL,
     PRIMARY KEY(variant, machine, backend, quant, sample)
 );
 
@@ -230,14 +218,8 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
         for variant, record in records.items():
             license_info = record["license"]
             headline = record.get("headline_benchmark") or {}
-            con.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-                variant, record["family"], record.get("role", "asr"), record.get("docs_page"),
-                record.get("upstream_url"),
-                json.dumps(record["source_artifact"], separators=(",", ":"), sort_keys=True)
-                if "source_artifact" in record else None,
-                json.dumps(record["vad_info"], separators=(",", ":"), sort_keys=True)
-                if "vad_info" in record else None,
-                record["display_name"], record["params"],
+            con.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                variant, record["family"], record["display_name"], record["params"],
                 license_info["spdx"], license_info["display"], record["upstream_repo"],
                 record["upstream_commit"], record.get("published_repo"),
                 record.get("language_tag_form"), record.get("encoder_window_s"),
@@ -277,16 +259,14 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                      (row.get("agreement") or {}).get("max_abs_logit_delta"))
                     for row in record.get("accuracy_benchmarks", [])])
             con.executemany(
-                "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (variant, row["machine"], row["backend"], row["quant"], row["sample"],
                      row["sample_duration_s"], row.get("total_ms"), row["xrt_compute"],
                      row.get("wall_ms"), row.get("xrt_wall"), row.get("load_ms"), row.get("mel_ms"), row.get("encode_ms"),
                      row.get("decode_ms"), row.get("engine_sha"),
                      row.get("measurement_provenance"), row.get("measured_on"),
                      None if row.get("thermal_gated") is None else int(row["thermal_gated"]),
-                     row.get("publication_profile"), row.get("feed_samples"),
-                     row.get("frame_samples"), row.get("threads"), row.get("n_calls"),
-                     row.get("warmup_calls"), row.get("median_ms"), row.get("p95_ms"))
+                     row.get("publication_profile"))
                     for row in record.get("speed_benchmarks", [])])
 
         profile_id, _ = profiles.load_profile()

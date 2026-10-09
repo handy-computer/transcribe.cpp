@@ -119,20 +119,16 @@ whisper.cpp `ggml-silero-v5.1.2.bin` / `v6.2.0.bin`) opens a `VadSession`.
 `run` scores a clip and returns per-frame probabilities
 (`vad_info()?.frame_samples` samples each) plus speech segments in samples;
 `stream_feed` / `stream_flush` return the probabilities of the frames each call
-completed. `VadIterator` turns streamed probabilities into START / END events.
+completed.
 
 ```rust
-use transcribe_cpp::{Model, VadIterator, VadIteratorOptions, VadOptions};
+use transcribe_cpp::{Model, VadOptions};
 let model = Model::load("silero-vad-v6.2-F32.gguf")?;
 let mut vad = model.vad_session()?;
 for s in vad.run(&pcm, &VadOptions::default())?.segments {
     println!("speech {}..{}", s.start_sample, s.end_sample);
 }
-let frame = model.vad_info()?.frame_samples;
-let mut live = VadIterator::new(frame, &VadIteratorOptions::default())?;
-for event in live.feed(&vad.stream_feed(&pcm)?.probs)? {
-    println!("{:?} at {}", event.kind, event.sample);
-}
+let live = vad.stream_feed(&pcm)?.probs;
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 

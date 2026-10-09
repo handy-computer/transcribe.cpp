@@ -321,34 +321,6 @@ export function bindLibrary(libraryPath: string): Bound {
       "void *",
       iop(T.transcribe_timings),
     ]),
-    vadIteratorParamsInit: lib.func("transcribe_vad_iterator_params_init", "void", [
-      outp(T.transcribe_vad_iterator_params),
-    ]),
-    vadIteratorInit: lib.func("transcribe_vad_iterator_init", "int", [
-      "int32_t",
-      inp(T.transcribe_vad_iterator_params),
-      handleOut,
-    ]),
-    vadIteratorFree: lib.func("transcribe_vad_iterator_free", "void", ["void *"]),
-    vadIteratorFeed: lib.func("transcribe_vad_iterator_feed", "int", [
-      "void *",
-      inp("float"),
-      "int32_t",
-    ]),
-    vadIteratorReset: lib.func("transcribe_vad_iterator_reset", "void", ["void *"]),
-    vadIteratorResultInit: lib.func("transcribe_vad_iterator_result_init", "void", [
-      outp(T.transcribe_vad_iterator_result),
-    ]),
-    vadIteratorGetResult: lib.func("transcribe_vad_iterator_get_result", "int", [
-      "void *",
-      iop(T.transcribe_vad_iterator_result),
-    ]),
-    vadEventInit: lib.func("transcribe_vad_event_init", "void", [outp(T.transcribe_vad_event)]),
-    vadIteratorGetEvent: lib.func("transcribe_vad_iterator_get_event", "int", [
-      "void *",
-      "int32_t",
-      iop(T.transcribe_vad_event),
-    ]),
 
     // batch (offline)
     runBatch: lib.func("transcribe_run_batch", "int", [

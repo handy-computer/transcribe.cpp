@@ -87,7 +87,7 @@ THE SOFTWARE.
 
 ## Silero VAD
 
-The offline segmentation and live iterator in `src/transcribe-vad.cpp` are
+The offline segmentation in `src/transcribe-vad.cpp` is
 translated from `silero_vad/utils_vad.py`, pinned to silero-vad 6.2.3. The
 authoritative text is `src/third_party/silero_vad/LICENSE`; native artifacts
 include it as `LICENSE.silero_vad`.

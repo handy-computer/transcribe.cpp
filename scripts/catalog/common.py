@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-from urllib.parse import urlparse
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 CATALOG_DIR = REPO / "catalog"
@@ -213,6 +212,8 @@ def fmt_err(row: dict | None, dp: int = 2) -> str:
 
 
 def fmt_ms(total_ms: float, dp_ms: int = 0, dp_s: int = 2) -> str:
+    if total_ms < 1:  # a VAD stream feed: keep the sub-millisecond digits
+        return f"{total_ms:.3f} ms"
     if total_ms < 1000:
         return f"{total_ms:.{dp_ms}f} ms"
     return f"{total_ms / 1000:.{dp_s}f} s"
@@ -245,8 +246,6 @@ def perf_rows(record: dict, machine: str) -> dict[tuple[str, str, str], dict]:
 
 
 def fmt_params(params: int) -> str:
-    if params < 10**6:
-        return f"{params // 10**3}K"
     if params >= 10**9:
         return f"{params / 10**9:.1f}B".replace(".0B", "B")
     return f"{round(params / 10**6):.0f}M"
@@ -279,50 +278,9 @@ def capabilities_summary(record: dict) -> str:
     return ", ".join(out) or "-"
 
 
-# --------------------------------------------------------------------------
-# source provenance
-
-
-def upstream_is_hf(record: dict) -> bool:
-    """An explicit non-HF URL overrides the legacy HF repo convention."""
-    url = record.get("upstream_url")
-    return not url or urlparse(url).hostname == "huggingface.co"
-
-
 def upstream_url(record: dict) -> str:
+    """The upstream home: `upstream_url` (e.g. GitHub) or the HF repo."""
     return record.get("upstream_url") or f"https://huggingface.co/{record['upstream_repo']}"
-
-
-def upstream_commit_url(record: dict) -> str:
-    url = upstream_url(record).rstrip("/")
-    if upstream_is_hf(record) or urlparse(url).hostname == "github.com":
-        return f"{url}/commit/{record['upstream_commit']}"
-    return url
-
-
-def source_provenance(record: dict) -> list[str]:
-    """The exact packaged weights are distinct from the upstream code pin."""
-    lines = []
-    artifact = record.get("source_artifact")
-    if artifact:
-        lines.append(f"Source artifact: `{artifact['package']}=={artifact['version']}`, "
-                     f"[`{artifact['filename']}`]({artifact['url']}). "
-                     f"SHA256: `{artifact['sha256']}`.")
-    return lines
-
-
-def model_geometry(record: dict) -> list[str]:
-    """Catalog-derived parameter count and native VAD frame geometry."""
-    lines = []
-    if record.get("role") == "vad":
-        line = f"Model: {record['params']:,} parameters."
-        info = record.get("vad_info")
-        if info:
-            line += (f" Input: {info['sample_rate']:,} Hz mono; "
-                     f"{info['frame_samples']:,} samples/frame "
-                     f"({info['frame_samples'] / info['sample_rate'] * 1000:g} ms).")
-        lines.append(line)
-    return lines
 
 
 # --------------------------------------------------------------------------
@@ -372,83 +330,6 @@ def render_table(header: list[str], aligns: list[str], rows: list[list[str]],
         return [head, "| " + " | ".join(rules) + " |"] + [line(row) for row in rows]
     rules = ["---:" if align == "r" else "---" for align in aligns]
     return [head, "| " + " | ".join(rules) + " |"] + [line(row) for row in rows]
-
-
-# --------------------------------------------------------------------------
-# VAD measurements (shared by documentation and HF cards)
-
-
-def measurement_provenance(rows: list[dict]) -> list[str]:
-    builds = sorted({(row["engine_sha"], row.get("measured_on") or "",
-                      row.get("publication_profile") or "")
-                     for row in rows if row.get("engine_sha")})
-    if not builds:
-        return []
-    return ["Measured at " + "; ".join(
-        f"transcribe.cpp `{sha}`" + (f" on {date}" if date else "")
-        + (f", profile `{profile}`" if profile else "")
-        for sha, date, profile in builds) + "."]
-
-
-def stream_perf_rows(record: dict, machine: str) -> list[dict]:
-    rank = {item["quant"]: i for i, item in enumerate(record.get("downloads", []))}
-    return sorted((row for row in record.get("speed_benchmarks", [])
-                   if row["machine"] == machine),
-                  key=lambda row: (row["sample_duration_s"], row["backend"],
-                                   rank.get(row["quant"], 99), row["quant"]))
-
-
-def fmt_latency_ms(value: float) -> str:
-    """Sub-ms call measurements must not round to the legacy `0 ms` cell."""
-    return f"{value:.6g} ms"
-
-
-def render_stream_perf(record: dict, machine: str,
-                       rows: list[dict] | None = None) -> list[str]:
-    rows = stream_perf_rows(record, machine) if rows is None else rows
-    if not rows:
-        raise ValueError(f"no stream speed_benchmarks rows for machine {machine!r}")
-    required = ("feed_samples", "frame_samples", "threads", "n_calls",
-                "warmup_calls", "total_ms", "median_ms", "p95_ms")
-    body = []
-    for row in rows:
-        if any(row.get(key) is None for key in required):
-            raise ValueError(f"stream row {row['sample']}/{row['quant']} needs "
-                             + ", ".join(required))
-        if row["frame_samples"] <= 0:
-            raise ValueError("stream frame_samples must be positive")
-        frames = row["feed_samples"] / row["frame_samples"]
-        if frames <= 0:
-            raise ValueError("stream frames/feed must be positive")
-        body.append([
-            row["backend"], row["quant"],
-            f"{row['sample_duration_s'] * 1000:g} ms", f"{frames:g}",
-            fmt_latency_ms(row["median_ms"]), fmt_latency_ms(row["p95_ms"]),
-            fmt_latency_ms(row["median_ms"] / frames), f"{row['n_calls']:,}"])
-    recipe = []
-    for key, label in (("frame_samples", "Samples/frame"), ("threads", "Threads"),
-                       ("warmup_calls", "Warmup calls")):
-        values = sorted({row[key] for row in rows})
-        recipe.append(label + ": " + ", ".join(f"{value:,}" for value in values) + ".")
-    samples = list(dict.fromkeys(row["sample"] for row in rows))
-    recipe.append("Source samples: " + ", ".join(f"`{sample}`" for sample in samples) + ".")
-    intro = [
-        "Streaming feed-call wall latency; the 32 ms chunk is the headline. "
-        "128 ms and 512 ms chunks show feed-size amortization, not independent "
-        "per-frame latency.",
-        "Includes the Python ctypes/native API wall call; excludes model load "
-        "and audio capture. One pass over the audio with preserved stream state. "
-        "Warmup calls are excluded from the measured call statistics. "
-        "Chunk duration is audio per feed, not the full clip duration.",
-        "Median and p95 are measured per feed call. Amortized median/frame is "
-        "median/feed divided by frames/feed, not a separately measured single-frame "
-        "latency. Mean feed-call latency remains in `total_ms` metadata.",
-        " ".join(recipe), ""]
-    return intro + render_table(
-        ["Backend", "GGUF", "Chunk", "Frames/feed", "Median/feed", "p95/feed",
-         "Amortized median/frame", "Calls"],
-        ["l", "l", "l"] + ["r"] * 5, body
-    ) + ["", f"Machine: `{machine}`."] + measurement_provenance(rows)
 
 
 # --------------------------------------------------------------------------

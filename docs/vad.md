@@ -71,31 +71,6 @@ for (;;) {
 transcribe_vad_stream_flush(vad);
 ```
 
-To turn stream probabilities into live START/END events, feed them to a
-`transcribe_vad_iterator` (Silero's `VADIterator`). It owns no model and takes
-`threshold`, `neg_threshold` (default `threshold - 0.15`, no 0.01 floor),
-`min_silence_ms` and `speech_pad_ms`, with the same meanings as above:
-
-```c
-struct transcribe_vad_iterator * it = NULL;
-transcribe_vad_iterator_init(512, NULL, &it);    /* info.frame_samples */
-
-/* after each stream_feed / stream_flush: */
-transcribe_vad_iterator_feed(it, transcribe_vad_probs(vad), r.n_probs);
-struct transcribe_vad_iterator_result ir;
-transcribe_vad_iterator_result_init(&ir);
-transcribe_vad_iterator_get_result(it, &ir);
-for (int i = 0; i < ir.n_events; ++i) {
-    struct transcribe_vad_event e;
-    transcribe_vad_event_init(&e);
-    transcribe_vad_iterator_get_event(it, i, &e); /* e.type START/END, e.sample */
-}
-transcribe_vad_iterator_free(it);
-```
-
-As upstream, the iterator does not emit END at end of input: close any open
-speech yourself at the real audio length.
-
 ## Backend
 
 `TRANSCRIBE_BACKEND_AUTO` resolves to the CPU for VAD models; a GPU backend can

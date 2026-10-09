@@ -15,8 +15,7 @@ files, this rewrites only the regions a doc explicitly delegates:
     ...
     <!-- /catalog -->
 
-Blocks: `downloads`, `perf machine=<slug>`, `stream-perf machine=<slug>`
-(VAD feed-call latency), `accuracy` (one table per
+Blocks: `downloads`, `perf machine=<slug>`, `accuracy` (one table per
 dataset split beyond the headline), `agreement` (language ID: headline
 accuracy and reference agreement per GGUF), `recipe` (the mechanical WER
 sentence from the headline rows), `pin` (licence, upstream and validation pins),
@@ -75,7 +74,7 @@ def as_bool(value: str | None, default: bool) -> bool:
 
 def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
     """The Download table: one row per published GGUF, plus the headline metric."""
-    want_metric = as_bool(attrs.get("metric"), record.get("role") != "vad")
+    want_metric = as_bool(attrs.get("metric"), True)
 
     rows_by_quant = common.headline_rows(record) if want_metric else {}
     target = common.headline(record)
@@ -93,33 +92,16 @@ def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
     body = []
     for item in record.get("downloads", []):
         url = common.download_url(record, item["filename"])
-        link = f"[{item['filename']}]({url})" if url else f"`{item['filename']}`"
-        cells = [item["quant"], link,
+        if not url:
+            raise RenderError("published_repo is null, so downloads have no URL")
+        cells = [item["quant"], f"[{item['filename']}]({url})",
                  common.fmt_size(item["size_bytes"])]
         if want_metric:
             cells.append(common.fmt_err(rows_by_quant.get(item["quant"])))
         body.append(cells)
     if not body:
         raise RenderError("no downloads")
-    table = common.render_table(header, aligns, body)
-    if not record.get("published_repo"):
-        table += ["", "Canonical publication pending; filenames above are local artifacts, "
-                  "not download links."]
-    return table
-
-
-def block_stream_perf(record: dict, attrs: dict[str, str]) -> list[str]:
-    machine = attrs.get("machine")
-    if not machine:
-        raise RenderError("stream-perf block needs machine=")
-    rows = common.stream_perf_rows(record, machine)
-    for attr, key in (("backends", "backend"), ("samples", "sample"), ("quants", "quant")):
-        if attrs.get(attr):
-            rows = [row for row in rows if row[key] in attrs[attr].split(",")]
-    try:
-        return common.render_stream_perf(record, machine, rows)
-    except ValueError as exc:
-        raise RenderError(str(exc)) from exc
+    return common.render_table(header, aligns, body)
 
 
 def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
@@ -154,7 +136,7 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
                 continue
             duration = next(r["sample_duration_s"] for r in present if r)
             cells = [backend.capitalize() if backend != "cpu" else "CPU",
-                     f"{sample} ({duration:.1f}s)"]
+                     f"{sample} ({duration:.1f}s)" if duration >= 1 else sample]
             for quant, row in zip(quants, present):
                 if row is None:
                     cells.append("-")
@@ -239,11 +221,10 @@ def prose_lines(text: object, what: str) -> list[str]:
 def block_intro(record: dict, attrs: dict[str, str]) -> list[str]:
     """Upstream pointer from the catalog, then the card spec's summary."""
     repo = record["upstream_repo"]
-    line = (f"Upstream: [`{repo}`]({common.upstream_url(record)}) at "
-            f"[`{record['upstream_commit']}`]"
-            f"({common.upstream_commit_url(record)}).")
-    return [line] + common.model_geometry(record) + [""] + prose_lines(
-        spec_for(record).get("summary"), "summary")
+    url = common.upstream_url(record)
+    line = (f"Upstream: [`{repo}`]({url}) at "
+            f"[`{record['upstream_commit']}`]({url}/commit/{record['upstream_commit']}).")
+    return [line, ""] + prose_lines(spec_for(record).get("summary"), "summary")
 
 
 def block_recipe(record: dict, attrs: dict[str, str]) -> list[str]:
@@ -278,11 +259,11 @@ def block_pin(record: dict, attrs: dict[str, str]) -> list[str]:
     display = (f"[{licence['display']}]({licence['link']})"
                if licence.get("link") else licence["display"])
     return [f"Licensed {display}. Ported from upstream commit "
-            f"[`{commit}`]({common.upstream_commit_url(record)}), pinned "
+            f"[`{commit}`]({common.upstream_url(record)}/commit/{commit}), pinned "
             f"{spec['pin_date']}. Validated against the {validation.get('reference', 'reference')} "
             f"reference at transcribe.cpp commit [`{validation['commit']}`]"
             f"(https://github.com/handy-computer/transcribe.cpp/tree/{validation['commit']}) "
-            f"on {validation['date']}."] + common.source_provenance(record)
+            f"on {validation['date']}."]
 
 
 def block_prose(record: dict, attrs: dict[str, str]) -> list[str]:
@@ -401,8 +382,7 @@ def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
         # on this family page links to its published repo.
         own = f"{name}.md"
         link = (f"[{own}]({own})" if (common.DOCS_DIR / own).exists() and own != attrs.get("_page")
-                else (f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})"
-                      if record.get("published_repo") else "Publication pending"))
+                else f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})")
         body.append([
             f"`{name}`", common.fmt_params(record["params"]), common.languages_summary(record),
             common.fmt_size(download["size_bytes"]) if download else "-",
@@ -438,8 +418,7 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
         else:
             key = variant
             title = record["display_name"]
-            link = (f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})"
-                    if record.get("published_repo") else "Publication pending")
+            link = f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})"
         group = groups.setdefault(key, {"title": title, "link": link, "variants": [], "caps": set()})
         # Variants named after the family sort first; third-party names
         # (orukeet under parakeet) go after them instead of leading the row.
@@ -457,8 +436,7 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
 
 BLOCKS = {"downloads": block_downloads, "perf": block_perf,
           "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy,
-          "recipe": block_recipe, "pin": block_pin, "agreement": block_agreement,
-          "stream-perf": block_stream_perf}
+          "recipe": block_recipe, "pin": block_pin, "agreement": block_agreement}
 
 
 # --------------------------------------------------------------------------

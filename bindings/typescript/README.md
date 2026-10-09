@@ -157,18 +157,11 @@ for (const s of segments) console.log(s.startSample, s.endSample);
 For live audio, `streamFeed(chunk)` returns the probabilities of the frames
 each chunk completes (`firstFrame` is the index of `probs[0]`), `streamFlush()`
 scores the zero-padded remainder and ends the stream, and `streamReset()` drops
-it. `VadIterator` (Silero's `VADIterator`, no model) turns those probabilities
-into START/END events; EOF does not emit END.
-
-```ts
-using it = new VadIterator(model.vadInfo.frameSamples);
-const u = await vad.streamFeed(chunk);
-for (const e of it.feed(u.probs).events) console.log(e.type, e.sample);
-```
+it.
 
 ### Resource management
 
-`TranscribeModel`, `Session`, `DiarizeSession`, `LangIdSession`, `VadSession`, `VadIterator`, and `Stream` all implement
+`TranscribeModel`, `Session`, `DiarizeSession`, `LangIdSession`, `VadSession`, and `Stream` all implement
 `Symbol.dispose`, so `using` works (TypeScript 5.2+ / Node 22+):
 
 ```ts

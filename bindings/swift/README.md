@@ -136,8 +136,7 @@ VAD models (`.vad`, e.g. Silero VAD; the whisper.cpp `ggml-silero-*.bin` files
 load too) score `vadInfo.frameSamples`-sample frames from a `VadSession`.
 `run` returns per-frame `probs` and speech `segments` in samples;
 `streamFeed` / `streamFlush` return the probabilities of the frames each call
-completed, starting at `firstFrame`. A `VadIterator` (no model) turns those
-into live START/END events; it does not emit END at end of input.
+completed, starting at `firstFrame`.
 
 ```swift
 let model = try Model(path: "silero-vad-v6.2-F32.gguf")
@@ -146,9 +145,8 @@ for s in try vad.run(pcm, options: VadOptions(threshold: 0.6)).segments {
     print(s.startSample, s.endSample)
 }
 
-let iterator = try VadIterator(frameSamples: try model.vadInfo.frameSamples)
 for chunk in micChunks {
-    for e in try iterator.feed(try vad.streamFeed(chunk).probs) { print(e.kind, e.sample) }
+    let probs = try vad.streamFeed(chunk).probs
 }
 ```
 

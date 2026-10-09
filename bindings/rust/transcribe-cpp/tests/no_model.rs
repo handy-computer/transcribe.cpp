@@ -48,9 +48,6 @@ fn abi_struct_sizes_are_live() {
         AbiStruct::VadParams,
         AbiStruct::VadResult,
         AbiStruct::VadSegment,
-        AbiStruct::VadIteratorParams,
-        AbiStruct::VadEvent,
-        AbiStruct::VadIteratorResult,
     ] {
         assert!(abi_struct_size(which) > 0, "{which:?} reported size 0");
     }
@@ -157,6 +154,5 @@ fn handles_are_send_sync() {
     assert_send::<transcribe_cpp::DiarizeSession>();
     assert_send::<transcribe_cpp::LangIdSession>();
     assert_send::<transcribe_cpp::VadSession>();
-    assert_send::<transcribe_cpp::VadIterator>();
     // Sessions are intentionally NOT Sync (single-threaded use).
 }

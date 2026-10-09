@@ -10,7 +10,7 @@
   },
   "upstream_repo": "snakers4/silero-vad",
   "upstream_commit": "5cd7945",
-  "published_repo": null,
+  "published_repo": "handy-computer/silero-vad-v6.2-gguf",
   "docs_page": "silero-vad-v6.2.md",
   "languages": [],
   "long_form_strategy": "chunked-unbounded",
@@ -29,21 +29,12 @@
   "accuracy_benchmarks": [],
   "headline_benchmark": null,
   "speed_benchmarks": [
-    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-128ms","sample_duration_s":0.128,"total_ms":0.07308,"xrt_compute":1751.51,"wall_ms":null,"xrt_wall":null,"load_ms":0.9,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"24fda783","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","feed_samples":2048,"frame_samples":512,"threads":1,"n_calls":1540,"warmup_calls":32,"median_ms":0.073916,"p95_ms":0.077,"thermal_gated":null},
-    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-32ms","sample_duration_s":0.032,"total_ms":0.060174,"xrt_compute":531.79,"wall_ms":null,"xrt_wall":null,"load_ms":0.9,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"24fda783","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","feed_samples":512,"frame_samples":512,"threads":1,"n_calls":6161,"warmup_calls":32,"median_ms":0.059125,"p95_ms":0.064042,"thermal_gated":null},
-    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-512ms","sample_duration_s":0.512,"total_ms":0.265079,"xrt_compute":1931.5,"wall_ms":null,"xrt_wall":null,"load_ms":0.9,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"24fda783","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","feed_samples":8192,"frame_samples":512,"threads":1,"n_calls":385,"warmup_calls":32,"median_ms":0.265292,"p95_ms":0.2775,"thermal_gated":null}
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"jfk","sample_duration_s":11.0,"total_ms":5.8,"xrt_compute":1886.05,"wall_ms":5.9,"xrt_wall":1860.41,"load_ms":0.8,"mel_ms":null,"encode_ms":4.6,"decode_ms":1.2,"engine_sha":"11b76d35","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss","sample_duration_s":197.1549375,"total_ms":100.7,"xrt_compute":1957.63,"wall_ms":102.1,"xrt_wall":1931.94,"load_ms":0.8,"mel_ms":null,"encode_ms":79.3,"decode_ms":21.4,"engine_sha":"11b76d35","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-128ms","sample_duration_s":0.128,"total_ms":0.0705,"xrt_compute":1816.82,"wall_ms":0.0755,"xrt_wall":1696.27,"load_ms":0.8,"mel_ms":null,"encode_ms":0.0561,"decode_ms":0.0144,"engine_sha":"11b76d35","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-32ms","sample_duration_s":0.032,"total_ms":0.0592,"xrt_compute":540.27,"wall_ms":0.0635,"xrt_wall":503.55,"load_ms":0.8,"mel_ms":null,"encode_ms":0.0555,"decode_ms":0.0037,"engine_sha":"11b76d35","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-512ms","sample_duration_s":0.512,"total_ms":0.2621,"xrt_compute":1953.56,"wall_ms":0.2691,"xrt_wall":1902.7,"load_ms":0.8,"mel_ms":null,"encode_ms":0.205,"decode_ms":0.0571,"engine_sha":"11b76d35","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","thermal_gated":null}
   ],
   "role": "vad",
-  "upstream_url": "https://github.com/snakers4/silero-vad",
-  "source_artifact": {
-    "package": "silero-vad",
-    "version": "6.2.3",
-    "filename": "silero_vad/data/silero_vad.jit",
-    "sha256": "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720",
-    "url": "https://pypi.org/project/silero-vad/6.2.3/"
-  },
-  "vad_info": {
-    "sample_rate": 16000,
-    "frame_samples": 512
-  }
+  "upstream_url": "https://github.com/snakers4/silero-vad"
 }

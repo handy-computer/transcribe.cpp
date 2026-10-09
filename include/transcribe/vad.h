@@ -10,7 +10,6 @@
  * transcribe_vad_run finds speech segments in a whole clip.
  * transcribe_vad_stream_feed returns probabilities for incoming audio.
  * transcribe_vad_stream_flush processes any leftover audio.
- * transcribe_vad_iterator turns those probabilities into START/END events.
  *
  * Usage: docs/vad.md. Threading and object lifetimes: docs/roles.md.
  */
@@ -177,104 +176,6 @@ TRANSCRIBE_API transcribe_status transcribe_vad_get_segment(const struct transcr
  * decode_ms: recurrent decoder. */
 TRANSCRIBE_API transcribe_status transcribe_vad_get_timings(const struct transcribe_vad_session * session,
                                                             struct transcribe_timings *           out);
-
-/* Turn speech probabilities into live START and END events.
- * Uses Silero's VADIterator rules for 16 kHz audio.
- * Does not own or reset a model. Use from one thread at a time. */
-struct transcribe_vad_iterator;
-
-struct transcribe_vad_iterator_params {
-    uint64_t struct_size; /* struct size in bytes; set by the init function */
-    /* Probability at or above which audio is classified as speech.
-     * Default: 0.5. Range: 0 to 1. */
-    double   threshold;
-    /* Probability below which ongoing speech is treated as silence.
-     * Default: -1, which uses threshold - 0.15 (unlike run, no 0.01 minimum).
-     * Any negative value uses this default; otherwise use 0 to threshold. */
-    double   neg_threshold;
-    /* How long to wait after silence starts before sending END.
-     * Default: 100 ms. Must be nonnegative. */
-    int32_t  min_silence_ms;
-    /* Extra audio to include before START and after END.
-     * Default: 30 ms. Must be nonnegative. */
-    int32_t  speech_pad_ms;
-};
-
-typedef enum transcribe_vad_event_type {
-    TRANSCRIBE_VAD_EVENT_START = 0, /* speech started */
-    TRANSCRIBE_VAD_EVENT_END   = 1, /* speech ended */
-} transcribe_vad_event_type;
-
-struct transcribe_vad_event {
-    uint64_t                  struct_size; /* struct size in bytes; set by the init function */
-    transcribe_vad_event_type type;        /* START or END */
-    /* Sample index where speech starts or ends in 16 kHz audio, including
-     * padding. This is the speech position, not when the event was reported.
-     * START cannot be below 0. END can extend past the processed audio.
-     * Padding from nearby events may overlap. */
-    int64_t                   sample;
-};
-
-struct transcribe_vad_iterator_result {
-    uint64_t struct_size; /* struct size in bytes; set by the init function */
-    int32_t  n_events;    /* number of events from the last feed, in the order detected */
-    /* Audio samples covered so far. Each probability counts as one full frame. */
-    int64_t  current_sample;
-    /* True while speech is active, including while waiting for silence to end it. */
-    bool     triggered;
-};
-
-/* Call each struct's init function before using it. */
-TRANSCRIBE_API void transcribe_vad_iterator_params_init(struct transcribe_vad_iterator_params * params);
-TRANSCRIBE_API void transcribe_vad_event_init(struct transcribe_vad_event * out);
-TRANSCRIBE_API void transcribe_vad_iterator_result_init(struct transcribe_vad_iterator_result * out);
-
-/* Create an iterator. Use the model's frame size from transcribe_vad_get_info;
- * frame_samples must be greater than 0. NULL params uses defaults.
- * Copies the settings and does not own a model. On failure, *out is NULL.
- * Free the iterator with transcribe_vad_iterator_free when done. */
-TRANSCRIBE_API transcribe_status transcribe_vad_iterator_init(int32_t frame_samples,
-                                                              const struct transcribe_vad_iterator_params * params,
-                                                              struct transcribe_vad_iterator **             out);
-/* Free the iterator. NULL does nothing. */
-TRANSCRIBE_API void              transcribe_vad_iterator_free(struct transcribe_vad_iterator * iterator);
-
-/*
- * Process speech probabilities in audio order and produce START/END events.
- * Feed any number at once. Each must be finite and between 0 and 1.
- *
- * Each successful feed replaces the previous events.
- * Feeding 0 probabilities clears events without advancing time;
- * probs may be NULL. Errors leave state and events unchanged.
- * A sample position too large to represent, including padding, returns
- * INVALID_ARG.
- *
- * Once silence starts, a probability at or above threshold cancels the
- * pending END. Values between the two thresholds do not cancel it
- * or produce END.
- *
- * There is no minimum or maximum speech length.
- * The end of the audio does not automatically produce END; there is no
- * finish function. Close unfinished speech yourself using the actual
- * audio length, not current_sample. The final frame counts as a full
- * frame, even if filled with zeros.
- * Reset discards active speech without producing END.
- */
-TRANSCRIBE_API transcribe_status transcribe_vad_iterator_feed(struct transcribe_vad_iterator * iterator,
-                                                              const float *                    probs,
-                                                              int32_t                          n_probs);
-
-/* Clear speech state and events, and start again at sample 0.
- * NULL does nothing. */
-TRANSCRIBE_API void              transcribe_vad_iterator_reset(struct transcribe_vad_iterator * iterator);
-/* Get the event count, audio position and whether speech is active. */
-TRANSCRIBE_API transcribe_status transcribe_vad_iterator_get_result(const struct transcribe_vad_iterator *  iterator,
-                                                                    struct transcribe_vad_iterator_result * out);
-/* Copy event i from the last feed. Out-of-range indices return INVALID_ARG
- * without changing out. The copy remains valid after feed, reset or free. */
-TRANSCRIBE_API transcribe_status transcribe_vad_iterator_get_event(const struct transcribe_vad_iterator * iterator,
-                                                                   int32_t                                i,
-                                                                   struct transcribe_vad_event *          out);
 
 #ifdef __cplusplus
 }

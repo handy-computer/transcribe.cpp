@@ -203,12 +203,6 @@ extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
             return sizeof(struct transcribe_vad_result);
         case TRANSCRIBE_ABI_VAD_SEGMENT:
             return sizeof(struct transcribe_vad_segment);
-        case TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS:
-            return sizeof(struct transcribe_vad_iterator_params);
-        case TRANSCRIBE_ABI_VAD_EVENT:
-            return sizeof(struct transcribe_vad_event);
-        case TRANSCRIBE_ABI_VAD_ITERATOR_RESULT:
-            return sizeof(struct transcribe_vad_iterator_result);
     }
     return 0;  // unknown id: "cannot verify", never a real size
 }
@@ -273,12 +267,6 @@ extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
             return alignof(struct transcribe_vad_result);
         case TRANSCRIBE_ABI_VAD_SEGMENT:
             return alignof(struct transcribe_vad_segment);
-        case TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS:
-            return alignof(struct transcribe_vad_iterator_params);
-        case TRANSCRIBE_ABI_VAD_EVENT:
-            return alignof(struct transcribe_vad_event);
-        case TRANSCRIBE_ABI_VAD_ITERATOR_RESULT:
-            return alignof(struct transcribe_vad_iterator_result);
     }
     return 0;
 }

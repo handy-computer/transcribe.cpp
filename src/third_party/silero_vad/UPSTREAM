@@ -2,5 +2,5 @@ Source: https://github.com/snakers4/silero-vad
 Version: silero-vad 6.2.3 (tag v6.2.3, commit 5cd7945)
 
 No model or Python source is vendored here. src/transcribe-vad.cpp translates
-get_speech_timestamps_from_probs and VADIterator from silero_vad/utils_vad.py.
+get_speech_timestamps_from_probs from silero_vad/utils_vad.py.
 LICENSE is copied verbatim from the pinned PyPI wheel.

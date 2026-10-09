@@ -2,12 +2,12 @@
 
 <!-- catalog:intro -->
 Upstream: [`snakers4/silero-vad`](https://github.com/snakers4/silero-vad) at [`5cd7945`](https://github.com/snakers4/silero-vad/commit/5cd7945).
-Model: 309,633 parameters. Input: 16,000 Hz mono; 512 samples/frame (32 ms).
 
 Voice activity detection by the Silero Team. Not a transcription model:
-the VAD role produces speech probabilities, offline speech segments,
-and streaming probabilities for live START/END events. CPU is the default
-backend for reference fidelity.
+the VAD role produces per-frame speech probabilities (offline or
+streaming) and offline speech segments. CPU is the default backend for
+reference fidelity. transcribe.cpp also loads whisper.cpp's
+`ggml-silero-v5.1.2.bin` / `v6.2.0.bin`.
 <!-- /catalog -->
 
 API and examples: [VAD usage](../vad.md). Architecture and validation:
@@ -15,59 +15,54 @@ API and examples: [VAD usage](../vad.md). Architecture and validation:
 
 <!-- catalog:pin -->
 Licensed MIT. Ported from upstream commit [`5cd7945`](https://github.com/snakers4/silero-vad/commit/5cd7945), pinned 2026-10-09. Validated against the silero-vad 6.2.3 (TorchScript, CPU, F32) reference at transcribe.cpp commit [`24fda783`](https://github.com/handy-computer/transcribe.cpp/tree/24fda783) on 2026-10-09.
-Source artifact: `silero-vad==6.2.3`, [`silero_vad/data/silero_vad.jit`](https://pypi.org/project/silero-vad/6.2.3/). SHA256: `e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720`.
 <!-- /catalog -->
+
+Source weights: `silero_vad/data/silero_vad.jit` from `silero-vad==6.2.3` on
+PyPI (SHA256 `e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720`).
 
 ## Downloads
 
 <!-- catalog:downloads metric=false -->
 | Quantization | Download | Size |
 | --- | --- | ---: |
-| F32          | `silero-vad-v6.2-F32.gguf` | 1 MB |
-
-Canonical publication pending; filenames above are local artifacts, not download links.
+| F32          | [silero-vad-v6.2-F32.gguf](https://huggingface.co/handy-computer/silero-vad-v6.2-gguf/resolve/main/silero-vad-v6.2-F32.gguf) | 1 MB |
 <!-- /catalog -->
 
-F32 only: this small detector does not need quantization. Until the canonical
-GGUF is uploaded, convert it locally:
+F32 only: the model has 309K parameters and does not need quantization. To
+convert it yourself:
 
 ```bash
 uv run --project scripts/envs/silero_vad scripts/convert-silero_vad.py
 ```
 
-### Compatibility
-
-<!-- catalog:prose field=compatibility -->
 The loader also accepts whisper.cpp's `ggml-silero-v5.1.2.bin` and
-`ggml-silero-v6.2.0.bin`, available from
-[ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad).
-These are third-party compatibility inputs, not this project's canonical
-GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load.
-<!-- /catalog -->
+`ggml-silero-v6.2.0.bin` from
+[ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad), so
+whisper.cpp users can keep their files. Their mixed F16/F32 weights are
+expanded to F32 at load.
 
-## Streaming latency
+## Performance
 
-The headline is single-frame feed-call latency. Larger frame-aligned chunks
-show amortized processing cost, not a reduction in audio collection time.
-These timings do not measure START/END detection delay, which also depends
-on the iterator's silence and padding policy.
+One CPU thread, `scripts/vad/bench.py`. The `-32ms` / `-128ms` / `-512ms`
+rows are live streaming: the time of one `transcribe_vad_stream_feed` call
+with that much audio, averaged over a pass of `love-loss.wav`. 32 ms is one
+frame, so it is the per-frame latency. The other rows are
+`transcribe_vad_run` over the whole clip.
 
-<!-- catalog:stream-perf machine=m4 -->
-Streaming feed-call wall latency; the 32 ms chunk is the headline. 128 ms and 512 ms chunks show feed-size amortization, not independent per-frame latency.
-Includes the Python ctypes/native API wall call; excludes model load and audio capture. One pass over the audio with preserved stream state. Warmup calls are excluded from the measured call statistics. Chunk duration is audio per feed, not the full clip duration.
-Median and p95 are measured per feed call. Amortized median/frame is median/feed divided by frames/feed, not a separately measured single-frame latency. Mean feed-call latency remains in `total_ms` metadata.
-Samples/frame: 512. Threads: 1. Warmup calls: 32. Source samples: `love-loss-32ms`, `love-loss-128ms`, `love-loss-512ms`.
+<!-- catalog:perf machine=m4 dp_ms=1 -->
+Compute latency (mel + encode + decode), speedup over realtime in parentheses; profile `vad-publication-v1`: mean over 10 iterations after 3 warmup.
 
-| Backend | GGUF | Chunk  | Frames/feed | Median/feed |    p95/feed | Amortized median/frame | Calls |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| cpu     | F32  | 32 ms  |           1 | 0.059125 ms | 0.064042 ms | 0.059125 ms | 6,161 |
-| cpu     | F32  | 128 ms |           4 | 0.073916 ms |    0.077 ms | 0.018479 ms | 1,540 |
-| cpu     | F32  | 512 ms |          16 | 0.265292 ms |   0.2775 ms | 0.0165807 ms |   385 |
+| Backend | Sample             |                 F32 |
+| ------- | ------------------ | ------------------: |
+| CPU     | love-loss-32ms     |  0.059 ms (540.27×) |
+| CPU     | love-loss-128ms    | 0.070 ms (1816.82×) |
+| CPU     | love-loss-512ms    | 0.262 ms (1953.56×) |
+| CPU     | jfk (11.0s)        |   5.8 ms (1886.05×) |
+| CPU     | love-loss (197.2s) | 100.7 ms (1957.63×) |
 
-Machine: `m4`.
-Measured at transcribe.cpp `24fda783` on 2026-10-09, profile `vad-publication-v1`.
+Apple M4: transcribe.cpp `11b76d35` on 2026-10-09.
 <!-- /catalog -->
 
 `AUTO` selects CPU for reference fidelity. Explicit GPU selection is available,
-but ggml-metal's half-precision staging of F32 operands can change probabilities;
-GPU timings are not part of this CPU publication profile.
+but ggml-metal's half-precision staging of F32 operands can change
+probabilities.

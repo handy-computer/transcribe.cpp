@@ -71,11 +71,8 @@ import type {
   Transcript,
   TranscribeOptions,
   TranscriptionResult,
-  VadEvent,
   VadFeedOptions,
   VadInfo,
-  VadIteratorOptions,
-  VadIteratorResult,
   VadOptions,
   VadResult,
   VadSegment,
@@ -1582,11 +1579,6 @@ export class LangIdSession {
 
 // ---- VadSession ------------------------------------------------------------
 
-const VAD_EVENT_TYPES: Record<number, VadEvent["type"]> = {
-  [g.TRANSCRIBE_VAD_EVENT_START]: "start",
-  [g.TRANSCRIBE_VAD_EVENT_END]: "end",
-};
-
 // Copy the last call's probabilities and segments out of the session; call
 // inside exclusive(), since the next compute replaces them.
 function readVadResult(n: Native, h: any): VadResult {
@@ -1700,73 +1692,6 @@ export class VadSession {
     if (this.#core.disposed) return;
     this.#untrack(this);
     this.#core.dispose(this.#n.F.vadSessionFree);
-  }
-
-  [Symbol.dispose](): void {
-    this.dispose();
-  }
-}
-
-/**
- * Silero's live START/END policy (VADIterator) over VAD probabilities. Owns no
- * model; calls are synchronous. EOF does not emit END: close unfinished
- * speech at the real input length yourself.
- */
-export class VadIterator {
-  #n: Native;
-  #h: any;
-
-  /** `frameSamples` normally comes from `model.vadInfo.frameSamples`. */
-  constructor(frameSamples: number, opts: VadIteratorOptions = {}) {
-    const n = loadLibrary();
-    const p: any = {};
-    n.F.vadIteratorParamsInit(p);
-    if (opts.threshold !== undefined) p.threshold = opts.threshold;
-    if (opts.negThreshold !== undefined) p.neg_threshold = opts.negThreshold;
-    if (opts.minSilenceMs !== undefined) p.min_silence_ms = opts.minSilenceMs;
-    if (opts.speechPadMs !== undefined) p.speech_pad_ms = opts.speechPadMs;
-    const out: any[] = [null];
-    check(n, n.F.vadIteratorInit(frameSamples, p, out), "opening vad iterator");
-    if (!out[0]) throw new TranscribeError("vad iterator init returned a null handle");
-    this.#n = n;
-    this.#h = out[0];
-  }
-
-  get #handle(): any {
-    if (!this.#h) throw new TranscribeError("vad iterator has been disposed");
-    return this.#h;
-  }
-
-  /** Consume the next probabilities, in order; returns this feed's events. */
-  feed(probs: Float32Array | readonly number[]): VadIteratorResult {
-    const n = this.#n;
-    const F = n.F;
-    const h = this.#handle;
-    const arr = probs instanceof Float32Array ? probs : Float32Array.from(probs);
-    check(n, F.vadIteratorFeed(h, arr, arr.length), "transcribe_vad_iterator_feed");
-    const r: any = {};
-    F.vadIteratorResultInit(r);
-    check(n, F.vadIteratorGetResult(h, r), "transcribe_vad_iterator_get_result");
-    const events: VadEvent[] = [];
-    for (let i = 0; i < r.n_events; i++) {
-      const e: any = {};
-      F.vadEventInit(e);
-      check(n, F.vadIteratorGetEvent(h, i, e), "transcribe_vad_iterator_get_event");
-      events.push({ type: VAD_EVENT_TYPES[e.type], sample: num(e.sample) });
-    }
-    return { events, currentSample: num(r.current_sample), triggered: r.triggered };
-  }
-
-  /** Reset time, hysteresis and events (no END is emitted). */
-  reset(): void {
-    this.#n.F.vadIteratorReset(this.#handle);
-  }
-
-  dispose(): void {
-    if (!this.#h) return;
-    const h = this.#h;
-    this.#h = null;
-    this.#n.F.vadIteratorFree(h);
   }
 
   [Symbol.dispose](): void {

@@ -1,7 +1,6 @@
 //! [`VadSession`] — the VAD role (where there is speech), from
-//! [`Model::vad_session`], plus the model-independent live policy
-//! [`VadIterator`]. Threading, lifetime, and compute-lock rules are those of
-//! [`Session`](crate::Session).
+//! [`Model::vad_session`]. Threading, lifetime, and compute-lock rules are
+//! those of [`Session`](crate::Session).
 
 use std::os::raw::c_void;
 use std::sync::atomic::AtomicBool;
@@ -277,150 +276,6 @@ impl VadSession {
     }
 }
 
-/// Options for a [`VadIterator`] (Silero `VADIterator`).
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct VadIteratorOptions {
-    /// Speech starts at `p >= threshold` (default 0.5). `[0, 1]`.
-    pub threshold: f64,
-    /// Inside speech, `p < neg_threshold` is silence. Negative (default -1)
-    /// means `threshold - 0.15`.
-    pub neg_threshold: f64,
-    /// Default 100.
-    pub min_silence_ms: i32,
-    /// Default 30.
-    pub speech_pad_ms: i32,
-}
-
-impl Default for VadIteratorOptions {
-    fn default() -> Self {
-        VadIteratorOptions {
-            threshold: 0.5,
-            neg_threshold: -1.0,
-            min_silence_ms: 100,
-            speech_pad_ms: 30,
-        }
-    }
-}
-
-/// Whether a [`VadEvent`] opens or closes speech.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum VadEventKind {
-    Start,
-    End,
-}
-
-/// A speech boundary from [`VadIterator::feed`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct VadEvent {
-    pub kind: VadEventKind,
-    /// Boundary in 16 kHz samples (padded), not the detection time.
-    pub sample: i64,
-}
-
-/// The live speech/silence policy over per-frame probabilities (e.g. from
-/// [`VadSession::stream_feed`]). Owns no model. End of input does NOT emit an
-/// END event.
-pub struct VadIterator {
-    ptr: *mut sys::transcribe_vad_iterator,
-}
-
-impl std::fmt::Debug for VadIterator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VadIterator").finish_non_exhaustive()
-    }
-}
-
-// SAFETY: plain heap state, no model; `&mut self` on the mutating calls keeps
-// use to one thread at a time. Deliberately NOT Sync.
-unsafe impl Send for VadIterator {}
-
-impl Drop for VadIterator {
-    fn drop(&mut self) {
-        unsafe { sys::transcribe_vad_iterator_free(self.ptr) };
-    }
-}
-
-impl VadIterator {
-    /// `frame_samples` comes from [`VadInfo::frame_samples`].
-    pub fn new(frame_samples: i32, options: &VadIteratorOptions) -> Result<VadIterator> {
-        let mut params: sys::transcribe_vad_iterator_params = unsafe { std::mem::zeroed() };
-        unsafe { sys::transcribe_vad_iterator_params_init(&mut params) };
-        params.threshold = options.threshold;
-        params.neg_threshold = options.neg_threshold;
-        params.min_silence_ms = options.min_silence_ms;
-        params.speech_pad_ms = options.speech_pad_ms;
-
-        let mut out: *mut sys::transcribe_vad_iterator = std::ptr::null_mut();
-        check(
-            unsafe { sys::transcribe_vad_iterator_init(frame_samples, &params, &mut out) },
-            "vad iterator init",
-        )?;
-        debug_assert!(!out.is_null());
-        Ok(VadIterator { ptr: out })
-    }
-
-    /// Consume sequential probabilities (each in `[0, 1]`) and return the
-    /// events they produced, in detection order. A failure leaves the state
-    /// intact.
-    pub fn feed(&mut self, probs: &[f32]) -> Result<Vec<VadEvent>> {
-        let n = clamp_len(probs.len())?;
-        check(
-            unsafe { sys::transcribe_vad_iterator_feed(self.ptr, probs.as_ptr(), n) },
-            "vad iterator feed",
-        )?;
-        let n_events = self.raw_result().n_events;
-        Ok((0..n_events)
-            .map(|i| {
-                let mut raw: sys::transcribe_vad_event = unsafe { std::mem::zeroed() };
-                unsafe { sys::transcribe_vad_event_init(&mut raw) };
-                let _ = unsafe { sys::transcribe_vad_iterator_get_event(self.ptr, i, &mut raw) };
-                let kind = match raw.type_ {
-                    sys::transcribe_vad_event_type::TRANSCRIBE_VAD_EVENT_START => {
-                        VadEventKind::Start
-                    }
-                    // The library emits only START and END.
-                    _ => VadEventKind::End,
-                };
-                VadEvent {
-                    kind,
-                    sample: raw.sample,
-                }
-            })
-            .collect())
-    }
-
-    /// Reset time and hysteresis; active speech is dropped without an END.
-    pub fn reset(&mut self) {
-        unsafe { sys::transcribe_vad_iterator_reset(self.ptr) };
-    }
-
-    /// Probabilities consumed so far times `frame_samples`.
-    pub fn current_sample(&self) -> i64 {
-        self.raw_result().current_sample
-    }
-
-    /// Whether speech is active (possibly awaiting silence).
-    pub fn triggered(&self) -> bool {
-        self.raw_result().triggered
-    }
-
-    fn raw_result(&self) -> sys::transcribe_vad_iterator_result {
-        let mut raw: sys::transcribe_vad_iterator_result = unsafe { std::mem::zeroed() };
-        unsafe { sys::transcribe_vad_iterator_result_init(&mut raw) };
-        let _ = unsafe { sys::transcribe_vad_iterator_get_result(self.ptr, &mut raw) };
-        raw
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,23 +326,6 @@ mod tests {
                 p.min_silence_ms,
                 p.speech_pad_ms,
                 p.max_speech_ms
-            )
-        );
-        let mut p: sys::transcribe_vad_iterator_params = unsafe { std::mem::zeroed() };
-        unsafe { sys::transcribe_vad_iterator_params_init(&mut p) };
-        let d = VadIteratorOptions::default();
-        assert_eq!(
-            (
-                d.threshold,
-                d.neg_threshold,
-                d.min_silence_ms,
-                d.speech_pad_ms
-            ),
-            (
-                p.threshold,
-                p.neg_threshold,
-                p.min_silence_ms,
-                p.speech_pad_ms
             )
         );
     }

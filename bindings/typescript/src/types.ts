@@ -414,29 +414,3 @@ export interface VadResult {
   /** Speech segments; run only, empty after a feed or flush. */
   segments: VadSegment[];
 }
-
-export interface VadIteratorOptions {
-  /** Speech starts at p >= threshold (default 0.5). */
-  threshold?: number;
-  /** Inside speech, p < negThreshold is silence (default threshold - 0.15). */
-  negThreshold?: number;
-  /** Default 100. */
-  minSilenceMs?: number;
-  /** Default 30. */
-  speechPadMs?: number;
-}
-
-/** A speech boundary in 16 kHz samples (not the time it was detected). */
-export interface VadEvent {
-  type: "start" | "end";
-  sample: number;
-}
-
-export interface VadIteratorResult {
-  /** Events from this feed, in detection order. */
-  events: VadEvent[];
-  /** Probabilities consumed so far * frameSamples. */
-  currentSample: number;
-  /** Speech is active (possibly awaiting silence). */
-  triggered: boolean;
-}

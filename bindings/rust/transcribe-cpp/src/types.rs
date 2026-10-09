@@ -334,9 +334,6 @@ pub enum AbiStruct {
     VadParams,
     VadResult,
     VadSegment,
-    VadIteratorParams,
-    VadEvent,
-    VadIteratorResult,
 }
 
 impl AbiStruct {
@@ -372,9 +369,6 @@ impl AbiStruct {
             AbiStruct::VadParams => A::TRANSCRIBE_ABI_VAD_PARAMS,
             AbiStruct::VadResult => A::TRANSCRIBE_ABI_VAD_RESULT,
             AbiStruct::VadSegment => A::TRANSCRIBE_ABI_VAD_SEGMENT,
-            AbiStruct::VadIteratorParams => A::TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS,
-            AbiStruct::VadEvent => A::TRANSCRIBE_ABI_VAD_EVENT,
-            AbiStruct::VadIteratorResult => A::TRANSCRIBE_ABI_VAD_ITERATOR_RESULT,
         }
     }
 }

@@ -20,8 +20,8 @@ int transcribe_cli::run_vad_file(const cli_args &           args,
                                  const std::vector<float> & pcm,
                                  double                     duration_s,
                                  std::ofstream *            output) {
-    // The CLI drives the offline path only; streaming probabilities and the
-    // live iterator are library APIs (docs/vad.md).
+    // The CLI drives the offline path only; streaming is a library API
+    // (docs/vad.md).
     if (args.stream_chunk_ms > 0) {
         std::fprintf(stderr, "stream: the VAD path has no streaming CLI mode; drop --stream-chunk-ms\n");
         transcribe_model_free(model);

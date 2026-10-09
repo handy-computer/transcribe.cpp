@@ -630,34 +630,3 @@ def test_langid_allowed_kept_alive_and_empty_rejected(fake, monkeypatch):
     with pytest.raises(t.InvalidArgument):
         lid.run(PCM, allowed=[])
     assert len(seen) == 2  # rejected before the native call
-
-
-# --- VadSession -----------------------------------------------------------------
-
-
-def test_vad_busy_while_stream_active(fake, native, monkeypatch):
-    # The VAD stream is per-session native state, not an ASR stream: it takes
-    # no lease, but its compute calls raise Busy under one like langid run().
-    m = fake.model()
-    s, vad = fake.session(m), fake.session(m, cls=t.VadSession)
-    calls: list = []
-    monkeypatch.setattr(t._lib, "transcribe_vad_run", lambda *a: calls.append("run") or 0)
-    monkeypatch.setattr(t._lib, "transcribe_vad_stream_feed",
-                        lambda *a: calls.append("feed") or 0)
-    monkeypatch.setattr(t._lib, "transcribe_vad_stream_flush",
-                        lambda *a: calls.append("flush") or 0)
-    monkeypatch.setattr(t._lib, "transcribe_vad_stream_reset",
-                        lambda *a: calls.append("reset"))
-    monkeypatch.setattr(t._lib, "transcribe_vad_get_result", lambda h, out: 0)
-    stream = s.stream()
-    for call, what in ((lambda: vad.run(PCM), "run"), (lambda: vad.feed(PCM), "feed"),
-                       (vad.flush, "flush")):
-        with pytest.raises(t.Busy) as ei:
-            call()
-        assert str(ei.value) == ("a stream is active on this model; "
-                                 f"finish or drop it before vad {what}()")
-    assert calls == [] and not m._compute_lock.locked()
-    vad.reset()  # dropping VAD state never waits on the ASR stream
-    stream.finalize()
-    assert vad.feed(PCM).probs == () and m._stream_owner is None
-    assert calls == ["reset", "feed"]

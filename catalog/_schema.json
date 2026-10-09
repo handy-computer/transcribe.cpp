@@ -28,25 +28,6 @@
       "enum": ["asr", "diarize", "langid", "vad"],
       "description": "The role the model is published for (transcribe_model_roles). Absent means asr."
     },
-    "vad_info": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "sample_rate",
-        "frame_samples"
-      ],
-      "description": "VAD frame geometry read from the GGUF, not authored benchmark metadata.",
-      "properties": {
-        "sample_rate": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "frame_samples": {
-          "type": "integer",
-          "minimum": 1
-        }
-      }
-    },
     "display_name": {
       "type": "string"
     },
@@ -79,50 +60,15 @@
       "type": "string",
       "description": "The upstream model this port derives from."
     },
+    "upstream_url": {
+      "type": "string",
+      "pattern": "^https://",
+      "description": "Upstream home when it is not the Hugging Face repo upstream_repo names (e.g. GitHub). Cards link it and fetch no HF model card."
+    },
     "upstream_commit": {
       "type": "string",
       "pattern": "^[0-9a-f]{7}$",
       "description": "The upstream revision used to produce the published GGUFs, as the 7-character short SHA."
-    },
-    "upstream_url": {
-      "type": "string",
-      "pattern": "^https://github\\.com/[^/\\s]+/[^/\\s]+/?$",
-      "description": "Optional upstream GitHub repository URL; upstream_commit remains its short Git SHA."
-    },
-    "source_artifact": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "package",
-        "version",
-        "filename",
-        "sha256",
-        "url"
-      ],
-      "properties": {
-        "package": {
-          "type": "string",
-          "minLength": 1
-        },
-        "version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "filename": {
-          "type": "string",
-          "minLength": 1
-        },
-        "sha256": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "url": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^https://[^\\s]+$"
-        }
-      }
     },
     "docs_page": {
       "type": "string",
@@ -137,7 +83,7 @@
       "items": {
         "type": "string"
       },
-      "description": "Languages this port handles, in the spellings it advertises. Only role vad may leave this empty."
+      "description": "Languages this port transcribes, in the spellings it advertises. Empty only for role vad."
     },
     "language_tag_form": {
       "enum": ["bare-bcp47","locale","mixed"],
@@ -531,41 +477,13 @@
             "type": "string",
             "description": "Sample id; the set is open, so a new sample means new rows, not a schema change."
           },
-          "feed_samples": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "frame_samples": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "threads": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "n_calls": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "warmup_calls": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "median_ms": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "p95_ms": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
           "sample_duration_s": {
             "type": "number",
-            "description": "Carried per cell so nothing downstream assumes a fixed sample set or has to look the duration up. For VAD, this is feed_samples / sample_rate (chunk duration), not the whole clip."
+            "description": "Carried per cell so nothing downstream assumes a fixed sample set or has to look the duration up."
           },
           "total_ms": {
             "type": ["number","null"],
-            "description": "mel + encode + decode, mean over iters after warmup. null for legacy rows where only rounded xRT survives. For VAD, the mean native stream_feed wall-call time over full measured calls."
+            "description": "mel + encode + decode, mean over iters after warmup. null for legacy rows where only rounded xRT survives."
           },
           "xrt_compute": {
             "type": "number",
@@ -616,38 +534,6 @@
       }
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "required": [
-          "role"
-        ],
-        "properties": {
-          "role": {
-            "const": "vad"
-          }
-        }
-      },
-      "then": {
-        "required": ["vad_info"],
-        "properties": {
-          "accuracy_benchmarks": {
-            "maxItems": 0
-          },
-          "headline_benchmark": {
-            "type": "null"
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "languages": {
-            "minItems": 1
-          }
-        }
-      }
-    }
-  ],
   "$defs": {
     "capability": {
       "type": "object",
@@ -688,5 +574,7 @@
         }
       ]
     }
-  }
+  },
+  "if": {"required": ["role"], "properties": {"role": {"const": "vad"}}},
+  "else": {"properties": {"languages": {"minItems": 1}}}
 }

@@ -164,8 +164,7 @@ A VAD model gets `VadSession` from `model.vad_session()` (Python, Rust),
 `vad_info` / `vadInfo` (sample rate, frame size). `run(pcm, options)` returns a
 copied-out result: per-frame probabilities and speech segments. Stream feed /
 flush return the probabilities of the frames they completed and `first_frame`;
-stream reset drops the stream. `VadIterator` turns probabilities into live
-START / END events; it owns no model and takes no lock.
+stream reset drops the stream.
 
 Every VAD call takes the model-wide compute lock for that call only. A VAD
 stream is session state, not a stream lease, so ASR work on the same model may

@@ -65,8 +65,8 @@ THE SOFTWARE.
 
 ## Silero VAD
 
-The speech-segment and live-iterator policies, translated from silero-vad's
-`utils_vad.py`, are compiled into the native artifact.
+The speech-segment policy, translated from silero-vad's
+`utils_vad.py`, is compiled into the native artifact.
 
 ```
 MIT License

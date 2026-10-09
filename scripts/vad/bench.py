@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Measure the VAD publication profile with bare native stream_feed calls.
-
-    uv run --project scripts/envs/silero_vad scripts/vad/bench.py --profile \
-        --library build-vad-review-shared/src/libtranscribe.dylib
-
-Each cell is one full love-loss clip pass, in exact 512/2048/8192-sample
-feeds (32/128/512 ms). Only full feeds are timed; the partial tail is
-omitted as specified by the profile. Warmup uses 32 feeds, then the stream
-is reset outside timing. Recurrent state is
-preserved throughout the measured pass. PCM, pointers and handles are
-prepared beforehand; no loading, reset, result capture or tuple copying is
-timed. total_ms is mean wall latency per native feed, not full-clip time.
-p50 is the ordinary median; p95 uses nearest rank (ceil(0.95 * n)).
 """
+bench.py - this machine's VAD publication speed cells
+(catalog/_benchmark_profiles.json) through the Python binding:
+tools/transcribe-bench is ASR-only.
+
+  uv run --project scripts/envs/silero_vad scripts/vad/bench.py \\
+      --library build-shared/src/libtranscribe.dylib
+  uv run scripts/catalog/ingest_perf.py
+
+Two kinds of cell, both native encode + decode time (total_ms):
+  <clip>       transcribe_vad_run over the whole of samples/<clip>.wav
+  <clip>-<N>ms one pass of transcribe_vad_stream_feed over the clip in N ms
+               chunks; the time per feed call, averaged over the pass
+Writes one bench-driver report (scripts/bench/run.py's shape) per backend to
+reports/perf/<machine-slug>/.
+"""
+
 from __future__ import annotations
 
 import argparse
-import ctypes
 import importlib.util
 import json
-import math
 import os
 import re
 import statistics
@@ -27,169 +28,138 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-SAMPLE_RE = re.compile(r"^(?P<clip>.+)-(?P<ms>32|128|512)ms$")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+STREAM_RE = re.compile(r"^(?P<clip>.+)-(?P<ms>\d+)ms$")
 
 
 def bench_driver():
-    spec = importlib.util.spec_from_file_location("vad_bench_driver", REPO / "scripts/bench/run.py")
+    """scripts/bench/run.py, for its profiles and machine detection."""
+    spec = importlib.util.spec_from_file_location(
+        "bench_driver", REPO_ROOT / "scripts" / "bench" / "run.py")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    sys.modules[spec.name] = module  # its dataclasses look their module up
     spec.loader.exec_module(module)
     return module
 
 
-def summarize(latencies_ms: list[float]) -> dict:
-    if not latencies_ms:
-        raise ValueError("a feed measurement must contain at least one call")
-    ordered = sorted(latencies_ms)
-    return {"mean": round(statistics.fmean(ordered), 6),
-            "median": round(statistics.median(ordered), 6),
-            "p95": round(ordered[math.ceil(0.95 * len(ordered)) - 1], 6)}
-
-
-def prepare_feeds(pcm, feed_samples: int):
-    """Return owning contiguous PCM and preloaded pointers for full feeds."""
-    import numpy as np
-
-    n_calls = len(pcm) // feed_samples
-    if not n_calls:
-        raise ValueError("benchmark clip has no complete feed")
-    audio = np.array(pcm[:n_calls * feed_samples], dtype=np.float32, order="C", copy=True)
-    pointers = [ctypes.cast(audio.ctypes.data + offset * audio.itemsize,
-                            ctypes.POINTER(ctypes.c_float))
-                for offset in range(0, len(audio), feed_samples)]
-    return audio, pointers
-
-
-def measure_feeds(feed, handle, pointers, feed_samples: int, warmup: int, reset) -> list[float]:
-    for index in range(warmup):
-        status = feed(handle, pointers[index % len(pointers)], feed_samples)
-        if status:
-            raise RuntimeError(f"transcribe_vad_stream_feed warmup: status {status}")
-    reset(handle)
-    timings = []
-    for pointer in pointers:
-        start = time.perf_counter_ns()
-        status = feed(handle, pointer, feed_samples)
-        elapsed = time.perf_counter_ns() - start
-        if status:
-            raise RuntimeError(f"transcribe_vad_stream_feed: status {status}")
-        timings.append(elapsed / 1_000_000)
-    return timings
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--profile", nargs="?", const="vad-publication-v1", default="vad-publication-v1")
-    parser.add_argument("--variant", default="silero-vad-v6.2")
-    parser.add_argument("--library", type=Path)
-    args = parser.parse_args(argv)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--variant", default="silero-vad-v6.2")
+    p.add_argument("--library", type=Path, help="a shared libtranscribe (TRANSCRIBE_LIBRARY)")
+    args = p.parse_args(argv)
+
     driver = bench_driver()
     profiles = driver.benchmark_profiles
-    record = driver.catalog_common.load_record(args.variant)
-    profile_id, profile = profiles.profile_for(record, args.profile)
-    if profile_id != args.profile or profile.get("role") != "vad":
-        parser.error("the variant must be governed by the requested VAD profile")
     machine = driver.detect_machine()
+    record = driver.catalog_common.load_record(args.variant)
+    profile_id, profile = profiles.profile_for(record)
     target = profiles.target_for_machine(profile, machine["slug"])
     if target is None:
-        parser.error(f"machine {machine['slug']!r} is not a target in {profile_id}")
-    warmup = int(profile["speed"]["warmup_calls"])
-    repeat = int(profile["speed"]["iterations"])
-    threads = int(profile["speed"].get("threads", target.get("threads", 1)))
-    if (warmup, repeat, threads) != (32, 1, 1):
-        parser.error("VAD publication requires warmup=32, iterations=1, threads=1")
-    cells = [cell for cell in profiles.apply_exceptions(
-        record, "speed", profiles.expected_speed(record, profile))
-        if cell["machine"] == target["machine"]]
-    if not cells or any(cell["backend"] != "cpu" for cell in cells):
-        parser.error("this driver requires CPU speed cells")
-    matches = {cell["sample"]: SAMPLE_RE.fullmatch(cell["sample"]) for cell in cells}
-    if any(match is None or match["clip"] != "love-loss" for match in matches.values()):
-        parser.error("VAD publication samples must be love-loss-{32,128,512}ms")
-    sample_rate = int(profile["speed"]["sample_rate"])
-    feeds = profile["speed"]["feed_samples"]
-    if any(feeds[name] != int(match["ms"]) * sample_rate // 1000
-           for name, match in matches.items()):
-        parser.error("profile feed_samples does not match the sample IDs")
+        p.error(f"machine {machine['slug']!r} is not a target in profile {profile_id}")
+    cells = [cell for cell in profiles.expected_speed(record, profile)
+             if cell["machine"] == target["machine"]]
+    quants = {cell["quant"] for cell in cells}
+    ggufs = [REPO_ROOT / "models" / args.variant / item["filename"]
+             for item in record["downloads"] if item["quant"] in quants]
+    backends = list(dict.fromkeys(cell["backend"] for cell in cells))
+    samples = list(dict.fromkeys(cell["sample"] for cell in cells))
+    warmup, repeat = int(profile["speed"]["warmup"]), int(profile["speed"]["iterations"])
 
-    if args.library:
+    if args.library is not None:
         os.environ["TRANSCRIBE_LIBRARY"] = str(args.library.resolve())
-    sys.path.insert(0, str(REPO / "bindings/python/src"))
+    sys.path.insert(0, str(REPO_ROOT / "bindings" / "python" / "src"))
+    import numpy as np
     import soundfile as sf
     import transcribe_cpp as t
-    from transcribe_cpp import _generated
 
-    lib = ctypes.CDLL(t.library_path())
-    _generated.configure(lib)
-    commit = lib.transcribe_version_commit().decode("ascii")
-    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
-        parser.error(f"native library does not report a build SHA: {commit!r}")
-    sample_path = REPO / "samples/love-loss.wav"
-    pcm, sr = sf.read(str(sample_path), dtype="float32")
-    if sr != sample_rate or pcm.ndim != 1:
-        parser.error("love-loss.wav must be 16 kHz mono")
-    if len(pcm) != profile["speed"]["source_samples"]:
-        parser.error("love-loss.wav does not have the profile's source_samples")
-    if not profile["speed"].get("full_calls_only"):
-        parser.error("VAD publication requires full_calls_only")
-    # Keep all owning buffers alive until every native call finishes.
-    prepared = {name: prepare_feeds(pcm, feeds[name]) for name in matches}
-    runs = []
-    for item in record["downloads"]:
-        model_cells = [cell for cell in cells if cell["quant"] == item["quant"]]
-        if not model_cells:
-            continue
-        gguf = REPO / "models" / args.variant / item["filename"]
-        start = time.perf_counter()
-        with t.Model(str(gguf), backend="cpu") as model:
-            load_ms = (time.perf_counter() - start) * 1000
-            info = model.vad_info
-            native_info = {"sample_rate": info.sample_rate, "frame_samples": info.frame_samples}
-            if native_info != record["vad_info"] or native_info != {
-                    "sample_rate": sample_rate, "frame_samples": profile["speed"]["frame_samples"]}:
-                parser.error("native VAD info does not match the record and publication profile")
-            with model.vad_session(n_threads=threads) as session:
-                handle = session._h
-                for cell in model_cells:
-                    driver.cooldown_wait(float(target.get("cooldown_tctl_c", 0)), 300.0, 10.0)
-                    sample = cell["sample"]
-                    audio, pointers = prepared[sample]
-                    feed_samples = feeds[sample]
-                    lib.transcribe_vad_stream_reset(handle)
-                    latencies = measure_feeds(lib.transcribe_vad_stream_feed, handle, pointers,
-                                             feed_samples, warmup, lib.transcribe_vad_stream_reset)
-                    runs.append({
-                        "model_path": str(gguf.relative_to(REPO)), "sample": sample,
-                        "sample_path": str(sample_path.relative_to(REPO)),
-                        "sample_duration_s": feed_samples / info.sample_rate,
-                        "clip_duration_s": len(pcm) / info.sample_rate,
-                        "omitted_tail_samples": len(pcm) - len(audio),
-                        "backend": "cpu", "threads": threads,
-                        "feed_samples": feed_samples, "frame_samples": info.frame_samples,
-                        "n_calls": len(pointers), "warmup_calls": warmup,
-                        "load_ms": round(load_ms, 6),
-                        "per_iter": [{"total_ms": round(value, 6)} for value in latencies],
-                        "summary": {"total_ms": summarize(latencies)},
-                    })
-                    print(f"{gguf.name} {sample}: {runs[-1]['summary']['total_ms']}", flush=True)
+    timestamp = driver.now_utc_iso()
+    commit = t.native_commit()
     name = f"{args.variant}-publication"
-    out = REPO / "reports/perf" / machine["slug"] / f"{driver.slugify(name)}_{args.variant}_cpu.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({
-        "schema": "transcribe-bench-driver-v1", "timestamp": driver.now_utc_iso(),
-        "name": name, "publication_profile": profile_id, "machine": machine,
-        "git_sha": commit, "variant": args.variant, "backend": "cpu",
-        "iters": repeat, "warmup": warmup, "tool": "scripts/vad/bench.py",
-        "library": t.library_path(),
-        "timing": "wall latency per bare native stream_feed; excludes result capture",
-        "percentiles": "median: ordinary median; p95: nearest rank ceil(0.95*n)",
-        "runs": runs,
-    }, indent=2) + "\n")
-    print(f"wrote {out}")
+    for backend in backends:
+        runs = []
+        for gguf in ggufs:
+            t0 = time.perf_counter()
+            model = t.Model(str(gguf), backend=backend)
+            load_ms = (time.perf_counter() - t0) * 1000
+            vad = model.vad_session(n_threads=1)
+            for sample in samples:
+                stream = STREAM_RE.match(sample)
+                clip = stream["clip"] if stream else sample
+                sample_path = REPO_ROOT / "samples" / f"{clip}.wav"
+                pcm, sr = sf.read(str(sample_path), dtype="float32")
+                assert sr == 16000 and pcm.ndim == 1
+                audio = np.ascontiguousarray(pcm)
+                if stream:
+                    feed = int(stream["ms"]) * 16
+                    chunks = [audio[i:i + feed] for i in range(0, len(audio) - feed + 1, feed)]
+                    duration_s = feed / 16000
+
+                    def once(chunks=chunks):
+                        # Mean per-feed time (ms) over one pass of the clip.
+                        enc = dec = wall = 0.0
+                        vad.reset()
+                        for chunk in chunks:
+                            w0 = time.perf_counter()
+                            vad.feed(chunk)
+                            wall += time.perf_counter() - w0
+                            tm = vad.timings
+                            enc += tm.encode_ms
+                            dec += tm.decode_ms
+                        n = len(chunks)
+                        return enc / n, dec / n, wall * 1000 / n
+                else:
+                    duration_s = len(audio) / 16000
+
+                    def once(audio=audio):
+                        w0 = time.perf_counter()
+                        vad.run(audio)
+                        wall = (time.perf_counter() - w0) * 1000
+                        tm = vad.timings
+                        return tm.encode_ms, tm.decode_ms, wall
+                for _ in range(warmup):
+                    once()
+                per_iter = []
+                for _ in range(repeat):
+                    enc, dec, wall = once()
+                    per_iter.append({"encode_ms": enc, "decode_ms": dec,
+                                     "total_ms": enc + dec, "wall_ms": wall})
+                runs.append({
+                    "model_path": str(gguf.relative_to(REPO_ROOT)),
+                    "sample": sample,
+                    "sample_path": str(sample_path.relative_to(REPO_ROOT)),
+                    "sample_duration_s": duration_s,
+                    "backend": model.backend,
+                    "threads": 1,
+                    "load_ms": round(load_ms, 1),
+                    "per_iter": per_iter,
+                    "summary": {field: {"mean": statistics.fmean(it[field] for it in per_iter)}
+                                for field in ("encode_ms", "decode_ms", "total_ms", "wall_ms")},
+                })
+                print(f"{gguf.name:32} {backend:4} {sample:10} mean "
+                      f"{runs[-1]['summary']['total_ms']['mean']:9.4f} ms", flush=True)
+            vad.close()
+            model.close()
+
+        out = REPO_ROOT / "reports" / "perf" / machine["slug"] / \
+            f"{driver.slugify(name)}_{args.variant}_{backend}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({
+            "schema": "transcribe-bench-driver-v1",
+            "timestamp": timestamp,
+            "name": name,
+            "publication_profile": profile_id,
+            "machine": machine,
+            "git_sha": commit if commit != "unknown" else driver.get_git_sha(REPO_ROOT),
+            "variant": args.variant,
+            "backend": backend,
+            "iters": repeat,
+            "warmup": warmup,
+            "tool": "scripts/vad/bench.py",
+            "runs": runs,
+        }, indent=2) + "\n")
+        print(f"wrote {out}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

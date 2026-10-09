@@ -66,7 +66,6 @@ Itn = Literal["default", "off", "on"]
 Diarize = Literal["default", "off", "on"]
 SortformerPreset = Literal["default", "very_high_latency", "high_latency", "low_latency"]
 CommitPolicy = Literal["auto", "on_finalize", "stable_prefix"]
-VadEventType = Literal["start", "end"]
 Feature = Literal[
     "initial_prompt", "temperature_fallback", "long_form",
     "cancellation", "pnc", "itn", "diarization",
@@ -88,9 +87,6 @@ __all__ = [
     "VadInfo",
     "VadResult",
     "VadSegment",
-    "VadIterator",
-    "VadEvent",
-    "VadEventType",
     "Role",
     "Result",
     "Segment",
@@ -652,14 +648,6 @@ class VadResult:
     probs: tuple[float, ...]
     first_frame: int
     segments: tuple[VadSegment, ...]
-
-
-@dataclass(frozen=True)
-class VadEvent:
-    """A VadIterator boundary, in 16 kHz samples (not detection time)."""
-
-    type: VadEventType
-    sample: int
 
 
 @dataclass(frozen=True)
@@ -2107,15 +2095,9 @@ class LangIdSession(_SessionBase):
         return _timings_from(tm)
 
 
-_VAD_EVENT_TYPES = {
-    _generated.TRANSCRIBE_VAD_EVENT_START: "start",
-    _generated.TRANSCRIBE_VAD_EVENT_END: "end",
-}
-
-
 def _floats_or_empty(values):
     """Like _pcm_to_carray, but an empty input is ``(None, 0)``: the VAD
-    stream feed and the iterator feed accept zero samples."""
+    stream feed accepts zero samples."""
     if hasattr(values, "__len__") and len(values) == 0:
         return None, 0
     return _pcm_to_carray(values)
@@ -2247,98 +2229,6 @@ class VadSession(_SessionBase):
         _check(_lib.transcribe_vad_get_timings(self._h, _byref(tm)),
                "transcribe_vad_get_timings")
         return _timings_from(tm)
-
-
-class VadIterator:
-    """Silero's VADIterator live policy over per-frame speech probabilities
-    (e.g. ``VadSession.feed()`` results): emits START / END events. Owns no
-    model and takes no lock; use one iterator from one thread at a time.
-    END is never emitted at end of input (as upstream); close an open
-    segment yourself from the real audio length."""
-
-    def __init__(self, frame_samples: int, *,
-                 threshold: float | None = None,
-                 neg_threshold: float | None = None,
-                 min_silence_ms: int | None = None,
-                 speech_pad_ms: int | None = None):
-        params = _generated.transcribe_vad_iterator_params()
-        _lib.transcribe_vad_iterator_params_init(_byref(params))
-        if threshold is not None:
-            params.threshold = threshold
-        if neg_threshold is not None:
-            params.neg_threshold = neg_threshold
-        if min_silence_ms is not None:
-            params.min_silence_ms = min_silence_ms
-        if speech_pad_ms is not None:
-            params.speech_pad_ms = speech_pad_ms
-        handle = ctypes.c_void_p()
-        _check(_lib.transcribe_vad_iterator_init(frame_samples, _byref(params), _byref(handle)),
-               "opening vad iterator")
-        if not handle.value:
-            raise TranscribeError("vad iterator init returned a null handle")
-        self._handle = handle
-
-    @property
-    def _h(self) -> ctypes.c_void_p:
-        if self._handle is None:
-            raise TranscribeError("vad iterator is closed")
-        return self._handle
-
-    def _result(self):
-        res = _generated.transcribe_vad_iterator_result()
-        _lib.transcribe_vad_iterator_result_init(_byref(res))
-        _check(_lib.transcribe_vad_iterator_get_result(self._h, _byref(res)),
-               "transcribe_vad_iterator_get_result")
-        return res
-
-    def feed(self, probs: "Sequence[float]") -> tuple[VadEvent, ...]:
-        """Consume the next probabilities (each in [0, 1]) and return the
-        events they produced, in detection order. A failed feed leaves the
-        state intact."""
-        array, n = _floats_or_empty(probs)
-        _check(_lib.transcribe_vad_iterator_feed(self._h, array, n),
-               "transcribe_vad_iterator_feed")
-        events = []
-        for i in range(self._result().n_events):
-            e = _generated.transcribe_vad_event()
-            _lib.transcribe_vad_event_init(_byref(e))
-            _check(_lib.transcribe_vad_iterator_get_event(self._h, i, _byref(e)),
-                   "transcribe_vad_iterator_get_event")
-            events.append(VadEvent(type=_VAD_EVENT_TYPES[e.type], sample=e.sample))
-        return tuple(events)
-
-    @property
-    def current_sample(self) -> int:
-        """Probabilities consumed so far times ``frame_samples``."""
-        return self._result().current_sample
-
-    @property
-    def triggered(self) -> bool:
-        """Speech is active (possibly awaiting silence)."""
-        return bool(self._result().triggered)
-
-    def reset(self) -> None:
-        """Reset time and hysteresis; active speech is dropped without END."""
-        _lib.transcribe_vad_iterator_reset(self._h)
-
-    def close(self) -> None:
-        handle = getattr(self, "_handle", None)
-        if handle is None:
-            return
-        self._handle = None
-        _lib.transcribe_vad_iterator_free(handle)
-
-    def __enter__(self) -> "VadIterator":
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.close()
-
-    def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
 
 
 def transcribe(

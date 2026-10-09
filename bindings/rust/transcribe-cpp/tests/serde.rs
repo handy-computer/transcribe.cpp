@@ -10,9 +10,8 @@ use transcribe_cpp::{
     ParakeetBufferedStreamOptions, ParakeetStreamOptions, Pnc, Role, Roles, RunExtension,
     RunOptions, Segment, SessionLimits, SessionOptions, SortformerDiarizeOptions, SortformerPreset,
     SpeakerSegment, StreamExtension, StreamOptions, StreamState, StreamText, StreamUpdate, Task,
-    TimestampKind, Timings, Token, Transcript, VadEvent, VadEventKind, VadInfo, VadIteratorOptions,
-    VadOptions, VadResult, VadSegment, VadSessionOptions, VoxtralRealtimeStreamOptions,
-    WhisperRunOptions, Word,
+    TimestampKind, Timings, Token, Transcript, VadInfo, VadOptions, VadResult, VadSegment,
+    VadSessionOptions, VoxtralRealtimeStreamOptions, WhisperRunOptions, Word,
 };
 
 fn assert_serde<T: serde::Serialize + serde::de::DeserializeOwned>() {}
@@ -40,7 +39,6 @@ fn plain_data_types_are_serializable() {
     assert_serde::<LangIdOptions>();
     assert_serde::<VadSessionOptions>();
     assert_serde::<VadOptions>();
-    assert_serde::<VadIteratorOptions>();
     // Results.
     assert_serde::<DiarizeInfo>();
     assert_serde::<LangIdInfo>();
@@ -59,8 +57,6 @@ fn plain_data_types_are_serializable() {
     assert_serde::<LangIdCandidate>();
     assert_serde::<VadResult>();
     assert_serde::<VadSegment>();
-    assert_serde::<VadEvent>();
-    assert_serde::<VadEventKind>();
     // Enums.
     assert_serde::<Task>();
     assert_serde::<TimestampKind>();
@@ -168,9 +164,6 @@ fn missing_fields_take_defaults() {
         }
     );
     assert_eq!((vad.neg_threshold, vad.min_speech_ms), (-1.0, 250));
-    let result: VadResult = serde_json::from_str(r#"{"first_frame":3}"#).unwrap();
-    assert_eq!(result.first_frame, 3);
-    assert!(result.probs.is_empty() && result.segments.is_empty());
 }
 
 mod errors {

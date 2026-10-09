@@ -11,7 +11,7 @@ Surprises worth feeding back into the docs and tooling.
   frame through the scripted submodules in `VADRNNJIT.forward` order and
   asserts the result equals `model(chunk, 16000)` bit for bit, so the
   captured intermediates are provably the reference's.
-- **New role.** VAD needed `TRANSCRIBE_ROLE_VAD` (bit 3), ABI ids 24-31,
+- **New role.** VAD needed `TRANSCRIBE_ROLE_VAD` (bit 3), ABI ids 24-28,
   `include/transcribe/vad.h`, `Arch::vad`, a dispatcher and a CLI driver.
   The role dispatcher owns the segmentation so future VAD families only
   score frames.
