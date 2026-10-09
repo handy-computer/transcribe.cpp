@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "whistle",
+  "variant": "whistle",
+  "source_model": {
+    "hf_repo": "Cactus-Compute/whistle",
+    "hf_revision": "b358ddadd89b7a713b5aa131f23032d3cca1b251"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}
