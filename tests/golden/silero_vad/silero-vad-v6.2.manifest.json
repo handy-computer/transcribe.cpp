@@ -1,0 +1,44 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "silero_vad",
+  "variant": "silero-vad-v6.2",
+  "role": "vad",
+  "source_model": {
+    "hf_repo": "snakers4/silero-vad",
+    "hf_revision": null,
+    "package": "silero-vad==6.2.3",
+    "file": "silero_vad/data/silero_vad.jit",
+    "sha256": "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720"
+  },
+  "reference": {
+    "kind": "silero-vad",
+    "source": "https://github.com/snakers4/silero-vad",
+    "revision": "v6.2.3",
+    "entrypoint": "scripts/dump_reference_silero_vad_author.py",
+    "dump_args": []
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "weights_header",
+  "frontend": {
+    "sample_rate": 16000,
+    "frame_samples": 512,
+    "context_samples": 64,
+    "fft_size": 256,
+    "hop_length": 128,
+    "window": "hann_periodic",
+    "pad_mode": "reflect_right_64"
+  },
+  "tokenizer_summary": {"type": "other", "vocab_size": 0, "special_tokens": {}},
+  "tolerance_file": "tests/tolerances/silero_vad.json",
+  "cases": [
+    {"audio": "jfk", "language": null},
+    {"audio": "jobs-silence", "language": null},
+    {"audio": "noise", "language": null},
+    {"audio": "fleurs-zh", "language": null},
+    {"audio": "ja", "language": null},
+    {"audio": "sortformer-2spk-mix", "language": null},
+    {"audio": "dots", "language": null},
+    {"audio": "cj-swimming-drop", "language": null},
+    {"audio": "love-loss", "language": null}
+  ]
+}

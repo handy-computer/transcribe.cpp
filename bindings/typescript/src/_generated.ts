@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "e628600daea42c4a";
+export const PUBLIC_HEADER_HASH = "006d174e5b1a2063";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -60,6 +60,11 @@ export const TRANSCRIBE_ABI_LANGID_SESSION_PARAMS = 20;
 export const TRANSCRIBE_ABI_LANGID_PARAMS = 21;
 export const TRANSCRIBE_ABI_LANGID_RESULT = 22;
 export const TRANSCRIBE_ABI_LANGID_CANDIDATE = 23;
+export const TRANSCRIBE_ABI_VAD_INFO = 24;
+export const TRANSCRIBE_ABI_VAD_SESSION_PARAMS = 25;
+export const TRANSCRIBE_ABI_VAD_PARAMS = 26;
+export const TRANSCRIBE_ABI_VAD_RESULT = 27;
+export const TRANSCRIBE_ABI_VAD_SEGMENT = 28;
 export const TRANSCRIBE_LOG_LEVEL_NONE = 0;
 export const TRANSCRIBE_LOG_LEVEL_INFO = 1;
 export const TRANSCRIBE_LOG_LEVEL_WARN = 2;
@@ -103,6 +108,7 @@ export const TRANSCRIBE_DEVICE_TYPE_ACCEL = 3;
 export const TRANSCRIBE_ROLE_ASR = 1;
 export const TRANSCRIBE_ROLE_DIARIZE = 2;
 export const TRANSCRIBE_ROLE_LANGID = 4;
+export const TRANSCRIBE_ROLE_VAD = 8;
 export const TRANSCRIBE_FEATURE_INITIAL_PROMPT = 0;
 export const TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK = 1;
 export const TRANSCRIBE_FEATURE_LONG_FORM = 2;
@@ -173,6 +179,11 @@ export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_parakeet_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'att_context_right': 16} },
   'transcribe_parakeet_buffered_stream_ext': { size: 32, align: 8, offsets: {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24} },
   'transcribe_sortformer_diarize_ext': { size: 24, align: 8, offsets: {'ext': 0, 'preset': 16} },
+  'transcribe_vad_info': { size: 16, align: 8, offsets: {'struct_size': 0, 'sample_rate': 8, 'frame_samples': 12} },
+  'transcribe_vad_session_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'n_threads': 8} },
+  'transcribe_vad_params': { size: 48, align: 8, offsets: {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_speech_ms': 24, 'min_silence_ms': 28, 'speech_pad_ms': 32, 'max_speech_ms': 36, 'min_silence_at_max_speech_ms': 40, 'use_max_possible_silence': 44} },
+  'transcribe_vad_result': { size: 32, align: 8, offsets: {'struct_size': 0, 'n_probs': 8, 'first_frame': 16, 'n_segments': 24} },
+  'transcribe_vad_segment': { size: 24, align: 8, offsets: {'struct_size': 0, 'start_sample': 8, 'end_sample': 16} },
   'transcribe_voxtral_realtime_stream_ext': { size: 24, align: 8, offsets: {'ext': 0, 'num_delay_tokens': 16, 'min_decode_interval_ms': 20} },
   'transcribe_whisper_run_ext': { size: 80, align: 8, offsets: {'ext': 0, 'initial_prompt': 16, 'prompt_tokens': 24, 'n_prompt_tokens': 32, 'prompt_condition': 40, 'condition_on_prev_tokens': 44, 'max_prev_context_tokens': 48, 'temperature': 52, 'temperature_inc': 56, 'compression_ratio_thold': 60, 'logprob_thold': 64, 'no_speech_thold': 68, 'seed': 72, 'max_initial_timestamp': 76} },
   'transcribe_whisper_chunk_trace': { size: 48, align: 8, offsets: {'struct_size': 0, 't0_ms': 8, 't1_ms': 16, 'temperature_used': 24, 'compression_ratio': 28, 'avg_logprob': 32, 'no_speech_prob': 36, 'no_speech_triggered': 40, 'n_fallbacks': 44} },
@@ -203,6 +214,11 @@ export const ABI_STRUCT_IDS: Record<string, number> = {
   'transcribe_langid_params': 21,
   'transcribe_langid_result': 22,
   'transcribe_langid_candidate': 23,
+  'transcribe_vad_info': 24,
+  'transcribe_vad_session_params': 25,
+  'transcribe_vad_params': 26,
+  'transcribe_vad_result': 27,
+  'transcribe_vad_segment': 28,
 };
 
 // Build koffi struct types; returns a name -> koffi.IKoffiCType map.
@@ -236,6 +252,11 @@ export function defineTypes(koffi: any): Record<string, any> {
   T['transcribe_parakeet_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], att_context_right: 'int32_t' });
   T['transcribe_parakeet_buffered_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], left_ms: 'int32_t', chunk_ms: 'int32_t', right_ms: 'int32_t' });
   T['transcribe_sortformer_diarize_ext'] = koffi.struct({ ext: T['transcribe_ext'], preset: 'int' });
+  T['transcribe_vad_info'] = koffi.struct({ struct_size: 'uint64_t', sample_rate: 'int32_t', frame_samples: 'int32_t' });
+  T['transcribe_vad_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int32_t' });
+  T['transcribe_vad_params'] = koffi.struct({ struct_size: 'uint64_t', threshold: 'double', neg_threshold: 'double', min_speech_ms: 'int32_t', min_silence_ms: 'int32_t', speech_pad_ms: 'int32_t', max_speech_ms: 'int32_t', min_silence_at_max_speech_ms: 'int32_t', use_max_possible_silence: 'bool' });
+  T['transcribe_vad_result'] = koffi.struct({ struct_size: 'uint64_t', n_probs: 'int32_t', first_frame: 'int64_t', n_segments: 'int32_t' });
+  T['transcribe_vad_segment'] = koffi.struct({ struct_size: 'uint64_t', start_sample: 'int64_t', end_sample: 'int64_t' });
   T['transcribe_voxtral_realtime_stream_ext'] = koffi.struct({ ext: T['transcribe_ext'], num_delay_tokens: 'int32_t', min_decode_interval_ms: 'int32_t' });
   T['transcribe_whisper_run_ext'] = koffi.struct({ ext: T['transcribe_ext'], initial_prompt: 'char *', prompt_tokens: 'void *', n_prompt_tokens: 'size_t', prompt_condition: 'int', condition_on_prev_tokens: 'bool', max_prev_context_tokens: 'int32_t', temperature: 'float', temperature_inc: 'float', compression_ratio_thold: 'float', logprob_thold: 'float', no_speech_thold: 'float', seed: 'uint32_t', max_initial_timestamp: 'float' });
   T['transcribe_whisper_chunk_trace'] = koffi.struct({ struct_size: 'uint64_t', t0_ms: 'int64_t', t1_ms: 'int64_t', temperature_used: 'float', compression_ratio: 'float', avg_logprob: 'float', no_speech_prob: 'float', no_speech_triggered: 'bool', n_fallbacks: 'int32_t' });
@@ -366,6 +387,23 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_timings_init': { ret: 'void', args: ['struct transcribe_timings *'] },
   'transcribe_token_init': { ret: 'void', args: ['struct transcribe_token *'] },
   'transcribe_tokenize': { ret: 'int', args: ['const struct transcribe_model *', 'const char *', 'int32_t *', 'size_t'] },
+  'transcribe_vad_get_info': { ret: 'transcribe_status', args: ['const struct transcribe_model *', 'struct transcribe_vad_info *'] },
+  'transcribe_vad_get_result': { ret: 'transcribe_status', args: ['const struct transcribe_vad_session *', 'struct transcribe_vad_result *'] },
+  'transcribe_vad_get_segment': { ret: 'transcribe_status', args: ['const struct transcribe_vad_session *', 'int', 'struct transcribe_vad_segment *'] },
+  'transcribe_vad_get_timings': { ret: 'transcribe_status', args: ['const struct transcribe_vad_session *', 'struct transcribe_timings *'] },
+  'transcribe_vad_info_init': { ret: 'void', args: ['struct transcribe_vad_info *'] },
+  'transcribe_vad_params_init': { ret: 'void', args: ['struct transcribe_vad_params *'] },
+  'transcribe_vad_probs': { ret: 'const float *', args: ['const struct transcribe_vad_session *'] },
+  'transcribe_vad_result_init': { ret: 'void', args: ['struct transcribe_vad_result *'] },
+  'transcribe_vad_run': { ret: 'transcribe_status', args: ['struct transcribe_vad_session *', 'const float *', 'int', 'const struct transcribe_vad_params *'] },
+  'transcribe_vad_segment_init': { ret: 'void', args: ['struct transcribe_vad_segment *'] },
+  'transcribe_vad_session_free': { ret: 'void', args: ['struct transcribe_vad_session *'] },
+  'transcribe_vad_session_init': { ret: 'transcribe_status', args: ['struct transcribe_model *', 'const struct transcribe_vad_session_params *', 'struct transcribe_vad_session **'] },
+  'transcribe_vad_session_params_init': { ret: 'void', args: ['struct transcribe_vad_session_params *'] },
+  'transcribe_vad_set_abort_callback': { ret: 'void', args: ['struct transcribe_vad_session *', 'transcribe_abort_callback', 'void *'] },
+  'transcribe_vad_stream_feed': { ret: 'transcribe_status', args: ['struct transcribe_vad_session *', 'const float *', 'int'] },
+  'transcribe_vad_stream_flush': { ret: 'transcribe_status', args: ['struct transcribe_vad_session *'] },
+  'transcribe_vad_stream_reset': { ret: 'void', args: ['struct transcribe_vad_session *'] },
   'transcribe_version': { ret: 'const char *', args: [] },
   'transcribe_version_commit': { ret: 'const char *', args: [] },
   'transcribe_voxtral_realtime_stream_ext_init': { ret: 'void', args: ['struct transcribe_voxtral_realtime_stream_ext *'] },

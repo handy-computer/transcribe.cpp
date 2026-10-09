@@ -1,0 +1,19 @@
+[project]
+name = "transcribe-silero_vad-env"
+version = "0.1.0"
+description = "Python env for Silero VAD reference dumps and conversion (upstream silero-vad package, TorchScript model)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Exact pin. The reference is the TorchScript model shipped inside this
+    # wheel (silero_vad/data/silero_vad.jit, model v6.2) and the
+    # get_speech_timestamps post-processing in silero_vad/utils_vad.py.
+    # tests/tolerances/silero_vad.json was measured against THIS version.
+    "silero-vad==6.2.3",
+    # CPU torch, fp32, one thread: the parity regime.
+    "torch==2.8.0",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "gguf>=0.10",
+    # Speed comparison against upstream's ONNX path (scripts/vad/bench_reference.py).
+    "onnxruntime>=1.18",
+]

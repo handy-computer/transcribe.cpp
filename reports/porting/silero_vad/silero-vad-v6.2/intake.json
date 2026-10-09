@@ -1,0 +1,110 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "silero_vad",
+  "hf_repo": "snakers4/silero-vad",
+  "hf_revision": null,
+  "sources": {
+    "config": {
+      "kind": "reference_code",
+      "path": "silero_vad.jit::VADRNNJITMerge._model (code/__torch__/vad/model/vad_annotator.py)",
+      "status": "manual",
+      "detail": "No HF config. Not distributed on Hugging Face: the model ships inside the silero-vad PyPI wheel / GitHub repo (src/silero_vad/data/silero_vad.jit). Geometry read from the TorchScript code: STFT filter_length 256, hop 128, ReflectionPad1d((0, 64)); context_size_samples 64; 512-sample frames at 16 kHz; encoder 4x SileroVadBlock(Conv1d k3 p1, strides 1,2,2,1, ReLU); LSTMCell(128, 128); Dropout, ReLU, Conv1d(128, 1, 1), Sigmoid."
+    },
+    "preprocessor": {
+      "kind": "reference_code",
+      "path": "silero_vad.jit::_model.stft (vad/utils/pytorch_stft.py)",
+      "status": "manual",
+      "detail": "STFT is a conv1d with forward_basis_buffer [258, 1, 256]: rows 0..128 = periodic-Hann * cos(2 pi k n / 256), rows 129..257 = -periodic-Hann * sin(...) (checked to 7.7e-8). Magnitude sqrt(re^2 + im^2); phase computed and discarded."
+    },
+    "tokenizer_config": {"kind": "hf_file", "path": "tokenizer_config.json", "status": "missing"},
+    "tokenizer_json": {"kind": "hf_file", "path": "tokenizer.json", "status": "missing"},
+    "generation_config": {"kind": "hf_file", "path": "generation_config.json", "status": "missing"},
+    "safetensors_metadata": {
+      "kind": "reference_code",
+      "path": "silero_vad.jit state_dict()",
+      "status": "manual",
+      "detail": "fp32 throughout: 16 tensors under _model.* (16 kHz, 309,633 params) and 16 under _model_8k.* (8 kHz, unused)."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "silero-vad==6.2.3: silero_vad.load_silero_vad() + utils_vad.get_speech_timestamps",
+      "status": "found",
+      "detail": "Upstream's own Python package (https://github.com/snakers4/silero-vad, tag v6.2.3, commit 5cd7945). silero_vad.jit sha256 e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720, unchanged since tag v6.2."
+    }
+  },
+  "variants": [
+    {
+      "name": "silero-vad-v6.2",
+      "memory_gb": 0.01,
+      "files": ["src/silero_vad/data/silero_vad.jit"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-classifier"],
+    "key_fields": {
+      "sample_rate": 16000,
+      "frame_samples": 512,
+      "context_samples": 64,
+      "stft_n_fft": 256,
+      "stft_hop": 128,
+      "stft_reflect_pad_right": 64,
+      "encoder_channels": [129, 128, 64, 64, 128],
+      "encoder_kernel": 3,
+      "encoder_strides": [1, 2, 2, 1],
+      "lstm_hidden": 128,
+      "n_params_16k": 309633
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "weights_header",
+    "evidence": "Every tensor in silero_vad.jit state_dict() is torch.float32.",
+    "details": {"config_declared": null, "header_distribution": {"float32": 309633}}
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": null,
+    "hop_length": 128,
+    "fft_size": 256,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {"type": "other", "vocab_size": 0, "special_tokens": {}, "has_language_tokens": false, "vocab_sha256": null},
+  "capabilities": {
+    "languages": [],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": true,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Silero multi-domain validation set",
+      "language": null,
+      "metric": "other",
+      "score": null,
+      "source": "https://github.com/snakers4/silero-vad/wiki/Quality-Metrics",
+      "notes": "Upstream publishes ROC-AUC / accuracy plots on private data only. Acceptance is per-frame probability and speech-segment parity with the reference package, not a published score."
+    }
+  ],
+  "reference_framework": "author_repo_silero_vad",
+  "reference_rationale": "Silero publishes the model only as artifacts inside its own package (TorchScript, ONNX, safetensors); the TorchScript model loaded by load_silero_vad() and the get_speech_timestamps post-processing are the canonical implementation every other port (whisper.cpp, ONNX wrappers) follows. Pinned to silero-vad 6.2.3 on torch 2.8.0, fp32, CPU, 1 thread.",
+  "architecture_pattern": "encoder-classifier",
+  "known_risks": [
+    "Role is VAD (new role, include/transcribe/vad.h), not ASR: acceptance is per-frame speech-probability parity and exact speech-segment parity with get_speech_timestamps, not WER.",
+    "Not on Hugging Face: the source checkpoint is the TorchScript file inside the silero-vad 6.2.3 wheel; provenance is the package version plus the file's sha256.",
+    "Stateful: an LSTMCell carries (h, c) and the model carries the last 64 samples of the previous frame as context. Frames must be scored in order; offline and streaming share the same recurrence.",
+    "Per-frame STFT: each 512-sample frame is scored as [64 context | 512 | 64 reflected] -> 4 STFT windows; the last window of every frame sees reflected samples, not the next frame's audio. The STFT therefore cannot be shared across frames.",
+    "The final short frame is zero padded to 512 samples, as get_speech_timestamps does; segment ends are clamped to the real audio length.",
+    "8 kHz model (_model_8k) is out of scope: the library's input contract is 16 kHz.",
+    "Post-processing (thresholds, min speech / silence, padding, max-speech splitting) is part of the reference contract and is ported verbatim to the role dispatcher, including Python int/float semantics and truthiness of 0 sample positions.",
+    "Tiny model (309K params, 1.2 MB F32): quantization buys nothing; ship F32 only."
+  ],
+  "intake_gaps": []
+}

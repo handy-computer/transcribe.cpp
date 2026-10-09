@@ -337,6 +337,20 @@ def parse_cli_language(output: str) -> dict[str, Any] | None:
     return None
 
 
+def parse_cli_segments(output: str) -> list[dict[str, int]] | None:
+    """The VAD CLI's `segment: <i> start=<sample> end=<sample> ...` lines;
+    None when the output has no VAD frame-count summary."""
+    if "  frames:" not in output:
+        return None
+    segments = []
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("segment: "):
+            fields = dict(p.split("=", 1) for p in line.split()[2:] if "=" in p)
+            segments.append({"start": int(fields["start"]), "end": int(fields["end"])})
+    return segments
+
+
 def write_cpp_transcript(
     out_dir: Path,
     *,
@@ -445,7 +459,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # prediction.json from a single classify_batch call.
         if args.family == "sortformer":
             stages = ["encoder", "diarize"]
-        elif args.family == "ecapa_tdnn":
+        elif args.family in ("ecapa_tdnn", "silero_vad"):
             stages = ["encoder"]
         else:
             stages = case_stages(case, ["encoder", "decode"])
@@ -587,6 +601,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         transcript = parse_cli_transcript(result.stdout or "")
         if transcript is None and "speaker segments:" in (result.stdout or ""):
             continue  # a diarizer has no transcript
+        segments = parse_cli_segments(result.stdout or "") if transcript is None else None
+        if segments is not None:
+            # A VAD model: its behavioural artifact is the speech segments,
+            # compared against the reference's segments.json.
+            (out_dir / "segments.json").write_text(json.dumps({"segments": segments}, indent=2) + "\n")
+            print(f"  wrote {out_dir / 'segments.json'}", file=sys.stderr)
+            continue
         prediction = parse_cli_language(result.stdout or "") if transcript is None else None
         if prediction is not None:
             # A language ID model: its behavioural artifact is the top-1
@@ -708,6 +729,21 @@ def cmd_compare(args: argparse.Namespace) -> int:
             expected = case.get("expected_language") if isinstance(case, dict) else None
             print(f"\n  Prediction: {'ok' if match else 'FAIL'} c++ {cpp_pred['code']!r}, "
                   f"reference {ref_pred['code']!r}, expected {expected!r}")
+
+        # VAD: the gate is exact speech-segment parity (sample positions).
+        ref_segments = ref_dir / "segments.json"
+        if manifest.get("role") == "vad" or args.family == "silero_vad" or ref_segments.exists():
+            ref_segs = (json.loads(ref_segments.read_text())["segments"] if ref_segments.exists() else None)
+            cpp_segments = cpp_dir / "segments.json"
+            cpp_segs = (json.loads(cpp_segments.read_text())["segments"] if cpp_segments.exists() else None)
+            match = ref_segs is not None and cpp_segs is not None and cpp_segs == ref_segs
+            all_passed = all_passed and match
+            transcript_results.append({"case": case_name, "match": match, "mode": "segments",
+                                       "reference": ref_segs, "cpp": cpp_segs})
+            if match:
+                print(f"\n  Segments: ok ({len(ref_segs)} identical)")
+            else:
+                print(f"\n  Segments: FAIL\n    reference: {ref_segs}\n    c++:       {cpp_segs}")
 
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists() and args.family != "sortformer":

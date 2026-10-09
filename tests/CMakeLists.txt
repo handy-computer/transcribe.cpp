@@ -368,10 +368,10 @@ add_test(NAME transcribe_run_dispatch_unit
 
 # -----------------------------------------------------------------------------
 # Dispatcher units against fake arches: roles, host thread pool, non-finite
-# input, throwing stream hooks, DIARIZE and LANGID roles
+# input, throwing stream hooks, DIARIZE, LANGID and VAD roles
 # -----------------------------------------------------------------------------
 
-foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch)
+foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch vad_dispatch)
     add_executable(transcribe_${_t}_unit ${_t}_unit.cpp)
     target_link_libraries(transcribe_${_t}_unit PRIVATE transcribe)
     target_include_directories(transcribe_${_t}_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -544,7 +544,9 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_hop0.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_win_gt_fft.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_win_gt_fft.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad_bad_frame.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -802,6 +804,23 @@ if(TRANSCRIBE_UV)
     transcribe_apply_warnings(transcribe_ecapa_tdnn_smoke)
     add_dependencies(transcribe_ecapa_tdnn_smoke fixtures)
     add_test(NAME transcribe_ecapa_tdnn_smoke COMMAND transcribe_ecapa_tdnn_smoke)
+endif()
+
+# -----------------------------------------------------------------------------
+# silero_vad (VAD role) fixture smoke
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_silero_vad_smoke silero_vad_smoke.cpp)
+    target_link_libraries(transcribe_silero_vad_smoke PRIVATE transcribe)
+    target_compile_definitions(transcribe_silero_vad_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_silero_vad_smoke)
+    add_dependencies(transcribe_silero_vad_smoke fixtures)
+    add_test(NAME transcribe_silero_vad_smoke COMMAND transcribe_silero_vad_smoke)
+    add_test(NAME transcribe_validate_vad_unit
+        COMMAND ${TRANSCRIBE_UV} run --no-project
+            ${CMAKE_SOURCE_DIR}/scripts/test_validate_vad.py)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1420,6 +1439,21 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_ecapa_tdnn_real_smoke)
     set_tests_properties(transcribe_ecapa_tdnn_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # silero_vad on the VAD role: reference segments of jfk.wav, no speech
+    # in noise.wav, 20 ms streaming parity, and a GPU backend against the
+    # CPU when one loads. Gated by TRANSCRIBE_SILERO_VAD_GGUF (RC 77 skip).
+    add_executable(transcribe_silero_vad_real_smoke
+        silero_vad_real_smoke.cpp)
+    target_link_libraries(transcribe_silero_vad_real_smoke
+        PRIVATE transcribe transcribe-common-example)
+    target_compile_definitions(transcribe_silero_vad_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+    transcribe_apply_warnings(transcribe_silero_vad_real_smoke)
+    add_test(NAME transcribe_silero_vad_real_smoke
+        COMMAND transcribe_silero_vad_real_smoke)
+    set_tests_properties(transcribe_silero_vad_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1610,6 +1644,15 @@ if(TRANSCRIBE_BUILD_EXAMPLES)
         SKIP_REGULAR_EXPRESSION "SKIP:")
 
     if(TRANSCRIBE_UV)
+        add_dependencies(transcribe-cli fixtures)
+        add_test(NAME transcribe_cli_vad_smoke
+            COMMAND ${CMAKE_COMMAND}
+                -DCLI=$<TARGET_FILE:transcribe-cli>
+                -DMODEL=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad.gguf
+                -DWAV=${CMAKE_SOURCE_DIR}/samples/jfk.wav
+                -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-vad-smoke
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_vad_smoke.cmake)
+
         add_test(NAME transcribe_cli_langid_smoke
             COMMAND ${CMAKE_COMMAND}
                 -DCLI=$<TARGET_FILE:transcribe-cli>

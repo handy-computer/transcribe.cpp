@@ -9,7 +9,9 @@
 #include "wav.h"
 
 #include <cctype>
+#include <cerrno>
 #include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +32,20 @@ bool parse_device_index(const char * text, int & out) {
     int          parsed = 0;
     const auto   result = std::from_chars(text, end, parsed);
     if (result.ec != std::errc{} || result.ptr != end || parsed < 0) {
+        return false;
+    }
+    out = parsed;
+    return true;
+}
+
+bool parse_vad_threshold(const char * text, double & out) {
+    if (text == nullptr || text[0] == '\0' || std::isspace(static_cast<unsigned char>(text[0]))) {
+        return false;
+    }
+    char * end          = nullptr;
+    errno               = 0;
+    const double parsed = std::strtod(text, &end);
+    if (end == text || *end != '\0' || errno == ERANGE || !std::isfinite(parsed) || parsed < 0.0 || parsed > 1.0) {
         return false;
     }
     out = parsed;
@@ -86,6 +102,7 @@ void print_usage(const char * argv0) {
                  "  --allow CODES         (language ID) comma-separated labels to choose from\n"
                  "  --top N               (language ID) print only the best N ranked\n"
                  "                        candidates (0 = all; default)\n"
+                 "  --vad-threshold P     (VAD) speech probability threshold, default 0.5\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
                  "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
                  "                        N-ms PCM slices; requires model to advertise\n"
@@ -450,6 +467,15 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --top must be >= 0\n");
                 return false;
             }
+        } else if (a == "--vad-threshold") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            if (!parse_vad_threshold(v, out.vad_threshold)) {
+                std::fprintf(stderr, "error: --vad-threshold must be a finite number in [0, 1]\n");
+                return false;
+            }
         } else if (a == "--diarize") {
             out.diarize     = true;
             out.diarize_set = true;
@@ -621,6 +647,9 @@ int run_file(const cli_args & args, std::ofstream * output) {
     }
     if ((roles & TRANSCRIBE_ROLE_LANGID) != 0) {
         return transcribe_cli::run_langid_file(args, model, pcm, output);
+    }
+    if ((roles & TRANSCRIBE_ROLE_VAD) != 0) {
+        return transcribe_cli::run_vad_file(args, model, pcm, duration_s, output);
     }
     return transcribe_cli::run_diarize_file(args, model, pcm, duration_s, output);
 }
