@@ -116,6 +116,11 @@ struct Model final : public transcribe_model {
 
 transcribe_status build_derived_weights(Model & m);
 
+// Published whisper.cpp Silero weight files; inference remains upstream Silero.
+transcribe_status load_from_bin(const char *                         path,
+                                const transcribe_model_load_params * params,
+                                transcribe_model **                  out_model);
+
 // Debug dump accumulators (TRANSCRIBE_DUMP_DIR only): every scored frame of
 // the current stream, appended block by block.
 struct DumpTrace {

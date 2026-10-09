@@ -1,7 +1,9 @@
 # Silero VAD (voice activity detection)
 
-Status: supported (VAD role). Clean-room port of the Silero VAD v6.2 16 kHz
-model, validated against upstream's own package (`silero-vad==6.2.3`).
+Status: supported (VAD role). Independently implemented inference for the
+Silero VAD v6.2 16 kHz model and published v5.1.2/v6.2.0 binary weights,
+validated against upstream's own JIT (tag `v5.1.2` /
+`silero-vad==6.2.3`); probability policies are translated from upstream.
 
 Silero VAD scores 512-sample (32 ms) frames of 16 kHz audio with a speech
 probability (architecture pattern `encoder-classifier`): a conv-STFT
@@ -11,6 +13,8 @@ frames and owns its recurrent state; the VAD role dispatcher
 (`src/transcribe-vad.cpp`) owns input validation, frame buffering for
 streaming, zero padding of the last frame, and the probabilities -> segments
 step (a line-for-line port of upstream's `get_speech_timestamps_from_probs`).
+Offline/live probability policies retain the Silero MIT notice in
+`src/third_party/silero_vad/LICENSE` and distributed artifacts.
 API and usage: `docs/vad.md`.
 
 Acceptance: per-frame tensor parity on nine clips (`validate.py`), and exact
@@ -19,7 +23,9 @@ those clips, on AMI IHM test (16 meetings, 9.1 h) and on LibriSpeech
 test-clean plus four FLEURS languages (5505 clips). The segmentation port is
 additionally pinned by 360 reference-generated vectors covering every
 parameter (`tests/vad_dispatch_unit.cpp`). Shipped matrix: F32 only (1.2 MB;
-quantization buys nothing).
+quantization buys nothing for our GGUF). The upstream binary compatibility
+path expands the published mixed F16/F32 payloads to F32 without recovering
+lost precision. It is not a new engine or a canonical GGUF publication.
 
 ## Identity
 
@@ -28,9 +34,12 @@ quantization buys nothing).
 - Source: PyPI `silero-vad==6.2.3` (GitHub `snakers4/silero-vad` tag
   `v6.2.3`, commit `5cd7945`); `silero_vad/data/silero_vad.jit` sha256
   `e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720`,
-  unchanged since tag `v6.2`. Not distributed on Hugging Face.
+  unchanged since tag `v6.2`. This original JIT is not distributed on Hugging Face.
 - License: MIT
-- Variants: `silero-vad-v6.2`
+- Golden-manifest/GGUF variant: `silero-vad-v6.2` (unchanged; no new manifests).
+- Binary runtime variants: `silero-vad-v5.1.2`, `silero-vad-v6.2.0`.
+- Binary downloads and hashes: `docs/models/silero-vad-v6.2.md`.
+- Stored-weight reference pins, including original v5 JIT: `scripts/lib/silero_bin_reference.py`.
 
 ## References
 
@@ -48,6 +57,18 @@ quantization buys nothing).
   checked against it. One difference worth knowing: upstream reflect-pads 64
   samples on the right of each 576-sample chunk only, which gives 4 STFT
   windows per frame; whisper.cpp pads both sides.
+
+### Binary stored-weight reference
+
+`scripts/lib/silero_bin_reference.py` verifies official hashes and all 15
+payloads against rounded upstream weights, then loads those values into the
+original v5/v6 JIT. The existing dumper's bit-exact stepwise/end-to-end bridge
+is retained. `bin_parity.py` checks all nine clips at 1/4 threads: intermediate
+tensors, exact segments/live events and bit-identical offline/stream scores.
+
+V6 uses `tests/tolerances/silero_vad.json`; v5's larger accumulated cell state
+needs a separate `dec.lstm_c` bound. Its FP64 analysis and bound derivation are
+in `silero_vad-bin-v5.1.2.json`; probability bounds remain unchanged.
 
 ## Forward pass
 
@@ -108,8 +129,11 @@ Tensors (all F32): `frontend.stft_basis` ne `[256, 258]`,
 # Conversion (reads the TorchScript model from the pinned wheel)
 uv run --project scripts/envs/silero_vad scripts/convert-silero_vad.py
 
+# Cheap GGUF configuration gate (variant also makes model discovery explicit)
+uv run scripts/preflight.py --family silero_vad --variant silero-vad-v6.2 --gate B
+
 # Reference dumps, C++ dumps, tensor + segment parity
-uv run scripts/validate.py all --family silero_vad
+uv run scripts/validate.py all --family silero_vad --variant silero-vad-v6.2
 
 # Segment parity on a corpus (WAVs or scripts/wer manifests)
 uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
@@ -121,7 +145,21 @@ uv run --project scripts/envs/silero_vad scripts/vad/bench_reference.py samples/
 # Segmentation test vectors (after a reference bump)
 uv run --project scripts/envs/silero_vad scripts/vad/gen_segment_vectors.py
 
-# Real-model smoke
+# Live iterator vectors (actual upstream with a probability stub)
+uv run --project scripts/envs/silero_vad scripts/vad/gen_iterator_vectors.py
+
+# Published binary stored-weight numerical parity (V5 JIT fetched/verified if absent)
+uv run --project scripts/envs/silero_vad scripts/vad/bin_parity.py \
+  --bin /path/ggml-silero-v5.1.2.bin
+uv run --project scripts/envs/silero_vad scripts/vad/bin_parity.py \
+  --bin /path/ggml-silero-v6.2.0.bin
+
+# Binary public API smoke (each variable optional)
+TRANSCRIBE_SILERO_VAD_V5_BIN=/path/ggml-silero-v5.1.2.bin \
+TRANSCRIBE_SILERO_VAD_V6_BIN=/path/ggml-silero-v6.2.0.bin \
+  ctest --test-dir build -R silero_vad
+
+# GGUF real-model smoke
 TRANSCRIBE_SILERO_VAD_GGUF=models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
   ctest --test-dir build -R silero_vad
 ```
@@ -132,6 +170,7 @@ TRANSCRIBE_SILERO_VAD_GGUF=models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
 |---|---|---|---|---|---|
 | Offline segments | default params | `validate.py all --family silero_vad`; `scripts/vad/parity.py` | segments identical to `get_speech_timestamps` | MUST PASS | PASS (9/9 clips, AMI 16/16, 5505 LibriSpeech + FLEURS clips) |
 | Segment params | every field | `transcribe_vad_dispatch_unit` (360 vectors) | identical to `get_speech_timestamps_from_probs` | MUST PASS | PASS |
+| Live START/END policy | upstream defaults and edge cases; arbitrary grouping/reset/EOF | `transcribe_vad_iterator_unit` (15 named cases); `scripts/vad/bin_parity.py` | exact `VADIterator` events on the same float32 probabilities | MUST PASS | PASS |
 | Per-frame probabilities | CPU, 1 thread | `validate.py` (`vad.probs`) | within `tests/tolerances/silero_vad.json` | MUST PASS | PASS (max 6.9e-6) |
 | Streaming | CPU, any chunking, 1 / 4 threads | `transcribe_silero_vad_smoke`, `_real_smoke` | bit-identical to offline | MUST PASS | PASS |
 | GPU backend | explicit Metal | `transcribe_silero_vad_real_smoke` | within 5e-3, same segments | OUT OF SCOPE - CPU is the target; Metal is a smoke check | PASS (2.0e-3) |

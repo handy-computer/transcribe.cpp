@@ -143,6 +143,16 @@ static void test_abi_metadata(void) {
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_RESULT) == _Alignof(struct transcribe_vad_result));
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_SEGMENT) == sizeof(struct transcribe_vad_segment));
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_SEGMENT) == _Alignof(struct transcribe_vad_segment));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS) ==
+          sizeof(struct transcribe_vad_iterator_params));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_ITERATOR_PARAMS) ==
+          _Alignof(struct transcribe_vad_iterator_params));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_EVENT) == sizeof(struct transcribe_vad_event));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_EVENT) == _Alignof(struct transcribe_vad_event));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_ITERATOR_RESULT) ==
+          sizeof(struct transcribe_vad_iterator_result));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_ITERATOR_RESULT) ==
+          _Alignof(struct transcribe_vad_iterator_result));
     CHECK(transcribe_abi_struct_size((transcribe_abi_struct) 9999) == 0);
     CHECK(transcribe_abi_struct_align((transcribe_abi_struct) 9999) == 0);
 

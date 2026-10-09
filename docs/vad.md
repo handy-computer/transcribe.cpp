@@ -6,6 +6,16 @@ into speech segments. API: `include/transcribe/vad.h`. The shipped model is
 [Silero VAD v6.2](models/silero-vad-v6.2.md): 512-sample (32 ms) frames,
 1.2 MB.
 
+## Supported model files
+
+Besides GGUF, `transcribe_model_load_file` accepts the published
+`ggml-silero-v5.1.2.bin` and `ggml-silero-v6.2.0.bin` directly, regardless of
+extension. Only these 16 kHz binary versions are supported. Their mixed F16/F32
+weights are expanded to F32; lost precision is not restored. Both use upstream
+Silero inference and the existing 6.2.3 segmentation policy, not whisper.cpp's
+graph or legacy v5 segmentation. `AUTO` selects CPU; no VAD-to-ASR pipeline is
+added. Downloads and measured accuracy: [model page](models/silero-vad-v6.2.md).
+
 ## Offline
 
 ```c
@@ -84,9 +94,53 @@ transcribe_vad_stream_flush(vad);
 On CPU, the probabilities of a stream are bit-identical to those of one
 `transcribe_vad_run` over the same audio with the same thread count, for any
 chunking (tested with 1 and 4 threads).
-Streaming returns probabilities only; segmenting a live stream (hysteresis,
-end-of-speech hangover) is the caller's policy. Segmenting the collected
+Streaming still returns probabilities only. Segmenting the collected
 probabilities with the offline rules is what `transcribe_vad_run` does.
+The optional live iterator below is a separate probability policy; it never
+changes `stream_feed` or resets the model when speech ends.
+
+### Optional live START/END iterator
+
+The model-independent `transcribe_vad_iterator` matches upstream `VADIterator`
+(6.2.3) at 16 kHz. Feed every sequential probability exactly once, after each
+successful audio feed and any final audio flush. A batch can emit multiple
+events. As with the other examples, check status returns in production.
+
+```c
+struct transcribe_vad_iterator * it = NULL;
+transcribe_vad_iterator_init(512, NULL, &it);   /* Silero frame size */
+
+/* After each successful stream_feed/stream_flush: */
+transcribe_vad_get_result(vad, &r);
+transcribe_vad_iterator_feed(it, transcribe_vad_probs(vad), r.n_probs);
+struct transcribe_vad_iterator_result ir;
+transcribe_vad_iterator_result_init(&ir);
+transcribe_vad_iterator_get_result(it, &ir);
+for (int i = 0; i < ir.n_events; ++i) {
+    struct transcribe_vad_event e;
+    transcribe_vad_event_init(&e);
+    transcribe_vad_iterator_get_event(it, i, &e);
+    /* e.type: START or END; e.sample: boundary, not detection time */
+}
+transcribe_vad_iterator_free(it);
+```
+
+Defaults: start threshold 0.5, minimum silence 100 ms, padding 30 ms. Exit is
+strictly below `threshold - 0.15`, without the offline 0.01 floor. Only a value
+at/above the start threshold cancels pending silence; middle-band values do
+not. There is no minimum-speech filtering or maximum-duration splitting.
+
+Events are in detection order; padding can overlap boundaries or put an END
+beyond received audio. **EOF does not emit END.** Close unfinished speech and
+clamp boundaries at the actual input length in application code; a zero-padded
+tail still advances a full frame. Reset the iterator when inference starts a
+new stream; it neither owns nor resets the model.
+
+Successful feeds replace events; empty feeds clear them without advancing time.
+Failures, including allocation failure, preserve state and previous events.
+Getters copy events. Use each iterator from one thread at a time; the full
+contract is in `include/transcribe/vad.h`. Translated policies retain the
+[Silero MIT notice](../THIRD-PARTY-LICENSES.md).
 
 ## Performance
 

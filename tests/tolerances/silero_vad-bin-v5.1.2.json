@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Silero v5.1.2 published whisper.cpp .bin, stored F16/F32 expanded to F32.",
+    "Reference: original upstream tag v5.1.2 JIT SHA256 85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a, with all 15 binary payloads loaded into its state_dict. Every payload exactly equals upstream rounded to its stored type.",
+    "Binary: HF ggml-org/whisper-vad revision 9ffd54a1e1ee413ddf265af9913beaf518d1639b, SHA256 29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf.",
+    "Regime: torch 2.8.0 CPU one thread; native CPU 1/4 threads, macOS arm64 Apple M4; all nine cases from silero-vad-v6.2.manifest.json. Run scripts/vad/bin_parity.py --bin ggml-silero-v5.1.2.bin.",
+    "All bounds inherit the existing silero_vad.json budget EXCEPT dec.lstm_c max_abs. No probability tolerance is widened. Observed worst probability max_abs 3.040e-6, worst mean_abs 1.772e-7; exact offline segments and live events.",
+    "V5 cell-state scale is materially larger than v6: love-loss reaches |c|=1346.6324 (p99 |c|=208.1304), vs bounded hidden state tanh(c). Worst cell error 0.0067138671875 at frame4946/unit68: native -1118.8033, reference -1118.7966; relative 6.001e-6.",
+    "Mechanism: near-unity forget gates preserve fp32 recurrence/reduction rounding over thousands of steps. At that frame/unit f=0.9999797956, i=0.0024985668, g=-0.9889310370, o=0.1112969791 (FP64 replay). tanh(c) saturates, so this large absolute cell-state error does not propagate into hidden states/probabilities.",
+    "Independent FP64 Torch recurrence using the reference encoder and same expanded weights gives c=-1118.801142698 at that index: native error 0.00220203, reference error 0.00451184. Across the clip native vs FP64 max=0.00306821, reference vs FP64 max=0.00576443, confirming fp32 accumulation rather than graph/padding mismatch.",
+    "Per contribution policy, widened dec.lstm_c max_abs = 1.5 * observed = 0.01007080078125 (rounded up to 0.010071). Its mean_abs remains unchanged at 3.553e-5; observed worst mean=1.928e-5. Every other tensor remains within the original v6 budgets."
+  ],
+  "fe.stft_mag": {
+    "max_abs": 0.0008916,
+    "mean_abs": 1.432e-05
+  },
+  "enc.0.out": {
+    "max_abs": 0.0007955,
+    "mean_abs": 1.675e-05
+  },
+  "enc.1.out": {
+    "max_abs": 0.0007876,
+    "mean_abs": 1.988e-05
+  },
+  "enc.2.out": {
+    "max_abs": 0.001514,
+    "mean_abs": 3.588e-05
+  },
+  "enc.3.out": {
+    "max_abs": 0.0002876,
+    "mean_abs": 5.749e-06
+  },
+  "dec.lstm_h": {
+    "max_abs": 0.0001282,
+    "mean_abs": 3.888e-06
+  },
+  "dec.lstm_c": {
+    "max_abs": 0.010071,
+    "mean_abs": 3.553e-05
+  },
+  "vad.probs": {
+    "max_abs": 0.0001,
+    "mean_abs": 8.912e-06
+  }
+}

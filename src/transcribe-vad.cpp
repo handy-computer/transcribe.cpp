@@ -1,3 +1,7 @@
+// Probability segmentation and iterator policy adapted from Silero VAD 6.2.3.
+// Copyright (c) 2020-present Silero Team
+// MIT license: src/third_party/silero_vad/LICENSE (distributed with artifacts).
+
 // transcribe-vad.cpp - VAD role C ABI (include/transcribe/vad.h): input
 // validation, frame buffering for streaming, the zero-padded last frame of
 // an offline run, and probabilities -> speech segments.
@@ -583,4 +587,186 @@ extern "C" void transcribe_vad_stream_reset(struct transcribe_vad_session * sess
             reset_stream(session, vad_ops(session->model));
         }
     });
+}
+
+// Probability policy only: no inference state, audio buffering or model reset.
+struct transcribe_vad_iterator {
+    int32_t                           frame_samples;
+    double                            threshold;
+    int64_t                           min_silence_samples;
+    int64_t                           speech_pad_samples;
+    int64_t                           current_sample = 0;
+    int64_t                           temp_end       = 0;
+    bool                              triggered      = false;
+    std::vector<transcribe_vad_event> events;
+};
+
+extern "C" void transcribe_vad_iterator_params_init(transcribe_vad_iterator_params * p) {
+    transcribe::init_sized(p);
+    if (p != nullptr) {
+        p->threshold      = 0.5;
+        p->min_silence_ms = 100;
+        p->speech_pad_ms  = 30;
+    }
+}
+
+extern "C" void transcribe_vad_event_init(transcribe_vad_event * p) {
+    transcribe::init_sized(p);
+}
+
+extern "C" void transcribe_vad_iterator_result_init(transcribe_vad_iterator_result * p) {
+    transcribe::init_sized(p);
+}
+
+static transcribe_status vad_iterator_init_impl(int32_t                                frame_samples,
+                                                const transcribe_vad_iterator_params * params,
+                                                transcribe_vad_iterator **             out) {
+    if (frame_samples <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    transcribe_vad_iterator_params defaults;
+    transcribe_vad_iterator_params_init(&defaults);
+    if (params == nullptr) {
+        params = &defaults;
+    }
+    if (const auto st = check_input_struct_size(params->struct_size,
+                                                TRANSCRIBE_FIELD_END(transcribe_vad_iterator_params, speech_pad_ms));
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (!std::isfinite(params->threshold) || params->threshold < 0.0 || params->threshold > 1.0 ||
+        params->min_silence_ms < 0 || params->speech_pad_ms < 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    std::unique_ptr<transcribe_vad_iterator> s(new transcribe_vad_iterator());
+    s->frame_samples       = frame_samples;
+    s->threshold           = params->threshold;
+    s->min_silence_samples = int64_t{ 16 } * params->min_silence_ms;
+    s->speech_pad_samples  = int64_t{ 16 } * params->speech_pad_ms;
+    *out                   = s.release();
+    return TRANSCRIBE_OK;
+}
+
+extern "C" transcribe_status transcribe_vad_iterator_init(int32_t                                frame_samples,
+                                                          const transcribe_vad_iterator_params * params,
+                                                          transcribe_vad_iterator **             out) {
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    *out          = nullptr;
+    const auto st = api_guard_status("transcribe_vad_iterator_init",
+                                     [&] { return vad_iterator_init_impl(frame_samples, params, out); });
+    if (st != TRANSCRIBE_OK) {
+        *out = nullptr;
+    }
+    return st;
+}
+
+static transcribe_status vad_iterator_feed_impl(transcribe_vad_iterator * s, const float * probs, int32_t n_probs) {
+    if (s == nullptr || n_probs < 0 || (n_probs > 0 && probs == nullptr)) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    // int32 * int32 fits int64. Keep headroom for padded END boundaries.
+    const int64_t advance = int64_t{ n_probs } * s->frame_samples;
+    if (advance > std::numeric_limits<int64_t>::max() - s->speech_pad_samples - s->current_sample) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    for (int32_t i = 0; i < n_probs; ++i) {
+        if (!std::isfinite(probs[i]) || probs[i] < 0.0f || probs[i] > 1.0f) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+
+    // Stage both policy state and results; even bad_alloc leaves the old
+    // events and stream position intact. At most one event per probability.
+    int64_t                           current_sample = s->current_sample;
+    int64_t                           temp_end       = s->temp_end;
+    bool                              triggered      = s->triggered;
+    std::vector<transcribe_vad_event> events;
+    for (int32_t i = 0; i < n_probs; ++i) {
+        current_sample += s->frame_samples;
+        const double prob = static_cast<double>(probs[i]);
+        // Translated from silero_vad.utils_vad.VADIterator.__call__.
+        if (prob >= s->threshold && temp_end != 0) {
+            temp_end = 0;
+        }
+        if (prob >= s->threshold && !triggered) {
+            triggered           = true;
+            const int64_t start = std::max<int64_t>(0, current_sample - s->speech_pad_samples - s->frame_samples);
+            events.push_back({ sizeof(transcribe_vad_event), TRANSCRIBE_VAD_EVENT_START, start });
+            continue;
+        }
+        if (prob < s->threshold - 0.15 && triggered) {
+            if (temp_end == 0) {
+                temp_end = current_sample;
+            }
+            if (current_sample - temp_end < s->min_silence_samples) {
+                continue;
+            }
+            const int64_t end = temp_end + s->speech_pad_samples - s->frame_samples;
+            temp_end          = 0;
+            triggered         = false;
+            events.push_back({ sizeof(transcribe_vad_event), TRANSCRIBE_VAD_EVENT_END, end });
+        }
+    }
+    s->events.swap(events);
+    s->current_sample = current_sample;
+    s->temp_end       = temp_end;
+    s->triggered      = triggered;
+    return TRANSCRIBE_OK;
+}
+
+extern "C" transcribe_status transcribe_vad_iterator_feed(transcribe_vad_iterator * s,
+                                                          const float *             probs,
+                                                          int32_t                   n_probs) {
+    return api_guard_status("transcribe_vad_iterator_feed", [&] { return vad_iterator_feed_impl(s, probs, n_probs); });
+}
+
+extern "C" void transcribe_vad_iterator_free(transcribe_vad_iterator * s) {
+    api_guard_void("transcribe_vad_iterator_free", [&] { delete s; });
+}
+
+extern "C" void transcribe_vad_iterator_reset(transcribe_vad_iterator * s) {
+    // Nothrow: trivial event destruction, no model hooks or allocations.
+    if (s != nullptr) {
+        s->current_sample = 0;
+        s->temp_end       = 0;
+        s->triggered      = false;
+        s->events.clear();
+    }
+}
+
+extern "C" transcribe_status transcribe_vad_iterator_get_result(const transcribe_vad_iterator *  s,
+                                                                transcribe_vad_iterator_result * out) {
+    if (s == nullptr || out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st =
+            check_struct_size(out->struct_size, TRANSCRIBE_FIELD_END(transcribe_vad_iterator_result, triggered));
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    transcribe_vad_iterator_result staged{};
+    staged.struct_size    = out->struct_size;
+    staged.n_events       = static_cast<int32_t>(s->events.size());
+    staged.current_sample = s->current_sample;
+    staged.triggered      = s->triggered;
+    copy_out_prefix(out, &staged, out->struct_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
+extern "C" transcribe_status transcribe_vad_iterator_get_event(const transcribe_vad_iterator * s,
+                                                               int32_t                         i,
+                                                               transcribe_vad_event *          out) {
+    if (s == nullptr || out == nullptr || i < 0 || static_cast<size_t>(i) >= s->events.size()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, TRANSCRIBE_FIELD_END(transcribe_vad_event, sample));
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    transcribe_vad_event staged = s->events[static_cast<size_t>(i)];
+    staged.struct_size          = out->struct_size;
+    copy_out_prefix(out, &staged, out->struct_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }

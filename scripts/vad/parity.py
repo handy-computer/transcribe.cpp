@@ -28,6 +28,8 @@ import numpy as np
 import soundfile as sf
 import torch
 
+from segment_output import parse_segments
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -52,11 +54,7 @@ def cpp_segments(cli: Path, gguf: Path, wav: Path, threads: int) -> list[dict[st
                             "-o", str(output), str(wav)], capture_output=True, text=True)
         if r.returncode != 0:
             raise SystemExit(f"error: transcribe-cli failed on {wav}:\n{r.stdout}\n{r.stderr}")
-        segs = []
-        for line in output.read_text().splitlines():
-            f = dict(kv.split("=", 1) for kv in line.split()[2:] if "=" in kv)
-            segs.append({"start": int(f["start"]), "end": int(f["end"])})
-        return segs
+        return parse_segments(output.read_text())
 
 
 def main() -> int:

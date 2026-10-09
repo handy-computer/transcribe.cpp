@@ -21,6 +21,34 @@ F32 only. Converted locally with
 `uv run --project scripts/envs/silero_vad scripts/convert-silero_vad.py`
 (not yet published to Hugging Face).
 
+### Direct whisper.cpp binary weights
+
+The same family/runtime also loads the official binaries from
+[ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad/tree/9ffd54a1e1ee413ddf265af9913beaf518d1639b),
+pinned revision `9ffd54a1e1ee413ddf265af9913beaf518d1639b`:
+
+| File | SHA256 |
+|---|---|
+| `ggml-silero-v5.1.2.bin` | `29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf` |
+| `ggml-silero-v6.2.0.bin` | `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987` |
+
+These are upstream publications, not canonical handy-computer GGUF releases.
+They use mixed F16/F32 storage; expansion does not restore full-F32 precision.
+See [VAD usage](../vad.md#supported-model-files) and the
+[validation commands](../porting/families/silero_vad.md#commands).
+
+CPU, Apple M4, nine golden clips, 1/4 threads, against upstream JIT loaded with
+**the same stored weights**:
+
+| Binary | Max probability error | Worst clip mean error |
+|---|---:|---:|
+| v5.1.2 | 3.040e-6 | 1.772e-7 |
+| v6.2.0 | 1.071e-5 | 1.498e-7 |
+
+Both have exact segments/live events and bit-identical offline/stream scores.
+Storage rounding alone changes probabilities versus original F32 weights by up
+to 0.003073 (v5) / 0.010982 (v6); that is separate from native inference error.
+
 ## Accuracy
 
 The reference is upstream's own package. Measured as exact speech-segment

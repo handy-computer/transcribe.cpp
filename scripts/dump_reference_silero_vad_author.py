@@ -51,7 +51,12 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     if args.torch_threads > 0:
         torch.set_num_threads(args.torch_threads)
-    model = load_silero_vad()
+    bin_source = {}
+    if args.bin is not None:
+        from lib.silero_bin_reference import load_stored_model
+        model, bin_source = load_stored_model(args.bin, args.v5_jit)
+    else:
+        model = load_silero_vad()
     sub = model._model
 
     audio_path = Path(args.audio).expanduser().resolve()
@@ -127,6 +132,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
         "audio": audio_path.name,
         "n_samples": int(len(audio)),
         "n_frames": n,
+        **bin_source,
     }
     for name in ("fe.stft_mag", "enc.0.out", "enc.1.out", "enc.2.out", "enc.3.out"):
         write_tensor(name, np.stack(captured[name]), stage="encoder", source=source, out_dir=out_dir)
@@ -147,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Silero VAD reference dumper (silero-vad package).")
     sub = p.add_subparsers(dest="cmd", required=True)
     ep = sub.add_parser("encoder", help="Score every frame; dump stage tensors and segments.json")
+    ep.add_argument("--bin", type=Path, help="Published v5.1.2/v6.2.0 .bin stored-weight reference")
+    ep.add_argument("--v5-jit", type=Path, help="Pinned upstream v5.1.2 JIT (otherwise fetched to build/reference)")
     ep.add_argument("--model", default="silero-vad", help="Ignored; the model is the pinned package's")
     ep.add_argument("--audio", required=True, help="16 kHz mono WAV path")
     ep.add_argument("--out", required=True, help="Output directory for dumps")

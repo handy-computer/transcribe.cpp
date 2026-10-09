@@ -56,7 +56,8 @@ struct transcribe_vad_params {
      * (the default, -1) means max(threshold - 0.15, 0.01). Otherwise
      * [0, threshold]. */
     double   neg_threshold;
-    /* Segments of at most this length are dropped (default 250). */
+    /* Segments of at most this length are dropped (default 250), except
+     * those emitted by max-duration splitting. */
     int32_t  min_speech_ms;
     /* Silence this long ends a segment (default 100). */
     int32_t  min_silence_ms;
@@ -181,6 +182,78 @@ TRANSCRIBE_API transcribe_status transcribe_vad_get_segment(const struct transcr
  * encoder; decode_ms: the recurrent decoder). */
 TRANSCRIBE_API transcribe_status transcribe_vad_get_timings(const struct transcribe_vad_session * session,
                                                             struct transcribe_timings *           out);
+
+/* Optional model-independent live policy: Silero VADIterator at 16 kHz.
+ * Separate from the inference session; never resets a model on speech END.
+ * One iterator may be used by one thread at a time. */
+struct transcribe_vad_iterator;
+
+struct transcribe_vad_iterator_params {
+    uint64_t struct_size;
+    /* Speech starts at p >= threshold; silence is p < threshold - 0.15.
+     * Double comparisons, with no offline-style 0.01 floor. [0, 1]. */
+    double   threshold;      /* default 0.5 */
+    int32_t  min_silence_ms; /* default 100; >= 0 */
+    int32_t  speech_pad_ms;  /* default 30; >= 0 */
+};
+
+typedef enum transcribe_vad_event_type {
+    TRANSCRIBE_VAD_EVENT_START = 0,
+    TRANSCRIBE_VAD_EVENT_END   = 1,
+} transcribe_vad_event_type;
+
+struct transcribe_vad_event {
+    uint64_t                  struct_size;
+    transcribe_vad_event_type type;
+    /* Boundary in 16 kHz samples, not the time the event was detected.
+     * START is clamped to 0; END includes padding and may exceed the
+     * samples scored so far. Padding may overlap adjacent events. */
+    int64_t                   sample;
+};
+
+struct transcribe_vad_iterator_result {
+    uint64_t struct_size;
+    int32_t  n_events;       /* events from the last feed, in detection order */
+    int64_t  current_sample; /* number of probabilities consumed * frame_samples */
+    bool     triggered;      /* speech is active (possibly awaiting silence) */
+};
+
+TRANSCRIBE_API void transcribe_vad_iterator_params_init(struct transcribe_vad_iterator_params * params);
+TRANSCRIBE_API void transcribe_vad_event_init(struct transcribe_vad_event * out);
+TRANSCRIBE_API void transcribe_vad_iterator_result_init(struct transcribe_vad_iterator_result * out);
+
+/* frame_samples > 0, normally from transcribe_vad_get_info. params may be
+ * NULL for defaults. Copies params; owns no model. On any failure *out is
+ * NULL. The caller owns the iterator and must free it. */
+TRANSCRIBE_API transcribe_status transcribe_vad_iterator_init(int32_t frame_samples,
+                                                              const struct transcribe_vad_iterator_params * params,
+                                                              struct transcribe_vad_iterator **             out);
+TRANSCRIBE_API void              transcribe_vad_iterator_free(struct transcribe_vad_iterator * iterator);
+
+/* Consume sequential per-frame probabilities, each finite and in [0, 1].
+ * Arbitrary grouping, including n_probs == 0 (probs may then be NULL).
+ * Every successful feed replaces the event result; an empty feed clears
+ * events without advancing time. Any failure leaves state AND events intact.
+ * Overflow of the sample counter (including padding headroom) is INVALID_ARG.
+ * Middle probabilities neither cancel pending silence nor emit END; only
+ * p >= threshold cancels it. No min/max speech-duration filtering.
+ * EOF does NOT emit END, even for active speech, exactly as upstream. There
+ * is no finish operation. A zero-padded final probability still advances a
+ * full frame; callers wanting EOF closure/clamping must use the actual audio
+ * length, not current_sample. Reset discards active speech without END. */
+TRANSCRIBE_API transcribe_status transcribe_vad_iterator_feed(struct transcribe_vad_iterator * iterator,
+                                                              const float *                    probs,
+                                                              int32_t                          n_probs);
+
+/* Reset time, hysteresis and last events. NULL is a no-op, as with free. */
+TRANSCRIBE_API void              transcribe_vad_iterator_reset(struct transcribe_vad_iterator * iterator);
+TRANSCRIBE_API transcribe_status transcribe_vad_iterator_get_result(const struct transcribe_vad_iterator *  iterator,
+                                                                    struct transcribe_vad_iterator_result * out);
+/* Copy event i; out-of-range indices return INVALID_ARG without writing out.
+ * No borrowed event pointers: the copy remains valid after feed/reset/free. */
+TRANSCRIBE_API transcribe_status transcribe_vad_iterator_get_event(const struct transcribe_vad_iterator * iterator,
+                                                                   int32_t                                i,
+                                                                   struct transcribe_vad_event *          out);
 
 #ifdef __cplusplus
 }

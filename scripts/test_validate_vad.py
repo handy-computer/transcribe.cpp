@@ -15,6 +15,25 @@ from pathlib import Path
 from unittest.mock import patch
 
 import validate
+from vad.segment_output import parse_segments
+
+
+class VadCliOutputTests(unittest.TestCase):
+    def test_blank_no_speech(self):
+        for text in ("", "\n", " \n\n"):
+            self.assertEqual(parse_segments(text), [])
+
+    def test_normal_segments(self):
+        self.assertEqual(parse_segments(
+            "\nsegment: 0 start=100 end=1000 t0=0.006 t1=0.062\n"
+            "segment: 1 start=2000 end=3000 t0=0.125 t1=0.188\n\n"),
+            [{"start": 100, "end": 1000}, {"start": 2000, "end": 3000}])
+
+    def test_unexpected_nonblank_is_error(self):
+        for text in ("noise", "segment: 0", "segment: 1 start=0 end=1 t0=0 t1=1",
+                     "segment: 0 start=3 end=2 t0=0 t1=1"):
+            with self.assertRaises(ValueError):
+                parse_segments(text)
 
 
 class VadSegmentGateTests(unittest.TestCase):

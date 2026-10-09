@@ -371,11 +371,15 @@ add_test(NAME transcribe_run_dispatch_unit
 # input, throwing stream hooks, DIARIZE, LANGID and VAD roles
 # -----------------------------------------------------------------------------
 
-foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch vad_dispatch)
+foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch vad_dispatch vad_iterator)
     add_executable(transcribe_${_t}_unit ${_t}_unit.cpp)
     target_link_libraries(transcribe_${_t}_unit PRIVATE transcribe)
     target_include_directories(transcribe_${_t}_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
     transcribe_apply_warnings(transcribe_${_t}_unit)
+    if(_t STREQUAL "vad_iterator" AND NOT TRANSCRIBE_BUILD_SHARED)
+        # Allocator interposition cannot reach a Windows shared library.
+        target_compile_definitions(transcribe_${_t}_unit PRIVATE TRANSCRIBE_TEST_ALLOC_INTERPOSE=1)
+    endif()
     add_test(NAME transcribe_${_t}_unit COMMAND transcribe_${_t}_unit)
 endforeach()
 
@@ -809,6 +813,13 @@ endif()
 # -----------------------------------------------------------------------------
 # silero_vad (VAD role) fixture smoke
 # -----------------------------------------------------------------------------
+
+add_executable(transcribe_silero_vad_bin_smoke silero_vad_bin_smoke.cpp)
+target_link_libraries(transcribe_silero_vad_bin_smoke PRIVATE transcribe ggml)
+target_compile_definitions(transcribe_silero_vad_bin_smoke PRIVATE
+    "TRANSCRIBE_TEST_BIN_DIR=\"${CMAKE_CURRENT_BINARY_DIR}/silero-bin-fixtures\"")
+transcribe_apply_warnings(transcribe_silero_vad_bin_smoke)
+add_test(NAME transcribe_silero_vad_bin_smoke COMMAND transcribe_silero_vad_bin_smoke)
 
 if(TRANSCRIBE_UV)
     add_executable(transcribe_silero_vad_smoke silero_vad_smoke.cpp)
@@ -1442,7 +1453,8 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 
     # silero_vad on the VAD role: reference segments of jfk.wav, no speech
     # in noise.wav, 20 ms streaming parity, and a GPU backend against the
-    # CPU when one loads. Gated by TRANSCRIBE_SILERO_VAD_GGUF (RC 77 skip).
+    # CPU when one loads (GGUF only). Gated by TRANSCRIBE_SILERO_VAD_GGUF
+    # / _V5_BIN / _V6_BIN (RC 77 skip); CPU smoke uses 1 and 4 threads.
     add_executable(transcribe_silero_vad_real_smoke
         silero_vad_real_smoke.cpp)
     target_link_libraries(transcribe_silero_vad_real_smoke
@@ -1454,6 +1466,14 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_silero_vad_real_smoke)
     set_tests_properties(transcribe_silero_vad_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+    # A missing configured model is a failure, not a successful smoke or skip.
+    add_test(NAME transcribe_silero_vad_real_bad_path
+        COMMAND ${CMAKE_COMMAND} -E env
+            --unset=TRANSCRIBE_SILERO_VAD_GGUF
+            --unset=TRANSCRIBE_SILERO_VAD_V6_BIN
+            "TRANSCRIBE_SILERO_VAD_V5_BIN=${CMAKE_CURRENT_BINARY_DIR}/missing-silero-model.bin"
+            $<TARGET_FILE:transcribe_silero_vad_real_smoke>)
+    set_tests_properties(transcribe_silero_vad_real_bad_path PROPERTIES WILL_FAIL TRUE)
 endif()
 
 # -----------------------------------------------------------------------------
