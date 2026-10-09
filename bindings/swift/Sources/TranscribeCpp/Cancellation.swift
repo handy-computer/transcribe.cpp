@@ -1,10 +1,10 @@
 import CTranscribe
 import os
 
-/// A thread-safe cancellation flag. Install it on a `Session` or a
-/// `DiarizeSession` with `setCancellationToken`; the native abort callback
-/// (polled between decode steps / chunks) reads it, so `cancel()` may be called
-/// from any thread to abort an in-flight run/stream. The run then throws
+/// A thread-safe cancellation flag. Install it on a `Session`, `DiarizeSession`,
+/// `LangIdSession` or `VadSession` with `setCancellationToken`; the native abort
+/// callback (polled between decode steps / chunks) reads it, so `cancel()` may
+/// be called from any thread to abort an in-flight run/stream. The run then throws
 /// `.aborted` (a `Session` run with the partial transcript preserved).
 public final class CancellationToken: @unchecked Sendable {
     private let cancelled = OSAllocatedUnfairLock(initialState: false)

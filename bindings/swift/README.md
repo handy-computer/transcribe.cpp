@@ -103,7 +103,7 @@ Runnable examples live in
 
 ## Diarization
 
-A model's `roles` say what it serves (`.asr`, `.diarize`). Diarization models
+A model's `roles` say what it serves (`.asr`, `.diarize`, `.langId`, `.vad`). Diarization models
 such as Sortformer (DIARIZE only) return speaker turns from a `DiarizeSession`:
 
 ```swift
@@ -146,8 +146,10 @@ for s in try vad.run(pcm, options: VadOptions(threshold: 0.6)).segments {
 }
 
 for chunk in micChunks {
-    let probs = try vad.streamFeed(chunk).probs
+    let r = try vad.streamFeed(chunk)
+    // r.probs[i] scores stream frame r.firstFrame + i
 }
+try vad.streamFlush()
 ```
 
 ## Backends
@@ -192,7 +194,9 @@ token.cancel()
 
 The active `run`, `runBatch`, or stream feed throws `TranscribeError.aborted`
 with any partial transcript preserved. Async `run`/`runBatch` also bridge Swift
-task cancellation when no custom token is installed.
+task cancellation when no custom token is installed. Role sessions
+(`DiarizeSession`, `LangIdSession`, `VadSession`, including a VAD stream feed)
+take a token the same way.
 
 ## C, Objective-C, and C++
 

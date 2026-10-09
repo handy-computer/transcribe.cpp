@@ -21,10 +21,21 @@ modelTest("toy: run, and stream equals run", VAD_TOY_MODEL, async () => {
 
     const got = [];
     for (let off = 0; off < pcm.length; off += 777) {
-      got.push(...(await vad.streamFeed(pcm.subarray(off, off + 777))).probs);
+      const f = await vad.streamFeed(pcm.subarray(off, off + 777));
+      assert.equal(f.firstFrame, Math.floor(off / 512));
+      got.push(...f.probs);
     }
     got.push(...(await vad.streamFlush()).probs);
-    assert.deepEqual(Float32Array.from(got), r.probs);
+    assert.deepEqual(got, r.probs);
+
+    // Empty feed scores nothing and keeps the position; reset / flush rewind to 0.
+    await vad.streamFeed(pcm.subarray(0, 1000));
+    const empty = await vad.streamFeed(new Float32Array(0));
+    assert.deepEqual([empty.probs.length, empty.firstFrame], [0, 1]);
+    await vad.streamReset();
+    assert.equal((await vad.streamFeed(pcm.subarray(0, 1000))).firstFrame, 0);
+    await vad.streamFlush();
+    assert.equal((await vad.streamFeed(pcm.subarray(0, 1000))).firstFrame, 0);
   } finally {
     vad.dispose();
     m.dispose();

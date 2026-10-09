@@ -1,5 +1,6 @@
 //! VAD role on the toy silero_vad fixture (tests/fixtures/arch_silero_vad.gguf,
-//! built by the C++ test fixtures): run, and stream parity with run.
+//! built by the C++ test fixtures): run, stream parity with run, and
+//! stream positions.
 
 mod common;
 
@@ -31,8 +32,16 @@ fn toy_run_and_stream_match() {
 
     let mut probs = Vec::new();
     for chunk in pcm.chunks(777) {
-        probs.extend_from_slice(&vad.stream_feed(chunk).unwrap().probs);
+        let r = vad.stream_feed(chunk).unwrap();
+        assert_eq!(r.first_frame, probs.len() as i64);
+        probs.extend_from_slice(&r.probs);
     }
     probs.extend_from_slice(&vad.stream_flush().unwrap().probs);
     assert_eq!(probs, off.probs);
+
+    // flush and reset both restart the stream at frame 0.
+    assert_eq!(vad.stream_feed(&pcm[..1024]).unwrap().first_frame, 0);
+    assert_eq!(vad.stream_feed(&pcm[..1024]).unwrap().first_frame, 2);
+    vad.stream_reset();
+    assert_eq!(vad.stream_feed(&pcm[..1024]).unwrap().first_frame, 0);
 }

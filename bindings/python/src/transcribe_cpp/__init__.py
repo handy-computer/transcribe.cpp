@@ -24,6 +24,7 @@ from __future__ import annotations
 import collections
 import ctypes
 import enum
+import numbers
 import os
 import threading
 import weakref
@@ -451,23 +452,29 @@ def _enum(mapping: dict, key: str, what: str) -> int:
 
 
 PCMLike = Union["ctypes.Array", bytes, bytearray, memoryview, Sequence[float]]
+_INT_MAX = 2**31 - 1
 
 
-def _pcm_to_carray(pcm: PCMLike):
-    """Copy *pcm* into a ``c_float`` array, returning ``(array, n_samples)``."""
+def _pcm_count(n: int, allow_empty: bool) -> int:
+    if n == 0 and not allow_empty:
+        raise InvalidArgument("empty PCM buffer")
+    if n > _INT_MAX:  # the native count is a C int; ctypes would wrap it
+        raise InvalidArgument(f"PCM buffer has {n} samples; the limit is {_INT_MAX}")
+    return n
+
+
+def _pcm_to_carray(pcm: PCMLike, allow_empty: bool = False):
+    """Copy *pcm* into a ``c_float`` array, returning ``(array, n_samples)``.
+    ``allow_empty`` accepts zero samples (after the format checks)."""
     if isinstance(pcm, ctypes.Array) and pcm._type_ is ctypes.c_float:
-        n = len(pcm)
-        if n == 0:
-            raise InvalidArgument("empty PCM buffer")
-        return pcm, n
+        return pcm, _pcm_count(len(pcm), allow_empty)
 
     try:
         mv = memoryview(pcm)
     except TypeError:
         seq = [float(x) for x in pcm]
-        if not seq:
-            raise InvalidArgument("empty PCM buffer")
-        return (ctypes.c_float * len(seq))(*seq), len(seq)
+        n = _pcm_count(len(seq), allow_empty)
+        return (ctypes.c_float * n)(*seq), n
 
     with mv:
         if not mv.contiguous:
@@ -496,9 +503,7 @@ def _pcm_to_carray(pcm: PCMLike):
                 f"PCM must be float32 (got buffer format {mv.format!r}); convert "
                 "with array('f', ...) or numpy.asarray(x, dtype='float32')"
             )
-        n = floats.shape[0]
-        if n == 0:
-            raise InvalidArgument("empty PCM buffer")
+        n = _pcm_count(floats.shape[0], allow_empty)
         return (ctypes.c_float * n).from_buffer_copy(floats), n
 
 
@@ -1031,15 +1036,18 @@ class Model:
 
     The native library allows one compute call in flight across ALL sessions
     of a model, so ``Session.run()`` / ``run_batch()`` / ``stream()``,
-    ``Stream.feed()`` / ``finalize()`` / ``reset()`` and ``DiarizeSession.run()``
-    hold a model-wide lock for the native call and its copy-out. Calls from
-    other threads wait; a ``cancel()`` on a queued call is kept, and it
-    aborts at its first poll after acquiring the lock. Load one Model per
-    worker for parallelism. An active stream holds the model's stream
+    ``Stream.feed()`` / ``finalize()`` / ``reset()``, ``DiarizeSession.run()``,
+    ``LangIdSession.run()`` and ``VadSession.run()`` / ``stream_feed()`` /
+    ``stream_flush()`` / ``stream_reset()`` hold a model-wide lock for the
+    native call and its copy-out. Calls from other threads wait; a
+    ``cancel()`` on a queued call is kept, and it aborts at its first poll
+    after acquiring the lock. Load one Model per worker for parallelism. An active stream holds the model's stream
     lease from ``stream()`` until it is finalized, reset, fails, is
     garbage-collected or its session/model is closed. Meanwhile ``run()``,
-    ``run_batch()``, ``stream()`` and diarize ``run()`` on any session raise
-    :class:`Busy` once they hold the lock; the stream's own calls proceed.
+    ``run_batch()``, ``stream()``, diarize and langid ``run()`` and VAD
+    ``run()`` / ``stream_feed()`` / ``stream_flush()`` on any session raise
+    :class:`Busy` once they hold the lock; the stream's own calls proceed. A
+    VAD stream is session state, not a lease.
     ``close()`` and GC never wait for the lock: the handle is closed at once
     and the native free runs right after any in-flight call.
 
@@ -1391,8 +1399,9 @@ _S = TypeVar("_S", bound="_SessionBase")
 
 
 class _SessionBase:
-    """Handle, cancellation and close plumbing shared by Session and
-    DiarizeSession. Subclasses name their native free in ``_free_fn``."""
+    """Handle, cancellation and close plumbing shared by Session,
+    DiarizeSession, LangIdSession and VadSession. Subclasses name their
+    native free in ``_free_fn``."""
 
     _free_fn = ""
 
@@ -1444,8 +1453,9 @@ class _SessionBase:
         """Request cancellation of an in-flight call from another thread: it
         aborts at the next chunk/decode boundary and raises ``Aborted`` (with
         ``partial_result`` where available). The flag is cleared when the next
-        run / run_batch / stream / diarize run starts, before it waits for the
-        lock, so a cancel() while queued still aborts it. Lock-free."""
+        run / run_batch / stream / diarize or langid run / VAD run, stream_feed
+        or stream_flush starts, before it waits for the lock, so a cancel()
+        while queued still aborts it. Lock-free."""
         self._cancel.set()
 
     def close(self) -> None:
@@ -2095,22 +2105,27 @@ class LangIdSession(_SessionBase):
         return _timings_from(tm)
 
 
-def _floats_or_empty(values):
-    """Like _pcm_to_carray, but an empty input is ``(None, 0)``: the VAD
-    stream feed accepts zero samples."""
-    if hasattr(values, "__len__") and len(values) == 0:
-        return None, 0
-    return _pcm_to_carray(values)
+def _vad_option(name: str, value, integer: bool):
+    """Check a VAD run option before ctypes would wrap or reject it."""
+    if integer:
+        if (isinstance(value, bool) or not isinstance(value, numbers.Integral)
+                or not -2**31 <= value <= _INT_MAX):
+            raise InvalidArgument(f"{name} must be an int32; got {value!r}")
+        return int(value)
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise InvalidArgument(f"{name} must be a real number; got {value!r}")
+    return float(value)
 
 
 class VadSession(_SessionBase):
     """A voice activity detection context on a model with the VAD role.
     Compute locking and ``Busy`` rules: see ``Model``.
 
-    ``run()`` scores one clip and segments it; ``feed()`` / ``flush()`` /
-    ``reset()`` drive this session's own probability stream. That stream is
-    native per-session state, not an ASR stream: it does not take the
-    model's stream lease. Each feed/flush is one bounded compute call, so it
+    ``run()`` scores one clip and segments it; ``stream_feed()`` /
+    ``stream_flush()`` / ``stream_reset()`` drive this session's own
+    probability stream. That stream is native per-session state, not an ASR
+    stream: it does not take the model's stream lease. Each feed/flush is one
+    bounded compute call, so it
     is locked and raises ``Busy`` under an ASR stream lease like a langid or
     diarize run."""
 
@@ -2161,9 +2176,14 @@ class VadSession(_SessionBase):
             speech_pad_ms: int | None = None,
             max_speech_ms: int | None = None) -> VadResult:
         """Score one clip (16 kHz mono float32 PCM) from a fresh state and
-        return its per-frame probabilities and speech segments. Unset
-        options keep the native defaults (Silero's get_speech_timestamps).
-        Ends any stream in progress on this session.
+        return its per-frame probabilities and speech segments. Ends any
+        stream in progress on this session.
+
+        Options left at None keep the native defaults (Silero's
+        get_speech_timestamps): ``threshold`` 0.5; ``neg_threshold`` None or
+        negative means max(threshold - 0.15, 0.01), otherwise it must be in
+        [0, threshold]; ``min_speech_ms`` 250, ``min_silence_ms`` 100,
+        ``speech_pad_ms`` 30, ``max_speech_ms`` 0 (no limit).
 
         Raises :class:`InvalidArgument` for out-of-range options,
         :class:`Aborted` after :meth:`cancel`, and :class:`Busy` if a stream
@@ -2172,13 +2192,14 @@ class VadSession(_SessionBase):
         array, n_samples = _pcm_to_carray(pcm)
         params = _generated.transcribe_vad_params()
         _lib.transcribe_vad_params_init(_byref(params))
-        for name, value in (("threshold", threshold), ("neg_threshold", neg_threshold),
-                            ("min_speech_ms", min_speech_ms),
-                            ("min_silence_ms", min_silence_ms),
-                            ("speech_pad_ms", speech_pad_ms),
-                            ("max_speech_ms", max_speech_ms)):
+        for name, value, integer in (
+                ("threshold", threshold, False), ("neg_threshold", neg_threshold, False),
+                ("min_speech_ms", min_speech_ms, True),
+                ("min_silence_ms", min_silence_ms, True),
+                ("speech_pad_ms", speech_pad_ms, True),
+                ("max_speech_ms", max_speech_ms, True)):
             if value is not None:
-                setattr(params, name, value)
+                setattr(params, name, _vad_option(name, value, integer))
         with self._model._exclusive(
                 "vad_run", busy="a stream is active on this model; "
                                 "finish or drop it before vad run()"):
@@ -2187,35 +2208,37 @@ class VadSession(_SessionBase):
                    "transcribe_vad_run")
             return self._copy_result(h, segments=True)
 
-    def feed(self, pcm: PCMLike) -> VadResult:
-        """Append audio to this session's stream and return the
-        probabilities of the frames it completed (possibly none); a partial
-        frame waits for the next feed. ``first_frame`` is the stream position
-        of the first one. A failed feed (other than rejected input) resets
-        the stream. Raises like :meth:`run`."""
+    def stream_feed(self, pcm: PCMLike) -> VadResult:
+        """Append audio (possibly empty) to this session's stream and return
+        the probabilities of the frames it completed (possibly none); a
+        partial frame waits for the next feed. ``first_frame`` is the stream
+        position of the first one; after :meth:`stream_reset` or
+        :meth:`stream_flush` the next feed starts at frame 0. Rejected input
+        leaves the stream unchanged; an abort or processing error resets it.
+        Raises like :meth:`run`."""
         self._cancel.clear()
-        array, n_samples = _floats_or_empty(pcm)
+        array, n_samples = _pcm_to_carray(pcm, allow_empty=True)
         with self._model._exclusive(
                 "vad_feed", busy="a stream is active on this model; "
-                                 "finish or drop it before vad feed()"):
+                                 "finish or drop it before vad stream_feed()"):
             h = self._h
             _check(_lib.transcribe_vad_stream_feed(h, array, n_samples),
                    "transcribe_vad_stream_feed")
             return self._copy_result(h, segments=False)
 
-    def flush(self) -> VadResult:
+    def stream_flush(self) -> VadResult:
         """End the stream: score the buffered partial frame zero padded (one
         probability, or none when nothing was buffered). The next feed starts
         a new stream at frame 0. Raises like :meth:`run`."""
         self._cancel.clear()
         with self._model._exclusive(
                 "vad_flush", busy="a stream is active on this model; "
-                                  "finish or drop it before vad flush()"):
+                                  "finish or drop it before vad stream_flush()"):
             h = self._h
             _check(_lib.transcribe_vad_stream_flush(h), "transcribe_vad_stream_flush")
             return self._copy_result(h, segments=False)
 
-    def reset(self) -> None:
+    def stream_reset(self) -> None:
         """Drop the stream without scoring. Never raises ``Busy``."""
         with self._model._exclusive("vad_reset"):
             _lib.transcribe_vad_stream_reset(self._h)

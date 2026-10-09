@@ -1,6 +1,9 @@
 //! [`VadSession`] — the VAD role (where there is speech), from
-//! [`Model::vad_session`]. Threading, lifetime, and compute-lock rules are
-//! those of [`Session`](crate::Session).
+//! [`Model::vad_session`]. Threading and lifetime rules are those of
+//! [`Session`](crate::Session). Each call takes the compute lock for that call
+//! only; `run`, `stream_feed` and `stream_flush` return
+//! [`Error::Busy`](crate::Error) while an ASR stream is active. A VAD stream is
+//! session state and does not take the stream lease.
 
 use std::os::raw::c_void;
 use std::sync::atomic::AtomicBool;
@@ -49,9 +52,11 @@ pub struct VadOptions {
     /// A frame with `p >= threshold` is speech (default 0.5). `[0, 1]`.
     pub threshold: f64,
     /// Inside speech, a frame with `p < neg_threshold` is silence. Negative
-    /// (the default, -1) means `max(threshold - 0.15, 0.01)`.
+    /// (the default, -1) means `max(threshold - 0.15, 0.01)`; otherwise
+    /// `[0, threshold]`.
     pub neg_threshold: f64,
-    /// Segments of at most this length are dropped (default 250).
+    /// Segments of at most this length are dropped (default 250), except
+    /// those split by `max_speech_ms`. Durations must be nonnegative.
     pub min_speech_ms: i32,
     /// Silence this long ends a segment (default 100).
     pub min_silence_ms: i32,
@@ -83,7 +88,9 @@ impl Default for VadOptions {
     serde(default)
 )]
 pub struct VadSegment {
+    /// First sample of speech.
     pub start_sample: i64,
+    /// First sample after speech.
     pub end_sample: i64,
 }
 
@@ -131,7 +138,11 @@ impl Drop for VadSession {
     }
 }
 
-const BUSY: &str = "a stream is active on this model; finish or drop it before vad calls";
+const BUSY_RUN: &str = "a stream is active on this model; finish or drop it before vad run()";
+const BUSY_FEED: &str =
+    "a stream is active on this model; finish or drop it before vad stream_feed()";
+const BUSY_FLUSH: &str =
+    "a stream is active on this model; finish or drop it before vad stream_flush()";
 
 /// Copy the last call's result out; called under the compute lock.
 fn copy_result(ptr: *mut sys::transcribe_vad_session) -> Result<VadResult> {
@@ -219,7 +230,7 @@ impl VadSession {
         // binding, so a concurrent call on the same model cannot interleave.
         let ptr = self.ptr;
         self.model
-            .with_compute(Some(BUSY), |_| -> Result<VadResult> {
+            .with_compute(Some(BUSY_RUN), |_| -> Result<VadResult> {
                 check(
                     unsafe { sys::transcribe_vad_run(ptr, pcm.as_ptr(), n, &params) },
                     "vad run",
@@ -231,11 +242,13 @@ impl VadSession {
     /// Append audio to the stream and return the probabilities of the frames
     /// it completed; a partial frame waits for the next call. On CPU the
     /// stream's probabilities equal a [`run`](Self::run) over the same audio.
+    /// [`Error::InvalidArgument`](crate::Error) (e.g. NaN input) leaves the
+    /// stream intact; an abort or processing error resets it to frame 0.
     pub fn stream_feed(&mut self, pcm: &[f32]) -> Result<VadResult> {
         let n = clamp_len(pcm.len())?;
         let ptr = self.ptr;
         self.model
-            .with_compute(Some(BUSY), |_| -> Result<VadResult> {
+            .with_compute(Some(BUSY_FEED), |_| -> Result<VadResult> {
                 check(
                     unsafe { sys::transcribe_vad_stream_feed(ptr, pcm.as_ptr(), n) },
                     "vad stream feed",
@@ -245,11 +258,12 @@ impl VadSession {
     }
 
     /// End the stream: score the buffered partial frame, zero padded (one
-    /// probability, or none), and reset. The next feed starts at frame 0.
+    /// probability, or none), and reset. The next feed starts at frame 0; a
+    /// processing error also resets the stream.
     pub fn stream_flush(&mut self) -> Result<VadResult> {
         let ptr = self.ptr;
         self.model
-            .with_compute(Some(BUSY), |_| -> Result<VadResult> {
+            .with_compute(Some(BUSY_FLUSH), |_| -> Result<VadResult> {
                 check(
                     unsafe { sys::transcribe_vad_stream_flush(ptr) },
                     "vad stream flush",
@@ -258,7 +272,7 @@ impl VadSession {
             })?
     }
 
-    /// Drop the stream without scoring.
+    /// Drop the stream without scoring; the next feed starts at frame 0.
     pub fn stream_reset(&mut self) {
         let ptr = self.ptr;
         let _ = self
@@ -294,15 +308,13 @@ mod tests {
             }),
             cancel: None,
         };
-        let err = session
-            .run(&[0.0; 160], &VadOptions::default())
-            .unwrap_err();
-        assert!(matches!(err, Error::Busy(ref m) if m == BUSY), "{err:?}");
-        assert!(matches!(
-            session.stream_feed(&[0.0; 160]),
-            Err(Error::Busy(_))
-        ));
-        assert!(matches!(session.stream_flush(), Err(Error::Busy(_))));
+        for (r, msg) in [
+            (session.run(&[0.0; 160], &VadOptions::default()), BUSY_RUN),
+            (session.stream_feed(&[0.0; 160]), BUSY_FEED),
+            (session.stream_flush(), BUSY_FLUSH),
+        ] {
+            assert!(matches!(r, Err(Error::Busy(ref m)) if m == msg), "{r:?}");
+        }
     }
 
     #[test]

@@ -408,7 +408,7 @@ export interface VadSegment {
 
 export interface VadResult {
   /** Per-frame speech probabilities produced by this call (copied). */
-  probs: Float32Array;
+  probs: number[];
   /** Stream frame index of probs[0]: 0 after run; frames scored before a feed / flush. */
   firstFrame: number;
   /** Speech segments; run only, empty after a feed or flush. */

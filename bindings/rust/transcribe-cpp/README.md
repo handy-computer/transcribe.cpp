@@ -128,7 +128,11 @@ let mut vad = model.vad_session()?;
 for s in vad.run(&pcm, &VadOptions::default())?.segments {
     println!("speech {}..{}", s.start_sample, s.end_sample);
 }
-let live = vad.stream_feed(&pcm)?.probs;
+for chunk in pcm.chunks(320) {
+    let r = vad.stream_feed(chunk)?;
+    println!("frames {}.. {:?}", r.first_frame, r.probs);
+}
+vad.stream_flush()?;
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 

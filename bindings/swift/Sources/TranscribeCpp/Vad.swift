@@ -84,8 +84,10 @@ extension Model {
 }
 
 /// A VAD-role session: where there is speech. Same threading and lifetime
-/// contract as `Session` (single-threaded; holds its `Model` alive), and its
-/// calls share the model's compute lock and stream lease with every `Session`.
+/// contract as `Session` (single-threaded; holds its `Model` alive). Calls take
+/// the model's compute lock; `run`/`streamFeed`/`streamFlush` throw `.busy`
+/// while an ASR stream holds the lease. A VAD stream is session state and does
+/// not take the lease.
 public final class VadSession {
     let model: Model
     let ptr: OpaquePointer
@@ -142,8 +144,9 @@ public final class VadSession {
     }
 
     /// Append audio to the session's stream and score every frame it
-    /// completes; a partial frame waits for the next call. A failure other
-    /// than invalid input resets the stream.
+    /// completes; a partial frame waits for the next call. Invalid input
+    /// leaves the stream and last result intact; an abort or processing error
+    /// resets the stream, so the next feed starts at frame 0.
     public func streamFeed(_ pcm: [Float]) throws -> VadResult {
         try model.withCompute(
             busyIfStreaming: "a stream is active on this model; finish or drop it before vad streamFeed()"
@@ -167,7 +170,8 @@ public final class VadSession {
         }
     }
 
-    /// Drop the stream without scoring.
+    /// Drop the stream without scoring; the next feed starts at frame 0. The
+    /// last result is kept.
     public func streamReset() {
         model.withCompute { transcribe_vad_stream_reset(ptr) }
     }

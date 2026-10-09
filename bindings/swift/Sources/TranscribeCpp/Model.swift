@@ -27,10 +27,10 @@ public final class Model: @unchecked Sendable {
     /// The compute lease: `true` while some session holds an ACTIVE stream.
     /// The C contract allows at most one in-flight run/stream across ALL
     /// sessions of a model, and an active stream spans begin..finalize/reset/
-    /// drop — so `run`/`runBatch`/another `stream`/a diarize `run` are refused
-    /// with `.busy` while it is held, rather than racing into the documented UB
-    /// (corrupted decodes on CPU, command-buffer failures on Metal). Always
-    /// accessed under `runLock`.
+    /// drop — so `run`/`runBatch`/another `stream`/a diarize or langid `run`/a
+    /// VAD `run`/`streamFeed`/`streamFlush` are refused with `.busy` while it
+    /// is held, rather than racing into the documented UB (corrupted decodes on
+    /// CPU, command-buffer failures on Metal). Always accessed under `runLock`.
     var streamActive = false
 
     /// Run `body` (a native compute call and its copy-out) under the model-wide
