@@ -234,13 +234,22 @@
   },
   "upstream_benchmarks": [
     {
+      "dataset": "LibriSpeech test-clean-le30s",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "transcribe.cpp acceptance subset (user decision 2026-10-09)",
+      "notes": "ACCEPTANCE DATASET. LibriSpeech test-clean restricted to utterances <= 30.0 s (2611 of 2620), because the engine rejects longer audio ('audio limit is 30 s'). Manifest samples/wer/librispeech-test-clean-le30s.manifest.jsonl, built from librispeech-test-clean.manifest.jsonl by WAV duration (see docs/porting/families/whistle.md). Publisher does not report this subset; the full-split publisher number is the next entry."
+    },
+    {
       "dataset": "LibriSpeech test-clean",
       "language": "en",
       "metric": "wer",
       "score": 4.31,
       "score_unit": "percent",
       "source": "model card (assets/whistle-benchmarks.svg)",
-      "notes": "Acceptance dataset for this port. Whisper normalizers; deployed 2-4 bit engine at its defaults (5 beams). Context only: downstream gates use the measured engine Oracle baseline."
+      "notes": "Full split. Whisper normalizers; deployed 2-4 bit engine at its defaults (5 beams). Context only: downstream gates use the measured engine Oracle baseline on the le30s subset."
     },
     {
       "dataset": "LibriSpeech test-other",
@@ -335,7 +344,7 @@
     "Keyword biasing is a decode-time search bias with undocumented weights; it does not map 1:1 onto transcribe.cpp's prompt-based vocabulary feature.",
     "Decoder depth ladder (--audio-depth N, N>=2) selects a layer subset per ladder_layer_indices(); the default depth the engine runs and benchmarks with must be confirmed (assumed full 8).",
     "Engine-side streaming (needle_stream_transcribe_*) is a re-decode policy committing words that two passes agree on; the model itself is an offline 30 s window.",
-    "Acceptance set exceeds the cap: 9 of 2620 LibriSpeech test-clean utterances are longer than 30 s (max 34.95 s). The engine Oracle baseline and the C++ port must treat them identically (reject, truncate, or chunk), or the REF-vs-C++ WER gate compares different inputs.",
+    "Acceptance set exceeds the cap: 9 of 2620 LibriSpeech test-clean utterances are longer than 30 s (max 34.95 s) and the engine rejects them. Resolved 2026-10-09: REF, Stage 4 and Stage 7 all score the 2611-utterance <=30 s subset (upstream_benchmarks[0]).",
     "The cactus-needle Python wrapper sends usage telemetry and re-fetches config.json from HF on every load; Stage 2 reference runs must set NEEDLE_TELEMETRY=0.",
     "The cactus-needle wrapper caches weights and engines under ~/.cache/cactus-needle (outside the sandbox); Stage 2 must point NEEDLE_WHISTLE_WEIGHTS at the HF-cache whistle.cact and NEEDLE3_LIB_PATH at an engine under refs/ so nothing is written there."
   ],
