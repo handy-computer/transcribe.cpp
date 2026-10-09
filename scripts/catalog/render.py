@@ -16,7 +16,7 @@ files, this rewrites only the regions a doc explicitly delegates:
     <!-- /catalog -->
 
 Blocks: `downloads`, `perf machine=<slug>`, `stream-perf machine=<slug>`
-(VAD feed-call latency), `reference-parity` (VAD segment agreement), `accuracy` (one table per
+(VAD feed-call latency), `accuracy` (one table per
 dataset split beyond the headline), `agreement` (language ID: headline
 accuracy and reference agreement per GGUF), `recipe` (the mechanical WER
 sentence from the headline rows), `pin` (licence, upstream and validation pins),
@@ -106,13 +106,6 @@ def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
         table += ["", "Canonical publication pending; filenames above are local artifacts, "
                   "not download links."]
     return table
-
-
-def block_reference_parity(record: dict, attrs: dict[str, str]) -> list[str]:
-    try:
-        return common.render_reference_parity(record)
-    except ValueError as exc:
-        raise RenderError(str(exc)) from exc
 
 
 def block_stream_perf(record: dict, attrs: dict[str, str]) -> list[str]:
@@ -465,7 +458,7 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
 BLOCKS = {"downloads": block_downloads, "perf": block_perf,
           "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy,
           "recipe": block_recipe, "pin": block_pin, "agreement": block_agreement,
-          "reference-parity": block_reference_parity, "stream-perf": block_stream_perf}
+          "stream-perf": block_stream_perf}
 
 
 # --------------------------------------------------------------------------

@@ -71,15 +71,6 @@ This is a draft card, not an uploaded model repository.
 {{ wer.recipe }}
 
 {{ wer.notes }}{% endif %}{% if role == "vad" %}
-## Reference parity
-
-{{ reference_parity_table or "Reference parity measurements pending." }}
-{% if wer.notes is defined %}
-{{ wer.notes.rstrip() }}
-{% endif %}
-{% if reference_parity is defined and reference_parity.notes is defined %}
-{{ reference_parity.notes.rstrip() }}
-{% endif %}
 ## Streaming performance
 
 {{ stream_perf_tables or "Streaming latency measurements pending." }}

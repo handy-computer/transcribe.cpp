@@ -63,7 +63,6 @@ SPEC_KEYS = {
     "usage",                 # extra usage prose for an unusual model
     "upstream_card_commit",  # revision of the upstream card that was quoted
     "default_quant",         # override the Q8_0 default
-    "reference_parity",      # editorial notes only, no measurements
     "stream_perf",           # editorial notes only, no measurements
 }
 CAP_FLAGS = ("streaming", "translate", "lang_detect")
@@ -80,12 +79,11 @@ def load_spec(path: Path) -> dict:
             f"{path.name}: {', '.join(unknown)} is not an editorial field. It is "
             f"either derived from catalog/{path.stem}.json or misspelled; remove "
             f"it. Editorial fields: {', '.join(sorted(SPEC_KEYS))}")
-    for key in ("reference_parity", "stream_perf"):
-        section = spec.get(key)
-        if section is not None and (not isinstance(section, dict)
-                                    or set(section) - {"notes"}
-                                    or not isinstance(section.get("notes", ""), str)):
-            raise SystemExit(f"{path.name}: {key} accepts only editorial notes")
+    section = spec.get("stream_perf")
+    if section is not None and (not isinstance(section, dict)
+                               or set(section) - {"notes"}
+                               or not isinstance(section.get("notes", ""), str)):
+        raise SystemExit(f"{path.name}: stream_perf accepts only editorial notes")
     if "default_quant_index" in spec:
         raise SystemExit(f"{path.name}: default_quant_index is gone; the default is "
                          f"{DEFAULT_QUANT}, override with default_quant: <QUANT>")
@@ -258,18 +256,14 @@ def build_context(record: dict, spec: dict) -> dict:
     for key in ("name", "link"):
         if record["license"].get(key):
             ctx[f"license_{key}"] = record["license"][key]
-    ctx["reference_parity_table"] = ""
     ctx["stream_perf_tables"] = ""
     if ctx["role"] == "vad":
-        parity = record.get("reference_parity", [])
         latency = [row for row in record.get("speed_benchmarks", [])
                    if row["quant"] == default_quant]
         ctx["vad_metadata"] = {"params": record["params"]}
         if record.get("vad_info"):
             ctx["vad_metadata"]["vad_info"] = record["vad_info"]
-        ctx["vad_metadata"].update(reference_parity=parity, latency_benchmarks=latency)
-        if parity:
-            ctx["reference_parity_table"] = "\n".join(common.render_reference_parity(record))
+        ctx["vad_metadata"]["latency_benchmarks"] = latency
         machines = sorted({row["machine"] for row in record.get("speed_benchmarks", [])})
         ctx["stream_perf_tables"] = "\n\n".join(
             f"### {machine}\n\n" + "\n".join(common.render_stream_perf(record, machine))

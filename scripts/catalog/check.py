@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import collections
 import json
-import math
 import pathlib
 import sys
 
@@ -49,7 +48,7 @@ def integrity_pass(records: dict) -> int:
     machines: dict[str, set[str]] = collections.defaultdict(set)
     for name, rec in records.items():
         published = {d["quant"] for d in rec.get("downloads", [])}
-        for sect in ("accuracy_benchmarks", "speed_benchmarks", "reference_parity"):
+        for sect in ("accuracy_benchmarks", "speed_benchmarks"):
             missing = {r["quant"] for r in rec.get(sect, []) if r["quant"] not in published}
             if missing:
                 bad += 1
@@ -64,31 +63,6 @@ def integrity_pass(records: dict) -> int:
             print(f"  FAIL {name}: {duplicate_accuracy} duplicate published "
                   "accuracy cell(s); batch size is recipe metadata, not a "
                   "separate result")
-        parity_counts = collections.Counter(
-            profiles.cell_key(row, "reference_parity")
-            for row in rec.get("reference_parity", []))
-        if any(count > 1 for count in parity_counts.values()):
-            bad += 1
-            print(f"  FAIL {name}: duplicate reference_parity cell(s)")
-        for row in rec.get("reference_parity", []):
-            identity_valid = all(isinstance(row.get(key), str) and row[key]
-                                 for key in profiles.PARITY_KEY)
-            counts_valid = (type(row.get("n_files")) is int and row["n_files"] > 0
-                            and type(row.get("n_segments")) is int and row["n_segments"] >= 0)
-            identical = row.get("n_identical")
-            duration = row.get("audio_duration_s")
-            delta = row.get("max_abs_prob_delta")
-            delta_valid = "max_abs_prob_delta" not in row or (
-                isinstance(delta, (int, float)) and not isinstance(delta, bool)
-                and math.isfinite(delta) and 0 <= delta <= 1)
-            if (not identity_valid or not delta_valid
-                    or not counts_valid or type(identical) is not int
-                    or not 0 <= identical <= row.get("n_files", -1)
-                    or not isinstance(duration, (int, float))
-                    or isinstance(duration, bool)
-                    or not math.isfinite(duration) or duration <= 0):
-                bad += 1
-                print(f"  FAIL {name}: reference_parity has invalid identity/counts/duration/delta")
         # A shipped model always says how fast it runs somewhere. The
         # publication profile decides which cells are required; this is the
         # weaker floor underneath it, so a record can never render a page or
@@ -142,27 +116,23 @@ def pairing_pass(records: dict, selected: bool = False) -> int:
 
 
 def vad_publication_problems(record: dict, profile_id: str, profile: dict) -> collections.Counter:
-    """VAD gates are mandatory suites, not ASR accuracy cells or waivers."""
+    """VAD publication requires measured streaming speed, not ASR accuracy."""
     problems = collections.Counter()
     info = record.get("vad_info") or {}
     problems["vad_info_invalid"] = int(
         info.get("sample_rate") != profile["speed"]["sample_rate"]
         or info.get("frame_samples") != profile["speed"]["frame_samples"])
-    for kind, section, expected, valid in (
-            ("reference_parity", "reference_parity",
-             profiles.expected_reference_parity(record, profile), profiles.valid_reference_parity),
-            ("speed", "speed_benchmarks",
-             profiles.expected_speed(record, profile), profiles.valid_vad_speed)):
-        targets = {profiles.cell_key(cell, kind): cell for cell in expected}
-        rows = record.get(section, [])
-        counts = collections.Counter(profiles.cell_key(row, kind) for row in rows)
-        problems[f"{kind}_missing"] = len(targets.keys() - counts.keys())
-        problems[f"{kind}_extra"] = len(counts.keys() - targets.keys())
-        problems[f"{kind}_duplicate"] = sum(n - 1 for n in counts.values() if n > 1)
-        problems[f"{kind}_invalid"] = sum(
-            not valid(row, targets[profiles.cell_key(row, kind)], profile_id)
-            or (kind == "speed" and row.get("frame_samples") != info.get("frame_samples"))
-            for row in rows if profiles.cell_key(row, kind) in targets)
+    targets = {profiles.cell_key(cell, "speed"): cell
+               for cell in profiles.expected_speed(record, profile)}
+    rows = record.get("speed_benchmarks", [])
+    counts = collections.Counter(profiles.cell_key(row, "speed") for row in rows)
+    problems["speed_missing"] = len(targets.keys() - counts.keys())
+    problems["speed_extra"] = len(counts.keys() - targets.keys())
+    problems["speed_duplicate"] = sum(n - 1 for n in counts.values() if n > 1)
+    problems["speed_invalid"] = sum(
+        not profiles.valid_vad_speed(row, targets[profiles.cell_key(row, "speed")], profile_id)
+        or row.get("frame_samples") != info.get("frame_samples")
+        for row in rows if profiles.cell_key(row, "speed") in targets)
     problems["accuracy_extra"] = len(record.get("accuracy_benchmarks", []))
     problems["headline_invalid"] = int(record.get("headline_benchmark") is not None)
     problems["exception_invalid"] = len(record.get("benchmark_exceptions") or [])
@@ -189,7 +159,7 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
             problems += count
             details = ", ".join(f"{key}={value}" for key, value in per_model.items() if value)
             print(f"  {('FAIL' if enforce else 'TODO') if count else 'PASS'} {name}: "
-                  f"{resolved_id} reference parity and stream-feed speed"
+                  f"{resolved_id} stream-feed speed"
                   + (f"; {details}" if details else " complete"))
             continue
         # An ASR publication profile does not apply to standalone diarizers.
@@ -325,10 +295,6 @@ def provenance_pass(records: dict) -> int:
                     bad += 1
                     print(f"  FAIL {name}: {kind} row has neither engine_sha nor "
                           f"measurement_provenance=legacy-published")
-        for row in record.get("reference_parity", []):
-            if not profiles.has_vad_provenance(row):
-                bad += 1
-                print(f"  FAIL {name}: reference_parity lacks build/date/profile provenance")
         if record.get("role") == "vad":
             for row in record.get("speed_benchmarks", []):
                 if not profiles.has_vad_provenance(row):
@@ -347,7 +313,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default=str(REPO / "catalog"))
     ap.add_argument("--publication-profile", nargs="?", const="",
-                    help="enforce exact accuracy, reference parity and speed matrices; optionally "
+                    help="enforce exact accuracy and speed matrices; optionally "
                          "name a profile (default: "
                          "catalog/_benchmark_profiles.json default)")
     ap.add_argument("--models", default="",

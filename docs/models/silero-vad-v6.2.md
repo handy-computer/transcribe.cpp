@@ -42,35 +42,7 @@ The loader also accepts whisper.cpp's `ggml-silero-v5.1.2.bin` and
 `ggml-silero-v6.2.0.bin`, available from
 [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad).
 These are third-party compatibility inputs, not this project's canonical
-GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load;
-reference parity is evaluated against the same stored weights.
-<!-- /catalog -->
-
-## Reference parity
-
-<!-- catalog:prose field=wer.notes -->
-The publication gate is reference parity: identical speech-segment lists
-at the upstream default parameters, plus per-frame probability agreement
-on the golden validation clips. This is not detection accuracy against
-human speech annotations. Numerical tensor checks remain in the golden
-manifest and tolerance file; the catalog records publication evidence.
-<!-- /catalog -->
-
-<!-- catalog:reference-parity -->
-Reference parity compares speech segment boundaries with the reference using default segmentation parameters. It is not labeled VAD accuracy or WER.
-Backend: `cpu`. Reference: `silero-vad==6.2.3`. Segmentation parameters: `defaults`.
-
-| Dataset | Language | GGUF | Identical files / files | Segments | Audio (s) | Max abs probability delta |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| AMI IHM test | en       | F32  | 16 / 16 |    9,785 | 32623.865 | 1.90139e-05 |
-| FLEURS test | ar       | F32  | 428 / 428 |      639 |  4685.403 | 9.47714e-06 |
-| FLEURS test | de       | F32  | 862 / 862 |    2,312 | 11349.300 | 2.44975e-05 |
-| FLEURS test | ja       | F32  | 650 / 650 |    1,370 |  8511.120 | 3.41237e-05 |
-| FLEURS test | zh       | F32  | 945 / 945 |    2,564 | 11065.180 | 2.52724e-05 |
-| golden validation | mul      | F32  | 9 / 9 |      115 |   363.532 | 7.689e-06 |
-| LibriSpeech test-clean | en       | F32  | 2,620 / 2,620 |    5,670 | 19452.481 | 7.30157e-05 |
-
-Measured at transcribe.cpp `24fda783` on 2026-10-09, profile `vad-publication-v1`.
+GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load.
 <!-- /catalog -->
 
 ## Streaming latency

@@ -45,14 +45,5 @@
   "vad_info": {
     "sample_rate": 16000,
     "frame_samples": 512
-  },
-  "reference_parity": [
-    {"dataset":"ami","split":"ihm-test","language":"en","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":16,"n_identical":16,"n_segments":9785,"audio_duration_s":32623.865374999998,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":1.901388168334961e-05},
-    {"dataset":"fleurs","split":"test","language":"ar","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":428,"n_identical":428,"n_segments":639,"audio_duration_s":4685.403062500003,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":9.47713851928711e-06},
-    {"dataset":"fleurs","split":"test","language":"de","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":862,"n_identical":862,"n_segments":2312,"audio_duration_s":11349.300000000014,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":2.4497509002685547e-05},
-    {"dataset":"fleurs","split":"test","language":"ja","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":650,"n_identical":650,"n_segments":1370,"audio_duration_s":8511.119999999997,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":3.412365913391113e-05},
-    {"dataset":"fleurs","split":"test","language":"zh","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":945,"n_identical":945,"n_segments":2564,"audio_duration_s":11065.179999999995,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":2.5272369384765625e-05},
-    {"dataset":"golden","split":"validation","language":"mul","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":9,"n_identical":9,"n_segments":115,"audio_duration_s":363.532375,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":7.68899917602539e-06},
-    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":2620,"n_identical":2620,"n_segments":5670,"audio_duration_s":19452.48062500003,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":7.301568984985352e-05}
-  ]
+  }
 }

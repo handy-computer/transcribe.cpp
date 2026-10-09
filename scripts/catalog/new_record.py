@@ -164,7 +164,6 @@ def main() -> int:
             print("VAD GGUF needs sample rate and frame geometry", file=sys.stderr)
             return 2
         record["vad_info"] = {"sample_rate": int(sample_rate), "frame_samples": int(frame_samples)}
-        record["reference_parity"] = []
     # Capabilities come from the file, never from hand: same reader the sweep uses.
     record["capabilities"] = sync_capabilities.build(record, sync_capabilities.read_kvs(reader))
     common.write_record(out, record)

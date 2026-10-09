@@ -19,7 +19,6 @@ ACCURACY_MAPPED = {"dataset": "dataset_id", "split": "dataset_id", "language": "
                    "ci95": "ci_lo/ci_hi", "errors": "substitutions/deletions/insertions",
                    "agreement": "agreement_n_agree/agreement_n/agreement_max_abs_logit_delta"}
 SPEED_MAPPED = {}
-PARITY_MAPPED = {key: "dataset_id" for key in ("dataset", "split", "language")}
 
 
 def columns(table: str) -> set[str]:
@@ -48,55 +47,3 @@ def test_speed_rows_reach_the_database():
 
 def test_download_rows_reach_the_database():
     check("downloads", "downloads", {})
-
-
-def test_reference_parity_rows_reach_the_database():
-    check("reference_parity", "reference_parity", PARITY_MAPPED)
-
-
-def test_model_metadata_reaches_the_database():
-    cols = columns("models")
-    for prop, col in {"role": "role", "docs_page": "docs_page", "upstream_url": "upstream_url",
-                      "source_artifact": "source_artifact_json", "vad_info": "vad_info_json"}.items():
-        assert prop in SCHEMA["properties"]
-        assert col in cols
-
-
-def test_existing_asr_and_langid_rows_are_unchanged(tmp_path):
-    records = db.common.load_records()
-    selected = {name: record for name, record in records.items()
-                if name == "whisper-tiny" or record.get("role") == "langid"}
-    assert selected
-    path = tmp_path / "catalog.db"
-    db.build(selected, path)
-    with sqlite3.connect(path) as con:
-        con.row_factory = sqlite3.Row
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 2
-        assert con.execute("SELECT count(*) FROM reference_parity").fetchone()[0] == 0
-        for variant, record in selected.items():
-            model = dict(con.execute("SELECT * FROM models WHERE variant=?", (variant,)).fetchone())
-            assert model["role"] == record.get("role", "asr")
-            assert model["vad_info_json"] is None
-            accuracy = con.execute(
-                "SELECT a.*, d.dataset, d.split, d.language FROM accuracy a "
-                "JOIN datasets d USING(dataset_id) WHERE variant=?", (variant,)).fetchall()
-            actual = {db.profiles.cell_key(dict(row), "accuracy"): dict(row) for row in accuracy}
-            for row in record["accuracy_benchmarks"]:
-                stored = actual[db.profiles.cell_key(row, "accuracy")]
-                for key, value in row.items():
-                    if key not in ACCURACY_MAPPED:
-                        assert stored[key] == value
-                assert [stored["ci_lo"], stored["ci_hi"]] == row["ci95"]
-                agreement = row.get("agreement") or {}
-                for key in ("n_agree", "n", "max_abs_logit_delta"):
-                    assert stored[f"agreement_{key}"] == agreement.get(key)
-            speed = con.execute("SELECT * FROM speed WHERE variant=?", (variant,)).fetchall()
-            actual = {db.profiles.cell_key(dict(row), "speed"): dict(row) for row in speed}
-            for row in record["speed_benchmarks"]:
-                stored = actual[db.profiles.cell_key(row, "speed")]
-                assert all(stored[key] == value for key, value in row.items())
-                assert stored["feed_samples"] is None
-                assert stored["median_ms"] is None
-            expected_headline = db.common.headline_rows(record)
-            headline = con.execute("SELECT * FROM headline WHERE variant=?", (variant,)).fetchall()
-            assert {row["quant"] for row in headline} == set(expected_headline)

@@ -6,7 +6,7 @@
 
 The SQLite file is a disposable query artifact; catalog/*.json is the source
 of truth. Tables mirror the record sections one to one (downloads, accuracy,
-reference_parity, speed) so a query reads like the JSON it came from.
+speed) so a query reads like the JSON it came from.
 
     uv run scripts/catalog/db.py                       # build/catalog.db
     uv run scripts/catalog/db.py --out path/to/catalog.db
@@ -28,7 +28,7 @@ import profiles  # noqa: E402
 DEFAULT_DB = common.REPO / "build" / "catalog.db"
 
 SCHEMA = """
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE models(
@@ -133,24 +133,6 @@ CREATE UNIQUE INDEX accuracy_identity ON accuracy(
     IFNULL(timestamps, ''), IFNULL(scoring, ''), IFNULL(mode, '')
 );
 
-CREATE TABLE reference_parity(
-    dataset_id TEXT NOT NULL REFERENCES datasets(dataset_id),
-    variant TEXT NOT NULL REFERENCES models(variant),
-    quant TEXT NOT NULL,
-    backend TEXT NOT NULL,
-    reference TEXT NOT NULL,
-    n_files INTEGER NOT NULL CHECK(n_files > 0),
-    n_identical INTEGER NOT NULL CHECK(n_identical BETWEEN 0 AND n_files),
-    n_segments INTEGER NOT NULL CHECK(n_segments >= 0),
-    audio_duration_s REAL NOT NULL CHECK(audio_duration_s > 0),
-    segmentation_params TEXT NOT NULL CHECK(segmentation_params = 'defaults'),
-    engine_sha TEXT NOT NULL,
-    measured_on TEXT NOT NULL,
-    publication_profile TEXT NOT NULL,
-    max_abs_prob_delta REAL CHECK(max_abs_prob_delta BETWEEN 0 AND 1),
-    PRIMARY KEY(dataset_id, variant, quant, backend, reference)
-);
-
 CREATE TABLE machines(
     machine TEXT PRIMARY KEY
 );
@@ -221,8 +203,7 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
 
     langs = {str(lang) for record in records.values() for lang in record.get("languages", [])}
     langs.update(row["language"] for record in records.values()
-                 for section in ("accuracy_benchmarks", "reference_parity")
-                 for row in record.get(section, []))
+                 for row in record.get("accuracy_benchmarks", []))
     for record in records.values():
         for alias, canonical in (record.get("language_aliases") or {}).items():
             langs.update((alias, canonical))
@@ -241,9 +222,8 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
 
         datasets: dict[str, tuple[str, str, str]] = {}
         for record in records.values():
-            for section in ("accuracy_benchmarks", "reference_parity"):
-                for row in record.get(section, []):
-                    datasets[dataset_id(row)] = (row["dataset"], row["split"], row["language"])
+            for row in record.get("accuracy_benchmarks", []):
+                datasets[dataset_id(row)] = (row["dataset"], row["split"], row["language"])
         con.executemany("INSERT INTO datasets VALUES (?,?,?,?)", [
             (key, *value) for key, value in sorted(datasets.items())])
 
@@ -297,13 +277,6 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
                      (row.get("agreement") or {}).get("max_abs_logit_delta"))
                     for row in record.get("accuracy_benchmarks", [])])
             con.executemany(
-                "INSERT INTO reference_parity VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
-                    (dataset_id(row), variant, row["quant"], row["backend"], row["reference"],
-                     row["n_files"], row["n_identical"], row["n_segments"],
-                     row["audio_duration_s"], row["segmentation_params"], row["engine_sha"],
-                     row["measured_on"], row["publication_profile"], row.get("max_abs_prob_delta"))
-                    for row in record.get("reference_parity", [])])
-            con.executemany(
                 "INSERT INTO speed VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                     (variant, row["machine"], row["backend"], row["quant"], row["sample"],
                      row["sample_duration_s"], row.get("total_ms"), row["xrt_compute"],
@@ -327,7 +300,7 @@ def build(records: dict[str, dict], out: pathlib.Path) -> dict[str, int]:
         counts = {table: con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                   for table in ("models", "languages", "model_languages",
                                 "language_aliases", "capabilities", "downloads", "datasets",
-                                "accuracy", "reference_parity", "machines", "speed")}
+                                "accuracy", "machines", "speed")}
     finally:
         con.close()
     os.replace(tmp, out)

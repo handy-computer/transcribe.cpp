@@ -21,15 +21,7 @@ compatibility: |
   `ggml-silero-v6.2.0.bin`, available from
   [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad).
   These are third-party compatibility inputs, not this project's canonical
-  GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load;
-  reference parity is evaluated against the same stored weights.
-wer:
-  notes: |
-    The publication gate is reference parity: identical speech-segment lists
-    at the upstream default parameters, plus per-frame probability agreement
-    on the golden validation clips. This is not detection accuracy against
-    human speech annotations. Numerical tensor checks remain in the golden
-    manifest and tolerance file; the catalog records publication evidence.
+  GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load.
 usage: |
   Build transcribe.cpp and run on a mono WAV at the model's sample rate:
 

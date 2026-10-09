@@ -2,7 +2,7 @@
 
 C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, with Metal, Vulkan, and CUDA backends for fast GPU inference plus a tinyBLAS-accelerated CPU path.
 
-16 model families and 60+ variants, streaming and batch. Every model we publish under [`handy-computer`](https://huggingface.co/handy-computer) is numerically verified and WER-tested against its reference implementation
+16 model families and 60+ variants, streaming and batch. Every transcription model we publish under [`handy-computer`](https://huggingface.co/handy-computer) is numerically verified and WER-tested against its reference implementation
 
 **Supported models:**
 
@@ -47,7 +47,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | VoxLingua107 ECAPA-TDNN (language ID) | `lang-id-voxlingua107-ecapa` | language ID (107 languages) | [docs/models/lang-id-voxlingua107-ecapa.md](docs/models/lang-id-voxlingua107-ecapa.md) |
 <!-- /catalog -->
 
-**Voice activity detection models** (no transcription; verified by upstream probability and speech-segment parity; see [`docs/vad.md`](docs/vad.md)):
+**Voice activity detection models** (no transcription; see [`docs/vad.md`](docs/vad.md)):
 
 <!-- catalog:family-index role=vad -->
 | Family | Variants | Available capabilities | Docs |
@@ -59,13 +59,13 @@ Per-variant model cards live under [`docs/models/`](docs/models/).
 
 ## Model catalog
 
-[`catalog/`](catalog/) is the source of truth for model metadata, accuracy,
-reference parity, and performance. Each release includes a queryable
+[`catalog/`](catalog/) is the source of truth for model metadata, accuracy, and
+performance. Each release includes a queryable
 [`catalog.db`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db)
 and [`SHA-256 checksum`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db.sha256).
 Rebuild it locally with `uv run scripts/catalog/db.py --out catalog.db`.
-The exact accuracy, reference-parity, and published speed matrices and standard
-benchmark recipes required for publication live in
+The exact accuracy and published speed matrices and standard benchmark recipes
+required for publication live in
 [`catalog/_benchmark_profiles.json`](catalog/_benchmark_profiles.json). Run
 `uv run scripts/catalog/check.py --publication-profile` to enforce it; the
 ordinary catalog check reports the migration backlog without failing.

@@ -6,7 +6,7 @@ models on accuracy and speed without scraping prose tables or re-running
 benchmarks. It lives in the card, not the GGUF files — weights are untouched.
 
 The block publishes only raw measurements (per-quant WER, per-machine RTF,
-or VAD reference parity and feed-call latency) and capability flags; any
+or VAD feed-call latency) and capability flags; any
 0–100 score is left to the consumer to compute from these.
 
 ## Where it comes from
@@ -63,9 +63,10 @@ misrepresenting a GitHub repo as an HF model ID.
 
 Only VAD cards currently use schema 3. Existing ASR, diarization and language-ID
 cards retain their schema 2 metadata and rendered content unchanged. Schema 3
-identifies the role explicitly and keeps reference agreement separate from
-accuracy metrics. It does not emit WER, detection accuracy, or a mean realtime
-factor across incompatible feed durations.
+identifies the role explicitly and publishes optional latency measurements,
+not quality measurements. It does not emit WER, detection accuracy, or a mean
+realtime factor across incompatible feed durations. Numerical validation
+remains part of the normal model-porting workflow.
 
 The shape below is illustrative; actual values are copied from the catalog:
 
@@ -77,7 +78,6 @@ transcribe_cpp:
   vad_info:                                # optional, from GGUF loader metadata
     sample_rate: 16000
     frame_samples: 512
-  reference_parity: []                      # raw catalog rows, all quants
   latency_benchmarks: []                    # raw speed rows, default quant only
   streaming: true
   timestamps: none
@@ -88,16 +88,7 @@ transcribe_cpp:
 | `role` | `vad`: probabilities and speech segments, not transcription. |
 | `params` | Exact parameter count, not the rounded display summary. |
 | `vad_info` | Optional `sample_rate` (Hz) and `frame_samples` (samples per native inference frame), read from the model artifact. |
-| `reference_parity` | Array of catalog reference-comparison rows. An empty array means no recorded measurements, not a passed gate. |
 | `latency_benchmarks` | Array of catalog speed rows at the card's default quant, preserving machine/backend/sample identity and provenance rather than averaging chunk sizes. An empty array means measurements pending. |
-
-Each reference-parity row carries `dataset`, `split`, `language`, `quant`,
-`backend`, `reference`, `n_files`, `n_identical`, `n_segments`,
-`audio_duration_s`, `segmentation_params: defaults`, `engine_sha`,
-`measured_on`, and `publication_profile`. Optional `max_abs_prob_delta` is
-an absolute probability difference. `n_identical / n_files` is agreement of
-speech-segment lists with the reference at default segmentation parameters;
-it is **not** labeled speech-detection accuracy or an error rate.
 
 VAD latency rows retain the catalog's existing speed fields and add
 `feed_samples`, `frame_samples`, `threads`, `n_calls`, `warmup_calls`,
@@ -121,9 +112,7 @@ table shows chunk duration, frames/feed, median/feed, p95/feed, amortized
 median/frame and measured calls; frame samples, threads, warmup calls and
 source sample identities appear in generated methodology prose. The mean
 (`total_ms`) and all other raw fields remain in machine-readable metadata.
-Reference/backend/default parameters move into methodology prose when shared
-by all parity rows, with row-specific columns retained when they differ. Source
-provenance links the packaged artifact and its SHA256 separately from the
+Source provenance links the packaged artifact and its SHA256 separately from the
 upstream code commit. A draft with `published_repo: null` has no canonical
 HF download URLs; generation alone does not publish a repository.
 

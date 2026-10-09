@@ -30,14 +30,15 @@ maintainer flips them.
 
 ## VAD and non-HF sources
 
-For `role: vad`, the card renders reference parity and streaming feed-call
-latency, not a fabricated WER column. These tables use the same stdlib helpers
-in `scripts/catalog/common.py` as the documentation markers
-`catalog:reference-parity` and `catalog:stream-perf machine=m4`. Parity is
-agreement with a reference segmenter, **not** detection accuracy against
-human annotations. The 32 ms feed is the latency headline; larger feeds show
-amortization. See `docs/tools/hf-metadata-schema.md` for the role-aware schema 3
-metadata; existing ASR, diarization and language-ID cards retain schema 2.
+For `role: vad`, the card renders streaming feed-call latency, not a
+fabricated WER column or quality measurement. The table uses the same stdlib
+helper in `scripts/catalog/common.py` as the documentation marker
+`catalog:stream-perf machine=m4`. The 32 ms feed is the latency headline;
+larger feeds show amortization. Latency measurements are optional: absent
+rows render an honest pending message. Numerical validation belongs to the
+normal model-porting workflow, not catalog publication metadata. See
+`docs/tools/hf-metadata-schema.md` for the role-aware schema 3 metadata;
+existing ASR, diarization and language-ID cards retain schema 2.
 
 An explicit non-HF `upstream_url` (for example GitHub) is linked directly and
 is never fetched through the HF API. `source_artifact` identifies the actual
@@ -60,10 +61,8 @@ Optional editorial fields:
 
 - `compatibility: |` describes alternate loader inputs, not canonical downloads.
   It also renders into documentation with `catalog:prose field=compatibility`.
-- `reference_parity: {notes: ...}` and `stream_perf: {notes: ...}` add caveats
-  below their generated tables; only `notes` is accepted, never measurements.
-- Existing `wer.notes` can hold VAD validation caveats. It is rendered in the
-  reference-parity section without printing a WER heading.
+- `stream_perf: {notes: ...}` adds caveats below the generated latency table;
+  only `notes` is accepted, never measurements. VAD cards do not use `wer.notes`.
 
 Verification (offline):
 

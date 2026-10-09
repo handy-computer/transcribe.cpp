@@ -68,8 +68,8 @@ def profile_for(record: dict, profile_id: str | None = None) -> tuple[str, dict]
     """The profile that governs one record: `profile_id` when it is written
     for the record's role, else the profile its role names in `roles`, else
     the default. ASR and diarize records share the default; language ID and VAD
-    have their own profiles, since classification accuracy, reference segment
-    parity and per-frame latency are not cells of the ASR matrix."""
+    have their own profiles, since classification accuracy
+    and per-chunk streaming latency are not cells of the ASR matrix."""
     data = load_profiles()
     if profile_id:
         named = load_profile(profile_id)[1]
@@ -189,20 +189,6 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
     return cells
 
 
-def expected_reference_parity(record: dict, profile: dict) -> list[dict]:
-    """Expand VAD suites without using the model's (empty) language list."""
-    if not governs(profile, record):
-        return []
-    return [
-        {**{key: value for key, value in suite.items()
-            if key not in ("languages", "quants", "n_files")},
-         "language": language, "quant": quant, "n_files": suite["n_files"][language]}
-        for suite in profile.get("reference_parity", [])
-        for language in suite["languages"]
-        for quant in _quants(suite["quants"], record)
-    ]
-
-
 def speed_samples(record: dict, profile: dict) -> list[str]:
     """Which clips a variant is benched on.
 
@@ -274,7 +260,6 @@ PROFILE_KEY = (*ACCURACY_CORE_KEY, "timestamps", "scoring", "mode")
 # recipe metadata, not a second publishable identity for the same result.
 ACCURACY_KEY = PROFILE_KEY
 SPEED_KEY = ("machine", "backend", "quant", "sample")
-PARITY_KEY = ("dataset", "split", "language", "quant", "backend", "reference")
 
 
 def accuracy_core_key(cell: dict) -> tuple:
@@ -286,8 +271,7 @@ def profile_key(cell: dict) -> tuple:
 
 
 def cell_key(cell: dict, kind: str) -> tuple:
-    fields = {"accuracy": ACCURACY_KEY, "speed": SPEED_KEY,
-              "reference_parity": PARITY_KEY}[kind]
+    fields = {"accuracy": ACCURACY_KEY, "speed": SPEED_KEY}[kind]
     return tuple(cell.get(field) for field in fields)
 
 
@@ -309,29 +293,6 @@ def has_vad_provenance(row: dict, profile_id: str | None = None) -> bool:
 def _positive_number(value) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value) and value > 0)
-
-
-def valid_reference_parity(row: dict, target: dict, profile_id: str) -> bool:
-    """Validate a row whose parity identity has already been matched to target."""
-    if not has_vad_provenance(row, profile_id):
-        return False
-    if row.get("segmentation_params") != target["segmentation_params"]:
-        return False
-    if (type(row.get("n_files")) is not int or row["n_files"] <= 0
-            or type(row.get("n_segments")) is not int or row["n_segments"] < 0):
-        return False
-    if (row["n_files"] != target["n_files"]
-            or type(row.get("n_identical")) is not int
-            or row["n_identical"] != row["n_files"]
-            or not _positive_number(row.get("audio_duration_s"))):
-        return False
-    limit = target.get("max_abs_prob_delta")
-    delta = row.get("max_abs_prob_delta")
-    if delta is None:
-        return limit is None and "max_abs_prob_delta" not in row
-    return (isinstance(delta, (int, float)) and not isinstance(delta, bool)
-            and math.isfinite(delta) and 0 <= delta <= 1
-            and (limit is None or delta <= limit))
 
 
 def valid_vad_speed(row: dict, target: dict, profile_id: str) -> bool:

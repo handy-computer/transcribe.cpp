@@ -390,40 +390,6 @@ def measurement_provenance(rows: list[dict]) -> list[str]:
         for sha, date, profile in builds) + "."]
 
 
-def render_reference_parity(record: dict) -> list[str]:
-    rows = record.get("reference_parity", [])
-    if not rows:
-        raise ValueError("no reference_parity rows")
-    header = ["Dataset", "Language", "GGUF", "Identical files / files",
-              "Segments", "Audio (s)", "Max abs probability delta"]
-    aligns = ["l", "l", "l", "r", "r", "r", "r"]
-    recipe, varying = [], []
-    for key, label in (("backend", "Backend"), ("reference", "Reference"),
-                       ("segmentation_params", "Segmentation parameters")):
-        values = sorted({row[key] for row in rows})
-        if len(values) == 1:
-            recipe.append(f"{label}: `{values[0]}`.")
-        else:
-            varying.append(key)
-            header.append(label)
-            aligns.append("l")
-    body = []
-    for row in rows:
-        delta = row.get("max_abs_prob_delta")
-        label = (f"FLEURS {row['split']}" if row["dataset"] == "fleurs"
-                 else dataset_label(row["dataset"], row["split"], row["language"]))
-        body.append([
-            label, row["language"], row["quant"],
-            f"{row['n_identical']:,} / {row['n_files']:,}",
-            f"{row['n_segments']:,}", f"{row['audio_duration_s']:.3f}",
-            "-" if delta is None else f"{delta:.6g}"] + [row[key] for key in varying])
-    return ["Reference parity compares speech segment boundaries with the reference "
-            "using default segmentation parameters. It is not labeled VAD accuracy "
-            "or WER.", " ".join(recipe), ""] + render_table(
-                header, aligns, body
-            ) + [""] + measurement_provenance(rows)
-
-
 def stream_perf_rows(record: dict, machine: str) -> list[dict]:
     rank = {item["quant"]: i for i, item in enumerate(record.get("downloads", []))}
     return sorted((row for row in record.get("speed_benchmarks", [])

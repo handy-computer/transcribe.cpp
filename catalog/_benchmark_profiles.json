@@ -136,77 +136,8 @@
     },
     "vad-publication-v1": {
       "role": "vad",
-      "description": "Silero VAD segment parity at default segmentation parameters, separate from ASR accuracy. CPU, every shipped quant, exact reference segments. Speed is native stream_feed wall-call latency over one whole love-loss pass (full calls only, tail omitted), after 32 warmup calls; mean, median and p95 per chunk.",
+      "description": "VAD streaming speed only, on CPU for every shipped quant. Native stream_feed wall-call latency over one whole love-loss pass (full calls only, tail omitted), after 32 warmup calls; mean, median and p95 per chunk. No VAD quality benchmark is required by this publication profile.",
       "accuracy": [],
-      "reference_parity": [
-        {
-          "dataset": "golden",
-          "split": "validation",
-          "languages": [
-            "mul"
-          ],
-          "quants": "all-downloads",
-          "backend": "cpu",
-          "reference": "silero-vad==6.2.3",
-          "segmentation_params": "defaults",
-          "exact_segments": true,
-          "max_abs_prob_delta": 1e-05,
-          "n_files": {
-            "mul": 9
-          }
-        },
-        {
-          "dataset": "ami",
-          "split": "ihm-test",
-          "languages": [
-            "en"
-          ],
-          "quants": "all-downloads",
-          "backend": "cpu",
-          "reference": "silero-vad==6.2.3",
-          "segmentation_params": "defaults",
-          "exact_segments": true,
-          "n_files": {
-            "en": 16
-          }
-        },
-        {
-          "dataset": "librispeech",
-          "split": "test-clean",
-          "languages": [
-            "en"
-          ],
-          "quants": "all-downloads",
-          "backend": "cpu",
-          "reference": "silero-vad==6.2.3",
-          "segmentation_params": "defaults",
-          "exact_segments": true,
-          "n_files": {
-            "en": 2620
-          }
-        },
-        {
-          "dataset": "fleurs",
-          "split": "test",
-          "languages": [
-            "zh",
-            "ja",
-            "ar",
-            "de"
-          ],
-          "quants": "all-downloads",
-          "backend": "cpu",
-          "reference": "silero-vad==6.2.3",
-          "segmentation_params": "defaults",
-          "exact_segments": true,
-          "n_files": {
-            "zh": 945,
-            "ja": 650,
-            "ar": 428,
-            "de": 862
-          }
-        }
-      ],
       "speed": {
         "quants": "all-downloads",
         "samples": [

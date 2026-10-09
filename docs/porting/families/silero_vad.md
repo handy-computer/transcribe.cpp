@@ -17,7 +17,7 @@ iterator is a port of `VADIterator`. Both keep the Silero MIT notice
 
 - Family key: `silero_vad`; variant `silero-vad-v6.2`
 - Upstream module: `silero_vad.jit` `VADRNNJITMerge._model` (16 kHz sub-model).
-  Package, source checksum, license and publication evidence come from
+  Package, source checksum, license and latency measurements come from
   [`catalog/silero-vad-v6.2.json`](../../../catalog/silero-vad-v6.2.json) and
   are rendered on the [model page](../../models/silero-vad-v6.2.md).
   The golden manifest separately pins the numerical-validation reference.
@@ -96,30 +96,6 @@ uv run --project scripts/envs/silero_vad scripts/vad/bench.py --profile \
   --library build-vad-shared/src/libtranscribe.dylib
 uv run scripts/catalog/ingest_perf.py --models silero-vad-v6.2
 
-# Probability and segment parity; reports must cover each whole suite
-uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
-  --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
-  --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
-  --dataset golden --split validation --language mul --out reports/vad/golden.json \
-  tests/golden/silero_vad/silero-vad-v6.2.manifest.json
-uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
-  --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
-  --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
-  --dataset ami --split ihm-test --language en --out reports/vad/ami.json \
-  samples/diar/ami-ihm-test.manifest.jsonl
-uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
-  --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
-  --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
-  --dataset librispeech --split test-clean --language en --out reports/vad/librispeech.json \
-  samples/wer/librispeech-test-clean.manifest.jsonl
-for lang in zh ja ar de; do
-  uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
-    --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
-    --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
-    --dataset fleurs --split test --language "$lang" --out "reports/vad/fleurs-$lang.json" \
-    "samples/wer/fleurs-$lang.manifest.jsonl"
-done
-uv run scripts/catalog/ingest_parity.py --models silero-vad-v6.2
 uv run scripts/catalog/check.py --publication-profile --models silero-vad-v6.2
 uv run scripts/catalog/render.py
 uv run scripts/hf_cards/generate.py scripts/hf_cards/silero-vad-v6.2.yaml
@@ -138,10 +114,10 @@ TRANSCRIBE_SILERO_VAD_V6_BIN=/path/ggml-silero-v6.2.0.bin \
 
 | Capability | Command / test | Expected | Status |
 |---|---|---|---|
-| Offline segments | `validate.py`; `scripts/vad/parity.py` | identical to `get_speech_timestamps` | PASS; corpus results in the catalog/model page |
+| Offline segments | `validate.py` | identical to `get_speech_timestamps` on golden clips | PASS |
 | Segment params | `transcribe_vad_dispatch_unit` | identical to `get_speech_timestamps_from_probs` | PASS |
 | Live iterator | `transcribe_vad_iterator_unit` | identical `VADIterator` events | PASS |
-| Per-frame probabilities | `validate.py` | within `tests/tolerances/silero_vad.json` | PASS; publication deltas in the catalog/model page |
+| Per-frame probabilities | `validate.py` | within `tests/tolerances/silero_vad.json` | PASS |
 | Streaming | `transcribe_silero_vad_smoke` | bit-identical to offline on CPU | PASS |
 | `.bin` loading | `transcribe_silero_vad_bin_smoke` | same probabilities as the equivalent GGUF | PASS |
 | 8 kHz model, quantized GGUFs | - | OUT OF SCOPE | SKIP |

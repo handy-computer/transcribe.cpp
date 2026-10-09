@@ -1,8 +1,7 @@
 // vad.cpp - transcribe-cli VAD driver: speech segments for one file through
 // include/transcribe/vad.h.
 //
-// Output lines are stable (scripts/validate.py and scripts/vad/parity.py parse
-// `segment:`):
+// Output lines are stable (scripts/validate.py parses `segment:`):
 //   segment: <i> start=<sample> end=<sample> t0=<s> t1=<s>
 // -o writes the segment lines.
 

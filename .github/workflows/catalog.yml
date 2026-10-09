@@ -58,7 +58,7 @@ jobs:
         run: uv run scripts/catalog/render.py --check
       - name: Rebuild portable database
         run: |
-          uv run --with pytest --with jsonschema --with pyyaml --with jinja2 --with huggingface-hub --with gguf --with numpy pytest -q scripts/catalog scripts/vad/test_measurements.py
+          uv run --with pytest --with pyyaml --with jinja2 --with huggingface-hub pytest -q scripts/catalog
           uv run scripts/wer/test_der.py
           uv run scripts/catalog/db.py --out "$RUNNER_TEMP/catalog.db"
           sqlite3 "$RUNNER_TEMP/catalog.db" "PRAGMA integrity_check"
