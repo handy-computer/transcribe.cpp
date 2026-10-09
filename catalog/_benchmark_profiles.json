@@ -1,7 +1,8 @@
 {
   "default": "asr-publication-v2",
   "roles": {
-    "langid": "langid-publication-v1"
+    "langid": "langid-publication-v1",
+    "vad": "vad-publication-v1"
   },
   "profiles": {
     "asr-publication-v2": {
@@ -129,6 +130,110 @@
               "vulkan"
             ],
             "cooldown_tctl_c": 55.0
+          }
+        ]
+      }
+    },
+    "vad-publication-v1": {
+      "role": "vad",
+      "description": "Silero VAD segment parity at default segmentation parameters, separate from ASR accuracy. CPU, every shipped quant, exact reference segments. Speed is native stream_feed wall-call latency over one whole love-loss pass (full calls only, tail omitted), after 32 warmup calls; mean, median and p95 per chunk.",
+      "accuracy": [],
+      "reference_parity": [
+        {
+          "dataset": "golden",
+          "split": "validation",
+          "languages": [
+            "mul"
+          ],
+          "quants": "all-downloads",
+          "backend": "cpu",
+          "reference": "silero-vad==6.2.3",
+          "segmentation_params": "defaults",
+          "exact_segments": true,
+          "max_abs_prob_delta": 1e-05,
+          "n_files": {
+            "mul": 9
+          }
+        },
+        {
+          "dataset": "ami",
+          "split": "ihm-test",
+          "languages": [
+            "en"
+          ],
+          "quants": "all-downloads",
+          "backend": "cpu",
+          "reference": "silero-vad==6.2.3",
+          "segmentation_params": "defaults",
+          "exact_segments": true,
+          "n_files": {
+            "en": 16
+          }
+        },
+        {
+          "dataset": "librispeech",
+          "split": "test-clean",
+          "languages": [
+            "en"
+          ],
+          "quants": "all-downloads",
+          "backend": "cpu",
+          "reference": "silero-vad==6.2.3",
+          "segmentation_params": "defaults",
+          "exact_segments": true,
+          "n_files": {
+            "en": 2620
+          }
+        },
+        {
+          "dataset": "fleurs",
+          "split": "test",
+          "languages": [
+            "zh",
+            "ja",
+            "ar",
+            "de"
+          ],
+          "quants": "all-downloads",
+          "backend": "cpu",
+          "reference": "silero-vad==6.2.3",
+          "segmentation_params": "defaults",
+          "exact_segments": true,
+          "n_files": {
+            "zh": 945,
+            "ja": 650,
+            "ar": 428,
+            "de": 862
+          }
+        }
+      ],
+      "speed": {
+        "quants": "all-downloads",
+        "samples": [
+          "love-loss-32ms",
+          "love-loss-128ms",
+          "love-loss-512ms"
+        ],
+        "feed_samples": {
+          "love-loss-32ms": 512,
+          "love-loss-128ms": 2048,
+          "love-loss-512ms": 8192
+        },
+        "frame_samples": 512,
+        "sample_rate": 16000,
+        "source_sample": "love-loss",
+        "source_samples": 3154479,
+        "threads": 1,
+        "iterations": 1,
+        "warmup_calls": 32,
+        "full_calls_only": true,
+        "targets": [
+          {
+            "machine": "m4",
+            "display": "Apple M4",
+            "backends": [
+              "cpu"
+            ]
           }
         ]
       }

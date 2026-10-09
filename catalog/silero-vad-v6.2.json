@@ -1,0 +1,58 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "silero-vad-v6.2",
+  "family": "silero_vad",
+  "display_name": "Silero VAD v6.2",
+  "params": 309633,
+  "license": {
+    "spdx": "mit",
+    "display": "MIT"
+  },
+  "upstream_repo": "snakers4/silero-vad",
+  "upstream_commit": "5cd7945",
+  "published_repo": null,
+  "docs_page": "silero-vad-v6.2.md",
+  "languages": [],
+  "long_form_strategy": "chunked-unbounded",
+  "capabilities": {
+    "transcribe": {"supported":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":true,"verified":true},
+    "diarize": {"supported":false},
+    "batching": {"supported":false}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"silero-vad-v6.2-F32.gguf","size_bytes":1241056}
+  ],
+  "accuracy_benchmarks": [],
+  "headline_benchmark": null,
+  "speed_benchmarks": [
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-128ms","sample_duration_s":0.128,"total_ms":0.07308,"xrt_compute":1751.51,"wall_ms":null,"xrt_wall":null,"load_ms":0.9,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"24fda783","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","feed_samples":2048,"frame_samples":512,"threads":1,"n_calls":1540,"warmup_calls":32,"median_ms":0.073916,"p95_ms":0.077,"thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-32ms","sample_duration_s":0.032,"total_ms":0.060174,"xrt_compute":531.79,"wall_ms":null,"xrt_wall":null,"load_ms":0.9,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"24fda783","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","feed_samples":512,"frame_samples":512,"threads":1,"n_calls":6161,"warmup_calls":32,"median_ms":0.059125,"p95_ms":0.064042,"thermal_gated":null},
+    {"machine":"m4","backend":"cpu","quant":"F32","sample":"love-loss-512ms","sample_duration_s":0.512,"total_ms":0.265079,"xrt_compute":1931.5,"wall_ms":null,"xrt_wall":null,"load_ms":0.9,"mel_ms":null,"encode_ms":null,"decode_ms":null,"engine_sha":"24fda783","publication_profile":"vad-publication-v1","measured_on":"2026-10-09","feed_samples":8192,"frame_samples":512,"threads":1,"n_calls":385,"warmup_calls":32,"median_ms":0.265292,"p95_ms":0.2775,"thermal_gated":null}
+  ],
+  "role": "vad",
+  "upstream_url": "https://github.com/snakers4/silero-vad",
+  "source_artifact": {
+    "package": "silero-vad",
+    "version": "6.2.3",
+    "filename": "silero_vad/data/silero_vad.jit",
+    "sha256": "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720",
+    "url": "https://pypi.org/project/silero-vad/6.2.3/"
+  },
+  "vad_info": {
+    "sample_rate": 16000,
+    "frame_samples": 512
+  },
+  "reference_parity": [
+    {"dataset":"ami","split":"ihm-test","language":"en","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":16,"n_identical":16,"n_segments":9785,"audio_duration_s":32623.865374999998,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":1.901388168334961e-05},
+    {"dataset":"fleurs","split":"test","language":"ar","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":428,"n_identical":428,"n_segments":639,"audio_duration_s":4685.403062500003,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":9.47713851928711e-06},
+    {"dataset":"fleurs","split":"test","language":"de","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":862,"n_identical":862,"n_segments":2312,"audio_duration_s":11349.300000000014,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":2.4497509002685547e-05},
+    {"dataset":"fleurs","split":"test","language":"ja","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":650,"n_identical":650,"n_segments":1370,"audio_duration_s":8511.119999999997,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":3.412365913391113e-05},
+    {"dataset":"fleurs","split":"test","language":"zh","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":945,"n_identical":945,"n_segments":2564,"audio_duration_s":11065.179999999995,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":2.5272369384765625e-05},
+    {"dataset":"golden","split":"validation","language":"mul","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":9,"n_identical":9,"n_segments":115,"audio_duration_s":363.532375,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":7.68899917602539e-06},
+    {"dataset":"librispeech","split":"test-clean","language":"en","quant":"F32","backend":"cpu","reference":"silero-vad==6.2.3","n_files":2620,"n_identical":2620,"n_segments":5670,"audio_duration_s":19452.48062500003,"segmentation_params":"defaults","engine_sha":"24fda783","measured_on":"2026-10-09","publication_profile":"vad-publication-v1","max_abs_prob_delta":7.301568984985352e-05}
+  ]
+}

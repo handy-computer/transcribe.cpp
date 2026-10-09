@@ -1,0 +1,46 @@
+# Editorial copy only; metadata and measurements come from the catalog.
+pin_date: 2026-10-09
+validation:
+  reference: silero-vad 6.2.3 (TorchScript, CPU, F32)
+  commit: 24fda783
+  date: 2026-10-09
+pipeline_tag: audio-classification
+default_quant: F32
+tags:
+  - gguf
+  - transcribe.cpp
+  - voice-activity-detection
+  - silero-vad
+summary: |
+  Voice activity detection by the Silero Team. Not a transcription model:
+  the VAD role produces speech probabilities, offline speech segments,
+  and streaming probabilities for live START/END events. CPU is the default
+  backend for reference fidelity.
+compatibility: |
+  The loader also accepts whisper.cpp's `ggml-silero-v5.1.2.bin` and
+  `ggml-silero-v6.2.0.bin`, available from
+  [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad).
+  These are third-party compatibility inputs, not this project's canonical
+  GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load;
+  reference parity is evaluated against the same stored weights.
+wer:
+  notes: |
+    The publication gate is reference parity: identical speech-segment lists
+    at the upstream default parameters, plus per-frame probability agreement
+    on the golden validation clips. This is not detection accuracy against
+    human speech annotations. Numerical tensor checks remain in the golden
+    manifest and tolerance file; the catalog records publication evidence.
+usage: |
+  Build transcribe.cpp and run on a mono WAV at the model's sample rate:
+
+  ```bash
+  cmake -B build && cmake --build build --target transcribe-cli
+  build/bin/transcribe-cli -m silero-vad-v6.2-F32.gguf input.wav
+  ```
+
+  From the C API, use the VAD role (`include/transcribe/vad.h`). For live
+  audio, feed PCM through `transcribe_vad_stream_feed`, then pass the returned
+  probabilities to a `transcribe_vad_iterator` for START/END events.
+
+  See [the model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/silero-vad-v6.2.md)
+  and [VAD usage](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/vad.md).

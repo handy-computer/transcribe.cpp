@@ -16,11 +16,11 @@ iterator is a port of `VADIterator`. Both keep the Silero MIT notice
 ## Identity
 
 - Family key: `silero_vad`; variant `silero-vad-v6.2`
-- Upstream: `silero_vad.jit` `VADRNNJITMerge._model` (16 kHz sub-model),
-  PyPI `silero-vad==6.2.3` (tag `v6.2.3`, commit `5cd7945`);
-  `silero_vad/data/silero_vad.jit` sha256
-  `e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720`
-- License: MIT
+- Upstream module: `silero_vad.jit` `VADRNNJITMerge._model` (16 kHz sub-model).
+  Package, source checksum, license and publication evidence come from
+  [`catalog/silero-vad-v6.2.json`](../../../catalog/silero-vad-v6.2.json) and
+  are rendered on the [model page](../../models/silero-vad-v6.2.md).
+  The golden manifest separately pins the numerical-validation reference.
 - `.bin` runtime variants: `silero-vad-v5.1.2`, `silero-vad-v6.2.0`. Their
   mixed F16/F32 payloads are expanded to F32 at load.
 
@@ -81,9 +81,48 @@ uv run --project scripts/envs/silero_vad scripts/convert-silero_vad.py
 uv run scripts/preflight.py --family silero_vad --variant silero-vad-v6.2 --gate B
 uv run scripts/validate.py all --family silero_vad --variant silero-vad-v6.2
 
-# Segment parity on a corpus
+# Seed publication metadata from the intake, manifest and local GGUF
+uv run scripts/catalog/new_record.py silero-vad-v6.2 \
+  --long-form chunked-unbounded --docs-page silero-vad-v6.2.md \
+  --upstream-commit 5cd7945 --unpublished
+
+# Use a shared build for the Python/native measurement tools.
+# Substitute this library path with .so or .dll on other platforms.
+cmake -B build-vad-shared -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_BUILD_EXAMPLES=OFF
+cmake --build build-vad-shared --target transcribe
+
+# Frame-aligned feed latency, following the VAD publication profile
+uv run --project scripts/envs/silero_vad scripts/vad/bench.py --profile \
+  --library build-vad-shared/src/libtranscribe.dylib
+uv run scripts/catalog/ingest_perf.py --models silero-vad-v6.2
+
+# Probability and segment parity; reports must cover each whole suite
 uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
-  --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf samples/diar/ami-ihm-test/*.wav
+  --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
+  --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
+  --dataset golden --split validation --language mul --out reports/vad/golden.json \
+  tests/golden/silero_vad/silero-vad-v6.2.manifest.json
+uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
+  --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
+  --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
+  --dataset ami --split ihm-test --language en --out reports/vad/ami.json \
+  samples/diar/ami-ihm-test.manifest.jsonl
+uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
+  --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
+  --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
+  --dataset librispeech --split test-clean --language en --out reports/vad/librispeech.json \
+  samples/wer/librispeech-test-clean.manifest.jsonl
+for lang in zh ja ar de; do
+  uv run --project scripts/envs/silero_vad scripts/vad/parity.py \
+    --library build-vad-shared/src/libtranscribe.dylib --threads 1 \
+    --gguf models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf \
+    --dataset fleurs --split test --language "$lang" --out "reports/vad/fleurs-$lang.json" \
+    "samples/wer/fleurs-$lang.manifest.jsonl"
+done
+uv run scripts/catalog/ingest_parity.py --models silero-vad-v6.2
+uv run scripts/catalog/check.py --publication-profile --models silero-vad-v6.2
+uv run scripts/catalog/render.py
+uv run scripts/hf_cards/generate.py scripts/hf_cards/silero-vad-v6.2.yaml
 
 # Regenerate the segmentation and iterator test vectors
 uv run --project scripts/envs/silero_vad scripts/vad/gen_vectors.py
@@ -99,10 +138,10 @@ TRANSCRIBE_SILERO_VAD_V6_BIN=/path/ggml-silero-v6.2.0.bin \
 
 | Capability | Command / test | Expected | Status |
 |---|---|---|---|
-| Offline segments | `validate.py`; `scripts/vad/parity.py` | identical to `get_speech_timestamps` | PASS (9/9 clips, AMI 16/16, 5505 LibriSpeech + FLEURS) |
+| Offline segments | `validate.py`; `scripts/vad/parity.py` | identical to `get_speech_timestamps` | PASS; corpus results in the catalog/model page |
 | Segment params | `transcribe_vad_dispatch_unit` | identical to `get_speech_timestamps_from_probs` | PASS |
 | Live iterator | `transcribe_vad_iterator_unit` | identical `VADIterator` events | PASS |
-| Per-frame probabilities | `validate.py` | within `tests/tolerances/silero_vad.json` | PASS (max 6.9e-6) |
+| Per-frame probabilities | `validate.py` | within `tests/tolerances/silero_vad.json` | PASS; publication deltas in the catalog/model page |
 | Streaming | `transcribe_silero_vad_smoke` | bit-identical to offline on CPU | PASS |
 | `.bin` loading | `transcribe_silero_vad_bin_smoke` | same probabilities as the equivalent GGUF | PASS |
 | 8 kHz model, quantized GGUFs | - | OUT OF SCOPE | SKIP |

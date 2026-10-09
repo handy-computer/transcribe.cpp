@@ -179,7 +179,11 @@ def build(record: dict, kvs: dict) -> dict:
                 block["note"] = was["note"]
         return block
 
-    caps = {"transcribe": previous.get("transcribe", {"supported": True, "verified": False})}
+    # Standalone roles do not implement the ASR entry point. Without this,
+    # a freshly seeded VAD/LID/diarizer record silently claims transcription.
+    transcribe = (previous.get("transcribe", {"supported": True, "verified": False})
+                  if record.get("role", "asr") == "asr" else {"supported": False})
+    caps = {"transcribe": transcribe}
 
     targets = kvs.get("stt.translation.target_languages")
     pairs = kvs.get("stt.translation.pairs")

@@ -102,9 +102,13 @@ def cells(report: dict) -> list[dict]:
         if not (variant and quant and duration and total):
             continue
 
+        # Streaming feeds are sub-millisecond: ASR's 0.1 ms precision can
+        # erase the measurement. Preserve six decimals for native feed runs.
+        precision = 6 if run.get("feed_samples") is not None else 1
+
         def mean(field: str):
             value = (summary.get(field) or {}).get("mean")
-            return None if value is None else round(value, 1)
+            return None if value is None else round(value, precision)
 
         out.append({
             "_profile": report.get("publication_profile"),
@@ -118,12 +122,13 @@ def cells(report: dict) -> list[dict]:
             # scores several lengths of one clip and names each.
             "sample": run.get("sample") or pathlib.PurePosixPath(run.get("sample_path", "")).stem,
             "sample_duration_s": duration,
-            "total_ms": round(total, 1),
-            # xrt is recomputed from the unrounded mean rather than carried
-            # over: a stored value that no longer matches its own latency is
-            # the drift this ingest exists to remove.
-            "xrt_compute": round(duration / (total / 1000), 2),
-            "wall_ms": None if wall is None else round(wall, 1),
+            "total_ms": round(total, precision),
+            # Streaming retains microsecond precision; compute xRT from its
+            # stored latency so the two fields agree even at tiny feed times.
+            # ASR keeps its historical unrounded-mean calculation.
+            "xrt_compute": round(duration / ((round(total, precision)
+                                               if precision == 6 else total) / 1000), 2),
+            "wall_ms": None if wall is None else round(wall, precision),
             "xrt_wall": None if wall is None else round(duration / (wall / 1000), 2),
             "load_ms": None if run.get("load_ms") is None else round(run["load_ms"], 1),
             "mel_ms": mean("mel_ms"),
@@ -134,8 +139,23 @@ def cells(report: dict) -> list[dict]:
             "measured_on": (report.get("timestamp") or "")[:10] or None,
             "_when": report.get("timestamp") or "",
             "_file": report["_file"],
+            # threads=0 means auto in legacy ASR/langid reports, not a
+            # measured thread count. Catalog recipe metadata is positive.
+            **{field: run[field] for field in STREAM_FIELDS
+               if field in run and not (field == "threads" and run[field] == 0)},
+            **{field: round(summary["total_ms"][stat], precision)
+               for field, stat in (("median_ms", "median"), ("p95_ms", "p95"))
+               if stat in (summary.get("total_ms") or {})},
         })
     return out
+
+
+def report_label(path: pathlib.Path) -> str:
+    """Operator labels work for relative paths and external staging roots."""
+    try:
+        return str(path.resolve().relative_to(common.REPO))
+    except ValueError:
+        return str(path)
 
 
 def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
@@ -147,11 +167,11 @@ def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
         try:
             report = json.loads(path.read_text())
         except (json.JSONDecodeError, UnicodeDecodeError):
-            unreadable.append(str(path.relative_to(common.REPO)))
+            unreadable.append(report_label(path))
             continue
         if not isinstance(report, dict) or report.get("schema") != "transcribe-bench-driver-v1":
             kind = report.get("schema") if isinstance(report, dict) else type(report).__name__
-            unreadable.append(f"{path.relative_to(common.REPO)} (schema {kind!r})")
+            unreadable.append(f"{report_label(path)} (schema {kind!r})")
             continue
         if not publishable(report):
             experiments += 1
@@ -159,10 +179,7 @@ def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
         # Reports normally live under the repo, but --reports can name a
         # staging directory elsewhere (or a relative one); the label is only
         # for the operator, so fall back to the path as given.
-        try:
-            report["_file"] = str(path.resolve().relative_to(common.REPO))
-        except ValueError:
-            report["_file"] = str(path)
+        report["_file"] = report_label(path)
         for row in cells(report):
             key = (row["variant"], row["machine"], row["backend"], row["quant"], row["sample"])
             previous = best.get(key)
@@ -181,22 +198,26 @@ def collect(reports_dir: pathlib.Path) -> tuple[dict, list[str]]:
     return best, notes
 
 
+STREAM_FIELDS = ("feed_samples", "frame_samples", "threads", "n_calls", "warmup_calls")
+OPTIONAL_FIELDS = (*STREAM_FIELDS, "median_ms", "p95_ms")
 FIELDS = ("sample_duration_s", "total_ms", "xrt_compute", "wall_ms", "xrt_wall",
           "load_ms", "mel_ms", "encode_ms", "decode_ms", "engine_sha",
-          "publication_profile", "measured_on")
+          "publication_profile", "measured_on", *OPTIONAL_FIELDS)
 
 
 def catalog_row(source: dict) -> dict:
     """Strip importer bookkeeping from one measured, catalog-shaped cell."""
     return {field: source[field] for field in (
         "machine", "backend", "quant", "sample", *FIELDS
-    )} | {"thermal_gated": None}
+    ) if field in source} | {"thermal_gated": None}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports", default=str(REPORTS))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--models", default="",
+                        help="comma-separated variants (default: all)")
     parser.add_argument("--drift", type=float, default=2.0,
                         help="percent xrt change worth reporting (default 2)")
     parser.add_argument("--max-drift", type=float, default=5.0,
@@ -208,11 +229,19 @@ def main() -> int:
                              "published xRT")
     args = parser.parse_args()
 
+    records = common.load_records()
+    selected = {item.strip() for item in args.models.split(",") if item.strip()}
+    unknown = selected - records.keys()
+    if unknown:
+        parser.error(f"no catalog record for {', '.join(sorted(unknown))}")
+
     reports_dir = pathlib.Path(args.reports)
     if not reports_dir.exists():
         print(f"no reports at {reports_dir}", file=sys.stderr)
         return 2
     measured, notes = collect(reports_dir)
+    if selected:
+        measured = {key: row for key, row in measured.items() if key[0] in selected}
     print(f"{len(measured)} measured cell(s) across "
           f"{len({key[1] for key in measured})} machine slug(s)")
     for note in notes:
@@ -220,7 +249,10 @@ def main() -> int:
 
     filled = updated = added = matched = 0
     drift, refused, unmatched = [], [], []
-    for variant, record in common.load_records().items():
+    for variant, record in records.items():
+        if selected and variant not in selected:
+            continue
+        profile_id, profile = profiles.profile_for(record)
         path = common.CATALOG_DIR / f"{variant}.json"
         rows = record.get("speed_benchmarks", [])
         changed = False
@@ -228,6 +260,9 @@ def main() -> int:
             key = (variant, row["machine"], row["backend"], row["quant"], row["sample"])
             source = measured.pop(key, None)
             if source is None:
+                continue
+            if source.get("_profile") != profile_id:
+                print(f"  skip {variant}: profile {source.get('_profile')!r} is not {profile_id}")
                 continue
             matched += 1
             was_null = row.get("total_ms") is None
@@ -249,6 +284,8 @@ def main() -> int:
                                 source["engine_sha"]))
                 continue
             for field in FIELDS:
+                if field not in source:
+                    continue
                 if row.get(field) != source[field]:
                     row[field] = source[field]
                     changed = True
@@ -264,7 +301,6 @@ def main() -> int:
         # Profile runs can create rows; the old importer could only refresh
         # placeholders, which made a newly required quant impossible to ingest
         # without first hand-authoring empty catalog cells.
-        profile_id, profile = profiles.profile_for(record)
         expected = profiles.apply_exceptions(
             record, "speed", profiles.expected_speed(record, profile))
         expected_keys = {

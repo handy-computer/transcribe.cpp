@@ -47,17 +47,25 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | VoxLingua107 ECAPA-TDNN (language ID) | `lang-id-voxlingua107-ecapa` | language ID (107 languages) | [docs/models/lang-id-voxlingua107-ecapa.md](docs/models/lang-id-voxlingua107-ecapa.md) |
 <!-- /catalog -->
 
+**Voice activity detection models** (no transcription; verified by upstream probability and speech-segment parity; see [`docs/vad.md`](docs/vad.md)):
+
+<!-- catalog:family-index role=vad -->
+| Family | Variants | Available capabilities | Docs |
+| --- | --- | --- | --- |
+| Silero VAD v6.2 | `silero-vad-v6.2` | streaming, voice activity detection | [docs/models/silero-vad-v6.2.md](docs/models/silero-vad-v6.2.md) |
+<!-- /catalog -->
+
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
 ## Model catalog
 
-[`catalog/`](catalog/) is the source of truth for model metadata, accuracy, and
-performance. Each release includes a queryable
+[`catalog/`](catalog/) is the source of truth for model metadata, accuracy,
+reference parity, and performance. Each release includes a queryable
 [`catalog.db`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db)
 and [`SHA-256 checksum`](https://github.com/handy-computer/transcribe.cpp/releases/latest/download/catalog.db.sha256).
 Rebuild it locally with `uv run scripts/catalog/db.py --out catalog.db`.
-The exact accuracy and published speed matrices and standard benchmark recipes
-required for publication live in
+The exact accuracy, reference-parity, and published speed matrices and standard
+benchmark recipes required for publication live in
 [`catalog/_benchmark_profiles.json`](catalog/_benchmark_profiles.json). Run
 `uv run scripts/catalog/check.py --publication-profile` to enforce it; the
 ordinary catalog check reports the migration backlog without failing.

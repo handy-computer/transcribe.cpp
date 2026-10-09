@@ -1,60 +1,101 @@
 # Silero VAD v6.2
 
-Voice activity detector by the Silero Team: one speech probability per
-32 ms frame of 16 kHz audio. Not a transcription model; it serves the VAD
-role ([docs/vad.md](../vad.md)). Internals:
-[docs/porting/families/silero_vad.md](../porting/families/silero_vad.md).
+<!-- catalog:intro -->
+Upstream: [`snakers4/silero-vad`](https://github.com/snakers4/silero-vad) at [`5cd7945`](https://github.com/snakers4/silero-vad/commit/5cd7945).
+Model: 309,633 parameters. Input: 16,000 Hz mono; 512 samples/frame (32 ms).
 
-- Upstream: [snakers4/silero-vad](https://github.com/snakers4/silero-vad),
-  PyPI `silero-vad==6.2.3`, 16 kHz model, MIT
-- Parameters: 309,633
+Voice activity detection by the Silero Team. Not a transcription model:
+the VAD role produces speech probabilities, offline speech segments,
+and streaming probabilities for live START/END events. CPU is the default
+backend for reference fidelity.
+<!-- /catalog -->
+
+API and examples: [VAD usage](../vad.md). Architecture and validation:
+[family note](../porting/families/silero_vad.md).
+
+<!-- catalog:pin -->
+Licensed MIT. Ported from upstream commit [`5cd7945`](https://github.com/snakers4/silero-vad/commit/5cd7945), pinned 2026-10-09. Validated against the silero-vad 6.2.3 (TorchScript, CPU, F32) reference at transcribe.cpp commit [`24fda783`](https://github.com/handy-computer/transcribe.cpp/tree/24fda783) on 2026-10-09.
+Source artifact: `silero-vad==6.2.3`, [`silero_vad/data/silero_vad.jit`](https://pypi.org/project/silero-vad/6.2.3/). SHA256: `e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720`.
+<!-- /catalog -->
 
 ## Downloads
 
-| File | Size |
-|---|---:|
-| `silero-vad-v6.2-F32.gguf` | 1,241,056 B |
+<!-- catalog:downloads metric=false -->
+| Quantization | Download | Size |
+| --- | --- | ---: |
+| F32          | `silero-vad-v6.2-F32.gguf` | 1 MB |
 
-F32 only; quantizing a 1.2 MB model buys nothing. Not yet published; convert
-with `uv run --project scripts/envs/silero_vad scripts/convert-silero_vad.py`.
+Canonical publication pending; filenames above are local artifacts, not download links.
+<!-- /catalog -->
 
-whisper.cpp's published binaries also load directly, from
-[ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad/tree/9ffd54a1e1ee413ddf265af9913beaf518d1639b):
+F32 only: this small detector does not need quantization. Until the canonical
+GGUF is uploaded, convert it locally:
 
-| File | SHA256 |
-|---|---|
-| `ggml-silero-v5.1.2.bin` | `29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf` |
-| `ggml-silero-v6.2.0.bin` | `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987` |
+```bash
+uv run --project scripts/envs/silero_vad scripts/convert-silero_vad.py
+```
 
-They store some weights as F16, so their probabilities differ from the F32
-original by up to 0.003 (v5) / 0.011 (v6). Against upstream's JIT loaded with
-the same stored weights, native inference is within 1.1e-5 with identical
-segments.
+### Compatibility
 
-## Accuracy
+<!-- catalog:prose field=compatibility -->
+The loader also accepts whisper.cpp's `ggml-silero-v5.1.2.bin` and
+`ggml-silero-v6.2.0.bin`, available from
+[ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad).
+These are third-party compatibility inputs, not this project's canonical
+GGUF downloads. Their mixed F16/F32 weights are expanded to F32 at load;
+reference parity is evaluated against the same stored weights.
+<!-- /catalog -->
 
-Exact speech-segment parity with upstream `get_speech_timestamps` at default
-parameters (`scripts/vad/parity.py`, CPU):
+## Reference parity
 
-| Corpus | Files | Audio | Segments | Identical segment lists |
-|---|---:|---:|---:|---:|
-| AMI IHM test (meetings) | 16 | 9.06 h | 9,785 | 16 / 16 |
-| LibriSpeech test-clean + FLEURS zh / ja / ar / de | 5,505 | 15.30 h | 12,555 | 5,505 / 5,505 |
+<!-- catalog:prose field=wer.notes -->
+The publication gate is reference parity: identical speech-segment lists
+at the upstream default parameters, plus per-frame probability agreement
+on the golden validation clips. This is not detection accuracy against
+human speech annotations. Numerical tensor checks remain in the golden
+manifest and tolerance file; the catalog records publication evidence.
+<!-- /catalog -->
 
-Per-frame probabilities on the nine `validate.py` clips: max |C++ - reference|
-6.9e-6.
+<!-- catalog:reference-parity -->
+Reference parity compares speech segment boundaries with the reference using default segmentation parameters. It is not labeled VAD accuracy or WER.
+Backend: `cpu`. Reference: `silero-vad==6.2.3`. Segmentation parameters: `defaults`.
 
-## Speed
+| Dataset | Language | GGUF | Identical files / files | Segments | Audio (s) | Max abs probability delta |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| AMI IHM test | en       | F32  | 16 / 16 |    9,785 | 32623.865 | 1.90139e-05 |
+| FLEURS test | ar       | F32  | 428 / 428 |      639 |  4685.403 | 9.47714e-06 |
+| FLEURS test | de       | F32  | 862 / 862 |    2,312 | 11349.300 | 2.44975e-05 |
+| FLEURS test | ja       | F32  | 650 / 650 |    1,370 |  8511.120 | 3.41237e-05 |
+| FLEURS test | zh       | F32  | 945 / 945 |    2,564 | 11065.180 | 2.52724e-05 |
+| golden validation | mul      | F32  | 9 / 9 |      115 |   363.532 | 7.689e-06 |
+| LibriSpeech test-clean | en       | F32  | 2,620 / 2,620 |    5,670 | 19452.481 | 7.30157e-05 |
 
-Apple M4, CPU, `samples/love-loss.wav` (197 s), model load excluded:
+Measured at transcribe.cpp `24fda783` on 2026-10-09, profile `vad-publication-v1`.
+<!-- /catalog -->
 
-| Engine | Threads | Time | x real time |
-|---|---:|---:|---:|
-| upstream TorchScript (`get_speech_timestamps`) | 1 | 405 ms | 486x |
-| upstream ONNX (`OnnxWrapper`) | 1 | 490 ms | 402x |
-| **transcribe.cpp** | 1 | 113 ms | 1746x |
-| **transcribe.cpp** | 4 | 61 ms | 3243x |
+## Streaming latency
 
-Explicit Metal (`--backend metal`) takes 35 ms but differs from the CPU by up
-to 2e-3 in probability (ggml-metal stages F32 matmul operands as half), so
-`AUTO` picks the CPU.
+The headline is single-frame feed-call latency. Larger frame-aligned chunks
+show amortized processing cost, not a reduction in audio collection time.
+These timings do not measure START/END detection delay, which also depends
+on the iterator's silence and padding policy.
+
+<!-- catalog:stream-perf machine=m4 -->
+Streaming feed-call wall latency; the 32 ms chunk is the headline. 128 ms and 512 ms chunks show feed-size amortization, not independent per-frame latency.
+Includes the Python ctypes/native API wall call; excludes model load and audio capture. One pass over the audio with preserved stream state. Warmup calls are excluded from the measured call statistics. Chunk duration is audio per feed, not the full clip duration.
+Median and p95 are measured per feed call. Amortized median/frame is median/feed divided by frames/feed, not a separately measured single-frame latency. Mean feed-call latency remains in `total_ms` metadata.
+Samples/frame: 512. Threads: 1. Warmup calls: 32. Source samples: `love-loss-32ms`, `love-loss-128ms`, `love-loss-512ms`.
+
+| Backend | GGUF | Chunk  | Frames/feed | Median/feed |    p95/feed | Amortized median/frame | Calls |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| cpu     | F32  | 32 ms  |           1 | 0.059125 ms | 0.064042 ms | 0.059125 ms | 6,161 |
+| cpu     | F32  | 128 ms |           4 | 0.073916 ms |    0.077 ms | 0.018479 ms | 1,540 |
+| cpu     | F32  | 512 ms |          16 | 0.265292 ms |   0.2775 ms | 0.0165807 ms |   385 |
+
+Machine: `m4`.
+Measured at transcribe.cpp `24fda783` on 2026-10-09, profile `vad-publication-v1`.
+<!-- /catalog -->
+
+`AUTO` selects CPU for reference fidelity. Explicit GPU selection is available,
+but ggml-metal's half-precision staging of F32 operands can change probabilities;
+GPU timings are not part of this CPU publication profile.
