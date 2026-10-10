@@ -1,0 +1,78 @@
+{
+  "_comment": [
+    "Silero VAD v6.2 (16 kHz) per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Regime, identical for every number below:",
+    "  model     models/silero-vad-v6.2/silero-vad-v6.2-F32.gguf (ALL_F32)",
+    "  runtime   build/bin/transcribe-cli --backend cpu --threads 1",
+    "            (transcribe_vad_run; production path, nothing injected)",
+    "  reference silero-vad 6.2.3 (silero_vad.jit, sha256 e1122837...), torch",
+    "            2.8.0, fp32, CPU, 1 thread, scored frame by frame exactly as",
+    "            get_speech_timestamps does",
+    "  host      macOS / arm64 (Apple M4), ggml CPU backend",
+    "  cases     all 9 in tests/golden/silero_vad/silero-vad-v6.2.manifest.json",
+    "            (speech, silence-heavy, noise, zh/ja, 2-speaker, music, 197 s)",
+    "",
+    "Every tensor is stacked over all frames of the clip ([n_frames, ...]), so",
+    "max_abs is the worst frame of up to 6162 recurrent steps.",
+    "",
+    "Recipe, per tensor, over all 9 cases:",
+    "  finalized = max(1.5 * observed, provisional, 1e-6)",
+    "with provisional = 1e-4 * p99_abs (max) / 1e-5 * rms (mean) from the",
+    "reference dumps. Most entries keep the provisional budget: observed drift",
+    "is 5-50x below it.",
+    "",
+    "WIDENED vs provisional (max_abs only):",
+    "  enc.3.out   observed 1.917e-04 (ja) -> 2.876e-04 (provisional 2.563e-04)",
+    "  dec.lstm_h  observed 8.541e-05 (ja) -> 1.282e-04 (provisional 9.707e-05)",
+    "Mechanism: fp32 reduction order. enc.3.out is a 192-term dot product",
+    "(3 taps x 64 channels) whose ReLU output reaches ~10 on loud frames.",
+    "The 1.917e-4 drift is about 201 fp32 ULPs at magnitude 10: accumulated reduction",
+    "error rather than a single rounding step. dec.lstm_h inherits it through",
+    "the 128-wide W_ih projection and the recurrence. mean_abs on both stays",
+    "under 30% of budget.",
+    "",
+    "Drift sources: ggml's SIMD reduction order in the STFT (256-tap) and conv",
+    "matmuls versus PyTorch's oneDNN/Accelerate conv1d, and the decoder's",
+    "polynomial expf (sigmoid / tanh within 9e-8 absolute of exact, the same as",
+    "libm's sigmoid). The algebra is exact: an fp64 NumPy re-derivation of the",
+    "forward pass is closer to the C++ probabilities than to the reference's",
+    "(max |c++ - fp64| 3.3e-06 vs max |ref - fp64| 7.6e-06 over the cases).",
+    "",
+    "vad.probs is the gate, together with exact speech-segment parity",
+    "(validate.py compares every segment's start / end sample against",
+    "get_speech_timestamps). Observed vad.probs max_abs 6.9e-06."
+  ],
+  "fe.stft_mag": {
+    "max_abs": 0.0008916,
+    "mean_abs": 1.432e-05
+  },
+  "enc.0.out": {
+    "max_abs": 0.0007955,
+    "mean_abs": 1.675e-05
+  },
+  "enc.1.out": {
+    "max_abs": 0.0007876,
+    "mean_abs": 1.988e-05
+  },
+  "enc.2.out": {
+    "max_abs": 0.001514,
+    "mean_abs": 3.588e-05
+  },
+  "enc.3.out": {
+    "max_abs": 0.0002876,
+    "mean_abs": 5.749e-06
+  },
+  "dec.lstm_h": {
+    "max_abs": 0.0001282,
+    "mean_abs": 3.888e-06
+  },
+  "dec.lstm_c": {
+    "max_abs": 0.001849,
+    "mean_abs": 3.553e-05
+  },
+  "vad.probs": {
+    "max_abs": 0.0001,
+    "mean_abs": 8.912e-06
+  }
+}

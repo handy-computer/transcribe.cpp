@@ -1,7 +1,7 @@
 // cli.h - shared declarations for the transcribe-cli example.
 //
 // main.cpp parses arguments, owns process setup (log sink, output file), and
-// routes each model to its role's driver (asr.cpp, diarize.cpp, langid.cpp). Shared
+// routes each model to its role's driver (asr.cpp, diarize.cpp, langid.cpp, vad.cpp). Shared
 // helpers live in namespace transcribe_cli next to the WAV loader in
 // examples/common.
 
@@ -71,11 +71,11 @@ struct cli_args {
     bool diarize     = true;
     bool diarize_set = false;
 
-    // Streaming demo: when > 0, the single-file path feeds the WAV
+    // Streaming demo: when > 0, the single-file ASR path feeds the WAV
     // through transcribe_stream_begin/feed/finalize in fixed-size
     // ms-aligned chunks instead of one transcribe_run call. Requires
-    // the loaded model to advertise supports_streaming. Set by
-    // --stream-chunk-ms N.
+    // the loaded model to advertise supports_streaming; the DIARIZE,
+    // LANGID and VAD drivers refuse it. Set by --stream-chunk-ms N.
     int stream_chunk_ms      = 0;
     // Parakeet streaming: pick a right-context (lookahead) setting
     // from the model's training menu. -1 = model default (max
@@ -109,6 +109,10 @@ struct cli_args {
     // candidates (0 = all). The library always ranks every allowed label.
     std::vector<std::string> langid_allow;
     int                      langid_top = 0;
+
+    // VAD role. --vad-threshold overrides transcribe_vad_params::threshold
+    // (< 0 = the library default).
+    double vad_threshold = -1.0;
 };
 
 // -o/--output: write `text` (newline-terminated) to `output` if non-null.
@@ -140,5 +144,12 @@ int run_langid_file(const cli_args &           args,
                     transcribe_model *         model,
                     const std::vector<float> & pcm,
                     std::ofstream *            output);
+
+// With -o, writes the speech segment lines.
+int run_vad_file(const cli_args &           args,
+                 transcribe_model *         model,
+                 const std::vector<float> & pcm,
+                 double                     duration_s,
+                 std::ofstream *            output);
 
 }  // namespace transcribe_cli

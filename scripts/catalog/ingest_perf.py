@@ -102,9 +102,13 @@ def cells(report: dict) -> list[dict]:
         if not (variant and quant and duration and total):
             continue
 
+        def ms(value: float) -> float:
+            # A VAD stream feed takes well under a millisecond.
+            return round(value, 1 if value >= 1 else 4)
+
         def mean(field: str):
             value = (summary.get(field) or {}).get("mean")
-            return None if value is None else round(value, 1)
+            return None if value is None else ms(value)
 
         out.append({
             "_profile": report.get("publication_profile"),
@@ -118,12 +122,12 @@ def cells(report: dict) -> list[dict]:
             # scores several lengths of one clip and names each.
             "sample": run.get("sample") or pathlib.PurePosixPath(run.get("sample_path", "")).stem,
             "sample_duration_s": duration,
-            "total_ms": round(total, 1),
+            "total_ms": ms(total),
             # xrt is recomputed from the unrounded mean rather than carried
             # over: a stored value that no longer matches its own latency is
             # the drift this ingest exists to remove.
             "xrt_compute": round(duration / (total / 1000), 2),
-            "wall_ms": None if wall is None else round(wall, 1),
+            "wall_ms": None if wall is None else ms(wall),
             "xrt_wall": None if wall is None else round(duration / (wall / 1000), 2),
             "load_ms": None if run.get("load_ms") is None else round(run["load_ms"], 1),
             "mel_ms": mean("mel_ms"),

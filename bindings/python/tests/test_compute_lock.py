@@ -57,6 +57,8 @@ def fake(monkeypatch):
                         lambda h: frees.append(("diarize", h.value)))
     monkeypatch.setattr(t._lib, "transcribe_langid_session_free",
                         lambda h: frees.append(("langid", h.value)))
+    monkeypatch.setattr(t._lib, "transcribe_vad_session_free",
+                        lambda h: frees.append(("vad", h.value)))
     resets: list = []  # session handles transcribe_stream_reset was given
     monkeypatch.setattr(t._lib, "transcribe_stream_reset",
                         lambda h: resets.append(h.value))
@@ -186,6 +188,7 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     s = fake.session(m)
     d = fake.session(m, cls=t.DiarizeSession)
     lid = fake.session(m, cls=t.LangIdSession)
+    vad = fake.session(m, cls=t.VadSession)
     seen: list = []
 
     def holds(name, ret=0):
@@ -200,8 +203,20 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
                  "transcribe_stream_finalize", "transcribe_stream_reset",
                  "transcribe_batch_status", "transcribe_diarize_run",
                  "transcribe_diarize_n_segments", "transcribe_langid_run",
-                 "transcribe_langid_get_result"):
+                 "transcribe_langid_get_result", "transcribe_vad_run",
+                 "transcribe_vad_stream_feed", "transcribe_vad_stream_flush",
+                 "transcribe_vad_stream_reset", "transcribe_vad_get_segment"):
         monkeypatch.setattr(t._lib, name, holds(name))
+    vad_probs = (ctypes.c_float * 2)(0.25, 0.75)
+
+    def vad_result(h, out):
+        holds("transcribe_vad_get_result")()
+        out._obj.n_probs, out._obj.n_segments = 2, 1
+        return 0
+
+    monkeypatch.setattr(t._lib, "transcribe_vad_get_result", vad_result)
+    monkeypatch.setattr(t._lib, "transcribe_vad_probs",
+                        holds("transcribe_vad_probs", ret=vad_probs))
     monkeypatch.setattr(t._lib, "transcribe_batch_n_results",
                         holds("transcribe_batch_n_results", ret=1))
     real_materialize = t.Session._materialize
@@ -220,6 +235,10 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     stream.reset()
     assert d.run(PCM) == []
     assert lid.run(PCM).candidates == ()
+    assert vad.run(PCM).probs == (0.25, 0.75)
+    assert vad.stream_feed(PCM).probs == (0.25, 0.75)
+    assert vad.stream_flush().probs == (0.25, 0.75)
+    vad.stream_reset()
 
     names = [n for n, _ in seen]
     for site in ("transcribe_run", "transcribe_run_batch",
@@ -228,7 +247,10 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
                  "transcribe_stream_finalize", "transcribe_stream_reset",
                  "transcribe_diarize_run", "transcribe_diarize_n_segments",
                  "transcribe_langid_run", "transcribe_langid_get_result",
-                 "copy-out"):
+                 "transcribe_vad_run", "transcribe_vad_stream_feed",
+                 "transcribe_vad_stream_flush", "transcribe_vad_stream_reset",
+                 "transcribe_vad_get_result", "transcribe_vad_probs",
+                 "transcribe_vad_get_segment", "copy-out"):
         assert site in names, f"{site} never reached"
     assert all(ok for _, ok in seen), [n for n, ok in seen if not ok]
     assert not m._compute_lock.locked()
@@ -619,3 +641,31 @@ def test_langid_allowed_kept_alive_and_empty_rejected(fake, monkeypatch):
     with pytest.raises(t.InvalidArgument):
         lid.run(PCM, allowed=[])
     assert len(seen) == 2  # rejected before the native call
+
+
+# --- VadSession -----------------------------------------------------------------
+
+
+def test_vad_busy_while_stream_active(fake, native, monkeypatch):
+    m = fake.model()
+    s, vad = fake.session(m), fake.session(m, cls=t.VadSession)
+    calls: list = []
+    for name in ("run", "stream_feed", "stream_flush", "stream_reset"):
+        monkeypatch.setattr(t._lib, f"transcribe_vad_{name}",
+                            lambda *a, name=name: calls.append(name) or 0)
+    monkeypatch.setattr(t._lib, "transcribe_vad_get_result", lambda h, out: 0)
+    stream = s.stream()
+    for call, args in ((vad.run, (PCM,)), (vad.stream_feed, (PCM,)),
+                       (vad.stream_flush, ())):
+        with pytest.raises(t.Busy) as ei:
+            call(*args)
+        assert str(ei.value) == ("a stream is active on this model; finish or "
+                                 f"drop it before vad {call.__name__}()")
+    assert calls == [] and not m._compute_lock.locked()
+    vad.stream_reset()  # never Busy
+    assert calls == ["stream_reset"]
+    stream.finalize()
+    vad.run(PCM)
+    vad.stream_feed(PCM)
+    vad.stream_flush()
+    assert calls == ["stream_reset", "run", "stream_feed", "stream_flush"]

@@ -181,19 +181,33 @@ def langid_model_path() -> Path:
     return _family_model("TRANSCRIBE_SMOKE_LANGID_MODEL", LANGID_MODEL)
 
 
-@pytest.fixture(scope="session")
-def langid_toy_model_path(tmp_path_factory) -> Path:
-    """The toy ecapa_tdnn GGUF from tests/fixtures/make_gguf_fixtures.py
-    (5 labels aa..ee, alias xx=aa, random weights). The generator is
-    dependency-free, so this always runs; results are structural only."""
+def _gguf_fixtures():
+    """tests/fixtures/make_gguf_fixtures.py, loaded as a module. The
+    generator is dependency-free, so toy fixtures built from it always run;
+    their results are structural only (random weights)."""
     import importlib.util
 
     gen = REPO / "tests/fixtures/make_gguf_fixtures.py"
     spec = importlib.util.spec_from_file_location("make_gguf_fixtures", gen)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="session")
+def langid_toy_model_path(tmp_path_factory) -> Path:
+    """The toy ecapa_tdnn GGUF (5 labels aa..ee, alias xx=aa)."""
+    mod = _gguf_fixtures()
     path = tmp_path_factory.mktemp("langid") / "ecapa_tdnn_toy.gguf"
     path.write_bytes(mod._ecapa_tdnn_gguf(mod.ECAPA_LABEL_CODES, mod.ECAPA_LABEL_NAMES, ["xx=aa"]))
+    return path
+
+
+@pytest.fixture(scope="session")
+def vad_toy_model_path(tmp_path_factory) -> Path:
+    """The toy silero_vad GGUF (512-sample frames)."""
+    path = tmp_path_factory.mktemp("vad") / "silero_vad_toy.gguf"
+    path.write_bytes(_gguf_fixtures()._silero_vad_gguf())
     return path
 
 

@@ -71,6 +71,12 @@ import type {
   Transcript,
   TranscribeOptions,
   TranscriptionResult,
+  VadFeedOptions,
+  VadInfo,
+  VadOptions,
+  VadResult,
+  VadSegment,
+  VadSessionOptions,
   Word,
 } from "./types.js";
 
@@ -141,6 +147,7 @@ const ROLES: Record<Role, number> = {
   asr: g.TRANSCRIBE_ROLE_ASR,
   diarize: g.TRANSCRIBE_ROLE_DIARIZE,
   langid: g.TRANSCRIBE_ROLE_LANGID,
+  vad: g.TRANSCRIBE_ROLE_VAD,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -258,32 +265,35 @@ function deferFree(lock: Mutex, fn: () => void, after?: () => void): void {
 // copy): the buffer is borrowed across the async native call, which reads it on
 // a worker thread, so callers must not mutate it until the promise resolves
 // (documented on run/runBatch/feed). Other inputs already produce a fresh array.
+// asFloat32 allows empty input (a VAD stream feed accepts 0 samples).
 function toFloat32(pcm: PcmLike): Float32Array {
-  let out: Float32Array;
-  if (pcm instanceof Float32Array) out = pcm;
-  else if (Array.isArray(pcm)) out = Float32Array.from(pcm);
-  else if (pcm instanceof ArrayBuffer) out = new Float32Array(pcm);
-  else if (ArrayBuffer.isView(pcm)) {
+  const out = asFloat32(pcm);
+  if (out.length === 0) throw new TranscribeError("PCM is empty");
+  return out;
+}
+
+function asFloat32(pcm: PcmLike): Float32Array {
+  if (pcm instanceof Float32Array) return pcm;
+  if (Array.isArray(pcm)) return Float32Array.from(pcm);
+  if (pcm instanceof ArrayBuffer) return new Float32Array(pcm);
+  if (ArrayBuffer.isView(pcm)) {
     const b = pcm as Buffer;
     if (b.byteLength % 4 !== 0) {
       throw new TranscribeError(
         "PCM byte length must be a multiple of 4 (float32)",
       );
     }
-    out = new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
-  } else {
-    throw new TranscribeError(
-      "PCM must be a Float32Array, number[], ArrayBuffer, or Buffer",
-    );
+    return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
   }
-  if (out.length === 0) throw new TranscribeError("PCM is empty");
-  return out;
+  throw new TranscribeError(
+    "PCM must be a Float32Array, number[], ArrayBuffer, or Buffer",
+  );
 }
 
 // koffi decodes int64 struct fields as bigint. We surface them as number for
-// ergonomics; the fields this is used on (millisecond timestamps, kv byte caps)
-// stay well under Number.MAX_SAFE_INTEGER, so the narrowing is lossless in
-// practice. Revisit if a field can exceed 2^53.
+// ergonomics; the fields this is used on (millisecond timestamps, kv byte caps,
+// sample / frame indices) stay well under Number.MAX_SAFE_INTEGER, so the
+// narrowing is lossless in practice. Revisit if a field can exceed 2^53.
 function num(v: number | bigint): number {
   return typeof v === "bigint" ? Number(v) : v;
 }
@@ -804,9 +814,10 @@ interface SessionControl {
 const SESSION_CONTROL = new WeakMap<Session, SessionControl>();
 
 /**
- * One native session handle under the model's compute rules, shared by Session
- * and DiarizeSession. Each holds it in a private field, so none of this is
- * reachable from user code. `setAbort` is the role's set_abort_callback.
+ * One native session handle under the model's compute rules, shared by Session,
+ * DiarizeSession, LangIdSession, and VadSession. Each holds it in a private
+ * field, so none of this is reachable from user code. `setAbort` is the role's
+ * set_abort_callback.
  */
 class SessionCore {
   #n: Native;
@@ -1570,13 +1581,149 @@ export class LangIdSession {
   }
 }
 
+// ---- VadSession ------------------------------------------------------------
+
+// Copy the last call's probabilities and segments out of the session; call
+// inside exclusive(), since the next compute replaces them.
+function readVadResult(n: Native, h: any): VadResult {
+  const F = n.F;
+  const res: any = {};
+  F.vadResultInit(res);
+  check(n, F.vadGetResult(h, res), "transcribe_vad_get_result");
+  const ptr = res.n_probs > 0 ? F.vadProbs(h) : null;
+  if (res.n_probs > 0 && !ptr)
+    throw new TranscribeError("vad result has probabilities but no buffer");
+  const probs: number[] = ptr ? Array.from(n.koffi.decode(ptr, "float", res.n_probs)) : [];
+  const segments: VadSegment[] = [];
+  for (let i = 0; i < res.n_segments; i++) {
+    const s: any = {};
+    F.vadSegmentInit(s);
+    check(n, F.vadGetSegment(h, i, s), "transcribe_vad_get_segment");
+    segments.push({ startSample: num(s.start_sample), endSample: num(s.end_sample) });
+  }
+  return { probs, firstFrame: num(res.first_frame), segments };
+}
+
+/**
+ * A VAD-role session: where there is speech. Same compute rules as Session,
+ * except a VAD stream is session state and does not take the stream lease.
+ */
+export class VadSession {
+  #n: Native;
+  #core: SessionCore;
+  #model: TranscribeModel; // keep the model alive while this session lives
+  #untrack: (self: VadSession) => void;
+
+  /** @internal */
+  constructor(
+    n: Native,
+    model: TranscribeModel,
+    handle: any,
+    lock: Mutex,
+    untrack: (self: VadSession) => void,
+  ) {
+    this.#n = n;
+    this.#model = model;
+    this.#core = new SessionCore(n, handle, lock, n.F.vadSetAbortCallback);
+    this.#untrack = untrack;
+  }
+
+  /**
+   * Score one clip from a fresh state and segment it (resets any stream in
+   * progress). The input PCM is borrowed, not copied (see Session.run).
+   */
+  async run(pcm: PcmLike, opts: VadOptions = {}): Promise<VadResult> {
+    const n = this.#n;
+    const F = n.F;
+    const h = this.#core.handle;
+    const samples = toFloat32(pcm);
+    const p: any = {};
+    F.vadParamsInit(p);
+    if (opts.threshold !== undefined) p.threshold = opts.threshold;
+    if (opts.negThreshold !== undefined) p.neg_threshold = opts.negThreshold;
+    if (opts.minSpeechMs !== undefined) p.min_speech_ms = opts.minSpeechMs;
+    if (opts.minSilenceMs !== undefined) p.min_silence_ms = opts.minSilenceMs;
+    if (opts.speechPadMs !== undefined) p.speech_pad_ms = opts.speechPadMs;
+    if (opts.maxSpeechMs !== undefined) p.max_speech_ms = opts.maxSpeechMs;
+
+    return this.#core.exclusive("run VAD", async (call) => {
+      const status = await call("run()", opts.signal, F.vadRun, h, samples, samples.length, p);
+      check(n, status, "transcribe_vad_run");
+      return readVadResult(n, h);
+    });
+  }
+
+  /**
+   * Append audio to the stream and score every frame it completes; returns
+   * those frames' probabilities (a partial frame waits for the next feed).
+   * The chunk is borrowed, not copied (see Stream.feed); an empty chunk scores
+   * nothing. An abort or processing error resets the stream (the next feed's
+   * firstFrame is 0); invalid input leaves it unchanged.
+   */
+  async streamFeed(pcm: PcmLike, opts: VadFeedOptions = {}): Promise<VadResult> {
+    const n = this.#n;
+    const h = this.#core.handle;
+    const samples = asFloat32(pcm);
+    return this.#core.exclusive("feed the VAD stream", async (call) => {
+      const status = await call(
+        "streamFeed()", opts.signal, n.F.vadStreamFeed, h,
+        samples.length > 0 ? samples : null, samples.length,
+      );
+      check(n, status, "transcribe_vad_stream_feed");
+      return readVadResult(n, h);
+    });
+  }
+
+  /**
+   * End the stream: score the buffered partial frame (zero padded) and reset,
+   * so the next feed's firstFrame is 0. A processing error also resets it.
+   */
+  async streamFlush(opts: VadFeedOptions = {}): Promise<VadResult> {
+    const n = this.#n;
+    const h = this.#core.handle;
+    return this.#core.exclusive("flush the VAD stream", async (call) => {
+      const status = await call("streamFlush()", opts.signal, n.F.vadStreamFlush, h);
+      check(n, status, "transcribe_vad_stream_flush");
+      return readVadResult(n, h);
+    });
+  }
+
+  /**
+   * Drop the stream without scoring (the next feed's firstFrame is 0); queued
+   * behind any in-flight call.
+   */
+  async streamReset(): Promise<void> {
+    const h = this.#core.handle;
+    return this.#core.exclusive(null, async () => {
+      this.#n.F.vadStreamReset(h);
+    });
+  }
+
+  /** load_ms plus the last call's encode / decode time. */
+  get timings(): Timings {
+    this.#core.assertNotComputing("session timings");
+    const h = this.#core.handle;
+    return readTimings(this.#n, (o) => this.#n.F.vadGetTimings(h, o));
+  }
+
+  dispose(): void {
+    if (this.#core.disposed) return;
+    this.#untrack(this);
+    this.#core.dispose(this.#n.F.vadSessionFree);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+}
+
 // ---- Model -----------------------------------------------------------------
 
 export class TranscribeModel {
   #n: Native;
   #h: any;
   #disposed = false;
-  #sessions = new Set<Session | DiarizeSession | LangIdSession>();
+  #sessions = new Set<Session | DiarizeSession | LangIdSession | VadSession>();
   #lock = new Mutex(); // serializes compute across all sessions of this model
 
   private constructor(n: Native, handle: any) {
@@ -1732,6 +1879,32 @@ export class TranscribeModel {
     if (!out[0])
       throw new TranscribeError("langid session init returned a null handle");
     const session = new LangIdSession(n, this, out[0], this.#lock, (s) =>
+      this.#sessions.delete(s),
+    );
+    this.#sessions.add(session);
+    return session;
+  }
+
+  /** Static facts of a "vad" model; UnsupportedRole otherwise. */
+  get vadInfo(): VadInfo {
+    const n = this.#n;
+    const info: any = {};
+    n.F.vadInfoInit(info);
+    check(n, n.F.vadGetInfo(this.handle, info), "reading vad info");
+    return { sampleRate: info.sample_rate, frameSamples: info.frame_samples };
+  }
+
+  /** Open a VAD-role session; UnsupportedRole on a model without "vad". */
+  createVadSession(opts: VadSessionOptions = {}): VadSession {
+    const n = this.#n;
+    const p: any = {};
+    n.F.vadSessionParamsInit(p);
+    if (opts.nThreads !== undefined) p.n_threads = opts.nThreads;
+    const out: any[] = [null];
+    check(n, n.F.vadSessionInit(this.handle, p, out), "opening vad session");
+    if (!out[0])
+      throw new TranscribeError("vad session init returned a null handle");
+    const session = new VadSession(n, this, out[0], this.#lock, (s) =>
       this.#sessions.delete(s),
     );
     this.#sessions.add(session);

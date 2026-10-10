@@ -21,7 +21,8 @@ final class NoModelTests: XCTestCase {
 
     func testAbiStructSizesAreLive() {
         // A real layout is non-zero; a garbage/empty one would be 0.
-        for s in [AbiStruct.runParams, .capabilities, .segment, .sessionLimits, .langIdResult, .langIdCandidate] {
+        for s in [AbiStruct.runParams, .capabilities, .segment, .sessionLimits, .langIdResult, .langIdCandidate,
+                  .vadInfo, .vadSessionParams, .vadParams, .vadResult, .vadSegment] {
             XCTAssertGreaterThan(Transcribe.abiStructSize(s), 0, "\(s)")
         }
     }

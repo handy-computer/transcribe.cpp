@@ -400,6 +400,12 @@ typedef enum {
     TRANSCRIBE_ABI_LANGID_PARAMS          = 21,
     TRANSCRIBE_ABI_LANGID_RESULT          = 22,
     TRANSCRIBE_ABI_LANGID_CANDIDATE       = 23,
+    /* include/transcribe/vad.h */
+    TRANSCRIBE_ABI_VAD_INFO               = 24,
+    TRANSCRIBE_ABI_VAD_SESSION_PARAMS     = 25,
+    TRANSCRIBE_ABI_VAD_PARAMS             = 26,
+    TRANSCRIBE_ABI_VAD_RESULT             = 27,
+    TRANSCRIBE_ABI_VAD_SEGMENT            = 28,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.
@@ -1372,6 +1378,7 @@ typedef enum {
     TRANSCRIBE_ROLE_ASR     = 1u << 0,
     TRANSCRIBE_ROLE_DIARIZE = 1u << 1,
     TRANSCRIBE_ROLE_LANGID  = 1u << 2,
+    TRANSCRIBE_ROLE_VAD     = 1u << 3,
 } transcribe_role;
 
 /*
@@ -1543,7 +1550,10 @@ TRANSCRIBE_API const char * transcribe_model_meta_val_str(const struct transcrib
 /* ----------------------------------------------------------------------- */
 
 /*
- * Load a GGUF model from disk.
+ * Load a GGUF model or a supported whisper.cpp Whisper/Silero .bin from disk.
+ * Format is detected from the file header, not the extension. Silero binary
+ * support is limited to published 16 kHz v5.1.2 and v6.2.0 weights; inference
+ * retains upstream Silero behavior. See docs/vad.md for scope and usage.
  *
  * path is UTF-8, like every path crossing this API; on Windows it is
  * converted to a wide path internally, so non-ASCII paths load

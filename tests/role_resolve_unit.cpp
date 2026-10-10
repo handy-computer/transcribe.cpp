@@ -4,6 +4,7 @@
 #include "transcribe-diarize.h"
 #include "transcribe-langid.h"
 #include "transcribe-model.h"
+#include "transcribe-vad.h"
 #include "transcribe.h"
 
 #include <cstdio>
@@ -71,10 +72,22 @@ transcribe::Arch make_langid_arch() {
 
 const transcribe::Arch k_langid_arch = make_langid_arch();
 
+const transcribe::VadOps k_vad_ops = {};
+
+transcribe::Arch make_vad_arch() {
+    transcribe::Arch a = {};
+    a.name             = "fake_vad";
+    a.vad              = &k_vad_ops;
+    return a;
+}
+
+const transcribe::Arch k_vad_arch = make_vad_arch();
+
 void test_resolve_roles() {
     constexpr uint32_t ASR = TRANSCRIBE_ROLE_ASR;
     constexpr uint32_t DIA = TRANSCRIBE_ROLE_DIARIZE;
     constexpr uint32_t LID = TRANSCRIBE_ROLE_LANGID;
+    constexpr uint32_t VAD = TRANSCRIBE_ROLE_VAD;
 
     struct Case {
         const transcribe::Arch * arch;
@@ -99,6 +112,10 @@ void test_resolve_roles() {
         { &k_asr_arch,      LID,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no langid ops table
         { &k_diarize_arch,  DIA | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
         { &k_langid_arch,   ASR | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_vad_arch,      VAD,              TRANSCRIBE_OK,                  VAD },
+        { &k_vad_arch,      0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_langid_arch,   VAD,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no vad ops table
+        { &k_vad_arch,      ASR | VAD,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
         { &k_asr_arch,      ASR | (1u << 31), TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // unknown bit
         { nullptr,          0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
     };

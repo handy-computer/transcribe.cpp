@@ -212,6 +212,8 @@ def fmt_err(row: dict | None, dp: int = 2) -> str:
 
 
 def fmt_ms(total_ms: float, dp_ms: int = 0, dp_s: int = 2) -> str:
+    if total_ms < 1:  # a VAD stream feed: keep the sub-millisecond digits
+        return f"{total_ms:.3f} ms"
     if total_ms < 1000:
         return f"{total_ms:.{dp_ms}f} ms"
     return f"{total_ms / 1000:.{dp_s}f} s"
@@ -264,6 +266,8 @@ def capabilities_summary(record: dict) -> str:
     out = []
     if record.get("role") == "langid":
         out.append(f"language ID ({len(record.get('languages', []))} languages)")
+    if record.get("role") == "vad":
+        out.append("voice activity detection")
     for name, label in (("translate", "translate"), ("streaming", "streaming"),
                         ("diarize", "diarize")):
         if caps.get(name, {}).get("supported"):
@@ -272,6 +276,11 @@ def capabilities_summary(record: dict) -> str:
     if grans:
         out.append(f"{grans[0]} timestamps")
     return ", ".join(out) or "-"
+
+
+def upstream_url(record: dict) -> str:
+    """The upstream home: `upstream_url` (e.g. GitHub) or the HF repo."""
+    return record.get("upstream_url") or f"https://huggingface.co/{record['upstream_repo']}"
 
 
 # --------------------------------------------------------------------------

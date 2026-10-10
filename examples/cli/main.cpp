@@ -54,7 +54,8 @@ void print_usage(const char * argv0) {
                  "  --target-language ISO target language for translation (e.g. de, es, fr)\n"
                  "  -q, --quiet           suppress library log output\n"
                  "  -r, --repeat N        run N times per file (benchmark)\n"
-                 "  -o, --output PATH     write text or speaker segments to PATH (stdout unchanged)\n"
+                 "  -o, --output PATH     write the text, speaker segments, language candidates\n"
+                 "                        or speech segments to PATH (stdout unchanged)\n"
                  "  --threads N           CPU threads (default: all cores)\n"
                  "  --n-ctx N             session context/KV cap in tokens (bounds decoder\n"
                  "                        KV memory; cannot extend the model): 0 = model\n"
@@ -86,10 +87,12 @@ void print_usage(const char * argv0) {
                  "  --allow CODES         (language ID) comma-separated labels to choose from\n"
                  "  --top N               (language ID) print only the best N ranked\n"
                  "                        candidates (0 = all; default)\n"
+                 "  --vad-threshold P     (VAD) speech probability threshold in [0, 1]\n"
+                 "                        (default: the library's, 0.5)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
-                 "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
-                 "                        N-ms PCM slices; requires model to advertise\n"
-                 "                        supports_streaming\n"
+                 "  --stream-chunk-ms N   (ASR) single-file: drive the streaming API by\n"
+                 "                        feeding N-ms PCM slices; requires model to\n"
+                 "                        advertise supports_streaming\n"
                  "  --stream-att-right R  (parakeet streaming) pick the right-context\n"
                  "                        setting from the model's training menu;\n"
                  "                        nemotron-speech-streaming-en-0.6b accepts\n"
@@ -450,6 +453,16 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --top must be >= 0\n");
                 return false;
             }
+        } else if (a == "--vad-threshold") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.vad_threshold = std::atof(v);
+            if (!(out.vad_threshold >= 0.0 && out.vad_threshold <= 1.0)) {
+                std::fprintf(stderr, "error: --vad-threshold must be in [0, 1]\n");
+                return false;
+            }
         } else if (a == "--diarize") {
             out.diarize     = true;
             out.diarize_set = true;
@@ -621,6 +634,9 @@ int run_file(const cli_args & args, std::ofstream * output) {
     }
     if ((roles & TRANSCRIBE_ROLE_LANGID) != 0) {
         return transcribe_cli::run_langid_file(args, model, pcm, output);
+    }
+    if ((roles & TRANSCRIBE_ROLE_VAD) != 0) {
+        return transcribe_cli::run_vad_file(args, model, pcm, duration_s, output);
     }
     return transcribe_cli::run_diarize_file(args, model, pcm, duration_s, output);
 }

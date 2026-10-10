@@ -10,6 +10,7 @@ A loaded model serves one or more **roles**, the kinds of work it can do.
 | `TRANSCRIBE_ROLE_ASR` | `include/transcribe.h` | `transcribe_session` | text, timestamps, speaker-attributed segments |
 | `TRANSCRIBE_ROLE_DIARIZE` | `include/transcribe/diarize.h` | `transcribe_diarize_session` | who spoke when |
 | `TRANSCRIBE_ROLE_LANGID` | `include/transcribe/langid.h` | `transcribe_langid_session` | which language (`docs/langid.md`) |
+| `TRANSCRIBE_ROLE_VAD` | `include/transcribe/vad.h` | `transcribe_vad_session` | where there is speech (`docs/vad.md`) |
 
 Every role follows the same rules:
 

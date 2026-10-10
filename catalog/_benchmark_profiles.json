@@ -1,7 +1,8 @@
 {
   "default": "asr-publication-v2",
   "roles": {
-    "langid": "langid-publication-v1"
+    "langid": "langid-publication-v1",
+    "vad": "vad-publication-v1"
   },
   "profiles": {
     "asr-publication-v2": {
@@ -129,6 +130,32 @@
               "vulkan"
             ],
             "cooldown_tctl_c": 55.0
+          }
+        ]
+      }
+    },
+    "vad-publication-v1": {
+      "role": "vad",
+      "description": "VAD speed only, no accuracy suite (numerical parity is the porting gate). scripts/vad/bench.py through the Python binding, CPU, one thread, every shipped quant. <clip>: transcribe_vad_run over the whole clip. <clip>-<N>ms: one pass of transcribe_vad_stream_feed over the clip in N ms chunks; a cell is the mean time per feed call.",
+      "accuracy": [],
+      "speed": {
+        "quants": "all-downloads",
+        "samples": [
+          "love-loss-32ms",
+          "love-loss-128ms",
+          "love-loss-512ms",
+          "jfk",
+          "love-loss"
+        ],
+        "iterations": 10,
+        "warmup": 3,
+        "targets": [
+          {
+            "machine": "m4",
+            "display": "Apple M4",
+            "backends": [
+              "cpu"
+            ]
           }
         ]
       }

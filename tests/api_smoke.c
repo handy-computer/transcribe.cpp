@@ -131,6 +131,18 @@ static void test_abi_metadata(void) {
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_SPEAKER_SEGMENT) == _Alignof(struct transcribe_speaker_segment));
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_LANGID_CANDIDATE) == sizeof(struct transcribe_langid_candidate));
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_LANGID_CANDIDATE) == _Alignof(struct transcribe_langid_candidate));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_INFO) == sizeof(struct transcribe_vad_info));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_INFO) == _Alignof(struct transcribe_vad_info));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_SESSION_PARAMS) ==
+          sizeof(struct transcribe_vad_session_params));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_SESSION_PARAMS) ==
+          _Alignof(struct transcribe_vad_session_params));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_PARAMS) == sizeof(struct transcribe_vad_params));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_PARAMS) == _Alignof(struct transcribe_vad_params));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_RESULT) == sizeof(struct transcribe_vad_result));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_RESULT) == _Alignof(struct transcribe_vad_result));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_VAD_SEGMENT) == sizeof(struct transcribe_vad_segment));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_VAD_SEGMENT) == _Alignof(struct transcribe_vad_segment));
     CHECK(transcribe_abi_struct_size((transcribe_abi_struct) 9999) == 0);
     CHECK(transcribe_abi_struct_align((transcribe_abi_struct) 9999) == 0);
 

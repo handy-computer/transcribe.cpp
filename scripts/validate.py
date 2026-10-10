@@ -337,6 +337,12 @@ def parse_cli_language(output: str) -> dict[str, Any] | None:
     return None
 
 
+def parse_cli_segments(output: str) -> list[dict[str, int]]:
+    """The VAD CLI's `segment: <i> start=<sample> end=<sample> ...` lines."""
+    return [{"start": int(m[1]), "end": int(m[2])}
+            for m in re.finditer(r"^\s*segment: \d+ start=(\d+) end=(\d+)", output, re.M)]
+
+
 def write_cpp_transcript(
     out_dir: Path,
     *,
@@ -445,7 +451,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # prediction.json from a single classify_batch call.
         if args.family == "sortformer":
             stages = ["encoder", "diarize"]
-        elif args.family == "ecapa_tdnn":
+        elif args.family in ("ecapa_tdnn", "silero_vad"):
             stages = ["encoder"]
         else:
             stages = case_stages(case, ["encoder", "decode"])
@@ -584,6 +590,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
                 f"error: cpp dump [{args.family}/{case_name}] failed "
                 f"with exit code {result.returncode}"
             )
+        if manifest.get("role") == "vad":
+            # A VAD model: its behavioural artifact is the speech segments,
+            # compared against the reference's segments.json.
+            segments = parse_cli_segments(result.stdout or "")
+            (out_dir / "segments.json").write_text(json.dumps({"segments": segments}, indent=2) + "\n")
+            print(f"  wrote {out_dir / 'segments.json'}", file=sys.stderr)
+            continue
         transcript = parse_cli_transcript(result.stdout or "")
         if transcript is None and "speaker segments:" in (result.stdout or ""):
             continue  # a diarizer has no transcript
@@ -708,6 +721,20 @@ def cmd_compare(args: argparse.Namespace) -> int:
             expected = case.get("expected_language") if isinstance(case, dict) else None
             print(f"\n  Prediction: {'ok' if match else 'FAIL'} c++ {cpp_pred['code']!r}, "
                   f"reference {ref_pred['code']!r}, expected {expected!r}")
+
+        # VAD: the gate is exact speech-segment parity (sample positions).
+        # A missing artifact on either side is a failure, not a skip.
+        if manifest.get("role") == "vad":
+            ref_segs, cpp_segs = ((json.loads(f.read_text())["segments"] if f.exists() else None)
+                                  for f in (ref_dir / "segments.json", cpp_dir / "segments.json"))
+            match = ref_segs is not None and cpp_segs == ref_segs
+            all_passed = all_passed and match
+            transcript_results.append({"case": case_name, "match": match, "mode": "segments",
+                                       "reference": ref_segs, "cpp": cpp_segs})
+            if match:
+                print(f"\n  Segments: ok ({len(ref_segs)} identical)")
+            else:
+                print(f"\n  Segments: FAIL\n    reference: {ref_segs}\n    c++:       {cpp_segs}")
 
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists() and args.family != "sortformer":

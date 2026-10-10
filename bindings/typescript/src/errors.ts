@@ -45,7 +45,7 @@ export class VersionMismatch extends TranscribeError {}
  */
 export class BackendInitializing extends TranscribeError {}
 
-/** Raised when the model does not serve the role (ASR, diarize, langid) the call needs. */
+/** Raised when the model does not serve the role (ASR, diarize, langid, vad) the call needs. */
 export class UnsupportedRole extends TranscribeError {}
 
 /** Raised when a run is cancelled; carries any partial transcript in `partialResult`. */

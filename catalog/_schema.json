@@ -25,7 +25,7 @@
       "description": "Loader family (the GGUF's general.architecture)"
     },
     "role": {
-      "enum": ["asr", "diarize", "langid"],
+      "enum": ["asr", "diarize", "langid", "vad"],
       "description": "The role the model is published for (transcribe_model_roles). Absent means asr."
     },
     "display_name": {
@@ -60,6 +60,11 @@
       "type": "string",
       "description": "The upstream model this port derives from."
     },
+    "upstream_url": {
+      "type": "string",
+      "pattern": "^https://",
+      "description": "Upstream home when it is not the Hugging Face repo upstream_repo names (e.g. GitHub). Cards link it and fetch no HF model card."
+    },
     "upstream_commit": {
       "type": "string",
       "pattern": "^[0-9a-f]{7}$",
@@ -78,8 +83,7 @@
       "items": {
         "type": "string"
       },
-      "minItems": 1,
-      "description": "Languages this port transcribes, in the spellings it advertises."
+      "description": "Languages this port transcribes, in the spellings it advertises. Empty only for role vad."
     },
     "language_tag_form": {
       "enum": ["bare-bcp47","locale","mixed"],
@@ -570,5 +574,7 @@
         }
       ]
     }
-  }
+  },
+  "if": {"required": ["role"], "properties": {"role": {"const": "vad"}}},
+  "else": {"properties": {"languages": {"minItems": 1}}}
 }

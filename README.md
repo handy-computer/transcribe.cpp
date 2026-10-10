@@ -2,7 +2,7 @@
 
 C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, with Metal, Vulkan, and CUDA backends for fast GPU inference plus a tinyBLAS-accelerated CPU path.
 
-16 model families and 60+ variants, streaming and batch. Every model we publish under [`handy-computer`](https://huggingface.co/handy-computer) is numerically verified and WER-tested against its reference implementation
+16 model families and 60+ variants, streaming and batch. Every transcription model we publish under [`handy-computer`](https://huggingface.co/handy-computer) is numerically verified and WER-tested against its reference implementation
 
 **Supported models:**
 
@@ -45,6 +45,14 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Family | Variants | Available capabilities | Docs |
 | --- | --- | --- | --- |
 | VoxLingua107 ECAPA-TDNN (language ID) | `lang-id-voxlingua107-ecapa` | language ID (107 languages) | [docs/models/lang-id-voxlingua107-ecapa.md](docs/models/lang-id-voxlingua107-ecapa.md) |
+<!-- /catalog -->
+
+**Voice activity detection models** (no transcription; see [`docs/vad.md`](docs/vad.md)):
+
+<!-- catalog:family-index role=vad -->
+| Family | Variants | Available capabilities | Docs |
+| --- | --- | --- | --- |
+| Silero VAD v6.2 | `silero-vad-v6.2` | streaming, voice activity detection | [docs/models/silero-vad-v6.2.md](docs/models/silero-vad-v6.2.md) |
 <!-- /catalog -->
 
 Per-variant model cards live under [`docs/models/`](docs/models/).

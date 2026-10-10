@@ -2,13 +2,15 @@ import CTranscribe
 import Foundation
 
 /// The kinds of work a model serves (`transcribe_model_roles`). ASR is
-/// `Session`; DIARIZE is `DiarizeSession`; LANGID is `LangIdSession`.
+/// `Session`; DIARIZE is `DiarizeSession`; LANGID is `LangIdSession`; VAD is
+/// `VadSession`.
 public struct Roles: OptionSet, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }
     public static let asr = Roles(rawValue: TRANSCRIBE_ROLE_ASR.rawValue)
     public static let diarize = Roles(rawValue: TRANSCRIBE_ROLE_DIARIZE.rawValue)
     public static let langId = Roles(rawValue: TRANSCRIBE_ROLE_LANGID.rawValue)
+    public static let vad = Roles(rawValue: TRANSCRIBE_ROLE_VAD.rawValue)
 }
 
 /// A loaded model. Safe to share across threads (`@unchecked Sendable`): the C
@@ -25,10 +27,10 @@ public final class Model: @unchecked Sendable {
     /// The compute lease: `true` while some session holds an ACTIVE stream.
     /// The C contract allows at most one in-flight run/stream across ALL
     /// sessions of a model, and an active stream spans begin..finalize/reset/
-    /// drop — so `run`/`runBatch`/another `stream`/a diarize `run` are refused
-    /// with `.busy` while it is held, rather than racing into the documented UB
-    /// (corrupted decodes on CPU, command-buffer failures on Metal). Always
-    /// accessed under `runLock`.
+    /// drop — so `run`/`runBatch`/another `stream`/a diarize or langid `run`/a
+    /// VAD `run`/`streamFeed`/`streamFlush` are refused with `.busy` while it
+    /// is held, rather than racing into the documented UB (corrupted decodes on
+    /// CPU, command-buffer failures on Metal). Always accessed under `runLock`.
     var streamActive = false
 
     /// Run `body` (a native compute call and its copy-out) under the model-wide
@@ -46,7 +48,8 @@ public final class Model: @unchecked Sendable {
         }
     }
 
-    /// Load a model from a GGUF file. Runs the pre-1.0 version gate first.
+    /// Load a model from a GGUF file or a supported whisper.cpp Whisper/Silero
+    /// `.bin` (detected from the header). Runs the pre-1.0 version gate first.
     public init(path: String, options: ModelOptions = .init()) throws {
         try Transcribe.ensureCompatible()
         var params = transcribe_model_load_params()

@@ -115,6 +115,16 @@ enum Fixtures {
         return path
     }
 
+    /// The toy silero_vad GGUF the C++ build generates under tests/fixtures/,
+    /// or `XCTSkip` before the C++ test fixtures have been built.
+    static func vadToyModelPath() throws -> String {
+        let path = repoRoot().appendingPathComponent("tests/fixtures/arch_silero_vad.gguf").path
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("no toy silero_vad fixture (build the C++ `fixtures` target)")
+        }
+        return path
+    }
+
     /// The model path + decoded PCM, or `XCTSkip` when either is absent.
     static func modelAndAudio() throws -> (model: String, pcm: [Float]) {
         guard let model = modelPath() else {

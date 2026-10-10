@@ -274,6 +274,54 @@ export function bindLibrary(libraryPath: string): Bound {
       iop(T.transcribe_timings),
     ]),
 
+    // vad role
+    vadInfoInit: lib.func("transcribe_vad_info_init", "void", [outp(T.transcribe_vad_info)]),
+    vadGetInfo: lib.func("transcribe_vad_get_info", "int", [
+      "void *",
+      iop(T.transcribe_vad_info),
+    ]),
+    vadSessionParamsInit: lib.func("transcribe_vad_session_params_init", "void", [
+      outp(T.transcribe_vad_session_params),
+    ]),
+    vadSessionInit: lib.func("transcribe_vad_session_init", "int", [
+      "void *",
+      inp(T.transcribe_vad_session_params),
+      handleOut,
+    ]),
+    vadSessionFree: lib.func("transcribe_vad_session_free", "void", ["void *"]),
+    vadSetAbortCallback: lib.func("transcribe_vad_set_abort_callback", "void", [
+      "void *",
+      "void *",
+      "void *",
+    ]),
+    vadParamsInit: lib.func("transcribe_vad_params_init", "void", [outp(T.transcribe_vad_params)]),
+    vadRun: lib.func("transcribe_vad_run", "int", [
+      "void *",
+      inp("float"),
+      "int",
+      inp(T.transcribe_vad_params),
+    ]),
+    vadStreamFeed: lib.func("transcribe_vad_stream_feed", "int", ["void *", inp("float"), "int"]),
+    vadStreamFlush: lib.func("transcribe_vad_stream_flush", "int", ["void *"]),
+    vadStreamReset: lib.func("transcribe_vad_stream_reset", "void", ["void *"]),
+    vadResultInit: lib.func("transcribe_vad_result_init", "void", [outp(T.transcribe_vad_result)]),
+    vadGetResult: lib.func("transcribe_vad_get_result", "int", [
+      "void *",
+      iop(T.transcribe_vad_result),
+    ]),
+    // Session-owned; decoded (copied) before the compute lock is released.
+    vadProbs: lib.func("transcribe_vad_probs", "void *", ["void *"]),
+    vadSegmentInit: lib.func("transcribe_vad_segment_init", "void", [outp(T.transcribe_vad_segment)]),
+    vadGetSegment: lib.func("transcribe_vad_get_segment", "int", [
+      "void *",
+      "int",
+      iop(T.transcribe_vad_segment),
+    ]),
+    vadGetTimings: lib.func("transcribe_vad_get_timings", "int", [
+      "void *",
+      iop(T.transcribe_timings),
+    ]),
+
     // batch (offline)
     runBatch: lib.func("transcribe_run_batch", "int", [
       "void *",

@@ -16,6 +16,7 @@ namespace transcribe {
 class Loader;
 struct DiarizeOps;
 struct LangidOps;
+struct VadOps;
 
 // Per-family trait. Function pointers may be null when an entry point is
 // not yet implemented; the central dispatch converts null entries into
@@ -135,6 +136,7 @@ struct Arch {
     // Ops tables for the non-ASR roles; nullptr = role not implemented.
     const DiarizeOps * diarize;
     const LangidOps *  langid;
+    const VadOps *     vad;
 };
 
 // Look up an architecture by name. Returns nullptr if no registered

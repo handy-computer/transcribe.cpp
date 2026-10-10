@@ -6,14 +6,18 @@ license_name: {{ license_name }}
 {%- if license_link is defined %}
 license_link: {{ license_link }}
 {%- endif %}
+{%- if upstream_is_hf %}
 base_model: {{ hf_repo }}
 base_model_relation: quantized
+{%- endif %}
 library_name: transcribe.cpp
 pipeline_tag: {{ pipeline_tag }}
+{%- if languages %}
 language:
 {%- for lang in languages %}
   - {{ lang }}
 {%- endfor %}
+{%- endif %}
 {%- if languages_bcp47 %}
 language_bcp47:
 {%- for lang in languages_bcp47 %}
@@ -31,11 +35,11 @@ tags:
 
 # {{ hf_repo.split('/')[-1] }}: transcribe.cpp GGUF
 
-GGUF conversions of [{{ hf_repo }}](https://huggingface.co/{{ hf_repo }}) for use
+GGUF conversions of [{{ hf_repo }}]({{ upstream_url }}) for use
 with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp).
 
 Ported from upstream commit
-[{{ upstream_commit }}](https://huggingface.co/{{ hf_repo }}/commit/{{ upstream_commit }}),
+[{{ upstream_commit }}]({{ upstream_url }}/commit/{{ upstream_commit }}),
 pinned {{ pin_date }}.
 Validated against the {{ validation.reference }} reference at transcribe.cpp commit
 [{{ validation.commit }}](https://github.com/handy-computer/transcribe.cpp/tree/{{ validation.commit }})
@@ -45,6 +49,7 @@ on {{ validation.date }}.
 
 ## Downloads
 
+{% if wer.source -%}
 | Quantization | Download | Size | {{ metric|default("WER") }} ({{ wer.source }}){% if wer.source2 is defined %} | {{ metric2|default("CER") }} ({{ wer.source2 }}){% endif %} |
 | --- | --- | ---: | ---:{% if wer.source2 is defined %} | ---:{% endif %} |
 {%- for q in quants %}
@@ -54,6 +59,13 @@ on {{ validation.date }}.
 {{ wer.recipe }}
 
 {{ wer.notes }}
+{%- else -%}
+| Quantization | Download | Size |
+| --- | --- | ---: |
+{%- for q in quants %}
+| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} |
+{%- endfor %}
+{%- endif %}
 
 ## Usage
 
@@ -88,8 +100,8 @@ numbers, numerical validation, and reproduction steps.
 ## License
 
 Inherited from the base model: **{{ license_display }}**. See the
-[upstream model card](https://huggingface.co/{{ hf_repo }}) for full terms.
-
+[upstream model card]({{ upstream_url }}) for full terms.
+{% if upstream_is_hf %}
 ---
 
 ## Original Model Card
@@ -100,3 +112,4 @@ Inherited from the base model: **{{ license_display }}**. See the
 > authoritative source.
 
 {{ upstream_card }}
+{% endif -%}

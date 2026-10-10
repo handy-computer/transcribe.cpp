@@ -136,7 +136,7 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
                 continue
             duration = next(r["sample_duration_s"] for r in present if r)
             cells = [backend.capitalize() if backend != "cpu" else "CPU",
-                     f"{sample} ({duration:.1f}s)"]
+                     f"{sample} ({duration:.1f}s)" if duration >= 1 else sample]
             for quant, row in zip(quants, present):
                 if row is None:
                     cells.append("-")
@@ -221,9 +221,9 @@ def prose_lines(text: object, what: str) -> list[str]:
 def block_intro(record: dict, attrs: dict[str, str]) -> list[str]:
     """Upstream pointer from the catalog, then the card spec's summary."""
     repo = record["upstream_repo"]
-    line = (f"Upstream: [`{repo}`](https://huggingface.co/{repo}) at "
-            f"[`{record['upstream_commit']}`]"
-            f"(https://huggingface.co/{repo}/commit/{record['upstream_commit']}).")
+    url = common.upstream_url(record)
+    line = (f"Upstream: [`{repo}`]({url}) at "
+            f"[`{record['upstream_commit']}`]({url}/commit/{record['upstream_commit']}).")
     return [line, ""] + prose_lines(spec_for(record).get("summary"), "summary")
 
 
@@ -259,7 +259,7 @@ def block_pin(record: dict, attrs: dict[str, str]) -> list[str]:
     display = (f"[{licence['display']}]({licence['link']})"
                if licence.get("link") else licence["display"])
     return [f"Licensed {display}. Ported from upstream commit "
-            f"[`{commit}`](https://huggingface.co/{repo}/commit/{commit}), pinned "
+            f"[`{commit}`]({common.upstream_url(record)}/commit/{commit}), pinned "
             f"{spec['pin_date']}. Validated against the {validation.get('reference', 'reference')} "
             f"reference at transcribe.cpp commit [`{validation['commit']}`]"
             f"(https://github.com/handy-computer/transcribe.cpp/tree/{validation['commit']}) "
