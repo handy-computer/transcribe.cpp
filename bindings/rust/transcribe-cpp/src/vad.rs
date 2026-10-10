@@ -195,7 +195,7 @@ impl VadSession {
         })
     }
 
-    /// Install a [`CancelToken`] so an in-flight run or feed can be aborted
+    /// Install a [`CancelToken`] so an in-flight run, feed or flush can be aborted
     /// from another thread (the call then returns
     /// [`Error::Aborted`](crate::Error)). Replaces any previously installed token.
     pub fn set_cancel_token(&mut self, token: &CancelToken) {

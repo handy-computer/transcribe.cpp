@@ -55,7 +55,7 @@ extension LangIdSession {
 }
 
 extension VadSession {
-    /// Install a cancellation token; a cancelled run or feed throws `.aborted`.
+    /// Install a cancellation token; a cancelled run, feed or flush throws `.aborted`.
     public func setCancellationToken(_ token: CancellationToken) {
         cancelToken = token
         let context = Unmanaged.passUnretained(token).toOpaque()

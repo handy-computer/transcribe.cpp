@@ -106,8 +106,8 @@ TRANSCRIBE_API transcribe_status transcribe_vad_session_init(struct transcribe_m
 /* Free the session. NULL does nothing. */
 TRANSCRIBE_API void transcribe_vad_session_free(struct transcribe_vad_session * session);
 
-/* Check this callback during run or feed. Return true to stop processing
- * with TRANSCRIBE_ERR_ABORTED. */
+/* Check this callback during run, feed or flush. Return true to stop
+ * processing with TRANSCRIBE_ERR_ABORTED. */
 TRANSCRIBE_API void transcribe_vad_set_abort_callback(struct transcribe_vad_session * session,
                                                       transcribe_abort_callback       cb,
                                                       void *                          user_data);

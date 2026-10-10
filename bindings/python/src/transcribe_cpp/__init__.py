@@ -1041,8 +1041,8 @@ class Model:
     ``stream_flush()`` / ``stream_reset()`` hold a model-wide lock for the
     native call and its copy-out. Calls from other threads wait; a
     ``cancel()`` on a queued call is kept, and it aborts at its first poll
-    after acquiring the lock. Load one Model per worker for parallelism. An active stream holds the model's stream
-    lease from ``stream()`` until it is finalized, reset, fails, is
+    after acquiring the lock. Load one Model per worker for parallelism. An
+    active stream holds the model's stream lease from ``stream()`` until it is finalized, reset, fails, is
     garbage-collected or its session/model is closed. Meanwhile ``run()``,
     ``run_batch()``, ``stream()``, diarize and langid ``run()`` and VAD
     ``run()`` / ``stream_feed()`` / ``stream_flush()`` on any session raise
@@ -2125,9 +2125,8 @@ class VadSession(_SessionBase):
     ``stream_flush()`` / ``stream_reset()`` drive this session's own
     probability stream. That stream is native per-session state, not an ASR
     stream: it does not take the model's stream lease. Each feed/flush is one
-    bounded compute call, so it
-    is locked and raises ``Busy`` under an ASR stream lease like a langid or
-    diarize run."""
+    bounded compute call, so it is locked and raises ``Busy`` under an ASR
+    stream lease like a langid or diarize run."""
 
     _free_fn = "transcribe_vad_session_free"
 
