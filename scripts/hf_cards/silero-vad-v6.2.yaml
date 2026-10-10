@@ -2,8 +2,8 @@
 pin_date: 2026-10-09
 validation:
   reference: silero-vad 6.2.3 (TorchScript, CPU, F32)
-  commit: 24fda783
-  date: 2026-10-09
+  commit: 2674b95d
+  date: 2026-10-10
 pipeline_tag: audio-classification
 default_quant: F32
 tags:

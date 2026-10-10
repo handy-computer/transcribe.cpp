@@ -14,7 +14,7 @@ API and examples: [VAD usage](../vad.md). Architecture and validation:
 [family note](../porting/families/silero_vad.md).
 
 <!-- catalog:pin -->
-Licensed MIT. Ported from upstream commit [`5cd7945`](https://github.com/snakers4/silero-vad/commit/5cd7945), pinned 2026-10-09. Validated against the silero-vad 6.2.3 (TorchScript, CPU, F32) reference at transcribe.cpp commit [`24fda783`](https://github.com/handy-computer/transcribe.cpp/tree/24fda783) on 2026-10-09.
+Licensed MIT. Ported from upstream commit [`5cd7945`](https://github.com/snakers4/silero-vad/commit/5cd7945), pinned 2026-10-09. Validated against the silero-vad 6.2.3 (TorchScript, CPU, F32) reference at transcribe.cpp commit [`2674b95d`](https://github.com/handy-computer/transcribe.cpp/tree/2674b95d) on 2026-10-10.
 <!-- /catalog -->
 
 Source weights: `silero_vad/data/silero_vad.jit` from `silero-vad==6.2.3` on
