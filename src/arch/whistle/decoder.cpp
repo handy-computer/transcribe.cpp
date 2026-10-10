@@ -81,7 +81,9 @@ CrossKvBuild build_cross_kv_graph(ggml_context *          ctx,
         ggml_build_forward_expand(cb.graph, ggml_cpy(ctx, k, kv));
 
         ggml_tensor * v  = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, c.v, mem), vd, nh, T_utt);
-        v                = ggml_permute(ctx, v, 1, 2, 0, 3);  // [T, vd, nh]
+        // Gather the transpose into a contiguous [T, vd, nh] first: the copy
+        // into the cache is then row-contiguous instead of a strided scatter.
+        v                = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [T, vd, nh]
         ggml_tensor * vc = cache.v_cross[l];
         ggml_tensor * vv =
             ggml_view_3d(ctx, vc, T_utt, vd, nh, vc->nb[1], vc->nb[2], static_cast<size_t>(utt) * vc->nb[3]);

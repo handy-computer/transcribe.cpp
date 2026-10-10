@@ -103,6 +103,22 @@ bool compute_mel(const float *              pcm,
         window[k] = 0.5 - 0.5 * std::cos(2.0 * kPi * k / (win - 1));
     }
 
+    // Nonzero mel band [lo, hi) of every FFT bin: the triangular filterbank is
+    // ~97% zeros, and skipping exact-zero terms leaves every sum unchanged.
+    std::vector<int> band_lo(n_bin, 0), band_hi(n_bin, 0);
+    for (int b = 0; b < n_bin; ++b) {
+        const float * fbr = fb.data() + static_cast<size_t>(b) * n_mels;
+        int           lo = n_mels, hi = 0;
+        for (int m = 0; m < n_mels; ++m) {
+            if (fbr[m] != 0.0f) {
+                lo = std::min(lo, m);
+                hi = m + 1;
+            }
+        }
+        band_lo[b] = lo < hi ? lo : 0;
+        band_hi[b] = lo < hi ? hi : 0;
+    }
+
     // Frames are independent: split them across threads (identical results).
     std::vector<double> power(static_cast<size_t>(n_frames) * n_mels, 0.0);
     auto                frames = [&](int t0, int t1) {
@@ -128,7 +144,7 @@ bool compute_mel(const float *              pcm,
             for (int b = 0; b < n_bin; ++b) {
                 const float * fbr = fb.data() + static_cast<size_t>(b) * n_mels;
                 const double  s   = spec[b];
-                for (int m = 0; m < n_mels; ++m) {
+                for (int m = band_lo[b]; m < band_hi[b]; ++m) {
                     row[m] += s * static_cast<double>(fbr[m]);
                 }
             }
@@ -768,6 +784,43 @@ ggml_tensor * stem_conv0(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, i
     return ggml_cont(ctx, ggml_permute(ctx, result, 0, 1, 3, 2));                                  // [N, OC, OH, OW]
 }
 
+// CPU stem layout (WhistleAux::cpu_fused_ops): activations stay channel-first
+// [C, W, H] end to end. conv0 runs as mul_mat(kernel, im2col) so its output is
+// already [C, W*H]; the depthwise convs read the [W, H, C] permuted view, which
+// ggml_conv_2d_dw_direct runs on its channels-contiguous (CWHN) SIMD kernel and
+// returns in the same layout; the pointwise convs then contract over C with no
+// copy. Each output element is the same dot product in the same order as the
+// generic path below (identical tinyBLAS FMA chain for conv0, ky/kx FMA order
+// for the depthwise convs); only the layout copies disappear.
+ggml_tensor * stem_conv0_cf(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1) {
+    ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, s1, p0, p1, 1, 1, /*is_2D=*/true, GGML_TYPE_F32);
+    ggml_tensor * cols =
+        pad_k4(ctx, ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]));
+    ggml_tensor * kern = pad_k4(ctx, ggml_reshape_2d(ctx, a, a->ne[0] * a->ne[1] * a->ne[2], a->ne[3]));
+    ggml_tensor * y    = ggml_mul_mat(ctx, kern, cols);                      // [OC, OW*OH]
+    return ggml_reshape_3d(ctx, y, a->ne[3], im2col->ne[1], im2col->ne[2]);  // [C, W, H]
+}
+
+// Depthwise 3x3 stride 2 on a channel-first [C, W, H] tensor; returns [C, W', H'].
+// w is the stored F32 kernel ne [C, 9] (row kt*3 + kf): exactly the channels-
+// innermost layout the CWHN kernel reads, so it is passed as a strided
+// [3(kf), 3(kt), 1, C] view instead of the transposed copy stem_kernel makes.
+ggml_tensor * stem_dw_cf(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
+    const int64_t C   = w->ne[0];
+    ggml_tensor * k   = ggml_permute(ctx, ggml_reshape_4d(ctx, w, C, 3, 3, 1), 3, 0, 1, 2);  // [3, 3, 1, C]
+    k->nb[2]          = k->nb[0];  // singleton axis: any stride, as the kernel layout check wants
+    ggml_tensor * whc = ggml_permute(ctx, x, 2, 0, 1, 3);  // view [W, H, C], channels contiguous
+    ggml_tensor * y   = ggml_conv_2d_dw_direct(ctx, k, whc, 2, 2, 1, 1, 1, 1);
+    return ggml_permute(ctx, y, 1, 2, 0, 3);               // [C, W', H'] (contiguous)
+}
+
+// [C, W, H] channel-first -> pointwise conv over C -> SiLU -> [C, W, H].
+ggml_tensor * stem_pointwise_cf(ggml_context * ctx, ggml_tensor * x, ggml_tensor * pw, const WhistleHada & hd) {
+    const int64_t C = x->ne[0], W = x->ne[1], H = x->ne[2];
+    ggml_tensor * c = ggml_silu(ctx, ggml_mul_mat(ctx, pw, hada_in(ctx, ggml_reshape_2d(ctx, x, C, W * H), hd)));
+    return ggml_reshape_3d(ctx, c, C, W, H);
+}
+
 // [W, H, C] -> pointwise conv over C -> SiLU -> [W, H, C].
 ggml_tensor * stem_pointwise(ggml_context * ctx, ggml_tensor * x, ggml_tensor * pw, const WhistleHada & hd) {
     const int64_t W = x->ne[0], H = x->ne[1], C = x->ne[2];
@@ -874,13 +927,20 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     ggml_set_input(eb.mel_in);
 
     // ----- stem: image [W = mel bins, H = frames, C, 1] -----
-    ggml_tensor * x  = ggml_reshape_4d(ctx, eb.mel_in, hp.fe_num_mels, n_mel_frames, 1, 1);
-    x                = ggml_silu(ctx, stem_conv0(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));
-    x                = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_1), x, 2, 2, 1, 1, 1, 1);
-    x                = stem_pointwise(ctx, x, w.stem.pw_1, w.hada);       // [C, W, H]
-    x                = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));  // [W, H, C]
-    x                = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_2), x, 2, 2, 1, 1, 1, 1);
-    x                = stem_pointwise(ctx, x, w.stem.pw_2, w.hada);       // [C, F', T']
+    ggml_tensor * x = ggml_reshape_4d(ctx, eb.mel_in, hp.fe_num_mels, n_mel_frames, 1, 1);
+    if (aux.cpu_fused_ops && w.stem.dw_1->type == GGML_TYPE_F32 && w.stem.dw_2->type == GGML_TYPE_F32) {
+        // channel-first CPU layout (see stem_conv0_cf)
+        x = ggml_silu(ctx, stem_conv0_cf(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));  // [C, W, H]
+        x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w.hada);
+        x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_2, x), w.stem.pw_2, w.hada);
+    } else {
+        x = ggml_silu(ctx, stem_conv0(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));
+        x = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_1), x, 2, 2, 1, 1, 1, 1);
+        x = stem_pointwise(ctx, x, w.stem.pw_1, w.hada);       // [C, W, H]
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));  // [W, H, C]
+        x = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_2), x, 2, 2, 1, 1, 1, 1);
+        x = stem_pointwise(ctx, x, w.stem.pw_2, w.hada);       // [C, F', T']
+    }
     const int64_t Fp = x->ne[1];
     const int64_t T  = x->ne[2];
     x                = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [F', C, T'] (index c*F' + f)

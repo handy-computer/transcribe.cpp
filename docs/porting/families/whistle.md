@@ -376,6 +376,22 @@ Stage 4.
   whole-layer kernels. `GGML_NATIVE=ON` (i8mm repack kernels) measured no
   gain. Q4_K_M is slower than Q8_0 (~77-82 ms/clip).
 
+- **CPU latency follow-up (2026-10-10, Apple M4, german 29 s, 4 threads).**
+  Q8_0 146 -> 135 ms; Q2_K_HR 155 -> ~136 ms; library defaults 203 -> 135 ms.
+  - Defaults: AUTO backend resolves to CPU (Metal is ~5x slower here; an
+    explicit backend/device is honored), and the default thread count is the
+    performance-core count on Apple hosts (efficiency cores slow every
+    barrier-separated op: 8 threads 203 ms vs 4 threads 145 ms).
+  - Q2_K_HR on CPU: the Hadamard rotation is folded into the weights during
+    the Q8_0 expansion (no FWHT nodes). Re-quantizes, so not exact:
+    LibriSpeech le30s 4.2979% -> 4.3113% (134/2611 changed), FLEURS de
+    22.78% -> 22.78%, es 10.03% -> 10.09%.
+  - Exact (F32 and Q8_0 LibriSpeech le30s 2611/2611 transcripts identical,
+    word timestamps identical, encoder/logit dumps byte-identical, batch
+    parity 200/200, validate.py all): channel-first CPU stem with no layout
+    copies, sparse mel filterbank, reused graph-metadata arena, top-k on raw
+    logits, smaller scheduler hash set, contiguous cross-V fill.
+
 - **Scope sign-off (2026-10-09).** The user signed off two MUST PASS rows
   whose upstream mechanism is closed:
   - Word timestamps: DTW over cross-attention, with layers and heads

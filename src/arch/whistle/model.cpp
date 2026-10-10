@@ -43,11 +43,13 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #if defined(__APPLE__)
 #    include <Accelerate/Accelerate.h>
+#    include <sys/sysctl.h>
 #endif
 
 namespace transcribe::whistle {
@@ -63,10 +65,31 @@ constexpr const char k_default_variant[] = "whistle";
 constexpr int        k_beam_size         = 5;
 constexpr int        k_prompt_len        = 2;  // <s> <|lang|>
 constexpr size_t     k_graph_mem         = 96u * 1024u * 1024u;
-constexpr size_t     k_sched_nodes       = 65536;
+// Scheduler hash-set capacity: >= nodes + leafs of the largest graph (the
+// encoder, ~1.5k). It is reset per graph, i.e. every decode step, so it is
+// kept near the need rather than at a generic maximum.
+constexpr size_t     k_sched_nodes       = 8192;
 
 float sigmoidf(float x) {
     return 1.0f / (1.0f + std::exp(-x));
+}
+
+// Default CPU thread count (n_threads <= 0). Whistle's graphs are many small,
+// barrier-separated ops, so the slowest participating core paces every op:
+// on Apple hybrid CPUs, adding efficiency cores makes both encode and decode
+// slower (M4 4P+6E, german 29 s Q8_0: 145 ms at 4 threads, 186 ms at 5, 203 ms
+// at the library default of 8). Use the performance-core count there, capped
+// by the library default; other hosts keep the library default.
+int whistle_default_threads() {
+    const int lib = transcribe::default_n_threads();
+#if defined(__APPLE__)
+    int    perf = 0;
+    size_t len  = sizeof(perf);
+    if (sysctlbyname("hw.perflevel0.physicalcpu", &perf, &len, nullptr, 0) == 0 && perf > 0) {
+        return std::max(1, std::min(perf, lib));
+    }
+#endif
+    return lib;
 }
 
 std::vector<float> read_host(ggml_tensor * t) {
@@ -354,20 +377,34 @@ std::vector<ggml_tensor *> repack_candidates(const WhistleWeights & w) {
 }
 
 // GGUF type of every weight whose in-memory type differs from the file's
-// (see expand_low_bit).
+// (see prepare_cpu_weights).
 using DiskTypes = std::unordered_map<const ggml_tensor *, ggml_type>;
 
-// CPU only: Q2_K matmul weights, and Q4_K ones in Hadamard-domain files (the
-// small-download format), are expanded to Q8_0 at load. ggml's CPU has no
-// repacked Q2_K kernel on Arm and its Q4_K path is slower than Q8_0's; Q8_0
-// holds every Q2_K / Q4_K value to within its own rounding (8 bits over at
-// most two sub-blocks of <= 16 levels). Plain Q4_K files keep their type. Must run before plan_fusion (fused
-// tensors take their parts' type).
-void expand_low_bit(WhistleModel & m, DiskTypes & disk) {
+// Matmul weights whose Hadamard rotation is folded back out at load (see
+// prepare_cpu_weights).
+using FoldSet = std::unordered_set<const ggml_tensor *>;
+
+// CPU only, two load-time rewrites of the linear weights:
+//
+// 1. Low-bit expansion. Q2_K matmul weights, and Q4_K ones in Hadamard-domain
+//    files (the small-download format), are expanded to Q8_0. ggml's CPU has
+//    no repacked Q2_K kernel on Arm and its Q4_K path is slower than Q8_0's.
+// 2. Hadamard fold (Hadamard-domain files). Every matmul weight that reads a
+//    hada_in() input is stored C = W blockdiag(H_g); the rotation is applied
+//    back to the weights (W = C H_g, H_g involutory) so the graphs skip the
+//    per-activation transform (WhistleHada::h stays null). The Engram
+//    projections are left rotated: they read Hadamard-domain table rows
+//    directly, with no hada_in.
+//
+// Q8_0 then holds the plain-domain weights to within its own rounding, the
+// same representation as a Q8_0 file quantized from F32. Must run before
+// plan_fusion (fused tensors take their parts' type).
+void prepare_cpu_weights(WhistleModel & m, DiskTypes & disk, FoldSet & fold) {
     if (m.plan.primary_kind != transcribe::BackendKind::Cpu) {
         return;
     }
     WhistleWeights &           w    = m.weights;
+    // Linear weights behind a hada_in() input (all Hadamard-domain in HR files).
     std::vector<ggml_tensor *> lin  = { w.stem.pw_1, w.stem.pw_2, w.stem.out, w.token_embd };
     auto                       attn = [&](const WhistleAttn & a) {
         lin.insert(lin.end(), { a.q, a.k, a.v, a.gate, a.out });
@@ -380,11 +417,28 @@ void expand_low_bit(WhistleModel & m, DiskTypes & disk) {
         attn(b.attn);
         attn(b.cross);
     }
-    for (const WhistleEngram & e : w.engrams) {
-        lin.insert(lin.end(), { e.key_proj, e.value_proj });
-    }
     for (const WhistleMhc * mh : { &w.enc_mhc, &w.dec_mhc }) {
         lin.insert(lin.end(), { mh->phi_pre, mh->phi_post, mh->phi_res });
+    }
+    const int g = m.hparams.hadamard_group;
+    if (g > 0) {
+        for (ggml_tensor * t : lin) {
+            if (t != nullptr && t->ne[0] % g == 0 &&
+                (t->type == GGML_TYPE_F32 || ggml_get_type_traits(t->type)->to_float != nullptr)) {
+                fold.insert(t);
+            }
+        }
+        // All or nothing: the graphs drop hada_in for every one of them.
+        size_t n_lin = 0;
+        for (ggml_tensor * t : lin) {
+            n_lin += t != nullptr ? 1 : 0;
+        }
+        if (fold.size() != n_lin) {
+            fold.clear();
+        }
+    }
+    for (const WhistleEngram & e : w.engrams) {
+        lin.insert(lin.end(), { e.key_proj, e.value_proj });
     }
     for (ggml_tensor * t : lin) {
         const bool low =
@@ -398,6 +452,31 @@ void expand_low_bit(WhistleModel & m, DiskTypes & disk) {
         t->nb[1] = ggml_row_size(t->type, t->ne[0]);
         for (int i = 2; i < GGML_MAX_DIMS; ++i) {
             t->nb[i] = t->nb[i - 1] * t->ne[i - 1];
+        }
+    }
+}
+
+// In-place orthonormal fast Walsh-Hadamard transform of every g-block of x
+// (Sylvester order, scaled by 1/sqrt(g)): x_b <- H_g x_b, the same H_g the
+// graphs apply (hada_in). Double accumulation; load time only.
+void fwht_blocks(float * x, int64_t n, int g) {
+    std::vector<double> y(static_cast<size_t>(g));
+    const double        s = 1.0 / std::sqrt(static_cast<double>(g));
+    for (int64_t b = 0; b + g <= n; b += g) {
+        for (int i = 0; i < g; ++i) {
+            y[static_cast<size_t>(i)] = x[b + i];
+        }
+        for (int h = 1; h < g; h *= 2) {
+            for (int i = 0; i < g; i += 2 * h) {
+                for (int j = i; j < i + h; ++j) {
+                    const double u = y[static_cast<size_t>(j)], v = y[static_cast<size_t>(j + h)];
+                    y[static_cast<size_t>(j)]     = u + v;
+                    y[static_cast<size_t>(j + h)] = u - v;
+                }
+            }
+        }
+        for (int i = 0; i < g; ++i) {
+            x[b + i] = static_cast<float>(y[static_cast<size_t>(i)] * s);
         }
     }
 }
@@ -491,7 +570,8 @@ transcribe_status stream_weights(WhistleModel &                           m,
                                  const gguf_context *                     gguf_data,
                                  const std::vector<FuseGroup> &           groups,
                                  const std::vector<const ggml_tensor *> & skip,
-                                 const DiskTypes &                        disk) {
+                                 const DiskTypes &                        disk,
+                                 const FoldSet &                          fold) {
     std::ifstream fin(transcribe::path_from_utf8(path), std::ios::binary);
     if (!fin) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whistle: failed to reopen %s for tensor data", path.c_str());
@@ -515,20 +595,30 @@ transcribe_status stream_weights(WhistleModel &                           m,
         return true;
     };
     // Rows [row0, row0 + rows) of t in t's in-memory type (expanding from the
-    // file's type when expand_low_bit changed it).
+    // file's type when prepare_cpu_weights changed it, and folding the
+    // Hadamard rotation for the tensors in `fold`).
     auto read = [&](const ggml_tensor * t, int64_t row0, int64_t rows, uint8_t * dst) {
-        const auto it = disk.find(t);
-        if (it == disk.end()) {
-            const size_t row = ggml_row_size(t->type, t->ne[0]);
+        const auto      it     = disk.find(t);
+        const bool      folded = fold.count(t) != 0;
+        const ggml_type ftype  = it == disk.end() ? t->type : it->second;
+        const size_t    row    = ggml_row_size(ftype, t->ne[0]);
+        if (it == disk.end() && !folded) {
             return read_raw(t, static_cast<size_t>(row0) * row, static_cast<size_t>(rows) * row, dst);
         }
-        const size_t row = ggml_row_size(it->second, t->ne[0]);
         raw.resize(static_cast<size_t>(rows) * row);
         if (!read_raw(t, static_cast<size_t>(row0) * row, raw.size(), raw.data())) {
             return false;
         }
-        f32.resize(static_cast<size_t>(rows * t->ne[0]));
-        ggml_get_type_traits(it->second)->to_float(raw.data(), f32.data(), rows * t->ne[0]);
+        const int64_t n = rows * t->ne[0];
+        f32.resize(static_cast<size_t>(n));
+        if (ftype == GGML_TYPE_F32) {
+            std::memcpy(f32.data(), raw.data(), static_cast<size_t>(n) * sizeof(float));
+        } else {
+            ggml_get_type_traits(ftype)->to_float(raw.data(), f32.data(), n);
+        }
+        if (folded) {
+            fwht_blocks(f32.data(), n, m.hparams.hadamard_group);
+        }
         ggml_quantize_chunk(t->type, f32.data(), dst, 0, rows, t->ne[0], nullptr);
         return true;
     };
@@ -623,7 +713,8 @@ transcribe_status build_aux(WhistleModel & m) {
     aux.enc_post_bias = ggml_new_tensor_2d(aux.ctx, GGML_TYPE_F32, lanes, hp.enc_n_layers);
     aux.dec_pre_bias  = ggml_new_tensor_2d(aux.ctx, GGML_TYPE_F32, lanes, hp.dec_n_layers);
     aux.dec_post_bias = ggml_new_tensor_2d(aux.ctx, GGML_TYPE_F32, lanes, hp.dec_n_layers);
-    const int g       = hp.hadamard_group;
+    // Folded weights (prepare_cpu_weights) take plain inputs: no rotation.
+    const int g       = m.hada_folded ? 0 : hp.hadamard_group;
     if (g > 0) {
         m.weights.hada.h    = ggml_new_tensor_2d(aux.ctx, GGML_TYPE_F32, g, g);
         m.weights.hada.fwht = aux.cpu_fused_ops;
@@ -893,8 +984,15 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    const transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    const transcribe_device_t        device      = (params != nullptr) ? params->device : nullptr;
+    transcribe_backend_request backend_req = (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
+    const transcribe_device_t  device      = (params != nullptr) ? params->device : nullptr;
+    // AUTO -> CPU: the CPU path (repacked weights + fused custom ops) is ~5x
+    // faster than Metal for this 55M-parameter beam-search model (M4, jfk
+    // Q8_0: 56 ms CPU vs 300 ms Metal). An explicit backend or device request
+    // is honored as given.
+    if (backend_req == TRANSCRIBE_BACKEND_AUTO && device == nullptr) {
+        backend_req = TRANSCRIBE_BACKEND_CPU;
+    }
     if (const transcribe_status st = transcribe::load_common::init_backends(backend_req, device, "whistle", m->plan);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
@@ -909,7 +1007,9 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->primary_backend   = m->plan.primary;
 
     DiskTypes disk_types;
-    expand_low_bit(*m, disk_types);
+    FoldSet   fold;
+    prepare_cpu_weights(*m, disk_types, fold);
+    m->hada_folded = !fold.empty();
     std::vector<FuseGroup>           fuse_groups;
     std::vector<const ggml_tensor *> fuse_skip;
     if (plan_fusion(*m, fuse_groups, fuse_skip) != TRANSCRIBE_OK || alloc_weights(*m, fuse_skip) != TRANSCRIBE_OK) {
@@ -917,7 +1017,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whistle: weight buffer allocation failed");
         return TRANSCRIBE_ERR_OOM;
     }
-    if (const transcribe_status st = stream_weights(*m, loader.path(), gguf_data, fuse_groups, fuse_skip, disk_types);
+    if (const transcribe_status st =
+            stream_weights(*m, loader.path(), gguf_data, fuse_groups, fuse_skip, disk_types, fold);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
@@ -942,7 +1043,7 @@ transcribe_status init_context(transcribe_model *                model,
     }
     auto cc       = std::make_unique<WhistleSession>();
     cc->model     = model;
-    cc->n_threads = params->n_threads;
+    cc->n_threads = params->n_threads > 0 ? params->n_threads : whistle_default_threads();
     cc->kv_type   = params->kv_type;
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
     *out_ctx      = cc.release();
@@ -958,8 +1059,12 @@ bool new_compute_ctx(WhistleSession * cc, size_t mem) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
     }
+    if (cc->graph_meta.size() < mem) {
+        cc->graph_meta.assign(mem, 0);
+    }
     ggml_init_params p{};
-    p.mem_size      = mem;
+    p.mem_size      = cc->graph_meta.size();
+    p.mem_buffer    = cc->graph_meta.data();
     p.no_alloc      = true;
     cc->compute_ctx = ggml_init(p);
     return cc->compute_ctx != nullptr;
@@ -1196,8 +1301,8 @@ transcribe_status reorder_cache(WhistleSession * cc, const std::vector<int32_t> 
     return run_graph(cc, rb.graph, "beam reorder");
 }
 
-void log_softmax_row(const float * x, int n, std::vector<double> & out) {
-    out.resize(static_cast<size_t>(n));
+// Log-sum-exp of x[0..n) in double (max-shifted). log p_i = x_i - lse.
+double log_sum_exp(const float * x, int n, std::vector<double> & scratch) {
     double mx = -std::numeric_limits<double>::infinity();
     for (int i = 0; i < n; ++i) {
         mx = std::max(mx, static_cast<double>(x[i]));
@@ -1205,22 +1310,43 @@ void log_softmax_row(const float * x, int n, std::vector<double> & out) {
     double sum = 0.0;
 #if defined(__APPLE__)
     // Vectorized double exp (vForce); same precision class as std::exp.
+    scratch.resize(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
-        out[static_cast<size_t>(i)] = static_cast<double>(x[i]) - mx;
+        scratch[static_cast<size_t>(i)] = static_cast<double>(x[i]) - mx;
     }
-    vvexp(out.data(), out.data(), &n);
+    vvexp(scratch.data(), scratch.data(), &n);
     for (int i = 0; i < n; ++i) {
-        sum += out[static_cast<size_t>(i)];
+        sum += scratch[static_cast<size_t>(i)];
     }
 #else
+    (void) scratch;
     for (int i = 0; i < n; ++i) {
         sum += std::exp(static_cast<double>(x[i]) - mx);
     }
 #endif
-    const double lse = mx + std::log(sum);
+    return mx + std::log(sum);
+}
+
+// Indices of the k largest x (k <= 16), best first; ties keep the lower
+// index first. log-softmax is x - const per row, so this is also the top-k
+// of the log-probabilities without materializing them.
+int top_k_desc(const float * x, int n, int k, int * idx) {
+    float val[16];
+    int   m = 0;
     for (int i = 0; i < n; ++i) {
-        out[static_cast<size_t>(i)] = static_cast<double>(x[i]) - lse;
+        const float v = x[i];
+        if (m == k && !(v > val[m - 1])) {
+            continue;
+        }
+        int j = m < k ? m++ : m - 1;
+        for (; j > 0 && val[j - 1] < v; --j) {
+            val[j] = val[j - 1];
+            idx[j] = idx[j - 1];
+        }
+        val[j] = v;
+        idx[j] = i;
     }
+    return m;
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,7 +1414,6 @@ transcribe_status beam_decode(WhistleSession *         cc,
     std::vector<std::vector<int>> hist(static_cast<size_t>(S), std::vector<int>{ bos });
     std::vector<float>            logits;
     std::vector<double>           lp;
-    std::vector<int>              idx;  // top-k scratch, reused across steps
 
     // pos 0: <s>. Language detection reads these logits.
     std::vector<float> xa;
@@ -1364,17 +1489,14 @@ transcribe_status beam_decode(WhistleSession *         cc,
 
             std::vector<Cand> cands;
             for (size_t h = 0; h < ud.live.size(); ++h) {
-                const int slot = ud.live_slot[h];
-                log_softmax_row(logits.data() + static_cast<size_t>(slot) * V, V, lp);
-                idx.resize(static_cast<size_t>(V));
-                for (int i = 0; i < V; ++i) {
-                    idx[i] = i;
-                }
-                const int topk = std::min(V, beam + 1);
-                std::partial_sort(idx.begin(), idx.begin() + topk, idx.end(),
-                                  [&](int a, int b) { return lp[a] > lp[b]; });
+                const int     slot = ud.live_slot[h];
+                const float * row  = logits.data() + static_cast<size_t>(slot) * V;
+                const double  lse  = log_sum_exp(row, V, lp);
+                int           top[16];
+                const int     topk = top_k_desc(row, V, std::min({ V, beam + 1, 16 }), top);
                 for (int i = 0; i < topk; ++i) {
-                    cands.push_back({ ud.live[h].score + lp[idx[i]], static_cast<int>(h), idx[i], lp[idx[i]] });
+                    const double l = static_cast<double>(row[top[i]]) - lse;
+                    cands.push_back({ ud.live[h].score + l, static_cast<int>(h), top[i], l });
                 }
             }
             std::stable_sort(cands.begin(), cands.end(),

@@ -104,8 +104,11 @@ struct WhistleModel final : public transcribe_model {
     WhistleHParams hparams;
     WhistleWeights weights;
     WhistleAux     aux;
-    ggml_context * ctx_meta  = nullptr;
-    ggml_context * ctx_fused = nullptr;  // fused projection weights (see WhistleAttn::fused)
+    ggml_context * ctx_meta    = nullptr;
+    ggml_context * ctx_fused   = nullptr;  // fused projection weights (see WhistleAttn::fused)
+    // CPU, Hadamard-domain file: the rotation was folded into the linear
+    // weights at load, so the graphs feed them plain activations.
+    bool           hada_folded = false;
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer     = nullptr;
@@ -128,9 +131,12 @@ struct WhistleModel final : public transcribe_model {
 struct WhistleSession final : public transcribe_session {
     WhistleDecCache cache;
 
-    std::vector<float> mel_buf;   // [T_mel][num_mels] normalized log-mel
-    std::vector<float> enc_host;  // [T_enc][d_model] encoder output
-    std::vector<float> mem_host;  // [T_enc][d_model] cross-attention memory
+    std::vector<float>   mel_buf;   // [T_mel][num_mels] normalized log-mel
+    std::vector<float>   enc_host;  // [T_enc][d_model] encoder output
+    std::vector<float>   mem_host;  // [T_enc][d_model] cross-attention memory
+    // Reused ggml metadata arena for the per-graph compute contexts (a fresh
+    // multi-MB allocation per decode step costs page faults every step).
+    std::vector<uint8_t> graph_meta;
 
     WhistleSession() = default;
     ~WhistleSession() override;

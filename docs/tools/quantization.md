@@ -224,6 +224,10 @@ The Whistle loader is the only one that accepts Q2_K (it widens its
 linear allowlist for this preset). On CPU it expands Q2_K weights, and
 Q4_K weights in Hadamard-domain files, to Q8_0 at load: ggml has no
 repacked Q2_K kernel on Arm, so the small download runs on the Q8_0 path.
+While expanding, it also folds the Hadamard rotation back into the linear
+weights (`W = C H`), so CPU graphs skip the per-activation transform; the
+Engram projections, which read Hadamard-domain table rows directly, stay
+rotated.
 
 ## Presets roadmap
 
