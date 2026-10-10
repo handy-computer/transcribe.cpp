@@ -1312,6 +1312,32 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
+# Whistle behavior + input/memory contract test (real-model gated)
+# -----------------------------------------------------------------------------
+#
+# Loads models/whistle/whistle-F32.gguf via TRANSCRIBE_WHISTLE_GGUF (exit 77 =
+# skipped when unset) on the CPU backend and checks the engine-parity
+# transcripts, auto language detection, the no-speech gate, the 30 s hard input
+# cap, n_ctx truncation, word timestamps and run_batch == single-shot.
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_whistle_real_smoke
+        whistle_real_smoke.cpp)
+
+    target_link_libraries(transcribe_whistle_real_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_whistle_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_whistle_real_smoke)
+
+    add_test(NAME transcribe_whistle_real_smoke COMMAND transcribe_whistle_real_smoke)
+    set_tests_properties(transcribe_whistle_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Qwen3-ASR structural + end-to-end tests (real-model gated)
 # -----------------------------------------------------------------------------
 #

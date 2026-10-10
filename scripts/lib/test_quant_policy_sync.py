@@ -88,6 +88,18 @@ NORM = [
     "frontend.window",                      # window frontend buffer
     "blk.1.tdnn1.bn.scale",                 # ecapa_tdnn folded BN affine (.bn.)
     "blk.1.res2.0.conv.bias",               # ecapa_tdnn conv bias (.bias)
+    "dec.blocks.0.hmlp.d1",                 # whistle HadamardMLP diagonal (.hmlp)
+    "enc.blocks.3.hmlp_0.w1b",              # whistle Kronecker factor (.hmlp)
+    "dec.blocks.0.hmlp.cond_u",             # whistle rank-8 correction (.hmlp)
+    "dec.blocks.0.attn.q_taps",             # whistle causal q/k/v taps (_taps)
+    "dec.engram.1.conv_taps",               # whistle Engram conv taps (_taps)
+    "dec.blocks.0.attn_gate",               # whistle scalar sigmoid gate (_gate)
+    "dec.blocks.7.cross_gate",              # whistle cross-attention gate (_gate)
+    "dec.pe_gate",                          # whistle positional gate (_gate)
+    "dec.mhc.a_pre",                        # whistle mHC lane scalar (.mhc.a_)
+    "enc.mhc.b_res",                        # whistle mHC lane bias (.mhc.b_)
+    "hada.perm1",                           # whistle Hadamard permutation table
+    "enc.blocks.0.norm_hmlp_0.weight",      # whistle RMSNorm scale (norm_ prefix)
 ]
 
 # Conv bucket: 2D / depthwise / 1x1 pointwise conv kernels. The loader has no
@@ -110,6 +122,8 @@ CONV = [
     "blk.1.res2.0.conv.weight",             # ecapa_tdnn tap-major k>1 kernel
     "vad.proj.weight",                      # parakeet-ultra VAD head 1x1 conv
     "vad.ctx.weight",                       # parakeet-ultra VAD head k=5 conv
+    "enc.blocks.0.conv.dw.weight",          # whistle encoder depthwise conv (k=9)
+    "enc.stem.conv.dw_1.weight",            # whistle stem depthwise 3x3
 ]
 
 # Linear / Embed: ggml_mul_mat operands and the decoder token embedding.
@@ -137,6 +151,11 @@ LINEAR = [
     "blk.1.tdnn1.weight",                   # ecapa_tdnn 1x1 TDNN (a matmul operand)
     "asp.attn.weight",                      # ecapa_tdnn ASP attention 1x1 (NOT .conv.)
     "cls.out.weight",                       # ecapa_tdnn classifier head
+    "enc.blocks.0.conv_pw1.weight",         # whistle conv-module pointwise (2-D matmul, NOT .conv.)
+    "dec.blocks.0.cross.gate.weight",       # whistle cross-attn gate projection (.weight, not _gate)
+    "dec.mhc.phi_res.weight",               # whistle mHC lane projection (CQ4 matrix)
+    "dec.engram.0.tables.weight",           # whistle Engram hash tables (get_rows source)
+    "enc.stem.out.weight",                  # whistle stem 1280->512 projection
 ]
 
 # KNOWN DRIFT — policy.cpp::classify_tensor places these in the Norm (F32) or

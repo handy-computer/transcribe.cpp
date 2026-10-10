@@ -49,6 +49,11 @@ add_library(transcribe
     arch/cohere/weights.cpp
     arch/cohere/encoder.cpp
     arch/cohere/decoder.cpp
+    arch/whistle/model.cpp
+    arch/whistle/capabilities.cpp
+    arch/whistle/weights.cpp
+    arch/whistle/encoder.cpp
+    arch/whistle/decoder.cpp
     arch/canary/model.cpp
     arch/canary/capabilities.cpp
     arch/canary/weights.cpp

@@ -1,0 +1,27 @@
+diff --git a/src/ggml-metal/ggml-metal.cpp b/src/ggml-metal/ggml-metal.cpp
+index c6c8ce83..07204e6a 100644
+--- a/src/ggml-metal/ggml-metal.cpp
++++ b/src/ggml-metal/ggml-metal.cpp
+@@ -564,13 +564,18 @@ static void ggml_backend_metal_event_wait(ggml_backend_t backend, ggml_backend_e
+ static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
+     GGML_ASSERT(params && params->add_alloc_dep);
+ 
+-    // keep the MoE weighted-reduction inputs alive until the fused output so the
+-    // allocator cannot reuse them while the fused kernel is still reading them
+-    ggml_metal_fusion_add_alloc_deps(params->user_data, params->add_alloc_dep, cgraph);
+-
+     ggml_metal_t ctx = (ggml_metal_t)backend->context;
+ 
+     ggml_metal_graph_optimize(ctx, cgraph);
++
++    // keep the MoE weighted-reduction inputs alive until the fused output so the
++    // allocator cannot reuse them while the fused kernel is still reading them.
++    // this must run on the final (reordered) node order: the raw pattern match is
++    // by op type only, so the `until` node need not depend on the kept tensors, and
++    // a reorder can move it ahead of their producers. a dep placed there would make
++    // the allocator pre-allocate (and possibly in-place reuse) a tensor before it
++    // is computed
++    ggml_metal_fusion_add_alloc_deps(params->user_data, params->add_alloc_dep, cgraph);
+ }
+ 
+ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {

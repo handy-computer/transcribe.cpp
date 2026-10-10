@@ -37,6 +37,7 @@
 #include <vector>
 
 using transcribe::quantize::find_preset;
+using transcribe::quantize::pairs_rows;
 using transcribe::quantize::Preset;
 using transcribe::quantize::preset_table;
 using transcribe::quantize::resolve_target_type;
@@ -269,6 +270,23 @@ int main(int argc, char ** argv) {
     const int64_t n_tensors = gguf_get_n_tensors(gguf_in);
     std::printf("input: %lld tensors\n", (long long) n_tensors);
 
+    // Hadamard presets need a Hadamard-domain input (a "*.hadamard_group" KV).
+    if (preset->hadamard) {
+        bool found = false;
+        for (int64_t k = 0; k < gguf_get_n_kv(gguf_in) && !found; ++k) {
+            const std::string key = gguf_get_key(gguf_in, k);
+            found                 = key.size() > 15 && key.compare(key.size() - 15, 15, ".hadamard_group") == 0;
+        }
+        if (!found) {
+            std::fprintf(stderr,
+                         "transcribe-quantize: preset %s needs a Hadamard-domain input (no *.hadamard_group KV; "
+                         "e.g. convert-whistle.py --hadamard-domain)\n",
+                         preset->name);
+            gguf_free(gguf_in);
+            return 2;
+        }
+    }
+
     // Plan: per-tensor target type + total output buffer size.
     //
     // We need a fresh ggml_context for the output tensors that owns
@@ -287,6 +305,7 @@ int main(int argc, char ** argv) {
         ggml_tensor * src;
         ggml_type     dst_type;
         size_t        dst_nbytes;  // ggml_row_size(dst_type, ne0) * nrows
+        int64_t       pair;        // rows per stored row (pairs_rows)
     };
 
     std::vector<PlanEntry> plan;
@@ -304,7 +323,12 @@ int main(int argc, char ** argv) {
             return 1;
         }
         const std::string name(t->name);
-        const ggml_type   dst_type = resolve_target_type(*preset, name, t->ne[0]);
+        // Paired tables store two source rows per row (same bytes when copied).
+        int64_t           pair = pairs_rows(*preset, name);
+        if (pair > 1 && (t->ne[1] % pair != 0 || ggml_n_dims(t) != 2)) {
+            pair = 1;
+        }
+        const ggml_type dst_type = resolve_target_type(*preset, name, t->ne[0] * pair);
 
         // ggml_row_size handles both block-quant and dense layouts.
         // For multi-row tensors the total bytes is row_size * (nrows
@@ -314,10 +338,10 @@ int main(int argc, char ** argv) {
         for (int d = 1; d < GGML_MAX_DIMS; ++d) {
             nrows *= t->ne[d];
         }
-        const size_t row_size = ggml_row_size(dst_type, t->ne[0]);
-        const size_t nb       = row_size * (size_t) nrows;
+        const size_t row_size = ggml_row_size(dst_type, t->ne[0] * pair);
+        const size_t nb       = row_size * (size_t) (nrows / pair);
 
-        plan.push_back({ t, dst_type, nb });
+        plan.push_back({ t, dst_type, nb, pair });
         total_data_bytes += nb;
         // Round up to ggml's alignment so each tensor starts on a
         // 32-byte boundary inside the output context buffer.
@@ -393,8 +417,9 @@ int main(int argc, char ** argv) {
         // Allocate the destination tensor in ctx_out with the new
         // dtype and the same shape as the source. ggml_new_tensor
         // handles arbitrary rank up to GGML_MAX_DIMS.
-        const int     n_dims = ggml_n_dims(src);
-        ggml_tensor * dst    = ggml_new_tensor(ctx_out, e.dst_type, n_dims, src->ne);
+        const int     n_dims            = ggml_n_dims(src);
+        int64_t       ne[GGML_MAX_DIMS] = { src->ne[0] * e.pair, src->ne[1] / e.pair, src->ne[2], src->ne[3] };
+        ggml_tensor * dst               = ggml_new_tensor(ctx_out, e.dst_type, n_dims, ne);
         if (dst == nullptr) {
             std::fprintf(stderr,
                          "transcribe-quantize: ggml_new_tensor failed for %s "
@@ -439,11 +464,8 @@ int main(int argc, char ** argv) {
                 gguf_free(gguf_out);
                 return 1;
             }
-            const int64_t n_per_row = src->ne[0];
-            int64_t       nrows     = 1;
-            for (int d = 1; d < GGML_MAX_DIMS; ++d) {
-                nrows *= src->ne[d];
-            }
+            const int64_t n_per_row = dst->ne[0];
+            const int64_t nrows     = ggml_nrows(dst);
             ggml_quantize_chunk(dst->type, fp32_scratch.data(), dst->data,
                                 /*start=*/0, nrows, n_per_row,
                                 /*imatrix=*/nullptr);

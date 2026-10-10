@@ -28,6 +28,8 @@ build/bin/transcribe-quantize INPUT.gguf OUTPUT.gguf --quant PRESET
 
 Presets: `F16`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q6_K`,
 `Q5_K_M`, `Q4_K_M`. Names match `llama.cpp`'s `llama-quantize` exactly.
+`Q2_K_HR` is a transcribe-only preset for Hadamard-domain inputs (see
+[Hadamard-domain 2-bit](#hadamard-domain-2-bit-q2_k_hr)).
 
 Example:
 
@@ -100,6 +102,7 @@ From `tools/transcribe-quantize/policy.cpp`:
 | `Q6_K`    | Q6_K        | Q8_0            | Q6_K        | —     | F32  | F16    | F32  |
 | `Q5_K_M`  | Q5_K        | Q8_0            | Q8_0        | Q6_K  | F32  | F16    | F32  |
 | `Q4_K_M`  | Q4_K        | Q8_0            | Q8_0        | Q6_K  | F32  | F16    | F32  |
+| `Q2_K_HR` | Q2_K        | Q8_0            | Q2_K        | Q4_K  | F32  | F16    | F32  |
 
 **`linear_fallback`** is the type used when a tensor's inner dim doesn't
 divide the target quant's block size. Every K preset (`Q6_K`, `Q5_K_M`,
@@ -186,7 +189,41 @@ shared constants:
 
 Every family must accept the full allowlist. A family that can't (e.g.
 because a specific op is missing on a backend) is a bug, not a policy
-difference.
+difference. Q2_K is outside the shared allowlist: only the Whistle loader
+accepts it, for `Q2_K_HR` files.
+
+## Hadamard-domain 2-bit (`Q2_K_HR`)
+
+Some checkpoints ship as rotated-codebook quants: Whistle's `whistle.cact`
+stores each 128-weight group as 2-bit (or 4-bit) Lloyd-Max codebook indices
+plus a norm, and the real weights are those values rotated back through a
+128-point Walsh-Hadamard transform. In the rotated domain every group has
+exactly 4 distinct values, which a Q2_K block fits to ~4.8% weight error;
+the same Q2_K applied to the de-rotated weights is ~30%.
+
+`Q2_K_HR` quantizes that rotated domain. It needs an input whose low-bit
+matrices are stored rotated and that declares it with a `*.hadamard_group`
+KV (`scripts/convert-whistle.py --hadamard-domain` writes
+`<slug>-HR-F32.gguf`); on any other input the tool exits 2. The runtime
+rotates the matching activations (`W x = C (H x)`). The preset mirrors the
+source's bit allocation:
+
+- Linear: Q2_K (attention output included, no `_M` bump). Rows narrower
+  than 256 fall back to Q8_0.
+- Embed and Whistle's mHC `phi` projections (4-bit in the source): Q4_K.
+- Whistle Engram tables (128-wide `get_rows` tables): stored two rows per
+  256-wide row so they fit Q2_K blocks; the loader accepts that layout.
+
+```bash
+uv run --project scripts/envs/whistle scripts/convert-whistle.py --hadamard-domain
+build/bin/transcribe-quantize models/whistle/whistle-HR-F32.gguf \
+  models/whistle/whistle-Q2_K_HR.gguf --quant Q2_K_HR
+```
+
+The Whistle loader is the only one that accepts Q2_K (it widens its
+linear allowlist for this preset). On CPU it expands Q2_K weights, and
+Q4_K weights in Hadamard-domain files, to Q8_0 at load: ggml has no
+repacked Q2_K kernel on Arm, so the small download runs on the Q8_0 path.
 
 ## Presets roadmap
 

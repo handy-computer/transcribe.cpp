@@ -161,7 +161,7 @@
   "dtype": {
     "expected": "float32",
     "source": "manual",
-    "evidence": "User decision (2026-10-09): the reference-dtype GGUF comes from the deployed whistle.cact, not the F32 QAT-master safetensors. whistle.cact stores 152 matmul weights as Cactus Quants CQ (145 x 2-bit, 7 x 4-bit: embedding + mHC; group 128; w_group = (codebook[idx] * group_norm) @ normalized Walsh-Hadamard(128)), 524 tensors FP16, 4 FP32. ggml has no CQ type, so CQ tensors are dequantized to F32 (exact in F32 arithmetic up to the Hadamard matmul rounding); FP16 tensors keep F16 storage and FP32 tensors stay F32 (Policy 2). Reference dtype label: F32.",
+    "evidence": "User decision (2026-10-09): the reference-dtype GGUF comes from the deployed whistle.cact, not the F32 QAT-master safetensors. whistle.cact stores 152 matmul weights as Cactus Quants CQ (145 x 2-bit, 7 x 4-bit: embedding + mHC; group 128; w_group = (codebook[idx] * group_norm) @ normalized Walsh-Hadamard(128)), 524 tensors FP16, 4 FP32. ggml has no CQ type, so CQ tensors are dequantized to F32 (exact in F32 arithmetic up to the Hadamard matmul rounding). Stage 3 stores every tensor F32: the FP16-shipped tensors are norms, gates, taps, Hadamard-MLP factors and mHC scalars, which the loader's Norm bucket requires at F32, plus 11 depthwise/stem conv kernels; every FP16 value is exactly representable in F32, so no value changes. This deviates from the Stage 1 wording ('FP16 tensors keep F16 storage'); accepted by the user 2026-10-09. Reference dtype label: F32.",
     "details": {
       "config_declared": "bfloat16 (safetensors __metadata__.config.dtype: training compute dtype, not storage)",
       "header_distribution": {

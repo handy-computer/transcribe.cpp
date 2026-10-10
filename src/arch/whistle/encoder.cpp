@@ -1,0 +1,944 @@
+// arch/whistle/encoder.cpp - Whistle frontend + encoder graph + shared
+// block helpers.
+//
+// Semantics follow the numpy prototype that was matched against the closed
+// engine (reports/porting/whistle/forward-map.md); the Needle-3 pieces
+// (ZCRMSNorm, HadamardMLP, mHC) follow cactus-compute/needle
+// needle/model/architecture.py.
+
+#include "encoder.h"
+
+#include "conformer/conformer.h"
+#include "ggml.h"
+#include "transcribe-debug.h"
+#include "transcribe-log.h"
+#include "whistle.h"
+
+#include <algorithm>
+#include <cmath>
+#include <complex>
+#include <cstring>
+#include <thread>
+#include <vector>
+
+#if defined(GGML_USE_ACCELERATE) || defined(__APPLE__)
+#    include <Accelerate/Accelerate.h>
+#endif
+
+namespace transcribe::whistle {
+
+namespace {
+
+constexpr double kPi            = 3.14159265358979323846;
+constexpr float  kNormEps       = 1e-6f;
+constexpr int    kSinkhornIters = 20;
+
+// In-place iterative radix-2 FFT (n power of two).
+void fft_inplace(std::vector<std::complex<double>> & a) {
+    const size_t n = a.size();
+    for (size_t i = 1, j = 0; i < n; ++i) {
+        size_t bit = n >> 1;
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+        j ^= bit;
+        if (i < j) {
+            std::swap(a[i], a[j]);
+        }
+    }
+    for (size_t len = 2; len <= n; len <<= 1) {
+        const double               ang = -2.0 * kPi / static_cast<double>(len);
+        const std::complex<double> wl(std::cos(ang), std::sin(ang));
+        for (size_t i = 0; i < n; i += len) {
+            std::complex<double> w(1.0, 0.0);
+            for (size_t k = 0; k < len / 2; ++k) {
+                const std::complex<double> u = a[i + k];
+                const std::complex<double> v = a[i + k + len / 2] * w;
+                a[i + k]                     = u + v;
+                a[i + k + len / 2]           = u - v;
+                w *= wl;
+            }
+        }
+    }
+}
+
+// numpy.percentile(..., method="linear").
+double percentile_linear(std::vector<double> v, double q) {
+    if (v.empty()) {
+        return 0.0;
+    }
+    std::sort(v.begin(), v.end());
+    const double pos = q / 100.0 * static_cast<double>(v.size() - 1);
+    const size_t lo  = static_cast<size_t>(std::floor(pos));
+    const size_t hi  = std::min(lo + 1, v.size() - 1);
+    const double fr  = pos - static_cast<double>(lo);
+    return v[lo] + (v[hi] - v[lo]) * fr;
+}
+
+}  // namespace
+
+bool compute_mel(const float *              pcm,
+                 int                        n_samples,
+                 const std::vector<float> & fb,
+                 int                        n_mels,
+                 MelResult &                out,
+                 int                        n_threads) {
+    constexpr int n_fft = 512;
+    constexpr int win   = 400;
+    constexpr int hop   = 160;
+    constexpr int n_bin = n_fft / 2 + 1;
+
+    out = MelResult{};
+    if (pcm == nullptr || n_samples <= 0 || static_cast<int>(fb.size()) != n_mels * n_bin) {
+        return false;
+    }
+    const int n_frames = n_samples / hop;
+    if (n_frames < 1) {
+        return false;
+    }
+
+    // Symmetric Hann (torch periodic=False), forward-map Frontend row "Window".
+    std::vector<double> window(win);
+    for (int k = 0; k < win; ++k) {
+        window[k] = 0.5 - 0.5 * std::cos(2.0 * kPi * k / (win - 1));
+    }
+
+    // Frames are independent: split them across threads (identical results).
+    std::vector<double> power(static_cast<size_t>(n_frames) * n_mels, 0.0);
+    auto                frames = [&](int t0, int t1) {
+        std::vector<std::complex<double>> buf(n_fft);
+        std::vector<double>               spec(n_bin);
+        for (int t = t0; t < t1; ++t) {
+            const int start = t * hop - win / 2;
+            for (int k = 0; k < n_fft; ++k) {
+                double v = 0.0;
+                if (k < win) {
+                    const int s = start + k;
+                    if (s >= 0 && s < n_samples) {
+                        v = static_cast<double>(pcm[s]) * window[k];
+                    }
+                }
+                buf[k] = std::complex<double>(v, 0.0);
+            }
+            fft_inplace(buf);
+            for (int b = 0; b < n_bin; ++b) {
+                spec[b] = std::norm(buf[b]);
+            }
+            double * row = power.data() + static_cast<size_t>(t) * n_mels;
+            for (int b = 0; b < n_bin; ++b) {
+                const float * fbr = fb.data() + static_cast<size_t>(b) * n_mels;
+                const double  s   = spec[b];
+                for (int m = 0; m < n_mels; ++m) {
+                    row[m] += s * static_cast<double>(fbr[m]);
+                }
+            }
+        }
+    };
+    const int nt = std::max(1, std::min(n_threads, n_frames / 64));
+    if (nt == 1) {
+        frames(0, n_frames);
+    } else {
+        std::vector<std::thread> pool;
+        const int                per = (n_frames + nt - 1) / nt;
+        for (int i = 0; i < nt; ++i) {
+            pool.emplace_back(frames, i * per, std::min(n_frames, (i + 1) * per));
+        }
+        for (std::thread & th : pool) {
+            th.join();
+        }
+    }
+
+    // No-speech statistic over per-frame mel energy (dB).
+    std::vector<double> energy(n_frames);
+    double              pmax = 0.0;
+    for (int t = 0; t < n_frames; ++t) {
+        double s = 0.0;
+        for (int m = 0; m < n_mels; ++m) {
+            const double p = power[static_cast<size_t>(t) * n_mels + m];
+            s += p;
+            pmax = std::max(pmax, p);
+        }
+        energy[t] = 10.0 * std::log10(s + 1e-30);
+    }
+    out.energy_spread_db = percentile_linear(energy, 99.0) - percentile_linear(energy, 10.0);
+
+    // Log floor relative to the clip maximum, then per-bin normalization.
+    const double        floor_v = 1e-8 * pmax;
+    std::vector<double> lm(power.size());
+    for (size_t i = 0; i < power.size(); ++i) {
+        lm[i] = std::log(power[i] + floor_v + 1e-30);
+    }
+    out.mel.assign(power.size(), 0.0f);
+    for (int m = 0; m < n_mels; ++m) {
+        double mean = 0.0;
+        for (int t = 0; t < n_frames; ++t) {
+            mean += lm[static_cast<size_t>(t) * n_mels + m];
+        }
+        mean /= n_frames;
+        double var = 0.0;
+        for (int t = 0; t < n_frames; ++t) {
+            const double dv = lm[static_cast<size_t>(t) * n_mels + m] - mean;
+            var += dv * dv;
+        }
+        const double sd  = std::sqrt(var / n_frames);
+        const double inv = sd > 0.0 ? 1.0 / sd : 0.0;
+        for (int t = 0; t < n_frames; ++t) {
+            const size_t i = static_cast<size_t>(t) * n_mels + m;
+            out.mel[i]     = static_cast<float>((lm[i] - mean) * inv);
+        }
+    }
+    out.n_frames = n_frames;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Graph helpers
+// ---------------------------------------------------------------------------
+
+ggml_tensor * out_rows(ggml_context * ctx, ggml_tensor * y, int64_t r0, int64_t n) {
+    return ggml_view_2d(ctx, y, n, y->ne[1], y->nb[1], static_cast<size_t>(r0) * ggml_element_size(y));
+}
+
+namespace {
+
+// Fused CPU fast Walsh-Hadamard transform over every g-block of a contiguous
+// F32 tensor (Sylvester order, scaled by 1/sqrt(g)): g log2 g adds instead of
+// a g x g product. userdata: the block size g.
+void fwht_cpu(ggml_tensor * dst, const ggml_tensor * a, int ith, int nth, void * userdata) {
+    const int64_t g  = static_cast<int64_t>(reinterpret_cast<intptr_t>(userdata));
+    const int64_t nb = ggml_nelements(a) / g;
+    const int64_t b0 = nb * ith / nth, b1 = nb * (ith + 1) / nth;
+    const float   s = 1.0f / std::sqrt(static_cast<float>(g));
+    for (int64_t b = b0; b < b1; ++b) {
+        const float * x = static_cast<const float *>(a->data) + b * g;
+        float *       y = static_cast<float *>(dst->data) + b * g;
+        for (int64_t i = 0; i < g; i += 2) {
+            y[i]     = x[i] + x[i + 1];
+            y[i + 1] = x[i] - x[i + 1];
+        }
+        for (int64_t h = 2; h < g; h *= 2) {
+            for (int64_t i = 0; i < g; i += 2 * h) {
+                for (int64_t j = i; j < i + h; ++j) {
+                    const float u = y[j], v = y[j + h];
+                    y[j]     = u + v;
+                    y[j + h] = u - v;
+                }
+            }
+        }
+        for (int64_t i = 0; i < g; ++i) {
+            y[i] *= s;
+        }
+    }
+}
+
+}  // namespace
+
+ggml_tensor * hada_in(ggml_context * ctx, ggml_tensor * x, const WhistleHada & hd) {
+    ggml_tensor * h = hd.h;
+    if (h == nullptr) {
+        return x;
+    }
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx, x);
+    }
+    if (hd.fwht) {
+        return ggml_map_custom1(ctx, x, fwht_cpu, GGML_N_TASKS_MAX,
+                                reinterpret_cast<void *>(static_cast<intptr_t>(h->ne[0])));
+    }
+    // H_g is symmetric, so mul_mat (which contracts against H_g^T) applies H_g.
+    ggml_tensor * y = ggml_mul_mat(ctx, h, ggml_reshape_2d(ctx, x, h->ne[0], ggml_nelements(x) / h->ne[0]));
+    return ggml_reshape_4d(ctx, y, x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
+}
+
+ggml_tensor * zcrms(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale) {
+    // `scale` already holds 1 + scale (folded at load, see build_aux).
+    return ggml_mul(ctx, ggml_rms_norm(ctx, x, kNormEps), scale);
+}
+
+namespace {
+
+// Kronecker product apply: z [512, N] -> out[k*bb + l] = sum_ij z[i*bb + j] a[i,k] b[j,l]
+// with a [ba, ba] / b [bb, bb] stored row-major (ggml ne0 = column). Takes the
+// transposes at / bt (contract j with b: W(j, l) = b[j][l]).
+ggml_tensor * kron_apply(ggml_context * ctx, ggml_tensor * z, ggml_tensor * at, ggml_tensor * bt) {
+    const int64_t ba = at->ne[0];
+    const int64_t bb = bt->ne[0];
+    const int64_t N  = z->ne[1];
+    ggml_tensor * r1 = ggml_mul_mat(ctx, bt, ggml_reshape_2d(ctx, z, bb, ba * N));  // [bb(l), ba(i)*N]
+    r1               = ggml_reshape_3d(ctx, r1, bb, ba, N);
+    ggml_tensor * p  = ggml_cont(ctx, ggml_permute(ctx, r1, 1, 0, 2, 3));           // [ba(i), bb(l), N]
+    ggml_tensor * r2 = ggml_mul_mat(ctx, at, ggml_reshape_2d(ctx, p, ba, bb * N));  // [ba(k), bb(l)*N]
+    r2               = ggml_reshape_3d(ctx, r2, ba, bb, N);
+    ggml_tensor * o  = ggml_cont(ctx, ggml_permute(ctx, r2, 1, 0, 2, 3));           // [bb(l), ba(k), N]
+    return ggml_reshape_2d(ctx, o, ba * bb, N);
+}
+
+// z[..., perm] along ne0.
+ggml_tensor * permute_features(ggml_context * ctx, ggml_tensor * z, ggml_tensor * perm) {
+    ggml_tensor * zt = ggml_cont(ctx, ggml_transpose(ctx, z));  // [N, d]
+    ggml_tensor * g  = ggml_get_rows(ctx, zt, perm);            // [N, d] rows reordered
+    return ggml_cont(ctx, ggml_transpose(ctx, g));              // [d, N]
+}
+
+}  // namespace
+
+namespace {
+
+// out = A^T (Z B) for Z = z viewed as [ba][bb] (row i, column j): the same
+// Kronecker apply as kron_apply, out[k*bb + l] = sum_ij z[i*bb + j] a[i][k] b[j][l].
+void kron_host(const float * z, const float * a, const float * b, int ba, int bb, float * tmp, float * out) {
+    for (int i = 0; i < ba; ++i) {
+        float * t = tmp + i * bb;
+        for (int l = 0; l < bb; ++l) {
+            t[l] = 0.0f;
+        }
+        for (int j = 0; j < bb; ++j) {
+            const float   zij = z[i * bb + j];
+            const float * br  = b + j * bb;
+            for (int l = 0; l < bb; ++l) {
+                t[l] += zij * br[l];
+            }
+        }
+    }
+    for (int k = 0; k < ba; ++k) {
+        float * o = out + k * bb;
+        for (int l = 0; l < bb; ++l) {
+            o[l] = 0.0f;
+        }
+        for (int i = 0; i < ba; ++i) {
+            const float   aik = a[i * ba + k];
+            const float * t   = tmp + i * bb;
+            for (int l = 0; l < bb; ++l) {
+                o[l] += aik * t[l];
+            }
+        }
+    }
+}
+
+// kron_host with compile-time factor sizes: the BB-wide accumulator rows stay
+// in vector registers.
+template <int BA, int BB> void kron_fixed(const float * z, const float * a, const float * b, float * tmp, float * out) {
+    for (int i = 0; i < BA; ++i) {
+        float acc[BB] = {};
+        for (int j = 0; j < BB; ++j) {
+            const float   zij = z[i * BB + j];
+            const float * br  = b + j * BB;
+            for (int l = 0; l < BB; ++l) {
+                acc[l] += zij * br[l];
+            }
+        }
+        std::memcpy(tmp + i * BB, acc, sizeof(acc));
+    }
+    for (int k = 0; k < BA; ++k) {
+        float acc[BB] = {};
+        for (int i = 0; i < BA; ++i) {
+            const float   aik = a[i * BA + k];
+            const float * t   = tmp + i * BB;
+            for (int l = 0; l < BB; ++l) {
+                acc[l] += aik * t[l];
+            }
+        }
+        std::memcpy(out + k * BB, acc, sizeof(acc));
+    }
+}
+
+void kron_dispatch(const float * z, const float * a, const float * b, int ba, int bb, float * tmp, float * out) {
+    if (ba == 16 && bb == 32) {
+        kron_fixed<16, 32>(z, a, b, tmp, out);
+    } else {
+        kron_host(z, a, b, ba, bb, tmp, out);
+    }
+}
+
+// y[k] = v[k] / (1 + exp(-v[k])) over n values (SiLU), vectorized exp where available.
+void silu_inplace(float * v, float * scratch, int n) {
+#if defined(__APPLE__)
+    for (int k = 0; k < n; ++k) {
+        scratch[k] = -v[k];
+    }
+    vvexpf(scratch, scratch, &n);
+    for (int k = 0; k < n; ++k) {
+        v[k] = v[k] / (1.0f + scratch[k]);
+    }
+#else
+    (void) scratch;
+    for (int k = 0; k < n; ++k) {
+        v[k] = v[k] / (1.0f + std::exp(-v[k]));
+    }
+#endif
+}
+
+// Fused CPU HadamardMLP over x [d, N]; tokens are split across threads.
+void hmlp_cpu(ggml_tensor * dst, const ggml_tensor * x, int ith, int nth, void * ud) {
+    const HmlpHost &   h   = *static_cast<const HmlpHost *>(ud);
+    const int          d   = h.d;
+    const int64_t      N   = x->ne[1];
+    const int64_t      per = (N + nth - 1) / nth;
+    const int64_t      n0  = per * ith;
+    const int64_t      n1  = std::min(N, n0 + per);
+    std::vector<float> z(static_cast<size_t>(d)), y(static_cast<size_t>(d)), tmp(static_cast<size_t>(d)),
+        cond(static_cast<size_t>(d));
+    for (int64_t n = n0; n < n1; ++n) {
+        const float * xr   = reinterpret_cast<const float *>(static_cast<const char *>(x->data) + n * x->nb[1]);
+        float *       out  = reinterpret_cast<float *>(static_cast<char *>(dst->data) + n * dst->nb[1]);
+        // cond = 1 + softmax(x @ cond_v) @ cond_u (loops ordered for contiguous access)
+        float         c[8] = {};
+        for (int k = 0; k < d; ++k) {
+            const float   xk = xr[k];
+            const float * cv = h.cond_v + k * 8;
+            for (int r = 0; r < 8; ++r) {
+                c[r] += cv[r] * xk;
+            }
+        }
+        float mx = c[0];
+        for (int r = 1; r < 8; ++r) {
+            mx = std::max(mx, c[r]);
+        }
+        float sum = 0.0f;
+        for (float & v : c) {
+            v = std::exp(v - mx);
+            sum += v;
+        }
+        for (float & v : c) {
+            v /= sum;
+        }
+        for (int k = 0; k < d; ++k) {
+            cond[k] = 1.0f;
+        }
+        for (int r = 0; r < 8; ++r) {
+            const float * cu = h.cond_u + r * d;
+            const float   cr = c[r];
+            for (int k = 0; k < d; ++k) {
+                cond[k] += cu[k] * cr;
+            }
+        }
+        for (int k = 0; k < d; ++k) {
+            z[k] = xr[k] * h.d1[k];
+        }
+        kron_dispatch(z.data(), h.a[0], h.b[0], h.ba, h.bb, tmp.data(), y.data());
+        for (int k = 0; k < d; ++k) {
+            z[k] = y[h.perm1[k]] * h.d2[k] * cond[k] + h.b2[k];
+        }
+        silu_inplace(z.data(), tmp.data(), d);
+        kron_dispatch(z.data(), h.a[1], h.b[1], h.ba, h.bb, tmp.data(), y.data());
+        for (int k = 0; k < d; ++k) {
+            z[k] = y[h.perm2[k]] * h.d3[k];
+        }
+        kron_dispatch(z.data(), h.a[2], h.b[2], h.ba, h.bb, tmp.data(), y.data());
+        for (int k = 0; k < d; ++k) {
+            out[k] = y[k] * h.d4[k];
+        }
+    }
+}
+
+}  // namespace
+
+ggml_tensor * hmlp(ggml_context * ctx, ggml_tensor * x, const WhistleHmlp & h, const WhistleAux & aux) {
+    if (h.host != nullptr) {
+        return ggml_map_custom1(ctx, ggml_is_contiguous(x) ? x : ggml_cont(ctx, x), hmlp_cpu, GGML_N_TASKS_MAX,
+                                const_cast<HmlpHost *>(h.host));
+    }
+    // cond = 1 + softmax(x @ cond_v) @ cond_u
+    ggml_tensor * c    = ggml_soft_max(ctx, ggml_mul_mat(ctx, h.cond_v_t, x));  // [8, N]
+    ggml_tensor * cond = ggml_scale_bias(ctx, ggml_mul_mat(ctx, h.cond_u_t, c), 1.0f, 1.0f);
+
+    ggml_tensor * z = kron_apply(ctx, ggml_mul(ctx, x, h.d1), h.wa_t[0], h.wb_t[0]);
+    z               = permute_features(ctx, z, aux.perm1);
+    z               = ggml_silu(ctx, ggml_add(ctx, ggml_mul(ctx, ggml_mul(ctx, z, h.d2), cond), h.b2));
+    z               = kron_apply(ctx, z, h.wa_t[1], h.wb_t[1]);
+    z               = permute_features(ctx, z, aux.perm2);
+    z               = kron_apply(ctx, ggml_mul(ctx, z, h.d3), h.wa_t[2], h.wb_t[2]);
+    return ggml_mul(ctx, z, h.d4);
+}
+
+namespace {
+
+// Sinkhorn normalization of [n(j), n(i), N] logits (rows over j, columns
+// over i), exp-space equivalent of architecture.py::_sinkhorn (20 iters,
+// log-space). The first row step is the softmax.
+// CPU-only fused form of the normalization loop below, for k [n(j), n(i), N]
+// (contiguous softmax output). Same f32 operations in the same order as the
+// graph: sums go through the same reduction ggml_vec_sum_f32 uses
+// (vDSP_sve with Accelerate, a double accumulator otherwise), divisions are
+// plain IEEE f32, so the result is bit-identical on the CPU backend.
+float vec_sum(const float * x, int n) {
+#if defined(GGML_USE_ACCELERATE) || defined(__APPLE__)
+    float s = 0.0f;
+    vDSP_sve(x, 1, &s, static_cast<vDSP_Length>(n));
+    return s;
+#else
+    double s = 0.0;
+    for (int i = 0; i < n; ++i) {
+        s += static_cast<double>(x[i]);
+    }
+    return static_cast<float>(s);
+#endif
+}
+
+// k [n(i)][n(j)] (row i = ggml ne1), normalized in place; col holds n floats.
+void sinkhorn_host(float * k, int64_t n, float * col) {
+    for (int it = 0; it < kSinkhornIters; ++it) {
+        if (it > 0) {  // k / sum_rows(k): over j for each i
+            for (int64_t i = 0; i < n; ++i) {
+                float *     row = k + i * n;
+                const float s   = vec_sum(row, static_cast<int>(n));
+                for (int64_t j = 0; j < n; ++j) {
+                    row[j] = row[j] / s;
+                }
+            }
+        }
+        // transpose, / sum_rows, transpose back: over i for each j
+        for (int64_t j = 0; j < n; ++j) {
+            for (int64_t i = 0; i < n; ++i) {
+                col[i] = k[i * n + j];
+            }
+            const float s = vec_sum(col, static_cast<int>(n));
+            for (int64_t i = 0; i < n; ++i) {
+                k[i * n + j] = col[i] / s;
+            }
+        }
+    }
+}
+
+void sinkhorn_iters_cpu(ggml_tensor * dst, const ggml_tensor * a, int ith, int nth, void *) {
+    const int64_t      n   = a->ne[0];
+    const int64_t      N   = a->ne[2];
+    const int64_t      per = (N + nth - 1) / nth;
+    const int64_t      t0  = per * ith;
+    const int64_t      t1  = std::min(N, t0 + per);
+    std::vector<float> k(static_cast<size_t>(n * n)), col(static_cast<size_t>(n));
+    for (int64_t t = t0; t < t1; ++t) {
+        const char * src = static_cast<const char *>(a->data) + t * a->nb[2];
+        for (int64_t i = 0; i < n; ++i) {
+            std::memcpy(k.data() + i * n, src + i * a->nb[1], static_cast<size_t>(n) * sizeof(float));
+        }
+        sinkhorn_host(k.data(), n, col.data());
+        char * out = static_cast<char *>(dst->data) + t * dst->nb[2];
+        for (int64_t i = 0; i < n; ++i) {
+            std::memcpy(out + i * dst->nb[1], k.data() + i * n, static_cast<size_t>(n) * sizeof(float));
+        }
+    }
+}
+
+inline float sigmoid_f(float x) {
+    return 1.0f / (1.0f + std::exp(-x));
+}
+
+// Splits [0, total) into nth contiguous ranges.
+inline void split_range(int64_t total, int ith, int nth, int64_t & b, int64_t & e) {
+    const int64_t per = (total + nth - 1) / nth;
+    b                 = std::min(total, per * ith);
+    e                 = std::min(total, b + per);
+}
+
+const float * col_f32(const ggml_tensor * t, int64_t n) {
+    return reinterpret_cast<const float *>(static_cast<const char *>(t->data) + n * t->nb[1]);
+}
+
+// u[:, n] = sum_k stream[:, k, n] * sigmoid(a_pre * pre[k, n] + pre_bias[k]).
+// src: stream [d, lanes, N], pre [lanes, N]. Work split over (token, feature).
+void mhc_pre_cpu(ggml_tensor * dst, int ith, int nth, void * ud) {
+    const MhcHost &     h      = *static_cast<const MhcHost *>(ud);
+    const ggml_tensor * stream = dst->src[0];
+    const ggml_tensor * pre    = dst->src[1];
+    const int64_t       d = h.d, L = h.lanes, N = stream->ne[2];
+    int64_t             b, e;
+    split_range(N * d, ith, nth, b, e);
+    float hp[16];
+    while (b < e) {
+        const int64_t n  = b / d;
+        const int64_t e0 = b % d;
+        const int64_t e1 = std::min(d, e0 + (e - b));
+        const float * pr = col_f32(pre, n);
+        for (int64_t k = 0; k < L; ++k) {
+            hp[k] = sigmoid_f(pr[k] * h.a_pre + h.pre_bias[k]);
+        }
+        const char * sb  = static_cast<const char *>(stream->data) + n * stream->nb[2];
+        float *      out = reinterpret_cast<float *>(static_cast<char *>(dst->data) + n * dst->nb[1]);
+        for (int64_t x = e0; x < e1; ++x) {
+            float acc = 0.0f;
+            for (int64_t k = 0; k < L; ++k) {
+                acc += reinterpret_cast<const float *>(sb + k * stream->nb[1])[x] * hp[k];
+            }
+            out[x] = acc;
+        }
+        b += e1 - e0;
+    }
+}
+
+// out[:, i, n] = sum_j stream[:, j, n] * hres[i][j] + (bu - u)[:, n] * hpost[i] with
+// hpost = 2 sigmoid(a_post * post + post_bias), hres = sinkhorn(softmax_j(a_res * res + b_res)).
+// src: stream [d, lanes, N], bu [d, N], u [d, N], post [lanes, N], res [lanes*lanes, N].
+void mhc_post_cpu(ggml_tensor * dst, int ith, int nth, void * ud) {
+    const MhcHost &     h      = *static_cast<const MhcHost *>(ud);
+    const ggml_tensor * stream = dst->src[0];
+    const ggml_tensor * bu     = dst->src[1];
+    const ggml_tensor * u      = dst->src[2];
+    const ggml_tensor * post   = dst->src[3];
+    const ggml_tensor * res    = dst->src[4];
+    const int64_t       d = h.d, L = h.lanes, N = stream->ne[2];
+    int64_t             b, e;
+    split_range(N * d, ith, nth, b, e);
+    float hres[16 * 16], col[16], hpo[16];
+    while (b < e) {
+        const int64_t n  = b / d;
+        const int64_t e0 = b % d;
+        const int64_t e1 = std::min(d, e0 + (e - b));
+        const float * po = col_f32(post, n);
+        for (int64_t i = 0; i < L; ++i) {
+            hpo[i] = sigmoid_f(po[i] * h.a_post + h.post_bias[i]) * 2.0f;
+        }
+        const float * rs = col_f32(res, n);
+        for (int64_t i = 0; i < L; ++i) {  // softmax over j of row i
+            float * row = hres + i * L;
+            float   mx  = -INFINITY;
+            for (int64_t j = 0; j < L; ++j) {
+                row[j] = rs[i * L + j] * h.a_res + h.b_res[i * L + j];
+                mx     = std::max(mx, row[j]);
+            }
+            float sum = 0.0f;
+            for (int64_t j = 0; j < L; ++j) {
+                row[j] = std::exp(row[j] - mx);
+                sum += row[j];
+            }
+            for (int64_t j = 0; j < L; ++j) {
+                row[j] /= sum;
+            }
+        }
+        sinkhorn_host(hres, L, col);
+        const char *  sb  = static_cast<const char *>(stream->data) + n * stream->nb[2];
+        const float * bur = col_f32(bu, n);
+        const float * ur  = col_f32(u, n);
+        char *        ob  = static_cast<char *>(dst->data) + n * dst->nb[2];
+        for (int64_t i = 0; i < L; ++i) {
+            float * out = reinterpret_cast<float *>(ob + i * dst->nb[1]);
+            for (int64_t x = e0; x < e1; ++x) {
+                float acc = 0.0f;
+                for (int64_t j = 0; j < L; ++j) {
+                    acc += reinterpret_cast<const float *>(sb + j * stream->nb[1])[x] * hres[i * L + j];
+                }
+                out[x] = acc + (bur[x] - ur[x]) * hpo[i];
+            }
+        }
+        b += e1 - e0;
+    }
+}
+
+ggml_tensor * sinkhorn(ggml_context * ctx, ggml_tensor * logits, bool cpu_fused) {
+    ggml_tensor * k = ggml_soft_max(ctx, logits);
+    if (cpu_fused) {
+        return ggml_map_custom1(ctx, k, sinkhorn_iters_cpu, GGML_N_TASKS_MAX, nullptr);
+    }
+    for (int it = 0; it < kSinkhornIters; ++it) {
+        if (it > 0) {
+            k = ggml_div(ctx, k, ggml_sum_rows(ctx, k));
+        }
+        ggml_tensor * kt = ggml_cont(ctx, ggml_transpose(ctx, k));
+        kt               = ggml_div(ctx, kt, ggml_sum_rows(ctx, kt));
+        k                = ggml_cont(ctx, ggml_transpose(ctx, kt));
+    }
+    return k;
+}
+
+ggml_tensor * row_view(ggml_context * ctx, ggml_tensor * w, int64_t row0, int64_t n_rows) {
+    return ggml_view_2d(ctx, w, w->ne[0], n_rows, w->nb[1], static_cast<size_t>(row0) * w->nb[1]);
+}
+
+}  // namespace
+
+ggml_tensor * mhc_step(ggml_context *                                      ctx,
+                       ggml_tensor *                                       stream,
+                       const MhcLayer &                                    l,
+                       const std::function<ggml_tensor *(ggml_tensor *)> & block) {
+    const int64_t      d     = stream->ne[0];
+    const int64_t      lanes = stream->ne[1];
+    const int64_t      N     = stream->ne[2];
+    const WhistleMhc & m     = *l.mhc;
+
+    ggml_tensor * nx = ggml_rms_norm(ctx, ggml_reshape_2d(ctx, stream, d * lanes, N), kNormEps);
+    if (l.hada != nullptr) {
+        nx = hada_in(ctx, nx, *l.hada);
+    }
+
+    ggml_tensor *pre, *post, *res;
+    if (!m.phi_fused.empty()) {  // rows pre | post | res of this layer in one matmul
+        ggml_tensor * y = ggml_mul_mat(ctx, m.phi_fused[static_cast<size_t>(l.layer)], nx);
+        pre             = out_rows(ctx, y, 0, lanes);
+        post            = out_rows(ctx, y, lanes, lanes);
+        res             = out_rows(ctx, y, 2 * lanes, lanes * lanes);
+        if (l.host == nullptr) {  // the generic ops below (scale) need contiguous inputs
+            pre  = ggml_cont(ctx, pre);
+            post = ggml_cont(ctx, post);
+            res  = ggml_cont(ctx, res);
+        }
+    } else {
+        pre  = ggml_mul_mat(ctx, row_view(ctx, m.phi_pre, (int64_t) l.layer * lanes, lanes), nx);
+        post = ggml_mul_mat(ctx, row_view(ctx, m.phi_post, (int64_t) l.layer * lanes, lanes), nx);
+        res  = ggml_mul_mat(ctx, row_view(ctx, m.phi_res, (int64_t) l.layer * lanes * lanes, lanes * lanes), nx);
+    }
+
+    if (l.host != nullptr) {
+        void *        ud     = const_cast<MhcHost *>(l.host);
+        ggml_tensor * a_u[2] = { stream, pre };
+        ggml_tensor * u  = ggml_custom_4d(ctx, GGML_TYPE_F32, d, N, 1, 1, a_u, 2, mhc_pre_cpu, GGML_N_TASKS_MAX, ud);
+        ggml_tensor * bu = block(u);
+        ggml_tensor * a_o[5] = { stream, bu, u, post, res };
+        return ggml_custom_4d(ctx, GGML_TYPE_F32, d, lanes, N, 1, a_o, 5, mhc_post_cpu, GGML_N_TASKS_MAX, ud);
+    }
+
+    auto bias_col = [&](ggml_tensor * b) {
+        return ggml_view_1d(ctx, b, lanes, static_cast<size_t>(l.layer) * b->nb[1]);
+    };
+
+    ggml_tensor * hpre = ggml_sigmoid(ctx, ggml_add(ctx, ggml_scale(ctx, pre, l.a_pre), bias_col(l.pre_bias)));
+
+    ggml_tensor * s_perm = ggml_cont(ctx, ggml_permute(ctx, stream, 1, 0, 2, 3));               // [lanes, d, N]
+    ggml_tensor * u      = ggml_mul_mat(ctx, s_perm, ggml_reshape_3d(ctx, hpre, lanes, 1, N));  // [d, 1, N]
+    u                    = ggml_reshape_2d(ctx, u, d, N);
+
+    ggml_tensor * y = ggml_sub(ctx, block(u), u);
+
+    ggml_tensor * hpost =
+        ggml_scale(ctx, ggml_sigmoid(ctx, ggml_add(ctx, ggml_scale(ctx, post, l.a_post), bias_col(l.post_bias))), 2.0f);
+
+    ggml_tensor * b_res = ggml_view_1d(ctx, m.b_res, lanes * lanes, static_cast<size_t>(l.layer) * m.b_res->nb[2]);
+    res                 = ggml_add(ctx, ggml_scale(ctx, res, l.a_res), b_res);                     // [n*n, N]
+    ggml_tensor * hres  = sinkhorn(ctx, ggml_reshape_3d(ctx, res, lanes, lanes, N), l.cpu_fused);  // [n(j), n(i), N]
+
+    ggml_tensor * mix  = ggml_mul_mat(ctx, s_perm, hres);                                          // [d, n(i), N]
+    ggml_tensor * yrep = ggml_repeat(ctx, ggml_reshape_3d(ctx, y, d, 1, N), mix);
+    return ggml_add(ctx, mix, ggml_mul(ctx, yrep, ggml_reshape_3d(ctx, hpost, 1, lanes, N)));
+}
+
+ggml_tensor * lane_mean(ggml_context * ctx, ggml_tensor * stream) {
+    const int64_t d     = stream->ne[0];
+    const int64_t lanes = stream->ne[1];
+    const int64_t N     = stream->ne[2];
+    ggml_tensor * acc   = nullptr;
+    for (int64_t n = 0; n < lanes; ++n) {
+        ggml_tensor * v = ggml_view_2d(ctx, stream, d, N, stream->nb[2], static_cast<size_t>(n) * stream->nb[1]);
+        acc             = acc == nullptr ? ggml_cont(ctx, v) : ggml_add(ctx, acc, v);
+    }
+    return ggml_scale(ctx, acc, 1.0f / static_cast<float>(lanes));
+}
+
+// ---------------------------------------------------------------------------
+// Encoder
+// ---------------------------------------------------------------------------
+
+int predict_t_enc(int n_mel_frames) {
+    int t = n_mel_frames;
+    for (int s = 0; s < 3; ++s) {
+        t = (t + 1) / 2;  // k3 s2 p1
+    }
+    return t;
+}
+
+namespace {
+
+namespace conf = transcribe::conformer;
+
+// Stem kernel stored ne [C, 9] (row j = kt*3 + kf) -> ggml conv kernel [3(kf), 3(kt), 1, C].
+ggml_tensor * stem_kernel(ggml_context * ctx, ggml_tensor * w) {
+    ggml_tensor * k = w;
+    if (k->type != GGML_TYPE_F32) {
+        k = ggml_cast(ctx, k, GGML_TYPE_F32);
+    }
+    k = ggml_cont(ctx, ggml_transpose(ctx, k));  // [9, C]
+    return ggml_reshape_4d(ctx, k, 3, 3, 1, w->ne[0]);
+}
+
+// Zero-pads ne0 up to a multiple of 4 so f32 mul_mat contracting over it can
+// take ggml's tiled f32 GEMM (which needs k % 4 == 0) instead of per-element
+// dot products. Zero rows add nothing to the sums.
+ggml_tensor * pad_k4(ggml_context * ctx, ggml_tensor * x) {
+    const int p = static_cast<int>((4 - x->ne[0] % 4) % 4);
+    return p == 0 ? x : ggml_pad(ctx, x, p, 0, 0, 0);
+}
+
+// conf::conv_2d_f32 with the im2col / kernel contraction (IC*KH*KW = 9 for
+// the 1-channel stem) zero-padded to a multiple of 4 (see pad_k4).
+ggml_tensor * stem_conv0(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b, int s0, int s1, int p0, int p1) {
+    ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, s1, p0, p1, 1, 1, /*is_2D=*/true, GGML_TYPE_F32);
+    ggml_tensor * cols =
+        pad_k4(ctx, ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]));
+    ggml_tensor * kern   = pad_k4(ctx, ggml_reshape_2d(ctx, a, a->ne[0] * a->ne[1] * a->ne[2], a->ne[3]));
+    ggml_tensor * result = ggml_mul_mat(ctx, cols, kern);
+    result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], im2col->ne[3], a->ne[3]);  // [OC, N, OH, OW]
+    return ggml_cont(ctx, ggml_permute(ctx, result, 0, 1, 3, 2));                                  // [N, OC, OH, OW]
+}
+
+// [W, H, C] -> pointwise conv over C -> SiLU -> [W, H, C].
+ggml_tensor * stem_pointwise(ggml_context * ctx, ggml_tensor * x, ggml_tensor * pw, const WhistleHada & hd) {
+    const int64_t W = x->ne[0], H = x->ne[1], C = x->ne[2];
+    ggml_tensor * c = ggml_cont(ctx, ggml_permute(ctx, x, 1, 2, 0, 3));  // [C, W, H]
+    c               = ggml_silu(ctx, ggml_mul_mat(ctx, pw, hada_in(ctx, ggml_reshape_2d(ctx, c, C, W * H), hd)));
+    c               = ggml_reshape_3d(ctx, c, C, W, H);
+    return c;  // channel-first [C, W, H]
+}
+
+ggml_tensor * enc_attention(ggml_context *         ctx,
+                            ggml_tensor *          x,
+                            const WhistleAttn &    a,
+                            const WhistleHParams & hp,
+                            ggml_tensor *          pos,
+                            const WhistleHada &    hd) {
+    const int64_t T  = x->ne[1];
+    x                = hada_in(ctx, x, hd);
+    const int64_t qk = hp.qk_head_dim, vd = hp.v_head_dim, nh = hp.n_heads, nkv = hp.n_kv_heads;
+
+    ggml_tensor *q, *k, *v, *g;
+    if (a.fused != nullptr) {  // q | k | v | gate in one matmul
+        ggml_tensor * y  = ggml_mul_mat(ctx, a.fused, x);
+        const size_t  es = ggml_element_size(y);
+        q                = ggml_view_3d(ctx, y, qk, nh, T, qk * es, y->nb[1], 0);
+        k                = ggml_view_3d(ctx, y, qk, nkv, T, qk * es, y->nb[1], nh * qk * es);
+        v                = ggml_view_3d(ctx, y, vd, nkv, T, vd * es, y->nb[1], (nh + nkv) * qk * es);
+        g                = out_rows(ctx, y, (nh + nkv) * qk + nkv * vd, nh * vd);
+    } else {
+        q = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, a.q, x), qk, nh, T);
+        k = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, a.k, x), qk, nkv, T);
+        v = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, a.v, x), vd, nkv, T);
+        g = ggml_mul_mat(ctx, a.gate, x);
+    }
+    q = zcrms(ctx, q, a.q_norm);
+    k = zcrms(ctx, k, a.k_norm);
+    q = ggml_rope_ext(ctx, q, pos, nullptr, qk, GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    k = ggml_rope_ext(ctx, k, pos, nullptr, qk, GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+
+    ggml_tensor * Q  = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [qk, T, nh]
+    ggml_tensor * K  = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));    // [qk, T, nkv]
+    ggml_tensor * Vt = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));    // [T, vd, nkv]
+    ggml_tensor * s  = ggml_mul_mat(ctx, K, Q);                             // [T_k, T_q, nh]
+    s                = ggml_soft_max_ext(ctx, s, nullptr, 1.0f / std::sqrt(static_cast<float>(qk)), 0.0f);
+    ggml_tensor * o  = ggml_mul_mat(ctx, pad_k4(ctx, Vt), pad_k4(ctx, s));  // [vd, T_q, nh]
+    o                = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));    // [vd, nh, T]
+    o                = ggml_reshape_2d(ctx, o, vd * nh, T);
+    o                = ggml_mul(ctx, o, ggml_sigmoid(ctx, g));
+    return ggml_mul_mat(ctx, a.out, hada_in(ctx, o, hd));
+}
+
+ggml_tensor * enc_conv(ggml_context *          ctx,
+                       ggml_tensor *           u,
+                       const WhistleEncBlock & b,
+                       int64_t                 d,
+                       int                     kernel,
+                       const WhistleHada &     hd) {
+    const int64_t T   = u->ne[1];
+    ggml_tensor * h   = ggml_mul_mat(ctx, b.conv_pw1, hada_in(ctx, zcrms(ctx, u, b.norm_conv), hd));  // [2d, T]
+    ggml_tensor * ga  = ggml_view_2d(ctx, h, d, T, h->nb[1], 0);
+    ggml_tensor * gb  = ggml_view_2d(ctx, h, d, T, h->nb[1], static_cast<size_t>(d) * h->nb[0]);
+    h                 = ggml_mul(ctx, ggml_cont(ctx, ga), ggml_sigmoid(ctx, ggml_cont(ctx, gb)));  // [d, T]
+    const int     p   = (kernel - 1) / 2;
+    // Zero-pad p frames on both sides with concat: Metal's PAD supports right
+    // padding only, and a left-pad CPU fallback split corrupted the offset
+    // views below on Metal.
+    ggml_tensor * zp  = ggml_scale(ctx, ggml_cont(ctx, ggml_view_2d(ctx, h, d, p, h->nb[1], 0)), 0.0f);
+    ggml_tensor * hp  = ggml_concat(ctx, zp, ggml_concat(ctx, h, zp, 1), 1);  // [d, T + 2p]
+    ggml_tensor * dw  = b.conv_dw->type == GGML_TYPE_F32 ? b.conv_dw : ggml_cast(ctx, b.conv_dw, GGML_TYPE_F32);
+    ggml_tensor * acc = nullptr;
+    for (int j = 0; j < kernel; ++j) {
+        ggml_tensor * xs = ggml_view_2d(ctx, hp, d, T, hp->nb[1], static_cast<size_t>(j) * hp->nb[1]);
+        ggml_tensor * wj = ggml_view_1d(ctx, dw, d, static_cast<size_t>(j) * dw->nb[1]);
+        ggml_tensor * t  = ggml_mul(ctx, xs, wj);
+        acc              = acc == nullptr ? t : ggml_add(ctx, acc, t);
+    }
+    h = ggml_silu(ctx, zcrms(ctx, acc, b.norm_conv_out));
+    return ggml_mul_mat(ctx, b.conv_pw2, hada_in(ctx, h, hd));
+}
+
+void mark_dump(ggml_tensor * t, bool want) {
+    if (want && t != nullptr) {
+        transcribe::debug::mark_tensor_for_dump(t);
+    }
+}
+
+}  // namespace
+
+EncoderBuild build_encoder_graph(ggml_context *         ctx,
+                                 const WhistleWeights & w,
+                                 const WhistleHParams & hp,
+                                 const WhistleAux &     aux,
+                                 int                    n_mel_frames,
+                                 bool                   want_dumps) {
+    EncoderBuild eb{};
+    if (ctx == nullptr || n_mel_frames < 1) {
+        return eb;
+    }
+    const int64_t d = hp.d_model;
+    const int64_t C = hp.stem_channels;
+
+    eb.graph  = ggml_new_graph_custom(ctx, 65536, false);
+    eb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.fe_num_mels, n_mel_frames);
+    ggml_set_name(eb.mel_in, "enc.mel.in");
+    ggml_set_input(eb.mel_in);
+
+    // ----- stem: image [W = mel bins, H = frames, C, 1] -----
+    ggml_tensor * x  = ggml_reshape_4d(ctx, eb.mel_in, hp.fe_num_mels, n_mel_frames, 1, 1);
+    x                = ggml_silu(ctx, stem_conv0(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));
+    x                = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_1), x, 2, 2, 1, 1, 1, 1);
+    x                = stem_pointwise(ctx, x, w.stem.pw_1, w.hada);       // [C, W, H]
+    x                = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));  // [W, H, C]
+    x                = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_2), x, 2, 2, 1, 1, 1, 1);
+    x                = stem_pointwise(ctx, x, w.stem.pw_2, w.hada);       // [C, F', T']
+    const int64_t Fp = x->ne[1];
+    const int64_t T  = x->ne[2];
+    x                = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [F', C, T'] (index c*F' + f)
+    x = ggml_mul_mat(ctx, w.stem.out, hada_in(ctx, ggml_reshape_2d(ctx, x, Fp * C, T), w.hada));  // [d, T']
+    ggml_set_name(x, "enc.stem.out");
+    eb.dumps.stem_out = x;
+    mark_dump(x, want_dumps);
+    eb.T_enc = static_cast<int>(T);
+
+    eb.pos_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T);
+    ggml_set_name(eb.pos_in, "enc.pos");
+    ggml_set_input(eb.pos_in);
+
+    // ----- mHC stream -----
+    const int64_t lanes = hp.mhc_lanes;
+    ggml_tensor * stream =
+        ggml_repeat(ctx, ggml_reshape_3d(ctx, x, d, 1, T), ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, lanes, T));
+
+    for (int i = 0; i < hp.enc_n_layers; ++i) {
+        const WhistleEncBlock & b = w.enc_blocks[i];
+        MhcLayer                ml;
+        ml.mhc         = &w.enc_mhc;
+        ml.pre_bias    = aux.enc_pre_bias;
+        ml.post_bias   = aux.enc_post_bias;
+        ml.a_pre       = aux.enc_a_pre[i];
+        ml.a_post      = aux.enc_a_post[i];
+        ml.a_res       = aux.enc_a_res[i];
+        ml.layer       = i;
+        ml.cpu_fused   = aux.cpu_fused_ops;
+        ml.host        = aux.cpu_fused_ops ? &aux.enc_mhc_host[i] : nullptr;
+        ml.hada        = &w.hada;
+        const float ag = aux.enc_attn_gate[i];
+
+        stream = mhc_step(ctx, stream, ml, [&](ggml_tensor * u) {
+            u = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, zcrms(ctx, u, b.norm_hmlp_0), b.hmlp_0, aux), 0.5f));
+            ggml_tensor * a = enc_attention(ctx, zcrms(ctx, u, b.norm_in), b.attn, hp, eb.pos_in, w.hada);
+            u               = ggml_add(ctx, u, ggml_scale(ctx, zcrms(ctx, a, b.norm_post_attn), ag));
+            u               = ggml_add(ctx, u, enc_conv(ctx, u, b, d, hp.enc_conv_kernel, w.hada));
+            u = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, zcrms(ctx, u, b.norm_hmlp), b.hmlp, aux), 0.5f));
+            return u;
+        });
+
+        if (want_dumps) {
+            ggml_tensor * lm = lane_mean(ctx, stream);
+            char          nm[48];
+            std::snprintf(nm, sizeof(nm), "enc.blk.%d.out", i);
+            ggml_set_name(lm, nm);
+            mark_dump(lm, true);
+            ggml_build_forward_expand(eb.graph, lm);
+            eb.dumps.block_out.push_back(lm);
+        }
+    }
+
+    eb.out = zcrms(ctx, lane_mean(ctx, stream), w.enc_final_norm);
+    ggml_set_name(eb.out, "enc.final");
+    ggml_set_output(eb.out);
+    ggml_build_forward_expand(eb.graph, eb.out);
+    return eb;
+}
+
+}  // namespace transcribe::whistle

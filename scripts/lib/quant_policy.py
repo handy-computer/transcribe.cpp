@@ -56,6 +56,13 @@ FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Presets that need a Hadamard-domain source GGUF (`*.hadamard_group` KV,
+# e.g. convert-whistle.py --hadamard-domain -> <slug>-HR-F32.gguf) rather
+# than the reference-tier conversion, so they are not part of any
+# quantize-all matrix. See docs/tools/quantization.md.
+HADAMARD_PRESETS: tuple[str, ...] = ("Q2_K_HR",)
+
+
 def derived_presets_for_arch(arch: str | None) -> tuple[str, ...]:
     """Return the preset matrix for a given general.architecture string,
     or DERIVED_PRESETS if no override exists / arch is unknown."""
@@ -66,7 +73,7 @@ def derived_presets_for_arch(arch: str | None) -> tuple[str, ...]:
 
 # All presets that may appear in a GGUF filename.
 ALL_PRESETS: tuple[str, ...] = tuple(
-    dict.fromkeys(REFERENCE_TIERS + DERIVED_PRESETS)
+    dict.fromkeys(REFERENCE_TIERS + DERIVED_PRESETS + HADAMARD_PRESETS)
 )
 
 
