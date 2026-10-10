@@ -1042,12 +1042,13 @@ class Model:
     native call and its copy-out. Calls from other threads wait; a
     ``cancel()`` on a queued call is kept, and it aborts at its first poll
     after acquiring the lock. Load one Model per worker for parallelism. An
-    active stream holds the model's stream lease from ``stream()`` until it is finalized, reset, fails, is
-    garbage-collected or its session/model is closed. Meanwhile ``run()``,
-    ``run_batch()``, ``stream()``, diarize and langid ``run()`` and VAD
-    ``run()`` / ``stream_feed()`` / ``stream_flush()`` on any session raise
-    :class:`Busy` once they hold the lock; the stream's own calls proceed. A
-    VAD stream is session state, not a lease.
+    active stream holds the model's stream lease from ``stream()`` until it is
+    finalized, reset, fails, is garbage-collected or its session/model is
+    closed. Meanwhile ``run()``, ``run_batch()``, ``stream()``, diarize and
+    langid ``run()`` and VAD ``run()`` / ``stream_feed()`` /
+    ``stream_flush()`` on any session raise :class:`Busy` once they hold the
+    lock; the stream's own calls proceed. A VAD stream is session state, not
+    a lease.
     ``close()`` and GC never wait for the lock: the handle is closed at once
     and the native free runs right after any in-flight call.
 
