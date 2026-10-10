@@ -212,9 +212,13 @@ struct CohereDecFinal {
     ggml_tensor * norm_b = nullptr;
 };
 
-// Head (bias only; weight is tied to dec_embed.token_w).
+// Head. The weight is tied to dec_embed.token_w unless the GGUF carries an
+// untied head.weight (fine-tunes such as syvai/hviske-v5*).
 struct CohereHead {
-    ggml_tensor * bias = nullptr;  // [vocab_size]
+    ggml_tensor * weight = nullptr;  // optional [dec_hidden, vocab_size]
+    ggml_tensor * bias   = nullptr;  // [vocab_size]
+
+    ggml_tensor * logits_w(ggml_tensor * token_w) const { return weight != nullptr ? weight : token_w; }
 };
 
 struct CohereWeights {

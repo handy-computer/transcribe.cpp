@@ -437,6 +437,9 @@ transcribe_status build_cohere_weights(ggml_context * ctx_meta, const CohereHPar
 
     // ----- head -----
     GET_F32(weights.head.bias, "head.bias", vocab_size);
+    if (ggml_get_tensor(ctx_meta, "head.weight") != nullptr) {
+        GET_LIN(weights.head.weight, "head.weight", dec_h, vocab_size);
+    }
 
     return TRANSCRIBE_OK;
 }
