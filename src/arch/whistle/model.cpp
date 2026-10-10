@@ -14,11 +14,11 @@
 #include "encoder.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml.h"
 #include "gguf.h"
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
+#include "transcribe-cpu-threadpool.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
 #include "transcribe-load-common.h"
@@ -214,9 +214,11 @@ WhistleModel::~WhistleModel() {
     }
     if (threadpool != nullptr) {
         if (plan.primary != nullptr) {
-            ggml_backend_cpu_set_threadpool(plan.primary, nullptr);
+            transcribe::cpu_threadpool_set(plan.primary, nullptr);
         }
-        ggml_threadpool_free(threadpool);
+        // Registry lookup needs the backend alive: free before the scheduler
+        // list below releases it.
+        transcribe::cpu_threadpool_free(plan.primary, threadpool);
         threadpool = nullptr;
     }
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
@@ -1095,13 +1097,16 @@ void ensure_threadpool(WhistleSession * cc, WhistleModel * cm) {
         return;
     }
     ggml_threadpool_params tpp = ggml_threadpool_params_default(n);
-    ggml_threadpool_t      tp  = ggml_threadpool_new(&tpp);
+    ggml_threadpool_t      tp  = transcribe::cpu_threadpool_new(cm->plan.primary, &tpp);
     if (tp == nullptr) {
         return;  // fall back to per-compute pools
     }
-    ggml_backend_cpu_set_threadpool(cm->plan.primary, tp);
+    if (!transcribe::cpu_threadpool_set(cm->plan.primary, tp)) {
+        transcribe::cpu_threadpool_free(cm->plan.primary, tp);
+        return;  // cannot attach: fall back to per-compute pools
+    }
     if (cm->threadpool != nullptr) {
-        ggml_threadpool_free(cm->threadpool);
+        transcribe::cpu_threadpool_free(cm->plan.primary, cm->threadpool);
     }
     cm->threadpool         = tp;
     cm->threadpool_threads = n;
