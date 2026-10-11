@@ -28,6 +28,11 @@ CrossKvBuild build_cross_kv_graph(ggml_context *          ctx,
 
 // One decode step: every hypothesis feeds one token at position `pos`
 // (all hypotheses are always at the same position).
+//
+// static_pos (WhistleAux::cpu_avx2 only) builds a position-independent graph, built
+// once and reused for every step: positions, tap / Engram ring slots, the KV
+// writes and the self-attention length are read from pos_in at compute time.
+// Otherwise `pos` is baked into the graph.
 struct StepBuild {
     ggml_cgraph *              graph      = nullptr;
     ggml_tensor *              tok_in     = nullptr;  // [n_seq] I32
@@ -37,10 +42,11 @@ struct StepBuild {
     // holds row % 2, ne [1, n_tables * n_seq] I32; null otherwise.
     ggml_tensor *              eg_lo_in   = nullptr;
     ggml_tensor *              eg_mask_in = nullptr;  // [1, n_tables, 1] F32 n-gram validity
-    ggml_tensor *              xmask_in   = nullptr;  // [T_enc, 1, 1, n_seq] F32 cross padding mask (n_utt > 1 only)
+    ggml_tensor *              xmask_in   = nullptr;  // [T4, 1, 1, n_seq] F32 cross padding mask (0 / -inf)
     ggml_tensor *              logits     = nullptr;  // [vocab, n_seq]
+    bool                       static_pos = false;
     // Cross-attention probabilities per layer, [T_enc, 1, n_heads, n_seq]
-    // (only when want_cross_attn).
+    // contiguous (only when want_cross_attn).
     std::vector<ggml_tensor *> cross_attn;
 };
 
@@ -50,7 +56,8 @@ StepBuild build_step_graph(ggml_context *          ctx,
                            const WhistleAux &      aux,
                            const WhistleDecCache & cache,
                            int                     pos,
-                           bool                    want_cross_attn);
+                           bool                    want_cross_attn,
+                           bool                    static_pos = false);
 
 // Reorder every per-hypothesis cache tensor: new slot s <- old slot src[s].
 // Only the filled self-attention positions [0, n_pos) are moved.

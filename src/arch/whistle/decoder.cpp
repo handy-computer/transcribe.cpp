@@ -16,6 +16,7 @@
 
 #include "decoder.h"
 
+#include "cpu_avx2.h"
 #include "encoder.h"
 #include "ggml.h"
 #include "whistle.h"
@@ -161,6 +162,105 @@ void taps_cpu(ggml_tensor * dst, int ith, int nth, void * ud) {
     }
 }
 
+// Per-thread score scratch for the fused attention ops.
+struct AttnScratch {
+    float              stack[4096];
+    std::vector<float> heap;
+
+    float * get(int64_t n) {
+        if (n <= 4096) {
+            return stack;
+        }
+        heap.resize(static_cast<size_t>(n));
+        return heap.data();
+    }
+};
+
+inline const float * f32_at(const ggml_tensor * t, size_t off) {
+    return reinterpret_cast<const float *>(static_cast<const char *>(t->data) + off);
+}
+
+// Fused decode self-attention over cache positions [0, pos]: QK^T, softmax,
+// PV, parallel over (seq, KV head); the G query heads of a KV head share its
+// K / V loads. src: Q [qk, G, nkv, S], K cache [qk, n_ctx, nkv, S], V cache
+// [n_ctx4, vd, nkv, S] (transposed), pos [S] I32, gate [vd * G * nkv, S], and
+// this step's k [qk, nkv, S] and v [vd * nkv, S] (each task first writes its
+// own (seq, KV head) row of them into the caches at pos).
+// dst [vd, G, nkv, S] = attention * sigmoid(gate).
+void self_attn_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor * Q  = dst->src[0];
+    const ggml_tensor * kc = dst->src[1];
+    const ggml_tensor * vc = dst->src[2];
+    const int           n  = input_pos(dst->src[3]) + 1;
+    const int64_t       qk = Q->ne[0], G = Q->ne[1], nkv = Q->ne[2], S = Q->ne[3], vd = dst->ne[0];
+    const float         scl = 1.0f / std::sqrt(static_cast<float>(qk));
+    AttnScratch         scratch;
+    float *             sc = scratch.get(G * (n + 8));
+    int64_t             b, e;
+    split_rows(S * nkv, ith, nth, b, e);
+    for (int64_t r = b; r < e; ++r) {
+        const int64_t s = r / nkv, h = r % nkv;
+        const size_t  ko = s * kc->nb[3] + h * kc->nb[2], vo = s * vc->nb[3] + h * vc->nb[2];
+        if (dst->src[5] != nullptr) {  // KV write at pos
+            const ggml_tensor * kn = dst->src[5];
+            const ggml_tensor * vn = dst->src[6];
+            std::memcpy(static_cast<char *>(kc->data) + ko + (n - 1) * kc->nb[1],
+                        f32_at(kn, h * kn->nb[1] + s * kn->nb[2]), static_cast<size_t>(qk) * sizeof(float));
+            const float * vr = f32_at(vn, s * vn->nb[1] + h * vd * sizeof(float));
+            char *        vw = static_cast<char *>(vc->data) + vo + (n - 1) * vc->nb[0];
+            for (int64_t i = 0; i < vd; ++i) {
+                std::memcpy(vw + i * vc->nb[1], vr + i, sizeof(float));
+            }
+        }
+        avx2::attn_multi(static_cast<int>(G), f32_at(Q, h * Q->nb[2] + s * Q->nb[3]), Q->nb[1] / sizeof(float),
+                         f32_at(kc, ko), kc->nb[1] / sizeof(float), static_cast<int>(qk), f32_at(vc, vo),
+                         vc->nb[1] / sizeof(float), static_cast<int>(vd), n, nullptr, 0, scl, sc,
+                         reinterpret_cast<float *>(static_cast<char *>(dst->data) + r * G * vd * sizeof(float)), vd,
+                         nullptr, 0);
+        float *       o = reinterpret_cast<float *>(static_cast<char *>(dst->data) + r * G * vd * sizeof(float));
+        const float * g = f32_at(dst->src[4], s * dst->src[4]->nb[1] + h * G * vd * sizeof(float));
+        avx2::sigmoid_mul(o, g, o, G * vd);
+    }
+}
+
+// Fused decode cross-attention, parallel over (head, utterance); the beams of
+// an utterance share the head's K / V loads. src: q [qk, nh, S],
+// K [qk, T4, nh, n_utt], V [T4, vd, nh, n_utt] (transposed), mask [T4, 1, 1,
+// S] (0 / -inf), gate [vd * nh, S]. userdata: T, the rows attended (max
+// utterance length). dst [vd * nh (+ T * nh), S]: per seq the output [vd, nh]
+// times sigmoid(gate), then (when dst is wider) the probabilities [T, nh] for
+// word timing.
+void cross_attn_cpu(ggml_tensor * dst, int ith, int nth, void * ud) {
+    const ggml_tensor * q    = dst->src[0];
+    const ggml_tensor * kc   = dst->src[1];
+    const ggml_tensor * vc   = dst->src[2];
+    const ggml_tensor * mask = dst->src[3];
+    const int           T    = static_cast<int>(reinterpret_cast<intptr_t>(ud));
+    const int64_t       qk = q->ne[0], nh = q->ne[1], S = q->ne[2], vd = vc->ne[1];
+    const int64_t       per_utt = S / kc->ne[3];
+    const bool          cap     = dst->ne[0] > vd * nh;
+    const float         scl     = 1.0f / std::sqrt(static_cast<float>(qk));
+    AttnScratch         scratch;
+    float *             sc = scratch.get(per_utt * (T + 8));
+    const size_t        rs = dst->nb[1] / sizeof(float);
+    int64_t             b, e;
+    split_rows(nh * kc->ne[3], ith, nth, b, e);
+    for (int64_t r = b; r < e; ++r) {
+        const int64_t h = r % nh, u = r / nh, s0 = u * per_utt;
+        const size_t  ko = u * kc->nb[3] + h * kc->nb[2], vo = u * vc->nb[3] + h * vc->nb[2];
+        float *       row = reinterpret_cast<float *>(static_cast<char *>(dst->data) + s0 * dst->nb[1]);
+        avx2::attn_multi(static_cast<int>(per_utt), f32_at(q, h * q->nb[1] + s0 * q->nb[2]), q->nb[2] / sizeof(float),
+                         f32_at(kc, ko), kc->nb[1] / sizeof(float), static_cast<int>(qk), f32_at(vc, vo),
+                         vc->nb[1] / sizeof(float), static_cast<int>(vd), T, f32_at(mask, s0 * mask->nb[3]),
+                         mask->nb[3] / sizeof(float), scl, sc, row + h * vd, rs, cap ? row + vd * nh + h * T : nullptr,
+                         rs);
+        for (int64_t s = s0; s < s0 + per_utt; ++s) {
+            float * o = reinterpret_cast<float *>(static_cast<char *>(dst->data) + s * dst->nb[1]) + h * vd;
+            avx2::sigmoid_mul(o, f32_at(dst->src[4], s * dst->src[4]->nb[1] + h * vd * sizeof(float)), o, vd);
+        }
+    }
+}
+
 // Fused CPU u + gate * (rms_norm(o) * w): ggml_rms_norm's f32 math (double
 // sum of squares, f32 scale) followed by the same elementwise ops.
 // src: u [d, S], o [d, S], w [d] (already 1 + scale); userdata: &gate.
@@ -239,8 +339,10 @@ StepBuild build_step_graph(ggml_context *          ctx,
                            const WhistleAux &      aux,
                            const WhistleDecCache & cache,
                            int                     pos,
-                           bool                    want_cross_attn) {
-    StepBuild     sb{};
+                           bool                    want_cross_attn,
+                           bool                    static_pos) {
+    StepBuild sb{};
+    sb.static_pos   = static_pos;
     const int64_t d = hp.d_model, qk = hp.qk_head_dim, vd = hp.v_head_dim, nh = hp.n_heads, nkv = hp.n_kv_heads;
     const int64_t S  = cache.n_seq;
     const int64_t T  = cache.T_enc;
@@ -265,11 +367,13 @@ StepBuild build_step_graph(ggml_context *          ctx,
     sb.eg_mask_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, hp.engram_n_tables, 1);
     ggml_set_name(sb.eg_mask_in, "dec.engram.mask");
     ggml_set_input(sb.eg_mask_in);
-    if (cache.n_utt > 1) {
-        sb.xmask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T, 1, 1, S);
-        ggml_set_name(sb.xmask_in, "dec.cross.mask");
-        ggml_set_input(sb.xmask_in);
-    }
+    // Cross scores span the cache's T4 rows (a multiple of 8: the generic score
+    // product takes the tiled f32 GEMM, the fused CPU op reads whole vectors);
+    // the mask hides the zero rows past each utterance's length.
+    const int64_t T4 = cache.k_cross.empty() ? T : cache.k_cross[0]->ne[1];
+    sb.xmask_in      = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T4, 1, 1, S);
+    ggml_set_name(sb.xmask_in, "dec.cross.mask");
+    ggml_set_input(sb.xmask_in);
     ggml_tensor * pos_dyn = aux.cpu_fused_ops ? sb.pos_in : nullptr;
 
     // Hadamard-domain embedding rows: H_g is involutory, so H_g recovers them.
@@ -354,31 +458,42 @@ StepBuild build_step_graph(ggml_context *          ctx,
 
                 ggml_tensor * kc = cache.k_self[l];  // [qk, n_ctx, nkv, S]
                 ggml_tensor * vc = cache.v_self[l];  // [n_ctx, vd, nkv, S]
-                ggml_tensor * kw = ggml_view_4d(ctx, kc, qk, 1, nkv, S, kc->nb[1], kc->nb[2], kc->nb[3],
-                                                static_cast<size_t>(pos) * kc->nb[1]);
-                ggml_tensor * vw = ggml_view_4d(ctx, vc, 1, vd, nkv, S, vc->nb[1], vc->nb[2], vc->nb[3],
-                                                static_cast<size_t>(pos) * vc->nb[0]);
-                ggml_build_forward_expand(gf, ggml_cpy(ctx, ggml_reshape_4d(ctx, k, qk, 1, nkv, S), kw));
-                ggml_build_forward_expand(gf,
-                                          ggml_cpy(ctx, ggml_reshape_4d(ctx, ggml_cont(ctx, v), 1, vd, nkv, S), vw));
-
-                // The nh / nkv query heads sharing a KV head form the columns of
-                // one product (head h -> KV head h / (nh / nkv), as ggml broadcasts),
-                // and the position contraction of probs . V is zero-padded to a
-                // multiple of 4 (zero probs over the zeroed V slack): both let
-                // ggml's tiled f32 GEMM run instead of per-element dot products.
-                const int64_t P4 = std::min<int64_t>((pos + 4) / 4 * 4, vc->ne[0]);
-                ggml_tensor * K  = ggml_view_4d(ctx, kc, qk, pos + 1, nkv, S, kc->nb[1], kc->nb[2], kc->nb[3], 0);
-                ggml_tensor * Vt = ggml_view_4d(ctx, vc, P4, vd, nkv, S, vc->nb[1], vc->nb[2], vc->nb[3], 0);
                 ggml_tensor * Q  = ggml_reshape_4d(ctx, q, qk, nh / nkv, nkv, S);
-                ggml_tensor * s  = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, K, Q), nullptr, attn_scale, 0.0f);
-                if (P4 > pos + 1) {
-                    s = ggml_pad(ctx, s, static_cast<int>(P4 - (pos + 1)), 0, 0, 0);
+                ggml_tensor * o  = nullptr;
+                if (static_pos) {
+                    // KV write at pos_in + fused attention over [0, pos].
+                    ggml_tensor * vv    = ggml_n_dims(v) == 2 ? v : ggml_reshape_2d(ctx, v, nkv * vd, S);
+                    ggml_tensor * aa[7] = { Q, kc, vc, sb.pos_in, pg, k, vv };
+                    o = ggml_custom_4d(ctx, GGML_TYPE_F32, vd, nh / nkv, nkv, S, aa, 7, self_attn_cpu, GGML_N_TASKS_MAX,
+                                       nullptr);
+                } else {
+                    ggml_tensor * kw = ggml_view_4d(ctx, kc, qk, 1, nkv, S, kc->nb[1], kc->nb[2], kc->nb[3],
+                                                    static_cast<size_t>(pos) * kc->nb[1]);
+                    ggml_tensor * vw = ggml_view_4d(ctx, vc, 1, vd, nkv, S, vc->nb[1], vc->nb[2], vc->nb[3],
+                                                    static_cast<size_t>(pos) * vc->nb[0]);
+                    ggml_build_forward_expand(gf, ggml_cpy(ctx, ggml_reshape_4d(ctx, k, qk, 1, nkv, S), kw));
+                    ggml_build_forward_expand(
+                        gf, ggml_cpy(ctx, ggml_reshape_4d(ctx, ggml_cont(ctx, v), 1, vd, nkv, S), vw));
+
+                    // The nh / nkv query heads sharing a KV head form the columns of
+                    // one product (head h -> KV head h / (nh / nkv), as ggml broadcasts),
+                    // and the position contraction of probs . V is zero-padded to a
+                    // multiple of 4 (zero probs over the zeroed V slack): both let
+                    // ggml's tiled f32 GEMM run instead of per-element dot products.
+                    const int64_t P4 = std::min<int64_t>((pos + 4) / 4 * 4, vc->ne[0]);
+                    ggml_tensor * K  = ggml_view_4d(ctx, kc, qk, pos + 1, nkv, S, kc->nb[1], kc->nb[2], kc->nb[3], 0);
+                    ggml_tensor * Vt = ggml_view_4d(ctx, vc, P4, vd, nkv, S, vc->nb[1], vc->nb[2], vc->nb[3], 0);
+                    ggml_tensor * s  = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, K, Q), nullptr, attn_scale, 0.0f);
+                    if (P4 > pos + 1) {
+                        s = ggml_pad(ctx, s, static_cast<int>(P4 - (pos + 1)), 0, 0, 0);
+                    }
+                    o = ggml_mul_mat(ctx, Vt, s);  // [vd, nh / nkv, nkv, S]
                 }
-                ggml_tensor * o = ggml_mul_mat(ctx, Vt, s);  // [vd, nh / nkv, nkv, S]
-                o               = ggml_reshape_2d(ctx, o, vd * nh, S);
-                o               = ggml_mul(ctx, o, ggml_sigmoid(ctx, pg));
-                o               = ggml_mul_mat(ctx, a.out, hada_in(ctx, o, w.hada));
+                o = ggml_reshape_2d(ctx, o, vd * nh, S);
+                if (!static_pos) {  // the fused op applies the gate
+                    o = ggml_mul(ctx, o, ggml_sigmoid(ctx, pg));
+                }
+                o = ggml_mul_mat(ctx, a.out, hada_in(ctx, o, w.hada));
                 u = post_norm_residual(ctx, u, o, b.norm_post_attn, aux.dec_attn_gate[l], aux.cpu_fused_ops);
             }
 
@@ -398,33 +513,48 @@ StepBuild build_step_graph(ggml_context *          ctx,
                 }
                 // The CPU norm reads the strided q rows in place; the generic
                 // path reshapes a contiguous copy.
-                ggml_tensor * q  = cpu ? zcrms(ctx, ggml_view_3d(ctx, pq, qk, nh, S, qk * sizeof(float), pq->nb[1], 0),
-                                               c.q_norm, cpu) :
-                                         zcrms(ctx, ggml_reshape_3d(ctx, ggml_cont(ctx, pq), qk, nh, S), c.q_norm, cpu);
-                // The beams of one utterance share its cross K/V: put them in
-                // the columns of one product per (head, utterance), and pad the
-                // T contraction of probs . V to the cache's multiple of 4.
-                const int64_t nb = S / cache.n_utt;
-                ggml_tensor * Q  = ggml_cont(ctx, ggml_permute(ctx, ggml_reshape_4d(ctx, q, qk, nh, nb, cache.n_utt), 0,
-                                                               2, 1, 3));   // [qk, nb, nh, n_utt]
-                ggml_tensor * s  = ggml_mul_mat(ctx, cache.k_cross[l], Q);  // [T, nb, nh, n_utt]
-                if (sb.xmask_in != nullptr) {
-                    s = ggml_add(ctx, s, ggml_reshape_4d(ctx, sb.xmask_in, T, nb, 1, cache.n_utt));
+                ggml_tensor * q = cpu ? zcrms(ctx, ggml_view_3d(ctx, pq, qk, nh, S, qk * sizeof(float), pq->nb[1], 0),
+                                              c.q_norm, cpu) :
+                                        zcrms(ctx, ggml_reshape_3d(ctx, ggml_cont(ctx, pq), qk, nh, S), c.q_norm, cpu);
+                ggml_tensor * o = nullptr;
+                if (static_pos) {
+                    ggml_tensor * aa[5] = { q, cache.k_cross[l], cache.v_cross[l], sb.xmask_in, pg };
+                    ggml_tensor * r = ggml_custom_4d(ctx, GGML_TYPE_F32, vd * nh + (want_cross_attn ? T * nh : 0), S, 1,
+                                                     1, aa, 5, cross_attn_cpu, GGML_N_TASKS_MAX,
+                                                     reinterpret_cast<void *>(static_cast<intptr_t>(T)));
+                    o               = r;
+                    if (want_cross_attn) {  // [T, beam, nh, n_utt] view of the probabilities
+                        const int64_t nb = S / cache.n_utt;
+                        ggml_tensor * pr =
+                            ggml_cont(ctx, ggml_view_4d(ctx, r, T, nb, nh, cache.n_utt, r->nb[1], T * sizeof(float),
+                                                        nb * r->nb[1], static_cast<size_t>(vd * nh) * sizeof(float)));
+                        ggml_set_output(pr);
+                        sb.cross_attn.push_back(pr);
+                        o = ggml_cont(ctx, ggml_view_2d(ctx, r, vd * nh, S, r->nb[1], 0));
+                    }
+                } else {
+                    // The beams of one utterance share its cross K/V: put them in
+                    // the columns of one product per (head, utterance), and pad the
+                    // T contraction of probs . V to the cache's multiple of 4.
+                    const int64_t nb = S / cache.n_utt;
+                    ggml_tensor * Q = ggml_cont(ctx, ggml_permute(ctx, ggml_reshape_4d(ctx, q, qk, nh, nb, cache.n_utt),
+                                                                  0, 2, 1, 3));  // [qk, nb, nh, n_utt]
+                    ggml_tensor * s = ggml_mul_mat(ctx, cache.k_cross[l], Q);    // [T4, nb, nh, n_utt]
+                    s               = ggml_add(ctx, s, ggml_reshape_4d(ctx, sb.xmask_in, T4, nb, 1, cache.n_utt));
+                    s               = ggml_soft_max_ext(ctx, s, nullptr, attn_scale, 0.0f);
+                    if (want_cross_attn) {  // [T, beam, nh, n_utt]
+                        ggml_tensor * sc = ggml_cont(ctx, ggml_view_4d(ctx, s, T, s->ne[1], s->ne[2], s->ne[3],
+                                                                       s->nb[1], s->nb[2], s->nb[3], 0));
+                        ggml_set_output(sc);
+                        sb.cross_attn.push_back(sc);
+                    }
+                    ggml_tensor * vx = cache.v_cross[l];                                  // [T4, vd, nh, n_utt]
+                    o                = ggml_mul_mat(ctx, vx, s);                          // [vd, nb, nh, n_utt]
+                    o                = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));  // [vd, nh, nb, n_utt]
+                    o                = ggml_reshape_2d(ctx, o, vd * nh, S);
+                    o                = ggml_mul(ctx, o, ggml_sigmoid(ctx, pg));  // the fused op applies the gate
                 }
-                s = ggml_soft_max_ext(ctx, s, nullptr, attn_scale, 0.0f);
-                if (want_cross_attn) {  // single hypothesis: [T, 1, nh, 1]
-                    ggml_set_output(s);
-                    sb.cross_attn.push_back(s);
-                }
-                ggml_tensor * vx = cache.v_cross[l];  // [T4, vd, nh, n_utt]
-                if (vx->ne[0] > T) {
-                    s = ggml_pad(ctx, s, static_cast<int>(vx->ne[0] - T), 0, 0, 0);
-                }
-                ggml_tensor * o = ggml_mul_mat(ctx, vx, s);                          // [vd, nb, nh, n_utt]
-                o               = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));  // [vd, nh, nb, n_utt]
-                o               = ggml_reshape_2d(ctx, o, vd * nh, S);
-                o               = ggml_mul(ctx, o, ggml_sigmoid(ctx, pg));
-                o               = ggml_mul_mat(ctx, c.out, hada_in(ctx, o, w.hada));
+                o = ggml_mul_mat(ctx, c.out, hada_in(ctx, o, w.hada));
                 u = post_norm_residual(ctx, u, o, b.norm_post_cross, aux.dec_cross_gate[l], aux.cpu_fused_ops);
             }
 

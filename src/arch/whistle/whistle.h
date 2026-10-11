@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "decoder.h"
 #include "encoder.h"
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -50,6 +51,10 @@ struct WhistleAux {
     // Graphs run on the CPU backend: use fused CPU custom ops (bit-identical
     // to the generic ggml graphs they replace) where available.
     bool                  cpu_fused_ops = false;
+    // cpu_fused_ops on an AVX2 + FMA CPU: also the AVX2 kernels (attention,
+    // GLU, HMLP, ...) and the cached decode step graph; otherwise those parts
+    // keep the generic ggml graph.
+    bool                  cpu_avx2      = false;
     // Host views + integer permutations backing the fused CPU HadamardMLP.
     std::vector<HmlpHost> hmlp_host;
     std::vector<int32_t>  perm1_host, perm2_host;
@@ -137,6 +142,10 @@ struct WhistleSession final : public transcribe_session {
     // Reused ggml metadata arena for the per-graph compute contexts (a fresh
     // multi-MB allocation per decode step costs page faults every step).
     std::vector<uint8_t> graph_meta;
+    // CPU decode: the cached step graph (in compute_ctx; cleared whenever a
+    // new compute context is made) and its per-step outputs.
+    StepBuild            step;
+    bool                 step_xattn = false;
     std::vector<char>    reorder_tmp;
 
     WhistleSession() = default;

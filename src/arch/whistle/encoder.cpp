@@ -9,6 +9,7 @@
 #include "encoder.h"
 
 #include "conformer/conformer.h"
+#include "cpu_avx2.h"
 #include "ggml.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
@@ -546,6 +547,13 @@ void hmlp_cpu(ggml_tensor * dst, int ith, int nth, void * ud) {
         rms_row(xr, xnorm, norm, d);
         return static_cast<const float *>(xnorm);
     };
+    if (avx2::hmlp_supported(h)) {
+        for (int64_t n = n0; n < n1; ++n) {
+            avx2::hmlp_row(h, input(n), reinterpret_cast<float *>(static_cast<char *>(dst->data) + n * dst->nb[1]),
+                           buf);
+        }
+        return;
+    }
     for (int64_t n = n0; n < n1; ++n) {
         const float * xr   = input(n);
         float *       out  = reinterpret_cast<float *>(static_cast<char *>(dst->data) + n * dst->nb[1]);
@@ -998,6 +1006,55 @@ ggml_tensor * stem_conv0_cf(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b
     return ggml_reshape_3d(ctx, y, a->ne[3], im2col->ne[1], im2col->ne[2]);  // [C, W, H]
 }
 
+// Direct CPU form of stem_conv0_cf for the 1-channel 3x3 stride-2 pad-1 conv:
+// out[c, ow, oh] = sum_j w[j][c] * x(ow * 2 - 1 + kf, oh * 2 - 1 + kt), j =
+// kt * 3 + kf, vectorized over the contiguous channels (the im2col + k = 12
+// GEMM spends its time in horizontal sums). src: x [W, H], w ne [C, 9] F32.
+void stem_conv0_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor * x = dst->src[0];
+    const float *       w = static_cast<const float *>(dst->src[1]->data);
+    const int64_t       C = dst->ne[0], OW = dst->ne[1], OH = dst->ne[2];
+    const int64_t       W = x->ne[0], H = x->ne[1];
+    const int64_t       h0 = OH * ith / nth, h1 = OH * (ith + 1) / nth;
+    for (int64_t oh = h0; oh < h1; ++oh) {
+        for (int64_t ow = 0; ow < OW; ++ow) {
+            float v[9];  // the 3x3 patch, zero outside the image
+            for (int kt = 0; kt < 3; ++kt) {
+                const int64_t iy = oh * 2 - 1 + kt;
+                for (int kf = 0; kf < 3; ++kf) {
+                    const int64_t ix = ow * 2 - 1 + kf;
+                    v[kt * 3 + kf] =
+                        iy < 0 || iy >= H || ix < 0 || ix >= W ?
+                            0.0f :
+                            reinterpret_cast<const float *>(static_cast<const char *>(x->data) + iy * x->nb[1])[ix];
+                }
+            }
+            float * __restrict out =
+                reinterpret_cast<float *>(static_cast<char *>(dst->data) + ow * dst->nb[1] + oh * dst->nb[2]);
+            for (int64_t c = 0; c < C; ++c) {
+                float acc = w[c] * v[0];
+                for (int j = 1; j < 9; ++j) {
+                    acc += w[j * C + c] * v[j];
+                }
+                out[c] = acc;
+            }
+        }
+    }
+}
+
+// avx2::stem_front as a custom op over output rows. src: mel [W0, H0],
+// conv0 kernel ne [C, 9], depthwise kernel ne [C, 9]. dst [C, W2, H2].
+void stem_front_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor *             mel = dst->src[0];
+    const int64_t                   C = dst->ne[0], H2 = dst->ne[2];
+    const int64_t                   W1 = (mel->ne[0] - 1) / 2 + 1;
+    thread_local std::vector<float> scratch;
+    scratch.resize(static_cast<size_t>(3 * W1 * C));
+    avx2::stem_front(static_cast<const float *>(mel->data), mel->ne[0], mel->ne[1], mel->nb[1] / sizeof(float),
+                     static_cast<const float *>(dst->src[1]->data), static_cast<const float *>(dst->src[2]->data), C,
+                     static_cast<float *>(dst->data), H2 * ith / nth, H2 * (ith + 1) / nth, scratch.data());
+}
+
 // Depthwise 3x3 stride 2 on a channel-first [C, W, H] tensor; returns [C, W', H'].
 // w is the stored F32 kernel ne [C, 9] (row kt*3 + kf): exactly the channels-
 // innermost layout the CWHN kernel reads, so it is passed as a strided
@@ -1027,13 +1084,43 @@ ggml_tensor * stem_pointwise(ggml_context * ctx, ggml_tensor * x, ggml_tensor * 
     return c;  // channel-first [C, W, H]
 }
 
+// Fused CPU encoder self-attention + output gate, parallel over (position,
+// KV head); the query heads of a KV head share its K / V loads. src: q [qk,
+// nh, T], k [qk, nkv, T] (strided rows), Vt [T8, vd, nkv], gate [vd * nh, T].
+// dst [vd * nh, T] = attention * sigmoid(gate).
+void enc_attn_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor *             q  = dst->src[0];
+    const ggml_tensor *             k  = dst->src[1];
+    const ggml_tensor *             vt = dst->src[2];
+    const ggml_tensor *             g  = dst->src[3];
+    const int64_t                   qk = q->ne[0], nh = q->ne[1], T = q->ne[2], nkv = k->ne[1], vd = vt->ne[1];
+    const int64_t                   G   = nh / nkv;
+    const float                     scl = 1.0f / std::sqrt(static_cast<float>(qk));
+    thread_local std::vector<float> sc;
+    sc.resize(static_cast<size_t>(G * (T + 16)));
+    const int64_t nt = T * nkv;
+    for (int64_t r = nt * ith / nth; r < nt * (ith + 1) / nth; ++r) {
+        const int64_t t = r / nkv, h = r % nkv;
+        auto          at = [](const ggml_tensor * x, size_t off) {
+            return reinterpret_cast<const float *>(static_cast<const char *>(x->data) + off);
+        };
+        float * o = reinterpret_cast<float *>(static_cast<char *>(dst->data) + t * dst->nb[1]) + h * G * vd;
+        avx2::attn_multi(static_cast<int>(G), at(q, t * q->nb[2] + h * G * q->nb[1]), q->nb[1] / sizeof(float),
+                         at(k, h * k->nb[1]), k->nb[2] / sizeof(float), static_cast<int>(qk), at(vt, h * vt->nb[2]),
+                         vt->nb[1] / sizeof(float), static_cast<int>(vd), static_cast<int>(T), nullptr, 0, scl,
+                         sc.data(), o, vd, nullptr, 0);
+        avx2::sigmoid_mul(o, at(g, t * g->nb[1] + h * G * vd * sizeof(float)), o, G * vd);
+    }
+}
+
 ggml_tensor * enc_attention(ggml_context *         ctx,
                             ggml_tensor *          x,
                             const WhistleAttn &    a,
                             const WhistleHParams & hp,
                             ggml_tensor *          pos,
                             const WhistleHada &    hd,
-                            bool                   cpu) {
+                            bool                   cpu,
+                            bool                   avx2) {
     const int64_t T  = x->ne[1];
     x                = hada_in(ctx, x, hd);
     const int64_t qk = hp.qk_head_dim, vd = hp.v_head_dim, nh = hp.n_heads, nkv = hp.n_kv_heads;
@@ -1057,16 +1144,74 @@ ggml_tensor * enc_attention(ggml_context *         ctx,
     q = ggml_rope_ext(ctx, q, pos, nullptr, qk, GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     k = ggml_rope_ext(ctx, k, pos, nullptr, qk, GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
+    const float scale = 1.0f / std::sqrt(static_cast<float>(qk));
+    if (avx2) {
+        // AVX2 CPU: one fused, gated attention op (no T x T score tensor); V is
+        // transposed and zero-padded to a multiple of 8 positions for it.
+        const int64_t T8      = (T + 7) / 8 * 8;
+        ggml_tensor * vt      = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [T, vd, nkv]
+        vt                    = T8 > T ? ggml_pad(ctx, vt, static_cast<int>(T8 - T), 0, 0, 0) : vt;
+        ggml_tensor * args[4] = { q, k, vt, g };
+        ggml_tensor * o =
+            ggml_custom_4d(ctx, GGML_TYPE_F32, vd * nh, T, 1, 1, args, 4, enc_attn_cpu, GGML_N_TASKS_MAX, nullptr);
+        return ggml_mul_mat(ctx, a.out, hada_in(ctx, o, hd));
+    }
     ggml_tensor * Q  = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [qk, T, nh]
     ggml_tensor * K  = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));    // [qk, T, nkv]
     ggml_tensor * Vt = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));    // [T, vd, nkv]
     ggml_tensor * s  = ggml_mul_mat(ctx, K, Q);                             // [T_k, T_q, nh]
-    s                = ggml_soft_max_ext(ctx, s, nullptr, 1.0f / std::sqrt(static_cast<float>(qk)), 0.0f);
+    s                = ggml_soft_max_ext(ctx, s, nullptr, scale, 0.0f);
     ggml_tensor * o  = ggml_mul_mat(ctx, pad_k4(ctx, Vt), pad_k4(ctx, s));  // [vd, T_q, nh]
     o                = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));    // [vd, nh, T]
     o                = ggml_reshape_2d(ctx, o, vd * nh, T);
     o                = ggml_mul(ctx, o, ggml_sigmoid(ctx, g));
     return ggml_mul_mat(ctx, a.out, hada_in(ctx, o, hd));
+}
+
+// Fused CPU GLU + depthwise conv of the conv module: g = a * sigmoid(b) for
+// h = [a; b] [2d, T], then out[c, t] = sum_j g[c, t + j - p] * w[j][c] with
+// zero padding p = (k - 1) / 2, summed in tap order as the generic graph
+// does. src: h [2d, T] contiguous, w ne [d, k] F32. Each thread rebuilds g for
+// its frames plus the halo.
+void conv_glu_dw_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor * h = dst->src[0];
+    const ggml_tensor * w = dst->src[1];
+    const int64_t       d = dst->ne[0], T = dst->ne[1], k = w->ne[1], p = (k - 1) / 2;
+    const int64_t       t0 = T * ith / nth, t1 = T * (ith + 1) / nth;
+    if (t0 >= t1) {
+        return;
+    }
+    const int64_t      g0 = std::max<int64_t>(0, t0 - p), g1 = std::min<int64_t>(T, t1 + p);
+    std::vector<float> g(static_cast<size_t>((g1 - g0) * d));
+    for (int64_t t = g0; t < g1; ++t) {
+        const float * hr = reinterpret_cast<const float *>(static_cast<const char *>(h->data) + t * h->nb[1]);
+        avx2::sigmoid_mul(hr, hr + d, g.data() + (t - g0) * d, d);
+    }
+    for (int64_t t = t0; t < t1; ++t) {
+        float * out = reinterpret_cast<float *>(static_cast<char *>(dst->data) + t * dst->nb[1]);
+        for (int64_t j = 0; j < k; ++j) {
+            const int64_t tt = t + j - p;
+            const float * wj = reinterpret_cast<const float *>(static_cast<const char *>(w->data) + j * w->nb[1]);
+            if (tt < 0 || tt >= T) {  // zero padding: 0 * w (the first tap) or + 0 * w
+                if (j == 0) {
+                    for (int64_t c = 0; c < d; ++c) {
+                        out[c] = 0.0f * wj[c];
+                    }
+                }
+                continue;
+            }
+            const float * gr = g.data() + (tt - g0) * d;
+            if (j == 0) {
+                for (int64_t c = 0; c < d; ++c) {
+                    out[c] = gr[c] * wj[c];
+                }
+            } else {
+                for (int64_t c = 0; c < d; ++c) {
+                    out[c] = out[c] + gr[c] * wj[c];
+                }
+            }
+        }
+    }
 }
 
 ggml_tensor * enc_conv(ggml_context *          ctx,
@@ -1075,9 +1220,17 @@ ggml_tensor * enc_conv(ggml_context *          ctx,
                        int64_t                 d,
                        int                     kernel,
                        const WhistleHada &     hd,
-                       bool                    cpu) {
-    const int64_t T   = u->ne[1];
-    ggml_tensor * h   = ggml_mul_mat(ctx, b.conv_pw1, hada_in(ctx, zcrms(ctx, u, b.norm_conv, cpu), hd));  // [2d, T]
+                       bool                    cpu,
+                       bool                    avx2) {
+    const int64_t T = u->ne[1];
+    ggml_tensor * h = ggml_mul_mat(ctx, b.conv_pw1, hada_in(ctx, zcrms(ctx, u, b.norm_conv, cpu), hd));  // [2d, T]
+    if (avx2 && b.conv_dw->type == GGML_TYPE_F32 && b.conv_dw->ne[1] == kernel) {
+        ggml_tensor * args[2] = { h, b.conv_dw };
+        ggml_tensor * acc =
+            ggml_custom_4d(ctx, GGML_TYPE_F32, d, T, 1, 1, args, 2, conv_glu_dw_cpu, GGML_N_TASKS_MAX, nullptr);
+        h = ggml_silu(ctx, zcrms(ctx, acc, b.norm_conv_out, cpu));
+        return ggml_mul_mat(ctx, b.conv_pw2, hada_in(ctx, h, hd));
+    }
     ggml_tensor * ga  = ggml_view_2d(ctx, h, d, T, h->nb[1], 0);
     ggml_tensor * gb  = ggml_view_2d(ctx, h, d, T, h->nb[1], static_cast<size_t>(d) * h->nb[0]);
     h                 = ggml_mul(ctx, ggml_cont(ctx, ga), ggml_sigmoid(ctx, ggml_cont(ctx, gb)));  // [d, T]
@@ -1129,8 +1282,23 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     ggml_tensor * x = ggml_reshape_4d(ctx, eb.mel_in, hp.fe_num_mels, n_mel_frames, 1, 1);
     if (aux.cpu_fused_ops && w.stem.dw_1->type == GGML_TYPE_F32 && w.stem.dw_2->type == GGML_TYPE_F32) {
         // channel-first CPU layout (see stem_conv0_cf)
-        x = ggml_silu(ctx, stem_conv0_cf(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));  // [C, W, H]
-        x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w.hada);
+        if (w.stem.conv_w->type == GGML_TYPE_F32 && aux.cpu_avx2 && C % 8 == 0) {
+            // conv0 + SiLU + depthwise 1 in one op (bit-identical to the three)
+            const int64_t W1 = (hp.fe_num_mels - 1) / 2 + 1, H1 = (n_mel_frames - 1) / 2 + 1;
+            ggml_tensor * args[3] = { eb.mel_in, w.stem.conv_w, w.stem.dw_1 };
+            x = ggml_custom_4d(ctx, GGML_TYPE_F32, C, (W1 - 1) / 2 + 1, (H1 - 1) / 2 + 1, 1, args, 3, stem_front_cpu,
+                               GGML_N_TASKS_MAX, nullptr);
+            x = stem_pointwise_cf(ctx, x, w.stem.pw_1, w.hada);
+        } else if (w.stem.conv_w->type == GGML_TYPE_F32) {
+            ggml_tensor * args[2] = { eb.mel_in, w.stem.conv_w };
+            x = ggml_custom_4d(ctx, GGML_TYPE_F32, C, (hp.fe_num_mels - 1) / 2 + 1, (n_mel_frames - 1) / 2 + 1, 1, args,
+                               2, stem_conv0_cpu, GGML_N_TASKS_MAX, nullptr);
+            x = ggml_silu(ctx, x);  // [C, W, H]
+            x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w.hada);
+        } else {
+            x = ggml_silu(ctx, stem_conv0_cf(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));  // [C, W, H]
+            x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w.hada);
+        }
         x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_2, x), w.stem.pw_2, w.hada);
     } else {
         x = ggml_silu(ctx, stem_conv0(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));
@@ -1175,11 +1343,12 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
         const bool  cpu = aux.cpu_fused_ops;
 
         stream = mhc_step(ctx, stream, ml, [&](ggml_tensor * u) {
-            u               = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, u, b.hmlp_0, aux, b.norm_hmlp_0), 0.5f));
-            ggml_tensor * a = enc_attention(ctx, zcrms(ctx, u, b.norm_in, cpu), b.attn, hp, eb.pos_in, w.hada, cpu);
-            u               = ggml_add(ctx, u, ggml_scale(ctx, zcrms(ctx, a, b.norm_post_attn, cpu), ag));
-            u               = ggml_add(ctx, u, enc_conv(ctx, u, b, d, hp.enc_conv_kernel, w.hada, cpu));
-            u               = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, u, b.hmlp, aux, b.norm_hmlp), 0.5f));
+            u = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, u, b.hmlp_0, aux, b.norm_hmlp_0), 0.5f));
+            ggml_tensor * a =
+                enc_attention(ctx, zcrms(ctx, u, b.norm_in, cpu), b.attn, hp, eb.pos_in, w.hada, cpu, aux.cpu_avx2);
+            u = ggml_add(ctx, u, ggml_scale(ctx, zcrms(ctx, a, b.norm_post_attn, cpu), ag));
+            u = ggml_add(ctx, u, enc_conv(ctx, u, b, d, hp.enc_conv_kernel, w.hada, cpu, aux.cpu_avx2));
+            u = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, u, b.hmlp, aux, b.norm_hmlp), 0.5f));
             return u;
         });
 

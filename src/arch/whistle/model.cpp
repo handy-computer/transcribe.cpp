@@ -10,6 +10,7 @@
 //
 // Provenance of every op: reports/porting/whistle/forward-map.md.
 
+#include "cpu_avx2.h"
 #include "decoder.h"
 #include "encoder.h"
 #include "ggml-alloc.h"
@@ -163,15 +164,18 @@ bool dec_cache_init(WhistleDecCache &      cache,
 
     const int64_t qk = hp.qk_head_dim, vd = hp.v_head_dim, nh = hp.n_heads, nkv = hp.n_kv_heads;
     // The transposed V caches are read with the position axis zero-padded to a
-    // multiple of 4 (decoder.cpp pad_k4); the slack stays zero (cleared below).
-    const int64_t n_ctx4 = (n_ctx + 3) / 4 * 4, T_enc4 = (T_enc + 3) / 4 * 4;
+    // multiple of 8 (f32 GEMM k % 4, and the fused attention reads whole
+    // 8-wide vectors); the slack stays zero (cleared below).
+    const int64_t n_ctx4 = (n_ctx + 7) / 8 * 8, T_enc4 = (T_enc + 7) / 8 * 8;
     for (int l = 0; l < L; ++l) {
         cache.k_self.push_back(ggml_new_tensor_4d(cache.ctx, GGML_TYPE_F32, qk, n_ctx, nkv, n_seq));
         cache.v_self.push_back(ggml_new_tensor_4d(cache.ctx, GGML_TYPE_F32, n_ctx4, vd, nkv, n_seq));
         cache.tap_q.push_back(ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F32, nh * qk, cache.tap_len, n_seq));
         cache.tap_k.push_back(ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F32, nkv * qk, cache.tap_len, n_seq));
         cache.tap_v.push_back(ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F32, nkv * vd, cache.tap_len, n_seq));
-        cache.k_cross.push_back(ggml_new_tensor_4d(cache.ctx, GGML_TYPE_F32, qk, T_enc, nh, n_utt));
+        // T_enc4 rows (a multiple of 8, as for V): the zero rows past T_enc are
+        // masked (decoder.cpp xmask_in).
+        cache.k_cross.push_back(ggml_new_tensor_4d(cache.ctx, GGML_TYPE_F32, qk, T_enc4, nh, n_utt));
         cache.v_cross.push_back(ggml_new_tensor_4d(cache.ctx, GGML_TYPE_F32, T_enc4, vd, nh, n_utt));
     }
     for (int s = 0; s < n_sites; ++s) {
@@ -1005,8 +1009,10 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->aux.cpu_fused_ops = (m->plan.primary_kind == transcribe::BackendKind::Cpu ||
                             m->plan.primary_kind == transcribe::BackendKind::Accel) &&
                            m->hparams.mhc_lanes <= 16;
-    m->backend           = ggml_backend_name(m->plan.primary);
-    m->primary_backend   = m->plan.primary;
+    m->aux.cpu_avx2 =
+        m->aux.cpu_fused_ops && avx2::available() && m->hparams.qk_head_dim % 8 == 0 && m->hparams.v_head_dim % 2 == 0;
+    m->backend         = ggml_backend_name(m->plan.primary);
+    m->primary_backend = m->plan.primary;
 
     DiskTypes disk_types;
     FoldSet   fold;
@@ -1069,6 +1075,7 @@ bool new_compute_ctx(WhistleSession * cc, size_t mem) {
     p.mem_buffer    = cc->graph_meta.data();
     p.no_alloc      = true;
     cc->compute_ctx = ggml_init(p);
+    cc->step        = StepBuild{};  // the cached step graph lived in the old context
     return cc->compute_ctx != nullptr;
 }
 
@@ -1218,15 +1225,24 @@ transcribe_status decode_step(WhistleSession *                      cc,
                               const std::vector<int> &              utt_T,
                               std::vector<float> &                  logits,
                               std::vector<float> *                  xattn) {
-    const WhistleHParams & hp = cm->hparams;
-    const int              S  = cc->cache.n_seq;
-    if (!new_compute_ctx(cc, k_graph_mem)) {
-        return TRANSCRIBE_ERR_OOM;
+    const WhistleHParams & hp      = cm->hparams;
+    const int              S       = cc->cache.n_seq;
+    // AVX2 CPU: one position-independent graph (StepBuild::static_pos), built on
+    // the first step and reused for the rest of the run.
+    const bool             reuse   = cm->aux.cpu_avx2;
+    const bool             want_xa = xattn != nullptr;
+    if (!reuse || cc->step.graph == nullptr || cc->step_xattn != want_xa) {
+        if (!new_compute_ctx(cc, k_graph_mem)) {
+            return TRANSCRIBE_ERR_OOM;
+        }
+        StepBuild nb = build_step_graph(cc->compute_ctx, cm->weights, hp, cm->aux, cc->cache, pos, want_xa, reuse);
+        if (auto st = compute_graph(cc, nb.graph, "decoder step"); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        cc->step       = nb;
+        cc->step_xattn = want_xa;
     }
-    StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights, hp, cm->aux, cc->cache, pos, xattn != nullptr);
-    if (auto st = compute_graph(cc, sb.graph, "decoder step"); st != TRANSCRIBE_OK) {
-        return st;
-    }
+    const StepBuild &    sb = cc->step;
     std::vector<int32_t> tok(S), posv(S, pos), rows(static_cast<size_t>(hp.engram_n_tables) * S);
     for (int s = 0; s < S; ++s) {
         tok[s] = hist[s][static_cast<size_t>(pos)];
@@ -1250,14 +1266,14 @@ transcribe_status decode_step(WhistleSession *                      cc,
         }
     }
     ggml_backend_tensor_set(sb.eg_mask_in, egm.data(), 0, egm.size() * sizeof(float));
-    if (sb.xmask_in != nullptr) {
-        const int          T       = cc->cache.T_enc;
+    {
+        const int          T4      = static_cast<int>(sb.xmask_in->ne[0]);
         const int          per_utt = S / cc->cache.n_utt;
-        std::vector<float> xm(static_cast<size_t>(T) * S, 0.0f);
+        std::vector<float> xm(static_cast<size_t>(T4) * S, 0.0f);
         for (int s = 0; s < S; ++s) {
             const int Tu = utt_T[static_cast<size_t>(s / per_utt)];
-            for (int t = Tu; t < T; ++t) {
-                xm[static_cast<size_t>(s) * T + t] = -INFINITY;
+            for (int t = Tu; t < T4; ++t) {
+                xm[static_cast<size_t>(s) * T4 + t] = -INFINITY;
             }
         }
         ggml_backend_tensor_set(sb.xmask_in, xm.data(), 0, xm.size() * sizeof(float));
@@ -1356,6 +1372,9 @@ transcribe_status reorder_cache(WhistleSession * cc, const std::vector<int32_t> 
 
 // Log-sum-exp of x[0..n) in double (max-shifted). log p_i = x_i - lse.
 double log_sum_exp(const float * x, int n, std::vector<double> & scratch) {
+    if (avx2::available()) {  // vector exp terms summed in double
+        return avx2::log_sum_exp(x, n);
+    }
     double mx = -std::numeric_limits<double>::infinity();
     for (int i = 0; i < n; ++i) {
         mx = std::max(mx, static_cast<double>(x[i]));
