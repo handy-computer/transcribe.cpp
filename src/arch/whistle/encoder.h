@@ -50,6 +50,10 @@ constexpr double kNoSpeechSpreadDb = 4.771212547196624;
 // cpu: fused CPU custom op (same results as the ggml ops, faster rows).
 ggml_tensor * zcrms(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale, bool cpu = false);
 
+// y = W x for a linear weight W [k, rows] and x [k, N...]: ggml_mul_mat, or
+// the q8x8 custom op when W is in w.q8x8 (packed at load, CPU with AVX2).
+ggml_tensor * linear(ggml_context * ctx, const WhistleWeights & w, ggml_tensor * W, ggml_tensor * x);
+
 // One row of the CPU ZCRMSNorm: y = x * scale * w (w null: x * scale), with
 // ggml_rms_norm's arithmetic. y may alias x.
 void rms_row(const float * x, float * y, const float * w, int64_t n);
@@ -85,16 +89,17 @@ struct MhcHost {
 };
 
 struct MhcLayer {
-    const WhistleMhc *  mhc       = nullptr;
-    ggml_tensor *       pre_bias  = nullptr;  // ne [lanes, L] (aux)
-    ggml_tensor *       post_bias = nullptr;
-    float               a_pre     = 0.0f;
-    float               a_post    = 0.0f;
-    float               a_res     = 0.0f;
-    int                 layer     = 0;
-    bool                cpu_fused = false;    // WhistleAux::cpu_fused_ops
-    const MhcHost *     host      = nullptr;  // fused CPU ops when set
-    const WhistleHada * hada      = nullptr;  // &WhistleWeights::hada
+    const WhistleMhc *     mhc       = nullptr;
+    ggml_tensor *          pre_bias  = nullptr;  // ne [lanes, L] (aux)
+    ggml_tensor *          post_bias = nullptr;
+    float                  a_pre     = 0.0f;
+    float                  a_post    = 0.0f;
+    float                  a_res     = 0.0f;
+    int                    layer     = 0;
+    bool                   cpu_fused = false;    // WhistleAux::cpu_fused_ops
+    const MhcHost *        host      = nullptr;  // fused CPU ops when set
+    const WhistleHada *    hada      = nullptr;  // &WhistleWeights::hada
+    const WhistleWeights * weights   = nullptr;  // for linear(); null = plain ggml_mul_mat
 };
 
 ggml_tensor * mhc_step(ggml_context *                                      ctx,

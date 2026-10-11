@@ -74,7 +74,7 @@ CrossKvBuild build_cross_kv_graph(ggml_context *          ctx,
 
     for (int l = 0; l < hp.dec_n_layers; ++l) {
         const WhistleAttn & c = w.dec_blocks[l].cross;
-        ggml_tensor *       k = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, c.k, mem), qk, nh, T_utt);
+        ggml_tensor *       k = ggml_reshape_3d(ctx, linear(ctx, w, c.k, mem), qk, nh, T_utt);
         k                     = zcrms(ctx, k, c.k_norm);
         k                     = ggml_permute(ctx, k, 0, 2, 1, 3);  // [qk, T, nh]
         ggml_tensor * kc      = cache.k_cross[l];
@@ -82,7 +82,7 @@ CrossKvBuild build_cross_kv_graph(ggml_context *          ctx,
             ggml_view_3d(ctx, kc, qk, T_utt, nh, kc->nb[1], kc->nb[2], static_cast<size_t>(utt) * kc->nb[3]);
         ggml_build_forward_expand(cb.graph, ggml_cpy(ctx, k, kv));
 
-        ggml_tensor * v  = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, c.v, mem), vd, nh, T_utt);
+        ggml_tensor * v  = ggml_reshape_3d(ctx, linear(ctx, w, c.v, mem), vd, nh, T_utt);
         // Gather the transpose into a contiguous [T, vd, nh] first: the copy
         // into the cache is then row-contiguous instead of a strided scatter.
         v                = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [T, vd, nh]
@@ -404,6 +404,7 @@ StepBuild build_step_graph(ggml_context *          ctx,
         ml.cpu_fused = aux.cpu_fused_ops;
         ml.host      = aux.cpu_fused_ops ? &aux.dec_mhc_host[l] : nullptr;
         ml.hada      = &w.hada;
+        ml.weights   = &w;
 
         stream = mhc_step(ctx, stream, ml, [&](ggml_tensor * u) {
             // ----- Engram -----
@@ -419,8 +420,8 @@ StepBuild build_step_graph(ggml_context *          ctx,
                 e                  = ggml_reshape_3d(ctx, e, hp.engram_sub_dim, hp.engram_n_tables, S);
                 e                  = ggml_mul(ctx, e, sb.eg_mask_in);
                 e                  = ggml_reshape_2d(ctx, e, (int64_t) hp.engram_sub_dim * hp.engram_n_tables, S);
-                ggml_tensor * ek   = ggml_mul_mat(ctx, eg.key_proj, e);
-                ggml_tensor * vraw = ggml_mul_mat(ctx, eg.value_proj, e);
+                ggml_tensor * ek   = linear(ctx, w, eg.key_proj, e);
+                ggml_tensor * vraw = linear(ctx, w, eg.value_proj, e);
                 ggml_tensor * ev =
                     apply_taps(ctx, gf, vraw, cache.eg_val[site], eg.conv_taps, pos, hp.engram_conv_dilation, pos_dyn);
                 ggml_tensor * dot =
@@ -434,17 +435,17 @@ StepBuild build_step_graph(ggml_context *          ctx,
                 const WhistleAttn & a = b.attn;
                 ggml_tensor *       pq, *pk, *pv, *pg;
                 if (a.fused != nullptr) {  // q | k | v | gate in one matmul
-                    ggml_tensor * y = ggml_mul_mat(ctx, a.fused, hada_in(ctx, zcrms(ctx, u, b.norm_in, cpu), w.hada));
+                    ggml_tensor * y = linear(ctx, w, a.fused, hada_in(ctx, zcrms(ctx, u, b.norm_in, cpu), w.hada));
                     pq              = out_rows(ctx, y, 0, nh * qk);
                     pk              = out_rows(ctx, y, nh * qk, nkv * qk);
                     pv              = out_rows(ctx, y, (nh + nkv) * qk, nkv * vd);
                     pg              = out_rows(ctx, y, (nh + nkv) * qk + nkv * vd, nh * vd);
                 } else {
                     ggml_tensor * xn = hada_in(ctx, zcrms(ctx, u, b.norm_in, cpu), w.hada);
-                    pq               = ggml_mul_mat(ctx, a.q, xn);
-                    pk               = ggml_mul_mat(ctx, a.k, xn);
-                    pv               = ggml_mul_mat(ctx, a.v, xn);
-                    pg               = ggml_mul_mat(ctx, a.gate, xn);
+                    pq               = linear(ctx, w, a.q, xn);
+                    pk               = linear(ctx, w, a.k, xn);
+                    pv               = linear(ctx, w, a.v, xn);
+                    pg               = linear(ctx, w, a.gate, xn);
                 }
                 ggml_tensor * q = apply_taps(ctx, gf, pq, cache.tap_q[l], a.q_taps, pos, 1, pos_dyn);
                 ggml_tensor * k = apply_taps(ctx, gf, pk, cache.tap_k[l], a.k_taps, pos, 1, pos_dyn);
@@ -493,7 +494,7 @@ StepBuild build_step_graph(ggml_context *          ctx,
                 if (!static_pos) {  // the fused op applies the gate
                     o = ggml_mul(ctx, o, ggml_sigmoid(ctx, pg));
                 }
-                o = ggml_mul_mat(ctx, a.out, hada_in(ctx, o, w.hada));
+                o = linear(ctx, w, a.out, hada_in(ctx, o, w.hada));
                 u = post_norm_residual(ctx, u, o, b.norm_post_attn, aux.dec_attn_gate[l], aux.cpu_fused_ops);
             }
 
@@ -502,14 +503,13 @@ StepBuild build_step_graph(ggml_context *          ctx,
                 const WhistleAttn & c = b.cross;
                 ggml_tensor *       pq, *pg;
                 if (c.fused != nullptr) {  // q | gate in one matmul
-                    ggml_tensor * y =
-                        ggml_mul_mat(ctx, c.fused, hada_in(ctx, zcrms(ctx, u, b.norm_cross, cpu), w.hada));
-                    pq = out_rows(ctx, y, 0, nh * qk);
-                    pg = out_rows(ctx, y, nh * qk, nh * vd);
+                    ggml_tensor * y = linear(ctx, w, c.fused, hada_in(ctx, zcrms(ctx, u, b.norm_cross, cpu), w.hada));
+                    pq              = out_rows(ctx, y, 0, nh * qk);
+                    pg              = out_rows(ctx, y, nh * qk, nh * vd);
                 } else {
                     ggml_tensor * xn = hada_in(ctx, zcrms(ctx, u, b.norm_cross, cpu), w.hada);
-                    pq               = ggml_mul_mat(ctx, c.q, xn);
-                    pg               = ggml_mul_mat(ctx, c.gate, xn);
+                    pq               = linear(ctx, w, c.q, xn);
+                    pg               = linear(ctx, w, c.gate, xn);
                 }
                 // The CPU norm reads the strided q rows in place; the generic
                 // path reshapes a contiguous copy.
@@ -554,7 +554,7 @@ StepBuild build_step_graph(ggml_context *          ctx,
                     o                = ggml_reshape_2d(ctx, o, vd * nh, S);
                     o                = ggml_mul(ctx, o, ggml_sigmoid(ctx, pg));  // the fused op applies the gate
                 }
-                o = ggml_mul_mat(ctx, c.out, hada_in(ctx, o, w.hada));
+                o = linear(ctx, w, c.out, hada_in(ctx, o, w.hada));
                 u = post_norm_residual(ctx, u, o, b.norm_post_cross, aux.dec_cross_gate[l], aux.cpu_fused_ops);
             }
 
@@ -565,8 +565,8 @@ StepBuild build_step_graph(ggml_context *          ctx,
     }
 
     ggml_tensor * h = hada_in(ctx, zcrms(ctx, lane_mean(ctx, stream), w.dec_final_norm, cpu), w.hada);
-    if (w.head_rp != nullptr) {  // padded repacked head: drop the zero rows
-        ggml_tensor * full = ggml_mul_mat(ctx, w.head_rp, h);
+    if (w.head_rp != nullptr || w.head_q8 != nullptr) {  // padded repacked head: drop the zero rows
+        ggml_tensor * full = w.head_rp != nullptr ? ggml_mul_mat(ctx, w.head_rp, h) : linear(ctx, w, w.head_q8, h);
         sb.logits          = ggml_cont(ctx, ggml_view_2d(ctx, full, hp.vocab_size, full->ne[1], full->nb[1], 0));
     } else {
         sb.logits = ggml_mul_mat(ctx, w.token_embd, h);  // [vocab, S]

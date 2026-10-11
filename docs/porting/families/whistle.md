@@ -392,6 +392,53 @@ Stage 4.
     copies, sparse mel filterbank, reused graph-metadata arena, top-k on raw
     logits, smaller scheduler hash set, contiguous cross-V fill.
 
+- **CPU latency follow-up (2026-10-11, AMD Ryzen 7 PRO 4750U, AVX2).**
+  `transcribe-bench`, median of 5, every cell started at Tctl < 55 °C,
+  base = the previous commit:
+
+  | Cell | Q8_0 1 thread | Q8_0 4 threads | Q2_K_HR 1 thread | Q2_K_HR 4 threads |
+  |------|---------------|----------------|------------------|-------------------|
+  | jfk 11 s | 429 -> 204 ms | 183 -> 88 ms | 421 -> 195 ms | 182 -> 82 ms |
+  | german 29 s | 1215 -> 546 ms | 497 -> 214 ms | 1208 -> 541 ms | 497 -> 214 ms |
+
+  All CPU-only, no ggml patch. Three layers:
+  - Exact, every CPU (dumps byte-identical to before): beam reorder as host
+    memcpy of the filled prefix; mel FFT on split re / im arrays with the
+    twiddle recurrence precomputed (same values); ZCRMSNorm / RMS norm as one
+    op with row-parallel sums, folded into the HadamardMLP; vectorizable mHC
+    lane mixes; decoder and Engram taps read the position from `pos_in`.
+  - AVX2 + FMA + F16C CPUs (`avx2::available()`, GCC / Clang on x86-64;
+    `WhistleAux::cpu_avx2`), rounding-order only: the decoder step graph is
+    built once per run (positions, ring slots and KV writes read from
+    `pos_in`); fused decode self / cross attention (gate folded in, beams /
+    GQA heads share K / V loads; caches padded to a multiple of 8, cross K
+    masked); fused encoder attention; AVX2 HadamardMLP; GLU + depthwise conv
+    in one op; stem conv0 + SiLU + depthwise #1 in one op; vector exp for the
+    sigmoid gates and the beam log-sum-exp. The stem conv0 also runs as a
+    direct kernel on other CPUs (rounding-order). Everywhere else these
+    parts keep the generic ggml graph: with the AVX2 kernels forced off on
+    this machine, german Q8_0 is 1151 -> 1034 ms at 1 thread and 503 -> 420
+    ms at 4 threads.
+  - Packed Q8_0 (interim): Q8_0 linears, which includes Q2_K_HR after its
+    load-time Q8_0 expansion, packed in place into an 8-row interleaved
+    layout with an AVX2 GEMM (`cpu_avx2.cpp`; activations quantized exactly
+    as ggml's AVX2 path; the tied head gets a padded copy). Worth 19-36% of
+    the gain. Drop it once the vendored ggml has an x86 Q8_0 repack.
+  - LibriSpeech le30s (2611): F32 4.32% with all transcripts identical to
+    before; Q8_0 4.32% -> 4.31% (2263 -> 2256 errors, 65 differ, near-ties);
+    Q2_K_HR 4.34% (2271 -> 2270 errors, 81 differ). Batch parity 200/200 vs
+    the golden; tensor parity bit-exact. The teacher-forced alignment pass
+    (S = 1, debug and validation only) rounds its cross-attention
+    differently: `dec.logits_raw.gen8` moves by up to 1.5e-5 on F32.
+  - Remaining: decode streams ~21 MB of weights + cross K/V per step, but
+    jfk decode is ~54 ms at 4 threads and ~53 ms at 8 (29 steps, ~11 GB/s
+    effective vs the ~28 GB/s this machine reaches): it is bound by per-step
+    op / barrier latency, not bandwidth. Pinning the 4 threads to one CCX
+    (`taskset -c 0,2,4,6`) is a further 3-5%. The per-run scheduler release
+    (`release_scratch`) re-faults the compute buffer every run. MSVC builds
+    get the generic graph (the AVX2 kernels need GCC / Clang target
+    attributes).
+
 - **Scope sign-off (2026-10-09).** The user signed off two MUST PASS rows
   whose upstream mechanism is closed:
   - Word timestamps: DTW over cross-attention, with layers and heads

@@ -22,6 +22,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 struct gguf_context;
@@ -227,6 +228,9 @@ struct WhistleWeights {
     // CPU repack only: the tied head padded to a multiple of 8 rows (zero rows)
     // in the repacked layout; null otherwise (the head then uses token_embd).
     ggml_tensor *                head_rp    = nullptr;
+    // CPU with AVX2: the tied head padded to 8200 rows in the q8x8 layout
+    // (cpu_avx2.h); null otherwise.
+    ggml_tensor *                head_q8    = nullptr;
     std::vector<WhistleDecBlock> dec_blocks;
     WhistleMhc                   dec_mhc;
     std::vector<WhistleEngram>   engrams;
@@ -237,6 +241,10 @@ struct WhistleWeights {
 
     ggml_tensor * hada_perm1 = nullptr;  // [hada_n] F32 (integer-valued)
     ggml_tensor * hada_perm2 = nullptr;
+
+    // Q8_0 linear weights packed in place into the q8x8 layout (CPU, AVX2):
+    // only linear() may read them (ggml's ops would see garbage).
+    std::unordered_set<const ggml_tensor *> q8x8;
 };
 
 transcribe_status build_whistle_weights(ggml_context * ctx_meta, const WhistleHParams & hp, WhistleWeights & w);

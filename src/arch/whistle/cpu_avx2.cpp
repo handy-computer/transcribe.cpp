@@ -371,6 +371,158 @@ WHISTLE_AVX2 void sigmoid_mul(const float * o, const float * g, float * out, int
 
 namespace {
 
+// Row order of the scales / int32 results after the hadd in q8x8_gemm.
+constexpr int kQ8x8Perm[8] = { 0, 1, 4, 5, 2, 3, 6, 7 };
+
+struct BlockQ8_0 {
+    uint16_t d;
+    int8_t   qs[32];
+};
+
+static_assert(sizeof(BlockQ8_0) == 34, "Q8_0 block");
+
+template <int NC>
+WHISTLE_AVX2 inline void q8x8_cols(const uint8_t * W,
+                                   int64_t         nbk,
+                                   const Q8Act *   cols,
+                                   int64_t         g,
+                                   float *         out,
+                                   size_t          ldo) {
+    const __m256i ones = _mm256_set1_epi16(1);
+    __m256        acc[NC];
+    for (int j = 0; j < NC; ++j) {
+        acc[j] = _mm256_setzero_ps();
+    }
+    const uint8_t * wg = W + static_cast<size_t>(g) * static_cast<size_t>(nbk) * kQ8x8Block;
+    for (int64_t b = 0; b < nbk; ++b) {
+        const uint8_t * wb = wg + static_cast<size_t>(b) * kQ8x8Block;
+        __m256i         lo[NC], hi[NC];
+        for (int j = 0; j < NC; ++j) {
+            lo[j] = _mm256_setzero_si256();
+            hi[j] = _mm256_setzero_si256();
+        }
+        for (int ch = 0; ch < 4; ++ch) {
+            const __m256i wl = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(wb + 16 + ch * 64));
+            const __m256i wh = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(wb + 16 + ch * 64 + 32));
+            const __m256i al = _mm256_sign_epi8(wl, wl);
+            const __m256i ah = _mm256_sign_epi8(wh, wh);
+            for (int j = 0; j < NC; ++j) {
+                int64_t a8;
+                std::memcpy(&a8, cols[j * nbk + b].qs + ch * 8, sizeof(a8));
+                const __m256i ac = _mm256_set1_epi64x(a8);
+                lo[j] = _mm256_add_epi32(lo[j],
+                                         _mm256_madd_epi16(_mm256_maddubs_epi16(al, _mm256_sign_epi8(ac, wl)), ones));
+                hi[j] = _mm256_add_epi32(hi[j],
+                                         _mm256_madd_epi16(_mm256_maddubs_epi16(ah, _mm256_sign_epi8(ac, wh)), ones));
+            }
+        }
+        const __m256 wd = _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(wb)));
+        for (int j = 0; j < NC; ++j) {
+            const __m256 sc = _mm256_mul_ps(wd, _mm256_set1_ps(cols[j * nbk + b].d));
+            acc[j]          = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_hadd_epi32(lo[j], hi[j])), sc, acc[j]);
+        }
+    }
+    for (int j = 0; j < NC; ++j) {
+        alignas(32) float t[8];
+        _mm256_store_ps(t, acc[j]);
+        float * o = out + j * ldo + g * 8;
+        for (int r = 0; r < 8; ++r) {
+            o[kQ8x8Perm[r]] = t[r];
+        }
+    }
+}
+
+}  // namespace
+
+void q8x8_pack(void * data, int64_t rows, int64_t k) {
+    const int64_t        nbk = k / 32;
+    const size_t         gsz = static_cast<size_t>(nbk) * kQ8x8Block;
+    std::vector<uint8_t> tmp(gsz);
+    for (int64_t g = 0; g < rows / 8; ++g) {
+        uint8_t *         base = static_cast<uint8_t *>(data) + static_cast<size_t>(g) * gsz;
+        const BlockQ8_0 * src  = reinterpret_cast<const BlockQ8_0 *>(base);  // 8 rows x nbk blocks
+        for (int64_t b = 0; b < nbk; ++b) {
+            uint8_t * o = tmp.data() + static_cast<size_t>(b) * kQ8x8Block;
+            for (int r = 0; r < 8; ++r) {
+                std::memcpy(o + 2 * r, &src[kQ8x8Perm[r] * nbk + b].d, 2);
+            }
+            for (int ch = 0; ch < 4; ++ch) {
+                for (int r = 0; r < 8; ++r) {
+                    std::memcpy(o + 16 + ch * 64 + (r / 4) * 32 + (r % 4) * 8, src[r * nbk + b].qs + ch * 8, 8);
+                }
+            }
+        }
+        std::memcpy(base, tmp.data(), gsz);
+    }
+}
+
+// ggml-cpu/arch/x86/quants.c quantize_row_q8_0 (AVX2 path), with the scale
+// kept as its fp16 value converted back to f32.
+WHISTLE_AVX2 void q8_quantize(const float * x, int64_t k, Q8Act * out) {
+    for (int64_t i = 0; i < k / 32; ++i, x += 32) {
+        __m256       v0         = _mm256_loadu_ps(x);
+        __m256       v1         = _mm256_loadu_ps(x + 8);
+        __m256       v2         = _mm256_loadu_ps(x + 16);
+        __m256       v3         = _mm256_loadu_ps(x + 24);
+        const __m256 signBit    = _mm256_set1_ps(-0.0f);
+        __m256       maxAbs     = _mm256_andnot_ps(signBit, v0);
+        maxAbs                  = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v1));
+        maxAbs                  = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v2));
+        maxAbs                  = _mm256_max_ps(maxAbs, _mm256_andnot_ps(signBit, v3));
+        __m128 max4             = _mm_max_ps(_mm256_extractf128_ps(maxAbs, 1), _mm256_castps256_ps128(maxAbs));
+        max4                    = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
+        max4                    = _mm_max_ss(max4, _mm_movehdup_ps(max4));
+        const float   maxScalar = _mm_cvtss_f32(max4);
+        const float   d         = maxScalar / 127.f;
+        const __m128i dh        = _mm_cvtps_ph(_mm_set_ss(d), _MM_FROUND_TO_NEAREST_INT);
+        out[i].d                = _mm_cvtss_f32(_mm_cvtph_ps(dh));
+        const float  id         = (maxScalar != 0.0f) ? 127.f / maxScalar : 0.0f;
+        const __m256 mul        = _mm256_set1_ps(id);
+        __m256i      i0         = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v0, mul), _MM_ROUND_NEAREST));
+        __m256i      i1         = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v1, mul), _MM_ROUND_NEAREST));
+        __m256i      i2         = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v2, mul), _MM_ROUND_NEAREST));
+        __m256i      i3         = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(v3, mul), _MM_ROUND_NEAREST));
+        i0                      = _mm256_packs_epi32(i0, i1);
+        i2                      = _mm256_packs_epi32(i2, i3);
+        i0                      = _mm256_packs_epi16(i0, i2);
+        const __m256i perm      = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+        i0                      = _mm256_permutevar8x32_epi32(i0, perm);
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(out[i].qs), i0);
+    }
+}
+
+WHISTLE_AVX2 void q8x8_gemm(const uint8_t * W,
+                            int64_t         k,
+                            const Q8Act *   cols,
+                            int             ncols,
+                            int64_t         g0,
+                            int64_t         g1,
+                            float *         out,
+                            size_t          ldo) {
+    const int64_t nbk = k / 32;
+    for (int64_t g = g0; g < g1; ++g) {
+        int c = 0;
+        for (; c + 4 <= ncols; c += 4) {
+            q8x8_cols<4>(W, nbk, cols + c * nbk, g, out + c * ldo, ldo);
+        }
+        switch (ncols - c) {
+            case 3:
+                q8x8_cols<3>(W, nbk, cols + c * nbk, g, out + c * ldo, ldo);
+                break;
+            case 2:
+                q8x8_cols<2>(W, nbk, cols + c * nbk, g, out + c * ldo, ldo);
+                break;
+            case 1:
+                q8x8_cols<1>(W, nbk, cols + c * nbk, g, out + c * ldo, ldo);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+namespace {
+
 // conv0 + SiLU for conv0 output row iy: dst [W1][C].
 WHISTLE_AVX2 void stem_conv0_row(const float * mel,
                                  int64_t       W0,
@@ -500,6 +652,8 @@ void hmlp_row(const HmlpHost &, const float *, float *, float *) {}
 
 void sigmoid_mul(const float *, const float *, float *, int64_t) {}
 
+void q8x8_pack(void *, int64_t, int64_t) {}
+
 double log_sum_exp(const float *, int64_t) {
     return 0.0;
 }
@@ -515,6 +669,10 @@ void stem_front(const float *,
                 int64_t,
                 int64_t,
                 float *) {}
+
+void q8_quantize(const float *, int64_t, Q8Act *) {}
+
+void q8x8_gemm(const uint8_t *, int64_t, const Q8Act *, int, int64_t, int64_t, float *, size_t) {}
 
 void attn_multi(int,
                 const float *,

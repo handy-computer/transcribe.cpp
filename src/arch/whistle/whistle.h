@@ -121,6 +121,8 @@ struct WhistleModel final : public transcribe_model {
     ggml_backend_buffer_t   repack_buffer      = nullptr;
     ggml_context *          ctx_head           = nullptr;  // WhistleWeights::head_rp
     ggml_backend_buffer_t   head_buffer        = nullptr;
+    ggml_context *          ctx_head_q8        = nullptr;  // WhistleWeights::head_q8
+    ggml_backend_buffer_t   head_q8_buffer     = nullptr;
     // CPU only: persistent worker pool for every graph compute (a pool per
     // compute would spawn and join threads each decode step). Owned by the
     // model: compute is serialized across a model's sessions (transcribe.h).

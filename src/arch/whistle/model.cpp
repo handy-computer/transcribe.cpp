@@ -216,6 +216,14 @@ WhistleModel::~WhistleModel() {
         ggml_free(ctx_head);
         ctx_head = nullptr;
     }
+    if (head_q8_buffer != nullptr) {
+        safe_buffer_free(head_q8_buffer);
+        head_q8_buffer = nullptr;
+    }
+    if (ctx_head_q8 != nullptr) {
+        ggml_free(ctx_head_q8);
+        ctx_head_q8 = nullptr;
+    }
     if (threadpool != nullptr) {
         if (plan.primary != nullptr) {
             transcribe::cpu_threadpool_set(plan.primary, nullptr);
@@ -690,6 +698,52 @@ void build_padded_head(WhistleModel & m) {
     m.weights.head_rp = hd;
 }
 
+// CPU with AVX2: pack every Q8_0 linear read only through linear() into the
+// q8x8 layout in place (same bytes, cpu_avx2.h), and build an 8200-row q8x8
+// copy of the tied head (token_embd itself stays plain for the embedding
+// lookup). Weights in the CPU_REPACK buffer are left to ggml.
+void pack_q8x8_weights(WhistleModel & m) {
+    if (!m.aux.cpu_avx2) {
+        return;
+    }
+    WhistleWeights & w = m.weights;
+    for (ggml_tensor * t : repack_candidates(w)) {
+        if (t == nullptr || t->type != GGML_TYPE_Q8_0 || t->buffer == nullptr || t->buffer == m.repack_buffer ||
+            !ggml_backend_buffer_is_host(t->buffer) || ggml_n_dims(t) != 2 || !ggml_is_contiguous(t) ||
+            t->ne[1] % 8 != 0 || t->ne[0] % 32 != 0 || w.q8x8.count(t) != 0) {
+            continue;
+        }
+        avx2::q8x8_pack(t->data, t->ne[1], t->ne[0]);
+        w.q8x8.insert(t);
+    }
+    const ggml_tensor * te = w.token_embd;
+    if (w.head_rp == nullptr && te != nullptr && te->type == GGML_TYPE_Q8_0 && te->ne[0] % 32 == 0 &&
+        te->buffer != nullptr && ggml_backend_buffer_is_host(te->buffer)) {
+        ggml_init_params p{};
+        p.mem_size    = 2 * ggml_tensor_overhead();
+        p.no_alloc    = true;
+        m.ctx_head_q8 = ggml_init(p);
+        if (m.ctx_head_q8 == nullptr) {
+            return;
+        }
+        ggml_tensor * hd = ggml_new_tensor_2d(m.ctx_head_q8, te->type, te->ne[0], (te->ne[1] + 7) / 8 * 8);
+        ggml_set_name(hd, "dec.head_q8");
+        m.head_q8_buffer = ggml_backend_alloc_ctx_tensors(m.ctx_head_q8, m.plan.primary);
+        if (m.head_q8_buffer == nullptr || !ggml_backend_buffer_is_host(m.head_q8_buffer)) {
+            return;
+        }
+        ggml_backend_buffer_set_usage(m.head_q8_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        std::memset(hd->data, 0, ggml_nbytes(hd));  // zero bytes = zero rows
+        std::memcpy(hd->data, te->data, ggml_nbytes(te));
+        avx2::q8x8_pack(hd->data, hd->ne[1], hd->ne[0]);
+        w.q8x8.insert(hd);
+        w.head_q8 = hd;
+    }
+    if (!w.q8x8.empty()) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "whistle: %zu Q8_0 linear weights in the AVX2 q8x8 layout", w.q8x8.size());
+    }
+}
+
 transcribe_status build_aux(WhistleModel & m) {
     const WhistleHParams & hp    = m.hparams;
     const WhistleWeights & w     = m.weights;
@@ -1037,6 +1091,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     if (const transcribe_status st = build_aux(*m); st != TRANSCRIBE_OK) {
         return st;
     }
+    pack_q8x8_weights(*m);
 
     m->t_load_us = ggml_time_us() - t_load_start;
     *out_model   = m.release();

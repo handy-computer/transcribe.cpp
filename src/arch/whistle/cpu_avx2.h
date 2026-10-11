@@ -57,6 +57,41 @@ void attn_multi(int           nq,
 // out[i] = o[i] * sigmoid(g[i]), i < n (ggml_v_expf for the exponential).
 void sigmoid_mul(const float * o, const float * g, float * out, int64_t n);
 
+// ---------------------------------------------------------------------------
+// Q8_0 matmul on 8-row interleaved weights ("q8x8").
+//
+// Layout per (8-row group, 32-wide block): the 8 rows' fp16 scales (in
+// kQ8x8Perm order), then 4 chunks of [rows 0-3 | rows 4-7] x 8 int8 values:
+// the same 272 bytes as the 8 Q8_0 blocks it replaces, so a weight is packed
+// in place. Activations are quantized to Q8_0 exactly as ggml's AVX2
+// quantize_row_q8_0 does, so results differ from ggml's Q8_0 matmul only in
+// the float accumulation order.
+//
+// Interim: ggml's CPU_REPACK has no x86 Q8_0 layout yet. Once the vendored
+// ggml has one, drop this and let the repack buffer take these weights.
+// ---------------------------------------------------------------------------
+constexpr size_t kQ8x8Block = 272;
+
+struct Q8Act {
+    float  d;  // fp16-rounded scale
+    int8_t qs[32];
+};
+
+// In place: data holds rows x k Q8_0 (rows % 8 == 0, k % 32 == 0).
+void q8x8_pack(void * data, int64_t rows, int64_t k);
+// One activation row x [k] -> k / 32 blocks.
+void q8_quantize(const float * x, int64_t k, Q8Act * out);
+// out[c * ldo + r] = <row r of W, column c> for rows in groups [g0, g1) and
+// the ncols columns (column c's blocks at cols + c * nbk, nbk = k / 32).
+void q8x8_gemm(const uint8_t * W,
+               int64_t         k,
+               const Q8Act *   cols,
+               int             ncols,
+               int64_t         g0,
+               int64_t         g1,
+               float *         out,
+               size_t          ldo);
+
 // Encoder stem front, channel-first: conv0 (1 -> C, 3x3, stride 2, pad 1,
 // sum order as encoder.cpp stem_conv0_cpu), SiLU (as ggml's AVX2 SiLU), then
 // the depthwise 3x3 stride-2 pad-1 conv (as ggml's CWHN depthwise kernel), so

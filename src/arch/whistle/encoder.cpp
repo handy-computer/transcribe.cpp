@@ -380,6 +380,74 @@ void rms_cpu(ggml_tensor * dst, int ith, int nth, void *) {
 
 }  // namespace
 
+namespace {
+
+// q8x8 matmul with each thread quantizing all (<= kQ8SmallCols) activation
+// columns itself (decode: a barrier costs more than the redundant work).
+// src: x [k, N] contiguous F32, W packed [k, rows]. dst [rows, N].
+constexpr int64_t kQ8SmallCols = 16;
+
+void q8x8_mm_small_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor *                   x = dst->src[0];
+    const ggml_tensor *                   W = dst->src[1];
+    const int64_t                         k = x->ne[0], N = ggml_nrows(x), nbk = k / 32, ng = W->ne[1] / 8;
+    thread_local std::vector<avx2::Q8Act> act;
+    act.resize(static_cast<size_t>(N * nbk));
+    for (int64_t c = 0; c < N; ++c) {
+        avx2::q8_quantize(reinterpret_cast<const float *>(static_cast<const char *>(x->data) + c * x->nb[1]), k,
+                          act.data() + c * nbk);
+    }
+    avx2::q8x8_gemm(static_cast<const uint8_t *>(W->data), k, act.data(), static_cast<int>(N), ng * ith / nth,
+                    ng * (ith + 1) / nth, static_cast<float *>(dst->data), dst->nb[1] / sizeof(float));
+}
+
+// Q8_0 activations for q8x8_mm_cpu, parallel over columns. src: x [k, N]
+// contiguous F32. dst: N * k / 32 Q8Act blocks (in an F32 tensor).
+void q8_quantize_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor * x = dst->src[0];
+    const int64_t       k = x->ne[0], N = ggml_nrows(x), nbk = k / 32;
+    auto *              act = static_cast<avx2::Q8Act *>(dst->data);
+    for (int64_t c = N * ith / nth; c < N * (ith + 1) / nth; ++c) {
+        avx2::q8_quantize(reinterpret_cast<const float *>(static_cast<const char *>(x->data) + c * x->nb[1]), k,
+                          act + c * nbk);
+    }
+}
+
+// src: activations from q8_quantize_cpu, W packed [k, rows]. dst [rows, N].
+void q8x8_mm_cpu(ggml_tensor * dst, int ith, int nth, void *) {
+    const ggml_tensor * W = dst->src[1];
+    const int64_t       k = W->ne[0], ng = W->ne[1] / 8, N = dst->ne[1];
+    const auto *        act = static_cast<const avx2::Q8Act *>(dst->src[0]->data);
+    avx2::q8x8_gemm(static_cast<const uint8_t *>(W->data), k, act, static_cast<int>(N), ng * ith / nth,
+                    ng * (ith + 1) / nth, static_cast<float *>(dst->data), dst->nb[1] / sizeof(float));
+}
+
+}  // namespace
+
+ggml_tensor * linear(ggml_context * ctx, const WhistleWeights & w, ggml_tensor * W, ggml_tensor * x) {
+    if (w.q8x8.empty() || w.q8x8.count(W) == 0) {
+        return ggml_mul_mat(ctx, W, x);
+    }
+    if (!ggml_is_contiguous(x)) {
+        x = ggml_cont(ctx, x);
+    }
+    const int64_t N    = ggml_nrows(x);
+    const int64_t rows = W->ne[1];
+    ggml_tensor * y    = nullptr;
+    if (N <= kQ8SmallCols) {
+        ggml_tensor * args[2] = { x, W };
+        y = ggml_custom_4d(ctx, GGML_TYPE_F32, rows, N, 1, 1, args, 2, q8x8_mm_small_cpu, GGML_N_TASKS_MAX, nullptr);
+    } else {
+        static_assert(sizeof(avx2::Q8Act) % sizeof(float) == 0, "Q8Act in an F32 tensor");
+        const int64_t nf = N * (x->ne[0] / 32) * static_cast<int64_t>(sizeof(avx2::Q8Act) / sizeof(float));
+        ggml_tensor * xq =
+            ggml_custom_4d(ctx, GGML_TYPE_F32, nf, 1, 1, 1, &x, 1, q8_quantize_cpu, GGML_N_TASKS_MAX, nullptr);
+        ggml_tensor * args[2] = { xq, W };
+        y = ggml_custom_4d(ctx, GGML_TYPE_F32, rows, N, 1, 1, args, 2, q8x8_mm_cpu, GGML_N_TASKS_MAX, nullptr);
+    }
+    return ggml_reshape_4d(ctx, y, rows, x->ne[1], x->ne[2], x->ne[3]);
+}
+
 void rms_row(const float * x, float * y, const float * w, int64_t n) {
     const float * xp[1] = { x };
     float *       yp[1] = { y };
@@ -883,10 +951,11 @@ ggml_tensor * mhc_step(ggml_context *                                      ctx,
 
     ggml_tensor *pre, *post, *res;
     if (!m.phi_fused.empty()) {  // rows pre | post | res of this layer in one matmul
-        ggml_tensor * y = ggml_mul_mat(ctx, m.phi_fused[static_cast<size_t>(l.layer)], nx);
-        pre             = out_rows(ctx, y, 0, lanes);
-        post            = out_rows(ctx, y, lanes, lanes);
-        res             = out_rows(ctx, y, 2 * lanes, lanes * lanes);
+        ggml_tensor * fw = m.phi_fused[static_cast<size_t>(l.layer)];
+        ggml_tensor * y  = l.weights != nullptr ? linear(ctx, *l.weights, fw, nx) : ggml_mul_mat(ctx, fw, nx);
+        pre              = out_rows(ctx, y, 0, lanes);
+        post             = out_rows(ctx, y, lanes, lanes);
+        res              = out_rows(ctx, y, 2 * lanes, lanes * lanes);
         if (l.host == nullptr) {  // the generic ops below (scale) need contiguous inputs
             pre  = ggml_cont(ctx, pre);
             post = ggml_cont(ctx, post);
@@ -1069,17 +1138,17 @@ ggml_tensor * stem_dw_cf(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
 }
 
 // [C, W, H] channel-first -> pointwise conv over C -> SiLU -> [C, W, H].
-ggml_tensor * stem_pointwise_cf(ggml_context * ctx, ggml_tensor * x, ggml_tensor * pw, const WhistleHada & hd) {
+ggml_tensor * stem_pointwise_cf(ggml_context * ctx, ggml_tensor * x, ggml_tensor * pw, const WhistleWeights & w) {
     const int64_t C = x->ne[0], W = x->ne[1], H = x->ne[2];
-    ggml_tensor * c = ggml_silu(ctx, ggml_mul_mat(ctx, pw, hada_in(ctx, ggml_reshape_2d(ctx, x, C, W * H), hd)));
+    ggml_tensor * c = ggml_silu(ctx, linear(ctx, w, pw, hada_in(ctx, ggml_reshape_2d(ctx, x, C, W * H), w.hada)));
     return ggml_reshape_3d(ctx, c, C, W, H);
 }
 
 // [W, H, C] -> pointwise conv over C -> SiLU -> [W, H, C].
-ggml_tensor * stem_pointwise(ggml_context * ctx, ggml_tensor * x, ggml_tensor * pw, const WhistleHada & hd) {
+ggml_tensor * stem_pointwise(ggml_context * ctx, ggml_tensor * x, ggml_tensor * pw, const WhistleWeights & w) {
     const int64_t W = x->ne[0], H = x->ne[1], C = x->ne[2];
     ggml_tensor * c = ggml_cont(ctx, ggml_permute(ctx, x, 1, 2, 0, 3));  // [C, W, H]
-    c               = ggml_silu(ctx, ggml_mul_mat(ctx, pw, hada_in(ctx, ggml_reshape_2d(ctx, c, C, W * H), hd)));
+    c               = ggml_silu(ctx, linear(ctx, w, pw, hada_in(ctx, ggml_reshape_2d(ctx, c, C, W * H), w.hada)));
     c               = ggml_reshape_3d(ctx, c, C, W, H);
     return c;  // channel-first [C, W, H]
 }
@@ -1114,6 +1183,7 @@ void enc_attn_cpu(ggml_tensor * dst, int ith, int nth, void *) {
 }
 
 ggml_tensor * enc_attention(ggml_context *         ctx,
+                            const WhistleWeights & wt,
                             ggml_tensor *          x,
                             const WhistleAttn &    a,
                             const WhistleHParams & hp,
@@ -1127,17 +1197,17 @@ ggml_tensor * enc_attention(ggml_context *         ctx,
 
     ggml_tensor *q, *k, *v, *g;
     if (a.fused != nullptr) {  // q | k | v | gate in one matmul
-        ggml_tensor * y  = ggml_mul_mat(ctx, a.fused, x);
+        ggml_tensor * y  = linear(ctx, wt, a.fused, x);
         const size_t  es = ggml_element_size(y);
         q                = ggml_view_3d(ctx, y, qk, nh, T, qk * es, y->nb[1], 0);
         k                = ggml_view_3d(ctx, y, qk, nkv, T, qk * es, y->nb[1], nh * qk * es);
         v                = ggml_view_3d(ctx, y, vd, nkv, T, vd * es, y->nb[1], (nh + nkv) * qk * es);
         g                = out_rows(ctx, y, (nh + nkv) * qk + nkv * vd, nh * vd);
     } else {
-        q = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, a.q, x), qk, nh, T);
-        k = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, a.k, x), qk, nkv, T);
-        v = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, a.v, x), vd, nkv, T);
-        g = ggml_mul_mat(ctx, a.gate, x);
+        q = ggml_reshape_3d(ctx, linear(ctx, wt, a.q, x), qk, nh, T);
+        k = ggml_reshape_3d(ctx, linear(ctx, wt, a.k, x), qk, nkv, T);
+        v = ggml_reshape_3d(ctx, linear(ctx, wt, a.v, x), vd, nkv, T);
+        g = linear(ctx, wt, a.gate, x);
     }
     q = zcrms(ctx, q, a.q_norm, cpu);
     k = zcrms(ctx, k, a.k_norm, cpu);
@@ -1154,7 +1224,7 @@ ggml_tensor * enc_attention(ggml_context *         ctx,
         ggml_tensor * args[4] = { q, k, vt, g };
         ggml_tensor * o =
             ggml_custom_4d(ctx, GGML_TYPE_F32, vd * nh, T, 1, 1, args, 4, enc_attn_cpu, GGML_N_TASKS_MAX, nullptr);
-        return ggml_mul_mat(ctx, a.out, hada_in(ctx, o, hd));
+        return linear(ctx, wt, a.out, hada_in(ctx, o, hd));
     }
     ggml_tensor * Q  = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [qk, T, nh]
     ggml_tensor * K  = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));    // [qk, T, nkv]
@@ -1165,7 +1235,7 @@ ggml_tensor * enc_attention(ggml_context *         ctx,
     o                = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));    // [vd, nh, T]
     o                = ggml_reshape_2d(ctx, o, vd * nh, T);
     o                = ggml_mul(ctx, o, ggml_sigmoid(ctx, g));
-    return ggml_mul_mat(ctx, a.out, hada_in(ctx, o, hd));
+    return linear(ctx, wt, a.out, hada_in(ctx, o, hd));
 }
 
 // Fused CPU GLU + depthwise conv of the conv module: g = a * sigmoid(b) for
@@ -1215,6 +1285,7 @@ void conv_glu_dw_cpu(ggml_tensor * dst, int ith, int nth, void *) {
 }
 
 ggml_tensor * enc_conv(ggml_context *          ctx,
+                       const WhistleWeights &  wt,
                        ggml_tensor *           u,
                        const WhistleEncBlock & b,
                        int64_t                 d,
@@ -1223,13 +1294,13 @@ ggml_tensor * enc_conv(ggml_context *          ctx,
                        bool                    cpu,
                        bool                    avx2) {
     const int64_t T = u->ne[1];
-    ggml_tensor * h = ggml_mul_mat(ctx, b.conv_pw1, hada_in(ctx, zcrms(ctx, u, b.norm_conv, cpu), hd));  // [2d, T]
+    ggml_tensor * h = linear(ctx, wt, b.conv_pw1, hada_in(ctx, zcrms(ctx, u, b.norm_conv, cpu), hd));  // [2d, T]
     if (avx2 && b.conv_dw->type == GGML_TYPE_F32 && b.conv_dw->ne[1] == kernel) {
         ggml_tensor * args[2] = { h, b.conv_dw };
         ggml_tensor * acc =
             ggml_custom_4d(ctx, GGML_TYPE_F32, d, T, 1, 1, args, 2, conv_glu_dw_cpu, GGML_N_TASKS_MAX, nullptr);
         h = ggml_silu(ctx, zcrms(ctx, acc, b.norm_conv_out, cpu));
-        return ggml_mul_mat(ctx, b.conv_pw2, hada_in(ctx, h, hd));
+        return linear(ctx, wt, b.conv_pw2, hada_in(ctx, h, hd));
     }
     ggml_tensor * ga  = ggml_view_2d(ctx, h, d, T, h->nb[1], 0);
     ggml_tensor * gb  = ggml_view_2d(ctx, h, d, T, h->nb[1], static_cast<size_t>(d) * h->nb[0]);
@@ -1249,7 +1320,7 @@ ggml_tensor * enc_conv(ggml_context *          ctx,
         acc              = acc == nullptr ? t : ggml_add(ctx, acc, t);
     }
     h = ggml_silu(ctx, zcrms(ctx, acc, b.norm_conv_out, cpu));
-    return ggml_mul_mat(ctx, b.conv_pw2, hada_in(ctx, h, hd));
+    return linear(ctx, wt, b.conv_pw2, hada_in(ctx, h, hd));
 }
 
 void mark_dump(ggml_tensor * t, bool want) {
@@ -1288,30 +1359,30 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
             ggml_tensor * args[3] = { eb.mel_in, w.stem.conv_w, w.stem.dw_1 };
             x = ggml_custom_4d(ctx, GGML_TYPE_F32, C, (W1 - 1) / 2 + 1, (H1 - 1) / 2 + 1, 1, args, 3, stem_front_cpu,
                                GGML_N_TASKS_MAX, nullptr);
-            x = stem_pointwise_cf(ctx, x, w.stem.pw_1, w.hada);
+            x = stem_pointwise_cf(ctx, x, w.stem.pw_1, w);
         } else if (w.stem.conv_w->type == GGML_TYPE_F32) {
             ggml_tensor * args[2] = { eb.mel_in, w.stem.conv_w };
             x = ggml_custom_4d(ctx, GGML_TYPE_F32, C, (hp.fe_num_mels - 1) / 2 + 1, (n_mel_frames - 1) / 2 + 1, 1, args,
                                2, stem_conv0_cpu, GGML_N_TASKS_MAX, nullptr);
             x = ggml_silu(ctx, x);  // [C, W, H]
-            x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w.hada);
+            x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w);
         } else {
             x = ggml_silu(ctx, stem_conv0_cf(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));  // [C, W, H]
-            x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w.hada);
+            x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_1, x), w.stem.pw_1, w);
         }
-        x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_2, x), w.stem.pw_2, w.hada);
+        x = stem_pointwise_cf(ctx, stem_dw_cf(ctx, w.stem.dw_2, x), w.stem.pw_2, w);
     } else {
         x = ggml_silu(ctx, stem_conv0(ctx, stem_kernel(ctx, w.stem.conv_w), x, 2, 2, 1, 1));
         x = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_1), x, 2, 2, 1, 1, 1, 1);
-        x = stem_pointwise(ctx, x, w.stem.pw_1, w.hada);       // [C, W, H]
+        x = stem_pointwise(ctx, x, w.stem.pw_1, w);            // [C, W, H]
         x = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));  // [W, H, C]
         x = conf::conv_2d_dw_direct_f32(ctx, stem_kernel(ctx, w.stem.dw_2), x, 2, 2, 1, 1, 1, 1);
-        x = stem_pointwise(ctx, x, w.stem.pw_2, w.hada);       // [C, F', T']
+        x = stem_pointwise(ctx, x, w.stem.pw_2, w);            // [C, F', T']
     }
     const int64_t Fp = x->ne[1];
     const int64_t T  = x->ne[2];
     x                = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [F', C, T'] (index c*F' + f)
-    x = ggml_mul_mat(ctx, w.stem.out, hada_in(ctx, ggml_reshape_2d(ctx, x, Fp * C, T), w.hada));  // [d, T']
+    x                = linear(ctx, w, w.stem.out, hada_in(ctx, ggml_reshape_2d(ctx, x, Fp * C, T), w.hada));  // [d, T']
     ggml_set_name(x, "enc.stem.out");
     eb.dumps.stem_out = x;
     mark_dump(x, want_dumps);
@@ -1339,15 +1410,16 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
         ml.cpu_fused    = aux.cpu_fused_ops;
         ml.host         = aux.cpu_fused_ops ? &aux.enc_mhc_host[i] : nullptr;
         ml.hada         = &w.hada;
+        ml.weights      = &w;
         const float ag  = aux.enc_attn_gate[i];
         const bool  cpu = aux.cpu_fused_ops;
 
         stream = mhc_step(ctx, stream, ml, [&](ggml_tensor * u) {
             u = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, u, b.hmlp_0, aux, b.norm_hmlp_0), 0.5f));
             ggml_tensor * a =
-                enc_attention(ctx, zcrms(ctx, u, b.norm_in, cpu), b.attn, hp, eb.pos_in, w.hada, cpu, aux.cpu_avx2);
+                enc_attention(ctx, w, zcrms(ctx, u, b.norm_in, cpu), b.attn, hp, eb.pos_in, w.hada, cpu, aux.cpu_avx2);
             u = ggml_add(ctx, u, ggml_scale(ctx, zcrms(ctx, a, b.norm_post_attn, cpu), ag));
-            u = ggml_add(ctx, u, enc_conv(ctx, u, b, d, hp.enc_conv_kernel, w.hada, cpu, aux.cpu_avx2));
+            u = ggml_add(ctx, u, enc_conv(ctx, w, u, b, d, hp.enc_conv_kernel, w.hada, cpu, aux.cpu_avx2));
             u = ggml_add(ctx, u, ggml_scale(ctx, hmlp(ctx, u, b.hmlp, aux, b.norm_hmlp), 0.5f));
             return u;
         });
