@@ -98,6 +98,53 @@ transcribe_status init_backends(transcribe_backend_request requested,
 // I/O or tensor-not-found failure. On failure ctx_meta's tensors
 // may be partially populated; the caller should discard the
 // whole model state on error.
+// A read-only mapping of a GGUF file, used to back model weights directly
+// instead of copying them into anonymous memory. Anonymous pages cannot be
+// reclaimed under pressure, so on Android every weight byte counts against the
+// low-memory killer's budget for the process; file-backed pages can be dropped
+// and re-read instead. Move-only: the mapping must outlive every tensor that
+// points into it.
+struct MappedWeights {
+    void * addr = nullptr;
+    size_t len  = 0;
+
+    MappedWeights()                                  = default;
+    MappedWeights(const MappedWeights &)             = delete;
+    MappedWeights & operator=(const MappedWeights &) = delete;
+    MappedWeights(MappedWeights && o) noexcept : addr(o.addr), len(o.len) { o.addr = nullptr; o.len = 0; }
+    MappedWeights & operator=(MappedWeights && o) noexcept {
+        if (this != &o) { reset(); addr = o.addr; len = o.len; o.addr = nullptr; o.len = 0; }
+        return *this;
+    }
+    ~MappedWeights() { reset(); }
+
+    bool valid() const { return addr != nullptr; }
+    void reset();
+};
+
+// Point every tensor in `ctx_meta` at an mmap of `path` instead of allocating a
+// backend buffer and copying into it. CPU primary backend only: anything else
+// needs a real upload, and there is nothing to gain from mapping first.
+//
+// Returns true on success, with `*out_buffer` a cpu-buffer-from-ptr over the
+// tensor-data region (it does not own the pages) and `*out_map` owning the
+// mapping. Returns false for every other outcome — unsupported platform,
+// non-CPU backend, open/mmap failure, or a file whose tensors are misaligned or
+// truncated — leaving nothing allocated and ctx_meta untouched, so the caller
+// falls back to ggml_backend_alloc_ctx_tensors + stream_tensor_data. Mapping is
+// purely an optimization, so a false return is never an error: the streaming
+// path re-validates and reports real corruption itself.
+//
+// Only safe for architectures that never write to ctx_meta tensors after load.
+// Check every ggml_backend_tensor_set target in the arch before adopting it.
+bool map_tensor_data_cpu(const std::string &     path,
+                         const gguf_context *    gguf_data,
+                         ggml_context *          ctx_meta,
+                         const BackendPlan &     plan,
+                         ggml_backend_buffer_t * out_buffer,
+                         MappedWeights *         out_map,
+                         const char *            error_tag);
+
 transcribe_status stream_tensor_data(const std::string &  path,
                                      const gguf_context * gguf_data,
                                      ggml_context *       ctx_meta,
