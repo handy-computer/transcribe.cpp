@@ -6,6 +6,8 @@
 #include "ggml.h"
 #include "weights.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -45,7 +47,15 @@ constexpr double kNoSpeechSpreadDb = 4.771212547196624;
 
 // ZCRMSNorm: x / rms(x) * (1 + scale), eps 1e-6, over ne0. `scale` must be a
 // norm weight already folded to 1 + scale by build_aux (model.cpp).
-ggml_tensor * zcrms(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale);
+// cpu: fused CPU custom op (same results as the ggml ops, faster rows).
+ggml_tensor * zcrms(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale, bool cpu = false);
+
+// One row of the CPU ZCRMSNorm: y = x * scale * w (w null: x * scale), with
+// ggml_rms_norm's arithmetic. y may alias x.
+void rms_row(const float * x, float * y, const float * w, int64_t n);
+
+// ggml_rms_norm with eps 1e-6; cpu as for zcrms.
+ggml_tensor * rms_norm(ggml_context * ctx, ggml_tensor * x, bool cpu = false);
 
 // Rows [r0, r0 + n) (ne0 slice) of a projection output y [R, N]; used to
 // split the fused projection matmuls (WhistleAttn::fused, phi_fused).
@@ -56,8 +66,13 @@ ggml_tensor * out_rows(ggml_context * ctx, ggml_tensor * y, int64_t r0, int64_t 
 // Identity when h is null.
 ggml_tensor * hada_in(ggml_context * ctx, ggml_tensor * x, const WhistleHada & h);
 
-// HadamardMLP over x [d, N].
-ggml_tensor * hmlp(ggml_context * ctx, ggml_tensor * x, const WhistleHmlp & h, const WhistleAux & aux);
+// HadamardMLP over x [d, N]; with norm, HadamardMLP(ZCRMS(x; norm)) (fused
+// into the CPU op).
+ggml_tensor * hmlp(ggml_context *      ctx,
+                   ggml_tensor *       x,
+                   const WhistleHmlp & h,
+                   const WhistleAux &  aux,
+                   ggml_tensor *       norm = nullptr);
 
 // One mHC layer. stream [d, lanes, N]; block maps u [d, N] -> block(u) [d, N].
 // Host-memory view of one mHC layer for the fused CPU custom ops.

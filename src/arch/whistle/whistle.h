@@ -137,6 +137,7 @@ struct WhistleSession final : public transcribe_session {
     // Reused ggml metadata arena for the per-graph compute contexts (a fresh
     // multi-MB allocation per decode step costs page faults every step).
     std::vector<uint8_t> graph_meta;
+    std::vector<char>    reorder_tmp;
 
     WhistleSession() = default;
     ~WhistleSession() override;

@@ -1279,6 +1279,50 @@ transcribe_status decode_step(WhistleSession *                      cc,
     return TRANSCRIBE_OK;
 }
 
+// Host-memory caches (CPU): move each changed slot's filled prefix with
+// memcpy, no graph. Sources are gathered first, so any permutation works.
+void reorder_cache_host(WhistleDecCache & c, const std::vector<int32_t> & src, int n_pos, std::vector<char> & tmp) {
+    const int        S = c.n_seq;
+    std::vector<int> moved;
+    for (int s = 0; s < S; ++s) {
+        if (src[static_cast<size_t>(s)] != s) {
+            moved.push_back(s);
+        }
+    }
+    // Strided slab copy: for slot s, `rows` runs of `run` bytes at row stride
+    // `rs` starting at s * ss.
+    auto move = [&](ggml_tensor * t, size_t ss, int64_t rows, size_t rs, size_t run) {
+        tmp.resize(moved.size() * static_cast<size_t>(rows) * run);
+        char * base = static_cast<char *>(t->data);
+        char * o    = tmp.data();
+        for (int s : moved) {
+            const char * from = base + static_cast<size_t>(src[static_cast<size_t>(s)]) * ss;
+            for (int64_t r = 0; r < rows; ++r, o += run) {
+                std::memcpy(o, from + static_cast<size_t>(r) * rs, run);
+            }
+        }
+        const char * in = tmp.data();
+        for (int s : moved) {
+            char * to = base + static_cast<size_t>(s) * ss;
+            for (int64_t r = 0; r < rows; ++r, in += run) {
+                std::memcpy(to + static_cast<size_t>(r) * rs, in, run);
+            }
+        }
+    };
+    for (size_t l = 0; l < c.k_self.size(); ++l) {
+        ggml_tensor * kc = c.k_self[l];  // [qk, n_ctx, nkv, S]: per (head, seq) qk * n_pos floats
+        move(kc, kc->nb[3], kc->ne[2], kc->nb[2], static_cast<size_t>(n_pos) * kc->nb[1]);
+        ggml_tensor * vc = c.v_self[l];  // [n_ctx4, vd, nkv, S]: per (row, seq) n_pos floats
+        move(vc, vc->nb[3], vc->ne[1] * vc->ne[2], vc->nb[1], static_cast<size_t>(n_pos) * vc->nb[0]);
+        for (ggml_tensor * t : { c.tap_q[l], c.tap_k[l], c.tap_v[l] }) {
+            move(t, t->nb[2], 1, 0, t->nb[2]);
+        }
+    }
+    for (ggml_tensor * t : c.eg_val) {
+        move(t, t->nb[2], 1, 0, t->nb[2]);
+    }
+}
+
 // n_pos: self-attention positions written so far (only these are moved).
 transcribe_status reorder_cache(WhistleSession * cc, const std::vector<int32_t> & src, int n_pos) {
     bool identity = true;
@@ -1286,6 +1330,10 @@ transcribe_status reorder_cache(WhistleSession * cc, const std::vector<int32_t> 
         identity = identity && src[i] == static_cast<int32_t>(i);
     }
     if (identity) {
+        return TRANSCRIBE_OK;
+    }
+    if (cc->cache.buffer != nullptr && ggml_backend_buffer_is_host(cc->cache.buffer)) {
+        reorder_cache_host(cc->cache, src, n_pos, cc->reorder_tmp);
         return TRANSCRIBE_OK;
     }
     if (!new_compute_ctx(cc, 4u * 1024u * 1024u)) {

@@ -21,10 +21,11 @@
 #include "whistle.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <vector>
 
 namespace transcribe::whistle {
 
@@ -103,54 +104,60 @@ ggml_tensor * tap_row(ggml_context * ctx, ggml_tensor * taps, int j) {
     return ggml_view_1d(ctx, taps, taps->ne[0], static_cast<size_t>(j) * taps->nb[1]);
 }
 
-// Positions handed to the fused CPU ops through their userdata pointer (a
-// static table, so the pointer outlives every graph).
-constexpr int kMaxPos = 4096;
-
-const int * pos_ptr(int pos) {
-    static const auto table = [] {
-        std::array<int, kMaxPos> t{};
-        for (int i = 0; i < kMaxPos; ++i) {
-            t[static_cast<size_t>(i)] = i;
-        }
-        return t;
-    }();
-    return &table[static_cast<size_t>(pos)];
-}
-
 inline void split_rows(int64_t total, int ith, int nth, int64_t & b, int64_t & e) {
     const int64_t per = (total + nth - 1) / nth;
     b                 = std::min(total, per * ith);
     e                 = std::min(total, b + per);
 }
 
+inline int32_t input_pos(const ggml_tensor * pos_in) {
+    return static_cast<const int32_t *>(pos_in->data)[0];
+}
+
+// One sequence's taps: out = x * t0 + sum_j ring(pos - j * dil) * tj, then x
+// into the ring slot for pos. rb: the sequence's ring [dim, len] (row stride
+// rs bytes); t: taps [dim, nt].
+inline void taps_row(const float * x,
+                     char *        rb,
+                     size_t        rs,
+                     int64_t       len,
+                     const float * t,
+                     int64_t       nt,
+                     int64_t       dim,
+                     int64_t       pos,
+                     int64_t       dil,
+                     float *       out) {
+    for (int64_t i = 0; i < dim; ++i) {
+        out[i] = x[i] * t[i];
+    }
+    for (int64_t j = 1; j < nt && pos - j * dil >= 0; ++j) {
+        const float * r  = reinterpret_cast<const float *>(rb + ((pos - j * dil) % len) * rs);
+        const float * tj = t + j * dim;
+        for (int64_t i = 0; i < dim; ++i) {
+            out[i] = out[i] + r[i] * tj[i];
+        }
+    }
+    std::memcpy(rb + (pos % len) * rs, x, static_cast<size_t>(dim) * sizeof(float));
+}
+
 // Fused CPU apply_taps: same f32 operations in the same order as the graph
-// below (raw * t0, then + ring(pos - j) * tj), and writes raw into the ring
-// slot for pos. src: raw [dim, S], ring [dim, len, S], taps [dim, n_taps].
+// below (raw * t0, then + ring(pos - j * dil) * tj), and writes raw into the
+// ring slot for pos. src: raw [dim, S], ring [dim, len, S], taps [dim, n_taps],
+// pos [S] I32 (all equal); userdata: the dilation.
 void taps_cpu(ggml_tensor * dst, int ith, int nth, void * ud) {
-    const int           pos  = *static_cast<const int *>(ud);
+    const int64_t       dil  = static_cast<int64_t>(reinterpret_cast<intptr_t>(ud));
     const ggml_tensor * raw  = dst->src[0];
     ggml_tensor *       ring = dst->src[1];
     const ggml_tensor * taps = dst->src[2];
+    const int64_t       pos  = input_pos(dst->src[3]);
     const int64_t       dim = raw->ne[0], S = raw->ne[1], len = ring->ne[1], nt = taps->ne[1];
     int64_t             b, e;
     split_rows(S, ith, nth, b, e);
     const float * t = static_cast<const float *>(taps->data);
     for (int64_t s = b; s < e; ++s) {
-        const float * x   = reinterpret_cast<const float *>(static_cast<const char *>(raw->data) + s * raw->nb[1]);
-        char *        rb  = static_cast<char *>(ring->data) + s * ring->nb[2];
-        float *       out = reinterpret_cast<float *>(static_cast<char *>(dst->data) + s * dst->nb[1]);
-        for (int64_t i = 0; i < dim; ++i) {
-            out[i] = x[i] * t[i];
-        }
-        for (int64_t j = 1; j < nt && pos - j >= 0; ++j) {
-            const float * r  = reinterpret_cast<const float *>(rb + ((pos - j) % len) * ring->nb[1]);
-            const float * tj = t + j * dim;
-            for (int64_t i = 0; i < dim; ++i) {
-                out[i] = out[i] + r[i] * tj[i];
-            }
-        }
-        std::memcpy(rb + (pos % len) * ring->nb[1], x, static_cast<size_t>(dim) * sizeof(float));
+        taps_row(reinterpret_cast<const float *>(static_cast<const char *>(raw->data) + s * raw->nb[1]),
+                 static_cast<char *>(ring->data) + s * ring->nb[2], ring->nb[1], len, t, nt, dim, pos, dil,
+                 reinterpret_cast<float *>(static_cast<char *>(dst->data) + s * dst->nb[1]));
     }
 }
 
@@ -182,26 +189,29 @@ void post_norm_residual_cpu(ggml_tensor * dst, int ith, int nth, void * ud) {
 }
 
 // x_tapped = sum_j taps[j] * raw(pos - j); writes raw into the ring at pos.
+// pos_in (CPU fused path): the position is read from this input at compute
+// time, so the graph does not depend on it; otherwise `pos` is baked in.
 ggml_tensor * apply_taps(ggml_context * ctx,
                          ggml_cgraph *  gf,
                          ggml_tensor *  raw,
                          ggml_tensor *  ring,
                          ggml_tensor *  taps,
                          int            pos,
-                         bool           cpu_fused) {
-    if (cpu_fused && pos < kMaxPos) {
-        ggml_tensor * args[3] = { raw, ring, taps };
-        return ggml_custom_4d(ctx, GGML_TYPE_F32, raw->ne[0], raw->ne[1], 1, 1, args, 3, taps_cpu, GGML_N_TASKS_MAX,
-                              const_cast<int *>(pos_ptr(pos)));
+                         int            dil,
+                         ggml_tensor *  pos_in) {
+    if (pos_in != nullptr) {
+        ggml_tensor * args[4] = { raw, ring, taps, pos_in };
+        return ggml_custom_4d(ctx, GGML_TYPE_F32, raw->ne[0], raw->ne[1], 1, 1, args, 4, taps_cpu, GGML_N_TASKS_MAX,
+                              reinterpret_cast<void *>(static_cast<intptr_t>(dil)));
     }
     const int len = static_cast<int>(ring->ne[1]);
     ggml_build_forward_expand(gf, ggml_cpy(ctx, raw, ring_slot(ctx, ring, pos % len)));
     ggml_tensor * acc = ggml_mul(ctx, raw, tap_row(ctx, taps, 0));
     for (int j = 1; j < taps->ne[1]; ++j) {
-        if (pos - j < 0) {
+        if (pos - j * dil < 0) {
             break;
         }
-        acc = ggml_add(ctx, acc, ggml_mul(ctx, ring_slot(ctx, ring, (pos - j) % len), tap_row(ctx, taps, j)));
+        acc = ggml_add(ctx, acc, ggml_mul(ctx, ring_slot(ctx, ring, (pos - j * dil) % len), tap_row(ctx, taps, j)));
     }
     return acc;
 }
@@ -260,6 +270,7 @@ StepBuild build_step_graph(ggml_context *          ctx,
         ggml_set_name(sb.xmask_in, "dec.cross.mask");
         ggml_set_input(sb.xmask_in);
     }
+    ggml_tensor * pos_dyn = aux.cpu_fused_ops ? sb.pos_in : nullptr;
 
     // Hadamard-domain embedding rows: H_g is involutory, so H_g recovers them.
     ggml_tensor * x = ggml_scale(ctx, hada_in(ctx, ggml_get_rows(ctx, w.token_embd, sb.tok_in), w.hada),
@@ -268,6 +279,7 @@ StepBuild build_step_graph(ggml_context *          ctx,
         ggml_repeat(ctx, ggml_reshape_3d(ctx, x, d, 1, S), ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, hp.mhc_lanes, S));
 
     const float attn_scale = 1.0f / std::sqrt(static_cast<float>(qk));
+    const bool  cpu        = aux.cpu_fused_ops;
 
     for (int l = 0; l < hp.dec_n_layers; ++l) {
         const WhistleDecBlock & b    = w.dec_blocks[l];
@@ -305,45 +317,36 @@ StepBuild build_step_graph(ggml_context *          ctx,
                 e                  = ggml_reshape_2d(ctx, e, (int64_t) hp.engram_sub_dim * hp.engram_n_tables, S);
                 ggml_tensor * ek   = ggml_mul_mat(ctx, eg.key_proj, e);
                 ggml_tensor * vraw = ggml_mul_mat(ctx, eg.value_proj, e);
-                ggml_tensor * ring = cache.eg_val[site];
-                const int     len  = static_cast<int>(ring->ne[1]);
-                ggml_build_forward_expand(gf, ggml_cpy(ctx, vraw, ring_slot(ctx, ring, pos % len)));
-                ggml_tensor * ev = ggml_mul(ctx, vraw, tap_row(ctx, eg.conv_taps, 0));
-                for (int j = 1; j < eg.conv_taps->ne[1]; ++j) {
-                    const int p = pos - j * hp.engram_conv_dilation;
-                    if (p < 0) {
-                        break;
-                    }
-                    ev = ggml_add(ctx, ev, ggml_mul(ctx, ring_slot(ctx, ring, p % len), tap_row(ctx, eg.conv_taps, j)));
-                }
-                ggml_tensor * dot = ggml_sum_rows(
-                    ctx, ggml_mul(ctx, ggml_rms_norm(ctx, u, 1e-6f), ggml_rms_norm(ctx, ek, 1e-6f)));  // [1, S]
+                ggml_tensor * ev =
+                    apply_taps(ctx, gf, vraw, cache.eg_val[site], eg.conv_taps, pos, hp.engram_conv_dilation, pos_dyn);
+                ggml_tensor * dot =
+                    ggml_sum_rows(ctx, ggml_mul(ctx, rms_norm(ctx, u, cpu), rms_norm(ctx, ek, cpu)));  // [1, S]
                 ggml_tensor * alpha = ggml_sigmoid(ctx, ggml_scale(ctx, dot, 1.0f / std::sqrt(static_cast<float>(d))));
                 u                   = ggml_add(ctx, u, ggml_mul(ctx, ev, alpha));
             }
 
             // ----- self-attention with causal taps -----
             {
-                const WhistleAttn & a  = b.attn;
-                ggml_tensor *       xn = hada_in(ctx, zcrms(ctx, u, b.norm_in), w.hada);
+                const WhistleAttn & a = b.attn;
                 ggml_tensor *       pq, *pk, *pv, *pg;
                 if (a.fused != nullptr) {  // q | k | v | gate in one matmul
-                    ggml_tensor * y = ggml_mul_mat(ctx, a.fused, xn);
+                    ggml_tensor * y = ggml_mul_mat(ctx, a.fused, hada_in(ctx, zcrms(ctx, u, b.norm_in, cpu), w.hada));
                     pq              = out_rows(ctx, y, 0, nh * qk);
                     pk              = out_rows(ctx, y, nh * qk, nkv * qk);
                     pv              = out_rows(ctx, y, (nh + nkv) * qk, nkv * vd);
                     pg              = out_rows(ctx, y, (nh + nkv) * qk + nkv * vd, nh * vd);
                 } else {
-                    pq = ggml_mul_mat(ctx, a.q, xn);
-                    pk = ggml_mul_mat(ctx, a.k, xn);
-                    pv = ggml_mul_mat(ctx, a.v, xn);
-                    pg = ggml_mul_mat(ctx, a.gate, xn);
+                    ggml_tensor * xn = hada_in(ctx, zcrms(ctx, u, b.norm_in, cpu), w.hada);
+                    pq               = ggml_mul_mat(ctx, a.q, xn);
+                    pk               = ggml_mul_mat(ctx, a.k, xn);
+                    pv               = ggml_mul_mat(ctx, a.v, xn);
+                    pg               = ggml_mul_mat(ctx, a.gate, xn);
                 }
-                ggml_tensor * q = apply_taps(ctx, gf, pq, cache.tap_q[l], a.q_taps, pos, aux.cpu_fused_ops);
-                ggml_tensor * k = apply_taps(ctx, gf, pk, cache.tap_k[l], a.k_taps, pos, aux.cpu_fused_ops);
-                ggml_tensor * v = apply_taps(ctx, gf, pv, cache.tap_v[l], a.v_taps, pos, aux.cpu_fused_ops);
-                q               = zcrms(ctx, ggml_reshape_3d(ctx, q, qk, nh, S), a.q_norm);
-                k               = zcrms(ctx, ggml_reshape_3d(ctx, k, qk, nkv, S), a.k_norm);
+                ggml_tensor * q = apply_taps(ctx, gf, pq, cache.tap_q[l], a.q_taps, pos, 1, pos_dyn);
+                ggml_tensor * k = apply_taps(ctx, gf, pk, cache.tap_k[l], a.k_taps, pos, 1, pos_dyn);
+                ggml_tensor * v = apply_taps(ctx, gf, pv, cache.tap_v[l], a.v_taps, pos, 1, pos_dyn);
+                q               = zcrms(ctx, ggml_reshape_3d(ctx, q, qk, nh, S), a.q_norm, cpu);
+                k               = zcrms(ctx, ggml_reshape_3d(ctx, k, qk, nkv, S), a.k_norm, cpu);
                 q = ggml_rope_ext(ctx, q, sb.pos_in, nullptr, qk, GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f,
                                   1.0f, 0.0f, 0.0f);
                 k = ggml_rope_ext(ctx, k, sb.pos_in, nullptr, qk, GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f,
@@ -381,18 +384,23 @@ StepBuild build_step_graph(ggml_context *          ctx,
 
             // ----- cross-attention -----
             {
-                const WhistleAttn & c  = b.cross;
-                ggml_tensor *       xn = hada_in(ctx, zcrms(ctx, u, b.norm_cross), w.hada);
+                const WhistleAttn & c = b.cross;
                 ggml_tensor *       pq, *pg;
                 if (c.fused != nullptr) {  // q | gate in one matmul
-                    ggml_tensor * y = ggml_mul_mat(ctx, c.fused, xn);
-                    pq              = ggml_cont(ctx, out_rows(ctx, y, 0, nh * qk));
-                    pg              = out_rows(ctx, y, nh * qk, nh * vd);
+                    ggml_tensor * y =
+                        ggml_mul_mat(ctx, c.fused, hada_in(ctx, zcrms(ctx, u, b.norm_cross, cpu), w.hada));
+                    pq = out_rows(ctx, y, 0, nh * qk);
+                    pg = out_rows(ctx, y, nh * qk, nh * vd);
                 } else {
-                    pq = ggml_mul_mat(ctx, c.q, xn);
-                    pg = ggml_mul_mat(ctx, c.gate, xn);
+                    ggml_tensor * xn = hada_in(ctx, zcrms(ctx, u, b.norm_cross, cpu), w.hada);
+                    pq               = ggml_mul_mat(ctx, c.q, xn);
+                    pg               = ggml_mul_mat(ctx, c.gate, xn);
                 }
-                ggml_tensor * q  = zcrms(ctx, ggml_reshape_3d(ctx, pq, qk, nh, S), c.q_norm);
+                // The CPU norm reads the strided q rows in place; the generic
+                // path reshapes a contiguous copy.
+                ggml_tensor * q  = cpu ? zcrms(ctx, ggml_view_3d(ctx, pq, qk, nh, S, qk * sizeof(float), pq->nb[1], 0),
+                                               c.q_norm, cpu) :
+                                         zcrms(ctx, ggml_reshape_3d(ctx, ggml_cont(ctx, pq), qk, nh, S), c.q_norm, cpu);
                 // The beams of one utterance share its cross K/V: put them in
                 // the columns of one product per (head, utterance), and pad the
                 // T contraction of probs . V to the cache's multiple of 4.
@@ -421,12 +429,12 @@ StepBuild build_step_graph(ggml_context *          ctx,
             }
 
             // ----- HadamardMLP -----
-            u = ggml_add(ctx, u, hmlp(ctx, zcrms(ctx, u, b.norm_hmlp), b.hmlp, aux));
+            u = ggml_add(ctx, u, hmlp(ctx, u, b.hmlp, aux, b.norm_hmlp));
             return u;
         });
     }
 
-    ggml_tensor * h = hada_in(ctx, zcrms(ctx, lane_mean(ctx, stream), w.dec_final_norm), w.hada);
+    ggml_tensor * h = hada_in(ctx, zcrms(ctx, lane_mean(ctx, stream), w.dec_final_norm, cpu), w.hada);
     if (w.head_rp != nullptr) {  // padded repacked head: drop the zero rows
         ggml_tensor * full = ggml_mul_mat(ctx, w.head_rp, h);
         sb.logits          = ggml_cont(ctx, ggml_view_2d(ctx, full, hp.vocab_size, full->ne[1], full->nb[1], 0));
