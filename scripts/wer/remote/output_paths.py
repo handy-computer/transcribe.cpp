@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cache_paths import att_context_tag
 from dataset_specs import dataset_id
 
 
@@ -12,12 +13,19 @@ def write_ref_hyp(
     dataset_spec: str,
     batch_size: int | None = None,
     mode: str = "offline",
+    extra_args: list[str] | None = None,
 ) -> Path:
     out_dir = root / "reports" / "wer"
     out_dir.mkdir(parents=True, exist_ok=True)
     bs_tag = "" if not batch_size or batch_size <= 1 else f".b{batch_size}"
     mode_tag = "" if mode == "offline" else f".{mode}"
-    out_path = out_dir / f"{variant}-REF.{dataset_id(dataset_spec)}{bs_tag}{mode_tag}.jsonl"
+    # A reference run with a parakeet attention-window override is tagged
+    # like the C++ hyps (.att-256x256 / .att-full); other extra args are
+    # per-family defaults (e.g. --language) and keep the plain name.
+    att_tag = ""
+    if extra_args and "--att-context" in extra_args:
+        att_tag = att_context_tag(extra_args[extra_args.index("--att-context") + 1])
+    out_path = out_dir / f"{variant}-REF.{dataset_id(dataset_spec)}{bs_tag}{mode_tag}{att_tag}.jsonl"
     out_path.write_text(hyp_jsonl)
     return out_path
 
@@ -32,6 +40,7 @@ def write_hyp(
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
     n_utts: int | None = None,
+    att_context: str = "",
 ) -> Path:
     out_dir = root / "reports" / "wer"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -42,6 +51,7 @@ def write_hyp(
     stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
     r_tag = "" if stream_att_right < 0 else f".r{stream_att_right}"
     subset_tag = "" if n_utts is None else f".n{n_utts}"
-    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}{stream_tag}{r_tag}{subset_tag}.jsonl"
+    att_tag = att_context_tag(att_context)
+    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}{stream_tag}{r_tag}{subset_tag}{att_tag}.jsonl"
     out_path.write_text(hyp_jsonl)
     return out_path

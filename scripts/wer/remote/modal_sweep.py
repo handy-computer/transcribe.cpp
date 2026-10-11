@@ -270,7 +270,8 @@ def build(arch: str, build_dir: str, clean: bool = False) -> None:
 
 @app.function(
     image=image,
-    timeout=3600,
+    # mTEDx archives are up to 35 GB from openslr.org; leave room.
+    timeout=10800,
     volumes={"/data": data_vol},
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )
@@ -431,6 +432,7 @@ def _run_wer_impl(
     stream_chunk_ms: int = 0,
     stream_att_right: int = -1,
     dataset_status: dict | None = None,
+    att_context: str = "",
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
     hyp JSONL contents + a summary dict back to the dispatcher.
@@ -450,7 +452,7 @@ def _run_wer_impl(
     cache_hyp, cache_sum = hyp_cache_paths(
         HYP_FP, model_file, dataset_spec, n_utts, batch_size, sort_by_length,
         timestamps, language, stream_chunk_ms, stream_att_right,
-        publication_profile, backend)
+        publication_profile, backend, att_context)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         _log_prepared_dataset("wer", dataset_status)
@@ -490,6 +492,10 @@ def _run_wer_impl(
 
     # Force per-line stdout flushing so progress streams live to Modal logs.
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    if att_context:
+        # Parakeet attention-window override; read only by validation builds
+        # (this build has the hooks on). "-1,-1" = full attention.
+        env["TRANSCRIBE_PARAKEET_ATT_CONTEXT"] = att_context
     # The container gets a source tree with no .git, so run.py's own
     # `git rev-parse` finds nothing and every remote row would land
     # unattributable. Hand it the sha of the tree this sweep built from.
@@ -566,6 +572,7 @@ def _run_wer_impl(
         "batch_size": batch_size,
         "stream_chunk_ms": stream_chunk_ms,
         "stream_att_right": stream_att_right,
+        "att_context": att_context,
         "mel_s": mel_ms / 1000.0,
         "encode_s": enc_ms / 1000.0,
         "decode_s": dec_ms / 1000.0,
@@ -620,6 +627,7 @@ def _register_runner(gpu_id: str):
         engine_sha: str = "",
         publication_profile: str = "",
         backend: str = "",
+        att_context: str = "",
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -634,6 +642,7 @@ def _register_runner(gpu_id: str):
             stream_chunk_ms=stream_chunk_ms,
             stream_att_right=stream_att_right,
             dataset_status=dataset_status,
+            att_context=att_context,
         )
 
     runner.__name__ = name
@@ -897,13 +906,16 @@ def _dispatch(cells: list[dict], gpu: str, *, clean: bool = False, n_utts: int =
                              c["bs"], sort_by_length, build_dir, c["timestamps"],
                              c.get("language", ""), stream_chunk_ms, stream_att_right,
                              statuses[c["dataset"]], engine_sha,
-                             c.get("publication_profile", ""), c.get("backend", "")))
+                             c.get("publication_profile", ""), c.get("backend", ""),
+                             c.get("att_context", "")))
             for c in cells]
 
     rows, failures = [], []
     for c, fut in futs:
         bs = c["bs"]
         slug = c["file"].replace(".gguf", "") + (f" b{bs}" if bs != 1 else "")
+        if c.get("att_context"):
+            slug += " att=" + c["att_context"]
         try:
             res = fut.get()
             # b1 stays untagged (matches the published-run filenames); b>1 is
@@ -913,7 +925,8 @@ def _dispatch(cells: list[dict], gpu: str, *, clean: bool = False, n_utts: int =
                              timestamps=c["timestamps"],
                              stream_chunk_ms=stream_chunk_ms,
                              stream_att_right=stream_att_right,
-                             n_utts=(n_utts if n_utts >= 0 else None))
+                             n_utts=(n_utts if n_utts >= 0 else None),
+                             att_context=c.get("att_context", ""))
             s = res["summary"]
             rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
                          s["wall_s"], s["rtf_wall"], str(path)))
@@ -964,6 +977,7 @@ def sweep(
     stream_att_right: int = -1,
     publication_profile: str = "",
     backend: str = "",
+    att_context: str = "",
 ) -> None:
     """Fan WER across one or more models on one dataset and GPU class.
 
@@ -979,6 +993,12 @@ def sweep(
                   Supported: T4, L4, A10G, L40S, A100, A100-80GB, H100, H200.
     --n-utts      Cap each manifest to N utterances. Default -1 = full.
     --clean       Force a clean build (use after a branch switch).
+    --att-context Parakeet only: comma-separated list of attention windows
+                  to run as separate cells, each "L,R" or "-1,-1" (full
+                  attention), e.g. "-1,-1;256,256" (semicolon-separated).
+                  Sets TRANSCRIBE_PARAKEET_ATT_CONTEXT per cell; hyps are
+                  tagged .att-full / .att-256x256. Default: the library's
+                  own default, untagged.
     """
     specs = [s.strip() for s in models.split(",") if s.strip()]
     if not specs:
@@ -992,7 +1012,10 @@ def sweep(
     print(f"  gpu      = {gpu}")
     print(f"  n_utts   = {'full manifest' if n_utts < 0 else n_utts}")
     print(f"  clean    = {clean}")
+    if att_context:
+        print(f"  att_ctx  = {att_context}")
     print("======================================================")
+    att_contexts = [a.strip() for a in att_context.split(";") if a.strip()] or [""]
 
     repo_root = pathlib.Path(REPO)
     resolved = [(s, *resolve_model(repo_root, s)) for s in specs]
@@ -1015,10 +1038,11 @@ def sweep(
                 continue
         for f in fns:
             for bs in sizes:
-                cells.append({"repo": repo, "file": f, "dataset": dataset, "bs": bs,
-                              "language": language, "timestamps": timestamps,
-                              "publication_profile": publication_profile,
-                              "backend": backend})
+                for att in att_contexts:
+                    cells.append({"repo": repo, "file": f, "dataset": dataset, "bs": bs,
+                                  "language": language, "timestamps": timestamps,
+                                  "publication_profile": publication_profile,
+                                  "backend": backend, "att_context": att})
     if skipped:
         print(">>> skipped (no cells generated):")
         for s, r in skipped:
@@ -1360,7 +1384,7 @@ def reference_sweep(
                 continue
             p = write_ref_hyp(repo_root, res["hyp_jsonl"], r["variant"], dataset,
                               batch_size=(bs if bs != 1 else None),
-                              mode=mode)
+                              mode=mode, extra_args=extra)
             s = res["summary"]
             rows.append((slug, s["n_utts"], s["audio_s"], s["wall_s"],
                          s["rtf_wall"], str(p)))

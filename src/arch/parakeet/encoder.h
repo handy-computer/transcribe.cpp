@@ -104,10 +104,14 @@ struct EncoderBuild {
     // broadcasts across heads inside rel_pos_mhsa.
     ggml_tensor * chunked_mask_in = nullptr;
 
-    // True when the graph took the bounded [window,chunk,1,n_chunks]
-    // ChunkedLimited geometry; the driver sizes its host mask and places
-    // the zero-offset pos_emb row accordingly.
-    bool chunked_windowed = false;
+    // Bounded-window attention geometry when the graph took it (see
+    // conformer::BlockParams::window_*): chunked_mask_in is then
+    // [window_keys, window_chunk, 1, n_chunks] and pos_emb's zero-offset
+    // row sits at window_left + window_chunk - 1. window_chunk == 0 means
+    // the dense reference graph.
+    int window_chunk = 0;
+    int window_left  = 0;
+    int window_keys  = 0;
 
     // Buffered-streaming conv valid-frame mask, ne=[T_enc, 1, 1, 1] f32.
     // Null unless the buffered path has pre_encode overhang frames that

@@ -36,10 +36,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import tarfile
 from pathlib import Path
-from urllib.request import urlretrieve
+from urllib.request import urlopen, urlretrieve
 
 import numpy as np
 import soundfile as sf
@@ -366,6 +367,156 @@ def ingest_tedlium_longform(repo: Path, args: argparse.Namespace) -> int:
     return 0
 
 
+# -------- Multilingual TEDx long-form (OpenSLR 100) -------------------------
+#
+# https://www.openslr.org/100/  CC BY-NC-ND 4.0 (same class as TED-LIUM).
+# Full TEDx talks in es, fr, pt, it, ru, el, ar, de with sentence-level
+# transcripts aligned to the talk. The long-form set is built the way
+# distil-whisper built tedlium-long-form: one entry per test-split talk, the
+# talk's original audio, and the reference is that talk's segment transcripts
+# joined in time order. Archive layout: <lang>-<lang>/data/test/wav/<talk>.flac,
+# txt/segments ("<talk>_<n> <talk> <start> <end>") and txt/test.<lang> (one
+# transcript per segments line).
+
+MTEDX_URL = "https://www.openslr.org/resources/100/mtedx_{lang}.tgz"
+MTEDX_LANGS = ("ar", "de", "el", "es", "fr", "it", "pt", "ru")
+
+
+def _mtedx_fetch_test(lang: str, raw_dir: Path) -> Path:
+    """Download mtedx_<lang>.tgz and extract only its data/test tree into
+    raw_dir/mtedx/<lang>. Idempotent. The per-language archive is mostly
+    training audio (2.6 GB for de, 35 GB for es); the test split is a few
+    dozen talks, so the stream is read once and everything else is skipped."""
+    extract_dir = raw_dir / "mtedx" / lang
+    marker = extract_dir / ".test-extracted"
+    if marker.exists():
+        return extract_dir
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    archive = raw_dir / f"mtedx_{lang}.tgz"
+    url = MTEDX_URL.format(lang=lang)
+    # Download to a .part file and only rename once the byte count matches
+    # Content-Length, so an interrupted or throttled transfer (openslr.org,
+    # tens of GB) never leaves a short archive that later reads as
+    # "unexpected end of data". A short archive from an older run is
+    # re-fetched the same way.
+    for attempt in range(3):
+        if archive.exists():
+            break
+        part = archive.with_suffix(".tgz.part")
+        print(f"downloading {url}" + (f" (attempt {attempt + 1})" if attempt else ""))
+        with urlopen(url) as resp, open(part, "wb") as out:
+            expected = int(resp.headers.get("Content-Length") or 0)
+            shutil.copyfileobj(resp, out, length=1 << 20)
+        got = part.stat().st_size
+        if expected and got != expected:
+            print(f"warning: {url}: got {got} of {expected} bytes, retrying",
+                  file=sys.stderr)
+            part.unlink()
+            continue
+        part.rename(archive)
+    if not archive.exists():
+        raise RuntimeError(f"{url}: download failed after 3 attempts")
+    print(f"extracting data/test from {archive}")
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    n = 0
+    try:
+        with tarfile.open(archive, "r|gz") as tf:
+            for member in tf:
+                parts = Path(member.name).parts
+                # <lang>-<lang>/data/test/...
+                if len(parts) < 4 or parts[1] != "data" or parts[2] != "test":
+                    continue
+                member.name = str(Path(*parts[3:]))
+                tf.extract(member, extract_dir, filter="data")
+                n += 1
+    except tarfile.ReadError as e:
+        # Truncated archive: drop it so the next run downloads it again.
+        archive.unlink(missing_ok=True)
+        raise RuntimeError(f"{archive}: {e}; removed, rerun to re-download") from e
+    if n == 0:
+        raise RuntimeError(f"{archive}: no data/test members found")
+    marker.write_text(f"{n} members\n")
+    return extract_dir
+
+
+def ingest_mtedx_longform(repo: Path, args: argparse.Namespace) -> int:
+    lang = args.lang.lower()
+    if lang not in MTEDX_LANGS:
+        print(f"error: mTEDx has no '{lang}' (available: {', '.join(MTEDX_LANGS)})",
+              file=sys.stderr)
+        return 2
+
+    raw_dir = repo / "samples/wer/raw"
+    out_dir = repo / f"samples/wer/mtedx-longform-{lang}"
+    manifest = repo / f"samples/wer/mtedx-longform-{lang}.manifest.jsonl"
+
+    if manifest.exists() and not args.force:
+        n_existing = sum(1 for _ in open(manifest))
+        print(f"OK already exists: {manifest} ({n_existing} talks). "
+              f"Pass --force to regenerate.")
+        return 0
+
+    test_dir = _mtedx_fetch_test(lang, raw_dir)
+    seg_path = test_dir / "txt" / "segments"
+    txt_path = test_dir / "txt" / f"test.{lang}"
+    if not seg_path.exists() or not txt_path.exists():
+        print(f"error: expected {seg_path} and {txt_path}", file=sys.stderr)
+        return 2
+    seg_lines = seg_path.read_text(encoding="utf-8").splitlines()
+    txt_lines = txt_path.read_text(encoding="utf-8").splitlines()
+    if len(seg_lines) != len(txt_lines):
+        print(f"error: {seg_path} has {len(seg_lines)} lines but {txt_path} "
+              f"has {len(txt_lines)}", file=sys.stderr)
+        return 2
+
+    # talk_id -> [(start, text)]
+    talks: dict[str, list[tuple[float, str]]] = {}
+    for seg, text in zip(seg_lines, txt_lines):
+        fields = seg.split()
+        if len(fields) != 4:
+            print(f"error: bad segments line: {seg!r}", file=sys.stderr)
+            return 2
+        _, talk_id, start, _end = fields
+        talks.setdefault(talk_id, []).append((float(start), text.strip()))
+
+    import librosa
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    entries: list[dict] = []
+    n_converted = 0
+    for talk_id in sorted(talks):
+        src = test_dir / "wav" / f"{talk_id}.flac"
+        if not src.exists():
+            cands = list((test_dir / "wav").glob(f"{talk_id}.*"))
+            if not cands:
+                print(f"error: no audio for talk {talk_id} under {test_dir / 'wav'}",
+                      file=sys.stderr)
+                return 2
+            src = cands[0]
+        utt_id = f"mtedx-longform-{lang}-{talk_id}"
+        wav_path = out_dir / f"{utt_id}.wav"
+        if not wav_path.exists():
+            # Talks ship at the source rate (44.1/48 kHz): resample properly
+            # (soxr via librosa) rather than the linear-interp helper.
+            data, _ = librosa.load(str(src), sr=16000, mono=True)
+            write_wav_16k_mono(np.asarray(data, dtype=np.float32), 16000, wav_path)
+            n_converted += 1
+        segs = sorted(talks[talk_id], key=lambda t: t[0])
+        ref = " ".join(" ".join(t.split()) for _, t in segs if t)
+        entries.append({
+            "id": utt_id,
+            "audio": str(wav_path),
+            "ref_text": ref,
+            "language": lang,
+        })
+
+    write_manifest(entries, manifest)
+    print(f"manifest: {manifest}")
+    print(f"  {len(entries)} talks ({n_converted} converted), "
+          f"{sum(len(v) for v in talks.values())} reference segments")
+    return 0
+
+
 # -------- Dispatch --------------------------------------------------------
 
 SOURCES = {
@@ -373,6 +524,7 @@ SOURCES = {
     "fleurs": ingest_fleurs,
     "eka-medical-asr": ingest_eka_medical_asr,
     "tedlium-longform": ingest_tedlium_longform,
+    "mtedx-longform": ingest_mtedx_longform,
 }
 
 
@@ -384,7 +536,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = p.add_subparsers(dest="source", required=True,
-                           metavar="{librispeech,fleurs,eka-medical-asr,tedlium-longform}")
+                           metavar="{librispeech,fleurs,eka-medical-asr,tedlium-longform,mtedx-longform}")
 
     p_ls = sub.add_parser("librispeech",
                           help="LibriSpeech split (English-only).")
@@ -418,6 +570,14 @@ def main() -> int:
                           help="distil-whisper/tedlium-long-form: the 11 full "
                                "TED-LIUM 3 test talks (long-form).")
     p_tl.add_argument("--force", action="store_true",
+                      help="Regenerate even if manifest already exists.")
+
+    p_mx = sub.add_parser("mtedx-longform",
+                          help="OpenSLR 100 Multilingual TEDx: full test-split "
+                               "talks for one language (long-form).")
+    p_mx.add_argument("--lang", required=True,
+                      help="one of " + ", ".join(MTEDX_LANGS))
+    p_mx.add_argument("--force", action="store_true",
                       help="Regenerate even if manifest already exists.")
 
     args = p.parse_args()

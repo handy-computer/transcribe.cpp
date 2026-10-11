@@ -125,6 +125,16 @@
     "mean_abs": 0.01
   },
   "enc.pos_emb": {
+    "_comment": [
+      "Full-attention checkpoints run NeMo's rel_pos_local_attn [256, 256] by",
+      "default in C++ (LocalAttRelPositionalEncoding: 513 rows), while the",
+      "reference dumps the checkpoint's own full attention (2T-1 rows: 275 on",
+      "jfk). The table is a deterministic sinusoid input, not an activation;",
+      "every encoder activation downstream is compared at full tolerance.",
+      "Values are still compared whenever the shapes agree (tdt_ctc-1.1b,",
+      "streaming variants, or a reference dumped with --att-context 256,256)."
+    ],
+    "shape_optional": true,
     "max_abs": 0.0005,
     "mean_abs": 1e-05
   },
