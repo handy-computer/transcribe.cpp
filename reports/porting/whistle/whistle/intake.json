@@ -1,0 +1,369 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "whistle",
+  "hf_repo": "Cactus-Compute/whistle",
+  "hf_revision": "b358ddadd89b7a713b5aa131f23032d3cca1b251",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Marketing-level config only (model_type=whistle, engine=Cactus-Compute/needle3, languages, sample_rate=16000, max_audio_seconds=30, encoder_frame_ms=80, attention=gqa, mlp=hadamard, quantization=cactus-quants group 128). No layer geometry."
+    },
+    "whistle_cact": {
+      "kind": "hf_file",
+      "path": "whistle.cact",
+      "status": "found",
+      "detail": "Deployed weights (16,919,407 bytes), Needle-3 .cact container (tag 0x05E12A84, 681 tensors). Directory: 145 CQ 2-bit + 7 CQ 4-bit matmul weights (group 128, Lloyd-Max unit-sphere codebooks + Walsh-Hadamard rotation, codebook_len=28), 524 FP16 (norms, Hadamard diagonals, gates, taps), 4 FP32 (2 Hadamard permutations [512], a 13-value speech config vector, the [257,80] mel filterbank), 1 RAW (SentencePiece dump). Header: vocab=8199, d_model=512, heads=8, kv_heads=2, layers=8, qk_head_dim=48, v_head_dim=64, max_seq_len=320, hada_n=512, mhc_lanes=4, qkv_conv_taps=3, kv_bits=8, engram slots=18432 sub_dim=128 tables=4 conv_taps=4 dilation=3 orders=[2,3] sites=[3,7], rope_theta=100000. User-selected weight source for the reference-dtype GGUF (2026-10-09)."
+    },
+    "speech_config_vector": {
+      "kind": "hf_file",
+      "path": "whistle.cact (FP32 tensor #237, shape [13])",
+      "status": "found",
+      "detail": "[3246, 1, 8192, 8, 4, 9, 128, 3, 80, 16000, 512, 400, 160]. Readable: lang-token base 8192, enc_layers 8, enc_lanes 4, conv_kernel 9, stem 128, stem_stages 3, mels 80, rate 16000, fft 512, win 400, hop 160. Fields 0 (3246) and 1 (1) are unidentified."
+    },
+    "mel_filterbank": {
+      "kind": "hf_file",
+      "path": "whistle.cact (FP32 tensor #679, shape [257,80])",
+      "status": "found",
+      "detail": "Shipped filterbank. Peak height falls with frequency (0.0225 -> 0.0033) => area (Slaney) normalized; filter 0 covers bins 1-2, filter 79 covers bins 238-255. Converter should copy it verbatim rather than regenerate."
+    },
+    "tokenizer_cact": {
+      "kind": "hf_file",
+      "path": "whistle.cact (RAW attachment)",
+      "status": "found",
+      "detail": "Self-contained SentencePiece BPE dump (format documented in needle/model/export.py): 8199 pieces, pad=0 eos=1 bos=2 unk=3, add_dummy_prefix=0, byte_fallback=1. 7908 NORMAL, 256 BYTE, 31 USER_DEFINED (Needle chat/tool tags 4-27 + <|en|>..<|pl|> at 8192-8198), 3 CONTROL, 1 UNKNOWN."
+    },
+    "safetensors_checkpoint": {
+      "kind": "hf_file",
+      "path": "checkpoints/whistle.safetensors",
+      "status": "found",
+      "detail": "116 tensors, all F32, 55,151,433 params. __metadata__.run = {stage: qapt, base_checkpoint: avg230-250.pkl, weight_bits: embedding=4,stack/mhc=4,encoder/mhc=4,default=2, kv_bits: 8, act_bits: 8}, step 25000; __metadata__.config carries full geometry (dim 512, kv_heads 2, qk_dim 48, v_dim 64, enc_layers 8, dec_layers 8, conv_kernel 9, taps 3, lanes 4, sites [3,7], orders [2,3], slots 18432, hashes 2, stem 128, stem_stages 3, rope 1e5, mels 80, fft 512, win 400, hop 160, dither 1e-5 (training), max_tokens 320, pad 0, eos 1, bos 2, dtype bfloat16). QAT masters: NOT the deployed numerics; not used as the GGUF source per user decision. Useful for tensor naming/geometry only."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "API returned nothing for checkpoints/ subdirectory; header read directly from the downloaded file instead (see safetensors_checkpoint)."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "Not shipped. Geometry recovered from the safetensors metadata and the .cact speech config vector; window/log/normalization/centering are inside the closed engine."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "Not shipped; tokenizer lives inside whistle.cact."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Not shipped; tokenizer lives inside whistle.cact."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Not shipped. Decode policy (5-beam default, LID, keyword biasing, silence handling) is compiled into the closed engine."
+    },
+    "model_card": {
+      "kind": "hf_file",
+      "path": "README.md + assets/whistle-benchmarks.svg + assets/whistle-model.svg",
+      "status": "found",
+      "detail": "Capabilities (transcribe 7 langs, auto LID, word timestamps from decoder attention, encoder embedding, keyword biasing, laddered decoder depth >=2 via --audio-depth). WER figures only in the benchmarks SVG text."
+    },
+    "reference_engine": {
+      "kind": "reference_binary",
+      "path": "hf://Cactus-Compute/needle3@2ae11323dc000f5e70c49f7403efa6af12ba9e67 (<platform>/needle, <platform>/libneedle.a, python/cactus_needle-3.2.0-*.whl)",
+      "status": "accepted_gap",
+      "detail": "Closed-source prebuilt Needle engine; the only executable that runs Whistle. Exposes needle_transcribe (text, language, words), needle_stream_transcribe_*, needle_embed (encoder output per 80 ms frame). No intermediate-tensor access. User accepted engine-only black-box oracle (2026-10-09). Not yet executed at intake."
+    },
+    "reference_code_needle_jax": {
+      "kind": "reference_code",
+      "path": "git@github.com:cactus-compute/needle.git@ef3cf7543204d99878c0dd913a05f6a506da4be8 needle/model/architecture.py, export.py, quantize.py, tokenizer.py (cloned to refs/cactus/needle)",
+      "status": "found",
+      "detail": "Partial, first-party: Needle-3 text-decoder blocks shared with Whistle's decoder stack (ZCRMSNorm, MultiHeadAttention with q/k/v causal taps + q/k norm + gate_proj, HadamardMLP, mHC hyper-connections with Sinkhorn, Engram hashed n-gram tables, RoPE, depth ladder), .cact format + CQ dequantization, SentencePiece reference tokenizer. Contains NO audio code: no mel frontend, stem, encoder block, cross-attention, pe_gate, or speech decode loop."
+    },
+    "reference_code_needle_experiments": {
+      "kind": "reference_code",
+      "path": "refs/cactus/needle origin/experiments@646ebdc src/model.py",
+      "status": "found",
+      "detail": "April 2026 prototype speech encoder-decoder (SpeechSubsampling DW/PW Conv2D stem, EncoderBlock, DecoderBlock with sigmoid(cross_attn_gate)). Predates the shipped architecture; hints only, not authoritative."
+    },
+    "third_party_port": {
+      "kind": "reference_code",
+      "path": "hf://mrfakename/whistle-ONNX@14fc92cb09ad5c271fe9a4ec4be70274790050d2 (scripts/wt.py PyTorch re-implementation, js/whistle.js pipeline)",
+      "status": "found",
+      "detail": "Third-party reimplementation on dequantized .cact weights; claims greedy transcript parity on 4 clips and mel max-abs-err <= 1.1e-4 vs the engine. NOT adopted as reference (user chose engine-only oracle, 2026-10-09). Non-authoritative."
+    }
+  },
+  "variants": [
+    {
+      "name": "whistle",
+      "memory_gb": 0.22,
+      "files": [
+        "whistle.cact",
+        "config.json",
+        "checkpoints/whistle.safetensors"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-decoder"
+    ],
+    "key_fields": {
+      "model_type": "whistle",
+      "architectures": [
+        "WhistleForSpeechRecognition"
+      ],
+      "weights_version": "2.0.0",
+      "engine": "Cactus-Compute/needle3",
+      "max_audio_seconds": 30,
+      "encoder_frame_ms": 80,
+      "vocab": 8199,
+      "text_vocab": 8192,
+      "d_model": 512,
+      "num_heads": 8,
+      "num_kv_heads": 2,
+      "qk_head_dim": 48,
+      "v_head_dim": 64,
+      "enc_layers": 8,
+      "dec_layers": 8,
+      "enc_conv_kernel": 9,
+      "qkv_conv_taps": 3,
+      "mhc_lanes": 4,
+      "hada_n": 512,
+      "engram_sites": [3, 7],
+      "engram_orders": [2, 3],
+      "engram_slots": 18432,
+      "engram_hashes": 2,
+      "engram_sub_dim": 128,
+      "engram_conv_taps": 4,
+      "engram_conv_dilation": 3,
+      "stem_channels": 128,
+      "stem_stages": 3,
+      "stem_out_in_features": 1280,
+      "rope_theta": 100000.0,
+      "max_tokens": 320,
+      "win_length": 400,
+      "cq_group_size": 128,
+      "kv_bits": 8,
+      "act_bits": 8,
+      "training_dtype": "bfloat16"
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "User decision (2026-10-09): the reference-dtype GGUF comes from the deployed whistle.cact, not the F32 QAT-master safetensors. whistle.cact stores 152 matmul weights as Cactus Quants CQ (145 x 2-bit, 7 x 4-bit: embedding + mHC; group 128; w_group = (codebook[idx] * group_norm) @ normalized Walsh-Hadamard(128)), 524 tensors FP16, 4 FP32. ggml has no CQ type, so CQ tensors are dequantized to F32 (exact in F32 arithmetic up to the Hadamard matmul rounding). Stage 3 stores every tensor F32: the FP16-shipped tensors are norms, gates, taps, Hadamard-MLP factors and mHC scalars, which the loader's Norm bucket requires at F32, plus 11 depthwise/stem conv kernels; every FP16 value is exactly representable in F32, so no value changes. This deviates from the Stage 1 wording ('FP16 tensors keep F16 storage'); accepted by the user 2026-10-09. Reference dtype label: F32.",
+    "details": {
+      "config_declared": "bfloat16 (safetensors __metadata__.config.dtype: training compute dtype, not storage)",
+      "header_distribution": {
+        "F32": 116
+      },
+      "cact_distribution": {
+        "CQ2": 145,
+        "CQ4": 7,
+        "FP16": 524,
+        "FP32": 4,
+        "RAW": 1
+      }
+    },
+    "expected_f32_tensors": [
+      "mel filterbank [257,80]",
+      "Hadamard permutation vectors [512] x2",
+      "speech config vector [13]",
+      "all CQ-dequantized matmul weights and embeddings"
+    ]
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": null,
+    "normalization": null,
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 8199,
+    "special_tokens": {
+      "pad": 0,
+      "eos": 1,
+      "bos": 2,
+      "unk": 3,
+      "lang_en": 8192,
+      "lang_de": 8193,
+      "lang_fr": 8194,
+      "lang_es": 8195,
+      "lang_it": 8196,
+      "lang_nl": 8197,
+      "lang_pl": 8198
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "ffed62a8af615389947e938ae6d958d438bc723ec6181ae5ebe2d32bd1267319"
+  },
+  "capabilities": {
+    "languages": [
+      "en",
+      "de",
+      "fr",
+      "es",
+      "it",
+      "nl",
+      "pl"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [
+      "word"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean-le30s",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "transcribe.cpp acceptance subset (user decision 2026-10-09)",
+      "notes": "ACCEPTANCE DATASET. LibriSpeech test-clean restricted to utterances <= 30.0 s (2611 of 2620), because the engine rejects longer audio ('audio limit is 30 s'). Manifest samples/wer/librispeech-test-clean-le30s.manifest.jsonl, built from librispeech-test-clean.manifest.jsonl by WAV duration (see docs/porting/families/whistle.md). Publisher does not report this subset; the full-split publisher number is the next entry."
+    },
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.31,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": "Full split. Whisper normalizers; deployed 2-4 bit engine at its defaults (5 beams). Context only: downstream gates use the measured engine Oracle baseline on the le30s subset."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.49,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": null
+    },
+    {
+      "dataset": "SPGISpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 7.65,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": null
+    },
+    {
+      "dataset": "Earnings-22",
+      "language": "en",
+      "metric": "wer",
+      "score": 19.01,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": null
+    },
+    {
+      "dataset": "AMI",
+      "language": "en",
+      "metric": "wer",
+      "score": 26.07,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": "Includes empty references (Open ASR Leaderboard convention)."
+    },
+    {
+      "dataset": "AMI cleaned",
+      "language": "en",
+      "metric": "wer",
+      "score": 22.87,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": null
+    },
+    {
+      "dataset": "TED-LIUM",
+      "language": "en",
+      "metric": "wer",
+      "score": 7.61,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": "Excludes ignore_time_segment_in_scoring regions."
+    },
+    {
+      "dataset": "FLEURS (7-language average)",
+      "language": null,
+      "metric": "wer",
+      "score": 21.4,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": "Average over en, de, fr, es, it, nl, pl."
+    },
+    {
+      "dataset": "MLS (6-language average)",
+      "language": null,
+      "metric": "wer",
+      "score": 24.9,
+      "score_unit": "percent",
+      "source": "model card (assets/whistle-benchmarks.svg)",
+      "notes": "Average over de, fr, es, it, nl, pl (no English)."
+    }
+  ],
+  "reference_framework": "author_repo_cactus_needle_engine",
+  "reference_rationale": "There is no first-party source implementation of Whistle's audio path. The only publisher-supported executable is the closed prebuilt Needle engine (Cactus-Compute/needle3 binaries / cactus-needle wheel) running whistle.cact. The user selected it as a black-box oracle on 2026-10-09 over (a) pausing for Cactus to publish code, (b) adopting the third-party mrfakename/whistle-ONNX PyTorch port, and (c) dropping the port; selecting it explicitly waives the CLAUDE.md 'do not guess' rule for the components with no source (mel frontend details, conv stem, encoder block, cross-attention, pe_gate, decode loop). The engine is authoritative for end-to-end transcripts, detected language, word times and the encoder embedding (needle_embed); first-party JAX code in cactus-compute/needle (architecture.py, export.py) is authoritative for the shared decoder blocks and the .cact/CQ format. No intermediate tensor dumps are available from the oracle, so Stage 2 dumps are limited to engine-observable outputs.",
+  "architecture_pattern": "encoder-decoder",
+  "known_risks": [
+    "Reference is a closed binary: no tensor dumps below the encoder output (needle_embed) and the final transcript/words; layer-by-layer bring-up has no oracle and must be validated end-to-end.",
+    "Do-not-guess waiver in effect: mel window/log/normalization/centering, conv stem wiring, encoder block order (attn + conv module + two Hadamard MLPs), cross-attention, pe_gate and the decode loop are reconstructed from tensor names, shapes and the experiments-branch prototype; each reconstruction must be confirmed against engine outputs.",
+    "Weights are the deployed CQ 2/4-bit .cact dequantized to F32, not the F32 QAT masters; dequantization (codebook * group L2 norm, then normalized Walsh-Hadamard over 128) must be bit-checked against needle/model/quantize.py and export.py.",
+    "Engine numerics are not F32: int8 KV cache (kv_bits=8 in the header) and 8-bit activations (act_bits=8) in QAT; an F32 ggml port will not be bit-exact and parity must be judged on transcripts/WER, not tensors.",
+    "Engine decodes with 5-beam search by default; transcribe.cpp has no beam search. Stage 2 must find out whether the engine can run greedy for a like-for-like baseline, else accept a greedy-vs-beam WER delta.",
+    "Hard input cap of 30 s per pass (max_audio_seconds=30; decoder max_tokens=320, max_seq_len=320). Long-form behavior beyond 30 s needs a chunking policy; the engine's own long-audio path is stream-based.",
+    "Decoder self-attention uses causal depthwise q/k/v taps (width 3) across decoded tokens: the KV cache must also carry the previous 2 pre-tap projections per layer.",
+    "mHC hyper-connections: 4 residual lanes with Sinkhorn-normalized lane-mixing matrices in both encoder and decoder; the Sinkhorn iteration count and whether it is precomputed must match the engine.",
+    "Engram hashed n-gram embeddings at decoder sites 3 and 7 (orders 2,3; 2 heads; 18432 slots; 4-tap dilated conv): hashing over the token history is host-side integer logic and must match exactly, including at the BOS/language-token boundary.",
+    "HadamardMLP is a structured Kronecker (16x16 x 32x32) Walsh-Hadamard MLP with fixed permutations (shipped as FP32 [512] vectors) and a rank-8 cond_u/cond_v correction; no direct ggml op, needs a custom decomposition.",
+    "Prompt/language semantics unknown: whether the decoder prompt is <s><|lang|> and how auto-LID scores the 7 language tokens (argmax at step 1 or restricted) is engine-internal.",
+    "Silence/steady noise must return empty text and empty language; the mechanism (no-speech threshold, EOS-first, energy gate) is undocumented.",
+    "Word timestamps come from DTW over decoder cross-attention; which layers/heads and the DTW normalization are undocumented.",
+    "Keyword biasing is a decode-time search bias with undocumented weights; it does not map 1:1 onto transcribe.cpp's prompt-based vocabulary feature.",
+    "Decoder depth ladder (--audio-depth N, N>=2) selects a layer subset per ladder_layer_indices(); the default depth the engine runs and benchmarks with must be confirmed (assumed full 8).",
+    "Engine-side streaming (needle_stream_transcribe_*) is a re-decode policy committing words that two passes agree on; the model itself is an offline 30 s window.",
+    "Acceptance set exceeds the cap: 9 of 2620 LibriSpeech test-clean utterances are longer than 30 s (max 34.95 s) and the engine rejects them. Resolved 2026-10-09: REF, Stage 4 and Stage 7 all score the 2611-utterance <=30 s subset (upstream_benchmarks[0]).",
+    "The cactus-needle Python wrapper sends usage telemetry and re-fetches config.json from HF on every load; Stage 2 reference runs must set NEEDLE_TELEMETRY=0.",
+    "The cactus-needle wrapper caches weights and engines under ~/.cache/cactus-needle (outside the sandbox); Stage 2 must point NEEDLE_WHISTLE_WEIGHTS at the HF-cache whistle.cact and NEEDLE3_LIB_PATH at an engine under refs/ so nothing is written there."
+  ],
+  "intake_gaps": [
+    {
+      "field": "reference_framework",
+      "reason": "No source implementation of the audio path exists. ACCEPTED by user 2026-10-09: closed Needle engine as black-box oracle, with explicit do-not-guess waiver for unsourced components."
+    },
+    {
+      "field": "frontend",
+      "reason": "Window type, log flavor/clamp, normalization, STFT centering/padding and inference-time dither are inside the closed engine. Geometry (16 kHz, 80 mels, n_fft 512, win 400, hop 160) and the Slaney-normalized [257,80] filterbank are first-party from whistle.cact. Remaining fields to be fixed in Stage 2 by matching needle_embed output; left null here."
+    },
+    {
+      "field": "decode_policy",
+      "reason": "Prompt layout, LID scoring, beam width, silence handling, keyword-bias weights and timestamp DTW are compiled into the engine and must be characterized empirically in Stage 2."
+    },
+    {
+      "field": "capabilities.streaming",
+      "reason": "Set false: the model is an offline 30 s encoder-decoder; the engine's stream API is a host-side re-decode policy. Signed off by user 2026-10-09 (streaming row OUT OF SCOPE)."
+    }
+  ]
+}

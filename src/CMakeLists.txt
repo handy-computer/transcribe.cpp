@@ -50,6 +50,12 @@ add_library(transcribe
     arch/cohere/weights.cpp
     arch/cohere/encoder.cpp
     arch/cohere/decoder.cpp
+    arch/whistle/model.cpp
+    arch/whistle/capabilities.cpp
+    arch/whistle/weights.cpp
+    arch/whistle/encoder.cpp
+    arch/whistle/decoder.cpp
+    arch/whistle/cpu_avx2.cpp
     arch/canary/model.cpp
     arch/canary/capabilities.cpp
     arch/canary/weights.cpp
@@ -294,6 +300,13 @@ if(MSVC)
     set_source_files_properties(third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "/w")
 else()
     set_source_files_properties(third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+
+# Whistle's AVX2 + FMA kernels fuse only where they call FMA explicitly: GCC
+# would otherwise contract plain mul + add into FMA in these target("fma")
+# functions, changing results the kernels mean to match exactly.
+if(NOT MSVC)
+    set_source_files_properties(arch/whistle/cpu_avx2.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 endif()
 
 if(WIN32)

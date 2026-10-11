@@ -15,6 +15,7 @@
 
 #include "parakeet.h"
 #include "transcribe-batch-util.h"
+#include "transcribe-cpu-threadpool.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
 #include "weights.h"
@@ -22,7 +23,8 @@
 // ggml-backend.h, not ggml-cpu.h: under GGML_BACKEND_DL the CPU backend
 // is a loadable module, so backend-specific entry points must be reached
 // through the registry (ggml_backend_init_by_type / get_proc_address),
-// never by direct link-time reference.
+// never by direct link-time reference. The threadpool entry points are
+// reached through transcribe-cpu-threadpool.h.
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"  // ggml_threadpool_params_default (rest via registry)
@@ -386,30 +388,6 @@ bool build_joint_graph(JointGraph & g, const HostJoint & j, ggml_backend_t backe
     return true;
 }
 
-// CPU-backend threadpool entry points, reached through the registry so
-// the library stays DL-safe (under GGML_BACKEND_DL these symbols are not
-// directly linkable). Resolved via ggml_backend_reg_get_proc_address.
-typedef ggml_threadpool_t (*pfn_threadpool_new)(ggml_threadpool_params *);
-typedef void (*pfn_threadpool_free)(ggml_threadpool_t);
-typedef void (*pfn_set_threadpool)(ggml_backend_t, ggml_threadpool_t);
-
-static void * cpu_backend_proc(ggml_backend_t backend, const char * name) {
-    ggml_backend_dev_t dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
-    ggml_backend_reg_t reg = dev != nullptr ? ggml_backend_dev_backend_reg(dev) : nullptr;
-    return reg != nullptr ? ggml_backend_reg_get_proc_address(reg, name) : nullptr;
-}
-
-// Free a CPU-backend threadpool via the registry. Resolving the free fn needs
-// the backend alive, so callers must invoke this BEFORE freeing the backend.
-static void free_cpu_threadpool(ggml_backend_t backend, ggml_threadpool_t tp) {
-    if (tp == nullptr || backend == nullptr) {
-        return;
-    }
-    if (auto fn = (pfn_threadpool_free) cpu_backend_proc(backend, "ggml_threadpool_free")) {
-        fn(tp);
-    }
-}
-
 // Per-call predictor LSTM graph (the mutable half of the predictor):
 // a single per-step graph built fresh per decode call around the
 // model-resident HostPredictor::lstm weights, recomputed in place each
@@ -440,7 +418,7 @@ struct PredGraph {
         if (ctx != nullptr) {
             ggml_free(ctx);
         }
-        free_cpu_threadpool(backend, tp);  // before safe_backend_free(backend)
+        cpu_threadpool_free(backend, tp);  // before safe_backend_free(backend)
         if (backend != nullptr) {
             safe_backend_free(backend);
         }
@@ -472,7 +450,7 @@ bool build_pred_graph(PredGraph & g, const HostPredictor & p, int n_threads) {
             ggml_free(g.ctx);
             g.ctx = nullptr;
         }
-        free_cpu_threadpool(g.backend, g.tp);
+        cpu_threadpool_free(g.backend, g.tp);
         g.tp = nullptr;  // before freeing backend
         if (g.backend != nullptr) {
             safe_backend_free(g.backend);
@@ -508,14 +486,12 @@ bool build_pred_graph(PredGraph & g, const HostPredictor & p, int n_threads) {
     // dispatches; poll=0 (park-immediately) was measured to regress pred to
     // 70-110 ms because parked workers are slow to reschedule.
     {
-        auto tp_new = (pfn_threadpool_new) cpu_backend_proc(g.backend, "ggml_threadpool_new");
-        auto tp_set = (pfn_set_threadpool) cpu_backend_proc(g.backend, "ggml_backend_cpu_set_threadpool");
-        if (tp_new != nullptr && tp_set != nullptr) {
-            ggml_threadpool_params tpp = ggml_threadpool_params_default(std::max(1, n_threads));
-            g.tp                       = tp_new(&tpp);
-            if (g.tp != nullptr) {
-                tp_set(g.backend, g.tp);
-            }
+        ggml_threadpool_params tpp = ggml_threadpool_params_default(std::max(1, n_threads));
+        ggml_threadpool_t      tp  = cpu_threadpool_new(g.backend, &tpp);
+        if (tp != nullptr && cpu_threadpool_set(g.backend, tp)) {
+            g.tp = tp;
+        } else {
+            cpu_threadpool_free(g.backend, tp);
         }
         // If unresolved (non-CPU exotic backend), g.tp stays null and each
         // graph_compute spawns a transient pool — correct, just less tuned.
