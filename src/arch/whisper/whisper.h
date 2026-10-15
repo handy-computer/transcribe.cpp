@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "transcribe-load-common.h"
 
 struct ggml_context;
 struct ggml_tensor;
@@ -270,6 +271,9 @@ struct WhisperModel final : public transcribe_model {
     // Runtime backend plan. See transcribe-backend.h.
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
+    // Owns the weight mmap when backend_buffer is a cpu-buffer-from-ptr over it.
+    // Must outlive backend_buffer and ctx_meta: both point into these pages.
+    transcribe::load_common::MappedWeights weights_map;
 
     // Language token ids keyed by BCP-47 short code (from general.languages).
     // Resolves a params.language string to the <|lang_xx|> token id (whisper

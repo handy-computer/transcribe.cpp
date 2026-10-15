@@ -57,6 +57,8 @@ QwenAsrModel::~QwenAsrModel() {
         safe_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
+    // After the buffer and ctx_meta, both of which point into these pages.
+    weights_map.reset();
     packed_gate_up.free();
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
         safe_backend_free(*it);
@@ -247,20 +249,32 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
-    ggml_backend_buffer_t weights_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
-    if (weights_buffer == nullptr) {
-        gguf_free(gguf_data);
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_OOM;
-    }
-    m->backend_buffer = weights_buffer;
-    ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    // Prefer mapping the weights on a CPU backend: the file pages back the
+    // tensors directly, keeping the model out of anonymous memory and so out of
+    // Android's low-memory-killer budget. Safe here — every
+    // ggml_backend_tensor_set in this arch targets graph-input tensors in their
+    // own contexts, and the packed gate/up weights are new tensors.
+    // Falls back to allocate-and-copy whenever mapping is unavailable.
+    ggml_backend_buffer_t weights_buffer = nullptr;
+    if (transcribe::load_common::map_tensor_data_cpu(loader.path(), gguf_data, m->ctx_meta, m->plan, &weights_buffer,
+                                                     &m->weights_map, "qwen3_asr")) {
+        m->backend_buffer = weights_buffer;
+    } else {
+        weights_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
+        if (weights_buffer == nullptr) {
+            gguf_free(gguf_data);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: ggml_backend_alloc_ctx_tensors failed");
+            return TRANSCRIBE_ERR_OOM;
+        }
+        m->backend_buffer = weights_buffer;
+        ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    if (const transcribe_status st =
-            transcribe::load_common::stream_tensor_data(loader.path(), gguf_data, m->ctx_meta, "qwen3_asr");
-        st != TRANSCRIBE_OK) {
-        gguf_free(gguf_data);
-        return st;
+        if (const transcribe_status st =
+                transcribe::load_common::stream_tensor_data(loader.path(), gguf_data, m->ctx_meta, "qwen3_asr");
+            st != TRANSCRIBE_OK) {
+            gguf_free(gguf_data);
+            return st;
+        }
     }
     gguf_free(gguf_data);
 

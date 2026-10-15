@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "transcribe-load-common.h"
 
 struct ggml_context;
 struct ggml_tensor;
@@ -78,6 +79,9 @@ struct QwenAsrModel final : public transcribe_model {
 
     transcribe::BackendPlan                    plan;
     ggml_backend_buffer_t                      backend_buffer = nullptr;
+    // Owns the weight mmap when backend_buffer is a cpu-buffer-from-ptr over it.
+    // Must outlive backend_buffer and ctx_meta: both point into these pages.
+    transcribe::load_common::MappedWeights weights_map;
     transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     std::optional<transcribe::MelFrontend> mel;
