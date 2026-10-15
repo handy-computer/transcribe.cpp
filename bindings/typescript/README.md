@@ -12,6 +12,13 @@ A matching prebuilt native package is selected automatically for your
 platform (`@transcribe-cpp/<platform>`); there is nothing to compile and no
 environment variables to set.
 
+On Windows, the prebuilt libraries are built with the Visual C++ 2022
+toolset and require the
+[Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+version 14.40 or newer. Older runtimes (for example the 2021-era 14.29
+redistributable) crash with a native access violation inside `std::mutex`
+during backend initialization.
+
 Upgrading from 0.1? See the
 [0.2 migration guide](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/migrating-to-0.2.md),
 including the replacement of `gpuDevice` with exact device objects.
