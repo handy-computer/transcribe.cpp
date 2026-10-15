@@ -637,3 +637,32 @@ unchanged. The deltas this variant adds:
   PASS, at ceiling). F16/Q8_0/Q6_K/Q5_K_M sit inside the REF 95% CI on
   both sets; Q4_K_M is the outlier (FLEURS 8.49%, LS 3.30%). All quants
   user-accepted. See `reports/wer/nemotron-3.5-asr-streaming-0.6b.*.summary.md`.
+
+## Phonon-2 conversion-first variant
+
+Source `FermionResearch/Phonon-2@7e153e4`; dense Transformers publisher
+reference, `scripts/envs/parakeet-phonon`, and
+`scripts/dump_reference_parakeet_phonon.py`. See
+[the variant documentation](../../models/phonon-2.md) for reproduction,
+reference pins, scope and attribution.
+
+The source uses the existing v3 FastConformer/TDT geometry and tokenizer,
+with English-only capability metadata. Container reconstruction is independent
+of the publisher reader and is checked exactly against it. No custom packed
+ggml types, external runtime, or public ABI is added.
+
+Transformers masks every subsampler convolution, including pointwise bias
+on invalid frames. KV `encoder.length_masking=transformers` shares the
+existing floor-derived valid lengths and F32 pointwise compute, but applies
+valid masks after pointwise/ReLU. This is equivalent on valid frames because
+pointwise kernels have temporal width 1. The existing `kestrel` and `none`
+values preserve their prior behavior. `tdt.symbol_budget=global` reproduces
+Transformers' blank progress and generation length budget.
+
+Full LibriSpeech test-clean WER was measured against the publisher reference
+for CPU serial and Metal serial/batch-8; the native runs passed the WER gate.
+Full CPU batch-8 was skipped at the user's request. Metal still exceeds the
+strict CPU-reference tensor tolerances. Packed compute, deployment
+quantization and publication readiness are not claimed. Detailed evidence is
+recorded in
+`reports/porting/parakeet/phonon-2/_porting-log.md`.

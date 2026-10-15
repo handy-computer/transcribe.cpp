@@ -941,9 +941,9 @@ endif()
 # -----------------------------------------------------------------------------
 #
 # Phase 5 acceptance gate: end-to-end transcription on jfk.wav. Loads
-# a real Parakeet v2 GGUF, runs transcribe_run, and asserts the full
-# text is within Levenshtein edit distance 3 of the canonical JFK
-# reference text. Tensor-level numerical validation lives in
+# a real Parakeet v2 or Phonon-2 GGUF, runs transcribe_run, and asserts
+# the full text matches its JFK reference (edit distance 3 for v2,
+# exact for Phonon-2). Tensor-level numerical validation lives in
 # scripts/validate.py.
 # Also exercises every public result accessor (segment / word / token
 # levels) including the safe-sentinel out-of-bounds path.

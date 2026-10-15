@@ -177,9 +177,12 @@ struct ParakeetHParams {
 
     // kestrel_length_masking: valid lengths from n_samples / hop, masks at
     // every batch size (see ConvPolicy::pre_encode_mask_after_stride). KV
-    // stt.parakeet.encoder.length_masking = "kestrel"; absent / "none" keeps
-    // the NeMo behavior (masks only in variable-length batches).
+    // stt.parakeet.encoder.length_masking = "kestrel" or "transformers";
+    // absent / "none" keeps NeMo masks only in variable-length batches.
     bool kestrel_length_masking = false;
+    // Transformers uses the same floor-derived valid lengths, but clears
+    // the pointwise bias on padded frames before the next strided conv.
+    bool mask_after_pointwise   = false;
 
     // Speech head on the subsampler output and the long-form pause
     // segmenter it drives. has_vad_head is set when stt.parakeet.vad.hidden

@@ -327,7 +327,9 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     }
     const bool       var_len_masks = batch_var_len && (n_batch > 1 || hp.kestrel_length_masking);
     conf::ConvPolicy policy{};
-    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    // A 1x1 pointwise conv cannot mix time frames, so masking after its
+    // ReLU also implements Transformers' mask-after-every-conv semantics.
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking && !hp.mask_after_pointwise;
     policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
     policy.direct_pw                    = conf::detect_direct_pw(backend_name);
     policy.direct_conv0_in_pre_encode   = true;
@@ -1027,7 +1029,7 @@ VadBuild build_vad_graph(ggml_context *          ctx,
     policy.direct_dw_in_block           = detect_direct_dw_in_block(backend_name);
     policy.direct_dw_in_pre_encode      = detect_direct_dw_in_pre_encode(backend_name);
     policy.causal_pre_encode            = false;
-    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking;
+    policy.pre_encode_mask_after_stride = hp.kestrel_length_masking && !hp.mask_after_pointwise;
     policy.pre_encode_f32_pointwise     = hp.kestrel_length_masking;
 
     vb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_mel_frames, hp.fe_num_mels, 1, 1);

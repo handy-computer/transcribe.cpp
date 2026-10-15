@@ -1,0 +1,69 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "phonon-2",
+  "source_model": {
+    "hf_repo": "FermionResearch/Phonon-2",
+    "hf_revision": "7e153e4054c0a10db6d47d6fff5c062d4c77c154"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://huggingface.co/FermionResearch/Phonon-2/blob/7e153e4054c0a10db6d47d6fff5c062d4c77c154/reference_transformers.py",
+    "revision": "7e153e4054c0a10db6d47d6fff5c062d4c77c154",
+    "entrypoint": "scripts/dump_reference_parakeet_phonon.py",
+    "env": "parakeet-phonon",
+    "dump_args": [
+      "--revision",
+      "7e153e4054c0a10db6d47d6fff5c062d4c77c154"
+    ]
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_symmetric",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": "slaney",
+    "win_length": 400
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": 8193,
+    "special_tokens": {
+      "pad": 2,
+      "blank": 8192,
+      "decoder_start": 8192
+    }
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/phonon-2.json",
+  "cases": [
+    {
+      "audio": "jfk",
+      "language": null
+    }
+  ],
+  "cpp_env": {
+    "TRANSCRIBE_NO_FLASH": "1"
+  }
+}

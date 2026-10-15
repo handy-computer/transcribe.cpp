@@ -121,7 +121,7 @@ struct ConvPolicy {
     bool causal_pre_encode = false;
 
     // Where the pre_encode valid-length masks apply. false (NeMo): after each
-    // stage's ReLU. true (kestrel / HF Subsampling): right after each strided
+    // stage's ReLU. true (kestrel): right after each strided
     // conv, so the padded tail carries ReLU(pointwise bias) into the next
     // strided conv as the reference does. Stage 1 is the same either way.
     bool pre_encode_mask_after_stride = false;

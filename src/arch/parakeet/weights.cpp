@@ -508,11 +508,12 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
             st != TRANSCRIBE_OK) {
             return st;
         }
-        if (masking != "none" && masking != "kestrel") {
+        if (masking != "none" && masking != "kestrel" && masking != "transformers") {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: unsupported encoder.length_masking \"%s\"", masking.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
-        hp.kestrel_length_masking = (masking == "kestrel");
+        hp.kestrel_length_masking = (masking != "none");
+        hp.mask_after_pointwise   = (masking == "transformers");
 
         std::string budget;
         if (auto st = read_optional_string_kv(gguf, "stt.parakeet.tdt.symbol_budget", kFamilyTag, "per_frame", budget);

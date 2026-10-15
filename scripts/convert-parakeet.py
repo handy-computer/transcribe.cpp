@@ -66,8 +66,8 @@ transcribe::parakeet::read_parakeet_hparams):
   stt.parakeet.encoder.length_masking = "kestrel",
   stt.parakeet.tdt.symbol_budget      = "global"            (kestrel_runtime variants)
 
-parakeet-ultra is the one HF-safetensors source (no .nemo); see
-load_hf_safetensors_model().
+parakeet-ultra uses HF safetensors (no .nemo); Phonon-2 uses Fermion's
+packed container, expanded to F32. Both reuse the HF-to-NeMo name mapping.
 """
 
 from __future__ import annotations
@@ -130,6 +130,23 @@ V3_LANGUAGES = [
 ]
 
 VARIANT_PROFILES: dict[str, dict] = {
+    "phonon-2": {
+        "variant": "tdt-0.6b-phonon-2",
+        "display_name": "Phonon-2",
+        "version": "v2",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
+        "languages": ["en"],
+        "lang_detect": False,
+        "source_format": "fermion",
+        "transformers_runtime": True,
+        "author": "Fermion Research",
+        "organization": "FermionResearch",
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
+    },
     "orukeet": {
         "variant": "tdt-0.6b-orukeet",
         "display_name": "Orukeet",
@@ -834,6 +851,33 @@ def load_hf_safetensors_model(model_spec: str, revision: str | None) -> _HfSafet
     sp = _HfBpeAsSpm(tok_json, blank_id)
     if sp.vocab_size() != blank_id:
         raise ValueError(f"blank_token_id {blank_id} != BPE vocab size {sp.vocab_size()}")
+    return _HfSafetensorsModel(cfg, sd, extract_tokenizer(sp))
+
+
+def load_fermion_model(model_spec: str, revision: str | None) -> _HfSafetensorsModel:
+    """Expand Phonon-2's learned weights to F32, then reuse Parakeet mapping."""
+    import json
+    import torch
+    from lib.phonon import base_directory, read_container, source_directory
+
+    root = source_directory(model_spec, revision)
+    base = base_directory()
+    hf_cfg = json.loads((base / "config.json").read_text())
+    cfg = _nemo_cfg_from_hf_config(hf_cfg)
+    sd = {}
+    for key, value in read_container(root / "model.fermion").items():
+        name = _hf_to_nemo_key(key)
+        if name in sd:
+            raise ValueError(f"duplicate mapped tensor: {name}")
+        sd[name] = torch.from_numpy(value)
+    blank_id = int(hf_cfg["blank_token_id"])
+    tok = json.loads((base / "tokenizer.json").read_text())
+    blank_piece = next((a["content"] for a in tok.get("added_tokens", []) if a["id"] == blank_id), None)
+    if blank_piece != "<blank>":
+        raise ValueError("Phonon-2 tokenizer blank token does not match the base model")
+    sp = _HfBpeAsSpm(tok, blank_id)
+    if blank_id != 8192 or sp.vocab_size() != blank_id:
+        raise ValueError("Phonon-2 requires the v3 8192-piece tokenizer")
     return _HfSafetensorsModel(cfg, sd, extract_tokenizer(sp))
 
 
@@ -1588,6 +1632,8 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     # the parakeet TDT family (0.6b-v2 and 1.1b both ship 1024 SPM
     # tokens), hence the slug-based dispatch.
     slug = out_path.parent.name
+    if slug.lower() == "phonon-2":
+        slug = "phonon-2"
     if slug not in VARIANT_PROFILES:
         raise ValueError(
             f"unknown parakeet variant slug: {slug!r}; "
@@ -1606,7 +1652,9 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
           f"{', spk_kernels=on' if has_spk_kernels else ''})")
 
     has_vad_head = bool(profile.get("has_vad_head", False))
-    if profile.get("source_format") == "hf_safetensors":
+    if profile.get("source_format") == "fermion":
+        model = load_fermion_model(model_spec, revision)
+    elif profile.get("source_format") == "hf_safetensors":
         model = load_hf_safetensors_model(model_spec, revision or profile.get("hf_revision"))
     else:
         model = load_nemo_model(model_spec, prefer_direct=prefer_direct)
@@ -1978,6 +2026,9 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     if profile.get("kestrel_runtime"):
         writer.add_string("stt.parakeet.encoder.length_masking", "kestrel")
         writer.add_string("stt.parakeet.tdt.symbol_budget", "global")
+    elif profile.get("transformers_runtime"):
+        writer.add_string("stt.parakeet.encoder.length_masking", "transformers")
+        writer.add_string("stt.parakeet.tdt.symbol_budget", "global")
 
     # VAD head shape from the checkpoint; segmenter constants are kestrel's
     # runtime policy, written here so the C++ does not hard-code a copy.
@@ -2205,7 +2256,7 @@ def main(argv: list[str]) -> int:
         "--revision",
         type=str,
         default=None,
-        help="HF revision for HF-safetensors variants (parakeet-ultra); "
+        help="HF revision for HF-safetensors or Fermion variants; "
              "defaults to the profile's pinned revision.",
     )
     args = p.parse_args(argv[1:])

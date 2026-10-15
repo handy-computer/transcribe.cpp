@@ -32,6 +32,7 @@
 #include "arch/parakeet/weights.h"
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "gguf.h"
 #include "transcribe-model.h"
 #include "transcribe.h"
 
@@ -311,6 +312,26 @@ int main() {
     } else {
         std::fprintf(stderr, "FAIL pre_encode.out_w is null\n");
         ++g_failures;
+    }
+
+    // Optional mask modes must preserve the legacy default and reject
+    // misspellings rather than silently using another reference's math.
+    gguf_init_params gp{};
+    gp.no_alloc             = true;
+    gguf_context * metadata = gguf_init_from_file(fixture.c_str(), gp);
+    CHECK(metadata != nullptr);
+    if (metadata != nullptr) {
+        for (const char * mode : { "none", "kestrel", "transformers" }) {
+            gguf_set_val_str(metadata, "stt.parakeet.encoder.length_masking", mode);
+            transcribe::parakeet::ParakeetHParams parsed{};
+            CHECK(transcribe::parakeet::read_parakeet_hparams(metadata, parsed) == TRANSCRIBE_OK);
+            CHECK(parsed.kestrel_length_masking == (std::strcmp(mode, "none") != 0));
+            CHECK(parsed.mask_after_pointwise == (std::strcmp(mode, "transformers") == 0));
+        }
+        gguf_set_val_str(metadata, "stt.parakeet.encoder.length_masking", "typo");
+        transcribe::parakeet::ParakeetHParams parsed{};
+        CHECK(transcribe::parakeet::read_parakeet_hparams(metadata, parsed) == TRANSCRIBE_ERR_GGUF);
+        gguf_free(metadata);
     }
 
     // ----- Lifecycle -----
