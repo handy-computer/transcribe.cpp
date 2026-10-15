@@ -3,6 +3,7 @@ sha:  d7cb574130e6f01ad25b3289685489200febcd74
 patches:
   patches/ggml/0001-fix-threadpool-oversubscription.patch
   patches/ggml/0002-backend-reg-filter.patch
+  patches/ggml/0003-metal-alloc-deps-after-reorder.patch
 
 This directory is generated from the upstream ggml tree at the SHA above, minus
 .github/, with the listed downstream patches applied in order. Do not edit it by

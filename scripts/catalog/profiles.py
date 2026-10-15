@@ -186,6 +186,18 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
     return cells
 
 
+def _variant_override(record: dict, profile: dict) -> dict:
+    """Per-variant speed-matrix override written in the profile itself.
+
+    A variant whose hard input cap excludes the default long clip, or whose
+    shipped low-bit preset is not the profile's, names its own samples/quants
+    under `speed.variant_overrides` in catalog/_benchmark_profiles.json
+    rather than restating the matrix as bench command-line flags.
+    """
+    overrides = profile["speed"].get("variant_overrides") or {}
+    return dict(overrides.get(record.get("variant"), {}))
+
+
 def speed_samples(record: dict, profile: dict) -> list[str]:
     """Which clips a variant is benched on.
 
@@ -193,8 +205,12 @@ def speed_samples(record: dict, profile: dict) -> list[str]:
     language is benched on that language instead, at the same two lengths:
     English audio decodes out of distribution on a single-language fine-tune
     and the figure would not be comparable. The rule replaces what used to be
-    one hand-written override per such variant.
+    one hand-written override per such variant. An explicit
+    `variant_overrides` entry wins over both rules.
     """
+    override = _variant_override(record, profile)
+    if override.get("samples"):
+        return [str(sample) for sample in override["samples"]]
     spec = profile["speed"]
     samples = spec.get("samples", [])
     rule = spec.get("single_language_samples")
@@ -219,10 +235,11 @@ def expected_speed(record: dict, profile: dict) -> list[dict]:
         return []
     spec = profile["speed"]
     samples = speed_samples(record, profile)
+    quant_spec = _variant_override(record, profile).get("quants") or spec["quants"]
     cells: list[dict] = []
     for target in spec.get("targets", []):
         for backend in target.get("backends", []):
-            for quant in _quants(spec["quants"], record):
+            for quant in _quants(quant_spec, record):
                 for sample in samples:
                     cells.append({
                         "machine": target["machine"],

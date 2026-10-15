@@ -204,6 +204,15 @@ def reference_dtype_for(
         return GGMLQuantizationType.F32
     if name in ("frontend.mel_filterbank", "frontend.window"):
         return GGMLQuantizationType.F32
+    # Whistle: HadamardMLP diagonals / Kronecker factors / rank-8 correction
+    # (".hmlp"), causal q/k/v and Engram conv taps ("_taps"), scalar sigmoid
+    # gates ("_gate"), mHC lane-mixing scalars and biases (".mhc.a_" /
+    # ".mhc.b_") and the integer Hadamard permutation tables ("hada.perm").
+    # Tiny and precision-sensitive; as 1-D/narrow tensors they would otherwise
+    # fall into Linear and be block-quantized.
+    if (".hmlp" in name or name.endswith("_taps") or name.endswith("_gate")
+            or name.startswith("hada.perm") or ".mhc.a_" in name or ".mhc.b_" in name):
+        return GGMLQuantizationType.F32
 
     # Conv bucket (pointwise + depthwise + 2D).
     is_convpw = (

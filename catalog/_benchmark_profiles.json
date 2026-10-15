@@ -63,6 +63,19 @@
             "cooldown_tctl_c": 55.0
           }
         ],
+        "variant_overrides": {
+          "whistle": {
+            "samples": [
+              "jfk",
+              "german"
+            ],
+            "quants": [
+              "Q8_0",
+              "Q2_K_HR"
+            ],
+            "reason": "Whistle is a hard 30 s per-pass model, so the default long sample dots (35.3 s) cannot run; german (29.3 s) is its in-family long sample. It ships Q2_K_HR (Hadamard-domain 2-bit) as its low-bit preset instead of Q4_K_M."
+          }
+        },
         "single_language_samples": {
           "pattern": [
             "{lang}-short",

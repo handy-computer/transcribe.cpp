@@ -79,6 +79,14 @@ struct Preset {
     ggml_type    norm;
     // llama-style file_type tag written to general.file_type.
     uint32_t     file_type;
+    // Hadamard-domain recipe (Q2_K_HR). The input must store its low-bit
+    // matrices in their Walsh-Hadamard domain (a "*.hadamard_group" KV, e.g.
+    // convert-whistle.py --hadamard-domain), where a 4-level grid fits the
+    // source's 2-bit codebook. Mirrors that source's bit allocation: tensors
+    // it keeps at 4 bits (token embedding, Whistle mHC phi) take linear_embed,
+    // and lookup tables narrower than a K-quant block are stored two rows per
+    // row (pairs_rows).
+    bool         hadamard = false;
 };
 
 // Look up a preset by name. Case-insensitive so "Q4_K_M", "q4_k_m",
@@ -95,5 +103,11 @@ const Preset * preset_table(size_t & n_out);
 // ne[0] so the linear_fallback path can trip when the inner dim
 // doesn't divide the target block size.
 ggml_type resolve_target_type(const Preset & preset, const std::string & name, int64_t ne0);
+
+// Rows per stored row for `name` under `preset`: 2 for Whistle Engram tables
+// under a Hadamard preset (128-wide get_rows tables; the loader accepts the
+// paired layout, see src/arch/whistle/weights.h WhistleEngram::paired), else
+// 1. resolve_target_type must be called with ne0 * pairs_rows(...).
+int64_t pairs_rows(const Preset & preset, const std::string & name);
 
 }  // namespace transcribe::quantize
