@@ -6,7 +6,8 @@
   "params": 220718498,
   "license": {
     "spdx": "mit",
-    "display": "MIT"
+    "display": "MIT",
+    "text": "mit-gigaam"
   },
   "upstream_repo": "ai-sage/GigaAM-v3",
   "upstream_commit": "15ef3b5",

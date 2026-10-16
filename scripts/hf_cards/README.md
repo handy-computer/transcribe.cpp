@@ -23,10 +23,13 @@ uv run scripts/hf_cards/generate.py scripts/hf_cards/<variant>.yaml
 hf upload handy-computer/<variant>-gguf models/<variant> . --repo-type model
 ```
 
-The 12 Moonshine language fine-tunes (`moonshine-{tiny,base}-<lang>`) are
-under the Moonshine AI Community License, which requires a copy of the
-agreement and a `NOTICE` file with every redistributed copy: upload
-`files/moonshine-community-license/{LICENSE,NOTICE}` alongside their GGUFs.
+`generate.py` also writes `LICENSE` and `NOTICE` next to the README: the
+licence text from `licenses/<key>/` and a notice carrying any attribution
+line the licence mandates plus how the files were derived (see
+[`licenses/SOURCES.md`](licenses/SOURCES.md)). Upload all three with every
+card. `models/<slug>/` can also hold local GGUFs that were never published;
+upload named files (or a staging directory) rather than the whole directory
+unless you have checked what is in it.
 
 Re-render and re-upload whenever the catalog record changes (new WER sweep,
 re-bench, capability fix). Repos stay private until a maintainer flips them.

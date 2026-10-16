@@ -24,7 +24,7 @@ See NVIDIA's [model card](https://huggingface.co/nvidia/diar_streaming_sortforme
 for training data, intended use, and upstream evaluation methodology.
 
 <!-- catalog:pin -->
-Licensed NVIDIA Open Model License. Ported from upstream commit [`fafaab5`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1/commit/fafaab5), pinned 2026-07-19. Validated against the NeMo reference at transcribe.cpp commit [`d42c3bb`](https://github.com/handy-computer/transcribe.cpp/tree/d42c3bb) on 2026-07-22.
+Licensed [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/). Ported from upstream commit [`fafaab5`](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1/commit/fafaab5), pinned 2026-07-19. Validated against the NeMo reference at transcribe.cpp commit [`d42c3bb`](https://github.com/handy-computer/transcribe.cpp/tree/d42c3bb) on 2026-07-22.
 <!-- /catalog -->
 
 ## Download

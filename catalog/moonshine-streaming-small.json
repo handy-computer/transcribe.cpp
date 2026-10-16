@@ -6,7 +6,8 @@
   "params": 140135225,
   "license": {
     "spdx": "mit",
-    "display": "MIT"
+    "display": "MIT",
+    "text": "mit-moonshine"
   },
   "upstream_repo": "UsefulSensors/moonshine-streaming-small",
   "upstream_commit": "2c03650",
