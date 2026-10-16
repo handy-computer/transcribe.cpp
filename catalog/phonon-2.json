@@ -11,7 +11,7 @@
   "upstream_repo": "FermionResearch/Phonon-2",
   "upstream_commit": "7e153e4",
   "published_repo": "handy-computer/phonon-2-gguf",
-  "docs_page": "phonon-2.md",
+  "docs_page": "parakeet.md",
   "languages": ["en"],
   "language_tag_form": "bare-bcp47",
   "long_form_strategy": "chunked-unbounded",

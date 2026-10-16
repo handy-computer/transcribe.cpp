@@ -31,6 +31,10 @@ Most users want one of three:
 - **German → `parakeet-primeline`.** primeLine's German fine-tune of
   v3. Same size and speed; tuned for German while keeping the other 24
   v3 languages usable.
+- **English, alternative → `phonon-2`.** Fermion Research's
+  five-value-quantized repack of v3, expanded back to dense weights here.
+  English only, accuracy on par with `parakeet-tdt-0.6b-v2`. CC-BY-4.0
+  weights. See [phonon-2.md](phonon-2.md).
 - **Streaming / real-time → Nemotron streaming.** Most Parakeet variants here
   are offline-only. For low-latency streaming use the FastConformer-lineage
   [`nemotron-3.5-asr-streaming-0.6b`](nemotron-3.5-asr-streaming-0.6b.md)
@@ -58,13 +62,14 @@ WER is on LibriSpeech test-clean for the **Q8_0** preset, measured by
 transcribe.cpp's WER pipeline. See each per-variant doc for the full
 quant matrix and the comparison to NVIDIA's self-reported numbers.
 
-<!-- catalog:family variants=parakeet-tdt-0.6b-v2,parakeet-ultra,parakeet-tdt-0.6b-v3,orukeet,parakeet-primeline,parakeet-tdt-1.1b,parakeet-tdt_ctc-110m,parakeet-tdt_ctc-1.1b,parakeet-rnnt-0.6b,parakeet-rnnt-1.1b,parakeet-ctc-0.6b,parakeet-ctc-1.1b,parakeet-unified-en-0.6b -->
+<!-- catalog:family variants=parakeet-tdt-0.6b-v2,parakeet-ultra,parakeet-tdt-0.6b-v3,orukeet,phonon-2,parakeet-primeline,parakeet-tdt-1.1b,parakeet-tdt_ctc-110m,parakeet-tdt_ctc-1.1b,parakeet-rnnt-0.6b,parakeet-rnnt-1.1b,parakeet-ctc-0.6b,parakeet-ctc-1.1b,parakeet-unified-en-0.6b -->
 | Variant                    | Params | Languages                  | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities                | Doc |
 | --- | ---: | --- | ---: | --- | ---: | --- | --- |
 | `parakeet-tdt-0.6b-v2`     |   618M | en                         |    730 MB | LibriSpeech test-clean (WER) | 1.69% | token timestamps            | [parakeet-tdt-0.6b-v2.md](parakeet-tdt-0.6b-v2.md) |
 | `parakeet-ultra`           |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.80% | token timestamps            | [parakeet-ultra.md](parakeet-ultra.md) |
 | `parakeet-tdt-0.6b-v3`     |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.94% | token timestamps            | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
 | `orukeet`                  |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.86% | token timestamps            | [orukeet.md](orukeet.md) |
+| `phonon-2`                 |   627M | en                         |    740 MB | LibriSpeech test-clean (WER) | 2.15% | token timestamps            | [phonon-2.md](phonon-2.md) |
 | `parakeet-primeline`       |   627M | 25 languages + auto-detect |    740 MB | FLEURS de (WER)              | 5.98% | token timestamps            | [parakeet-primeline.md](parakeet-primeline.md) |
 | `parakeet-tdt-1.1b`        |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.38% | token timestamps            | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |
 | `parakeet-tdt_ctc-110m`    |   114M | en                         |    135 MB | LibriSpeech test-clean (WER) | 2.43% | token timestamps            | [parakeet-tdt_ctc-110m.md](parakeet-tdt_ctc-110m.md) |
