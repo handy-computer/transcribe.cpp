@@ -12,6 +12,7 @@
 #include "gguf.h"
 #include "gigaam.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
@@ -43,9 +44,28 @@ static_assert(std::is_base_of_v<transcribe_session, GigaamSession>);
 
 GigaamSession::~GigaamSession() = default;
 
-// Base release_scratch has freed sched/compute_ctx; drop what pointed into them.
+namespace {
+
+// Host scratch above this many floats (4 MiB, about twice one 25 s window of
+// encoder output) is freed after a run instead of being kept.
+constexpr size_t k_host_scratch_keep_floats = size_t{ 1 } << 20;
+
+void release_if_oversized(std::vector<float> & v) noexcept {
+    if (v.capacity() > k_host_scratch_keep_floats) {
+        std::vector<float>().swap(v);
+    }
+}
+
+}  // namespace
+
+// Base release_scratch has freed sched/compute_ctx; drop what pointed into
+// them. The mel and stitched encoder buffers are sized by the whole
+// utterance, so release them after a long one rather than pinning them.
 void GigaamSession::on_scratch_released() noexcept {
     encoder_out = nullptr;
+    release_if_oversized(mel_buf);
+    release_if_oversized(mel_win);
+    release_if_oversized(enc_host);
 }
 
 GigaamModel::~GigaamModel() {
@@ -69,17 +89,11 @@ namespace {
 
 constexpr const char k_default_variant[] = "gigaam-v3-e2e-rnnt";
 
-// Input-length contract (see docs/input-limits.md). GigaAM is a SOFT-WINDOW
-// family: the Conformer encoder has no hard architectural cap, but every
-// published variant was trained on utterances up to ~25 s, beyond which
-// accuracy degrades. Upstream rejects over-length audio outright; we
-// WARN-and-PROCEED so the caller keeps control of the degradation.
-//
-// No hparam encodes the window, so hardcode the upstream 25 s limit.
-// k_safe_audio_ms is reported via transcribe_capabilities::max_audio_ms and is
-// the run() soft-window WARN threshold; k_safe_s is the same value in seconds,
-// used only in the WARN text.
-constexpr int     k_safe_s        = 25;
+// Input-length contract (see docs/input-limits.md). Every published GigaAM
+// variant was trained on utterances up to ~25 s. Upstream rejects longer
+// audio; we encode it in windows of at most this length (plan_windows), so
+// there is no practical input limit. No hparam encodes the window, so
+// hardcode the upstream 25 s limit.
 constexpr int64_t k_safe_audio_ms = 25000;
 
 transcribe_status load(Loader & loader, const transcribe_model_load_params * params, transcribe_model ** out_model) {
@@ -109,11 +123,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    // Publish the advisory soft-window now that the frontend hparams are
-    // known (apply_family_invariants ran before the hparams were read, so it
-    // could not set this). GigaAM warns-and-proceeds past this window rather
-    // than rejecting; see docs/input-limits.md.
-    m->caps.max_audio_ms = k_safe_audio_ms;
+    // Long audio is windowed internally (plan_windows): no practical limit.
+    m->caps.max_audio_ms = 0;
 
     // Reopen for tensor metadata.
     gguf_init_params init_params{};
@@ -229,6 +240,176 @@ transcribe_status load_ref_mel(const std::string & dir, int n_mels, int & n_mel_
 }
 #endif  // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
+// Replace the per-call graph context (the scheduler, if any, is kept).
+transcribe_status reset_compute_ctx(GigaamSession * gc) {
+    if (gc->compute_ctx != nullptr) {
+        ggml_free(gc->compute_ctx);
+        gc->compute_ctx = nullptr;
+    }
+    gc->encoder_out = nullptr;
+
+    ggml_init_params ip{};
+    ip.mem_size     = 4 * 1024 * 1024;
+    ip.mem_buffer   = nullptr;
+    ip.no_alloc     = true;
+    gc->compute_ctx = ggml_init(ip);
+    if (gc->compute_ctx == nullptr) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: compute context allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
+    return TRANSCRIBE_OK;
+}
+
+// Create the scheduler on first use, then allocate `graph` on it and apply
+// the session thread count to the CPU backend.
+transcribe_status alloc_encoder_graph(GigaamSession * gc, GigaamModel * gm, ggml_cgraph * graph) {
+    if (gc->sched == nullptr) {
+        gc->sched = ggml_backend_sched_new(gm->plan.scheduler_list.data(), nullptr,
+                                           static_cast<int>(gm->plan.scheduler_list.size()),
+                                           /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+        if (gc->sched == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: ggml_backend_sched_new failed");
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+    }
+    ggml_backend_sched_reset(gc->sched);
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(gc->sched, graph, "gigaam")) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
+    transcribe::configure_sched_n_threads(gc->sched, gc->n_threads);
+    return TRANSCRIBE_OK;
+}
+
+// Encoder frames produced from n mel frames: two stride-2 convs with
+// symmetric (k-1)/2 padding, floor((in-1)/2)+1 each (matches encoder.cpp).
+int enc_frames_for_mel(int n_mel) {
+    int t = (n_mel - 1) / 2 + 1;
+    return (t - 1) / 2 + 1;
+}
+
+// Windowed-encode plan over T encoder frames. Full-utterance attention past
+// the 25 s training window degrades accuracy and grows the encoder workspace
+// with the input (Handy #2000), so longer audio is encoded in windows of at
+// most k_window_frames. k_window_ctx_frames are encoded on each side of a
+// window's kept span and then discarded, so every kept frame sees at least
+// that much real audio on both sides. `bounds` holds the kept spans as
+// consecutive [bounds[i], bounds[i+1]) ranges covering [0, T); empty means a
+// single full-utterance pass.
+struct WindowPlan {
+    std::vector<int> bounds;
+
+    int n_windows() const { return bounds.empty() ? 1 : static_cast<int>(bounds.size()) - 1; }
+};
+
+constexpr int k_window_frames     = static_cast<int>(k_safe_audio_ms / 40);  // 625 frames of 40 ms
+constexpr int k_window_ctx_frames = 50;                                      // 2 s
+
+WindowPlan plan_windows(int T) {
+    WindowPlan p;
+    if (T <= k_window_frames) {
+        return p;
+    }
+    // Equal spans (no short tail window), each at most max_stride.
+    const int max_stride = k_window_frames - 2 * k_window_ctx_frames;
+    const int n          = (T + max_stride - 1) / max_stride;
+    for (int i = 0; i <= n; ++i) {
+        p.bounds.push_back(static_cast<int>(static_cast<int64_t>(T) * i / n));
+    }
+    return p;
+}
+
+// Encode one contiguous mel slice (channel-major [n_mels, n_frames]) and
+// copy the pre-transpose encoder output (T-major [T_enc * D]) to `out`.
+// Rebuilds the graph each call; the scheduler is reused, so its allocator
+// grows to the largest slice of the run and no further.
+transcribe_status encode_mel_slice(GigaamSession *      gc,
+                                   GigaamModel *        gm,
+                                   const float *        mel,
+                                   int                  n_frames,
+                                   bool                 dumps,
+                                   std::vector<float> & out,
+                                   int &                T_enc,
+                                   int &                D) {
+    if (auto st = reset_compute_ctx(gc); st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    EncoderBuild eb = build_encoder_graph(gc->compute_ctx, gm->weights, gm->hparams, n_frames,
+                                          /*kv_type=*/GGML_TYPE_F32, gm->backend.c_str());
+    if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (auto st = alloc_encoder_graph(gc, gm, eb.graph); st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    ggml_backend_tensor_set(eb.mel_in, mel, 0, static_cast<size_t>(n_frames) * gm->hparams.fe_num_mels * sizeof(float));
+    if (dumps) {
+        transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
+    }
+
+    // Rotary positions [0, 1, ..., T_enc-1] as int32. Window-local: the
+    // rotary attention depends only on relative offsets inside the window.
+    if (eb.dumps.pos_emb != nullptr) {
+        const int64_t        T = eb.dumps.pos_emb->ne[0];
+        std::vector<int32_t> pos(T);
+        for (int64_t i = 0; i < T; ++i) {
+            pos[i] = static_cast<int32_t>(i);
+        }
+        ggml_backend_tensor_set(eb.dumps.pos_emb, pos.data(), 0, pos.size() * sizeof(int32_t));
+    }
+
+    const int64_t t_enc_start = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(gc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: graph_compute failed");
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    gc->t_encode_us = ggml_time_us() - t_enc_start;
+
+    if (dumps) {
+        if (eb.dumps.pre_encode_out) {
+            transcribe::debug::dump_tensor("enc.subsample.out", eb.dumps.pre_encode_out, "encoder.subsample");
+        }
+        if (eb.dumps.block0_after_attn) {
+            transcribe::debug::dump_tensor("enc.block.0.after_attn", eb.dumps.block0_after_attn, "encoder.block.0");
+        }
+        if (eb.dumps.block0_after_conv) {
+            transcribe::debug::dump_tensor("enc.block.0.after_conv", eb.dumps.block0_after_conv, "encoder.block.0");
+        }
+        if (eb.dumps.block0_out) {
+            transcribe::debug::dump_tensor("enc.block.0.out", eb.dumps.block0_out, "encoder.block.0");
+        }
+        if (eb.dumps.mid_block_out && eb.dumps.mid_block_idx >= 0) {
+            char nm[32];
+            std::snprintf(nm, sizeof(nm), "enc.block.%d.out", eb.dumps.mid_block_idx);
+            transcribe::debug::dump_tensor(nm, eb.dumps.mid_block_out, "encoder.block.mid");
+        }
+        if (eb.dumps.last_block_out && eb.dumps.last_block_idx >= 0) {
+            char nm[32];
+            std::snprintf(nm, sizeof(nm), "enc.block.%d.out", eb.dumps.last_block_idx);
+            transcribe::debug::dump_tensor(nm, eb.dumps.last_block_out, "encoder.block.last");
+        }
+        if (eb.dumps.final_out) {
+            transcribe::debug::dump_tensor("enc.out", eb.dumps.final_out, "encoder.out");
+        }
+    }
+    gc->encoder_out = eb.out;
+
+    // Both heads consume the pre-final-transpose encoder tensor
+    // (ne=[d_model, T_enc, 1]), named `rnnt.encoded` on the graph.
+    ggml_tensor * enc_t = eb.dumps.rnnt_encoded;
+    if (enc_t == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: rnnt.encoded missing");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    T_enc = static_cast<int>(enc_t->ne[1]);
+    D     = static_cast<int>(enc_t->ne[0]);
+    out.resize(static_cast<size_t>(T_enc) * D);
+    ggml_backend_tensor_get(enc_t, out.data(), 0, out.size() * sizeof(float));
+    return TRANSCRIBE_OK;
+}
+
 // Host-side RNN-T / CTC greedy decode of one utterance's encoder slice,
 // publishing the transcript into the session scratch slot (full_text /
 // tokens / has_result / result_kind / t_decode_us). `encoded` is the
@@ -322,25 +503,6 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
 
     transcribe::debug::init();
 
-    // Soft-window advisory: warn once past the ~25 s training window and
-    // proceed unchanged (never reject, never alter numerics). See
-    // docs/input-limits.md.
-    {
-        const int sr = gm->hparams.fe_sample_rate;
-        if (sr > 0) {
-            const int64_t audio_ms = static_cast<int64_t>(n_samples) * 1000 / sr;
-            if (audio_ms > k_safe_audio_ms) {
-                const double seconds = static_cast<double>(audio_ms) / 1000.0;
-                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
-                                    "gigaam run: audio is %.1f s, beyond the ~%d s window this "
-                                    "model was trained on; transcription may be degraded. "
-                                    "Split long audio into <=%d s segments. See "
-                                    "transcribe_capabilities.max_audio_ms.",
-                                    seconds, k_safe_s, k_safe_s);
-            }
-        }
-    }
-
     // Mel acquisition: the family mel (HTK + power=2 + log-clamp +
     // center=False + periodic Hann). The env-var injection is a debug knob
     // for tensor-parity isolation.
@@ -373,133 +535,81 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Reset per-call compute state.
-    if (gc->compute_ctx != nullptr) {
-        ggml_free(gc->compute_ctx);
-        gc->compute_ctx = nullptr;
-    }
-    gc->encoder_out = nullptr;
+    // Audio that fits one window runs single-shot. Longer audio is encoded
+    // window by window (plan_windows); each window's kept frames are
+    // stitched into one encoder sequence that the greedy decoder consumes in
+    // a single pass, so the RNN-T state stays continuous across windows.
+    const int n_mels  = gm->hparams.fe_num_mels;
+    const int T_total = enc_frames_for_mel(mel_n_frames);
+    int       D       = 0;
 
-    {
-        ggml_init_params ip{};
-        ip.mem_size     = 4 * 1024 * 1024;
-        ip.mem_buffer   = nullptr;
-        ip.no_alloc     = true;
-        gc->compute_ctx = ggml_init(ip);
-        if (gc->compute_ctx == nullptr) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "gigaam run: compute context allocation failed — out of memory. "
-                                "Split long audio into shorter segments (see "
-                                "transcribe_capabilities.max_audio_ms).");
-            return TRANSCRIBE_ERR_OOM;
+    const WindowPlan wp = plan_windows(T_total);
+    if (wp.n_windows() <= 1) {
+        int T_enc = 0;
+        if (auto st =
+                encode_mel_slice(gc, gm, gc->mel_buf.data(), mel_n_frames, /*dumps=*/true, gc->enc_host, T_enc, D);
+            st != TRANSCRIBE_OK) {
+            return st;
         }
-    }
-
-    // Build encoder graph.
-    EncoderBuild eb = build_encoder_graph(gc->compute_ctx, gm->weights, gm->hparams, mel_n_frames,
-                                          /*kv_type=*/GGML_TYPE_F32, gm->backend.c_str());
-    if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
-        return TRANSCRIBE_ERR_GGUF;
-    }
-
-    // Scheduler.
-    if (gc->sched == nullptr) {
-        gc->sched = ggml_backend_sched_new(gm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(gm->plan.scheduler_list.size()),
-                                           /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
-        if (gc->sched == nullptr) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam run: ggml_backend_sched_new failed");
-            return TRANSCRIBE_ERR_BACKEND;
-        }
-    }
-    ggml_backend_sched_reset(gc->sched);
-    if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "gigaam run: encoder graph allocation failed — out of memory. "
-                            "Split long audio into shorter segments (see "
-                            "transcribe_capabilities.max_audio_ms).");
-        return TRANSCRIBE_ERR_OOM;
-    }
-
-    ggml_backend_tensor_set(eb.mel_in, gc->mel_buf.data(), 0, gc->mel_buf.size() * sizeof(float));
-    transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
-
-    // Upload positions [0, 1, ..., T_enc-1] as int32.
-    if (eb.dumps.pos_emb != nullptr) {
-        const int64_t        T_enc = eb.dumps.pos_emb->ne[0];
-        std::vector<int32_t> pos(T_enc);
-        for (int64_t i = 0; i < T_enc; ++i) {
-            pos[i] = static_cast<int32_t>(i);
-        }
-        ggml_backend_tensor_set(eb.dumps.pos_emb, pos.data(), 0, pos.size() * sizeof(int32_t));
-    }
-
-    // Compute.
-    const int64_t t_enc_start = ggml_time_us();
-    if (ggml_backend_sched_graph_compute(gc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: graph_compute failed");
-        return TRANSCRIBE_ERR_BACKEND;
-    }
-    gc->t_encode_us = ggml_time_us() - t_enc_start;
-
-    // Dump intermediates.
-    if (eb.dumps.pre_encode_out) {
-        transcribe::debug::dump_tensor("enc.subsample.out", eb.dumps.pre_encode_out, "encoder.subsample");
-    }
-    if (eb.dumps.block0_after_attn) {
-        transcribe::debug::dump_tensor("enc.block.0.after_attn", eb.dumps.block0_after_attn, "encoder.block.0");
-    }
-    if (eb.dumps.block0_after_conv) {
-        transcribe::debug::dump_tensor("enc.block.0.after_conv", eb.dumps.block0_after_conv, "encoder.block.0");
-    }
-    if (eb.dumps.block0_out) {
-        transcribe::debug::dump_tensor("enc.block.0.out", eb.dumps.block0_out, "encoder.block.0");
-    }
-    if (eb.dumps.mid_block_out && eb.dumps.mid_block_idx >= 0) {
-        char nm[32];
-        std::snprintf(nm, sizeof(nm), "enc.block.%d.out", eb.dumps.mid_block_idx);
-        transcribe::debug::dump_tensor(nm, eb.dumps.mid_block_out, "encoder.block.mid");
-    }
-    if (eb.dumps.last_block_out && eb.dumps.last_block_idx >= 0) {
-        char nm[32];
-        std::snprintf(nm, sizeof(nm), "enc.block.%d.out", eb.dumps.last_block_idx);
-        transcribe::debug::dump_tensor(nm, eb.dumps.last_block_out, "encoder.block.last");
-    }
-    if (eb.dumps.final_out) {
-        transcribe::debug::dump_tensor("enc.out", eb.dumps.final_out, "encoder.out");
-    }
-
-    gc->encoder_out = eb.out;
-
-    // Decoder (RNN-T or CTC greedy). Both heads consume the
-    // pre-final-transpose encoder tensor (ne=[d_model, T_enc, 1]), named
-    // `rnnt.encoded` on the graph. CTC variants skip the `rnnt.encoded` dump
-    // (the reference dumper does not emit it for CTC).
-    {
-        ggml_tensor * enc_t = eb.dumps.rnnt_encoded;
-        if (enc_t == nullptr) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: rnnt.encoded missing");
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        const int T_enc = static_cast<int>(enc_t->ne[1]);
-        const int D     = static_cast<int>(enc_t->ne[0]);
-        gc->enc_host.assign(static_cast<size_t>(T_enc) * D, 0.0f);
-        ggml_backend_tensor_get(enc_t, gc->enc_host.data(), 0, gc->enc_host.size() * sizeof(float));
-
+        // CTC variants skip the `rnnt.encoded` dump (the reference dumper does
+        // not emit it for CTC).
         if (gm->hparams.head_kind == HeadKind::RNNT) {
             const long long enc_shape[2] = { T_enc, D };
             transcribe::debug::dump_host_f32("rnnt.encoded", gc->enc_host.data(),
                                              static_cast<long long>(gc->enc_host.size()), enc_shape, 2,
                                              "decoder.rnnt.encoded");
         }
+        return decode_and_populate(gc, gm, gc->enc_host.data(), T_enc, D, /*utt_index=*/-1);
+    }
 
-        if (auto st = decode_and_populate(gc, gm, gc->enc_host.data(), T_enc, D, /*utt_index=*/-1);
+    const int64_t      t_enc_start = ggml_time_us();
+    std::vector<float> win_out;
+    std::vector<float> stitched;
+    for (int w = 0; w < wp.n_windows(); ++w) {
+        if (gc->poll_abort()) {
+            return TRANSCRIBE_ERR_ABORTED;
+        }
+        // Kept frames [a, b); encoded frames [ws, we) add context each side.
+        const int a  = wp.bounds[w];
+        const int b  = wp.bounds[w + 1];
+        const int ws = std::max(0, a - k_window_ctx_frames);
+        const int we = std::min(T_total, b + k_window_ctx_frames);
+
+        // Encoder frame g is centred on mel frame 4g, so a window starting
+        // at encoder frame ws starts at mel frame 4*ws. A window that ends
+        // before the last frame takes exactly 4*(we-ws) mel frames, which
+        // yields we-ws encoder frames; the last window takes the remainder.
+        const int m0    = 4 * ws;
+        const int m_len = (we == T_total) ? (mel_n_frames - m0) : 4 * (we - ws);
+
+        // Channel-major [n_mels, T_mel] -> [n_mels, m_len] slice.
+        gc->mel_win.resize(static_cast<size_t>(n_mels) * m_len);
+        for (int m = 0; m < n_mels; ++m) {
+            std::memcpy(gc->mel_win.data() + static_cast<size_t>(m) * m_len,
+                        gc->mel_buf.data() + static_cast<size_t>(m) * mel_n_frames + m0,
+                        static_cast<size_t>(m_len) * sizeof(float));
+        }
+
+        int T_win = 0;
+        if (auto st = encode_mel_slice(gc, gm, gc->mel_win.data(), m_len, /*dumps=*/false, win_out, T_win, D);
             st != TRANSCRIBE_OK) {
             return st;
         }
+        if (T_win != we - ws) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: window %d produced %d frames, expected %d", w,
+                                T_win, we - ws);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (stitched.empty()) {
+            stitched.assign(static_cast<size_t>(T_total) * D, 0.0f);
+        }
+        std::memcpy(stitched.data() + static_cast<size_t>(a) * D, win_out.data() + static_cast<size_t>(a - ws) * D,
+                    static_cast<size_t>(b - a) * D * sizeof(float));
     }
+    gc->t_encode_us = ggml_time_us() - t_enc_start;
+    gc->enc_host    = std::move(stitched);
 
-    return TRANSCRIBE_OK;
+    return decode_and_populate(gc, gm, gc->enc_host.data(), T_total, D, /*utt_index=*/-1);
 }
 
 // Offline batch (transcribe_run_batch): B utterances through ONE Conformer
@@ -534,24 +644,8 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
     // (channel-major source [n_mels, nf[b]] -> per-utterance [T_max, n_mels]).
     transcribe::pack_pad_channel_major(gc->mel_buf, mels, nf, n_mels, T_max);
 
-    if (gc->compute_ctx != nullptr) {
-        ggml_free(gc->compute_ctx);
-        gc->compute_ctx = nullptr;
-    }
-    gc->encoder_out = nullptr;
-    {
-        ggml_init_params ip{};
-        ip.mem_size     = 4 * 1024 * 1024;
-        ip.mem_buffer   = nullptr;
-        ip.no_alloc     = true;
-        gc->compute_ctx = ggml_init(ip);
-        if (gc->compute_ctx == nullptr) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                "gigaam run: compute context allocation failed — out of memory. "
-                                "Split long audio into shorter segments (see "
-                                "transcribe_capabilities.max_audio_ms).");
-            return TRANSCRIBE_ERR_OOM;
-        }
+    if (auto st = reset_compute_ctx(gc); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     EncoderBuild eb = build_encoder_graph(gc->compute_ctx, gm->weights, gm->hparams, T_max,
@@ -560,23 +654,8 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
-
-    if (gc->sched == nullptr) {
-        gc->sched = ggml_backend_sched_new(gm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(gm->plan.scheduler_list.size()),
-                                           /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
-        if (gc->sched == nullptr) {
-            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam run: ggml_backend_sched_new failed");
-            return TRANSCRIBE_ERR_BACKEND;
-        }
-    }
-    ggml_backend_sched_reset(gc->sched);
-    if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                            "gigaam run: encoder graph allocation failed — out of memory. "
-                            "Split long audio into shorter segments (see "
-                            "transcribe_capabilities.max_audio_ms).");
-        return TRANSCRIBE_ERR_OOM;
+    if (auto st = alloc_encoder_graph(gc, gm, eb.graph); st != TRANSCRIBE_OK) {
+        return st;
     }
 
     ggml_backend_tensor_set(eb.mel_in, gc->mel_buf.data(), 0, gc->mel_buf.size() * sizeof(float));
@@ -637,10 +716,6 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
         }
         ggml_backend_tensor_set(eb.dumps.pos_emb, pos.data(), 0, pos.size() * sizeof(int32_t));
     }
-
-    // Set the per-backend thread count (mirrors single-shot through the
-    // scheduler; the encoder is the dominant cost on CPU).
-    transcribe::configure_sched_n_threads(gc->sched, gc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(gc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
@@ -733,33 +808,20 @@ transcribe_status run_batch(transcribe_session *          session,
     const int64_t total_mel_us = ggml_time_us() - t_mel_start;
 
     if (all_ok) {
-        // Per-utterance soft-window advisory before the shared encode; the
-        // fallback path re-enters run(), which warns there, so each
-        // over-length clip is warned about exactly once.
-        const int sr = gm->hparams.fe_sample_rate;
-        if (sr > 0) {
-            for (int i = 0; i < n; ++i) {
-                const int64_t audio_ms = static_cast<int64_t>(n_samples[i]) * 1000 / sr;
-                if (audio_ms > k_safe_audio_ms) {
-                    const double seconds = static_cast<double>(audio_ms) / 1000.0;
-                    transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
-                                        "gigaam run: audio is %.1f s, beyond the ~%d s window "
-                                        "this model was trained on; transcription may be "
-                                        "degraded. Split long audio into <=%d s segments. See "
-                                        "transcribe_capabilities.max_audio_ms.",
-                                        seconds, k_safe_s, k_safe_s);
-                }
-            }
-        }
-
         int T_max = 0;
         for (int i = 0; i < n; ++i) {
             T_max = std::max(T_max, nf[i]);
         }
-        return run_batch_encode(gc, gm, mels, nf, n_mels, T_max, total_mel_us);
+        // A batch whose longest clip needs more than one encoder window takes
+        // the per-utterance path below, which windows each clip, so the
+        // batched workspace stays bounded by n x one window.
+        if (plan_windows(enc_frames_for_mel(T_max)).n_windows() <= 1) {
+            return run_batch_encode(gc, gm, mels, nf, n_mels, T_max, total_mel_us);
+        }
     }
 
-    // Per-utterance fallback (also the malformed-input path).
+    // Per-utterance path: clips longer than one encoder window, and the
+    // malformed-input fallback.
     for (int i = 0; i < n; ++i) {
         if (gc->poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;

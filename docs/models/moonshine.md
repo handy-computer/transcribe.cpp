@@ -32,7 +32,8 @@ see the family doc at
   both tiny and base sizes. Each is single-language (no auto-detect, no
   translation), same architecture as the corresponding English variant.
   See the **All variants** table below. For models that auto-detect
-  language or translate, use Whisper or Parakeet v3.
+  language or translate, use Whisper or Parakeet v3. These fine-tunes
+  are **not MIT**; commercial use is restricted (see below).
 
 ## All variants
 
@@ -57,7 +58,15 @@ to Q8_0 storage and would be near-duplicates.
 
 ### Language-specific (Useful Sensors fine-tunes)
 
-Per-language fine-tunes of the same architecture. Acceptance was measured
+Per-language fine-tunes of the same architecture. Unlike the English
+variants (MIT), these are licensed under the
+[Moonshine AI Community License](https://github.com/moonshine-ai/moonshine/blob/main/LICENSE),
+and the GGUFs inherit it: free for research and non-commercial use;
+commercial use requires registering with Moonshine AI and is limited to
+organizations under US$1M annual revenue. Each repo ships the agreement
+and the required `NOTICE`. Powered by Moonshine AI.
+
+Acceptance was measured
 against the **Transformers F32 reference on the same FLEURS test split**
 because Useful Sensors does not publish per-language WER/CER for these
 variants. See each repo's `README.md` on Hugging Face for the full

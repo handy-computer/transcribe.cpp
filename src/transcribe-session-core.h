@@ -88,8 +88,10 @@ struct SessionCore {
     //
     // Host-side vectors that scale with input length, such as mel buffers,
     // encoder host copies, and positional banks, deliberately retain their
-    // capacity. Family KV caches sized by the last batch are also retained;
-    // this hook releases only the ggml scheduler and compute context.
+    // capacity unless a family trims them in on_scratch_released (gigaam
+    // frees them past a few MiB). Family KV caches sized by the last batch
+    // are also retained; this hook releases only the ggml scheduler and
+    // compute context.
     //
     // Streaming entry points do not invoke this hook. A streaming session
     // keeps its scheduler until a later offline run or session destruction.

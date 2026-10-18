@@ -11,16 +11,25 @@
 //   - wrong mel scale formula (HTK vs Slaney)
 //   - missing Slaney area normalization (would scale by ~50x)
 //
+// Plus the SpeechBrain (ecapa_tdnn) options: the periodic Hamming window
+// and the "sentence_mean" normalize (dB, top-dB floor, per-bin mean, no
+// frame drop), run end to end on a synthetic one-hot filterbank.
+//
 // All reference values are bit-precise constants captured from
 // librosa 0.11 and the symmetric-hann formula. Regenerate via the
 // preflight script if librosa updates and the tolerances drift.
 
 #include "transcribe-mel.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+
+#ifndef M_PI
+#    define M_PI 3.14159265358979323846
+#endif
 
 namespace {
 
@@ -204,12 +213,112 @@ void test_n_frames_for() {
     CHECK(mf.n_frames_for(0) == 1);
 }
 
+// SpeechBrain (ecapa_tdnn) config: periodic Hamming, constant pad, no
+// pre-emphasis, 10*log10 with an 80 dB top-dB floor, per-bin mean only.
+// The filterbank is a synthetic one-hot bank (mel m reads FFT bin 3*m),
+// since the real one is checkpoint-provided.
+transcribe::MelConfig speechbrain_config() {
+    transcribe::MelConfig cfg;
+    cfg.num_mels      = 60;
+    cfg.n_fft         = 400;
+    cfg.win_length    = 400;
+    cfg.hop_length    = 160;
+    cfg.pre_emphasis  = 0.0f;
+    cfg.pad_mode      = "constant";
+    cfg.window_type   = "hamming_periodic";
+    cfg.normalize     = "sentence_mean";
+    cfg.log_clamp_min = 1e-10f;
+    cfg.top_db        = 80.0f;
+    cfg.filterbank.assign(static_cast<size_t>(60) * 201, 0.0f);
+    for (int m = 0; m < 60; ++m) {
+        cfg.filterbank[static_cast<size_t>(m) * 201 + static_cast<size_t>(m) * 3] = 1.0f;
+    }
+    return cfg;
+}
+
+void test_hamming_window() {
+    transcribe::MelFrontend mf(speechbrain_config());
+    const auto &            w = mf.window();
+    CHECK(w.size() == 400);
+    if (w.size() != 400) {
+        return;
+    }
+    // Periodic: the peak lands ON sample N/2 (a symmetric Hamming of
+    // length 400 never reaches 1.0), and w[1] uses 2*pi*n/N, not N-1.
+    CHECK_NEAR(w[0], 0.08, 1e-15);
+    CHECK_NEAR(w[100], 0.54, 1e-15);
+    CHECK_NEAR(w[200], 1.0, 1e-15);
+    CHECK_NEAR(w[1], 0.0800567490584361, 1e-15);
+    double sum = 0.0;
+    for (double v : w) {
+        sum += v;
+    }
+    CHECK_NEAR(sum, 216.0, 1e-12);  // 0.54 * N: the cosine term cancels
+}
+
+void test_sentence_mean() {
+    // 1 kHz sine, 1 s, through the full sentence_mean pipeline.
+    std::vector<float> pcm(16000);
+    for (int i = 0; i < 16000; ++i) {
+        pcm[static_cast<size_t>(i)] = static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * i / 16000.0));
+    }
+    transcribe::MelFrontend mf(speechbrain_config());
+    std::vector<float>      out;
+    int                     n_mels   = 0;
+    int                     n_frames = 0;
+    CHECK(mf.compute(pcm.data(), pcm.size(), out, n_mels, n_frames, 1) == TRANSCRIBE_OK);
+    // torch center=True framing with no trailing-frame drop.
+    CHECK(n_mels == 60);
+    CHECK(n_frames == 101);
+    if (out.size() != static_cast<size_t>(60) * 101) {
+        CHECK(false);
+        return;
+    }
+    // Mean removed per mel bin over all frames ([n_mels, n_frames] rows),
+    // and nothing else: a variance normalize would also pin each row's
+    // spread, so require one row with spread well above 1.
+    double max_spread = 0.0;
+    for (int m = 0; m < 60; ++m) {
+        const float * row = out.data() + static_cast<size_t>(m) * 101;
+        double        sum = 0.0;
+        float         lo  = row[0];
+        float         hi  = row[0];
+        for (int t = 0; t < 101; ++t) {
+            sum += static_cast<double>(row[t]);
+            lo = std::min(lo, row[t]);
+            hi = std::max(hi, row[t]);
+        }
+        CHECK_NEAR(sum / 101.0, 0.0, 1e-4);
+        max_spread = std::max(max_spread, static_cast<double>(hi - lo));
+        // Top-dB floor: before the mean shift every value sat in
+        // [max_all - 80, max_all], so no row can span more than 80 dB.
+        CHECK(static_cast<double>(hi - lo) <= 80.0 + 1e-3);
+    }
+    CHECK(max_spread > 1.0);
+
+    // With the floor disabled the -100 dB (amin) bins reappear, so some
+    // row must now span more than 80 dB: proves the floor above did work.
+    transcribe::MelConfig no_floor_cfg = speechbrain_config();
+    no_floor_cfg.top_db                = 0.0f;
+    transcribe::MelFrontend no_floor(no_floor_cfg);
+    CHECK(no_floor.compute(pcm.data(), pcm.size(), out, n_mels, n_frames, 1) == TRANSCRIBE_OK);
+    double raw_spread = 0.0;
+    for (int m = 0; m < 60 && out.size() == static_cast<size_t>(60) * 101; ++m) {
+        const float * row = out.data() + static_cast<size_t>(m) * 101;
+        const auto    mm  = std::minmax_element(row, row + 101);
+        raw_spread        = std::max(raw_spread, static_cast<double>(*mm.second - *mm.first));
+    }
+    CHECK(raw_spread > 80.0);
+}
+
 }  // namespace
 
 int main() {
     test_window();
     test_mel_filterbank();
     test_n_frames_for();
+    test_hamming_window();
+    test_sentence_mean();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "mel_unit: %d failures\n", g_failures);

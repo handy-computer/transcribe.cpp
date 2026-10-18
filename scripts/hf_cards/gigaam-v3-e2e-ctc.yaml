@@ -10,8 +10,8 @@ upstream_card_commit: ec1dc1f
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: gigaam author package
-  commit: 42b96d9
-  date: 2026-05-12
+  commit: 0fff13f8
+  date: 2026-10-15
 
 pipeline_tag: automatic-speech-recognition
 tags:

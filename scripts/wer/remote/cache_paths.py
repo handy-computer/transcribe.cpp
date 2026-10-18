@@ -5,6 +5,16 @@ import hashlib
 from dataset_specs import dataset_id
 
 
+def att_context_tag(att_context: str) -> str:
+    """Filename tag for a TRANSCRIBE_PARAKEET_ATT_CONTEXT value: "" for the
+    library default, ".att-full" for "-1,-1", ".att-256x256" for "256,256"."""
+    if not att_context:
+        return ""
+    if att_context.replace(" ", "") == "-1,-1":
+        return ".att-full"
+    return ".att-" + att_context.replace(" ", "").replace(",", "x")
+
+
 def hyp_cache_paths(
     hyp_fp: str,
     model_file: str,
@@ -18,6 +28,7 @@ def hyp_cache_paths(
     stream_att_right: int = -1,
     publication_profile: str = "",
     backend: str = "",
+    att_context: str = "",
 ) -> tuple[str, str]:
     """Deterministic Volume paths for the (model, dataset, subset, batch,
     sort) tuple.
@@ -49,8 +60,11 @@ def hyp_cache_paths(
     r_tag = "" if stream_att_right < 0 else f".r{stream_att_right}"
     profile_tag = "" if not publication_profile else f".profile-{publication_profile}"
     backend_tag = "" if not backend else f".backend-{backend}"
+    # Parakeet attention-window override (TRANSCRIBE_PARAKEET_ATT_CONTEXT,
+    # validation builds). "" = the library default, no tag.
+    att_tag = att_context_tag(att_context)
     base = (f"/data/wer/hyps/{hyp_fp}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}{stream_tag}{r_tag}{profile_tag}{backend_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}{stream_tag}{r_tag}{profile_tag}{backend_tag}{att_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 

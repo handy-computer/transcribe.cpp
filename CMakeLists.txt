@@ -313,6 +313,15 @@ if(TRANSCRIBE_X86_CONSERVATIVE)
     endforeach()
 endif()
 
+# Apple Silicon defaults GGML_NATIVE to OFF, the posture of the macOS wheel,
+# the XCFramework and the Rust crate. Native tuning on an M2 or newer turns on
+# i8mm, and ggml compiles tinyBLAS out under __ARM_FEATURE_MATMUL_INT8, so a
+# native build runs F32 / F16 / Q8_0 CPU inference 1.2-2.1x slower (#194).
+# A default, not a clamp: -DGGML_NATIVE=ON still wins.
+if(TRANSCRIBE_IS_APPLE_SILICON AND NOT DEFINED CACHE{GGML_NATIVE})
+    set(GGML_NATIVE OFF CACHE BOOL "")
+endif()
+
 # OpenMP — CENTRAL POLICY.
 #
 # DEFAULT: OFF. We use ggml's native CPU threadpool everywhere; OpenMP is an
@@ -408,6 +417,18 @@ if(MSVC)
     if(NOT CMAKE_CXX_FLAGS MATCHES "/EHs")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHs")
     endif()
+endif()
+
+# Windows: MSVC STL 17.10 made std::mutex's constructor constexpr, and binaries
+# built that way fault in _Mtx_lock when the loaded msvcp140.dll is older than
+# 14.40 (e.g. the 2021 14.29 redist), crashing on the first ggml_init (#210).
+# The STL's documented escape hatch restores the _Mtx_init_in_situ constructor
+# that old and new runtimes both handle. Global, not per-target: std::mutex is
+# constructed in ggml-base, ggml-cpu, ggml-vulkan, ggml-cuda and src/. Applies
+# to clang/clang-cl too, since they build against the same MSVC STL headers.
+# Same fix as whisper.cpp (there scoped to ggml-base only).
+if(WIN32)
+    add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
 endif()
 
 # Windows MAX_PATH: relocate ExternalProjects (vulkan-shaders-gen) to a flat

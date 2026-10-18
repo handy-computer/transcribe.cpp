@@ -1,0 +1,9 @@
+This Moonshine AI Model is licensed under the Moonshine AI Community License, Copyright © Moonshine AI Ltd. All Rights Reserved
+
+Modifications: handy-computer converted the original Moonshine AI model
+weights (UsefulSensors/moonshine-{tiny,base}-<language> on Hugging Face) to
+GGUF for transcribe.cpp. The F32 file carries the original weights unchanged;
+the F16 and Q8_0 files are reduced-precision (quantized) copies of them. No
+weights were retrained or fine-tuned.
+
+Powered by Moonshine AI.

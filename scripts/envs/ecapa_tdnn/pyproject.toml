@@ -1,0 +1,29 @@
+[project]
+name = "transcribe-ecapa_tdnn-env"
+version = "0.1.0"
+description = "Python env for ECAPA-TDNN VoxLingua107 reference dumps and conversion (SpeechBrain)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Exact pin. The VoxLingua107 checkpoint ships as a SpeechBrain
+    # hyperparams.yaml that instantiates SpeechBrain classes by name, so the
+    # module tree the reference dumper hooks (`embedding_model.blocks[1].se_block`,
+    # `classifier.DNN.block_0.act`, `compute_features.compute_fbanks`) is
+    # version-specific, and so is the arithmetic inside them.
+    # tests/tolerances/ecapa_tdnn.json was measured against THIS version
+    # (recorded as reference.revision in
+    # tests/golden/ecapa_tdnn/lang-id-voxlingua107-ecapa.manifest.json); a silent bump can
+    # move both the hook points and the numbers.
+    "speechbrain==1.1.1",
+    # CPU torch. The parity regime is fp32 on CPU with one thread; no
+    # CUDA/Metal build is needed or wanted here.
+    "torch==2.13.0",
+    "torchaudio==2.11.0",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "huggingface-hub>=0.30",
+    # Used by the converter (T3), not by the dumper.
+    "gguf>=0.10",
+    # FLEURS lives in the local HF hub cache as parquet; the fixture builder
+    # reads it with pyarrow rather than pulling in `datasets`.
+    "pyarrow>=15",
+]

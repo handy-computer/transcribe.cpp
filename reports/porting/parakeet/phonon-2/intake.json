@@ -1,0 +1,184 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "FermionResearch/Phonon-2",
+  "hf_revision": "7e153e4054c0a10db6d47d6fff5c062d4c77c154",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "base_config": {
+      "kind": "hf_file",
+      "status": "found",
+      "path": "nvidia/parakeet-tdt-0.6b-v3@541d1f99c6b0c3cd0b11a95167540bb8edefd82b/{config,processor_config,tokenizer,generation_config}.json",
+      "detail": "Publisher reference loads architecture, processor, tokenizer and generation config from this base. Phonon top-level config is an artifact manifest."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "status": "found",
+      "path": "FermionResearch/Phonon-2@7e153e4054c0a10db6d47d6fff5c062d4c77c154/{reference_transformers,fermion_container}.py",
+      "detail": "Independent, hash-checked publisher reconstruction with stock transformers==5.20.0 ParakeetForTDT; torch==2.10.0 CPU F32."
+    }
+  },
+  "variants": [
+    {
+      "name": "phonon-2",
+      "memory_gb": null,
+      "files": [
+        "phonon-2.bps.tar.zst"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "architectures": [
+        "ParakeetForTDT"
+      ],
+      "blank_token_id": 8192,
+      "decoder_hidden_size": 640,
+      "dtype": "float32",
+      "durations": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "encoder_config": {
+        "activation_dropout": 0.1,
+        "attention_bias": false,
+        "attention_dropout": 0.1,
+        "conv_kernel_size": 9,
+        "convolution_bias": false,
+        "dropout": 0.1,
+        "dropout_positions": 0.0,
+        "hidden_act": "silu",
+        "hidden_size": 1024,
+        "initializer_range": 0.02,
+        "intermediate_size": 4096,
+        "layerdrop": 0.1,
+        "max_position_embeddings": 5000,
+        "model_type": "parakeet_encoder",
+        "num_attention_heads": 8,
+        "num_hidden_layers": 24,
+        "num_key_value_heads": 8,
+        "num_mel_bins": 128,
+        "scale_input": false,
+        "subsampling_conv_channels": 256,
+        "subsampling_conv_kernel_size": 3,
+        "subsampling_conv_stride": 2,
+        "subsampling_factor": 8
+      },
+      "hidden_act": "relu",
+      "initializer_range": 0.02,
+      "is_encoder_decoder": true,
+      "max_symbols_per_step": 10,
+      "model_type": "parakeet_tdt",
+      "num_decoder_layers": 2,
+      "pad_token_id": 2,
+      "transformers_version": "5.6.0.dev0",
+      "vocab_size": 8193
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "Publisher reference expands five-value, int6/int8 and fp16 records to F32. F32 GGUF preserves reconstructed values before any deployment re-quantization."
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_symmetric",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 8192,
+    "special_tokens": {
+      "pad": 2,
+      "blank": 8192,
+      "decoder_start": 8192
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "7c21c04ff6ff2f806ca43a8420479091479c805d2b7952825ae2acc4fec9424d"
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.72,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/FermionResearch/Phonon-2",
+      "notes": "Publisher result, not a local acceptance measurement."
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Publisher explicitly provides a dense Transformers oracle for this container. Execute the pinned, hash-checked publisher loader independently of the new conversion reader. Base configuration and processor are pinned separately.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Compact download is not retained by F32 conversion. Runtime memory and latency need measurement; no publisher speed claim is inherited.",
+    "Fermion five-value sign codes, high-magnitude bits, per-row FP16 levels and int6 packing must reconstruct exactly. The unused BN num_batches_tracked counter can overflow in publisher storage.",
+    "Transformers masks invalid subsampler/encoder frames and uses a global TDT generation budget. Reuse existing metadata-controlled kestrel semantics; no model-name runtime branches.",
+    "Reference scope is stock Transformers whole-clip inference. Publisher CLI energy segmentation, hotword bias, custom kernels, MLX/CoreML and streaming wrappers are outside this conversion-first implementation.",
+    "Full acceptance-set WER and publication quantization remain separate from focused tensor and behavioral validation."
+  ],
+  "intake_gaps": [
+    {
+      "field": "sources.preprocessor",
+      "reason": "Top-level Phonon repository has no tokenizer/processor or architecture config. Pinned base files are authoritative per publisher reference; converter validates their values. Preflight A cannot independently read this two-repository relationship."
+    }
+  ]
+}

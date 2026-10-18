@@ -1,12 +1,12 @@
 // decoder_smoke.cpp - real-model gated end-to-end decoder accuracy test.
 //
-// Loads a real Parakeet v2 GGUF, runs the full pipeline (load → mel →
+// Loads a real Parakeet v2 or Phonon-2 GGUF, runs the full pipeline (load → mel →
 // encoder → predictor + joint + TDT decode → result accessor population)
 // on samples/jfk.wav, and asserts:
 //
 //   1. transcribe_run completes OK on the canonical sample.
 //   2. transcribe_full_text matches the canonical JFK reference text
-//      to within edit distance 3.
+//      within edit distance 3 for v2, exactly for Phonon-2.
 //   3. transcribe_n_tokens > 0 and the per-token accessors return
 //      non-sentinel values: ids in range, text non-empty, t0_ms ≤
 //      t1_ms, p in [0, 1].
@@ -26,12 +26,11 @@
 // validation.
 //
 // Gating: built only when TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON; at run
-// time TRANSCRIBE_PARAKEET_GGUF must point at a v2 GGUF. The test
+// time TRANSCRIBE_PARAKEET_GGUF must point at a v2 or Phonon-2 GGUF. The test
 // exits 77 (CTest "skipped") when the model path is unset or missing.
 //
-// The reference text was validated against v2; v3's encoder weights are
-// different and the resulting text may differ, so the test hard-fails
-// on v3 rather than silently mis-validating.
+// Each supported variant has a validated reference. Other variants
+// hard-fail rather than silently using another model's golden.
 
 #include "transcribe.h"
 #include "wav.h"
@@ -111,6 +110,11 @@ const char * const k_jfk_reference_text =
     "And so, my fellow Americans, ask not what your country can do for you, "
     "ask what you can do for your country.";
 
+// Pinned publisher Transformers reference for Phonon-2.
+const char * const k_phonon_jfk_reference_text =
+    "And so my fellow Americans, ask not what your country can do for you, "
+    "ask what you can do for your country.";
+
 constexpr int k_max_edit_distance = 3;
 
 }  // namespace
@@ -148,15 +152,17 @@ int main() {
         }
     }
 
-    // The reference golden was generated against v2; v3 has different
-    // weights and produces different text. Fail loudly rather than
-    // silently mis-validating.
+    const char * reference_text    = k_jfk_reference_text;
+    int          max_edit_distance = k_max_edit_distance;
     {
         const std::string variant = transcribe_model_variant_string(model);
-        if (variant != "tdt-0.6b-v2") {
+        if (variant == "tdt-0.6b-phonon-2") {
+            reference_text    = k_phonon_jfk_reference_text;
+            max_edit_distance = 0;
+        } else if (variant != "tdt-0.6b-v2") {
             std::fprintf(stderr,
-                         "decoder_smoke: golden is for tdt-0.6b-v2 only, "
-                         "got \"%s\"\n",
+                         "decoder_smoke: no transcript golden for variant "
+                         "\"%s\"\n",
                          variant.c_str());
             transcribe_model_free(model);
             return EXIT_FAILURE;
@@ -218,11 +224,11 @@ int main() {
     const std::string actual = full ? full : "";
     std::fprintf(stdout, "decoder_smoke: text=\"%s\"\n", actual.c_str());
 
-    const int dist = edit_distance(actual, k_jfk_reference_text);
-    std::fprintf(stdout, "decoder_smoke: edit_distance=%d (tolerance=%d)\n", dist, k_max_edit_distance);
-    if (dist > k_max_edit_distance) {
-        std::fprintf(stderr, "FAIL: text edit distance %d exceeds %d\n", dist, k_max_edit_distance);
-        std::fprintf(stderr, "  reference: %s\n", k_jfk_reference_text);
+    const int dist = edit_distance(actual, reference_text);
+    std::fprintf(stdout, "decoder_smoke: edit_distance=%d (tolerance=%d)\n", dist, max_edit_distance);
+    if (dist > max_edit_distance) {
+        std::fprintf(stderr, "FAIL: text edit distance %d exceeds %d\n", dist, max_edit_distance);
+        std::fprintf(stderr, "  reference: %s\n", reference_text);
         std::fprintf(stderr, "  actual:    %s\n", actual.c_str());
         ++g_failures;
     }
@@ -440,36 +446,38 @@ int main() {
         }
     }
 
-    // ---- Failed transcribe_run clears the prior result -------------
+    // ---- Invalid run parameters preserve the prior result ----------
     //
     // Parakeet's max_timestamp_kind is TOKEN, so the dispatcher
     // cannot reject a valid enum request on ceiling grounds. Use an
     // out-of-range enum value cast through int to trip the enum-
-    // range switch at INVALID_ARG. The result-replacement contract
-    // (include/transcribe.h "Results") says a failing transcribe_run
-    // must leave the context in the empty sentinel state, not
-    // silently re-expose the prior successful run's output.
+    // range switch at INVALID_ARG. Pre-clear parameter validation
+    // preserves the previous successful snapshot (include/transcribe.h).
     {
         // First, seed the context with a real successful run so
-        // there is a previous result to clobber.
+        // there is a previous result to preserve.
         transcribe_run_params rp_ok;
         transcribe_run_params_init(&rp_ok);
         rp_ok.timestamps              = TRANSCRIBE_TIMESTAMPS_TOKEN;
         const transcribe_status st_ok = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
         CHECK(st_ok == TRANSCRIBE_OK);
         CHECK(transcribe_n_tokens(ctx) > 0);
+        const std::string prior_text           = transcribe_full_text(ctx);
+        const int         prior_segments       = transcribe_n_segments(ctx);
+        const int         prior_words          = transcribe_n_words(ctx);
+        const int         prior_tokens         = transcribe_n_tokens(ctx);
+        const auto        prior_timestamp_kind = transcribe_returned_timestamp_kind(ctx);
 
         transcribe_run_params rp_bad;
         transcribe_run_params_init(&rp_bad);
         rp_bad.timestamps              = static_cast<transcribe_timestamp_kind>(9999);
         const transcribe_status st_bad = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_bad);
         CHECK(st_bad == TRANSCRIBE_ERR_INVALID_ARG);
-        // All accessors return their safe sentinels.
-        CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
-        CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
-        CHECK_EQ_INT(transcribe_n_words(ctx), 0);
-        CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
-        CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
+        CHECK(prior_text == transcribe_full_text(ctx));
+        CHECK_EQ_INT(transcribe_n_segments(ctx), prior_segments);
+        CHECK_EQ_INT(transcribe_n_words(ctx), prior_words);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx), prior_tokens);
+        CHECK(transcribe_returned_timestamp_kind(ctx) == prior_timestamp_kind);
     }
 
     // ---- Teardown --------------------------------------------------

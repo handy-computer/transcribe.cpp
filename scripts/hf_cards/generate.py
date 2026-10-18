@@ -22,7 +22,8 @@ on the card belongs in the catalog first. Fetches the upstream model card at
 the pinned commit and renders template.md.j2.
 
 Default output is models/<upstream-slug>/README.md alongside the GGUFs, so
-`hf upload <repo> models/<upstream-slug> .` picks it up in the same call.
+`hf upload <repo> models/<upstream-slug> .` picks it up in the same call. When
+several records share one upstream repo (gigaam), it is models/<variant>/ instead.
 
 Usage:
     uv run scripts/hf_cards/generate.py scripts/hf_cards/parakeet-tdt-0.6b-v2.yaml
@@ -61,6 +62,7 @@ SPEC_KEYS = {
     "usage",                 # extra usage prose for an unusual model
     "upstream_card_commit",  # revision of the upstream card that was quoted
     "default_quant",         # override the Q8_0 default
+    "license_notes",         # licence terms/notices beyond the inherited name
 }
 CAP_FLAGS = ("streaming", "translate", "lang_detect")
 DEFAULT_QUANT = "Q8_0"
@@ -134,7 +136,7 @@ def derive_metric_blocks(record: dict) -> dict[str, dict[str, float]]:
             chosen[cell] = row
     blocks: dict[str, dict[str, float]] = {}
     for (key, quant), row in chosen.items():
-        blocks.setdefault(key, {})[quant] = row["err_pct"]
+        blocks.setdefault(key, {})[quant] = common.row_pct(row)
     return blocks
 
 
@@ -218,6 +220,8 @@ def build_context(record: dict, spec: dict) -> dict:
     ctx = {
         **spec,
         "hf_repo": record["upstream_repo"],
+        "upstream_url": common.upstream_url(record),
+        "upstream_is_hf": not record.get("upstream_url"),
         "target_repo": record.get("published_repo"),
         "upstream_commit": record["upstream_commit"],
         "license": record["license"]["spdx"],
@@ -233,7 +237,7 @@ def build_context(record: dict, spec: dict) -> dict:
         "transcribe_docs_url": docs_url(record),
     }
     if headline.get("metric"):
-        ctx["metric"] = headline["metric"].upper()
+        ctx["metric"] = common.metric_label(headline["metric"])
     for key in ("name", "link"):
         if record["license"].get(key):
             ctx[f"license_{key}"] = record["license"][key]
@@ -338,7 +342,8 @@ def main() -> int:
     # different revision than the catalog's upstream_commit.
     card_commit = spec.get("upstream_card_commit", ctx["upstream_commit"])
     upstream = (
-        "_(upstream card not fetched — run without --skip-upstream to include it)_"
+        "" if not ctx["upstream_is_hf"]  # a GitHub upstream has no HF card to quote
+        else "_(upstream card not fetched — run without --skip-upstream to include it)_"
         if args.skip_upstream
         else fetch_upstream_card(ctx["hf_repo"], card_commit)
     )
@@ -352,9 +357,13 @@ def main() -> int:
     # hf_repo) so the README lands alongside the GGUFs in the same
     # directory `hf upload` will publish. The kebab-cased spec stem is
     # the internal handle; the filesystem dir mirrors upstream casing
-    # (matches the converter's output dir convention).
+    # (matches the converter's output dir convention). An upstream repo that
+    # several records share (the four gigaam variants) would make every card
+    # overwrite the same file, so those use the variant directory instead.
     upstream_slug = ctx["hf_repo"].rsplit("/", 1)[-1]
-    output = args.output or (REPO_ROOT / "models" / upstream_slug / "README.md")
+    shared = sum(r["upstream_repo"] == record["upstream_repo"] for r in common.load_records().values()) > 1
+    model_dir = args.spec.stem if shared else upstream_slug
+    output = args.output or (REPO_ROOT / "models" / model_dir / "README.md")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(out)
     print(f"wrote {output}", file=sys.stderr)

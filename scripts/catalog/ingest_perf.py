@@ -5,7 +5,9 @@
 """Fold bench driver reports into the catalog's speed_benchmarks rows.
 
 `scripts/bench/run.py` writes one report per (variant, backend) under
-reports/perf/<machine-slug>/, and reports/ is gitignored -- so the latency
+reports/perf/<machine-slug>/ (`scripts/langid/bench.py` writes the same shape
+for language ID, which transcribe-bench cannot run), and reports/ is
+gitignored -- so the latency
 breakdown only exists on the machine that measured it. This is the hop that
 moves it into the catalog, where it is durable and publishable.
 
@@ -100,9 +102,13 @@ def cells(report: dict) -> list[dict]:
         if not (variant and quant and duration and total):
             continue
 
+        def ms(value: float) -> float:
+            # A VAD stream feed takes well under a millisecond.
+            return round(value, 1 if value >= 1 else 4)
+
         def mean(field: str):
             value = (summary.get(field) or {}).get("mean")
-            return None if value is None else round(value, 1)
+            return None if value is None else ms(value)
 
         out.append({
             "_profile": report.get("publication_profile"),
@@ -112,14 +118,16 @@ def cells(report: dict) -> list[dict]:
             # the canonical backend; the driver records that at the top level.
             "backend": (report.get("backend") or run.get("backend", "")).lower(),
             "quant": quant,
-            "sample": pathlib.PurePosixPath(run.get("sample_path", "")).stem,
+            # The driver names a cell after its clip; scripts/langid/bench.py
+            # scores several lengths of one clip and names each.
+            "sample": run.get("sample") or pathlib.PurePosixPath(run.get("sample_path", "")).stem,
             "sample_duration_s": duration,
-            "total_ms": round(total, 1),
+            "total_ms": ms(total),
             # xrt is recomputed from the unrounded mean rather than carried
             # over: a stored value that no longer matches its own latency is
             # the drift this ingest exists to remove.
             "xrt_compute": round(duration / (total / 1000), 2),
-            "wall_ms": None if wall is None else round(wall, 1),
+            "wall_ms": None if wall is None else ms(wall),
             "xrt_wall": None if wall is None else round(duration / (wall / 1000), 2),
             "load_ms": None if run.get("load_ms") is None else round(run["load_ms"], 1),
             "mel_ms": mean("mel_ms"),
@@ -214,7 +222,6 @@ def main() -> int:
     for note in notes:
         print(f"  note: {note}")
 
-    profile_id, profile = profiles.load_profile()
     filled = updated = added = matched = 0
     drift, refused, unmatched = [], [], []
     for variant, record in common.load_records().items():
@@ -261,6 +268,7 @@ def main() -> int:
         # Profile runs can create rows; the old importer could only refresh
         # placeholders, which made a newly required quant impossible to ingest
         # without first hand-authoring empty catalog cells.
+        profile_id, profile = profiles.profile_for(record)
         expected = profiles.apply_exceptions(
             record, "speed", profiles.expected_speed(record, profile))
         expected_keys = {

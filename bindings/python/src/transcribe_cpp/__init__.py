@@ -24,6 +24,7 @@ from __future__ import annotations
 import collections
 import ctypes
 import enum
+import numbers
 import os
 import threading
 import weakref
@@ -39,6 +40,7 @@ from .errors import (
     BackendError,
     Busy,
     InputTooLong,
+    InputTooShort,
     InvalidArgument,
     ModelFileNotFound,
     ModelLoadError,
@@ -53,7 +55,7 @@ from .errors import (
     raise_for_status,
 )
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 # String-enum types, exported so callers (and type checkers) can name them.
 Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda", "rocm"]
@@ -78,6 +80,14 @@ __all__ = [
     "Session",
     "DiarizeSession",
     "DiarizeInfo",
+    "LangIdSession",
+    "LangIdInfo",
+    "LangIdResult",
+    "LangIdCandidate",
+    "VadSession",
+    "VadInfo",
+    "VadResult",
+    "VadSegment",
     "Role",
     "Result",
     "Segment",
@@ -120,6 +130,7 @@ __all__ = [
     "Aborted",
     "Busy",
     "InputTooLong",
+    "InputTooShort",
     "OutputTruncated",
     "OutputRepetition",
     "native_version",
@@ -190,6 +201,10 @@ _Capabilities = _generated.transcribe_capabilities
 _Timings = _generated.transcribe_timings
 _Segment = _generated.transcribe_segment
 _SpeakerSegment = _generated.transcribe_speaker_segment
+_LangIdCandidate = _generated.transcribe_langid_candidate
+_LangIdResult = _generated.transcribe_langid_result
+_VadResult = _generated.transcribe_vad_result
+_VadSegment = _generated.transcribe_vad_segment
 _Word = _generated.transcribe_word
 _Token = _generated.transcribe_token
 _StreamParams = _generated.transcribe_stream_params
@@ -437,23 +452,29 @@ def _enum(mapping: dict, key: str, what: str) -> int:
 
 
 PCMLike = Union["ctypes.Array", bytes, bytearray, memoryview, Sequence[float]]
+_INT_MAX = 2**31 - 1
 
 
-def _pcm_to_carray(pcm: PCMLike):
-    """Copy *pcm* into a ``c_float`` array, returning ``(array, n_samples)``."""
+def _pcm_count(n: int, allow_empty: bool) -> int:
+    if n == 0 and not allow_empty:
+        raise InvalidArgument("empty PCM buffer")
+    if n > _INT_MAX:  # the native count is a C int; ctypes would wrap it
+        raise InvalidArgument(f"PCM buffer has {n} samples; the limit is {_INT_MAX}")
+    return n
+
+
+def _pcm_to_carray(pcm: PCMLike, allow_empty: bool = False):
+    """Copy *pcm* into a ``c_float`` array, returning ``(array, n_samples)``.
+    ``allow_empty`` accepts zero samples (after the format checks)."""
     if isinstance(pcm, ctypes.Array) and pcm._type_ is ctypes.c_float:
-        n = len(pcm)
-        if n == 0:
-            raise InvalidArgument("empty PCM buffer")
-        return pcm, n
+        return pcm, _pcm_count(len(pcm), allow_empty)
 
     try:
         mv = memoryview(pcm)
     except TypeError:
         seq = [float(x) for x in pcm]
-        if not seq:
-            raise InvalidArgument("empty PCM buffer")
-        return (ctypes.c_float * len(seq))(*seq), len(seq)
+        n = _pcm_count(len(seq), allow_empty)
+        return (ctypes.c_float * n)(*seq), n
 
     with mv:
         if not mv.contiguous:
@@ -482,9 +503,7 @@ def _pcm_to_carray(pcm: PCMLike):
                 f"PCM must be float32 (got buffer format {mv.format!r}); convert "
                 "with array('f', ...) or numpy.asarray(x, dtype='float32')"
             )
-        n = floats.shape[0]
-        if n == 0:
-            raise InvalidArgument("empty PCM buffer")
+        n = _pcm_count(floats.shape[0], allow_empty)
         return (ctypes.c_float * n).from_buffer_copy(floats), n
 
 
@@ -558,16 +577,82 @@ class Capabilities:
 
 class Role(enum.Enum):
     """What a model serves (``Model.roles``): ASR is ``Model.session()``,
-    DIARIZE is ``Model.diarize_session()``."""
+    DIARIZE is ``Model.diarize_session()``, LANGID is
+    ``Model.langid_session()``, VAD is ``Model.vad_session()``."""
 
     ASR = _generated.TRANSCRIBE_ROLE_ASR
     DIARIZE = _generated.TRANSCRIBE_ROLE_DIARIZE
+    LANGID = _generated.TRANSCRIBE_ROLE_LANGID
+    VAD = _generated.TRANSCRIBE_ROLE_VAD
 
 
 @dataclass(frozen=True)
 class DiarizeInfo:
     sample_rate: int
     max_speakers: int  # speaker_id is in [1, max_speakers]
+
+
+@dataclass(frozen=True)
+class LangIdInfo:
+    sample_rate: int
+    n_labels: int      # label indices are [0, n_labels)
+    min_audio_ms: int  # shorter scored audio raises InputTooShort
+    max_audio_ms: int  # longer input is scored on its first max_audio_ms
+
+
+@dataclass(frozen=True)
+class LangIdCandidate:
+    """One ranked label. ``code`` is the model's own label ("en", "iw");
+    ``p`` is renormalized over the allowed set."""
+
+    index: int
+    code: str
+    name: str
+    p: float
+    logit: float
+
+
+@dataclass(frozen=True)
+class LangIdResult:
+    """``candidates`` are ranked by ``p`` (ties keep label order).
+    ``allowed_mass`` is the unrestricted probability inside the allowed set
+    (1.0 when unrestricted); a low value means the speech is probably outside
+    it. There is one candidate per allowed label (every label when
+    unrestricted)."""
+
+    candidates: tuple[LangIdCandidate, ...]
+    allowed_mass: float
+
+    @property
+    def code(self) -> str | None:
+        """The top candidate's code, or None when there are no candidates."""
+        return self.candidates[0].code if self.candidates else None
+
+
+@dataclass(frozen=True)
+class VadInfo:
+    sample_rate: int
+    frame_samples: int  # samples per probability (512 = 32 ms at 16 kHz)
+
+
+@dataclass(frozen=True)
+class VadSegment:
+    """One speech segment in samples of the run's input: [start, end)."""
+
+    start_sample: int
+    end_sample: int
+
+
+@dataclass(frozen=True)
+class VadResult:
+    """One speech probability per frame the call scored. ``first_frame`` is
+    the stream position of ``probs[0]`` (0 after ``run()``); frame ``f``
+    covers samples ``[f * frame_samples, (f + 1) * frame_samples)``.
+    ``segments`` is filled by ``run()`` only."""
+
+    probs: tuple[float, ...]
+    first_frame: int
+    segments: tuple[VadSegment, ...]
 
 
 @dataclass(frozen=True)
@@ -951,15 +1036,19 @@ class Model:
 
     The native library allows one compute call in flight across ALL sessions
     of a model, so ``Session.run()`` / ``run_batch()`` / ``stream()``,
-    ``Stream.feed()`` / ``finalize()`` / ``reset()`` and ``DiarizeSession.run()``
-    hold a model-wide lock for the native call and its copy-out. Calls from
-    other threads wait; a ``cancel()`` on a queued call is kept, and it
-    aborts at its first poll after acquiring the lock. Load one Model per
-    worker for parallelism. An active stream holds the model's stream
-    lease from ``stream()`` until it is finalized, reset, fails, is
-    garbage-collected or its session/model is closed. Meanwhile ``run()``,
-    ``run_batch()``, ``stream()`` and diarize ``run()`` on any session raise
-    :class:`Busy` once they hold the lock; the stream's own calls proceed.
+    ``Stream.feed()`` / ``finalize()`` / ``reset()``, ``DiarizeSession.run()``,
+    ``LangIdSession.run()`` and ``VadSession.run()`` / ``stream_feed()`` /
+    ``stream_flush()`` / ``stream_reset()`` hold a model-wide lock for the
+    native call and its copy-out. Calls from other threads wait; a
+    ``cancel()`` on a queued call is kept, and it aborts at its first poll
+    after acquiring the lock. Load one Model per worker for parallelism. An
+    active stream holds the model's stream lease from ``stream()`` until it is
+    finalized, reset, fails, is garbage-collected or its session/model is
+    closed. Meanwhile ``run()``, ``run_batch()``, ``stream()``, diarize and
+    langid ``run()`` and VAD ``run()`` / ``stream_feed()`` /
+    ``stream_flush()`` on any session raise :class:`Busy` once they hold the
+    lock; the stream's own calls proceed. A VAD stream is session state, not
+    a lease.
     ``close()`` and GC never wait for the lock: the handle is closed at once
     and the native free runs right after any in-flight call.
 
@@ -1227,6 +1316,51 @@ class Model:
         """Raises :class:`UnsupportedRole` without the DIARIZE role."""
         return DiarizeSession(self, n_threads=n_threads)
 
+    @property
+    def langid_info(self) -> LangIdInfo:
+        """Raises :class:`UnsupportedRole` without the LANGID role."""
+        info = _generated.transcribe_langid_info()
+        _lib.transcribe_langid_info_init(_byref(info))
+        _check(_lib.transcribe_langid_get_info(self._h, _byref(info)),
+               "reading langid info")
+        return LangIdInfo(sample_rate=info.sample_rate, n_labels=info.n_labels,
+                          min_audio_ms=info.min_audio_ms,
+                          max_audio_ms=info.max_audio_ms)
+
+    @property
+    def langid_labels(self) -> tuple[tuple[str, str], ...]:
+        """``(code, name)`` per label index. Raises :class:`UnsupportedRole`
+        without the LANGID role."""
+        n = self.langid_info.n_labels
+        return tuple((_decode(_lib.transcribe_langid_label_code(self._h, i)),
+                      _decode(_lib.transcribe_langid_label_name(self._h, i)))
+                     for i in range(n))
+
+    def langid_label_index(self, code: str) -> int | None:
+        """Label index of a code or alias ("he" and "iw" name the same
+        label), or None. None as well on a model without the LANGID role.
+        Raises :class:`InvalidArgument` if ``code`` contains a NUL."""
+        i = _lib.transcribe_langid_label_index(self._h, _cstr(code, "code"))
+        return i if i >= 0 else None
+
+    def langid_session(self, *, n_threads: int = 0) -> "LangIdSession":
+        """Raises :class:`UnsupportedRole` without the LANGID role."""
+        return LangIdSession(self, n_threads=n_threads)
+
+    @property
+    def vad_info(self) -> VadInfo:
+        """Raises :class:`UnsupportedRole` without the VAD role."""
+        info = _generated.transcribe_vad_info()
+        _lib.transcribe_vad_info_init(_byref(info))
+        _check(_lib.transcribe_vad_get_info(self._h, _byref(info)),
+               "reading vad info")
+        return VadInfo(sample_rate=info.sample_rate,
+                       frame_samples=info.frame_samples)
+
+    def vad_session(self, *, n_threads: int = 0) -> "VadSession":
+        """Raises :class:`UnsupportedRole` without the VAD role."""
+        return VadSession(self, n_threads=n_threads)
+
     def close(self) -> None:
         """Free the model. Any session still open on it is closed first —
         the C contract forbids freeing a model before its sessions, so this
@@ -1266,8 +1400,9 @@ _S = TypeVar("_S", bound="_SessionBase")
 
 
 class _SessionBase:
-    """Handle, cancellation and close plumbing shared by Session and
-    DiarizeSession. Subclasses name their native free in ``_free_fn``."""
+    """Handle, cancellation and close plumbing shared by Session,
+    DiarizeSession, LangIdSession and VadSession. Subclasses name their
+    native free in ``_free_fn``."""
 
     _free_fn = ""
 
@@ -1319,8 +1454,9 @@ class _SessionBase:
         """Request cancellation of an in-flight call from another thread: it
         aborts at the next chunk/decode boundary and raises ``Aborted`` (with
         ``partial_result`` where available). The flag is cleared when the next
-        run / run_batch / stream / diarize run starts, before it waits for the
-        lock, so a cancel() while queued still aborts it. Lock-free."""
+        run / run_batch / stream / diarize or langid run / VAD run, stream_feed
+        or stream_flush starts, before it waits for the lock, so a cancel()
+        while queued still aborts it. Lock-free."""
         self._cancel.set()
 
     def close(self) -> None:
@@ -1885,6 +2021,236 @@ class DiarizeSession(_SessionBase):
         _lib.transcribe_timings_init(_byref(tm))
         _check(_lib.transcribe_diarize_get_timings(self._h, _byref(tm)),
                "transcribe_diarize_get_timings")
+        return _timings_from(tm)
+
+
+class LangIdSession(_SessionBase):
+    """A language ID context on a model with the LANGID role. Compute
+    locking and ``Busy`` rules: see ``Model``."""
+
+    _free_fn = "transcribe_langid_session_free"
+
+    def __init__(self, model: Model, *, n_threads: int = 0):
+        self._model = model  # keep the model alive for the session's lifetime
+        params = _generated.transcribe_langid_session_params()
+        _lib.transcribe_langid_session_params_init(_byref(params))
+        params.n_threads = n_threads
+
+        handle = ctypes.c_void_p()
+        _check(_lib.transcribe_langid_session_init(model._h, _byref(params), _byref(handle)),
+               "opening langid session")
+        if not handle.value:
+            raise TranscribeError("langid session init returned a null handle")
+        self._handle = handle
+        self._arm_abort(_lib.transcribe_langid_set_abort_callback)
+
+    def run(self, pcm: PCMLike, *,
+            allowed: "Sequence[str] | None" = None) -> LangIdResult:
+        """Identify the language of one clip (16 kHz mono float32 PCM).
+        Input longer than ``LangIdInfo.max_audio_ms`` is scored on its first
+        ``max_audio_ms``. ``allowed`` restricts the decision to those codes
+        or aliases; None means every label, and an empty list is rejected.
+        Every allowed label is returned, ranked by ``p``.
+
+        Raises :class:`InputTooShort` below ``LangIdInfo.min_audio_ms``,
+        :class:`UnsupportedRequest` for an unknown code, :class:`Aborted`
+        after :meth:`cancel`, and :class:`Busy` if a stream is active on this
+        model."""
+        self._cancel.clear()  # before the lock wait, as in Session.run()
+        array, n_samples = _pcm_to_carray(pcm)
+        params = _generated.transcribe_langid_params()
+        _lib.transcribe_langid_params_init(_byref(params))
+        if allowed is not None:
+            if isinstance(allowed, (str, bytes)):
+                raise InvalidArgument("allowed must be a sequence of codes, not a string")
+            codes = list(allowed)
+            # An empty list must not reach native as NULL, which means "all".
+            if not codes:
+                raise InvalidArgument("allowed is empty; pass None for every label")
+            if not all(isinstance(c, str) for c in codes):
+                raise InvalidArgument("allowed entries must be str")
+            encoded = [_cstr(c, "allowed") for c in codes]
+            arr = (ctypes.c_char_p * len(encoded))(*encoded)
+            params.allowed = ctypes.cast(arr, type(params.allowed))
+            params.n_allowed = len(encoded)
+            params._allowed_keepalive = (encoded, arr)
+        with self._model._exclusive(
+                "langid_run", busy="a stream is active on this model; "
+                                   "finish or drop it before langid run()"):
+            h = self._h  # captured under the lock; close() defers its free
+            _check(_lib.transcribe_langid_run(h, array, n_samples, _byref(params)),
+                   "transcribe_langid_run")
+            res = _LangIdResult()
+            _lib.transcribe_langid_result_init(_byref(res))
+            _check(_lib.transcribe_langid_get_result(h, _byref(res)),
+                   "transcribe_langid_get_result")
+            rows = []
+            for i in range(res.n_candidates):
+                c = _LangIdCandidate()
+                _lib.transcribe_langid_candidate_init(_byref(c))
+                _check(_lib.transcribe_langid_get_candidate(h, i, _byref(c)),
+                       "transcribe_langid_get_candidate")
+                rows.append(LangIdCandidate(
+                    index=c.index, code=_decode(c.code), name=_decode(c.name),
+                    p=c.p, logit=c.logit))
+            return LangIdResult(candidates=tuple(rows), allowed_mass=res.allowed_mass)
+
+    @property
+    def timings(self) -> Timings:
+        """Load time plus the last run's mel / encode time. Not locked, like
+        ``Session.limits``."""
+        tm = _Timings()
+        _lib.transcribe_timings_init(_byref(tm))
+        _check(_lib.transcribe_langid_get_timings(self._h, _byref(tm)),
+               "transcribe_langid_get_timings")
+        return _timings_from(tm)
+
+
+def _vad_option(name: str, value, integer: bool):
+    """Check a VAD run option before ctypes would wrap or reject it."""
+    if integer:
+        if (isinstance(value, bool) or not isinstance(value, numbers.Integral)
+                or not -2**31 <= value <= _INT_MAX):
+            raise InvalidArgument(f"{name} must be an int32; got {value!r}")
+        return int(value)
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise InvalidArgument(f"{name} must be a real number; got {value!r}")
+    return float(value)
+
+
+class VadSession(_SessionBase):
+    """A voice activity detection context on a model with the VAD role.
+    Compute locking and ``Busy`` rules: see ``Model``.
+
+    ``run()`` scores one clip and segments it; ``stream_feed()`` /
+    ``stream_flush()`` / ``stream_reset()`` drive this session's own
+    probability stream. That stream is native per-session state, not an ASR
+    stream: it does not take the model's stream lease. Each feed/flush is one
+    bounded compute call, so it is locked and raises ``Busy`` under an ASR
+    stream lease like a langid or diarize run."""
+
+    _free_fn = "transcribe_vad_session_free"
+
+    def __init__(self, model: Model, *, n_threads: int = 0):
+        self._model = model  # keep the model alive for the session's lifetime
+        params = _generated.transcribe_vad_session_params()
+        _lib.transcribe_vad_session_params_init(_byref(params))
+        params.n_threads = n_threads
+
+        handle = ctypes.c_void_p()
+        _check(_lib.transcribe_vad_session_init(model._h, _byref(params), _byref(handle)),
+               "opening vad session")
+        if not handle.value:
+            raise TranscribeError("vad session init returned a null handle")
+        self._handle = handle
+        self._arm_abort(_lib.transcribe_vad_set_abort_callback)
+
+    @staticmethod
+    def _copy_result(h, segments: bool) -> VadResult:
+        """Copy the last call's result out. Caller holds the compute lock:
+        the probs pointer is session-owned and replaced by the next call."""
+        res = _VadResult()
+        _lib.transcribe_vad_result_init(_byref(res))
+        _check(_lib.transcribe_vad_get_result(h, _byref(res)),
+               "transcribe_vad_get_result")
+        probs: tuple[float, ...] = ()
+        if res.n_probs > 0:
+            ptr = _lib.transcribe_vad_probs(h)
+            if not ptr:
+                raise TranscribeError("vad result has probabilities but no buffer")
+            probs = tuple(ptr[:res.n_probs])
+        rows = []
+        for i in range(res.n_segments if segments else 0):
+            s = _VadSegment()
+            _lib.transcribe_vad_segment_init(_byref(s))
+            _check(_lib.transcribe_vad_get_segment(h, i, _byref(s)),
+                   "transcribe_vad_get_segment")
+            rows.append(VadSegment(start_sample=s.start_sample, end_sample=s.end_sample))
+        return VadResult(probs=probs, first_frame=res.first_frame, segments=tuple(rows))
+
+    def run(self, pcm: PCMLike, *,
+            threshold: float | None = None,
+            neg_threshold: float | None = None,
+            min_speech_ms: int | None = None,
+            min_silence_ms: int | None = None,
+            speech_pad_ms: int | None = None,
+            max_speech_ms: int | None = None) -> VadResult:
+        """Score one clip (16 kHz mono float32 PCM) from a fresh state and
+        return its per-frame probabilities and speech segments. Ends any
+        stream in progress on this session.
+
+        Options left at None keep the native defaults (Silero's
+        get_speech_timestamps): ``threshold`` 0.5; ``neg_threshold`` None or
+        negative means max(threshold - 0.15, 0.01), otherwise it must be in
+        [0, threshold]; ``min_speech_ms`` 250, ``min_silence_ms`` 100,
+        ``speech_pad_ms`` 30, ``max_speech_ms`` 0 (no limit).
+
+        Raises :class:`InvalidArgument` for out-of-range options,
+        :class:`Aborted` after :meth:`cancel`, and :class:`Busy` if a stream
+        is active on this model."""
+        self._cancel.clear()  # before the lock wait, as in Session.run()
+        array, n_samples = _pcm_to_carray(pcm)
+        params = _generated.transcribe_vad_params()
+        _lib.transcribe_vad_params_init(_byref(params))
+        for name, value, integer in (
+                ("threshold", threshold, False), ("neg_threshold", neg_threshold, False),
+                ("min_speech_ms", min_speech_ms, True),
+                ("min_silence_ms", min_silence_ms, True),
+                ("speech_pad_ms", speech_pad_ms, True),
+                ("max_speech_ms", max_speech_ms, True)):
+            if value is not None:
+                setattr(params, name, _vad_option(name, value, integer))
+        with self._model._exclusive(
+                "vad_run", busy="a stream is active on this model; "
+                                "finish or drop it before vad run()"):
+            h = self._h  # captured under the lock; close() defers its free
+            _check(_lib.transcribe_vad_run(h, array, n_samples, _byref(params)),
+                   "transcribe_vad_run")
+            return self._copy_result(h, segments=True)
+
+    def stream_feed(self, pcm: PCMLike) -> VadResult:
+        """Append audio (possibly empty) to this session's stream and return
+        the probabilities of the frames it completed (possibly none); a
+        partial frame waits for the next feed. ``first_frame`` is the stream
+        position of the first one; after :meth:`stream_reset` or
+        :meth:`stream_flush` the next feed starts at frame 0. Rejected input
+        leaves the stream unchanged; an abort or processing error resets it.
+        Raises like :meth:`run`."""
+        self._cancel.clear()
+        array, n_samples = _pcm_to_carray(pcm, allow_empty=True)
+        with self._model._exclusive(
+                "vad_feed", busy="a stream is active on this model; "
+                                 "finish or drop it before vad stream_feed()"):
+            h = self._h
+            _check(_lib.transcribe_vad_stream_feed(h, array, n_samples),
+                   "transcribe_vad_stream_feed")
+            return self._copy_result(h, segments=False)
+
+    def stream_flush(self) -> VadResult:
+        """End the stream: score the buffered partial frame zero padded (one
+        probability, or none when nothing was buffered). The next feed starts
+        a new stream at frame 0. Raises like :meth:`run`."""
+        self._cancel.clear()
+        with self._model._exclusive(
+                "vad_flush", busy="a stream is active on this model; "
+                                  "finish or drop it before vad stream_flush()"):
+            h = self._h
+            _check(_lib.transcribe_vad_stream_flush(h), "transcribe_vad_stream_flush")
+            return self._copy_result(h, segments=False)
+
+    def stream_reset(self) -> None:
+        """Drop the stream without scoring. Never raises ``Busy``."""
+        with self._model._exclusive("vad_reset"):
+            _lib.transcribe_vad_stream_reset(self._h)
+
+    @property
+    def timings(self) -> Timings:
+        """Load time plus the last call's encode / decode time. Not locked,
+        like ``Session.limits``."""
+        tm = _Timings()
+        _lib.transcribe_timings_init(_byref(tm))
+        _check(_lib.transcribe_vad_get_timings(self._h, _byref(tm)),
+               "transcribe_vad_get_timings")
         return _timings_from(tm)
 
 

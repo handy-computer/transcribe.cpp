@@ -110,16 +110,18 @@ several sessions of one model each hold an active stream and interleave
 their feeds; a binding allows one active stream per model. Starting a stream
 takes the model's stream lease, and ending it (finalize, reset, a feed that
 leaves the stream FAILED, or dropping / closing the stream) releases it.
-While the lease is held, `run`, `run_batch`, a new stream and a diarize run
-on any session of that model raise `Busy` instead of waiting. A feed
+While the lease is held, `run`, `run_batch`, a new stream, a diarize run and
+a langid run and a VAD run / feed / flush on any session of that model raise
+`Busy` instead of waiting. A feed
 rejected before the native call (e.g. NaN input) keeps the lease.
 
 ## Roles and the DIARIZE session
 
 Each binding exposes the role mask as `Model.roles` (Python `frozenset[Role]`,
-TypeScript `readonly ('asr' | 'diarize')[]`, Rust `Roles`, Swift `Roles`
-option set). Status 20 surfaces as `UnsupportedRole` (`.unsupportedRole` in
-Swift), including from capabilities on a model without ASR.
+TypeScript `readonly ('asr' | 'diarize' | 'langid' | 'vad')[]`, Rust `Roles`, Swift
+`Roles` option set). Status 20 surfaces as `UnsupportedRole`
+(`.unsupportedRole` in Swift), including from capabilities on a model without
+ASR. Status 21 surfaces as `InputTooShort` (`.inputTooShort` in Swift).
 
 A DIARIZE model (`docs/roles.md`) gets its own session type: `DiarizeSession`
 from `model.diarize_session()` (Python, Rust), `model.diarizeSession()`
@@ -133,6 +135,41 @@ model-wide compute lock, waits behind other compute on the model, raises
 `Busy` while a stream on any session of the model holds the stream lease,
 keeps its model alive, honours cancellation, and defers native frees that
 race an in-flight call.
+
+## The LANGID session
+
+A LANGID model gets `LangIdSession` from `model.langid_session()` (Python,
+Rust), `model.langIdSession()` (Swift) or `model.createLangIdSession()`
+(TypeScript), plus `langid_info` / `langIdInfo` / `langidInfo` (sample
+rate, label count, minimum audio, and the fixed maximum: longer input is
+scored on its first `max_audio_ms`) and the label table (codes, names, and
+alias lookup). `run(pcm, allowed=…)` returns a copied-out result: every
+allowed label ranked by `p` (index, code, name, `p`, `logit`) and
+`allowed_mass`.
+
+`allowed` is the first caller-owned `const char * const *` input. Every
+binding keeps the array and each encoded string alive until the native call
+returns (TypeScript frees them only after its async worker call settles).
+Omitted / `None` / `nil` / `null` passes NULL, meaning every label; an empty
+list raises `InvalidArgument`.
+
+A langid run follows the same execution rules as an ASR or diarize run:
+model-wide compute lock, `Busy` under a stream lease, results copied out
+under the lock, cancellation, and deferred frees.
+
+## The VAD session
+
+A VAD model gets `VadSession` from `model.vad_session()` (Python, Rust),
+`model.vadSession()` (Swift) or `model.createVadSession()` (TypeScript), plus
+`vad_info` / `vadInfo` (sample rate, frame size). `run(pcm, options)` returns a
+copied-out result: per-frame probabilities and speech segments. Stream feed /
+flush return the probabilities of the frames they completed and `first_frame`;
+stream reset drops the stream.
+
+Every VAD call takes the model-wide compute lock for that call only. A VAD
+stream is session state, not a stream lease, so ASR work on the same model may
+run between two feeds. Results are copied out under the lock, and VAD calls
+honour cancellation and deferred frees like the other roles.
 
 ## Raw text
 

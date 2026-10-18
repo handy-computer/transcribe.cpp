@@ -152,12 +152,13 @@ int main() {
         }
     }
 
-    // Variant must be one of the two the converter produces. Capture
-    // which one for the variant-dependent assertions below.
-    const std::string variant = transcribe_model_variant_string(model);
-    const bool        is_v2   = (variant == "tdt-0.6b-v2");
-    const bool        is_v3   = (variant == "tdt-0.6b-v3");
-    if (!is_v2 && !is_v3) {
+    // These variants share the 0.6B tensor layout; capability and
+    // vocabulary assertions below distinguish the converted sources.
+    const std::string variant   = transcribe_model_variant_string(model);
+    const bool        is_v2     = (variant == "tdt-0.6b-v2");
+    const bool        is_v3     = (variant == "tdt-0.6b-v3");
+    const bool        is_phonon = (variant == "tdt-0.6b-phonon-2");
+    if (!is_v2 && !is_v3 && !is_phonon) {
         std::fprintf(stderr, "FAIL: unexpected variant \"%s\"\n", variant.c_str());
         ++g_failures;
     }
@@ -172,7 +173,7 @@ int main() {
         CHECK(caps->native_sample_rate == 16000);
         CHECK(caps->supports_translate == false);
 
-        if (is_v2) {
+        if (is_v2 || is_phonon) {
             CHECK(caps->supports_language_detect == false);
             CHECK_EQ_INT(caps->n_languages, 1);
             if (caps->n_languages == 1 && caps->languages != nullptr) {
@@ -218,9 +219,16 @@ int main() {
         CHECK_EQ_INT(hp.pred_vocab, 1025);         // 1024 + 1 start row
         CHECK_EQ_INT(hp.joint_n_classes(), 1030);  // 1024 + 5 + 1
     }
-    if (is_v3) {
+    if (is_v3 || is_phonon) {
         CHECK_EQ_INT(hp.pred_vocab, 8193);         // 8192 + 1 start row
         CHECK_EQ_INT(hp.joint_n_classes(), 8198);  // 8192 + 5 + 1
+    }
+    if (is_phonon) {
+        CHECK(hp.kestrel_length_masking);
+        CHECK(hp.mask_after_pointwise);
+        CHECK(hp.tdt_global_symbol_budget);
+        CHECK(!hp.has_vad_head);
+        CHECK(caps != nullptr && !caps->supports_streaming);
     }
     CHECK_EQ_INT(hp.joint_hidden, 640);
     CHECK_EQ_INT(hp.joint_num_extra_outputs, 5);
@@ -243,7 +251,7 @@ int main() {
     CHECK_EQ_INT(hp.fe_hop_length, 160);  // 0.010 s * 16000
     CHECK_STR_EQ(hp.fe_window, "hann");
     CHECK_STR_EQ(hp.fe_normalize, "per_feature");
-    CHECK(hp.fe_dither == 1e-5f);
+    CHECK(hp.fe_dither == (is_phonon ? 0.0f : 1e-5f));
     CHECK(hp.fe_pre_emphasis == 0.97f);
     CHECK(hp.fe_f_min == 0.0f);
     CHECK(hp.fe_f_max == 8000.0f);
@@ -295,6 +303,25 @@ int main() {
         if (t != nullptr) {
             CHECK_EQ_INT(t->ne[0], 640);                   // joint_hidden
             CHECK_EQ_INT(t->ne[1], hp.joint_n_classes());  // 1030 or 8198
+        }
+    }
+
+    if (is_phonon) {
+        transcribe_session * session = nullptr;
+        CHECK(transcribe_session_init(model, nullptr, &session) == TRANSCRIBE_OK);
+        if (session != nullptr) {
+            float silence[16000] = {};
+            transcribe_set_abort_callback(session, [](void *) { return true; }, nullptr);
+            CHECK(transcribe_run(session, silence, 16000, nullptr) == TRANSCRIBE_ERR_ABORTED);
+            CHECK(transcribe_was_aborted(session));
+            transcribe_set_abort_callback(session, nullptr, nullptr);
+            CHECK(transcribe_run(session, nullptr, 0, nullptr) != TRANSCRIBE_OK);
+            for (int repeat = 0; repeat < 2; ++repeat) {
+                CHECK(transcribe_run(session, silence, 16000, nullptr) == TRANSCRIBE_OK);
+                CHECK(!transcribe_was_aborted(session));
+                CHECK_STR_EQ(transcribe_full_text(session), "");
+            }
+            transcribe_session_free(session);
         }
     }
 

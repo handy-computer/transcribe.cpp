@@ -121,7 +121,7 @@ struct ConvPolicy {
     bool causal_pre_encode = false;
 
     // Where the pre_encode valid-length masks apply. false (NeMo): after each
-    // stage's ReLU. true (kestrel / HF Subsampling): right after each strided
+    // stage's ReLU. true (kestrel): right after each strided
     // conv, so the padded tail carries ReLU(pointwise bias) into the next
     // strided conv as the reference does. Stage 1 is the same either way.
     bool pre_encode_mask_after_stride = false;
@@ -171,8 +171,8 @@ struct BlockParams {
     //     T <= 2W+1 and remains correct (band-restricted) when T
     //     exceeds the window. Default for every offline variant.
     //
-    //   ChunkedLimited  — pos_emb stays at the full 2T-1 length and
-    //     the caller supplies a precomputed F16 mask of shape
+    //   ChunkedLimited  — pos_emb normally stays at the full 2T-1 length
+    //     and the caller supplies a precomputed F32 mask of shape
     //     [T_k, T_q, 1, 1] in `attn_chunked_mask` that
     //     rel_pos_mhsa adds onto matrix_bd before flash_attn. Chunk
     //     size = right+1, left_chunks = left/chunk_size; the mask is
@@ -181,8 +181,21 @@ struct BlockParams {
     enum class AttContextStyle { Regular, ChunkedLimited };
     AttContextStyle att_context_style = AttContextStyle::Regular;
 
+    // Bounded-window attention (offline, batch 1). When window_chunk > 0,
+    // attention reshapes the utterance into N = ceil(T / C) query blocks
+    // of C = window_chunk frames; block n attends to the W = window_keys
+    // keys starting at n*C - window_left. attn_chunked_mask is then
+    // [W, C, 1, N] (0 allowed / -INF) and carries the band itself, either
+    // the ChunkedLimited chunk topology or the Regular-local |q-k| window,
+    // plus the sequence edges; pos_emb has W + C - 1 rows with offset 0 at
+    // row window_left + C - 1. Same math as the dense [T,T] graph with
+    // work and scratch linear in T. 0 = dense reference graph.
+    int window_chunk = 0;
+    int window_left  = 0;
+    int window_keys  = 0;
+
     // Optional precomputed mask for ChunkedLimited. The caller builds
-    // this as a graph input shape [T_k, T_q, 1, 1] F16 (broadcasts
+    // this as a graph input shape [T_k, T_q, 1, 1] F32 (broadcasts
     // across heads) and uploads the host-computed pattern after the
     // compute buffer is allocated. Ignored for AttContextStyle::Regular.
     ggml_tensor * attn_chunked_mask = nullptr;

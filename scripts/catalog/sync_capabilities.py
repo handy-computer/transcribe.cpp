@@ -60,6 +60,7 @@ FAMILY_DIRS = {
     "cohere_asr": "cohere",
     "granite_speech": "granite",
     "granite_speech_nar": "granite_nar",
+    "granite_speech5_ctc": "granite5_ctc",
 }
 
 KIND_RE = re.compile(r"max_timestamp_kind\s*=\s*TRANSCRIBE_TIMESTAMPS_(\w+)")
@@ -179,7 +180,11 @@ def build(record: dict, kvs: dict) -> dict:
                 block["note"] = was["note"]
         return block
 
-    caps = {"transcribe": previous.get("transcribe", {"supported": True, "verified": False})}
+    # Standalone roles do not implement the ASR entry point. Without this,
+    # a freshly seeded VAD/LID/diarizer record silently claims transcription.
+    transcribe = (previous.get("transcribe", {"supported": True, "verified": False})
+                  if record.get("role", "asr") == "asr" else {"supported": False})
+    caps = {"transcribe": transcribe}
 
     targets = kvs.get("stt.translation.target_languages")
     pairs = kvs.get("stt.translation.pairs")
@@ -191,7 +196,7 @@ def build(record: dict, kvs: dict) -> dict:
     caps["lang_detect"] = carry("lang_detect", bool(kvs.get(KV["lang_detect"], False)))
 
     ceiling = family_ceiling(record["family"])
-    if record["family"].startswith("granite_speech") and not kvs.get(
+    if record["family"] in ("granite_speech", "granite_speech_nar") and not kvs.get(
             "stt.capability.word_timestamps", False):
         # Granite scopes the ceiling per variant, in arch/granite/model.cpp.
         ceiling = "none"

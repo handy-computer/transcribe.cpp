@@ -532,6 +532,25 @@ def _display_name(variant: str) -> str:
     return name
 
 
+# (spdx, name, link) for general.license{,.name,.link}. Moonshine AI ships the
+# English and streaming models under MIT, but the legacy non-streaming language
+# fine-tunes stay under the Moonshine AI Community License, which restricts
+# commercial use. The upstream LICENSE calls its list of those exhaustive, and
+# every language-suffixed slug this converter handles is on it.
+_MIT_LICENSE = ("mit", "MIT License", "https://opensource.org/license/mit")
+_COMMUNITY_LICENSE = (
+    "other",
+    "moonshine-community-license",
+    "https://github.com/moonshine-ai/moonshine/blob/main/LICENSE",
+)
+
+
+def _license(variant: str) -> tuple[str, str, str]:
+    """English (no language suffix) is MIT; every language fine-tune is the
+    Moonshine AI Community License."""
+    return _COMMUNITY_LICENSE if len(variant.lower().split("-")) == 3 else _MIT_LICENSE
+
+
 def convert(model_dir: Path, out_path: Path, variant: str,
             languages: list[str] | None = None,
             repo_id: str | None = None) -> None:
@@ -595,6 +614,7 @@ def convert(model_dir: Path, out_path: Path, variant: str,
         writer = gguf_writer(str(out_path), "moonshine")
 
         # ---- general.* ----
+        license_spdx, license_name, license_link = _license(variant)
         add_general_identity(
             writer,
             name=_display_name(variant),
@@ -604,9 +624,9 @@ def convert(model_dir: Path, out_path: Path, variant: str,
             languages=languages,
             author="Useful Sensors",
             organization="UsefulSensors",
-            license="mit",
-            license_name="MIT License",
-            license_link="https://opensource.org/license/mit",
+            license=license_spdx,
+            license_name=license_name,
+            license_link=license_link,
             repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
         )
 

@@ -8,6 +8,7 @@
 #include "gguf.h"
 #include "qwen3_asr.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -701,7 +702,7 @@ transcribe_status run(transcribe_session *          session,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "qwen3_asr")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "qwen3_asr run: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -859,7 +860,7 @@ transcribe_status run(transcribe_session *          session,
 
     // Allocate + compute prefill on the same scheduler.
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "qwen3_asr")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "qwen3_asr run: prefill graph allocation failed (T_prompt=%d) — "
                             "out of memory. Lower transcribe_session_params.n_ctx or shorten "
@@ -979,7 +980,7 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "qwen3_asr")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "qwen3_asr step: decode graph allocation failed — out of memory. "
                             "Lower transcribe_session_params.n_ctx or shorten the audio.");
@@ -1267,7 +1268,7 @@ transcribe_status encode_all_batched(QwenAsrSession *                  cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "qwen3_asr")) {
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -1398,7 +1399,7 @@ transcribe_status prefill_all_batched(QwenAsrSession *                          
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "qwen3_asr")) {
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -1727,7 +1728,7 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "qwen3_asr")) {
         return TRANSCRIBE_ERR_OOM;
     }
 

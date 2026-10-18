@@ -4,10 +4,12 @@
 //
 // Device discovery needs no model; model loads are skipped when none is given.
 
-import { getAvailableBackends, backendAvailable, TranscribeModel } from "../dist/index.js";
+import { getAvailableBackendsAsync, backendAvailable, TranscribeModel } from "../dist/index.js";
 import { model, skip } from "./_support.mjs";
 
-const devices = getAvailableBackends();
+// Async discovery initializes backends off the event loop; the sync queries
+// below are then instant.
+const devices = await getAvailableBackendsAsync();
 console.log("discovered devices:");
 for (const d of devices) {
   console.log(`  ${d.kind.padEnd(7)} ${d.name} — ${d.description}`);

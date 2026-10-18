@@ -1,0 +1,123 @@
+{
+  "_comment": [
+    "ECAPA-TDNN / VoxLingua107 per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Carried over unchanged from langid.cpp: on the port, every stage tensor the",
+    "transcribe.cpp ecapa_tdnn family dumps was bit-identical to langid.cpp's",
+    "(CPU, 1 thread, F32), so the measured drift below still holds.",
+    "",
+    "Measured in langid.cpp (handy-computer/langid.cpp @ 96af3a5) against C++ vs",
+    "reference drift. Every Stage-2 provisional flag has been removed.",
+    "",
+    "Regime, identical for every number below:",
+    "  model     models/lang-id-voxlingua107-ecapa/lang-id-voxlingua107-ecapa-F32.gguf",
+    "            (ALL_F32; no quantised tensor takes part in these numbers)",
+    "  runtime   build/bin/transcribe-cli --backend cpu --threads 1",
+    "  front end the production C++ log-mel front end (src/transcribe-mel.cpp,",
+    "            normalize=sentence_mean; measured on its family-local predecessor,",
+    "            which ran the same fp32 mixed-radix FFT),",
+    "            not a reference feature dump -- fe.mel is measured, not injected",
+    "  host      macOS / arm64 (Apple Silicon) and Linux / x86-64 (AVX2+FMA,",
+    "            Ryzen 7 PRO 4750U), ggml CPU backend",
+    "  reference speechbrain 1.1.1 on torch 2.13.0, fp32, CPU, 1 thread,",
+    "            checkpoint speechbrain/lang-id-voxlingua107-ecapa @",
+    "            0253049ae131d6a4be1c4f0d8b0ff483a0f8c8e9",
+    "  cases     all 8 in tests/golden/ecapa_tdnn/lang-id-voxlingua107-ecapa.manifest.json",
+    "            (fleurs-{en,de,fr,es,ja,zh,ru,id}, 7.9 s .. 11.2 s)",
+    "",
+    "F16 / Q8_0 / Metal are production variants measured separately and were",
+    "never used to set these numbers.",
+    "",
+    "Recipe, per tensor, over all 8 cases:",
+    "  max_abs  = max(1.5 * max_over_cases(observed max_abs),  provisional, 1e-6)",
+    "  mean_abs = max(1.5 * max_over_cases(observed mean_abs), provisional, 1e-6)",
+    "The Stage-2 provisional budgets were max(1e-4*p99_abs, 1e-6) and",
+    "max(1e-5*rms, 1e-6) from the reference dumps alone.",
+    "",
+    "WIDENED ENTRIES (max_abs only, from the x86 host; every other value is",
+    "the unchanged Stage-2 number):",
+    "  enc.mfa.out    observed 2.3806e-04 (fleurs-zh) -> 3.571e-04",
+    "  enc.blk.2.out  observed 2.0504e-04 (fleurs-zh) -> 3.076e-04",
+    "Cause: fp32 FMA reduction order over the 3072- and 1024-wide",
+    "contractions on x86 AVX2, about 2x the arm64 drift on these tensors.",
+    "mean_abs on both stays under 7% of budget, and the drift contracts",
+    "again downstream (enc.emb, cls.logits_raw under 1%).",
+    "",
+    "Dominant drift source: fp32 summation ORDER, not algorithm. Two",
+    "contributors, in order of size:",
+    "  1. fe.mel -- the C++ mixed-radix 400-point FFT (src/transcribe-mel.cpp)",
+    "     accumulates the STFT differently from torch.stft's FFT, and the",
+    "     difference is then amplified by 10*log10 on near-floor bins. This",
+    "     is the only stage whose drift is not inherited.",
+    "  2. every matmul -- ggml's blocked/SIMD reduction order over the 1024-",
+    "     and 3072-wide contractions differs from PyTorch's BLAS. The graph",
+    "     itself is exact: an independent fp64 NumPy re-derivation of the",
+    "     forward pass agrees with the ggml graph to 4.5e-07 relative on a",
+    "     synthetic fixture, so no term of the ECAPA algebra is approximated.",
+    "The residual-add topology means block drift accumulates roughly linearly",
+    "(blk.0 5.2e-05 -> blk.3 1.5e-04), then the attention softmax and the",
+    "1/T statistics CONTRACT it again (enc.asp.out 9.5e-06), which is why the",
+    "downstream vectors sit two orders of magnitude inside their budgets.",
+    "",
+    "Tightest entry: enc.blk.0.out, where 1.5*observed (arm64) is 99% of",
+    "the budget; max_abs on a wide [T, C] activation.",
+    "",
+    "cls.logits_raw is the gate."
+  ],
+  "fe.mel": {
+    "max_abs": 0.004079,
+    "mean_abs": 0.0001782
+  },
+  "enc.blk.0.out": {
+    "max_abs": 7.896e-05,
+    "mean_abs": 1.897e-06
+  },
+  "enc.blk.1.tdnn1.out": {
+    "max_abs": 0.0004054,
+    "mean_abs": 1.008e-05
+  },
+  "enc.blk.1.res2.out": {
+    "max_abs": 0.0003865,
+    "mean_abs": 9.456e-06
+  },
+  "enc.blk.1.se.out": {
+    "max_abs": 0.0001077,
+    "mean_abs": 2.4e-06
+  },
+  "enc.blk.1.out": {
+    "max_abs": 0.0001297,
+    "mean_abs": 2.952e-06
+  },
+  "enc.blk.2.out": {
+    "max_abs": 0.0003076,
+    "mean_abs": 5.964e-06
+  },
+  "enc.blk.3.out": {
+    "max_abs": 0.0006391,
+    "mean_abs": 1.412e-05
+  },
+  "enc.mfa.out": {
+    "max_abs": 0.0003571,
+    "mean_abs": 4.163e-06
+  },
+  "enc.asp.attn_logits": {
+    "max_abs": 0.0003274,
+    "mean_abs": 1.19e-05
+  },
+  "enc.asp.out": {
+    "max_abs": 0.0001753,
+    "mean_abs": 4.176e-06
+  },
+  "enc.emb": {
+    "max_abs": 0.006139,
+    "mean_abs": 0.0002736
+  },
+  "cls.hidden": {
+    "max_abs": 0.002295,
+    "mean_abs": 8.541e-05
+  },
+  "cls.logits_raw": {
+    "max_abs": 0.001809,
+    "mean_abs": 0.0001014
+  }
+}

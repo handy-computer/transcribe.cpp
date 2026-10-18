@@ -69,6 +69,7 @@ struct GigaamSession final : public transcribe_session {
 
     std::vector<float> mel_buf;
     std::vector<float> pos_buf;  // cos/sin rotary PE bank, host scratch
+    std::vector<float> mel_win;  // windowed encode: one window's mel slice
     std::vector<float> enc_host;
 
     GigaamSession() = default;

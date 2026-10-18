@@ -10,11 +10,12 @@ Offline Russian speech-to-text with greedy CTC decoding. 16-layer Conformer enco
 
 Offline Russian speech-to-text with greedy CTC decoding. Output includes punctuation and Cyrillic casing inline from a 256-piece SentencePiece tokenizer.
 
-Decoder is greedy; no language model, no beam search. Short-form only
-(≤ 25 s per utterance; upstream `transcribe_longform` chunking via
-PyAnnote VAD is intentionally not ported). Token-level timestamps are
-emitted at the encoder frame rate (40 ms granularity); word- and
-segment-level timestamps are out of scope.
+Decoder is greedy; no language model, no beam search. Audio longer than
+the 25 s training window is encoded in overlapping windows (see
+[Input limits](gigaam.md#input-limits)); upstream's PyAnnote-VAD
+`transcribe_longform` is not ported. Token-level timestamps are emitted
+at the encoder frame rate (40 ms granularity); word- and segment-level
+timestamps are out of scope.
 
 The encoder is shared across all four ported GigaAM-v3 variants but
 weights are per-variant fine-tuned (the encoder hidden state differs
@@ -29,7 +30,7 @@ See ai-sage's [model card](https://huggingface.co/ai-sage/GigaAM-v3)
 for training data, intended use, and upstream evaluation methodology.
 
 <!-- catalog:pin -->
-Licensed MIT. Ported from upstream commit [`cec030b`](https://huggingface.co/ai-sage/GigaAM-v3/commit/cec030b), pinned 2026-05-12. Validated against the gigaam author package reference at transcribe.cpp commit [`42b96d9`](https://github.com/handy-computer/transcribe.cpp/tree/42b96d9) on 2026-05-12.
+Licensed MIT. Ported from upstream commit [`cec030b`](https://huggingface.co/ai-sage/GigaAM-v3/commit/cec030b), pinned 2026-05-12. Validated against the gigaam author package reference at transcribe.cpp commit [`0fff13f8`](https://github.com/handy-computer/transcribe.cpp/tree/0fff13f8) on 2026-10-15.
 <!-- /catalog -->
 
 ## Download
@@ -110,12 +111,12 @@ Compute latency (mel + encode + decode), speedup over realtime in parentheses; p
 
 | Backend | Sample           |            Q8_0 |          Q4_K_M |
 | ------- | ---------------- | --------------: | --------------: |
-| Vulkan  | ru-short (11.0s) | 318 ms (34.53×) | 326 ms (33.69×) |
-| Vulkan  | ru-long (33.8s)  | 934 ms (36.22×) | 954 ms (35.48×) |
-| CPU     | ru-short (11.0s) | 824 ms (13.33×) | 928 ms (11.83×) |
-| CPU     | ru-long (33.8s)  |  3.53 s (9.58×) |  3.74 s (9.06×) |
+| Vulkan  | ru-short (11.0s) | 313 ms (35.12×) | 322 ms (34.12×) |
+| Vulkan  | ru-long (33.8s)  | 1.03 s (32.70×) | 1.06 s (32.00×) |
+| CPU     | ru-short (11.0s) | 546 ms (20.11×) | 529 ms (20.76×) |
+| CPU     | ru-long (33.8s)  | 2.07 s (16.34×) | 1.91 s (17.75×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `522ccd68` on 2026-09-15.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `0fff13f8` on 2026-10-15.
 <!-- /catalog -->
 
 Benchmark reproduction:

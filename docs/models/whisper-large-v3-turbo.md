@@ -16,7 +16,7 @@ See the [upstream model card](https://huggingface.co/openai/whisper-large-v3-tur
 use, and the original evaluation methodology.
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`41f01f3`](https://huggingface.co/openai/whisper-large-v3-turbo/commit/41f01f3), pinned 2026-04-25. Validated against the transformers reference at transcribe.cpp commit [`0a26478`](https://github.com/handy-computer/transcribe.cpp/tree/0a26478) on 2026-09-13.
+Licensed MIT. Ported from upstream commit [`41f01f3`](https://huggingface.co/openai/whisper-large-v3-turbo/commit/41f01f3), pinned 2026-04-25. Validated against the transformers reference at transcribe.cpp commit [`0a26478`](https://github.com/handy-computer/transcribe.cpp/tree/0a26478) on 2026-09-13.
 <!-- /catalog -->
 
 ## Download

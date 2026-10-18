@@ -1,0 +1,154 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "ecapa_tdnn",
+  "hf_repo": "speechbrain/lang-id-voxlingua107-ecapa",
+  "hf_revision": "0253049ae131d6a4be1c4f0d8b0ff483a0f8c8e9",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "hyperparams.yaml",
+      "status": "found",
+      "detail": "SpeechBrain hyperparams.yaml (no HF config.json). Instantiates lobes.features.Fbank, lobes.models.ECAPA_TDNN.ECAPA_TDNN and lobes.models.Xvector.Classifier by class name; only channels / kernel_sizes / dilations / attention_channels / lin_neurons and four Fbank fields are explicit, the rest are speechbrain 1.1.1 defaults (asserted against the live modules by scripts/convert-ecapa_tdnn.py)."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "hyperparams.yaml::compute_features",
+      "status": "found",
+      "detail": "Fbank(n_mels=60, left_frames=0, right_frames=0, deltas=False) + InputNormalization(norm_type=sentence, std_norm=False)."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "speechbrain==1.1.1 speechbrain.inference.classifiers.EncoderClassifier",
+      "status": "found",
+      "detail": "The only published implementation; ported from handy-computer/langid.cpp@96af3a5 where the C++ was first validated against it."
+    }
+  },
+  "variants": [
+    {
+      "name": "lang-id-voxlingua107-ecapa",
+      "memory_gb": 0.1,
+      "files": [
+        "hyperparams.yaml",
+        "embedding_model.ckpt",
+        "classifier.ckpt",
+        "label_encoder.txt"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-classifier"
+    ],
+    "key_fields": {
+      "channels": [
+        1024,
+        1024,
+        1024,
+        1024,
+        3072
+      ],
+      "kernel_sizes": [
+        5,
+        3,
+        3,
+        3,
+        1
+      ],
+      "dilations": [
+        1,
+        2,
+        3,
+        4,
+        1
+      ],
+      "res2net_scale": 8,
+      "se_channels": 128,
+      "attention_channels": 128,
+      "lin_neurons": 256,
+      "classifier_hidden": 512,
+      "n_labels": 107
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "weights_header",
+    "evidence": "embedding_model.ckpt / classifier.ckpt are fp32 PyTorch state dicts (21,058,432 + 188,011 params); the converter asserts every parameter is torch.float32.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {
+        "float32": 21246443
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 60,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hamming_periodic",
+    "normalization": "sentence_mean",
+    "preemphasis": null,
+    "dither": null,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "other",
+    "vocab_size": 0,
+    "special_tokens": {},
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": [],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "VoxLingua107 dev",
+      "language": null,
+      "metric": "accuracy",
+      "score": 93.3,
+      "score_unit": "percent",
+      "source": "model card (6.7% error rate on the VoxLingua107 development set)",
+      "notes": "Language ID role: top-1 accuracy over 107 labels. Not a WER figure."
+    }
+  ],
+  "reference_framework": "author_repo_speechbrain",
+  "reference_rationale": "SpeechBrain is the only implementation of this checkpoint: hyperparams.yaml instantiates SpeechBrain classes by name and there is no Transformers shim. Pinned to speechbrain 1.1.1 / torch 2.13.0, the versions langid.cpp's tolerances were measured against.",
+  "architecture_pattern": "encoder-classifier",
+  "known_risks": [
+    "Role is LANGID, not ASR: acceptance is FLEURS decision parity vs SpeechBrain (12000 decisions) plus top-1 accuracy, not WER on LibriSpeech.",
+    "capabilities.language_detection / stt.capability.lang_detect mean ASR auto-detect and stay false; language ID is the model's role (transcribe_model_roles), not an ASR capability.",
+    "SpeechBrain front end (periodic Hamming, 10*log10, 80 dB top-db, per-bin mean) runs on the shared transcribe-mel (src/transcribe-mel.cpp) with window_type hamming_periodic and normalize sentence_mean.",
+    "Labels use VoxLingua107's legacy codes (iw, jw, tl, no); modern codes are stored as aliases. Codes are not canonicalized against ASR models' language lists.",
+    "Closed-set classifier: out-of-set speech still gets a confident label; callers use allowed_mass / restrict the allowed set."
+  ],
+  "intake_gaps": []
+}

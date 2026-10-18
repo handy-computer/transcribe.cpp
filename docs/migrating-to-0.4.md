@@ -25,6 +25,12 @@ Segments are byte-identical to 0.3 for the same audio, preset and backend.
 Speaker-attributing ASR models (granite, moss, multitalker parakeet) are
 unchanged; see `docs/roles.md`.
 
+## New: the LANGID role
+
+Language identification is a new role (`include/transcribe/langid.h`,
+`docs/langid.md`) with a new status, `TRANSCRIBE_ERR_INPUT_TOO_SHORT` (21).
+It is new API, so nothing migrates.
+
 ## Capabilities are ASR-only
 
 `transcribe_model_get_capabilities` returns `TRANSCRIBE_ERR_UNSUPPORTED_ROLE`
@@ -46,8 +52,9 @@ from the role's own query (`transcribe_diarize_get_info`).
 
 ## Language bindings
 
-- New `Model.roles`, `DiarizeSession` and an `UnsupportedRole` error for
-  status 20 (`.unsupportedRole` in Swift); see `docs/bindings.md`. The
+- New `Model.roles`, `DiarizeSession`, `LangIdSession`, an `UnsupportedRole`
+  error for status 20 (`.unsupportedRole` in Swift) and an `InputTooShort`
+  error for status 21; see `docs/bindings.md`. The
   Sortformer ASR-path extension (`SortformerStreamOptions` and equivalents)
   is removed. Sortformer runs through a diarize session instead:
 
@@ -68,7 +75,7 @@ from the role's own query (`transcribe_diarize_get_info`).
   (e.g. NaN) keeps the lease and the stream stays usable.
 - **Rust:** `Model::capabilities()` returns `Result<Capabilities>`
   (`Err(Error::UnsupportedRole)` on a model without ASR). `ExtSlot` gains
-  `DiarizeRun` and `AbiStruct` gains the three diarize structs; both are now
+  `DiarizeRun` and `AbiStruct` gains the diarize and langid structs; both are now
   `#[non_exhaustive]`, so later roles add variants without another break.
 - **Swift:** `Model.capabilities` is `get throws`.
 - **Python:** calls on one model now serialize (they used to race), and a

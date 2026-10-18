@@ -48,6 +48,11 @@ FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
     # either). K tiers also save little (Q8_0 139MB -> Q4_K_M 92MB) and
     # are slower than Q8_0 on CPU. Ship only the near-reference tiers.
     "sortformer": ("F16", "Q8_0"),
+    # ecapa_tdnn (language ID): a 21M-parameter model whose decision is an
+    # argmax over 107 logits. Q8_0 ships for its download size (the loader
+    # widens it to F16, see src/arch/ecapa_tdnn/model.cpp); the K tiers would
+    # save a few MB at most. Ship only the near-reference tiers.
+    "ecapa_tdnn": ("F16", "Q8_0"),
 }
 
 

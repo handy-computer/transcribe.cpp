@@ -86,6 +86,8 @@ NORM = [
     "dec.pos_emb.weight",                   # whisper decoder pos_emb
     "frontend.mel_filterbank",              # mel frontend buffer
     "frontend.window",                      # window frontend buffer
+    "blk.1.tdnn1.bn.scale",                 # ecapa_tdnn folded BN affine (.bn.)
+    "blk.1.res2.0.conv.bias",               # ecapa_tdnn conv bias (.bias)
 ]
 
 # Conv bucket: 2D / depthwise / 1x1 pointwise conv kernels. The loader has no
@@ -105,6 +107,7 @@ CONV = [
     "enc.blocks.3.conv.pointwise2.weight",  # conformer 1x1 pointwise
     "enc.pre_encode.conv.0.weight",         # pre-encode subsampling conv
     "enc.blocks.3.conv.depthwise.weight",   # conformer depthwise conv
+    "blk.1.res2.0.conv.weight",             # ecapa_tdnn tap-major k>1 kernel
     "vad.proj.weight",                      # parakeet-ultra VAD head 1x1 conv
     "vad.ctx.weight",                       # parakeet-ultra VAD head k=5 conv
 ]
@@ -131,6 +134,9 @@ LINEAR = [
     "enc.blocks.3.attn.rel_pos_emb.weight",
     "enc.blocks.3.attn.kv.weight",          # granite5_ctc fused K|V projection
     "enc.ctc_proj.weight",                  # granite5_ctc tied CTC head
+    "blk.1.tdnn1.weight",                   # ecapa_tdnn 1x1 TDNN (a matmul operand)
+    "asp.attn.weight",                      # ecapa_tdnn ASP attention 1x1 (NOT .conv.)
+    "cls.out.weight",                       # ecapa_tdnn classifier head
 ]
 
 # KNOWN DRIFT — policy.cpp::classify_tensor places these in the Norm (F32) or

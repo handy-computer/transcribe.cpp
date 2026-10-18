@@ -324,6 +324,16 @@ pub enum AbiStruct {
     DiarizeInfo,
     DiarizeSessionParams,
     DiarizeParams,
+    LangIdInfo,
+    LangIdSessionParams,
+    LangIdParams,
+    LangIdResult,
+    LangIdCandidate,
+    VadInfo,
+    VadSessionParams,
+    VadParams,
+    VadResult,
+    VadSegment,
 }
 
 impl AbiStruct {
@@ -349,6 +359,16 @@ impl AbiStruct {
             AbiStruct::DiarizeInfo => A::TRANSCRIBE_ABI_DIARIZE_INFO,
             AbiStruct::DiarizeSessionParams => A::TRANSCRIBE_ABI_DIARIZE_SESSION_PARAMS,
             AbiStruct::DiarizeParams => A::TRANSCRIBE_ABI_DIARIZE_PARAMS,
+            AbiStruct::LangIdInfo => A::TRANSCRIBE_ABI_LANGID_INFO,
+            AbiStruct::LangIdSessionParams => A::TRANSCRIBE_ABI_LANGID_SESSION_PARAMS,
+            AbiStruct::LangIdParams => A::TRANSCRIBE_ABI_LANGID_PARAMS,
+            AbiStruct::LangIdResult => A::TRANSCRIBE_ABI_LANGID_RESULT,
+            AbiStruct::LangIdCandidate => A::TRANSCRIBE_ABI_LANGID_CANDIDATE,
+            AbiStruct::VadInfo => A::TRANSCRIBE_ABI_VAD_INFO,
+            AbiStruct::VadSessionParams => A::TRANSCRIBE_ABI_VAD_SESSION_PARAMS,
+            AbiStruct::VadParams => A::TRANSCRIBE_ABI_VAD_PARAMS,
+            AbiStruct::VadResult => A::TRANSCRIBE_ABI_VAD_RESULT,
+            AbiStruct::VadSegment => A::TRANSCRIBE_ABI_VAD_SEGMENT,
         }
     }
 }
@@ -386,6 +406,10 @@ pub enum Role {
     Asr,
     /// Speaker diarization: [`DiarizeSession`](crate::DiarizeSession).
     Diarize,
+    /// Language identification: [`LangIdSession`](crate::LangIdSession).
+    LangId,
+    /// Voice activity detection: [`VadSession`](crate::VadSession).
+    Vad,
 }
 
 /// The set of [`Role`]s a model serves ([`Model::roles`](crate::Model::roles)).
@@ -399,6 +423,8 @@ impl Roles {
         let bit = match role {
             Role::Asr => sys::transcribe_role::TRANSCRIBE_ROLE_ASR,
             Role::Diarize => sys::transcribe_role::TRANSCRIBE_ROLE_DIARIZE,
+            Role::LangId => sys::transcribe_role::TRANSCRIBE_ROLE_LANGID,
+            Role::Vad => sys::transcribe_role::TRANSCRIBE_ROLE_VAD,
         };
         self.0 & bit.0 != 0
     }

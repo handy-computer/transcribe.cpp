@@ -39,7 +39,7 @@ LibriSpeech WER:
 | Fallback thresholds | compression `2.4`, logprob `-1.0`, no-speech `0.6` | Library defaults (`transcribe_whisper_run_ext_init`). |
 | Condition on prev | **off** | Library default; long-form conditioning is not part of short-form WER. |
 | Normalization | `EnglishTextNormalizer` (en) / `BasicTextNormalizer` (other) | Applied to both ref and hyp at score time (`score.py`). |
-| ITN | **off** (`--no-itn`) | Spoken form, matching what the reference runs produce (`run_reference_sensevoice.py` / `run_reference_funasr_nano.py` default `--use-itn` off). Only `sensevoice` and `funasr_nano` have a runtime ITN toggle; every other family ignores the flag. |
+| ITN | **off** (`--no-itn`), **on** (`--itn`) for `fun-asr-mlt-nano-2512` | Off is spoken form, matching what the reference runs produce (`run_reference_sensevoice.py` / `run_reference_funasr_nano.py` default `--use-itn` off). MLT is measured with ITN on, its runtime default, against a reference run with `--use-itn`. `run.py` picks the mode from the GGUF's `stt.variant` (`ITN_ON_VARIANTS`). Only `sensevoice` and `funasr_nano` have a runtime ITN toggle; every other family ignores the flag. |
 | Dataset | full LibriSpeech `test-clean` (2620 utts) | — |
 
 The recipe is **stamped into the hyp JSONL `batch_header`** (`recipe` field)
@@ -75,12 +75,15 @@ Batch size is not part of a cell's identity: the profile recommends batch 8
 because it is faster and cheaper, a cell measured at batch 1 still satisfies
 it, and the catalog row records whichever was run.
 
-> **ITN is pinned, not inherited.** The runtime ITN default is per-family
-> (`sensevoice` resolves it on, `funasr_nano` keeps upstream's `itn=False`),
-> but the benchmark follows neither: `run.py` always passes `--no-itn` because
-> the reference runs it is scored against produce spoken form. If a family
-> default ever flips, the pin stays unless the reference side is re-run to
-> match. `scripts/validate.py` pins `--no-itn` for the same two families.
+> **ITN is pinned, not inherited.** `run.py` always passes an explicit
+> `--itn` or `--no-itn`, chosen per variant by `ITN_ON_VARIANTS`, so a
+> published WER cannot silently start describing different text when a
+> library default moves. Today the pin matches the runtime default for
+> `fun-asr-mlt-nano-2512` (on) and `fun-asr-nano-2512` (off), but not for
+> `sensevoice-small` (runtime on, measured off). Changing a variant's pin
+> means re-running its reference side to match. `scripts/validate.py` pins
+> `--no-itn` for both families regardless, because its reference tensor
+> dumps are ITN-off.
 
 **What does and doesn't move WER (measured on whisper-medium F16):**
 

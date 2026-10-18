@@ -5,8 +5,10 @@
   "display_name": "Parakeet Unified EN 0.6B",
   "params": 618309121,
   "license": {
-    "spdx": "cc-by-4.0",
-    "display": "CC-BY-4.0"
+    "spdx": "other",
+    "display": "NVIDIA Open Model License",
+    "name": "nvidia-open-model-license",
+    "link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
   },
   "upstream_repo": "nvidia/parakeet-unified-en-0.6b",
   "upstream_commit": "d4ac992",

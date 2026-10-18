@@ -11,8 +11,8 @@ upstream_card_commit: ec1dc1f
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: gigaam author package
-  commit: 42b96d9
-  date: 2026-05-12
+  commit: 0fff13f8
+  date: 2026-10-15
 
 pipeline_tag: automatic-speech-recognition
 tags:
@@ -26,7 +26,7 @@ tags:
   - russian
 
 summary: |
-  Offline Russian speech-to-text with greedy RNN-T decoding. 16-layer Conformer encoder paired with an RNN-T transducer head. Output is cased Russian with punctuation, decoded from a 1024-piece SentencePiece tokenizer. Not a streaming model and does not translate. Short-form only (≤25 s per utterance).
+  Offline Russian speech-to-text with greedy RNN-T decoding. 16-layer Conformer encoder paired with an RNN-T transducer head. Output is cased Russian with punctuation, decoded from a 1024-piece SentencePiece tokenizer. Not a streaming model and does not translate. Audio past the 25 s training window is encoded in overlapping windows.
 
 wer:
   notes: |

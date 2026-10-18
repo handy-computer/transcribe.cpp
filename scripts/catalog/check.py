@@ -5,7 +5,8 @@
 # ///
 """Validate the durable catalog JSON records.
 
-Checks the JSON schema, cross-row integrity the schema cannot express (a
+Checks the JSON schema, that each `family` is an architecture the engine
+registers, cross-row integrity the schema cannot express (a
 benchmark row referencing a quant the variant does not publish), that every
 record is paired with the card spec and doc the schema says it owns.
 
@@ -20,6 +21,7 @@ import argparse
 import collections
 import json
 import pathlib
+import re
 import sys
 
 from jsonschema import Draft202012Validator
@@ -40,6 +42,30 @@ def schema_pass(records: dict, schema: dict) -> int:
             for e in errs[:4]:
                 print(f"        {'/'.join(map(str, e.path)) or '<root>'}: {e.message[:110]}")
     print(f"schema     {len(records) - bad}/{len(records)} valid")
+    return bad
+
+
+ARCH_NAME_RE = re.compile(r'/\*\s*\.name\s*=\s*\*/\s*"([^"]+)"')
+
+
+def engine_arches() -> set[str]:
+    """The `.name` each src/arch registers: the GGUF general.architecture."""
+    return {name for path in (REPO / "src" / "arch").glob("*/*.cpp")
+            for name in ARCH_NAME_RE.findall(path.read_text())}
+
+
+def family_pass(records: dict) -> int:
+    """`family` is the GGUF's general.architecture, so the engine must
+    register it. Catches records written with a src/arch directory name
+    (granite5_ctc) instead of the architecture string (granite_speech5_ctc)."""
+    arches, bad = engine_arches(), 0
+    for name, rec in records.items():
+        if rec["family"] not in arches:
+            bad += 1
+            print(f"  FAIL {name}: family {rec['family']!r} is not a registered "
+                  f"architecture name in src/arch")
+    print(f"family     {len(records) - bad}/{len(records)} match a registered "
+          f"architecture ({len(arches)} known)")
     return bad
 
 
@@ -116,18 +142,22 @@ def pairing_pass(records: dict, selected: bool = False) -> int:
 
 
 def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> int:
-    """Check publication matrices, including explicit legacy accuracy rows."""
+    """Check publication matrices, including explicit legacy accuracy rows.
+
+    Each record is held to its role's profile (language ID has its own)."""
     try:
-        resolved_id, profile = profiles.load_profile(profile_id)
+        profiles.load_profile(profile_id)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"publication FAIL: {exc}")
         return 1
 
     problems = 0
-    totals = collections.Counter()
+    totals: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     for name, record in records.items():
+        resolved_id, profile = profiles.profile_for(record, profile_id)
         # An ASR publication profile does not apply to standalone diarizers.
-        if not record.get("capabilities", {}).get("transcribe", {}).get("supported"):
+        if not profile.get("role") and \
+                not record.get("capabilities", {}).get("transcribe", {}).get("supported"):
             continue
         accuracy_raw = profiles.expected_accuracy(record, profile)
         speed_raw = profiles.expected_speed(record, profile)
@@ -177,7 +207,7 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
                     # Preserve pre-profile rows that were already published,
                     # even when their quant was not selected by today's
                     # publication matrix. They are archive data, not drift.
-                    totals["accuracy_archived"] += 1
+                    totals[resolved_id]["accuracy_archived"] += 1
                 else:
                     accuracy_extra.add(key)
                 continue
@@ -193,9 +223,9 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
         per_model["accuracy_extra"] = len(accuracy_extra)
         per_model["accuracy_duplicate"] = sum(
             count - 1 for count in accuracy_counts.values() if count > 1)
-        totals["accuracy_required"] += len(expected_keys)
+        totals[resolved_id]["accuracy_required"] += len(expected_keys)
         for suffix in ("missing", "invalid", "extra", "duplicate"):
-            totals[f"accuracy_{suffix}"] += per_model[f"accuracy_{suffix}"]
+            totals[resolved_id][f"accuracy_{suffix}"] += per_model[f"accuracy_{suffix}"]
 
         # Both published samples are required for each quant selected by the
         # profile on every machine/backend target.
@@ -215,9 +245,9 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
         per_model["speed_extra"] = len(speed_actual - speed_expected)
         per_model["speed_duplicate"] = sum(
             count - 1 for count in speed_counts.values() if count > 1)
-        totals["speed_required"] += len(speed_expected)
+        totals[resolved_id]["speed_required"] += len(speed_expected)
         for suffix in ("missing", "invalid", "extra", "duplicate"):
-            totals[f"speed_{suffix}"] += per_model[f"speed_{suffix}"]
+            totals[resolved_id][f"speed_{suffix}"] += per_model[f"speed_{suffix}"]
 
         count = sum(per_model.values())
         if count:
@@ -225,11 +255,12 @@ def publication_pass(records: dict, profile_id: str | None, enforce: bool) -> in
             details = ", ".join(f"{key}={value}" for key, value in per_model.items() if value)
             print(f"  {'FAIL' if enforce else 'TODO'} {name}: {details}")
 
-    print(f"publication {resolved_id}: accuracy {totals['accuracy_required']} required, "
-          f"{totals['accuracy_missing']} missing, {totals['accuracy_invalid']} invalid, "
-          f"{totals['accuracy_extra']} extra, {totals['accuracy_archived']} archived legacy; speed "
-          f"{totals['speed_required']} required, {totals['speed_missing']} missing, "
-          f"{totals['speed_invalid']} invalid, {totals['speed_extra']} extra")
+    for resolved_id, total in sorted(totals.items()):
+        print(f"publication {resolved_id}: accuracy {total['accuracy_required']} required, "
+              f"{total['accuracy_missing']} missing, {total['accuracy_invalid']} invalid, "
+              f"{total['accuracy_extra']} extra, {total['accuracy_archived']} archived legacy; speed "
+              f"{total['speed_required']} required, {total['speed_missing']} missing, "
+              f"{total['speed_invalid']} invalid, {total['speed_extra']} extra")
     if problems and not enforce:
         print("            audit only; pass --publication-profile to enforce this gate")
     return problems if enforce else 0
@@ -291,8 +322,8 @@ def main() -> int:
         return 2
     enforce_publication = args.publication_profile is not None
     selected_profile = args.publication_profile or None
-    bad = (schema_pass(records, schema) + integrity_pass(records)
-           + pairing_pass(records, bool(selected)) + provenance_pass(records)
+    bad = (schema_pass(records, schema) + family_pass(records)
+           + integrity_pass(records) + pairing_pass(records, bool(selected)) + provenance_pass(records)
            + publication_pass(records, selected_profile, enforce_publication))
     return 1 if bad else 0
 

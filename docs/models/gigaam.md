@@ -52,10 +52,10 @@ each per-variant doc has direct download links.
 ## Input limits
 
 GigaAM is trained for utterances up to about **25 seconds**. Longer audio is
-accepted, but the library logs a `WARN` and accuracy may degrade past that
-window — it is not rejected (upstream GigaAM rejects outright; transcribe.cpp
-leaves the choice to you). Segment long recordings (e.g. with VAD) for best
-results. See the [input-length contract](../input-limits.md).
+encoded in overlapping windows of at most 25 s, and the encoder frames are
+stitched into one sequence for a single greedy decode. There is no practical
+length limit, and the encoder workspace does not grow with input length. Audio
+up to 25 s is encoded in one pass. See the [input-length contract](../input-limits.md).
 
 ## Quick start
 
@@ -84,7 +84,7 @@ All GigaAM-v3 variants support:
   granularity).
 
 What's not supported (consistent across the family): translation, real-time
-streaming, VAD, speaker diarization, languages other than Russian,
-long-form input beyond 25 seconds per utterance (upstream
-`transcribe_longform` PyAnnote-VAD chunking is intentionally not
-ported). See the family doc for the full runtime contract.
+streaming, VAD, speaker diarization, languages other than Russian.
+Long-form input is windowed internally rather than through upstream's
+`transcribe_longform` PyAnnote-VAD chunking. See the family doc for the full
+runtime contract.

@@ -14,6 +14,7 @@
 #include "gguf.h"
 #include "moss.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -548,7 +549,7 @@ transcribe_status encode_one(MossSession *        cc,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "moss")) {
             return TRANSCRIBE_ERR_OOM;
         }
         ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(), 0, cc->mel_buf.size() * sizeof(float));
@@ -608,7 +609,7 @@ transcribe_status encode_one(MossSession *        cc,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, ab.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, ab.graph, "moss")) {
         return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(ab.in, concat_trim.data(), 0, concat_trim.size() * sizeof(float));
@@ -681,7 +682,7 @@ transcribe_status prefill_chunked(MossSession *                cc,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "moss")) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moss prefill: chunk %d/%d graph alloc failed", c + 1, n_chunks);
             return TRANSCRIBE_ERR_OOM;
         }
@@ -918,7 +919,7 @@ transcribe_status run(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "moss")) {
             return TRANSCRIBE_ERR_OOM;
         }
 
@@ -992,7 +993,7 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "moss")) {
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -1308,7 +1309,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return st;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "moss")) {
             return TRANSCRIBE_ERR_OOM;
         }
 
@@ -1401,7 +1402,7 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "moss")) {
         return TRANSCRIBE_ERR_OOM;
     }
 

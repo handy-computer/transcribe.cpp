@@ -10,7 +10,11 @@ Status: research
   intakes pin each variant's repo + revision under
   `reports/porting/moonshine/<variant>/intake.json`)
 - Hugging Face revision: `390624ed33d594443aa4aa221f5b9f283b545b5a`
-- License: MIT (see model card)
+- License: MIT for the English variants; the language fine-tunes
+  (`moonshine-{tiny,base}-{ar,ja,ko,uk,vi,zh}`) are under the
+  [Moonshine AI Community License](https://github.com/moonshine-ai/moonshine/blob/main/LICENSE),
+  which restricts commercial use; their HF repos must carry its `LICENSE`
+  and `NOTICE` (`scripts/hf_cards/files/moonshine-community-license/`)
 - Variants:
   - `moonshine-tiny` (27M params, 6 enc / 6 dec layers, hidden 288, F32 reference dtype, English-only).
   - `moonshine-base` (61M params, 8 enc / 8 dec layers, hidden 416, intermediate 1664, partial_rotary_factor 0.62, F32 reference dtype, English-only). HF revision `7a73d8d55ac0ba2ef3ae761593f6784b51f96dcf`.

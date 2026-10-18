@@ -5,8 +5,8 @@
   "display_name": "Whisper large-v3-turbo",
   "params": 808904208,
   "license": {
-    "spdx": "apache-2.0",
-    "display": "Apache-2.0"
+    "spdx": "mit",
+    "display": "MIT"
   },
   "upstream_repo": "openai/whisper-large-v3-turbo",
   "upstream_commit": "41f01f3",
@@ -35,11 +35,11 @@
     "batching": {"supported":true,"verified":false}
   },
   "downloads": [
-    {"quant":"F16","filename":"whisper-large-v3-turbo-F16.gguf","size_bytes":1625935520},
-    {"quant":"Q8_0","filename":"whisper-large-v3-turbo-Q8_0.gguf","size_bytes":886381760},
-    {"quant":"Q6_K","filename":"whisper-large-v3-turbo-Q6_K.gguf","size_bytes":692536928},
-    {"quant":"Q5_K_M","filename":"whisper-large-v3-turbo-Q5_K_M.gguf","size_bytes":619628128},
-    {"quant":"Q4_K_M","filename":"whisper-large-v3-turbo-Q4_K_M.gguf","size_bytes":536069728}
+    {"quant":"F16","filename":"whisper-large-v3-turbo-F16.gguf","size_bytes":1625935488},
+    {"quant":"Q8_0","filename":"whisper-large-v3-turbo-Q8_0.gguf","size_bytes":886381728},
+    {"quant":"Q6_K","filename":"whisper-large-v3-turbo-Q6_K.gguf","size_bytes":692536896},
+    {"quant":"Q5_K_M","filename":"whisper-large-v3-turbo-Q5_K_M.gguf","size_bytes":619628096},
+    {"quant":"Q4_K_M","filename":"whisper-large-v3-turbo-Q4_K_M.gguf","size_bytes":536069696}
   ],
   "accuracy_benchmarks": [
     {"dataset":"fleurs","split":"test","language":"af","quant":"Q8_0","metric":"wer","err_pct":36.06,"ci95":[33.6,38.5],"n_utts":264,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":1651,"del":326,"ins":133},"empty_hyp":0,"utts_over_50pct":50,"measurement_provenance":"legacy-published"},

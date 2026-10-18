@@ -88,6 +88,54 @@ with model.diarize_session() as diarizer:
         print(turn.speaker_id, turn.t0_ms, turn.t1_ms)
 ```
 
+### Language ID
+
+Models whose `model.roles` include `Role.LANGID` (VoxLingua107 ECAPA-TDNN)
+identify the spoken language through a langid session. `run()` returns a
+`LangIdResult` with candidates ranked by `p`. Codes are the model's own labels
+(`"iw"`, `"jw"`; `model.langid_label_index("he")` resolves aliases), so match
+`result.code` against the ASR model's `capabilities.languages` yourself.
+`allowed=None` scores every label; `allowed_mass` is the unrestricted
+probability the allowed set captured. An empty `allowed` list raises
+`InvalidArgument`; clips under `model.langid_info.min_audio_ms` raise
+`InputTooShort`, and longer ones than `max_audio_ms` are scored on their first
+`max_audio_ms`. Every allowed label comes back as a candidate. Locking,
+`Busy`, `cancel()` and `close()` work as on `Session`.
+
+```python
+with model.langid_session() as lid:
+    result = lid.run(pcm, allowed=["en", "de", "fr"])
+    print(result.code, result.candidates[0].p, result.allowed_mass)
+```
+
+### Voice activity detection
+
+Models whose `model.roles` include `Role.VAD` (Silero VAD, GGUF or the
+whisper.cpp `.bin`) score speech probability per frame of
+`model.vad_info.frame_samples` samples through a VAD session. `run()` scores one
+clip and returns a `VadResult` with `probs` and speech `segments`
+(`start_sample`/`end_sample`; options default to Silero's
+`get_speech_timestamps`). `stream_feed()` streams audio of any chunk size and
+returns the probabilities of the frames each call completed (`first_frame` is
+the position of the first); `stream_flush()` scores the zero-padded remainder
+and ends the stream, `stream_reset()` drops it. The VAD stream does not take
+the model's ASR stream lease. Locking, `Busy`, `cancel()` and `close()` work as
+on `Session`.
+
+```python
+with model.vad_session() as vad:
+    for seg in vad.run(pcm, min_silence_ms=300).segments:
+        print(seg.start_sample, seg.end_sample)
+
+    frame = model.vad_info.frame_samples
+    probs = []
+    for chunk in chunks:
+        r = vad.stream_feed(chunk)
+        print(f"{len(r.probs)} frames from sample {r.first_frame * frame}")
+        probs.extend(r.probs)
+    probs.extend(vad.stream_flush().probs)
+```
+
 ## Backends
 
 `Model(backend=...)` applies a backend policy (`"auto"` uses the best

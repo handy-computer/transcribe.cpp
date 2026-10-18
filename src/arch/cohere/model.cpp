@@ -13,6 +13,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -741,7 +742,7 @@ transcribe_status run(transcribe_session *          session,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "cohere")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere run: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
     }
@@ -948,7 +949,7 @@ transcribe_status run(transcribe_session *          session,
         }
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, cross_db.graph, "cohere")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "cohere run: cross_kv graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -985,7 +986,7 @@ transcribe_status run(transcribe_session *          session,
         }
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, db.graph, "cohere")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "cohere run: decoder prompt graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -1154,7 +1155,7 @@ transcribe_status run(transcribe_session *          session,
                 return TRANSCRIBE_ERR_GGUF;
             }
             ggml_backend_sched_reset(cc->sched);
-            if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+            if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "cohere")) {
                 transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                     "cohere run: step graph allocation failed — out of memory.");
                 commit_result();
@@ -1273,7 +1274,7 @@ transcribe_status run(transcribe_session *          session,
                 }
 
                 ggml_backend_sched_reset(cc->sched);
-                if (!ggml_backend_sched_alloc_graph(cc->sched, db_step.graph)) {
+                if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, db_step.graph, "cohere")) {
                     transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                         "cohere run: step graph allocation failed — out of memory.");
                     commit_result();
@@ -1405,7 +1406,7 @@ transcribe_status encode_one_to_host(CohereSession *            cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "cohere")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "cohere encode_one_to_host: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -1638,7 +1639,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, cross.graph, "cohere")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "cohere run_batch: cross_kv graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -1695,7 +1696,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "cohere")) {
             return TRANSCRIBE_ERR_OOM;
         }
         ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0, cmask.size() * sizeof(ggml_fp16_t));

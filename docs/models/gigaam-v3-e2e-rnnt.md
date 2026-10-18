@@ -3,18 +3,19 @@
 <!-- catalog:intro -->
 Upstream: [`ai-sage/GigaAM-v3`](https://huggingface.co/ai-sage/GigaAM-v3) at [`ec1dc1f`](https://huggingface.co/ai-sage/GigaAM-v3/commit/ec1dc1f).
 
-Offline Russian speech-to-text with greedy RNN-T decoding. 16-layer Conformer encoder paired with an RNN-T transducer head. Output is cased Russian with punctuation, decoded from a 1024-piece SentencePiece tokenizer. Not a streaming model and does not translate. Short-form only (≤25 s per utterance).
+Offline Russian speech-to-text with greedy RNN-T decoding. 16-layer Conformer encoder paired with an RNN-T transducer head. Output is cased Russian with punctuation, decoded from a 1024-piece SentencePiece tokenizer. Not a streaming model and does not translate. Audio past the 25 s training window is encoded in overlapping windows.
 <!-- /catalog -->
 
 ## What it's for
 
 Offline Russian speech-to-text with greedy RNN-T decoding. Output includes punctuation and Cyrillic casing inline from a 1024-piece SentencePiece tokenizer.
 
-Decoder is greedy; no language model, no beam search. Short-form only
-(≤ 25 s per utterance; upstream `transcribe_longform` chunking via
-PyAnnote VAD is intentionally not ported). Token-level timestamps are
-emitted at the encoder frame rate (40 ms granularity); word- and
-segment-level timestamps are out of scope.
+Decoder is greedy; no language model, no beam search. Audio longer than
+the 25 s training window is encoded in overlapping windows (see
+[Input limits](gigaam.md#input-limits)); upstream's PyAnnote-VAD
+`transcribe_longform` is not ported. Token-level timestamps are emitted
+at the encoder frame rate (40 ms granularity); word- and segment-level
+timestamps are out of scope.
 
 The encoder is shared across all four ported GigaAM-v3 variants but
 weights are per-variant fine-tuned (the encoder hidden state differs
@@ -29,7 +30,7 @@ See ai-sage's [model card](https://huggingface.co/ai-sage/GigaAM-v3)
 for training data, intended use, and upstream evaluation methodology.
 
 <!-- catalog:pin -->
-Licensed MIT. Ported from upstream commit [`ec1dc1f`](https://huggingface.co/ai-sage/GigaAM-v3/commit/ec1dc1f), pinned 2026-05-12. Validated against the gigaam author package reference at transcribe.cpp commit [`42b96d9`](https://github.com/handy-computer/transcribe.cpp/tree/42b96d9) on 2026-05-12.
+Licensed MIT. Ported from upstream commit [`ec1dc1f`](https://huggingface.co/ai-sage/GigaAM-v3/commit/ec1dc1f), pinned 2026-05-12. Validated against the gigaam author package reference at transcribe.cpp commit [`0fff13f8`](https://github.com/handy-computer/transcribe.cpp/tree/0fff13f8) on 2026-10-15.
 <!-- /catalog -->
 
 ## Download
@@ -110,12 +111,12 @@ Compute latency (mel + encode + decode), speedup over realtime in parentheses; p
 
 | Backend | Sample           |            Q8_0 |          Q4_K_M |
 | ------- | ---------------- | --------------: | --------------: |
-| Vulkan  | ru-short (11.0s) | 797 ms (13.78×) | 800 ms (13.73×) |
-| Vulkan  | ru-long (33.8s)  | 2.08 s (16.26×) | 2.08 s (16.24×) |
-| CPU     | ru-short (11.0s) |  1.30 s (8.47×) |  1.40 s (7.87×) |
-| CPU     | ru-long (33.8s)  |  4.65 s (7.28×) |  4.85 s (6.98×) |
+| Vulkan  | ru-short (11.0s) | 793 ms (13.85×) | 798 ms (13.76×) |
+| Vulkan  | ru-long (33.8s)  | 2.17 s (15.61×) | 2.20 s (15.36×) |
+| CPU     | ru-short (11.0s) | 1.02 s (10.73×) | 982 ms (11.18×) |
+| CPU     | ru-long (33.8s)  | 3.19 s (10.62×) | 3.05 s (11.10×) |
 
-AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `522ccd68` on 2026-09-15.
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `0fff13f8` on 2026-10-15.
 <!-- /catalog -->
 
 Benchmark reproduction:

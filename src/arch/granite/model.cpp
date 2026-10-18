@@ -9,6 +9,7 @@
 #include "granite.h"
 #include "projector.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -955,7 +956,7 @@ transcribe_status run(transcribe_session *          ctx_base,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "granite")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite run: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -1061,7 +1062,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "granite")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite run: projector graph allocation failed — out of memory.");
         ggml_free(proj_ctx);
@@ -1225,7 +1226,7 @@ transcribe_status run(transcribe_session *          ctx_base,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, dec.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, dec.graph, "granite")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite run: decoder prefill graph allocation failed — "
                             "out of memory.");
@@ -1332,7 +1333,7 @@ transcribe_status run(transcribe_session *          ctx_base,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, step.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, step.graph, "granite")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite run: decode step graph allocation failed — "
                             "out of memory.");
@@ -1492,7 +1493,7 @@ transcribe_status encode_one(GraniteSession *           cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "granite")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite encode_one: encoder graph allocation failed — "
                             "out of memory.");
@@ -1550,7 +1551,7 @@ transcribe_status encode_one(GraniteSession *           cc,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "granite")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite encode_one: projector graph allocation failed — "
                             "out of memory.");
@@ -1793,7 +1794,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "granite")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "granite run_batch: batched prefill graph allocation failed "
                                 "— out of memory.");
@@ -1885,7 +1886,7 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "granite")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "granite run_batch: batched step graph allocation failed — "
                             "out of memory.");

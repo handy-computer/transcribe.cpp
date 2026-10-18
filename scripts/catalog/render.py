@@ -16,8 +16,9 @@ files, this rewrites only the regions a doc explicitly delegates:
     <!-- /catalog -->
 
 Blocks: `downloads`, `perf machine=<slug>`, `accuracy` (one table per
-dataset split beyond the headline), `recipe` (the mechanical WER sentence
-from the headline rows), `pin` (licence, upstream and validation pins),
+dataset split beyond the headline), `agreement` (language ID: headline
+accuracy and reference agreement per GGUF), `recipe` (the mechanical WER
+sentence from the headline rows), `pin` (licence, upstream and validation pins),
 `intro` (upstream link plus the card spec's `summary`), `prose
 field=wer.notes` (any `|` text field of the spec, dotted path), `family variants=a,b,c` (a roll-up row per variant, for
 family pages), and `family-index` (the root README's supported-models table,
@@ -84,7 +85,7 @@ def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
     aligns = ["l", "l", "r"]
     if want_metric:
         label = attrs.get("label") or common.headline_label(record)
-        metric = attrs.get("metric_name") or target["metric"].upper()
+        metric = attrs.get("metric_name") or common.metric_label(target["metric"])
         header.append(f"{metric} ({label})")
         aligns.append("r")
 
@@ -135,7 +136,7 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
                 continue
             duration = next(r["sample_duration_s"] for r in present if r)
             cells = [backend.capitalize() if backend != "cpu" else "CPU",
-                     f"{sample} ({duration:.1f}s)"]
+                     f"{sample} ({duration:.1f}s)" if duration >= 1 else sample]
             for quant, row in zip(quants, present):
                 if row is None:
                     cells.append("-")
@@ -157,13 +158,15 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
     table = common.render_table(["Backend", "Sample"] + quants,
                                 ["l", "l"] + ["r"] * len(quants), body,
                                 rule_fill=True, max_pad=20)
-    return perf_methodology(rows) + [""] + table + [""] + perf_provenance(machine, rows)
+    return (perf_methodology(record, rows) + [""] + table + [""]
+            + perf_provenance(record, machine, rows))
 
 
-def perf_methodology(rows: dict) -> list[str]:
+def perf_methodology(record: dict, rows: dict) -> list[str]:
     """What a cell is. Iterations and warmup are claimed only for rows that
     name the profile they were measured under."""
-    line = "Compute latency (mel + encode + decode), speedup over realtime in parentheses"
+    stages = "mel + encode" if record.get("role") == "langid" else "mel + encode + decode"
+    line = f"Compute latency ({stages}), speedup over realtime in parentheses"
     ids = sorted({row["publication_profile"] for row in rows.values()
                   if row.get("publication_profile")})
     claims = []
@@ -176,9 +179,9 @@ def perf_methodology(rows: dict) -> list[str]:
     return [line + "."]
 
 
-def perf_provenance(machine: str, rows: dict) -> list[str]:
+def perf_provenance(record: dict, machine: str, rows: dict) -> list[str]:
     """Where the numbers came from: machine, engine commit, date."""
-    _, profile = profiles.load_profile()
+    _, profile = profiles.profile_for(record)
     display = profiles.machine_display(profile, machine)
     builds: dict[tuple, int] = {}
     for row in rows.values():
@@ -218,9 +221,9 @@ def prose_lines(text: object, what: str) -> list[str]:
 def block_intro(record: dict, attrs: dict[str, str]) -> list[str]:
     """Upstream pointer from the catalog, then the card spec's summary."""
     repo = record["upstream_repo"]
-    line = (f"Upstream: [`{repo}`](https://huggingface.co/{repo}) at "
-            f"[`{record['upstream_commit']}`]"
-            f"(https://huggingface.co/{repo}/commit/{record['upstream_commit']}).")
+    url = common.upstream_url(record)
+    line = (f"Upstream: [`{repo}`]({url}) at "
+            f"[`{record['upstream_commit']}`]({url}/commit/{record['upstream_commit']}).")
     return [line, ""] + prose_lines(spec_for(record).get("summary"), "summary")
 
 
@@ -256,7 +259,7 @@ def block_pin(record: dict, attrs: dict[str, str]) -> list[str]:
     display = (f"[{licence['display']}]({licence['link']})"
                if licence.get("link") else licence["display"])
     return [f"Licensed {display}. Ported from upstream commit "
-            f"[`{commit}`](https://huggingface.co/{repo}/commit/{commit}), pinned "
+            f"[`{commit}`]({common.upstream_url(record)}/commit/{commit}), pinned "
             f"{spec['pin_date']}. Validated against the {validation.get('reference', 'reference')} "
             f"reference at transcribe.cpp commit [`{validation['commit']}`]"
             f"(https://github.com/handy-computer/transcribe.cpp/tree/{validation['commit']}) "
@@ -331,6 +334,37 @@ def block_accuracy(record: dict, attrs: dict[str, str]) -> list[str]:
     return out
 
 
+def block_agreement(record: dict, attrs: dict[str, str]) -> list[str]:
+    """Language ID: per shipped GGUF, the headline accuracy with its interval
+    and the scored run's top-1 agreement with the reference (the ship gate),
+    then which build measured it."""
+    rows = common.headline_rows(record)
+    reference = (spec_for(record).get("validation") or {}).get("reference", "reference")
+    body = []
+    for item in record.get("downloads", []):
+        row = rows.get(item["quant"])
+        if row is None:
+            continue
+        agreement = row.get("agreement") or {}
+        lo, hi = row["ci95"]
+        delta = agreement.get("max_abs_logit_delta")
+        body.append([item["quant"],
+                     common.fmt_err(row) + ("" if lo is None else f" ({lo:.2f}-{hi:.2f})"),
+                     f"{agreement['n_agree']} / {agreement['n']}" if agreement else "-",
+                     "-" if delta is None else f"{delta:.2g}"])
+    if not any(cells[2] != "-" for cells in body):
+        raise RenderError("no headline row carries an agreement")
+    table = common.render_table(
+        ["GGUF", f"{common.metric_label(common.headline(record)['metric'])} (95% CI)",
+         f"Top-1 agreement with {reference}", "Max abs logit difference"],
+        ["l", "r", "r", "r"], body)
+    builds = sorted({(row["engine_sha"], row.get("measured_on") or "")
+                     for row in rows.values() if row.get("engine_sha")})
+    line = "Measured at " + "; ".join(
+        f"transcribe.cpp `{sha}`" + (f" on {date}" if date else "") for sha, date in builds) + "."
+    return table + ["", line] if builds else table
+
+
 def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
     """A family roll-up: one row per variant, headline number at one quant."""
     names = [name for name in attrs.get("variants", "").split(",") if name]
@@ -352,7 +386,7 @@ def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
         body.append([
             f"`{name}`", common.fmt_params(record["params"]), common.languages_summary(record),
             common.fmt_size(download["size_bytes"]) if download else "-",
-            (f"{common.headline_label(record)} ({headline['metric'].upper()})"
+            (f"{common.headline_label(record)} ({common.metric_label(headline['metric'])})"
              if headline else "-"),
             common.fmt_err(common.headline_rows(record).get(quant)),
             common.capabilities_summary(record), link])
@@ -386,13 +420,15 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
             title = record["display_name"]
             link = f"[{record['published_repo']}](https://huggingface.co/{record['published_repo']})"
         group = groups.setdefault(key, {"title": title, "link": link, "variants": [], "caps": set()})
-        group["variants"].append(variant)
+        # Variants named after the family sort first; third-party names
+        # (orukeet under parakeet) go after them instead of leading the row.
+        group["variants"].append((0 if variant.startswith(record.get("family", "")) else 1, variant))
         group["caps"].update(c for c in common.capabilities_summary(record).split(", ") if c != "-")
     if not groups:
         raise RenderError("no models matched")
     body = []
     for group in sorted(groups.values(), key=lambda g: g["title"].lower()):
-        body.append([group["title"], ", ".join(f"`{v}`" for v in sorted(group["variants"])),
+        body.append([group["title"], ", ".join(f"`{v}`" for _, v in sorted(group["variants"])),
                      ", ".join(sorted(group["caps"])) or "-", group["link"]])
     return common.render_table(["Family", "Variants", "Available capabilities", "Docs"],
                                ["l", "l", "l", "l"], body)
@@ -400,7 +436,7 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
 
 BLOCKS = {"downloads": block_downloads, "perf": block_perf,
           "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy,
-          "recipe": block_recipe, "pin": block_pin}
+          "recipe": block_recipe, "pin": block_pin, "agreement": block_agreement}
 
 
 # --------------------------------------------------------------------------

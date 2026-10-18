@@ -1,0 +1,18 @@
+[project]
+name = "transcribe-parakeet-phonon-env"
+version = "0.1.0"
+description = "Phonon-2 conversion and publisher Transformers reference"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch==2.10.0",
+    "transformers==5.20.0",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "omegaconf>=2.3",
+    "sentencepiece>=0.2",
+    "zstandard>=0.23",
+    "jsonschema>=4",
+]

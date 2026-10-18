@@ -13,6 +13,7 @@
 #include "gguf.h"
 #include "granite5_ctc.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-load-common.h"
@@ -307,7 +308,7 @@ transcribe_status run_encoder(Granite5CtcSession *     cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, out_eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, out_eb.graph, "granite5_ctc")) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "granite5_ctc: encoder graph allocation failed — out of memory. "
                 "Split long audio into shorter segments, or use a smaller batch.");

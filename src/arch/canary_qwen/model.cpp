@@ -26,6 +26,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -838,7 +839,7 @@ transcribe_status run(transcribe_session *          context,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "canary_qwen")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen run: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -992,7 +993,7 @@ transcribe_status run(transcribe_session *          context,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "canary_qwen")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen run: prefill graph allocation failed (T_prompt=%d) — "
                             "out of memory. Lower transcribe_session_params.n_ctx or shorten "
@@ -1132,7 +1133,7 @@ transcribe_status run(transcribe_session *          context,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "canary_qwen")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "canary_qwen step: decode graph allocation failed — out of memory. "
                             "Lower transcribe_session_params.n_ctx or shorten the audio.");
@@ -1332,7 +1333,7 @@ transcribe_status encode_one(CanaryQwenSession *        cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "canary_qwen")) {
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -1523,7 +1524,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "canary_qwen")) {
             return TRANSCRIBE_ERR_OOM;
         }
 
@@ -1607,7 +1608,7 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "canary_qwen")) {
         return TRANSCRIBE_ERR_OOM;
     }
 

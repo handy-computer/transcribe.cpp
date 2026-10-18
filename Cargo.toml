@@ -11,7 +11,7 @@
 
 [package]
 name = "transcribe-cpp-sys"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.74"
 description = "Native FFI bindings for transcribe.cpp, a C/C++ speech-to-text library built on ggml"
@@ -36,6 +36,7 @@ include = [
     "/CMakeLists.txt",
     "/CMakePresets.json",
     "/LICENSE",
+    "/THIRD-PARTY-LICENSES.md",
     "/include/**/*.h",
     "/include/transcribe.abihash",
     "/src/**",

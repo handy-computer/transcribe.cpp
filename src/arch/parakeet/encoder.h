@@ -91,18 +91,31 @@ struct EncoderBuild {
     // ne[0]=fastest convention for this 2-D tensor).
     ggml_tensor * mel_in = nullptr;
 
-    // Sinusoidal positional embedding handle, ne=[d_model, 2*T_enc-1, 1, 1].
-    // The driver computes the buffer host-side from T_enc (read from
-    // out->ne[1] after build) and uploads via ggml_backend_tensor_set.
+    // Sinusoidal positional embedding handle, normally
+    // ne=[d_model, 2*T_enc-1, 1, 1]. Bounded ChunkedLimited attention uses
+    // ne=[d_model, window+chunk-1, 1, 1]. The driver computes the buffer
+    // host-side and uploads via ggml_backend_tensor_set.
     ggml_tensor * pos_emb_in = nullptr;
 
-    // ChunkedLimited attention mask, ne=[T_enc, T_enc, 1, 1] f32. Null
-    // for every variant on the regular / local-attention path; populated
-    // only when the hparams declare att_context_style="chunked_limited"
-    // (today: nemotron-speech-streaming-en-0.6b). Driver fills with 0
-    // on allowed (q, k) pairs and -INF outside, then ggml broadcasts
-    // across heads inside rel_pos_mhsa.
+    // ChunkedLimited attention mask, normally ne=[T_enc,T_enc,1,1] f32;
+    // bounded offline attention uses ne=[window,chunk,1,n_chunks]. Null for
+    // every variant on the regular/local-attention path. The driver fills
+    // it with 0 on allowed (q,k) pairs and -INF outside, then ggml
+    // broadcasts across heads inside rel_pos_mhsa.
     ggml_tensor * chunked_mask_in = nullptr;
+
+    // Bounded-window attention geometry when the graph took it (see
+    // conformer::BlockParams::window_*): chunked_mask_in is then
+    // [window_keys, window_chunk, 1, n_chunks] and pos_emb's zero-offset
+    // row sits at window_left + window_chunk - 1. window_chunk == 0 means
+    // the dense reference graph.
+    int  window_chunk            = 0;
+    int  window_left             = 0;
+    int  window_keys             = 0;
+    // Regular-local band that covers the whole sequence (T_enc - 1 <=
+    // min(left, right)): the graph is the full-attention one, so the driver
+    // fills a 2T-1 pos table centred at T-1 rather than the local layout.
+    bool full_attention_shortcut = false;
 
     // Buffered-streaming conv valid-frame mask, ne=[T_enc, 1, 1, 1] f32.
     // Null unless the buffered path has pre_encode overhang frames that

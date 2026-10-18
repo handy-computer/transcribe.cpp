@@ -11,9 +11,9 @@ a 2-layer audio adaptor (512 → 1024), and a bundled Qwen3-0.6B LLM
 (28 layers, 16/8 GQA, BF16) that produces the transcript autoregressively.
 Takes a 16 kHz mono WAV and emits text. Not a streaming model, no
 translation, no built-in long-form chunking, no timestamps. ITN
-(inverse text normalization) is supported by the model and exposed
-via the `--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
-in the library API.
+(inverse text normalization) is off by default, since with it on
+English can come back all caps; pass `--itn` for digits and
+punctuation, which helps Chinese.
 <!-- /catalog -->
 
 ## What it's for
@@ -24,9 +24,16 @@ regional Mandarin accents. The model takes a 16 kHz mono WAV and produces
 a transcript. Not a streaming model, no translation, no built-in long-form
 chunking, no timestamps.
 
-ITN (inverse text normalization — digits, capitalization, punctuation)
-is supported by the model. Pass `--itn` on the CLI, or set
-`transcribe_funasr_nano_params { use_itn = true }` via the library API.
+ITN (inverse text normalization — digits, punctuation) is **off by
+default**, unlike upstream's `itn=True`. Without it, English already comes
+back cased (`samples/jfk.wav`: `And so my fellow Americans … for your
+country.`); with it on, the same clip comes back all caps (`AND SO MY
+FELLOW AMERICANS …`). The FunASR 1.3.1 reference produces the same text,
+so this is model behavior, not a port artifact. For Chinese, ITN adds
+sentence punctuation and digits (`开饭时间早上九点至下午五点。`). Pass
+`--itn` on the CLI, or set `itn = TRANSCRIBE_ITN_MODE_ON` in
+`transcribe_run_params`, to enable it. The WER numbers below are measured
+with ITN off, the default; see [WER methodology](../tools/wer.md).
 
 For multilingual coverage beyond zh/en/ja, see the sibling
 [Fun-ASR-MLT-Nano](fun-asr-mlt-nano-2512.md) (31 languages).
@@ -64,6 +71,8 @@ reference run scores 1.79% (95% CI [1.63%, 1.95%]), within bootstrap noise of th
 publisher's number. transcribe.cpp's BF16 port matches that baseline within -0.01
 percentage-points. LibriSpeech is an English-only benchmark; Chinese (AISHELL-1,
 WenetSpeech) and Japanese (CommonVoice JA) are the recommended complementary checks.
+These table values were measured with ITN off, this variant's runtime default,
+matching the FunASR reference.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -96,11 +105,11 @@ build/bin/transcribe-cli \
 ```
 
 Pass `--language zh` / `ja` (or omit for auto-detection) for the other
-supported languages. Add `--itn` to render digits, capitalization, and
-punctuation in formal form:
+supported languages. ITN is off by default; pass `--itn` for digits and
+punctuation:
 
 ```bash
-build/bin/transcribe-cli --itn -m … samples/jfk.wav
+build/bin/transcribe-cli --itn --language zh -m … samples/zh.wav
 ```
 
 If your audio is not already 16 kHz mono WAV, convert it first:

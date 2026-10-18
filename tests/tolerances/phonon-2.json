@@ -1,0 +1,81 @@
+{
+  "_comment": [
+    "Phonon-2 F32, CPU, 1 thread; pinned publisher Transformers loader (5.20.0 / Torch 2.10.0).",
+    "Production C++ mel, no injection; TRANSCRIBE_NO_FLASH=1. Magnitude budgets: max(1e-4*p99_abs,1e-6) and max(1e-5*rms,1e-6).",
+    "All non-lookup entries retain their reference-derived magnitude budgets; no widening is used. Blank embedding lookup is exact.",
+    "Frontend float32 Torch STFT vs native FFT accumulation causes small drift, amplified by the large reconstructed subsampler weights. Subsequent normalization reduces final encoder drift.",
+    "Scope: JFK sample. Full acceptance-set WER and backend publication validation are not claimed."
+  ],
+  "enc.final": {
+    "max_abs": 6.129009447991831e-06,
+    "mean_abs": 1e-06
+  },
+  "enc.block.0.ff2": {
+    "max_abs": 0.12980878271484256,
+    "mean_abs": 0.003885643066223058
+  },
+  "dec.lstm.0.c.0": {
+    "max_abs": 8.051498991250995e-05,
+    "mean_abs": 3.5285650773836473e-06
+  },
+  "dec.lstm.1.c.0": {
+    "max_abs": 9.966001284122467e-05,
+    "mean_abs": 4.455549051092374e-06
+  },
+  "dec.joint.0": {
+    "max_abs": 0.0082856010055542,
+    "mean_abs": 0.0005574292195122755
+  },
+  "enc.block.0.conv": {
+    "max_abs": 0.12345115624999997,
+    "mean_abs": 0.0037377529028676682
+  },
+  "enc.block.12.out": {
+    "max_abs": 0.003855679134368854,
+    "mean_abs": 0.0001059210068608602
+  },
+  "enc.pos_emb": {
+    "max_abs": 9.999976754188538e-05,
+    "mean_abs": 7.0710678286428045e-06
+  },
+  "dec.embed.0": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "dec.enc_out": {
+    "max_abs": 6.129009447991831e-06,
+    "mean_abs": 1e-06
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.003025004520416244,
+    "mean_abs": 9.002725363504661e-05
+  },
+  "enc.block.23.out": {
+    "max_abs": 6.129009447991831e-06,
+    "mean_abs": 1e-06
+  },
+  "enc.mel.in": {
+    "max_abs": 0.00026277078652381917,
+    "mean_abs": 9.990868079197039e-06
+  },
+  "enc.block.0.attn": {
+    "max_abs": 0.1287632325439425,
+    "mean_abs": 0.0036898221553257416
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 0.1301978741455071,
+    "mean_abs": 0.0037135234556683887
+  },
+  "enc.block.0.ff1": {
+    "max_abs": 0.13447290332031228,
+    "mean_abs": 0.0038433780665249155
+  },
+  "dec.lstm.0.h.0": {
+    "max_abs": 5.209093782305726e-05,
+    "mean_abs": 1.8672224086676873e-06
+  },
+  "dec.lstm.1.h.0": {
+    "max_abs": 2.153676944971089e-05,
+    "mean_abs": 1e-06
+  }
+}

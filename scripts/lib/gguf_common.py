@@ -267,12 +267,16 @@ _NORMALIZE_ALIASES = {
     "all_features":     "global",
     "global":           "global",
     "per_utterance":    "per_utterance",
+    # SpeechBrain InputNormalization(norm_type="sentence", std_norm=False):
+    # per-bin mean subtraction only (ecapa_tdnn).
+    "sentence_mean":    "sentence_mean",
 }
 
 
 def canonicalize_normalize(raw) -> str:
     """Map a reference-framework normalize value to the canonical enum
-    in our intake schema (per_feature / global / per_utterance / none).
+    in our intake schema (per_feature / global / per_utterance /
+    sentence_mean / none).
     Unknown values raise — Stage 3 should fail loudly rather than emit
     a value the C++ loader will not recognise."""
     key = raw if raw is None else str(raw)

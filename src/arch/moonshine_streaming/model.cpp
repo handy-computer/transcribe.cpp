@@ -28,6 +28,7 @@
 #include "gguf.h"
 #include "moonshine_streaming.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
@@ -482,7 +483,7 @@ transcribe_status encode_window_to_host(MoonshineStreamingSession * cc,
         return st;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "moonshine_streaming")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "moonshine_streaming encode_window: encoder graph allocation "
                             "failed — out of memory.");
@@ -583,7 +584,7 @@ transcribe_status apply_adapter_window(MoonshineStreamingSession * cc,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, ab.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, ab.graph, "moonshine_streaming")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "moonshine_streaming adapter: graph allocation failed — "
                             "out of memory.");
@@ -670,7 +671,7 @@ transcribe_status project_cross_kv_window(MoonshineStreamingSession *       cc,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "moonshine_streaming")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "moonshine_streaming cross_kv_proj: graph allocation failed — "
                             "out of memory.");
@@ -794,7 +795,7 @@ transcribe_status commit_cross_kv_from_host(MoonshineStreamingSession *         
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, cb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, cb.graph, "moonshine_streaming")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "moonshine_streaming cross_kv_commit: graph allocation failed — "
                             "out of memory.");
@@ -892,7 +893,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, db.graph, "moonshine_streaming")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming decode: step graph allocation failed — "
                                 "out of memory.");
@@ -1128,7 +1129,7 @@ transcribe_status decode_from_committed_enc(MoonshineStreamingSession *   cc,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, cross_db.graph, "moonshine_streaming")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming decode: cross_kv graph allocation failed — "
                                 "out of memory.");
@@ -1948,7 +1949,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, cross.graph, "moonshine_streaming")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming run_batch: cross_kv graph allocation "
                                 "failed — out of memory.");
@@ -2008,7 +2009,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "moonshine_streaming")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine_streaming run_batch: step graph allocation failed — "
                                 "out of memory.");

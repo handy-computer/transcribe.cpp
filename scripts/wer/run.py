@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["gguf"]
 # ///
 """
 run.py — transcribe-cli driver for WER evaluation.
@@ -45,11 +45,15 @@ Usage:
                     with this flag, run.py fails loud. If --language is
                     omitted and the manifest has a single consistent
                     language, it is inferred automatically.
-    --itn MODE      off (default) | on | default. Pinned off so hypotheses
-                    stay in spoken form and remain comparable with the
-                    ITN-off reference runs, regardless of what the library's
-                    per-family default is. Stamped into the batch_header
-                    recipe. Only 'default' defers to the library.
+    --itn MODE      off | on | default. Unset resolves per variant from the
+                    GGUF's stt.variant (ITN_ON_VARIANTS): 'on' for
+                    fun-asr-mlt-nano-2512, whose library default is ITN on and
+                    whose published WER is measured that way; 'off' for
+                    everything else, so hypotheses stay in spoken form and
+                    remain comparable with the ITN-off reference runs. The
+                    resolved mode is always passed explicitly and stamped into
+                    the batch_header recipe. Only 'default' defers to the
+                    library.
 
 Output JSONL:
     - First line (batch header):
@@ -175,6 +179,25 @@ def resolve_dataset(repo: Path, spec: str) -> tuple[Path, str | None]:
     return manifest, default_lang
 
 
+# Variants whose published WER is measured with ITN on, because that is the
+# library default for them (src/arch/funasr_nano/model.cpp resolve_use_itn)
+# and their reference runs pass --use-itn. Every other ITN-aware variant
+# (sensevoice-small, fun-asr-nano-2512) is measured with ITN off. Keyed on
+# the GGUF's stt.variant, the same field the library branches on, so a
+# renamed file cannot measure a different mode than the library ships.
+ITN_ON_VARIANTS = {"fun-asr-mlt-nano-2512"}
+
+
+def gguf_variant(model: Path) -> str | None:
+    """The GGUF's stt.variant, or None when the file does not carry one."""
+    from gguf import GGUFReader
+
+    field = GGUFReader(model).fields.get("stt.variant")
+    if field is None:
+        return None
+    return bytes(field.parts[field.data[0]]).decode()
+
+
 def engine_sha() -> str | None:
     """Short SHA of the checkout that built transcribe-cli, if it is a repo.
 
@@ -248,16 +271,15 @@ def main() -> int:
     p.add_argument("--publication-profile", default="",
                    help="publication profile that selected this run; normally "
                         "set by the profile-aware local or Modal dispatcher")
-    p.add_argument("--itn", choices=("off", "on", "default"), default="off",
+    p.add_argument("--itn", choices=("off", "on", "default"), default=None,
                    help="Inverse text normalization for ITN-aware families "
-                        "(sensevoice, funasr_nano). Pinned to 'off' — the "
-                        "harness measures spoken-form text so hypotheses stay "
-                        "comparable with the ITN-off reference runs, "
-                        "independent of the library's per-family run-time "
-                        "default (ON for sensevoice, OFF for funasr_nano). "
-                        "Do not change this to refresh a published table "
-                        "without re-running the reference side to match. "
-                        "See docs/tools/wer.md.")
+                        "(sensevoice, funasr_nano). Unset resolves per "
+                        "variant: 'on' for the variants in ITN_ON_VARIANTS "
+                        "(fun-asr-mlt-nano-2512), 'off' otherwise, so "
+                        "hypotheses match the reference runs they are scored "
+                        "against. Do not change the resolution to refresh a "
+                        "published table without re-running the reference "
+                        "side to match. See docs/tools/wer.md.")
     p.add_argument("--stream-chunk-ms", type=int, default=0,
                    help="When > 0, drive each utterance through the "
                         "streaming API in N-ms chunks. Requires a model "
@@ -299,6 +321,9 @@ def main() -> int:
         if not path.exists():
             print(f"error: {path} does not exist", file=sys.stderr)
             return 2
+
+    if args.itn is None:
+        args.itn = "on" if gguf_variant(args.model) in ITN_ON_VARIANTS else "off"
 
     out_path = args.out or derive_out_path(
         repo, args.model, args.manifest, args.timestamps, args.diarize
@@ -405,11 +430,12 @@ def main() -> int:
     cmd += ["--timestamps", args.timestamps]
     if args.diarize:
         cmd += ["--diarize"]
-    # Always explicit, never inherited. The library's per-family ITN default
+    # Always explicit, never inherited. The library's per-variant ITN default
     # is a product decision that can change; the benchmark recipe must not
     # move with it, or a published WER silently starts describing different
-    # text. Families without an ITN toggle ignore the flag (the library logs
-    # an advisory WARN, suppressed here by -q).
+    # text. ITN_ON_VARIANTS mirrors today's defaults deliberately, alongside
+    # the reference runs. Families without an ITN toggle ignore the flag (the
+    # library logs an advisory WARN, suppressed here by -q).
     if args.itn == "off":
         cmd += ["--no-itn"]
     elif args.itn == "on":

@@ -23,11 +23,13 @@ void apply_family_invariants(transcribe_model & model) {
     // honest timestamp resolution is per-token.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 
-    // Cancellation is honored at the top of each run() so callers can
-    // short-circuit a long audio. No initial-prompt / temperature
-    // fallback / long-form chunker; those belong to autoregressive
-    // families. No runtime PNC/ITN toggle.
+    // Cancellation is honored at the top of each run() and between encoder
+    // windows. Audio past the ~25 s training window is encoded in
+    // overlapping windows (model.cpp plan_windows), so long-form input is
+    // supported. No initial-prompt / temperature fallback; those belong to
+    // autoregressive families. No runtime PNC/ITN toggle.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_LONG_FORM, true);
 }
 
 }  // namespace transcribe::gigaam

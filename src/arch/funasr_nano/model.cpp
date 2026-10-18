@@ -11,6 +11,7 @@
 #include "gguf.h"
 #include "sanm/sanm.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -72,6 +73,31 @@ FunAsrNanoModel::~FunAsrNanoModel() {
 namespace {
 
 constexpr const char k_default_variant[] = "fun-asr-nano-2512";
+constexpr const char k_mlt_variant[]     = "fun-asr-mlt-nano-2512";
+
+// Generic transcribe_run_params::itn routes here; OFF / ON override
+// explicitly. DEFAULT is per variant. MLT resolves it to ON, matching
+// upstream (FunASR 1.3.1 `get_prompt(..., itn=True)`): with ITN off it emits
+// lowercase, unpunctuated text. Nano keeps ITN off: it already emits cased,
+// punctuated English without ITN, and with ITN on can render English all
+// caps (samples/jfk.wav; FunASR 1.3.1 produces the same string). ITN off
+// appends `，不进行文本规整` to the prompt. scripts/wer/run.py mirrors this
+// split so published WER describes each variant's default output. The
+// dispatcher's advisory WARN only fires when transcribe_model_supports(
+// model, TRANSCRIBE_FEATURE_ITN) is false; funasr_nano sets
+// TRANSCRIBE_FEATURE_ITN so the probe returns true and no WARN here.
+bool resolve_use_itn(const FunAsrNanoModel & cm, const transcribe_run_params * params) {
+    const transcribe_itn_mode mode = (params != nullptr) ? params->itn : TRANSCRIBE_ITN_MODE_DEFAULT;
+    switch (mode) {
+        case TRANSCRIBE_ITN_MODE_OFF:
+            return false;
+        case TRANSCRIBE_ITN_MODE_ON:
+            return true;
+        case TRANSCRIBE_ITN_MODE_DEFAULT:
+            break;
+    }
+    return cm.variant == k_mlt_variant;
+}
 
 // ---------------------------------------------------------------------------
 // Input-length contract (see docs/input-limits.md). Fun-ASR-Nano is a
@@ -567,7 +593,7 @@ transcribe_status run(transcribe_session *          session,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "funasr_nano")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "funasr_nano run: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -645,7 +671,7 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, ab.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, ab.graph, "funasr_nano")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "funasr_nano run: adaptor graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -669,26 +695,7 @@ transcribe_status run(transcribe_session *          session,
     const int fake_token_len = compute_fake_token_len(T_lfr, hp.adaptor_use_low_frame_rate);
 
     const char * lang    = (params != nullptr) ? params->language : nullptr;
-    // Generic transcribe_run_params::itn routes here. DEFAULT maps to the
-    // family's shipping default (use_itn=false; matches the upstream
-    // `itn=False` Python path). OFF / ON override explicitly. The
-    // dispatcher's advisory WARN only fires when transcribe_model_supports(
-    // model, TRANSCRIBE_FEATURE_ITN) is false; funasr_nano sets
-    // TRANSCRIBE_FEATURE_ITN so the probe returns true and no WARN here.
-    bool         use_itn = false;
-    if (params != nullptr) {
-        switch (params->itn) {
-            case TRANSCRIBE_ITN_MODE_DEFAULT:
-                use_itn = false;
-                break;
-            case TRANSCRIBE_ITN_MODE_OFF:
-                use_itn = false;
-                break;
-            case TRANSCRIBE_ITN_MODE_ON:
-                use_itn = true;
-                break;
-        }
-    }
+    const bool   use_itn = resolve_use_itn(*cm, params);
 
     // Hotword list, fitted to the room the context window leaves after the
     // audio, the rest of the prompt and the generation reserve.
@@ -795,7 +802,7 @@ transcribe_status run(transcribe_session *          session,
     }
 
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "funasr_nano")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "funasr_nano run: prefill graph allocation failed (T_prompt=%d) — "
                             "out of memory. Lower transcribe_session_params.n_ctx or shorten "
@@ -906,7 +913,7 @@ transcribe_status run(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "funasr_nano")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "funasr_nano step: decode graph allocation failed — out of memory. "
                             "Lower transcribe_session_params.n_ctx or shorten the audio.");
@@ -1057,7 +1064,7 @@ transcribe_status audio_embed_one(FunAsrNanoSession *        cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "funasr_nano")) {
         return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(eb.frontend_in, frontend_buf.data(), 0, frontend_buf.size() * sizeof(float));
@@ -1081,7 +1088,7 @@ transcribe_status audio_embed_one(FunAsrNanoSession *        cc,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, ab.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, ab.graph, "funasr_nano")) {
         return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(ab.enc_in, cc->enc_host.data(), 0, cc->enc_host.size() * sizeof(float));
@@ -1152,7 +1159,7 @@ transcribe_status run_batch(transcribe_session *          session,
     const int ceiling = funasr_nano_context_ceiling(cc->n_ctx, hp);
 
     const char * lang    = (params != nullptr) ? params->language : nullptr;
-    bool         use_itn = (params != nullptr && params->itn == TRANSCRIBE_ITN_MODE_ON);
+    const bool   use_itn = resolve_use_itn(*cm, params);
 
     // Shared hotword list (one run_params per batch), fitted as if there were
     // no audio. A row whose own budget is smaller than that fit would get
@@ -1291,7 +1298,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "funasr_nano")) {
             return TRANSCRIBE_ERR_OOM;
         }
 
@@ -1375,7 +1382,7 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "funasr_nano")) {
         return TRANSCRIBE_ERR_OOM;
     }
 

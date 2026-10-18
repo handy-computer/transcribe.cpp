@@ -1,0 +1,67 @@
+# Spec for the HF README of handy-computer/lang-id-voxlingua107-ecapa-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+#
+# Language ID family (LANGID role): metric is top-1 accuracy (not WER).
+
+pin_date: 2026-10-05
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: SpeechBrain
+  commit: aa4d0f47
+  date: 2026-10-08
+
+pipeline_tag: audio-classification
+tags:
+  - gguf
+  - transcribe.cpp
+  - language-identification
+  - spoken-language-identification
+  - ecapa-tdnn
+  - voxlingua107
+  - speechbrain
+
+summary: |
+  Spoken language identification over 107 languages: SpeechBrain's
+  ECAPA-TDNN trained on VoxLingua107. NOT a transcription model: a run
+  returns the model's language labels ranked by probability, optionally
+  restricted to a caller-chosen set. Takes 16 kHz mono WAV; scores up to
+  the first 30 s of a clip.
+
+usage: |
+  Build transcribe.cpp from source:
+
+  ```bash
+  git clone git@github.com:handy-computer/transcribe.cpp.git
+  cd transcribe.cpp
+  cmake -B build && cmake --build build
+  ```
+
+  Run on a 16 kHz mono WAV. This is a language identifier, not a
+  transcription model: the CLI prints ranked language candidates.
+
+  ```bash
+  build/bin/transcribe-cli -m lang-id-voxlingua107-ecapa-Q8_0.gguf --allow en,de,fr --top 3 input.wav
+  # language: de index=18 p=0.999998
+  #   ...
+  ```
+
+  From the C API, use the LANGID role (`include/transcribe/langid.h`, see
+  `docs/langid.md`).
+
+  If your audio isn't already 16 kHz mono WAV, convert it first:
+
+  ```bash
+  ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+  ```
+
+  See the [transcribe.cpp model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/lang-id-voxlingua107-ecapa.md) for performance
+  numbers, numerical validation, and reproduction steps.
+
+wer:
+  notes: |
+    Open-set top-1 accuracy over all 107 labels, the mean over 15 FLEURS
+    languages, on the first 5 s of each clip without silence trimming.
+    Agreement with the SpeechBrain reference, per GGUF, is on the
+    transcribe.cpp model page.

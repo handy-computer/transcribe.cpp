@@ -167,7 +167,8 @@ observable on every variant against `samples/ru.wav`.
 - **Long-form (>25 s) parity is out of scope.** Upstream
   `transcribe_longform` chains a PyAnnote VAD pipeline + per-segment
   forward. transcribe.cpp will support short-form (≤25 s) at every
-  variant.
+  variant. (Superseded: audio past 25 s is now encoded in overlapping
+  windows natively; see `docs/models/gigaam.md`.)
 - **Charwise vs SentencePiece tokenizer paths.** The `rnnt` and `ctc`
   branches use an inline 33-entry character vocab in `config.json`;
   the e2e branches use a SentencePiece `tokenizer.model` file. The

@@ -78,6 +78,10 @@ pub enum Error {
     /// `TRANSCRIBE_ERR_UNSUPPORTED_ROLE` — see [`Model::roles`](crate::Model::roles).
     #[error("unsupported role: {0}")]
     UnsupportedRole(String),
+    /// `TRANSCRIBE_ERR_INPUT_TOO_SHORT` — the audio is shorter than the role's
+    /// minimum (e.g. [`LangIdInfo::min_audio_ms`](crate::LangIdInfo)).
+    #[error("input too short: {0}")]
+    InputTooShort(String),
     /// The loaded library's base version disagrees with the headers this crate
     /// was generated against (the pre-1.0 version lock). Raised on first use.
     #[error("native library version mismatch: {0}")]
@@ -98,7 +102,148 @@ pub enum Error {
     Other(String),
 }
 
+/// The category of an [`Error`], without its payload. One kind per variant.
+///
+/// Stable for matching and, under the `serde` feature, serialized as a
+/// snake_case string (`"aborted"`, `"model_file_not_found"`, ...). A kind
+/// this version does not know deserializes as [`ErrorKind::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "snake_case")
+)]
+pub enum ErrorKind {
+    InvalidArgument,
+    NotImplemented,
+    ModelFileNotFound,
+    ModelLoad,
+    OutOfMemory,
+    Backend,
+    Unsupported,
+    BadStructSize,
+    InputTooLong,
+    Aborted,
+    OutputTruncated,
+    OutputRepetition,
+    UnsupportedRole,
+    VersionMismatch,
+    Nul,
+    Busy,
+    InputTooShort,
+    #[cfg_attr(feature = "serde", serde(other))]
+    Other,
+}
+
+/// An owned, plain-data snapshot of an [`Error`]: what crosses a process or
+/// IPC boundary (e.g. a Tauri command's error).
+///
+/// [`Error`] itself serializes to exactly this shape under the `serde`
+/// feature; deserialize into `ErrorReport` on the receiving side (an
+/// [`Error`] cannot be rebuilt from it). JSON looks like:
+///
+/// ```json
+/// { "kind": "aborted", "message": "operation aborted: ...", "status": 13, "partial": { "text": "..." } }
+/// ```
+///
+/// `partial` is `null` unless the error carried a partial transcript. It is
+/// always written (never skipped) so non-self-describing formats such as
+/// postcard round-trip.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ErrorReport {
+    /// The error category.
+    pub kind: ErrorKind,
+    /// The error's `Display` text.
+    pub message: String,
+    /// [`Error::raw_status`]: the `transcribe_status`, or 0 for Rust-side errors.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub status: i32,
+    /// [`Error::partial`], if any.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub partial: Option<Transcript>,
+}
+
+impl From<&Error> for ErrorReport {
+    fn from(err: &Error) -> Self {
+        ErrorReport {
+            kind: err.kind(),
+            message: err.to_string(),
+            status: err.raw_status(),
+            partial: err.partial().cloned(),
+        }
+    }
+}
+
+/// Moves the partial transcript out instead of cloning it.
+impl From<Error> for ErrorReport {
+    fn from(err: Error) -> Self {
+        let (kind, message, status) = (err.kind(), err.to_string(), err.raw_status());
+        let partial = match err {
+            Error::Aborted { partial, .. }
+            | Error::OutputTruncated { partial, .. }
+            | Error::OutputRepetition { partial, .. } => partial.map(|p| *p),
+            _ => None,
+        };
+        ErrorReport {
+            kind,
+            message,
+            status,
+            partial,
+        }
+    }
+}
+
+/// Serializes as an [`ErrorReport`] (see there for the shape), without
+/// cloning the partial transcript.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Error {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        #[derive(serde::Serialize)]
+        struct Report<'a> {
+            kind: ErrorKind,
+            message: String,
+            status: i32,
+            partial: Option<&'a Transcript>,
+        }
+        Report {
+            kind: self.kind(),
+            message: self.to_string(),
+            status: self.raw_status(),
+            partial: self.partial(),
+        }
+        .serialize(s)
+    }
+}
+
 impl Error {
+    /// This error's [`ErrorKind`].
+    pub fn kind(&self) -> ErrorKind {
+        // Exhaustive on purpose: a new variant must pick a kind to compile.
+        match self {
+            Error::InvalidArgument(_) => ErrorKind::InvalidArgument,
+            Error::NotImplemented(_) => ErrorKind::NotImplemented,
+            Error::ModelFileNotFound(_) => ErrorKind::ModelFileNotFound,
+            Error::ModelLoad(_) => ErrorKind::ModelLoad,
+            Error::OutOfMemory(_) => ErrorKind::OutOfMemory,
+            Error::Backend(_) => ErrorKind::Backend,
+            Error::Unsupported(_) => ErrorKind::Unsupported,
+            Error::BadStructSize(_) => ErrorKind::BadStructSize,
+            Error::InputTooLong(_) => ErrorKind::InputTooLong,
+            Error::Aborted { .. } => ErrorKind::Aborted,
+            Error::OutputTruncated { .. } => ErrorKind::OutputTruncated,
+            Error::OutputRepetition { .. } => ErrorKind::OutputRepetition,
+            Error::UnsupportedRole(_) => ErrorKind::UnsupportedRole,
+            Error::InputTooShort(_) => ErrorKind::InputTooShort,
+            Error::VersionMismatch(_) => ErrorKind::VersionMismatch,
+            Error::Nul(_) => ErrorKind::Nul,
+            Error::Busy(_) => ErrorKind::Busy,
+            Error::Other(_) => ErrorKind::Other,
+        }
+    }
+
     /// The `transcribe_status` this error was mapped from, or `0` for errors
     /// raised on the Rust side (version gate, NUL in a string, …).
     pub fn raw_status(&self) -> i32 {
@@ -117,6 +262,7 @@ impl Error {
             Error::OutputTruncated { .. } => S::TRANSCRIBE_ERR_OUTPUT_TRUNCATED,
             Error::OutputRepetition { .. } => S::TRANSCRIBE_ERR_OUTPUT_REPETITION,
             Error::UnsupportedRole(_) => S::TRANSCRIBE_ERR_UNSUPPORTED_ROLE,
+            Error::InputTooShort(_) => S::TRANSCRIBE_ERR_INPUT_TOO_SHORT,
             _ => S::TRANSCRIBE_OK,
         };
         s.0 as i32
@@ -191,6 +337,7 @@ pub(crate) fn error_for_status(status: sys::transcribe_status, context: &str) ->
             partial: None,
         },
         S::TRANSCRIBE_ERR_UNSUPPORTED_ROLE => Error::UnsupportedRole(msg),
+        S::TRANSCRIBE_ERR_INPUT_TOO_SHORT => Error::InputTooShort(msg),
         _ => Error::Other(msg),
     }
 }
@@ -243,6 +390,8 @@ mod tests {
                 discriminant(&err),
                 "status {code} -> {err:?} -> raw {raw} -> {back:?}"
             );
+            assert_eq!(back.kind(), err.kind(), "status {code}");
+            assert_ne!(err.kind(), ErrorKind::Other, "status {code}");
         }
         let role = error_for_status(S::TRANSCRIBE_ERR_UNSUPPORTED_ROLE, "ctx");
         assert!(matches!(role, Error::UnsupportedRole(_)), "{role:?}");

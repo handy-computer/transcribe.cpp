@@ -1,0 +1,40 @@
+# Spec for the HF README of handy-computer/phonon-2-gguf.
+# Prose only; numbers and metadata come from catalog/phonon-2.json. See README.md.
+
+pin_date: 2026-10-15
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: Transformers (publisher loader)
+  commit: 66ad945d
+  date: 2026-10-15
+
+pipeline_tag: automatic-speech-recognition
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - tdt
+  - english
+
+summary: |
+  Offline English speech-to-text. Fermion Research's Phonon-2 is a
+  five-value-quantized repack of NVIDIA's parakeet-tdt-0.6b-v3; these GGUFs
+  expand the packed weights back to dense tensors and run them through
+  transcribe.cpp's Parakeet engine. Takes a 16 kHz mono WAV and produces a
+  transcript with optional token-level timestamps. Not a streaming model;
+  English only, no translation or language detection.
+
+  Weights are CC-BY-4.0 (Fermion Research, derived from NVIDIA); preserve
+  the upstream NOTICE and license with any redistribution.
+
+wer:
+  notes: |
+    Greedy TDT decoding, no external LM. Measured against the publisher's own
+    Transformers reference loader on the full LibriSpeech test-clean split:
+    reference 2.16%, this port's F32 2.15%, so the port matches the reference
+    within rounding. Shipped quants sit within 0.05 of F32.

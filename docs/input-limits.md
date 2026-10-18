@@ -57,9 +57,11 @@ value at the default context; for the effective limit under a lowered
 
 | Families | Limit | Behavior |
 | --- | --- | --- |
-| whisper, parakeet (all variants), voxtral_realtime | none (`max_audio_ms = 0`) | Long audio is windowed internally and stitched (whisper), processed by an unbounded/streaming encoder (parakeet, voxtral_realtime), or padded if short. No practical limit; all three **ignore `n_ctx`** (it cannot lower a limit they don't have). whisper and parakeet never error on length. voxtral_realtime has one exception — its absolute `dec_max_position` cap (~2.9 h, see below): a clip past it returns `INPUT_TOO_LONG` (one-shot/batch), and a stream that reaches it flags `was_truncated`. |
+| whisper, parakeet (all variants), voxtral_realtime, gigaam | none (`max_audio_ms = 0`) | Long audio is windowed internally and stitched (whisper, gigaam), processed by an unbounded/streaming encoder (parakeet, voxtral_realtime), or padded if short. No practical limit; all four **ignore `n_ctx`** (it cannot lower a limit they don't have). whisper, parakeet and gigaam never error on length. voxtral_realtime has one exception — its absolute `dec_max_position` cap (~2.9 h, see below): a clip past it returns `INPUT_TOO_LONG` (one-shot/batch), and a stream that reaches it flags `was_truncated`. |
 
-Whisper slices audio into 30 s windows with prev-context stitching; parakeet's
+Whisper slices audio into 30 s windows with prev-context stitching; gigaam
+encodes audio past its 25 s training window in overlapping windows of at most
+25 s and decodes the stitched encoder frames in one greedy pass; parakeet's
 conformer is effectively unbounded (the encoder positional table is recomputed
 per run, not a fixed wall). This holds for every parakeet variant, including the
 cache-aware streaming RNN-T member (`nemotron-3.5-asr-streaming-0.6b`): the
@@ -105,14 +107,12 @@ on sequences which are identical and are obviously looping
 
 | Families | Window | Behavior |
 | --- | --- | --- |
-| gigaam (~25 s), sensevoice (~30 s), medasr (~400 s), moonshine (output-bound, ~48 s), moonshine_streaming (output-bound, ~17 min) | training / positional window | Any length is accepted; past the window the library emits a `WARN` (degraded accuracy is possible) and proceeds. `max_audio_ms` reports the window as advisory. |
+| sensevoice (~30 s), medasr (~400 s), moonshine (output-bound, ~48 s), moonshine_streaming (output-bound, ~17 min) | training / positional window | Any length is accepted; past the window the library emits a `WARN` (degraded accuracy is possible) and proceeds. `max_audio_ms` reports the window as advisory. |
 
 These families have no hard architectural wall but were trained on a bounded
 window; beyond it, accuracy degrades rather than failing. The library does not
 reject (a caller may knowingly accept degradation) but it does warn so the
-degradation is never silent. Upstream `gigaam` rejects over-length audio
-outright; transcribe.cpp deliberately warns-and-proceeds instead so callers
-keep control.
+degradation is never silent.
 
 Moonshine is the honest edge case in this bucket: its cap is on *output*
 (`max_length = 194` decode tokens, ≈ 48 s), not input, so it cannot be gated on

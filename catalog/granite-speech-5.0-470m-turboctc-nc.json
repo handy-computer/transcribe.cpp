@@ -1,7 +1,7 @@
 {
   "schema": "transcribe-catalog-v1",
   "variant": "granite-speech-5.0-470m-turboctc-nc",
-  "family": "granite5_ctc",
+  "family": "granite_speech5_ctc",
   "display_name": "Granite Speech 5.0 470M TurboCTC NC",
   "params": 473014752,
   "license": {

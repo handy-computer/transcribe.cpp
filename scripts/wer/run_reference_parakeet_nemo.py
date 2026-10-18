@@ -81,7 +81,38 @@ def main() -> int:
                        "Stage 11. No-op for variants whose cfg already "
                        "orders [L, max_R] first."
                    ))
+    p.add_argument("--att-context", default=None,
+                   help=(
+                       "Switch a full-attention (regular-style) encoder to "
+                       "NeMo's rel_pos_local_attn window at inference, e.g. "
+                       "'256,256': the model card's long-audio mode "
+                       "(model.change_attention_model('rel_pos_local_attn', "
+                       "[L, R])). This is what transcribe.cpp runs by default "
+                       "on full-attention Parakeet checkpoints, so pass it to "
+                       "produce the matching reference. '-1,-1' = full "
+                       "attention (switches a local-window checkpoint such "
+                       "as tdt_ctc-1.1b). Unset = the checkpoint's own "
+                       "attention."
+                   ))
+    p.add_argument("--allow-errors", action="store_true",
+                   help=(
+                       "Exit 0 when some (not all) utterances fail. Failures "
+                       "are still recorded in the report's `error` field and "
+                       "surface on score.py's Errors line. For long-form sets "
+                       "where full attention is expected to OOM on the "
+                       "longest talks. Default: any failure exits 1."
+                   ))
     args = p.parse_args()
+
+    att_context = None
+    if args.att_context:
+        try:
+            left, right = (int(x) for x in args.att_context.split(","))
+        except ValueError:
+            print(f"error: --att-context must be 'L,R', got {args.att_context!r}",
+                  file=sys.stderr)
+            return 2
+        att_context = [left, right]
 
     if not args.manifest.exists():
         print(f"error: manifest not found: {args.manifest}", file=sys.stderr)
@@ -109,6 +140,7 @@ def main() -> int:
         is_prompt_aware,
         resolve_prompt_id,
         apply_prompt,
+        switch_attention,
     )
     _patch_conformer_for_offline(force_regular_att_style=args.offline_only)
 
@@ -122,6 +154,16 @@ def main() -> int:
     # fallbacks when the abstract dispatcher fails.
     from nemo.collections.asr.models import ASRModel
     local = Path(args.model).expanduser()
+    # `org/repo:path/to/file.nemo` pins one .nemo inside an HF repo whose
+    # layout NeMo's from_pretrained cannot resolve (it wants `<repo>.nemo`
+    # at the root, else it snapshots the whole repo). Needed for publisher
+    # repos that bundle ONNX / Core ML / GGUF exports next to the .nemo
+    # (oruk/orukeet).
+    if not local.exists() and args.model.count(":") == 1 and args.model.endswith(".nemo"):
+        from huggingface_hub import hf_hub_download
+        repo_id, filename = args.model.split(":", 1)
+        local = Path(hf_hub_download(repo_id=repo_id, filename=filename))
+        print(f"resolved {args.model} -> {local}")
     is_local = local.exists()
     loader = "restore_from" if is_local else "from_pretrained"
     try:
@@ -148,6 +190,17 @@ def main() -> int:
             raise last
     model.eval()
     apply_att_context_right_override(model, args.att_context_right)
+    if att_context is not None:
+        style = str(getattr(model.cfg.encoder, "att_context_style", "regular"))
+        if style != "regular":
+            print(f"error: --att-context applies to regular-style encoders; "
+                  f"this checkpoint is {style!r}", file=sys.stderr)
+            return 2
+        try:
+            print(switch_attention(model, *att_context))
+        except ValueError as e:
+            print(f"error: --att-context: {e}", file=sys.stderr)
+            return 2
     if args.device != "cpu":
         model = model.to(args.device)
     load_ms = (time.monotonic() - t0) * 1000
@@ -307,7 +360,11 @@ def main() -> int:
         f"({n_done / wall:.2f} utt/s), {n_errors} errors"
     )
     print(f"report: {args.out}")
-    return 0 if n_errors == 0 else 1
+    if n_errors == 0:
+        return 0
+    # --allow-errors: partial failures (recorded per utterance above) still
+    # reach the scorer; an all-failed run is always a runner failure.
+    return 0 if args.allow_errors and n_errors < n_done else 1
 
 
 if __name__ == "__main__":

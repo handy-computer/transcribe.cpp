@@ -9,8 +9,9 @@ name: typescript-ci
 #                _generated.py + transcribe.abihash + the TS _generated.ts),
 #                version-sync, and the TypeScript typecheck (tsc). No native
 #                build — fast, runs everywhere including forks.
-#   - ts-build:  build a shared libtranscribe, then run the node:test suite and
-#                the 5 canonical examples against it on linux, macos, and windows.
+#   - ts-build:  build a shared libtranscribe and generate the toy GGUF fixtures,
+#                then run the node:test suite and the 5 canonical examples
+#                against it on linux, macos, and windows.
 #
 # Two test tiers (requirements §4): the no-model tests (version/ABI/error
 # mapping/device discovery) always run, including on forks. The model-gated
@@ -118,7 +119,7 @@ jobs:
         if: runner.os != 'Windows'   # the Deno smoke below is non-Windows only
         with:
           deno-version: v2.x
-      - uses: astral-sh/setup-uv@v8.2.0 # fetch-canary fetches via uvx
+      - uses: astral-sh/setup-uv@v8.2.0 # fetch-canary (uvx) + the fixture generator
         with:
           version: "0.12.19"
       - name: Install build deps (Linux)
@@ -161,6 +162,11 @@ jobs:
           cmake -B build-shared -G Ninja -DTRANSCRIBE_BUILD_SHARED=ON ${{ matrix.cmake_flags }}
           cmake --build build-shared --target transcribe
           echo "TRANSCRIBE_LIBRARY=$GITHUB_WORKSPACE/build-shared/${{ matrix.lib_subdir }}/${{ matrix.lib }}" >> "$GITHUB_ENV"
+      # The gitignored toy GGUFs the langid / vad tests load (they skip without
+      # them). A shared build has no `fixtures` target, so run its generator
+      # directly; it is pure Python and writes into tests/fixtures.
+      - name: Generate toy GGUF fixtures
+        run: uv run --quiet tests/fixtures/make_gguf_fixtures.py
       - name: Install + build the binding
         working-directory: bindings/typescript
         run: |

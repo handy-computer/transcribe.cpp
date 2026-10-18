@@ -39,6 +39,11 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/transcribe"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.h")
 
+# --- translated probability policy attribution -------------------------------
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/silero_vad/LICENSE"
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/transcribe
+    RENAME LICENSE.silero_vad)
+
 # --- libtranscribe ------------------------------------------------------------
 # ggml's own install rules cover ggml / ggml-base. They ALSO declare an install
 # for each backend module, but ggml_add_backend_library() uses `LIBRARY

@@ -13,6 +13,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
@@ -424,7 +425,7 @@ transcribe_status compute_ada_scales(Session * cc, Model * cm, int num_delay) {
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, gf)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, gf, "voxtral_realtime")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "voxtral_realtime: ada-scale graph allocation failed — "
                             "out of memory.");
@@ -568,7 +569,7 @@ transcribe_status forward_buffer(Session *     cc,
         n_audio = eb.n_audio;
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "voxtral_realtime")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime run: encoder graph allocation failed — "
                                 "out of memory.");
@@ -729,7 +730,7 @@ transcribe_status forward_buffer(Session *     cc,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "voxtral_realtime")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime run: prefill graph allocation failed — "
                                 "out of memory.");
@@ -803,7 +804,7 @@ transcribe_status forward_buffer(Session *     cc,
                 return TRANSCRIBE_ERR_GGUF;
             }
             ggml_backend_sched_reset(cc->sched);
-            if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+            if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "voxtral_realtime")) {
                 transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                     "voxtral_realtime run: step graph allocation failed — "
                                     "out of memory.");
@@ -861,7 +862,7 @@ transcribe_status forward_buffer(Session *     cc,
                 return TRANSCRIBE_ERR_GGUF;
             }
             ggml_backend_sched_reset(cc->sched);
-            if (!ggml_backend_sched_alloc_graph(cc->sched, vb.graph)) {
+            if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, vb.graph, "voxtral_realtime")) {
                 transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                     "voxtral_realtime run: verify graph allocation failed — "
                                     "out of memory.");
@@ -1044,7 +1045,7 @@ transcribe_status forward_buffer(Session *     cc,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, tf.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, tf.graph, "voxtral_realtime")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime run: tail-forward graph allocation failed — "
                                 "out of memory.");
@@ -1313,7 +1314,7 @@ transcribe_status stream_run_graph(Session *                     cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, gf)) {  // graph alloc = overhead
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, gf, "voxtral_realtime")) {  // graph alloc = overhead
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "voxtral_realtime: stream graph allocation failed — "
                             "out of memory.");
@@ -1749,7 +1750,7 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
             }
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "voxtral_realtime")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime: stream step graph allocation failed — "
                                 "out of memory.");
@@ -2316,7 +2317,7 @@ transcribe_status run_batch(transcribe_session *          session,
         const int n_audio_max = eb.n_audio;
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "voxtral_realtime")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime run_batch: encoder graph allocation failed — "
                                 "out of memory.");
@@ -2493,7 +2494,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "voxtral_realtime")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime run_batch: prefill graph allocation failed — "
                                 "out of memory.");
@@ -2584,7 +2585,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "voxtral_realtime")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral_realtime run_batch: step graph allocation failed — "
                                 "out of memory.");

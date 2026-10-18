@@ -125,6 +125,18 @@
     "mean_abs": 0.01
   },
   "enc.pos_emb": {
+    "_comment": [
+      "Full-attention checkpoints run NeMo's rel_pos_local_attn [256, 256] by",
+      "default in C++. Clips whose encoder length fits inside the band (<= 257",
+      "frames, ~20.5 s, e.g. jfk) run the full-attention graph and match the",
+      "reference's 2T-1 rows exactly. Longer clips carry the local table (513",
+      "rows dense, W+C-1 rows bounded-window) while NeMo dumps 2T-1 rows, or",
+      "2L+1 under --att-context 256,256. The table is a deterministic sinusoid",
+      "input, not an activation; every encoder activation downstream is",
+      "compared at full tolerance, and values are compared whenever the shapes",
+      "agree."
+    ],
+    "shape_optional": true,
     "max_abs": 0.0005,
     "mean_abs": 1e-05
   },

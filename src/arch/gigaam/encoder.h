@@ -28,7 +28,8 @@ struct EncoderDumps {
     // equivalent shape (1, T_enc, d_model). This is what the RNN-T /
     // CTC head consumes for decode and what the reference dumps as
     // `rnnt.encoded`. final_out (post-transpose) is what gets compared
-    // against the reference `enc.out` dump.
+    // against the reference `enc.out` dump; it is built only when debug
+    // dumps are enabled (null otherwise).
     ggml_tensor *              rnnt_encoded   = nullptr;
     int                        mid_block_idx  = -1;
     int                        last_block_idx = -1;
@@ -40,6 +41,7 @@ struct EncoderDumps {
 
 struct EncoderBuild {
     ggml_tensor * mel_in = nullptr;
+    // Graph root: `enc.out` when debug dumps are enabled, else `rnnt.encoded`.
     ggml_tensor * out    = nullptr;
 
     // Variable-length offline batch masks. All null for single-shot and

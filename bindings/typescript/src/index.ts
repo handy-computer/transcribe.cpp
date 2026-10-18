@@ -7,8 +7,14 @@
  */
 
 import {
-  native,
+  backendState,
+  callAsync,
+  initialize,
+  loadLibrary,
+  nativeAsync,
+  nativeReady,
   setLogHandler,
+  type BackendState,
   type LogHandler,
   type Native,
 } from "./native.js";
@@ -42,6 +48,11 @@ import type {
   Feature,
   Itn,
   KvType,
+  LangIdCandidate,
+  LangIdInfo,
+  LangIdOptions,
+  LangIdResult,
+  LangIdSessionOptions,
   ModelOptions,
   PcmLike,
   Pnc,
@@ -60,12 +71,18 @@ import type {
   Transcript,
   TranscribeOptions,
   TranscriptionResult,
+  VadFeedOptions,
+  VadInfo,
+  VadOptions,
+  VadResult,
+  VadSegment,
+  VadSessionOptions,
   Word,
 } from "./types.js";
 
 export * from "./types.js";
 export * from "./errors.js";
-export { setLogHandler, type LogHandler };
+export { backendState, initialize, setLogHandler, type BackendState, type LogHandler };
 
 // ---- enum maps -------------------------------------------------------------
 
@@ -129,6 +146,8 @@ const FEATURES: Record<Feature, number> = {
 const ROLES: Record<Role, number> = {
   asr: g.TRANSCRIBE_ROLE_ASR,
   diarize: g.TRANSCRIBE_ROLE_DIARIZE,
+  langid: g.TRANSCRIBE_ROLE_LANGID,
+  vad: g.TRANSCRIBE_ROLE_VAD,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -242,44 +261,39 @@ function deferFree(lock: Mutex, fn: () => void, after?: () => void): void {
   });
 }
 
-function callAsync<T = number>(fn: any, ...args: any[]): Promise<T> {
-  return new Promise((resolve, reject) =>
-    fn.async(...args, (err: Error | null, res: T) =>
-      err ? reject(err) : resolve(res),
-    ),
-  );
-}
-
 // Coerce caller PCM to a Float32Array. A Float32Array is returned AS-IS (no
 // copy): the buffer is borrowed across the async native call, which reads it on
 // a worker thread, so callers must not mutate it until the promise resolves
 // (documented on run/runBatch/feed). Other inputs already produce a fresh array.
+// asFloat32 allows empty input (a VAD stream feed accepts 0 samples).
 function toFloat32(pcm: PcmLike): Float32Array {
-  let out: Float32Array;
-  if (pcm instanceof Float32Array) out = pcm;
-  else if (Array.isArray(pcm)) out = Float32Array.from(pcm);
-  else if (pcm instanceof ArrayBuffer) out = new Float32Array(pcm);
-  else if (ArrayBuffer.isView(pcm)) {
+  const out = asFloat32(pcm);
+  if (out.length === 0) throw new TranscribeError("PCM is empty");
+  return out;
+}
+
+function asFloat32(pcm: PcmLike): Float32Array {
+  if (pcm instanceof Float32Array) return pcm;
+  if (Array.isArray(pcm)) return Float32Array.from(pcm);
+  if (pcm instanceof ArrayBuffer) return new Float32Array(pcm);
+  if (ArrayBuffer.isView(pcm)) {
     const b = pcm as Buffer;
     if (b.byteLength % 4 !== 0) {
       throw new TranscribeError(
         "PCM byte length must be a multiple of 4 (float32)",
       );
     }
-    out = new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
-  } else {
-    throw new TranscribeError(
-      "PCM must be a Float32Array, number[], ArrayBuffer, or Buffer",
-    );
+    return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
   }
-  if (out.length === 0) throw new TranscribeError("PCM is empty");
-  return out;
+  throw new TranscribeError(
+    "PCM must be a Float32Array, number[], ArrayBuffer, or Buffer",
+  );
 }
 
 // koffi decodes int64 struct fields as bigint. We surface them as number for
-// ergonomics; the fields this is used on (millisecond timestamps, kv byte caps)
-// stay well under Number.MAX_SAFE_INTEGER, so the narrowing is lossless in
-// practice. Revisit if a field can exceed 2^53.
+// ergonomics; the fields this is used on (millisecond timestamps, kv byte caps,
+// sample / frame indices) stay well under Number.MAX_SAFE_INTEGER, so the
+// narrowing is lossless in practice. Revisit if a field can exceed 2^53.
 function num(v: number | bigint): number {
   return typeof v === "bigint" ? Number(v) : v;
 }
@@ -309,18 +323,17 @@ class Mutex {
 
 // ---- module-level introspection -------------------------------------------
 //
-// Note: these (like every public entry point) trigger the lazy native bootstrap
-// on first call — they dlopen the library, verify the ABI, and init backends.
-// There is no way to probe the binding without loading the native library, with
-// one exception: `headerHash` below is the compile-time PUBLIC_HEADER_HASH and
-// is the value the binding *expects*, not one read from the loaded library.
+// Native bootstrap is two-phase (see native.ts). `version()` and
+// `libraryPath()` only load the library and never initialize a backend.
+// `headerHash` is the compile-time PUBLIC_HEADER_HASH: the value the binding
+// *expects*, not one read from the loaded library.
 
 export function version(): {
   version: string;
   commit: string;
   headerHash: string;
 } {
-  const n = native();
+  const n = loadLibrary();
   return {
     version: n.F.version(),
     commit: n.F.versionCommit(),
@@ -329,7 +342,7 @@ export function version(): {
 }
 
 export function libraryPath(): string {
-  return native().libraryPath;
+  return loadLibrary().libraryPath;
 }
 
 /**
@@ -379,8 +392,12 @@ function deviceFromRaw(
   return info;
 }
 
+/**
+ * Every registered compute device. Initializes backends on the calling thread
+ * if needed; throws `BackendInitializing` while {@link initialize} runs.
+ */
 export function getAvailableBackends(): BackendInfo[] {
-  const n = native();
+  const n = nativeReady();
   const count = n.F.deviceCount();
   const out: BackendInfo[] = [];
   for (let i = 0; i < count; i++) {
@@ -394,9 +411,37 @@ export function getAvailableBackends(): BackendInfo[] {
   return out;
 }
 
+/** {@link getAvailableBackends} without blocking the event loop. */
+export async function getAvailableBackendsAsync(): Promise<BackendInfo[]> {
+  const n = await nativeAsync();
+  const count = n.F.deviceCount();
+  const out: BackendInfo[] = [];
+  for (let i = 0; i < count; i++) {
+    const handle = n.F.deviceGet(i);
+    if (!handle) continue;
+    const dev: any = {};
+    n.F.deviceInfoInit(dev);
+    const st = await callAsync<number>(n.F.deviceGetInfo, handle, dev);
+    check(n, st, `reading backend device ${i}`);
+    out.push(deviceFromRaw(dev, handle, i));
+  }
+  return out;
+}
+
+/**
+ * Whether some registered device can satisfy `backend`. Same initialization
+ * behavior as {@link getAvailableBackends}.
+ */
 export function backendAvailable(backend: Backend): boolean {
-  const n = native();
-  return n.F.backendAvailable(lookup(BACKENDS, backend, "backend"));
+  const raw = lookup(BACKENDS, backend, "backend");
+  return nativeReady().F.backendAvailable(raw);
+}
+
+/** {@link backendAvailable} without blocking the event loop. */
+export async function backendAvailableAsync(backend: Backend): Promise<boolean> {
+  const raw = lookup(BACKENDS, backend, "backend");
+  const n = await nativeAsync();
+  return n.F.backendAvailable(raw);
 }
 
 // ---- result materialization ------------------------------------------------
@@ -769,9 +814,10 @@ interface SessionControl {
 const SESSION_CONTROL = new WeakMap<Session, SessionControl>();
 
 /**
- * One native session handle under the model's compute rules, shared by Session
- * and DiarizeSession. Each holds it in a private field, so none of this is
- * reachable from user code. `setAbort` is the role's set_abort_callback.
+ * One native session handle under the model's compute rules, shared by Session,
+ * DiarizeSession, LangIdSession, and VadSession. Each holds it in a private
+ * field, so none of this is reachable from user code. `setAbort` is the role's
+ * set_abort_callback.
  */
 class SessionCore {
   #n: Native;
@@ -1434,13 +1480,250 @@ export class DiarizeSession {
   }
 }
 
+// ---- LangIdSession ---------------------------------------------------------
+
+/** A LANGID-role session: which language is spoken. Same compute rules as Session. */
+export class LangIdSession {
+  #n: Native;
+  #core: SessionCore;
+  #model: TranscribeModel; // keep the model alive while this session lives
+  #untrack: (self: LangIdSession) => void;
+
+  /** @internal */
+  constructor(
+    n: Native,
+    model: TranscribeModel,
+    handle: any,
+    lock: Mutex,
+    untrack: (self: LangIdSession) => void,
+  ) {
+    this.#n = n;
+    this.#model = model;
+    this.#core = new SessionCore(n, handle, lock, n.F.langidSetAbortCallback);
+    this.#untrack = untrack;
+  }
+
+  /**
+   * Identify the language of one clip; input longer than langidInfo.maxAudioMs
+   * is scored on its first maxAudioMs. The input PCM is borrowed, not copied
+   * (see Session.run).
+   */
+  async run(pcm: PcmLike, opts: LangIdOptions = {}): Promise<LangIdResult> {
+    const n = this.#n;
+    const F = n.F;
+    const h = this.#core.handle;
+    const samples = toFloat32(pcm);
+    const p: any = {};
+    F.langidParamsInit(p);
+    if (opts.allowed !== undefined && opts.allowed !== null) {
+      const codes = opts.allowed;
+      if (!Array.isArray(codes) || !codes.every((c) => typeof c === "string"))
+        throw new InvalidArgument("allowed must be an array of strings");
+      // NULL would mean "every label", the opposite of an empty list.
+      if (codes.length === 0)
+        throw new InvalidArgument("allowed is empty; omit it for every label");
+      codes.forEach((c) => cstr(c, "allowed"));
+      // Freed after the call returns (including async worker calls).
+      const type = n.koffi.array("char *", codes.length);
+      const arr = n.koffi.alloc(type, 1);
+      n.koffi.encode(arr, type, codes);
+      p.allowed = arr;
+      p.n_allowed = codes.length;
+    }
+
+    return this.#core.exclusive("langid", async (call) => {
+      const status = await call("run()", opts.signal, F.langidRun, h, samples, samples.length, p);
+      check(n, status, "transcribe_langid_run");
+      const res: any = {};
+      F.langidResultInit(res);
+      check(n, F.langidGetResult(h, res), "transcribe_langid_get_result");
+      const candidates: LangIdCandidate[] = [];
+      for (let i = 0; i < res.n_candidates; i++) {
+        const c: any = {};
+        F.langidCandidateInit(c);
+        check(n, F.langidGetCandidate(h, i, c), "transcribe_langid_get_candidate");
+        candidates.push({
+          index: c.index,
+          code: c.code ?? "",
+          name: c.name ?? "",
+          p: c.p,
+          logit: c.logit,
+        });
+      }
+      return {
+        candidates,
+        code: candidates.length > 0 ? candidates[0].code : null,
+        allowedMass: res.allowed_mass,
+      };
+    }).finally(() => {
+      if (p.allowed) {
+        n.koffi.free(p.allowed);
+        p.allowed = null;
+      }
+    });
+  }
+
+  /** load_ms plus the last run's mel / encode time. */
+  get timings(): Timings {
+    this.#core.assertNotComputing("session timings");
+    const h = this.#core.handle;
+    return readTimings(this.#n, (o) => this.#n.F.langidGetTimings(h, o));
+  }
+
+  dispose(): void {
+    if (this.#core.disposed) return;
+    this.#untrack(this);
+    this.#core.dispose(this.#n.F.langidSessionFree);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+}
+
+// ---- VadSession ------------------------------------------------------------
+
+// Copy the last call's probabilities and segments out of the session; call
+// inside exclusive(), since the next compute replaces them.
+function readVadResult(n: Native, h: any): VadResult {
+  const F = n.F;
+  const res: any = {};
+  F.vadResultInit(res);
+  check(n, F.vadGetResult(h, res), "transcribe_vad_get_result");
+  const ptr = res.n_probs > 0 ? F.vadProbs(h) : null;
+  if (res.n_probs > 0 && !ptr)
+    throw new TranscribeError("vad result has probabilities but no buffer");
+  const probs: number[] = ptr ? Array.from(n.koffi.decode(ptr, "float", res.n_probs)) : [];
+  const segments: VadSegment[] = [];
+  for (let i = 0; i < res.n_segments; i++) {
+    const s: any = {};
+    F.vadSegmentInit(s);
+    check(n, F.vadGetSegment(h, i, s), "transcribe_vad_get_segment");
+    segments.push({ startSample: num(s.start_sample), endSample: num(s.end_sample) });
+  }
+  return { probs, firstFrame: num(res.first_frame), segments };
+}
+
+/**
+ * A VAD-role session: where there is speech. Same compute rules as Session,
+ * except a VAD stream is session state and does not take the stream lease.
+ */
+export class VadSession {
+  #n: Native;
+  #core: SessionCore;
+  #model: TranscribeModel; // keep the model alive while this session lives
+  #untrack: (self: VadSession) => void;
+
+  /** @internal */
+  constructor(
+    n: Native,
+    model: TranscribeModel,
+    handle: any,
+    lock: Mutex,
+    untrack: (self: VadSession) => void,
+  ) {
+    this.#n = n;
+    this.#model = model;
+    this.#core = new SessionCore(n, handle, lock, n.F.vadSetAbortCallback);
+    this.#untrack = untrack;
+  }
+
+  /**
+   * Score one clip from a fresh state and segment it (resets any stream in
+   * progress). The input PCM is borrowed, not copied (see Session.run).
+   */
+  async run(pcm: PcmLike, opts: VadOptions = {}): Promise<VadResult> {
+    const n = this.#n;
+    const F = n.F;
+    const h = this.#core.handle;
+    const samples = toFloat32(pcm);
+    const p: any = {};
+    F.vadParamsInit(p);
+    if (opts.threshold !== undefined) p.threshold = opts.threshold;
+    if (opts.negThreshold !== undefined) p.neg_threshold = opts.negThreshold;
+    if (opts.minSpeechMs !== undefined) p.min_speech_ms = opts.minSpeechMs;
+    if (opts.minSilenceMs !== undefined) p.min_silence_ms = opts.minSilenceMs;
+    if (opts.speechPadMs !== undefined) p.speech_pad_ms = opts.speechPadMs;
+    if (opts.maxSpeechMs !== undefined) p.max_speech_ms = opts.maxSpeechMs;
+
+    return this.#core.exclusive("run VAD", async (call) => {
+      const status = await call("run()", opts.signal, F.vadRun, h, samples, samples.length, p);
+      check(n, status, "transcribe_vad_run");
+      return readVadResult(n, h);
+    });
+  }
+
+  /**
+   * Append audio to the stream and score every frame it completes; returns
+   * those frames' probabilities (a partial frame waits for the next feed).
+   * The chunk is borrowed, not copied (see Stream.feed); an empty chunk scores
+   * nothing. An abort or processing error resets the stream (the next feed's
+   * firstFrame is 0); invalid input leaves it unchanged.
+   */
+  async streamFeed(pcm: PcmLike, opts: VadFeedOptions = {}): Promise<VadResult> {
+    const n = this.#n;
+    const h = this.#core.handle;
+    const samples = asFloat32(pcm);
+    return this.#core.exclusive("feed the VAD stream", async (call) => {
+      const status = await call(
+        "streamFeed()", opts.signal, n.F.vadStreamFeed, h,
+        samples.length > 0 ? samples : null, samples.length,
+      );
+      check(n, status, "transcribe_vad_stream_feed");
+      return readVadResult(n, h);
+    });
+  }
+
+  /**
+   * End the stream: score the buffered partial frame (zero padded) and reset,
+   * so the next feed's firstFrame is 0. A processing error also resets it.
+   */
+  async streamFlush(opts: VadFeedOptions = {}): Promise<VadResult> {
+    const n = this.#n;
+    const h = this.#core.handle;
+    return this.#core.exclusive("flush the VAD stream", async (call) => {
+      const status = await call("streamFlush()", opts.signal, n.F.vadStreamFlush, h);
+      check(n, status, "transcribe_vad_stream_flush");
+      return readVadResult(n, h);
+    });
+  }
+
+  /**
+   * Drop the stream without scoring (the next feed's firstFrame is 0); queued
+   * behind any in-flight call.
+   */
+  async streamReset(): Promise<void> {
+    const h = this.#core.handle;
+    return this.#core.exclusive(null, async () => {
+      this.#n.F.vadStreamReset(h);
+    });
+  }
+
+  /** load_ms plus the last call's encode / decode time. */
+  get timings(): Timings {
+    this.#core.assertNotComputing("session timings");
+    const h = this.#core.handle;
+    return readTimings(this.#n, (o) => this.#n.F.vadGetTimings(h, o));
+  }
+
+  dispose(): void {
+    if (this.#core.disposed) return;
+    this.#untrack(this);
+    this.#core.dispose(this.#n.F.vadSessionFree);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+}
+
 // ---- Model -----------------------------------------------------------------
 
 export class TranscribeModel {
   #n: Native;
   #h: any;
   #disposed = false;
-  #sessions = new Set<Session | DiarizeSession>();
+  #sessions = new Set<Session | DiarizeSession | LangIdSession | VadSession>();
   #lock = new Mutex(); // serializes compute across all sessions of this model
 
   private constructor(n: Native, handle: any) {
@@ -1453,11 +1736,12 @@ export class TranscribeModel {
     ensureExitHook();
   }
 
+  /** Load a GGUF model. Awaits {@link initialize}, so it never blocks the event loop. */
   static async load(
     path: string,
     opts: ModelOptions = {},
   ): Promise<TranscribeModel> {
-    const n = native();
+    const n = await nativeAsync();
     const p: any = {};
     n.F.modelLoadParamsInit(p);
     if ("gpuDevice" in opts) {
@@ -1548,6 +1832,79 @@ export class TranscribeModel {
     if (!out[0])
       throw new TranscribeError("diarize session init returned a null handle");
     const session = new DiarizeSession(n, this, out[0], this.#lock, (s) =>
+      this.#sessions.delete(s),
+    );
+    this.#sessions.add(session);
+    return session;
+  }
+
+  /** Static facts of a "langid" model; UnsupportedRole otherwise. */
+  get langidInfo(): LangIdInfo {
+    const n = this.#n;
+    const info: any = {};
+    n.F.langidInfoInit(info);
+    check(n, n.F.langidGetInfo(this.handle, info), "reading langid info");
+    return {
+      sampleRate: info.sample_rate,
+      nLabels: info.n_labels,
+      minAudioMs: info.min_audio_ms,
+      maxAudioMs: info.max_audio_ms,
+    };
+  }
+
+  /** [code, name] per label index of a "langid" model; UnsupportedRole otherwise. */
+  get langidLabels(): Array<[string, string]> {
+    const n = this.langidInfo.nLabels;
+    const F = this.#n.F;
+    const out: Array<[string, string]> = [];
+    for (let i = 0; i < n; i++)
+      out.push([F.langidLabelCode(this.handle, i) ?? "", F.langidLabelName(this.handle, i) ?? ""]);
+    return out;
+  }
+
+  /** Label index of a code or alias ("he" and "iw" name the same label), or null. */
+  langidLabelIndex(code: string): number | null {
+    const i = this.#n.F.langidLabelIndex(this.handle, cstr(code, "code"));
+    return i >= 0 ? i : null;
+  }
+
+  /** Open a LANGID-role session; UnsupportedRole on a model without "langid". */
+  createLangIdSession(opts: LangIdSessionOptions = {}): LangIdSession {
+    const n = this.#n;
+    const p: any = {};
+    n.F.langidSessionParamsInit(p);
+    if (opts.nThreads !== undefined) p.n_threads = opts.nThreads;
+    const out: any[] = [null];
+    check(n, n.F.langidSessionInit(this.handle, p, out), "opening langid session");
+    if (!out[0])
+      throw new TranscribeError("langid session init returned a null handle");
+    const session = new LangIdSession(n, this, out[0], this.#lock, (s) =>
+      this.#sessions.delete(s),
+    );
+    this.#sessions.add(session);
+    return session;
+  }
+
+  /** Static facts of a "vad" model; UnsupportedRole otherwise. */
+  get vadInfo(): VadInfo {
+    const n = this.#n;
+    const info: any = {};
+    n.F.vadInfoInit(info);
+    check(n, n.F.vadGetInfo(this.handle, info), "reading vad info");
+    return { sampleRate: info.sample_rate, frameSamples: info.frame_samples };
+  }
+
+  /** Open a VAD-role session; UnsupportedRole on a model without "vad". */
+  createVadSession(opts: VadSessionOptions = {}): VadSession {
+    const n = this.#n;
+    const p: any = {};
+    n.F.vadSessionParamsInit(p);
+    if (opts.nThreads !== undefined) p.n_threads = opts.nThreads;
+    const out: any[] = [null];
+    check(n, n.F.vadSessionInit(this.handle, p, out), "opening vad session");
+    if (!out[0])
+      throw new TranscribeError("vad session init returned a null handle");
+    const session = new VadSession(n, this, out[0], this.#lock, (s) =>
       this.#sessions.delete(s),
     );
     this.#sessions.add(session);

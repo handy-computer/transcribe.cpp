@@ -5,8 +5,10 @@
   "display_name": "moonshine-base-uk",
   "params": 61513920,
   "license": {
-    "spdx": "mit",
-    "display": "MIT"
+    "spdx": "other",
+    "display": "Moonshine AI Community License",
+    "name": "moonshine-community-license",
+    "link": "https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"
   },
   "upstream_repo": "UsefulSensors/moonshine-base-uk",
   "upstream_commit": "a52b2e9",
@@ -24,9 +26,9 @@
     "batching": {"supported":true,"verified":false}
   },
   "downloads": [
-    {"quant":"F32","filename":"moonshine-base-uk-F32.gguf","size_bytes":247657120},
-    {"quant":"F16","filename":"moonshine-base-uk-F16.gguf","size_bytes":131789472},
-    {"quant":"Q8_0","filename":"moonshine-base-uk-Q8_0.gguf","size_bytes":77476512}
+    {"quant":"F32","filename":"moonshine-base-uk-F32.gguf","size_bytes":247657152},
+    {"quant":"F16","filename":"moonshine-base-uk-F16.gguf","size_bytes":131789504},
+    {"quant":"Q8_0","filename":"moonshine-base-uk-Q8_0.gguf","size_bytes":77476544}
   ],
   "accuracy_benchmarks": [
     {"dataset":"fleurs","split":"test","language":"uk","quant":"Q8_0","metric":"wer","err_pct":14.38,"ci95":[13.42,15.32],"n_utts":750,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":1608,"del":194,"ins":265},"empty_hyp":0,"utts_over_50pct":17,"measurement_provenance":"legacy-published"},

@@ -13,6 +13,7 @@
 #include "gguf.h"
 #include "moonshine.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
@@ -390,7 +391,7 @@ transcribe_status run(transcribe_session *          session,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "moonshine")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "moonshine run: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -474,7 +475,7 @@ transcribe_status run(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, cross_db.graph, "moonshine")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine run: cross_kv graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -518,7 +519,7 @@ transcribe_status run(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, db.graph, "moonshine")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine run: step graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -659,7 +660,7 @@ transcribe_status run(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "moonshine")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine run: step graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -835,7 +836,7 @@ transcribe_status encode_one_to_host(MoonshineSession *   cc,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "moonshine")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "moonshine encode: encoder graph allocation failed — out of memory.");
         return TRANSCRIBE_ERR_OOM;
@@ -979,7 +980,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, cross.graph, "moonshine")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine run_batch: cross_kv graph allocation failed — "
                                 "out of memory.");
@@ -1027,7 +1028,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "moonshine")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "moonshine run_batch: step graph allocation failed — "
                                 "out of memory.");

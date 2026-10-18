@@ -468,6 +468,13 @@ VARIANT_DISPLAY_NAMES: dict[str, str] = {
     "breeze-asr-25":          "Breeze-ASR-25",
 }
 
+# (spdx, name, link) for general.license{,.name,.link}. OpenAI's HF repos are
+# Apache-2.0 except large-v3-turbo, which it published under MIT.
+APACHE_LICENSE = ("apache-2.0", "Apache License 2.0", "https://www.apache.org/licenses/LICENSE-2.0")
+VARIANT_LICENSES: dict[str, tuple[str, str, str]] = {
+    "whisper-large-v3-turbo": ("mit", "MIT License", "https://opensource.org/license/mit"),
+}
+
 
 # ---------------------------------------------------------------------------
 # Main converter
@@ -537,6 +544,7 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
             author, organization = "OpenAI", "openai"
         else:
             author, organization = org, org
+        license_spdx, license_name, license_link = VARIANT_LICENSES.get(variant, APACHE_LICENSE)
         add_general_identity(
             writer,
             name=VARIANT_DISPLAY_NAMES[variant],
@@ -546,9 +554,9 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
             languages=hp["languages"],
             author=author,
             organization=organization,
-            license="apache-2.0",
-            license_name="Apache License 2.0",
-            license_link="https://www.apache.org/licenses/LICENSE-2.0",
+            license=license_spdx,
+            license_name=license_name,
+            license_link=license_link,
             repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
         )
 

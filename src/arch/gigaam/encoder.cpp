@@ -415,20 +415,25 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     // decoder consumes this layout directly (matches the reference's
     // `encoded.transpose(1, 2)` for the joint network). Expose it
     // before the final transpose.
+    // The driver reads it back after compute, so it must be a graph output.
     ggml_set_name(x, "rnnt.encoded");
+    ggml_set_output(x);
     eb.dumps.rnnt_encoded = x;
-    transcribe::debug::mark_tensor_for_dump(x);
+    eb.out                = x;
 
     // The reference ConformerEncoder.forward returns
-    // `audio_signal.transpose(1, 2)` — [B, T, D] -> [B, D, T]. Apply
-    // the final transpose to match the reference enc.out byte layout.
+    // `audio_signal.transpose(1, 2)` — [B, T, D] -> [B, D, T]. The
+    // transposed copy only feeds the enc.out parity dump, so build it only
+    // when dumps are on.
     // CRITICAL: do NOT wrap in a reshape view afterwards; ggml_set_output
     // on a view doesn't preserve the materialized cont buffer.
-    ggml_tensor * enc_out_t = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
-    ggml_set_name(enc_out_t, "enc.out");
-    eb.out             = enc_out_t;
-    eb.dumps.final_out = enc_out_t;
-    transcribe::debug::mark_tensor_for_dump(enc_out_t);
+    if (transcribe::debug::enabled()) {
+        ggml_tensor * enc_out_t = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+        ggml_set_name(enc_out_t, "enc.out");
+        eb.out             = enc_out_t;
+        eb.dumps.final_out = enc_out_t;
+        transcribe::debug::mark_tensor_for_dump(enc_out_t);
+    }
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     ggml_build_forward_expand(eb.graph, eb.out);

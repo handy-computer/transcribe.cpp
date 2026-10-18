@@ -42,6 +42,10 @@ def load_profiles(path: pathlib.Path = PROFILE_PATH) -> dict:
     default = data.get("default")
     if default not in data["profiles"]:
         raise ValueError(f"{path}: default profile {default!r} is not defined")
+    for role, profile_id in (data.get("roles") or {}).items():
+        if data["profiles"].get(profile_id, {}).get("role") != role:
+            raise ValueError(f"{path}: roles.{role} must name a defined profile "
+                             f"whose role is {role!r}")
     return data
 
 
@@ -55,6 +59,30 @@ def load_profile(profile_id: str | None = None) -> tuple[str, dict]:
             f"unknown benchmark profile {profile_id!r}; choose one of "
             f"{sorted(data['profiles'])}"
         ) from exc
+
+
+def profile_for(record: dict, profile_id: str | None = None) -> tuple[str, dict]:
+    """The profile that governs one record: `profile_id` when it is written
+    for the record's role, else the profile its role names in `roles`, else
+    the default. ASR and diarize records share the default; language ID has
+    a profile of its own, since a top-1 accuracy over a pooled set and a
+    classifier's latency are not cells of the ASR matrix."""
+    data = load_profiles()
+    if profile_id:
+        named = load_profile(profile_id)[1]
+        if governs(named, record):
+            return profile_id, named
+    chosen = data.get("roles", {}).get(record.get("role", "asr"), data["default"])
+    return chosen, data["profiles"][chosen]
+
+
+def governs(profile: dict, record: dict) -> bool:
+    """A profile with a `role` governs only records of that role; a profile
+    without one governs every record no role-specific profile claims."""
+    role = record.get("role", "asr")
+    if profile.get("role"):
+        return profile["role"] == role
+    return role not in load_profiles().get("roles", {})
 
 
 def canonical_machine(slug: str) -> str:
@@ -117,7 +145,10 @@ def _quants(spec: str | list[str], record: dict) -> list[str]:
 def expected_accuracy(record: dict, profile: dict) -> list[dict]:
     """Expand a profile into publication accuracy cells for one model."""
     cells: list[dict] = []
-    if not (record.get("capabilities", {}).get("transcribe", {}).get("supported")):
+    if not governs(profile, record):
+        return cells
+    if not profile.get("role") and not (
+            record.get("capabilities", {}).get("transcribe", {}).get("supported")):
         return cells
     for suite in profile.get("accuracy", []):
         selector = suite["languages"]
@@ -125,6 +156,9 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
             languages = ["en"] if "en" in fleurs_languages(record) else []
         elif selector == "supported-intersect-fleurs":
             languages = fleurs_languages(record)
+        elif selector == "pooled":
+            # One result over every evaluated language at once (language ID).
+            languages = ["mul"]
         else:
             raise ValueError(f"unknown language selector {selector!r}")
         for language in languages:
@@ -133,14 +167,21 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
                     "dataset": suite["dataset"],
                     "split": suite["split"],
                     "language": language,
-                    "runtime_language": runtime_language(record, language),
+                    "runtime_language": (None if selector == "pooled"
+                                         else runtime_language(record, language)),
                     "quant": quant,
-                    "metric": "cer" if language in CER_LANGUAGES else "wer",
+                    "metric": suite.get("metric") or (
+                        "cer" if language in CER_LANGUAGES else "wer"),
                     "batch_size": suite["batch_size"],
                     "sort_by_length": suite.get("sort_by_length", False),
                     "timestamps": suite["timestamps"],
                     "gpu": suite.get("gpu"),
                     "backend": suite.get("backend"),
+                    # Language ID's crop: which slice of a run.py sweep the
+                    # published number is, and which languages its pooled
+                    # mean is over.
+                    **{key: suite[key] for key in ("crop_s", "pooled_languages")
+                       if key in suite},
                 })
     return cells
 
@@ -174,6 +215,8 @@ def all_speed_samples(profile: dict, records: dict[str, dict]) -> list[str]:
 
 def expected_speed(record: dict, profile: dict) -> list[dict]:
     """Expand the exact publication speed matrix for one model."""
+    if not governs(profile, record):
+        return []
     spec = profile["speed"]
     samples = speed_samples(record, profile)
     cells: list[dict] = []

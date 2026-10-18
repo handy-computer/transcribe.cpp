@@ -5,7 +5,8 @@ FunASR 1.3.1 for both shipped variants. C++ validation passes for
 `fun-asr-nano-2512` and `fun-asr-mlt-nano-2512`; the CLI/API expose
 ITN through the family prompt path. Stage 7 LibriSpeech test-clean WER
 passes against FunASR reference baselines: Nano BF16 1.78% vs reference
-1.79%, MLT BF16 1.74% vs reference 1.76%.
+1.79% (ITN off), MLT BF16 1.71% vs reference 1.71% (ITN on, its default;
+1.74% vs 1.76% with ITN off).
 
 ## Identity
 
@@ -199,8 +200,10 @@ done
   checkpoint also carries a partial auxiliary CTC path, but required CTC
   tensors are absent, so the port intentionally skips CTC inference.
 - Language and ITN controls are prompt-template driven. Explicit
-  language sets `语音转写成<lang>...`; default ITN off appends
-  `，不进行文本规整`, while `use_itn=true` omits that suffix.
+  language sets `语音转写成<lang>...`; ITN off appends
+  `，不进行文本规整`, while ITN on omits that suffix. DEFAULT resolves
+  per variant: on for MLT (matching upstream's `itn=True`), off for
+  Nano.
 
 ## Capability Validation
 
@@ -226,7 +229,7 @@ One row per advertised capability. Allowed statuses:
 | Transcribe (mlt) | explicit language hint (ko) | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf --language ko samples/ko.wav` | non-empty plausible Korean transcript | PASS — "조금만 생각을 하면서 살면 훨씬 편할 거야" (MLT-specific; Nano does not advertise ko) |
 | Transcribe (mlt) | explicit language hint (yue) | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf --language yue samples/yue.wav` | non-empty plausible Cantonese transcript | PASS — "呢幾個字都表達唔到我想講嘅意思" (uses Cantonese particles 呢/嘅; MLT-specific first-class language) |
 | Transcribe (mlt) | auto / no language hint | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf samples/jfk.wav` | non-empty plausible transcript without language flag | PASS — same English transcript as explicit `en` (auto-mode prompt template applied) |
-| ITN (inverse text normalization) | prompt flag, both variants | `build/bin/transcribe-cli -m models/Fun-ASR-Nano-2512/Fun-ASR-Nano-2512-BF16.gguf --language zh --itn samples/zh.wav` (repeat with `Fun-ASR-MLT-Nano-2512`; library: `transcribe_funasr_nano_params{ .use_itn = true }`) | runtime selects the upstream ITN prompt path; transcript remains plausible | PASS — `--itn` is wired through CLI and API; Nano zh renders `开饭时间早上九点至下午五点。`, and both variants share the same prompt builder |
+| ITN (inverse text normalization) | prompt flag, both variants | `build/bin/transcribe-cli -m models/Fun-ASR-Nano-2512/Fun-ASR-Nano-2512-BF16.gguf --language zh --itn samples/zh.wav` (repeat with `Fun-ASR-MLT-Nano-2512`; library: `transcribe_run_params.itn = TRANSCRIBE_ITN_MODE_ON`) | runtime selects the upstream ITN prompt path; transcript remains plausible | PASS — `--itn` / `--no-itn` are wired through CLI and API; Nano zh renders `开饭时间早上九点至下午五点。`, and both variants share the same prompt builder. ITN is now the MLT default; the transcribe rows above were captured with ITN off |
 | Translate | not exposed upstream | n/a | n/a | SKIP — not advertised |
 | Segment timestamps | not exposed upstream | n/a | n/a | SKIP — README explicitly lists `Support returning timestamps` as TODO |
 | Word timestamps | not exposed upstream | n/a | n/a | SKIP — not advertised |
@@ -242,19 +245,31 @@ One row per advertised capability. Allowed statuses:
   `reports/wer/fun-asr-nano-2512.test-clean.summary.md` and
   `reports/wer/fun-asr-mlt-nano-2512.test-clean.summary.md`.
 - **Ref-dtype hard gate: PASS.** Nano BF16 is 1.78% WER vs 1.79%
-  reference (-0.01 pp). MLT BF16 is 1.74% WER vs 1.76% reference
-  (-0.02 pp). Both are far inside the ±0.005 absolute Stage 7 gate.
-- **ITN exposure closed.** The public CLI flag `--itn` and library
-  `transcribe_funasr_nano_params.use_itn` now select the FunASR prompt
-  path that omits `，不进行文本规整`.
+  reference (-0.01 pp), ITN off. MLT BF16 is 1.71% WER vs 1.71%
+  reference (-0.002 pp), ITN on, against
+  `reports/wer/fun-asr-mlt-nano-2512-REF-ITN.test-clean.jsonl`
+  (`run_reference_funasr_nano.py --use-itn`); with ITN off it was 1.74%
+  vs 1.76%. Both are far inside the ±0.005 absolute Stage 7 gate.
+- **ITN exposure closed.** The public CLI flags `--itn` / `--no-itn`
+  and the generic `transcribe_run_params.itn` select the FunASR prompt
+  path; ON omits `，不进行文本规整`.
+- **ITN default per variant.** `TRANSCRIBE_ITN_MODE_DEFAULT` resolves to
+  ON for `fun-asr-mlt-nano-2512`, matching upstream FunASR 1.3.1
+  (`get_prompt(..., itn=True)`) and the model card; MLT with ITN off
+  yields lowercase, unpunctuated text. It resolves to OFF for
+  `fun-asr-nano-2512`: Nano with ITN off already emits cased English, and
+  with ITN on renders `samples/jfk.wav` in all caps; the FunASR reference
+  (`run_reference_funasr_nano.py --use-itn`) produces the same string.
+  `scripts/wer/run.py` measures each variant at its default (MLT against
+  an ITN-on reference run); `scripts/validate.py` pins `--no-itn` to
+  match the ITN-off reference tensor dumps.
 
 ## Notes
 
 - The encoder is `SenseVoiceEncoderSmall`, frozen during FunASRNano training. The SAN-M block code is shared between `src/arch/sensevoice/` and `src/arch/funasr_nano/` via `src/sanm/` (view-struct + free-function pattern, like `src/conformer/`); the Kaldi HTK fbank + LFR frontend lives at `src/transcribe-kaldi-fbank.{h,cpp}` and is parameterized by an `apply_cmvn` flag.
 - The CTC head with `ctc_weight=1.0` in the YAML config is auxiliary loss during training. The released checkpoints omit required CTC tensors (`ctc_decoder` layers 2..4 and `ctc.ctc_lo.*`), so runtime inference is LLM-driven only.
 - Two tokenizers ship in the checkpoint: `Qwen3-0.6B/tokenizer.json` (BPE, 151 936-vocab) for LLM-driven inference output, and `multilingual.tiktoken` (Whisper-style tiktoken) for the auxiliary CTC head. The GGUF round-trips the Qwen3 chat template so the C++ loader can rebuild the prompt (system / user formatting + audio token placement).
-- ITN is prompt-template driven. `transcribe_funasr_nano_params.use_itn`
-  mirrors the SenseVoice family-param shape but affects FunASR Nano by
-  omitting the no-normalization suffix from the LLM prompt; the CLI
-  `--itn` flag fills both family param structs and each handler consumes
-  only its own pointer.
+- ITN is prompt-template driven. The generic `transcribe_run_params.itn`
+  is shared with SenseVoice but affects FunASR Nano by omitting the
+  no-normalization suffix from the LLM prompt; the CLI `--itn` /
+  `--no-itn` flags set it for whichever family is loaded.

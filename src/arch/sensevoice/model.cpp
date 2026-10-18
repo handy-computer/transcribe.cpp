@@ -14,6 +14,7 @@
 #include "sanm/sanm.h"
 #include "sensevoice.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-kaldi-fbank.h"
@@ -467,7 +468,7 @@ transcribe_status run(transcribe_session *          session,
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "sensevoice")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "sensevoice run: encoder graph allocation failed — out of memory. "
                             "Split long audio into shorter segments (see "
@@ -703,7 +704,7 @@ static transcribe_status run_batch_encode(
         }
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "sensevoice")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "sensevoice run: encoder graph allocation failed — out of memory. "
                             "Split long audio into shorter segments (see "

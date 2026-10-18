@@ -5,8 +5,10 @@
   "display_name": "moonshine-tiny-ko",
   "params": 27092736,
   "license": {
-    "spdx": "mit",
-    "display": "MIT"
+    "spdx": "other",
+    "display": "Moonshine AI Community License",
+    "name": "moonshine-community-license",
+    "link": "https://github.com/moonshine-ai/moonshine/blob/main/LICENSE"
   },
   "upstream_repo": "UsefulSensors/moonshine-tiny-ko",
   "upstream_commit": "80995f0",
@@ -24,9 +26,9 @@
     "batching": {"supported":true,"verified":false}
   },
   "downloads": [
-    {"quant":"F32","filename":"moonshine-tiny-ko-F32.gguf","size_bytes":109969088},
-    {"quant":"F16","filename":"moonshine-tiny-ko-F16.gguf","size_bytes":59244224},
-    {"quant":"Q8_0","filename":"moonshine-tiny-ko-Q8_0.gguf","size_bytes":35466944}
+    {"quant":"F32","filename":"moonshine-tiny-ko-F32.gguf","size_bytes":109969120},
+    {"quant":"F16","filename":"moonshine-tiny-ko-F16.gguf","size_bytes":59244256},
+    {"quant":"Q8_0","filename":"moonshine-tiny-ko-Q8_0.gguf","size_bytes":35466976}
   ],
   "accuracy_benchmarks": [
     {"dataset":"fleurs","split":"test","language":"ko","quant":"Q8_0","metric":"cer","err_pct":9.0,"ci95":[7.86,10.19],"n_utts":382,"batch_size":8,"timestamps":"none","engine_sha":null,"measured_on":null,"errors":{"sub":934,"del":561,"ins":96},"empty_hyp":0,"utts_over_50pct":2,"measurement_provenance":"legacy-published"},

@@ -19,6 +19,7 @@
 #include "gguf.h"
 #include "medasr.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
@@ -484,7 +485,7 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
         }
     }
     ggml_backend_sched_reset(gc->sched);
-    if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(gc->sched, eb.graph, "medasr")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "medasr run: encoder graph allocation failed — out of memory. "
                             "Split long audio into shorter segments (see "
@@ -754,7 +755,7 @@ transcribe_status run_batch_encode(MedAsrSession *                         gc,
         }
     }
     ggml_backend_sched_reset(gc->sched);
-    if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(gc->sched, eb.graph, "medasr")) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                             "medasr run: encoder graph allocation failed — out of memory. "
                             "Split long audio into shorter segments (see "

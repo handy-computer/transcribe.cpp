@@ -26,12 +26,14 @@
 //!   derived from it are dropped — in any order.
 //! - [`Session`] is `Send` but not `Sync`; its mutating calls take `&mut self`,
 //!   so the type system enforces one-call-at-a-time.
-//! - **0.x concurrency:** the C library permits at most one in-flight
-//!   `run`/stream across all sessions of a model, [`DiarizeSession`]s
-//!   included. This crate enforces that with
-//!   a per-model mutex (held only for the native compute call), so concurrent
-//!   calls from many sessions queue rather than race. For real parallelism, use
-//!   one [`Model`] per worker today.
+//! - **0.x concurrency:** the C library permits at most one in-flight compute
+//!   across all sessions of a model, [`DiarizeSession`]s, [`LangIdSession`]s
+//!   and [`VadSession`]s included. This crate enforces that with a per-model
+//!   mutex (held only for the native compute call), so concurrent calls from
+//!   many sessions queue rather than race. An active ASR stream holds the
+//!   model's stream lease; other runs, including VAD `run` / `stream_feed` /
+//!   `stream_flush`, return [`Error::Busy`] meanwhile. A VAD stream does not
+//!   take the lease. For real parallelism, use one [`Model`] per worker today.
 //!
 //! # ABI verification
 //!
@@ -51,12 +53,14 @@ mod cancel;
 mod diarize;
 mod error;
 mod family;
+mod langid;
 mod logging;
 mod model;
 mod result;
 mod session;
 mod streaming;
 mod types;
+mod vad;
 mod version;
 
 pub use backend::{
@@ -65,11 +69,14 @@ pub use backend::{
 };
 pub use cancel::CancelToken;
 pub use diarize::{DiarizeInfo, DiarizeOptions, DiarizeSession, DiarizeSessionOptions};
-pub use error::{Error, Result};
+pub use error::{Error, ErrorKind, ErrorReport, Result};
 pub use family::{
     DiarizeExtension, MoonshineStreamingOptions, ParakeetBufferedStreamOptions,
     ParakeetStreamOptions, RunExtension, SortformerDiarizeOptions, SortformerPreset,
     StreamExtension, VoxtralRealtimeStreamOptions, WhisperRunOptions,
+};
+pub use langid::{
+    LangIdCandidate, LangIdInfo, LangIdOptions, LangIdResult, LangIdSession, LangIdSessionOptions,
 };
 pub use logging::{disable_logging, init_logging};
 pub use model::{Capabilities, Model, ModelOptions, SessionLimits, SessionOptions};
@@ -80,6 +87,7 @@ pub use types::{
     AbiStruct, Backend, CommitPolicy, Diarize, ExtSlot, Feature, Itn, KvType, Pnc, Role, Roles,
     StreamState, Task, TimestampKind,
 };
+pub use vad::{VadInfo, VadOptions, VadResult, VadSegment, VadSession, VadSessionOptions};
 pub use version::{
     abi_struct_align, abi_struct_size, compiled_version, header_hash, version, version_commit,
 };

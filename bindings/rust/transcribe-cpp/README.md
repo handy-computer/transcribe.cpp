@@ -93,6 +93,49 @@ for turn in diarize.run(&pcm, &DiarizeOptions::default())? {
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+### Language ID
+
+A model whose `roles()` contain `Role::LangId` (VoxLingua107 ECAPA-TDNN)
+opens a `LangIdSession`. Codes are the model's own labels; match them against
+an ASR model's `capabilities().languages` yourself. `allowed: None` scores
+every label, `Some(vec![])` is `Error::InvalidArgument`, and clips under
+`langid_info()?.min_audio_ms` are `Error::InputTooShort`. A low
+`allowed_mass` means the speech is probably outside the allowed set.
+
+```rust
+use transcribe_cpp::{LangIdOptions, Model};
+let model = Model::load("lang-id-voxlingua107-ecapa-Q8_0.gguf")?;
+let mut lid = model.langid_session()?;
+let opts = LangIdOptions { allowed: Some(vec!["en".into(), "de".into()]) };
+let result = lid.run(&pcm, &opts)?;
+println!("{:?} (mass {})", result.code(), result.allowed_mass);
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
+### Voice activity detection
+
+A model whose `roles()` contain `Role::Vad` (Silero VAD; GGUF or the
+whisper.cpp `ggml-silero-v5.1.2.bin` / `v6.2.0.bin`) opens a `VadSession`.
+`run` scores a clip and returns per-frame probabilities
+(`vad_info()?.frame_samples` samples each) plus speech segments in samples;
+`stream_feed` / `stream_flush` return the probabilities of the frames each call
+completed.
+
+```rust
+use transcribe_cpp::{Model, VadOptions};
+let model = Model::load("silero-vad-v6.2-F32.gguf")?;
+let mut vad = model.vad_session()?;
+for s in vad.run(&pcm, &VadOptions::default())?.segments {
+    println!("speech {}..{}", s.start_sample, s.end_sample);
+}
+for chunk in pcm.chunks(320) {
+    let r = vad.stream_feed(chunk)?;
+    println!("frames {}.. {:?}", r.first_frame, r.probs);
+}
+vad.stream_flush()?;
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Runnable examples:
 
 ```sh

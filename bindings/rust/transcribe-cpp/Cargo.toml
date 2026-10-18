@@ -1,6 +1,6 @@
 [package]
 name = "transcribe-cpp"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.74"
 description = "Rust bindings for transcribe.cpp, a C/C++ speech-to-text library built on ggml"
@@ -34,8 +34,9 @@ openmp = ["transcribe-cpp-sys/openmp"]
 # via the -sys feature). See notes/rust-dynamic-backends-plan.md.
 shared = ["transcribe-cpp-sys/shared"]
 dynamic-backends = ["shared", "transcribe-cpp-sys/dynamic-backends"]
-# Serialize/Deserialize on the plain-data option and result types (not handles
-# or Error). No native-build impact.
+# Serialize/Deserialize on the plain-data option and result types (not handles),
+# Serialize on Error, and Serialize/Deserialize on its ErrorReport snapshot. No
+# native-build impact.
 serde = ["dep:serde"]
 
 [dependencies]
@@ -44,7 +45,7 @@ serde = ["dep:serde"]
 # `transcribe-cpp --no-default-features`, silently re-enabling Metal. The backend
 # features below forward explicitly, so the default (`metal`) still reaches sys
 # via `metal = ["transcribe-cpp-sys/metal"]`.
-transcribe-cpp-sys = { version = "0.3.1", path = "../../..", default-features = false }
+transcribe-cpp-sys = { version = "0.4.0", path = "../../..", default-features = false }
 thiserror = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }

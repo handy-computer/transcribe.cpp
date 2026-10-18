@@ -103,7 +103,7 @@ Runnable examples live in
 
 ## Diarization
 
-A model's `roles` say what it serves (`.asr`, `.diarize`). Diarization models
+A model's `roles` say what it serves (`.asr`, `.diarize`, `.langId`, `.vad`). Diarization models
 such as Sortformer (DIARIZE only) return speaker turns from a `DiarizeSession`:
 
 ```swift
@@ -114,6 +114,43 @@ for t in turns { print(t.speakerId, t.t0Ms, t.t1Ms) }
 ```
 
 `capabilities` and `session()` throw `.unsupportedRole` on a model without `.asr`.
+
+## Language ID
+
+Language ID models (`.langId`, e.g. VoxLingua107 ECAPA-TDNN) rank the model's
+own label codes from a `LangIdSession`; match `result.code` against an ASR
+model's `capabilities.languages` yourself. `allowed: nil` scores every label,
+an empty array throws `.invalidArgument`, and clips under
+`langIdInfo.minAudioMs` throw `.inputTooShort`. Every allowed label comes back,
+ranked by `p`; input longer than `langIdInfo.maxAudioMs` is scored on its first `maxAudioMs`.
+
+```swift
+let model = try Model(path: "lang-id-voxlingua107-ecapa-Q8_0.gguf")
+let result = try model.langIdSession().run(pcm, options: LangIdOptions(allowed: ["en", "de"]))
+print(result.code ?? "-", result.allowedMass)
+```
+
+## Voice activity detection
+
+VAD models (`.vad`, e.g. Silero VAD; the whisper.cpp `ggml-silero-*.bin` files
+load too) score `vadInfo.frameSamples`-sample frames from a `VadSession`.
+`run` returns per-frame `probs` and speech `segments` in samples;
+`streamFeed` / `streamFlush` return the probabilities of the frames each call
+completed, starting at `firstFrame`.
+
+```swift
+let model = try Model(path: "silero-vad-v6.2-F32.gguf")
+let vad = try model.vadSession()
+for s in try vad.run(pcm, options: VadOptions(threshold: 0.6)).segments {
+    print(s.startSample, s.endSample)
+}
+
+for chunk in micChunks {
+    let r = try vad.streamFeed(chunk)
+    // r.probs[i] scores stream frame r.firstFrame + i
+}
+try vad.streamFlush()
+```
 
 ## Backends
 
@@ -157,7 +194,9 @@ token.cancel()
 
 The active `run`, `runBatch`, or stream feed throws `TranscribeError.aborted`
 with any partial transcript preserved. Async `run`/`runBatch` also bridge Swift
-task cancellation when no custom token is installed.
+task cancellation when no custom token is installed. Role sessions
+(`DiarizeSession`, `LangIdSession`, `VadSession`, including a VAD stream feed)
+take a token the same way.
 
 ## C, Objective-C, and C++
 

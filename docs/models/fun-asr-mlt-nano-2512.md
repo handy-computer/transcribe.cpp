@@ -15,9 +15,9 @@ bundled Qwen3-0.6B LLM); trained on a smaller multilingual corpus
 ("hundreds of thousands of hours" per the model card, vs Nano's
 "tens of millions"). Takes a 16 kHz mono WAV and emits text. Not
 streaming, no translation, no timestamps. ITN (inverse text
-normalization) is supported by the model and exposed via the
-`--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
-in the library API.
+normalization) is on by default, matching upstream, for readable
+casing, punctuation, and digits; pass `--no-itn` for spoken-form
+output.
 <!-- /catalog -->
 
 ## What it's for
@@ -37,8 +37,12 @@ timestamps. The README explicitly lists timestamps, speaker
 diarization, and training as upstream TODOs.
 
 ITN (inverse text normalization — digits, capitalization, punctuation)
-is supported by the model. Pass `--itn` on the CLI, or set
-`transcribe_funasr_nano_params { use_itn = true }` via the library API.
+is **on by default**, matching upstream's `itn=True`. With ITN off the
+model emits lowercase, unpunctuated spoken-form text. Pass `--no-itn` on
+the CLI, or set `itn = TRANSCRIBE_ITN_MODE_OFF` in
+`transcribe_run_params`, for that form. The WER numbers below are
+measured with ITN on, the default, against a FunASR reference run with
+ITN on; see [WER methodology](../tools/wer.md).
 
 For Mandarin-only / dialect-heavy use, the regular
 [Fun-ASR-Nano](fun-asr-nano-2512.md) was trained on a much larger
@@ -58,26 +62,29 @@ Licensed [FunASR Model Open Source License Agreement v1.1](https://github.com/mo
 <!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16         | [Fun-ASR-MLT-Nano-2512-BF16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-BF16.gguf) | 1.67 GB | 1.74% |
-| F16          | [Fun-ASR-MLT-Nano-2512-F16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-F16.gguf) | 1.67 GB | 1.74% |
-| Q8_0         | [Fun-ASR-MLT-Nano-2512-Q8_0.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q8_0.gguf) |  891 MB | 1.74% |
-| Q6_K         | [Fun-ASR-MLT-Nano-2512-Q6_K.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q6_K.gguf) |  691 MB | 1.69% |
-| Q5_K_M       | [Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf) |  631 MB | 1.77% |
-| Q4_K_M       | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  557 MB | 1.89% |
+| BF16         | [Fun-ASR-MLT-Nano-2512-BF16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-BF16.gguf) | 1.67 GB | 1.71% |
+| F16          | [Fun-ASR-MLT-Nano-2512-F16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-F16.gguf) | 1.67 GB | 1.71% |
+| Q8_0         | [Fun-ASR-MLT-Nano-2512-Q8_0.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q8_0.gguf) |  891 MB | 1.72% |
+| Q6_K         | [Fun-ASR-MLT-Nano-2512-Q6_K.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q6_K.gguf) |  691 MB | 1.66% |
+| Q5_K_M       | [Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf) |  631 MB | 1.74% |
+| Q4_K_M       | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  557 MB | 1.80% |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-WER on the full LibriSpeech test-clean split (2,620 utterances). Figures without a commit were published before provenance was recorded.
+WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, timestamps none, language hint `en`, decoded on cuda. Measured at transcribe.cpp `c5f26f94`.
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
 Greedy LLM decoding via the bundled Qwen3-0.6B head. The publisher does not report a
 numerical LibriSpeech WER for the MLT variant specifically (the shared README's
 per-model table covers Fun-ASR-Nano only). Gate baseline is our own FunASR 1.3.1
-reference run on the same manifest: 1.76% (95% CI [1.60%, 1.93%]). transcribe.cpp's
-BF16 port matches that baseline within -0.02 percentage-points. LibriSpeech is
-English only; the strength of the MLT variant is multilingual coverage, not English
-accuracy. For the other 30 languages, run your own representative manifest.
+reference run on the same manifest with ITN on (`--use-itn`): 1.71% (95% CI [1.55%,
+1.89%]). transcribe.cpp's BF16 port matches that baseline within -0.01
+percentage-points. LibriSpeech is English only; the strength of the MLT variant is
+multilingual coverage, not English accuracy. All values on this page are measured
+with ITN on, this variant's runtime default. With ITN off the reference scores 1.76%
+and the BF16 port 1.74%; on FLEURS, ITN on lowers error in 27 of 31 languages,
+partly because FLEURS references write numbers as digits.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -85,37 +92,37 @@ accuracy. For the other 30 languages, run your own representative manifest.
 
 | Language | Metric |    Q8_0 |
 | --- | --- | ---: |
-| ar       | WER    |  25.79% |
-| bg       | WER    |  84.98% |
-| cs       | WER    |  53.56% |
-| da       | WER    |  69.93% |
-| el       | WER    | 103.55% |
-| en       | WER    |   4.90% |
-| et       | WER    |  64.22% |
-| fi       | WER    |  68.16% |
-| fil      | WER    |  15.62% |
-| ga       | WER    | 100.08% |
-| hi       | WER    |  43.96% |
-| hr       | WER    |  61.07% |
-| hu       | WER    | 113.21% |
-| id       | WER    |   7.52% |
-| ja       | CER    |   2.32% |
-| ko       | CER    |   5.20% |
-| lt       | WER    |  78.42% |
-| lv       | WER    |  56.71% |
-| ms       | WER    |   9.92% |
-| mt       | WER    |  91.71% |
-| nl       | WER    |  42.97% |
-| pl       | WER    |  59.34% |
-| pt       | WER    |  28.24% |
-| ro       | WER    |  74.39% |
-| sk       | WER    |  64.01% |
-| sl       | WER    |  75.22% |
-| sv       | WER    |  75.36% |
-| th       | CER    |   7.99% |
-| vi       | WER    |   8.32% |
-| yue      | CER    |  12.72% |
-| zh       | CER    |   8.64% |
+| ar       | WER    |  25.88% |
+| bg       | WER    |  55.78% |
+| cs       | WER    |  48.70% |
+| da       | WER    |  55.94% |
+| el       | WER    | 100.43% |
+| en       | WER    |   5.02% |
+| et       | WER    |  61.09% |
+| fi       | WER    |  65.77% |
+| fil      | WER    |  14.29% |
+| ga       | WER    |  95.78% |
+| hi       | WER    |  23.07% |
+| hr       | WER    |  67.52% |
+| hu       | WER    | 110.75% |
+| id       | WER    |   7.32% |
+| ja       | CER    |   2.10% |
+| ko       | CER    |   5.41% |
+| lt       | WER    |  75.25% |
+| lv       | WER    |  52.14% |
+| ms       | WER    |   9.11% |
+| mt       | WER    |  89.25% |
+| nl       | WER    |  42.36% |
+| pl       | WER    |  52.34% |
+| pt       | WER    |  22.23% |
+| ro       | WER    |  67.83% |
+| sk       | WER    |  60.13% |
+| sl       | WER    |  72.73% |
+| sv       | WER    |  71.60% |
+| th       | CER    |   7.28% |
+| vi       | WER    |   8.22% |
+| yue      | CER    |   8.39% |
+| zh       | CER    |   7.33% |
 <!-- /catalog -->
 
 LibriSpeech is English only and is not the strength of this model. For
@@ -135,11 +142,18 @@ build/bin/transcribe-cli \
 ```
 
 Pass `--language ko` / `vi` / `th` / etc. for any of the 31 supported
-languages, or omit for auto-detection. Add `--itn` to render digits,
-capitalization, and punctuation in formal form:
+languages, or omit for auto-detection. ITN is on by default:
 
 ```bash
-build/bin/transcribe-cli --itn -m … samples/jfk.wav
+# Default (ITN on):
+#   And so my fellow Americans ask not what your country can do for you, ask
+#   what you can do for your country.
+build/bin/transcribe-cli -m … samples/jfk.wav
+
+# Spoken form — lowercase, unpunctuated, numbers as words:
+#   and so my fellow americans ask not what your country can do for you ask
+#   what you can do for your country
+build/bin/transcribe-cli --no-itn -m … samples/jfk.wav
 ```
 
 If your audio is not already 16 kHz mono WAV, convert it first:

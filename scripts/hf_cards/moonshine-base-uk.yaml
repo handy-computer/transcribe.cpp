@@ -36,3 +36,14 @@ wer:
     same manifest: **14.51% WER**. The C++ F32/F16 numbers
     above match the reference within bootstrap-CI noise; Q8_0 introduces
     a small additional drift from F16 (typically within 0.1pp).
+
+license_notes: |
+  Free for research and non-commercial use. Commercial use requires
+  registering with Moonshine AI and is limited to organizations under
+  US$1M annual revenue; read the
+  [license](https://github.com/moonshine-ai/moonshine/blob/main/LICENSE)
+  before using it. Moonshine AI releases its English and streaming models
+  under MIT; only these legacy language fine-tunes carry this license. The
+  agreement (`LICENSE`) and the required `NOTICE` ship in this repository.
+
+  Powered by Moonshine AI.

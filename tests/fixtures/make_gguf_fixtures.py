@@ -13,7 +13,7 @@ surface hermetic and uv-friendly (no dependency resolution at
 configure time). Tensor data emission uses Python struct only — no
 numpy dep — because the toy tensors are tiny (~3000 fp32 elements).
 
-Six fixtures are emitted:
+Fixtures emitted (see emit_fixtures for the full list):
 
   arch_parakeet.gguf       -- valid header, KV pairs:
                                 general.architecture = "parakeet"
@@ -110,6 +110,7 @@ a local `cmake --build build --target fixtures` regenerates the files.
 
 from __future__ import annotations
 
+import math
 import struct
 import sys
 from pathlib import Path
@@ -132,11 +133,16 @@ GGUF_TYPE_ARRAY   = 9
 # ggml_type enum values used for tensor data. Pinned here so we are not
 # at the mercy of upstream renumbering — a mismatch would surface as a
 # loader test failure (the most useful possible signal).
-GGML_TYPE_F32 = 0
+GGML_TYPE_F32  = 0
+GGML_TYPE_F16  = 1
+GGML_TYPE_Q8_0 = 8
 
-# Bytes per element for each ggml_type we emit.
+# (bytes per block, elements per block) for each ggml_type we emit. Q8_0 is
+# 32 int8 quants behind one fp16 scale, blocked along ne[0].
 GGML_TYPE_SIZE = {
-    GGML_TYPE_F32: 4,
+    GGML_TYPE_F32:  (4, 1),
+    GGML_TYPE_F16:  (2, 1),
+    GGML_TYPE_Q8_0: (34, 32),
 }
 
 
@@ -262,7 +268,7 @@ def _string_kvs(pairs: list[tuple[str, str]]) -> list[bytes]:
 # A "Tensor" here is just a (name, ne, dtype, data_bytes) tuple. ne is
 # fast-to-slow dim order matching ggml_tensor::ne[]. data_bytes is the
 # raw little-endian bytes of the tensor's elements, length must equal
-# product(ne) * GGML_TYPE_SIZE[dtype].
+# product(ne) / block * block_bytes (GGML_TYPE_SIZE[dtype]).
 #
 # _build_full_gguf assembles header + KV section + tensor info section
 # + aligned tensor data blob in one pass. The layout follows
@@ -276,10 +282,13 @@ class Tensor:
     def __init__(
         self, name: str, ne: list[int], dtype: int, data: bytes
     ) -> None:
+        block_bytes, block = GGML_TYPE_SIZE[dtype]
+        if ne[0] % block != 0:
+            raise ValueError(f"tensor {name!r}: ne[0]={ne[0]} is not a multiple of {block}")
         nbytes = 1
         for d in ne:
             nbytes *= d
-        nbytes *= GGML_TYPE_SIZE[dtype]
+        nbytes = nbytes // block * block_bytes
         if len(data) != nbytes:
             raise ValueError(
                 f"tensor {name!r}: ne={ne} dtype={dtype} expects "
@@ -1359,6 +1368,247 @@ QWEN3_ASR_CHAT_TEMPLATE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Toy ecapa_tdnn (LANGID) hparams + tensor catalog
+# ---------------------------------------------------------------------------
+#
+# The same metadata and tensor contract scripts/convert-ecapa_tdnn.py writes
+# for speechbrain/lang-id-voxlingua107-ecapa, at 1/32 width: channels
+# [32]*4 + [96], the real kernel sizes / dilations / res2net scale, a real
+# 60 x 201 front end, five labels aa..ee plus the alias xx=aa. Weights are
+# small seeded pseudo-random values so a forward pass stays well inside float
+# range; tests assert structure and invariants, never specific values.
+
+import random as _random
+
+ECAPA_CHANNELS     = [32, 32, 32, 32, 96]
+ECAPA_KERNELS      = [5, 3, 3, 3, 1]
+ECAPA_DILATIONS    = [1, 2, 3, 4, 1]
+ECAPA_SCALE        = 8
+ECAPA_SE           = 8
+ECAPA_ATT          = 8
+ECAPA_EMB          = 16
+ECAPA_HID          = 16
+ECAPA_N_MELS       = 60
+ECAPA_N_FREQ       = 201
+ECAPA_LABEL_CODES  = ["aa", "bb", "cc", "dd", "ee"]
+ECAPA_LABEL_NAMES  = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
+
+
+def _ecapa_tdnn_hparams_kv(codes: list[str], names: list[str], aliases: list[str],
+                           hop_length: int = 160, win_length: int = 400) -> list[bytes]:
+    return [
+        _pack_kv_string("stt.frontend.type", "speechbrain_fbank"),
+        _pack_kv_uint32("stt.frontend.sample_rate", 16000),
+        _pack_kv_uint32("stt.frontend.n_fft", 400),
+        _pack_kv_uint32("stt.frontend.hop_length", hop_length),
+        _pack_kv_uint32("stt.frontend.win_length", win_length),
+        _pack_kv_uint32("stt.frontend.num_mels", ECAPA_N_MELS),
+        _pack_kv_string("stt.frontend.window", "hamming_periodic"),
+        _pack_kv_string("stt.frontend.pad_mode", "constant"),
+        _pack_kv_float32("stt.frontend.log_clamp_min", 1e-10),
+        _pack_kv_float32("stt.frontend.top_db", 80.0),
+        _pack_kv_string("stt.frontend.normalize", "sentence_mean"),
+        _pack_kv_array_int32("stt.ecapa_tdnn.channels", ECAPA_CHANNELS),
+        _pack_kv_array_int32("stt.ecapa_tdnn.kernel_sizes", ECAPA_KERNELS),
+        _pack_kv_array_int32("stt.ecapa_tdnn.dilations", ECAPA_DILATIONS),
+        _pack_kv_uint32("stt.ecapa_tdnn.res2net_scale", ECAPA_SCALE),
+        _pack_kv_uint32("stt.ecapa_tdnn.se_channels", ECAPA_SE),
+        _pack_kv_uint32("stt.ecapa_tdnn.attention_channels", ECAPA_ATT),
+        _pack_kv_float32("stt.ecapa_tdnn.asp_eps", 1e-12),
+        _pack_kv_uint32("stt.ecapa_tdnn.embedding_dim", ECAPA_EMB),
+        _pack_kv_uint32("stt.ecapa_tdnn.classifier_hidden", ECAPA_HID),
+        _pack_kv_float32("stt.ecapa_tdnn.classifier_leaky_slope", 0.01),
+        _pack_kv_array_string("stt.langid.labels.codes", codes),
+        _pack_kv_array_string("stt.langid.labels.names", names),
+        _pack_kv_array_string("stt.langid.labels.aliases", aliases),
+    ]
+
+
+def _ecapa_tdnn_tensors(n_labels: int) -> list[Tensor]:
+    rng = _random.Random(0)
+    out: list[Tensor] = []
+
+    def add(name: str, ne: list[int], values: list[float]) -> None:
+        out.append(Tensor(name, ne, GGML_TYPE_F32, _f32_bytes(values)))
+
+    def weight(name: str, ne: list[int]) -> None:
+        n = 1
+        for d in ne:
+            n *= d
+        fan_in = ne[0] * (ne[2] if len(ne) == 3 else 1)
+        bound = 1.0 / fan_in ** 0.5
+        add(name, ne, [rng.uniform(-bound, bound) for _ in range(n)])
+
+    def vec(name: str, n: int, center: float, spread: float) -> None:
+        add(name, [n], [center + rng.uniform(-spread, spread) for _ in range(n)])
+
+    def tdnn(prefix: str, ic: int, oc: int, k: int, conv: bool) -> None:
+        stem = f"{prefix}.conv" if conv else prefix
+        weight(f"{stem}.weight", [ic, oc, k] if conv else [ic, oc])
+        vec(f"{stem}.bias", oc, 0.0, 0.05)
+        vec(f"{prefix}.bn.scale", oc, 1.0, 0.1)
+        vec(f"{prefix}.bn.shift", oc, 0.0, 0.05)
+
+    # Triangular mel-major filterbank, ne = [n_freq, n_mels].
+    fb = [0.0] * (ECAPA_N_MELS * ECAPA_N_FREQ)
+    for m in range(ECAPA_N_MELS):
+        c = 2 + 3 * m
+        for k in range(c - 3, c + 4):
+            if 0 <= k < ECAPA_N_FREQ:
+                fb[m * ECAPA_N_FREQ + k] = 1.0 - abs(k - c) / 4.0
+    add("frontend.mel_filterbank", [ECAPA_N_FREQ, ECAPA_N_MELS], fb)
+
+    c, cm, chunk = ECAPA_CHANNELS[0], ECAPA_CHANNELS[-1], ECAPA_CHANNELS[0] // ECAPA_SCALE
+    tdnn("blk.0", ECAPA_N_MELS, c, ECAPA_KERNELS[0], conv=True)
+    for i in (1, 2, 3):
+        tdnn(f"blk.{i}.tdnn1", c, c, 1, conv=False)
+        for j in range(ECAPA_SCALE - 1):
+            tdnn(f"blk.{i}.res2.{j}", chunk, chunk, ECAPA_KERNELS[i], conv=True)
+        tdnn(f"blk.{i}.tdnn2", c, c, 1, conv=False)
+        weight(f"blk.{i}.se.c1.weight", [c, ECAPA_SE])
+        vec(f"blk.{i}.se.c1.bias", ECAPA_SE, 0.0, 0.05)
+        weight(f"blk.{i}.se.c2.weight", [ECAPA_SE, c])
+        vec(f"blk.{i}.se.c2.bias", c, 0.0, 0.05)
+    for n in (1, 2, 3):
+        weight(f"mfa.w{n}.weight", [c, cm])
+    vec("mfa.bias", cm, 0.0, 0.05)
+    vec("mfa.bn.scale", cm, 1.0, 0.1)
+    vec("mfa.bn.shift", cm, 0.0, 0.05)
+    for part in ("x", "mean", "std"):
+        weight(f"asp.tdnn.{part}.weight", [cm, ECAPA_ATT])
+    vec("asp.tdnn.bias", ECAPA_ATT, 0.0, 0.05)
+    vec("asp.tdnn.bn.scale", ECAPA_ATT, 1.0, 0.1)
+    vec("asp.tdnn.bn.shift", ECAPA_ATT, 0.0, 0.05)
+    weight("asp.attn.weight", [ECAPA_ATT, cm])
+    vec("asp.attn.bias", cm, 0.0, 0.05)
+    weight("fc.weight", [2 * cm, ECAPA_EMB])
+    vec("fc.bias", ECAPA_EMB, 0.0, 0.05)
+    weight("cls.l1.weight", [ECAPA_EMB, ECAPA_HID])
+    vec("cls.l1.bias", ECAPA_HID, 0.0, 0.05)
+    weight("cls.out.weight", [ECAPA_HID, n_labels])
+    vec("cls.out.bias", n_labels, 0.0, 0.05)
+    return out
+
+
+def _q8_0_blocks(values: list[float]) -> tuple[bytes, list[float]]:
+    """ggml's quantize_row_q8_0_ref, plus the values its dequantize_row_q8_0
+    gives back (fp16 scale times int8, exact in float)."""
+    data = bytearray()
+    deq: list[float] = []
+    for b in range(0, len(values), 32):
+        x = values[b:b + 32]
+        d = max(abs(v) for v in x) / 127.0
+        inv = 1.0 / d if d else 0.0
+        q = [int(math.copysign(math.floor(abs(v * inv) + 0.5), v)) for v in x]
+        d16 = struct.pack("<e", d)
+        data += d16 + struct.pack("<32b", *q)
+        deq += [struct.unpack("<e", d16)[0] * qi for qi in q]
+    return bytes(data), deq
+
+
+def _ecapa_tdnn_q8_0(tensors: list[Tensor], as_f16: bool) -> list[Tensor]:
+    """Every 2-D weight the quantizer would make Q8_0 (ne[0] % 32 == 0), as
+    Q8_0, or (as_f16) as F16 holding exactly the dequantized Q8_0 values:
+    what the ecapa_tdnn loader must produce when it widens Q8_0 to F16."""
+    out = []
+    for t in tensors:
+        if len(t.ne) != 2 or not t.name.endswith(".weight") or t.ne[0] % 32 != 0 or t.name.startswith("frontend."):
+            out.append(t)
+            continue
+        values = list(struct.unpack(f"<{len(t.data) // 4}f", t.data))
+        q8, deq = _q8_0_blocks(values)
+        if as_f16:
+            out.append(Tensor(t.name, t.ne, GGML_TYPE_F16, struct.pack(f"<{len(deq)}e", *deq)))
+        else:
+            out.append(Tensor(t.name, t.ne, GGML_TYPE_Q8_0, q8))
+    return out
+
+
+def _ecapa_tdnn_gguf(codes: list[str], names: list[str], aliases: list[str], q8_0: str = "",
+                     **frontend: int) -> bytes:
+    tensors = _ecapa_tdnn_tensors(len(codes))
+    if q8_0:
+        tensors = _ecapa_tdnn_q8_0(tensors, as_f16=(q8_0 == "as_f16"))
+    return _build_full_gguf(
+        GGUF_MAGIC,
+        [
+            _pack_kv_string("general.architecture", "ecapa_tdnn"),
+            _pack_kv_string("stt.variant", "ecapa-tdnn-toy"),
+            *_ecapa_tdnn_hparams_kv(codes, names, aliases, **frontend),
+        ],
+        tensors,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Toy silero_vad (VAD) model
+# ---------------------------------------------------------------------------
+#
+# The metadata and tensor contract scripts/convert-silero_vad.py writes, at
+# the real geometry (the model is only 309K parameters): a real periodic-Hann
+# STFT basis and small seeded pseudo-random weights. Tests assert structure,
+# invariants and stream/offline parity, never specific values.
+
+SILERO_N_FFT    = 256
+SILERO_BINS     = SILERO_N_FFT // 2 + 1
+SILERO_CHANNELS = [SILERO_BINS, 128, 64, 64, 128]
+SILERO_STRIDES  = [1, 2, 2, 1]
+SILERO_HIDDEN   = 128
+
+
+def _silero_vad_gguf() -> bytes:
+    rng = _random.Random(1)
+    tensors: list[Tensor] = []
+
+    def add(name: str, ne: list[int], values: list[float]) -> None:
+        tensors.append(Tensor(name, ne, GGML_TYPE_F32, _f32_bytes(values)))
+
+    def uniform(name: str, ne: list[int], fan_in: int) -> None:
+        n = 1
+        for d in ne:
+            n *= d
+        bound = 1.0 / fan_in ** 0.5
+        add(name, ne, [rng.uniform(-bound, bound) for _ in range(n)])
+
+    basis = []
+    for half in (0, 1):
+        for k in range(SILERO_BINS):
+            for n in range(SILERO_N_FFT):
+                w = 0.5 - 0.5 * math.cos(2 * math.pi * n / SILERO_N_FFT)
+                a = 2 * math.pi * k * n / SILERO_N_FFT
+                basis.append(w * (math.cos(a) if half == 0 else -math.sin(a)))
+    add("frontend.stft_basis", [SILERO_N_FFT, 2 * SILERO_BINS], basis)
+    for i in range(4):
+        ic, oc = SILERO_CHANNELS[i], SILERO_CHANNELS[i + 1]
+        uniform(f"enc.{i}.conv.weight", [3, ic, oc], 3 * ic)
+        uniform(f"enc.{i}.conv.bias", [oc], 3 * ic)
+    h = SILERO_HIDDEN
+    uniform("lstm.weight_ih", [SILERO_CHANNELS[-1], 4 * h], h)
+    uniform("lstm.weight_hh", [h, 4 * h], h)
+    uniform("lstm.bias_ih", [4 * h], h)
+    uniform("lstm.bias_hh", [4 * h], h)
+    uniform("head.weight", [h], h)
+    add("head.bias", [1], [0.5])
+    return _build_full_gguf(
+        GGUF_MAGIC,
+        [
+            _pack_kv_string("general.architecture", "silero_vad"),
+            _pack_kv_string("stt.variant", "silero-vad-toy"),
+            _pack_kv_uint32("stt.frontend.sample_rate", 16000),
+            _pack_kv_uint32("stt.frontend.n_fft", SILERO_N_FFT),
+            _pack_kv_uint32("stt.frontend.hop_length", 128),
+            _pack_kv_uint32("stt.vad.frame_samples", 512),
+            _pack_kv_uint32("stt.silero_vad.context_samples", 64),
+            _pack_kv_uint32("stt.silero_vad.reflect_pad", 64),
+            _pack_kv_array_int32("stt.silero_vad.encoder_channels", SILERO_CHANNELS),
+            _pack_kv_array_int32("stt.silero_vad.encoder_strides", SILERO_STRIDES),
+            _pack_kv_uint32("stt.silero_vad.lstm_hidden", SILERO_HIDDEN),
+        ],
+        tensors,
+    )
+
+
 def _write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -1771,6 +2021,27 @@ def emit_fixtures(out_dir: Path) -> None:
             qwen3_asr_tensors,
         ),
     )
+
+
+    # ecapa_tdnn (LANGID role): a structurally complete toy model.
+    _write(out_dir / "arch_ecapa_tdnn_minimal.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"]))
+    # The toy model with its Q8_0-eligible weights in Q8_0, and the same
+    # weights as F16 holding the dequantized values. The loader widens Q8_0
+    # to F16, so the two must give bit-identical logits on the CPU.
+    _write(out_dir / "arch_ecapa_tdnn_q8_0.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="q8_0"))
+    _write(out_dir / "arch_ecapa_tdnn_q8_0_as_f16.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], q8_0="as_f16"))
+    # Front ends the loader must reject: a zero hop divides by zero in the
+    # frame count, and win_length > n_fft overruns the padded window.
+    _write(out_dir / "arch_ecapa_tdnn_bad_hop0.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], hop_length=0))
+    _write(out_dir / "arch_ecapa_tdnn_bad_win_gt_fft.gguf",
+           _ecapa_tdnn_gguf(ECAPA_LABEL_CODES, ECAPA_LABEL_NAMES, ["xx=aa"], win_length=512))
+
+    # silero_vad (VAD role): the real geometry with seeded weights.
+    _write(out_dir / "arch_silero_vad.gguf", _silero_vad_gguf())
 
 
 def main(argv: list[str]) -> int:

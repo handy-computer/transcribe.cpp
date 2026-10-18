@@ -54,7 +54,8 @@ void print_usage(const char * argv0) {
                  "  --target-language ISO target language for translation (e.g. de, es, fr)\n"
                  "  -q, --quiet           suppress library log output\n"
                  "  -r, --repeat N        run N times per file (benchmark)\n"
-                 "  -o, --output PATH     write text or speaker segments to PATH (stdout unchanged)\n"
+                 "  -o, --output PATH     write the text, speaker segments, language candidates\n"
+                 "                        or speech segments to PATH (stdout unchanged)\n"
                  "  --threads N           CPU threads (default: all cores)\n"
                  "  --n-ctx N             session context/KV cap in tokens (bounds decoder\n"
                  "                        KV memory; cannot extend the model): 0 = model\n"
@@ -75,18 +76,23 @@ void print_usage(const char * argv0) {
                  "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
                  "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
                  "  --itn                 (sensevoice/funasr-nano) enable inverse text\n"
-                 "                        normalization (sensevoice: on unless --no-itn)\n"
-                 "  --no-itn              (sensevoice/funasr-nano) emit the upstream\n"
-                 "                        spoken-form text instead\n"
+                 "                        normalization (default: on, except fun-asr-nano)\n"
+                 "  --no-itn              (sensevoice/funasr-nano) emit spoken-form text\n"
+                 "                        instead\n"
                  "  --pnc                 (canary) emit punctuation and capitalization (default)\n"
                  "  --no-pnc              (canary) emit lowercase de-punctuated text\n"
                  "  --diarize             (moss/granite-plus) speaker attribution: segments carry\n"
                  "                        speaker ids; granite-plus requests its speaker task\n"
                  "  --no-diarize          disable speaker attribution (the library default)\n"
+                 "  --allow CODES         (language ID) comma-separated labels to choose from\n"
+                 "  --top N               (language ID) print only the best N ranked\n"
+                 "                        candidates (0 = all; default)\n"
+                 "  --vad-threshold P     (VAD) speech probability threshold in [0, 1]\n"
+                 "                        (default: the library's, 0.5)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
-                 "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
-                 "                        N-ms PCM slices; requires model to advertise\n"
-                 "                        supports_streaming\n"
+                 "  --stream-chunk-ms N   (ASR) single-file: drive the streaming API by\n"
+                 "                        feeding N-ms PCM slices; requires model to\n"
+                 "                        advertise supports_streaming\n"
                  "  --stream-att-right R  (parakeet streaming) pick the right-context\n"
                  "                        setting from the model's training menu;\n"
                  "                        nemotron-speech-streaming-en-0.6b accepts\n"
@@ -418,6 +424,45 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
         } else if (a == "--no-pnc") {
             out.canary_pnc     = false;
             out.canary_pnc_set = true;
+        } else if (a == "--allow") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            const std::string list = v;
+            size_t            pos  = 0;
+            while (pos <= list.size()) {
+                const size_t comma = list.find(',', pos);
+                const size_t end   = comma == std::string::npos ? list.size() : comma;
+                if (end > pos) {
+                    out.langid_allow.push_back(list.substr(pos, end - pos));
+                }
+                pos = end + 1;
+            }
+            if (out.langid_allow.empty()) {
+                std::fprintf(stderr, "error: --allow needs at least one label\n");
+                return false;
+            }
+        } else if (a == "--top") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.langid_top = std::atoi(v);
+            if (out.langid_top < 0) {
+                std::fprintf(stderr, "error: --top must be >= 0\n");
+                return false;
+            }
+        } else if (a == "--vad-threshold") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.vad_threshold = std::atof(v);
+            if (!(out.vad_threshold >= 0.0 && out.vad_threshold <= 1.0)) {
+                std::fprintf(stderr, "error: --vad-threshold must be in [0, 1]\n");
+                return false;
+            }
         } else if (a == "--diarize") {
             out.diarize     = true;
             out.diarize_set = true;
@@ -583,8 +628,15 @@ int run_file(const cli_args & args, std::ofstream * output) {
         std::printf("  license:    %s\n", lic);
     }
 
-    if ((transcribe_model_roles(model) & TRANSCRIBE_ROLE_ASR) != 0) {
+    const uint32_t roles = transcribe_model_roles(model);
+    if ((roles & TRANSCRIBE_ROLE_ASR) != 0) {
         return transcribe_cli::run_asr_file(args, model, pcm, duration_s, output);
+    }
+    if ((roles & TRANSCRIBE_ROLE_LANGID) != 0) {
+        return transcribe_cli::run_langid_file(args, model, pcm, output);
+    }
+    if ((roles & TRANSCRIBE_ROLE_VAD) != 0) {
+        return transcribe_cli::run_vad_file(args, model, pcm, duration_s, output);
     }
     return transcribe_cli::run_diarize_file(args, model, pcm, duration_s, output);
 }

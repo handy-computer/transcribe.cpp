@@ -9,7 +9,7 @@ Status: research
 - Hugging Face repo: `openai/whisper-tiny` (first port; per-variant intakes
   pin each variant's repo + revision under
   `reports/porting/whisper/<variant>/intake.json`)
-- License: Apache-2.0 (see each HF repo)
+- License: Apache-2.0, except `large-v3-turbo`, which is MIT (see each HF repo)
 - Variants ported (12):
   - Multilingual `tiny`, `base`, `small`, `medium`, `large`, `large-v2`
     (F32 reference dtype; 80 mel bins; 99 languages).

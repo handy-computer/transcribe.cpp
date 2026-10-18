@@ -17,6 +17,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-decode-budget.h"
@@ -138,7 +139,7 @@ transcribe_status prefill_chunked(VoxtralSession *             cc,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "voxtral")) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral prefill: chunk %d/%d graph alloc failed — out of memory.",
                     c + 1, n_chunks);
             return TRANSCRIBE_ERR_OOM;
@@ -702,7 +703,7 @@ transcribe_status run(transcribe_session *          session,
         }
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "voxtral")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral run: encoder graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -857,7 +858,7 @@ transcribe_status run(transcribe_session *          session,
         }
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "voxtral")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral run: prefill graph allocation failed — out of memory. "
                                 "Lower transcribe_session_params.n_ctx or shorten the audio.");
@@ -958,7 +959,7 @@ transcribe_status run(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "voxtral")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral run: step graph allocation failed — out of memory. "
                                 "Lower transcribe_session_params.n_ctx or shorten the audio.");
@@ -1283,7 +1284,7 @@ transcribe_status run_batch(transcribe_session *          session,
         }
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, eb.graph, "voxtral")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral run_batch: encoder graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -1423,7 +1424,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, pb.graph, "voxtral")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral run_batch: prefill graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;
@@ -1526,7 +1527,7 @@ transcribe_status run_batch(transcribe_session *          session,
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, sb.graph, "voxtral")) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                 "voxtral run_batch: step graph allocation failed — out of memory.");
             return TRANSCRIBE_ERR_OOM;

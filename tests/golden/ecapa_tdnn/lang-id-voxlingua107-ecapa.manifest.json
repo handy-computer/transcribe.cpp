@@ -1,0 +1,51 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "ecapa_tdnn",
+  "variant": "lang-id-voxlingua107-ecapa",
+  "role": "langid",
+  "source_model": {
+    "hf_repo": "speechbrain/lang-id-voxlingua107-ecapa",
+    "hf_revision": "0253049ae131d6a4be1c4f0d8b0ff483a0f8c8e9"
+  },
+  "reference": {
+    "kind": "speechbrain",
+    "source": "https://github.com/speechbrain/speechbrain",
+    "revision": "v1.1.1",
+    "entrypoint": "scripts/dump_reference_ecapa_tdnn_speechbrain.py",
+    "dump_args": []
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 60,
+    "hop_length": 160,
+    "fft_size": 400,
+    "win_length": 400,
+    "window": "hamming_periodic",
+    "pad_mode": "constant",
+    "normalization": "sentence_mean",
+    "top_db": 80
+  },
+  "tokenizer_summary": {
+    "type": "other",
+    "vocab_size": 0,
+    "special_tokens": {}
+  },
+  "langid": {
+    "n_labels": 107,
+    "label_aliases": ["he=iw", "jv=jw", "fil=tl", "nb=no"],
+    "min_audio_ms": 500
+  },
+  "tolerance_file": "tests/tolerances/ecapa_tdnn.json",
+  "cases": [
+    { "audio": "fleurs-en", "language": null, "expected_language": "en" },
+    { "audio": "fleurs-de", "language": null, "expected_language": "de" },
+    { "audio": "fleurs-fr", "language": null, "expected_language": "fr" },
+    { "audio": "fleurs-es", "language": null, "expected_language": "es" },
+    { "audio": "fleurs-ja", "language": null, "expected_language": "ja" },
+    { "audio": "fleurs-zh", "language": null, "expected_language": "zh" },
+    { "audio": "fleurs-ru", "language": null, "expected_language": "ru" },
+    { "audio": "fleurs-id", "language": null, "expected_language": "id" }
+  ]
+}
