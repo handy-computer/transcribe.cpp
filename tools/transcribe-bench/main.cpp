@@ -47,7 +47,8 @@ struct bench_args {
     int                        n_threads     = 0;
     bool                       quiet         = false;
     transcribe_backend_request backend       = TRANSCRIBE_BACKEND_AUTO;
-    int                        device_index  = -1;  // --device N: -1 = auto, >=0 = exact device
+    int                        device_index  = -1;     // --device N: -1 = auto, >=0 = exact device
+    bool                       no_mmap       = false;  // --no-mmap: copy weights instead of mapping the file
     // Passed through to transcribe_run_params::spec_k_drafts. -1 = family
     // default, 0 = spec decode off, > 0 = explicit draft length. Silently
     // ignored by families without supports_spec_decode. Set by
@@ -73,6 +74,8 @@ void print_usage(const char * argv0) {
                  "                       (BLAS/AMX) when the build includes them.\n"
                  "  --device N         exact device index from transcribe-cli --list-devices,\n"
                  "                       including 0 (default: automatic selection)\n"
+                 "  --no-mmap          copy the weights into memory instead of memory-mapping\n"
+                 "                       the model file (TRANSCRIBE_NO_MMAP=1 does the same)\n"
                  "  --spec-k-drafts N  speculative-decode draft length on the offline\n"
                  "                     path: -1 = family default, 0 = off, > 0 = K.\n"
                  "                     Ignored by families without spec support.\n"
@@ -200,6 +203,8 @@ bool parse_args(int argc, char ** argv, bench_args & out) {
             if (!parse_backend_kind(v, out.backend)) {
                 return false;
             }
+        } else if (a == "--no-mmap") {
+            out.no_mmap = true;
         } else if (a == "--device") {
             auto v = need_val(i, "--device");
             if (!v) {
@@ -332,6 +337,7 @@ int main(int argc, char ** argv) {
     transcribe_model_load_params_init(&mp);
     mp.backend = args.backend;
     mp.device  = args.device_index >= 0 ? transcribe_device_get(args.device_index) : nullptr;
+    mp.no_mmap = args.no_mmap;
     if (args.device_index >= 0 && mp.device == nullptr) {
         std::fprintf(stderr, "error: --device index %d is not available\n", args.device_index);
         return EXIT_FAILURE;

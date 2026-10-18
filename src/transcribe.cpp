@@ -1024,6 +1024,21 @@ static transcribe_status transcribe_model_load_file_impl(const char *           
     if (const auto st = check_input_struct_size(params->struct_size, k_min_model_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
+    // Full-size view for the family loaders: defaults first, then only the
+    // prefix the caller's struct_size covers, so every trailing field is
+    // readable (no_mmap reads false for a caller built before it existed).
+    // The bool is re-derived from its raw byte: a C caller can store any
+    // value there, and loading a non-0/1 byte as bool is UB.
+    struct transcribe_model_load_params params_view;
+    transcribe_model_load_params_init(&params_view);
+    std::memcpy(&params_view, params,
+                static_cast<size_t>(std::min<uint64_t>(params->struct_size, sizeof(params_view))));
+    {
+        unsigned char no_mmap_raw = 0;
+        std::memcpy(&no_mmap_raw, &params_view.no_mmap, sizeof(no_mmap_raw));
+        params_view.no_mmap = no_mmap_raw != 0;
+    }
+    params = &params_view;
 
     // device is validated where the registry is available, in
     // load_common::init_backends. NULL means automatic selection; a non-NULL

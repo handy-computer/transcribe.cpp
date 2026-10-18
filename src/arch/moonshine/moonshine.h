@@ -14,6 +14,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
@@ -113,8 +114,8 @@ struct MoonshineModel final : public transcribe_model {
     MoonshineWeights weights;
     ggml_context *   ctx_meta = nullptr;
 
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
+    transcribe::BackendPlan                plan;
+    transcribe::load_common::WeightStorage weight_storage;
 
     MoonshineModel() = default;
     ~MoonshineModel() override;

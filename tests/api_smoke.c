@@ -27,6 +27,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -237,6 +238,7 @@ static void test_init_macros(void) {
     CHECK(mp_macro.struct_size == sizeof(struct transcribe_model_load_params));
     CHECK(mp_macro.backend == TRANSCRIBE_BACKEND_AUTO);
     CHECK(mp_macro.device == NULL);
+    CHECK(mp_macro.no_mmap == false);
 
     struct transcribe_session_params cp_macro;
     transcribe_session_params_init(&cp_macro);
@@ -451,6 +453,16 @@ static void test_load_invalid(void) {
     mp_dev.device = transcribe_device_get(0);
     m             = (struct transcribe_model *) 0xdeadbeef;
     CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf", &mp_dev, &m) ==
+          TRANSCRIBE_ERR_FILE_NOT_FOUND);
+    CHECK(m == NULL);
+
+    /* A caller built before no_mmap existed passes a shorter struct_size;
+     * it is accepted and the missing field reads as its default. */
+    struct transcribe_model_load_params mp_old;
+    transcribe_model_load_params_init(&mp_old);
+    mp_old.struct_size = offsetof(struct transcribe_model_load_params, no_mmap);
+    m                  = (struct transcribe_model *) 0xdeadbeef;
+    CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf", &mp_old, &m) ==
           TRANSCRIBE_ERR_FILE_NOT_FOUND);
     CHECK(m == NULL);
 

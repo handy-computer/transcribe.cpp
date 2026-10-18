@@ -128,6 +128,10 @@ General rules:
 - Do not add new ggml operators, `ggml_type` values, or backend behavior without
   CPU validation, benchmark or accuracy evidence where relevant, and an upstream
   plan for ggml/llama.cpp when appropriate.
+- Treat GGUF-backed weight tensors (a family's `ctx_meta`) as read-only after
+  load: they are memory-mapped from the file wherever the device allows it, so
+  a write crashes. Load-time transforms (fusions, promotions, packing) write
+  new tensors into their own buffer and repoint the weight slot.
 - Do not mix functional changes with broad reformatting or unrelated cleanup.
 - Keep comments concise. Explain non-obvious invariants, ABI contracts, tensor
   layout, numerical choices, and portability traps. Do not preserve local task

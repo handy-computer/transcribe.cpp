@@ -19,6 +19,7 @@
 #pragma once
 
 #include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 #include "transcribe-model.h"
 #include "transcribe-vad.h"
 
@@ -102,11 +103,11 @@ struct Model final : public transcribe_model {
     HParams hparams;
     Weights weights;
 
-    ggml_context *        ctx_meta       = nullptr;  // owns the file's tensor structs
-    ggml_backend_buffer_t backend_buffer = nullptr;
-    ggml_context *        ctx_derived    = nullptr;
-    ggml_backend_buffer_t derived_buffer = nullptr;
-    BackendPlan           plan;
+    ggml_context *             ctx_meta = nullptr;  // owns the file's tensor structs
+    load_common::WeightStorage weight_storage;
+    ggml_context *             ctx_derived    = nullptr;
+    ggml_backend_buffer_t      derived_buffer = nullptr;
+    BackendPlan                plan;
 
     HostDecoder host;
 

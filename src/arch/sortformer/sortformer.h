@@ -15,6 +15,7 @@
 #include "../parakeet/weights.h"  // ParakeetHParams / ParakeetWeights (conformer)
 #include "transcribe-backend.h"
 #include "transcribe-diarize.h"
+#include "transcribe-load-common.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe/sortformer.h"  // public preset enum + diarize ext
@@ -52,9 +53,9 @@ struct SortformerModel final : public transcribe_model {
     // Sortformer-specific weights (encoder_proj + transformer + diar head).
     SortformerWeights weights;
 
-    ggml_context *          ctx_meta = nullptr;
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
+    ggml_context *                         ctx_meta = nullptr;
+    transcribe::BackendPlan                plan;
+    transcribe::load_common::WeightStorage weight_storage;
 
     // Fused conformer BN params (computed at load from the raw BN tensors).
     ggml_context *        bn_fused_ctx    = nullptr;

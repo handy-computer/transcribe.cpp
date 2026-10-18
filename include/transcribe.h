@@ -1047,11 +1047,36 @@ TRANSCRIBE_API transcribe_device_t transcribe_model_device(const struct transcri
  *
  *          Handles are process-local. Persist device_id (when available), then
  *          enumerate and resolve a fresh handle in each process.
+ *
+ * no_mmap: false (the default) memory-maps the model file and serves the
+ *          weights straight from it wherever the primary device can use host
+ *          memory: the CPU on every platform, and Metal on Apple silicon.
+ *          The weights then live in clean, file-backed pages that the OS can
+ *          reclaim, share between models loaded from the same file, and does
+ *          not count as the process's anonymous memory (what the Android
+ *          low-memory killer and iOS/macOS jetsam charge). Loading is faster
+ *          too; a first run on a cold page cache reads the weights from disk.
+ *          Devices with their own memory (Vulkan, CUDA, ROCm) always get a
+ *          copy, and weights a family converts at load are copied as well.
+ *          true copies every weight into backend memory and closes the file,
+ *          the behavior before memory mapping.
+ *
+ *          While a memory-mapped model is loaded its file must not be
+ *          truncated or rewritten in place: a later access to a changed page
+ *          kills the process (SIGBUS; EXCEPTION_IN_PAGE_ERROR on Windows).
+ *          Update a model file by writing a new file and renaming it over the
+ *          old one. On Windows the file cannot be opened for writing or
+ *          truncated until the model is freed. Use no_mmap for models on
+ *          removable or network storage that may disappear.
+ *
+ *          Setting the TRANSCRIBE_NO_MMAP environment variable (to anything
+ *          but "0") forces no_mmap for every load in the process.
  */
 struct transcribe_model_load_params {
     uint64_t                   struct_size;
     transcribe_backend_request backend;
     transcribe_device_t        device;
+    bool                       no_mmap;
 };
 
 TRANSCRIBE_API void transcribe_model_load_params_init(struct transcribe_model_load_params * params);

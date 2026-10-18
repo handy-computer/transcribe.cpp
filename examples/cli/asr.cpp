@@ -275,6 +275,7 @@ int run_asr_batch(const cli_args & args, std::ofstream * output) {
     transcribe_model_load_params_init(&mp);
     mp.backend = args.backend;
     mp.device  = args.device_index >= 0 ? transcribe_device_get(args.device_index) : nullptr;
+    mp.no_mmap = args.no_mmap;
     if (args.device_index >= 0 && mp.device == nullptr) {
         std::fprintf(stderr, "error: --device index %d is not available\n", args.device_index);
         return EXIT_FAILURE;

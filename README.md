@@ -197,6 +197,14 @@ Input must be 16 kHz mono WAV. Use `ffmpeg` or `sox` to convert other formats:
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
 
+On the CPU and on Metal (Apple silicon), model weights are memory-mapped from
+the GGUF file rather than copied into process memory: they live in the page
+cache, which the OS can reclaim and share between processes, and loading is
+faster. Don't truncate or rewrite a model file in place while a program has it
+loaded; write a new file and rename it over the old one. `--no-mmap`
+(`transcribe_model_load_params::no_mmap`, or `TRANSCRIBE_NO_MMAP=1`) copies the
+weights instead.
+
 ## Bindings
 
 Official bindings wrap the C API for other languages:

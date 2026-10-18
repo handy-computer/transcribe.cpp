@@ -4,12 +4,6 @@
 // common backend-init and tensor-stream logic shared by per-family load().
 
 #include "transcribe-load-common.h"
-#if !defined(_WIN32)
-#    include <fcntl.h>
-#    include <sys/mman.h>
-#    include <sys/stat.h>
-#    include <unistd.h>
-#endif
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -21,9 +15,11 @@
 #    include "ggml-metal.h"
 #endif
 #include "transcribe-backend.h"
+#include "transcribe-env.h"
 #include "transcribe-log.h"
 #include "transcribe-path.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -446,125 +442,278 @@ transcribe_status init_backends(transcribe_backend_request requested,
     return TRANSCRIBE_ERR_INVALID_ARG;
 }
 
+// ---------------------------------------------------------------------------
+// Weight storage: memory-mapped where the device can use host memory,
+// copied into a backend buffer otherwise.
+// ---------------------------------------------------------------------------
 
-void MappedWeights::reset() {
-#if !defined(_WIN32)
-    if (addr != nullptr) {
-        munmap(addr, len);
-    }
-#endif
-    addr = nullptr;
-    len  = 0;
+void WeightStorage::reset() noexcept {
+    // Buffers before the mapping. A host-pointer buffer only wraps the pages
+    // (its free never touches them), but it must not outlive them.
+    safe_buffer_free(mapped_buffer_);
+    mapped_buffer_ = nullptr;
+    safe_buffer_free(copy_buffer_);
+    copy_buffer_ = nullptr;
+    file_.reset();
 }
 
-bool map_tensor_data_cpu(const std::string &     path,
-                         const gguf_context *    gguf_data,
-                         ggml_context *          ctx_meta,
-                         const BackendPlan &     plan,
-                         ggml_backend_buffer_t * out_buffer,
-                         MappedWeights *         out_map,
-                         const char *            error_tag) {
-#if defined(_WIN32)
-    (void) path; (void) gguf_data; (void) ctx_meta; (void) plan;
-    (void) out_buffer; (void) out_map; (void) error_tag;
-    return false;
-#else
-    if (plan.primary_kind != BackendKind::Cpu || plan.primary == nullptr) {
+bool WeightStorage::is_mapped(const ggml_tensor * t) const noexcept {
+    return t != nullptr && mapped_buffer_ != nullptr && t->buffer == mapped_buffer_;
+}
+
+bool mmap_allowed(const transcribe_model_load_params * params) {
+    if (params != nullptr && params->no_mmap) {
         return false;
+    }
+    return !env::flag("TRANSCRIBE_NO_MMAP");
+}
+
+namespace {
+
+constexpr double k_mib = 1024.0 * 1024.0;
+
+// The primary device can keep weights in a wrapped host allocation. ggml says
+// so through buffer_from_host_ptr (CPU, Metal) and mmap_support (false for
+// integrated CUDA/Vulkan GPUs). Pre-Apple7 Metal GPUs are also excluded: they
+// include the discrete AMD GPUs of Intel Macs, whose weights belong in VRAM
+// rather than in shared system memory.
+bool device_can_map(const BackendPlan & plan, ggml_backend_dev_t dev) {
+    if (dev == nullptr) {
+        return false;
+    }
+    ggml_backend_dev_props props{};
+    ggml_backend_dev_get_props(dev, &props);
+    if (!props.caps.buffer_from_host_ptr || !props.caps.mmap_support) {
+        return false;
+    }
+    if (plan.primary_kind == BackendKind::Metal && metal_backend_lacks_simdgroup_mm(plan.primary, dev)) {
+        return false;
+    }
+    return true;
+}
+
+struct MapCounts {
+    size_t n_mapped     = 0;
+    size_t mapped_bytes = 0;
+    size_t n_layout     = 0;  // in-memory type/size differs from the file (converted at load)
+    size_t n_misaligned = 0;  // file offset not aligned for the device
+};
+
+// Map every tensor of ctx_meta whose file bytes are usable as-is. When nothing
+// can be mapped, `file` and `out_buffer` are left empty, `why` says why, and
+// the result is still TRANSCRIBE_OK: the caller copies everything instead.
+transcribe_status map_weights(const std::string &     path,
+                              const gguf_context *    gguf_data,
+                              ggml_context *          ctx_meta,
+                              ggml_backend_dev_t      dev,
+                              const char *            error_tag,
+                              MappedFile &            file,
+                              ggml_backend_buffer_t & out_buffer,
+                              MapCounts &             counts,
+                              std::string &           why) {
+    if (!file.open(path, &why)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: cannot memory-map %s (%s); copying weights instead", error_tag,
+                path.c_str(), why.c_str());
+        why = "memory mapping failed";
+        return TRANSCRIBE_OK;
     }
 
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    if (fd < 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: mmap open failed; streaming instead", error_tag);
-        return false;
-    }
-    struct stat sb {};
-    if (::fstat(fd, &sb) != 0 || sb.st_size <= 0) {
-        ::close(fd);
-        return false;
-    }
-    const size_t file_size = static_cast<size_t>(sb.st_size);
-
-    void * base = ::mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    ::close(fd);  // the mapping holds its own reference
-    if (base == MAP_FAILED) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: mmap failed; streaming instead", error_tag);
-        return false;
-    }
-
+    const size_t file_size   = file.size();
     const size_t data_offset = gguf_get_data_offset(gguf_data);
-    if (data_offset >= file_size) {
-        ::munmap(base, file_size);
-        return false;
+    char *       base        = static_cast<char *>(file.addr());
+
+    struct Candidate {
+        ggml_tensor * t;
+        char *        addr;
+    };
+
+    std::vector<Candidate> candidates;
+    size_t                 max_tensor_size = 0;
+    if (data_offset <= file_size) {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+            if (t->data != nullptr || t->buffer != nullptr || t->view_src != nullptr) {
+                continue;  // already has storage
+            }
+            const int64_t idx = gguf_find_tensor(gguf_data, ggml_get_name(t));
+            if (idx < 0) {
+                continue;  // stream_tensor_data reports it
+            }
+            const size_t nbytes = ggml_nbytes(t);
+            if (gguf_get_tensor_type(gguf_data, idx) != t->type || gguf_get_tensor_size(gguf_data, idx) != nbytes ||
+                !ggml_is_contiguous(t)) {
+                ++counts.n_layout;
+                continue;
+            }
+            const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
+            if (toffset > file_size - data_offset || nbytes > file_size - data_offset - toffset) {
+                continue;  // runs past EOF: the stream reports the truncation
+            }
+            candidates.push_back({ t, base + data_offset + toffset });
+            max_tensor_size = std::max(max_tensor_size, nbytes);
+        }
+    }
+    if (candidates.empty()) {
+        file.reset();
+        why = "no tensor is stored as-is in the file";
+        return TRANSCRIBE_OK;
     }
 
-    // Weights are touched in essentially random order during a run, and we do
-    // not want readahead pulling in pages that may never be used.
-    (void) ::madvise(static_cast<char *>(base) + data_offset, file_size - data_offset, MADV_RANDOM);
-
-    ggml_backend_buffer_t buffer =
-        ggml_backend_cpu_buffer_from_ptr(static_cast<char *>(base) + data_offset, file_size - data_offset);
+    // Wrap the whole page-aligned mapping, not just the data section: ggml's
+    // CPU host-pointer buffer asserts 32-byte alignment of its base, which a
+    // GGUF with general.alignment < 32 would not give data_offset.
+    ggml_backend_buffer_t buffer = ggml_backend_dev_buffer_from_host_ptr(dev, base, file_size, max_tensor_size);
     if (buffer == nullptr) {
-        ::munmap(base, file_size);
-        return false;
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: %s cannot wrap the memory-mapped file; copying weights instead",
+                error_tag, ggml_backend_dev_name(dev));
+        file.reset();
+        why = "device could not wrap the mapping";
+        return TRANSCRIBE_OK;
     }
+
     const size_t alignment = ggml_backend_buffer_get_alignment(buffer);
-
-    // Validate every tensor before allocating any: a half-mapped ctx_meta would
-    // be worse than falling back cleanly.
-    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
-        const int64_t idx = gguf_find_tensor(gguf_data, t->name);
-        if (idx < 0) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: tensor \"%s\" not in gguf data; streaming instead", error_tag,
-                    t->name);
-            safe_buffer_free(buffer);
-            ::munmap(base, file_size);
-            return false;
+    for (const Candidate & c : candidates) {
+        const size_t nbytes = ggml_nbytes(c.t);
+        if (alignment > 1 && reinterpret_cast<uintptr_t>(c.addr) % alignment != 0) {
+            ++counts.n_misaligned;
+            continue;
         }
-        const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
-        if (data_offset + toffset + ggml_nbytes(t) > file_size) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: tensor \"%s\" runs past EOF; streaming instead", error_tag,
-                    t->name);
-            safe_buffer_free(buffer);
-            ::munmap(base, file_size);
-            return false;
+        if (ggml_backend_buffer_get_alloc_size(buffer, c.t) != nbytes) {
+            ++counts.n_layout;
+            continue;
         }
-        const auto addr_val = reinterpret_cast<uintptr_t>(static_cast<char *>(base) + data_offset + toffset);
-        if (alignment > 1 && (addr_val % alignment) != 0) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "%s: tensor \"%s\" misaligned for mmap; streaming instead", error_tag,
-                    t->name);
-            safe_buffer_free(buffer);
-            ::munmap(base, file_size);
-            return false;
+        if (ggml_backend_tensor_alloc(buffer, c.t, c.addr) != GGML_STATUS_SUCCESS) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: %s rejected memory-mapped tensor \"%s\"", error_tag,
+                    ggml_backend_dev_name(dev), ggml_get_name(c.t));
+            out_buffer = buffer;  // owned by the storage from here; tensors may point into it
+            return TRANSCRIBE_ERR_BACKEND;
         }
+        ++counts.n_mapped;
+        counts.mapped_bytes += nbytes;
     }
-
-    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
-        const int64_t idx     = gguf_find_tensor(gguf_data, t->name);
-        const size_t  toffset = gguf_get_tensor_offset(gguf_data, idx);
-        if (ggml_backend_tensor_alloc(buffer, t, static_cast<char *>(base) + data_offset + toffset) !=
-            GGML_STATUS_SUCCESS) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor_alloc failed for \"%s\"", error_tag, t->name);
-            safe_buffer_free(buffer);
-            ::munmap(base, file_size);
-            return false;
-        }
+    if (counts.n_mapped == 0) {
+        safe_buffer_free(buffer);
+        file.reset();
+        why = counts.n_misaligned > 0 ? "tensors misaligned in the file" : "no tensor is stored as-is in the file";
+        return TRANSCRIBE_OK;
     }
 
     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    *out_buffer   = buffer;
-    out_map->addr = base;
-    out_map->len  = file_size;
-    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: weights mapped (%zu MiB file-backed)", error_tag,
-            (file_size - data_offset) / (1024 * 1024));
-    return true;
-#endif
+    out_buffer = buffer;
+    return TRANSCRIBE_OK;
 }
 
-transcribe_status stream_tensor_data(const std::string &  path,
-                                     const gguf_context * gguf_data,
-                                     ggml_context *       ctx_meta,
-                                     const char *         error_tag) {
+}  // namespace
+
+transcribe_status allocate_copied_weights(ggml_context *      ctx_meta,
+                                          const BackendPlan & plan,
+                                          const char *        error_tag,
+                                          WeightStorage &     out) {
+    bool any_unallocated = false;
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        if (t->data == nullptr && t->view_src == nullptr) {
+            any_unallocated = true;
+            break;
+        }
+    }
+    if (!any_unallocated) {
+        return TRANSCRIBE_OK;
+    }
+    if (out.copy_buffer_ != nullptr || plan.primary == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: weight storage already allocated or no primary backend", error_tag);
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+
+    // Allocates only the tensors that have no storage yet.
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx_meta, plan.primary);
+    if (buffer == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: ggml_backend_alloc_ctx_tensors failed", error_tag);
+        return TRANSCRIBE_ERR_OOM;
+    }
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    out.copy_buffer_ = buffer;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status allocate_weights(const std::string &                  path,
+                                   const gguf_context *                 gguf_data,
+                                   ggml_context *                       ctx_meta,
+                                   const BackendPlan &                  plan,
+                                   const transcribe_model_load_params * params,
+                                   const char *                         error_tag,
+                                   WeightStorage &                      out) {
+    if (plan.primary == nullptr || gguf_data == nullptr || ctx_meta == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(plan.primary);
+
+    std::string why;
+    MapCounts   counts;
+    if (!mmap_allowed(params)) {
+        why = "memory mapping disabled";
+    } else if (!MappedFile::supported()) {
+        why = "memory mapping unsupported on this platform";
+    } else if (!device_can_map(plan, dev)) {
+        why = "device keeps weights in its own memory";
+    } else if (const transcribe_status st =
+                   map_weights(path, gguf_data, ctx_meta, dev, error_tag, out.file_, out.mapped_buffer_, counts, why);
+               st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    if (const transcribe_status st = allocate_copied_weights(ctx_meta, plan, error_tag, out); st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    size_t n_copied = 0, copied_bytes = 0;
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        if (out.copy_buffer_ != nullptr && t->buffer == out.copy_buffer_) {
+            ++n_copied;
+            copied_bytes += ggml_nbytes(t);
+        }
+    }
+    if (counts.n_mapped == 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: weights copied: %.1f MiB in %s (%s)", error_tag, copied_bytes / k_mib,
+                out.copy_buffer_ != nullptr ? ggml_backend_buffer_name(out.copy_buffer_) : "-", why.c_str());
+    } else if (n_copied == 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: weights memory-mapped: %.1f MiB in %s", error_tag,
+                counts.mapped_bytes / k_mib, ggml_backend_buffer_name(out.mapped_buffer_));
+    } else {
+        char reasons[96];
+        if (counts.n_layout > 0 && counts.n_misaligned > 0) {
+            std::snprintf(reasons, sizeof(reasons), "%zu converted at load, %zu misaligned in the file",
+                          counts.n_layout, counts.n_misaligned);
+        } else if (counts.n_misaligned > 0) {
+            std::snprintf(reasons, sizeof(reasons), "misaligned in the file");
+        } else {
+            std::snprintf(reasons, sizeof(reasons), "converted at load");
+        }
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                "%s: weights memory-mapped: %.1f MiB in %s; %zu tensors (%.1f MiB) copied (%s)", error_tag,
+                counts.mapped_bytes / k_mib, ggml_backend_buffer_name(out.mapped_buffer_), n_copied,
+                copied_bytes / k_mib, reasons);
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status load_weights(const std::string &                  path,
+                               const gguf_context *                 gguf_data,
+                               ggml_context *                       ctx_meta,
+                               const BackendPlan &                  plan,
+                               const transcribe_model_load_params * params,
+                               const char *                         error_tag,
+                               WeightStorage &                      out) {
+    if (const transcribe_status st = allocate_weights(path, gguf_data, ctx_meta, plan, params, error_tag, out);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    return stream_tensor_data(path, gguf_data, ctx_meta, error_tag, &out);
+}
+
+transcribe_status stream_tensor_data(const std::string &   path,
+                                     const gguf_context *  gguf_data,
+                                     ggml_context *        ctx_meta,
+                                     const char *          error_tag,
+                                     const WeightStorage * skip) {
     // std::ifstream rather than going through gguf's loader a third
     // time: ifstream::seekg takes a streamoff (signed 64-bit on every
     // platform we target), so multi-GB tensor offsets work without
@@ -579,6 +728,9 @@ transcribe_status stream_tensor_data(const std::string &  path,
     std::vector<uint8_t> staging;
 
     for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        if (skip != nullptr && skip->is_mapped(t)) {
+            continue;  // already backed by the file bytes
+        }
         const int64_t idx = gguf_find_tensor(gguf_data, t->name);
         if (idx < 0) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" not in gguf data", error_tag, t->name);

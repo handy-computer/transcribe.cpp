@@ -545,7 +545,8 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_q8_0_as_f16.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_hop0.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_win_gt_fft.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad_misaligned.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -817,6 +818,22 @@ if(TRANSCRIBE_UV)
     transcribe_apply_warnings(transcribe_silero_vad_smoke)
     add_dependencies(transcribe_silero_vad_smoke fixtures)
     add_test(NAME transcribe_silero_vad_smoke COMMAND transcribe_silero_vad_smoke)
+endif()
+
+# -----------------------------------------------------------------------------
+# Memory-mapped weights (no_mmap / TRANSCRIBE_NO_MMAP) across the fixture
+# families: mapping decision, mapped-vs-copied equivalence, misaligned and
+# truncated files, two models on one file, Metal when present.
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_weights_mmap_smoke weights_mmap_smoke.cpp)
+    target_link_libraries(transcribe_weights_mmap_smoke PRIVATE transcribe)
+    target_compile_definitions(transcribe_weights_mmap_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_weights_mmap_smoke)
+    add_dependencies(transcribe_weights_mmap_smoke fixtures)
+    add_test(NAME transcribe_weights_mmap_smoke COMMAND transcribe_weights_mmap_smoke)
 endif()
 
 # -----------------------------------------------------------------------------

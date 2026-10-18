@@ -15,6 +15,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
@@ -42,8 +43,8 @@ struct Granite5CtcModel final : public transcribe_model {
     Granite5CtcWeights weights;
     ggml_context *     ctx_meta = nullptr;
 
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
+    transcribe::BackendPlan                plan;
+    transcribe::load_common::WeightStorage weight_storage;
 
     // Per-block fused BatchNorm scale/bias, precomputed at load
     // (model.cpp fuse_batch_norm). Lives in its own context/buffer so

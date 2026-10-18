@@ -62,8 +62,13 @@ struct GgufGuard {
     GgufGuard & operator=(const GgufGuard &) = delete;
 };
 
-// Shared only by the two Silero file adapters.
-transcribe_status init_storage(Model & m, const transcribe_model_load_params * params) {
+// Shared only by the two Silero file adapters. `gguf` is null for the .bin
+// adapter, whose weights are converted on the host and so always copied; the
+// GGUF adapter memory-maps them where it can (load_common::allocate_weights).
+transcribe_status init_storage(Model &                              m,
+                               const transcribe_model_load_params * params,
+                               const std::string &                  path,
+                               const gguf_context *                 gguf) {
     // AUTO resolves to the strict CPU backend. The model is tiny and the CPU
     // path matches the reference to ~1e-6 in probability, while ggml-metal's
     // F32 mul_mm stages operands as half (about 2e-3). A specific GPU request
@@ -81,13 +86,10 @@ transcribe_status init_storage(Model & m, const transcribe_model_load_params * p
     m.backend         = ggml_backend_name(m.plan.primary);
     m.primary_backend = m.plan.primary;
 
-    m.backend_buffer = ggml_backend_alloc_ctx_tensors(m.ctx_meta, m.plan.primary);
-    if (m.backend_buffer == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: ggml_backend_alloc_ctx_tensors failed", kTag);
-        return TRANSCRIBE_ERR_OOM;
+    if (gguf != nullptr) {
+        return load_common::allocate_weights(path, gguf, m.ctx_meta, m.plan, params, kTag, m.weight_storage);
     }
-    ggml_backend_buffer_set_usage(m.backend_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    return TRANSCRIBE_OK;
+    return load_common::allocate_copied_weights(m.ctx_meta, m.plan, kTag, m.weight_storage);
 }
 
 transcribe_status load(Loader & loader, const transcribe_model_load_params * params, transcribe_model ** out_model) {
@@ -117,10 +119,11 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
-    if (auto st = init_storage(*m, params); st != TRANSCRIBE_OK) {
+    if (auto st = init_storage(*m, params, loader.path(), guard.ctx); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = load_common::stream_tensor_data(loader.path(), guard.ctx, m->ctx_meta, kTag); st != TRANSCRIBE_OK) {
+    if (auto st = load_common::stream_tensor_data(loader.path(), guard.ctx, m->ctx_meta, kTag, &m->weight_storage);
+        st != TRANSCRIBE_OK) {
         return st;
     }
     if (auto st = build_derived_weights(*m); st != TRANSCRIBE_OK) {
@@ -428,7 +431,7 @@ transcribe_status load_from_bin(const char *                         path,
     if (auto st = bind_weights(m->ctx_meta, hp, m->weights); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = init_storage(*m, params); st != TRANSCRIBE_OK) {
+    if (auto st = init_storage(*m, params, std::string(), nullptr); st != TRANSCRIBE_OK) {
         return st;
     }
     for (size_t i = 0; i < k_bin_count; ++i) {
@@ -483,9 +486,7 @@ Model::~Model() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
     }
-    if (backend_buffer != nullptr) {
-        safe_buffer_free(backend_buffer);
-    }
+    weight_storage.reset();
     if (ctx_derived != nullptr) {
         ggml_free(ctx_derived);
     }

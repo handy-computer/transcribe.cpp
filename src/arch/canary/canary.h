@@ -9,6 +9,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
@@ -103,8 +104,8 @@ struct CanaryModel final : public transcribe_model {
     CanaryWeights  weights;
     ggml_context * ctx_meta = nullptr;
 
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
+    transcribe::BackendPlan                plan;
+    transcribe::load_common::WeightStorage weight_storage;
 
     // Fused BN parameters (same as parakeet/cohere).
     ggml_context *        bn_fused_ctx    = nullptr;

@@ -36,7 +36,8 @@ struct cli_args {
     int                        n_ctx        = 0;      // 0 = model's true max; >0 lowers the cap
     transcribe_kv_type         kv_type      = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend      = TRANSCRIBE_BACKEND_AUTO;
-    int                        device_index = -1;  // --device N: -1 = auto, >=0 = exact registry device
+    int                        device_index = -1;     // --device N: -1 = auto, >=0 = exact registry device
+    bool                       no_mmap      = false;  // --no-mmap: copy weights instead of mapping the file
     transcribe_timestamp_kind  timestamps   = TRANSCRIBE_TIMESTAMPS_AUTO;
 
     // Generic prompting (transcribe_run_params::vocabulary / prompt / prefix).

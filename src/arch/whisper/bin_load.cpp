@@ -617,13 +617,13 @@ transcribe_status load_from_bin(const char *                                path
     m->primary_backend = m->plan.primary;
 
     // ---- Allocate backend buffer ----
-    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
-    if (buf == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: ggml_backend_alloc_ctx_tensors failed", kTag);
-        return TRANSCRIBE_ERR_OOM;
+    // Copied, never memory-mapped: the .bin payload is not laid out for ggml
+    // (unaligned offsets, renamed/reshaped tensors) and the frontend tensors
+    // below are written after allocation.
+    if (auto st = transcribe::load_common::allocate_copied_weights(m->ctx_meta, m->plan, kTag, m->weight_storage);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
-    m->backend_buffer = buf;
-    ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
     // ---- Stream tensor bytes from the .bin ----
     if (auto st = transcribe::bin_loader::stream_tensor_data_from_bin(bm.path, stream_slots, "whisper");

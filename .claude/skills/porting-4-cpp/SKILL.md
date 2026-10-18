@@ -133,6 +133,16 @@ Pick the closest existing family by architecture pattern:
 not the whole file. Load the closest family's `src/arch/<family>/` as a working
 example.
 
+Load weights the way every family does: `gguf_init_from_file` into
+`ctx_meta`, bind the weight struct, `load_common::init_backends`, then
+`load_common::load_weights` into a `load_common::WeightStorage` member that
+the destructor resets before freeing the backends. Weights are memory-mapped
+read-only wherever the device allows it, so never write a `ctx_meta` tensor
+after load: fusions and promotions create new tensors in their own buffer and
+repoint the weight slot (see `fuse_batch_norm`, cohere's
+`fuse_encoder_q_bias`). A stray write crashes the process on CPU and Metal;
+compare a default run against `--no-mmap` to confirm the outputs match.
+
 Wire the new family into the arch dispatch in `src/` per the existing
 family wiring. Build iteratively:
 

@@ -12,6 +12,7 @@
 #include "decoder.h"
 #include "mel.h"
 #include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
@@ -45,8 +46,8 @@ struct GigaamModel final : public transcribe_model {
     GigaamWeights  weights;
     ggml_context * ctx_meta = nullptr;
 
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
+    transcribe::BackendPlan                plan;
+    transcribe::load_common::WeightStorage weight_storage;
 
     // Family-specific mel frontend (HTK mel, power=2, log-clamp,
     // center=False, periodic Hann). See arch/gigaam/mel.{h,cpp}.

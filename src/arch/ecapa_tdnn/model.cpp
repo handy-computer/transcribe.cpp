@@ -115,8 +115,13 @@ int widen_q8_0_weights(ggml_context * ctx_meta) {
 // load_common::stream_tensor_data, plus the Q8_0 -> F16 widening: a tensor
 // whose file type is Q8_0 and whose bound type is F16 is dequantized with
 // ggml's own Q8_0 reference and rounded to F16 on the way in. Every other
-// tensor must be bound with its file type and is copied as-is.
-transcribe_status stream_weights(const std::string & path, const gguf_context * gguf, ggml_context * ctx_meta) {
+// tensor must be bound with its file type and is copied as-is, unless
+// `storage` memory-mapped it (allocate_weights maps only tensors whose
+// file bytes are usable as-is, so never a widened one).
+transcribe_status stream_weights(const std::string &                path,
+                                 const gguf_context *               gguf,
+                                 ggml_context *                     ctx_meta,
+                                 const load_common::WeightStorage & storage) {
     std::ifstream fin(path_from_utf8(path), std::ios::binary);
     if (!fin) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen %s for tensor data", kTag, path.c_str());
@@ -130,6 +135,9 @@ transcribe_status stream_weights(const std::string & path, const gguf_context * 
     std::vector<ggml_fp16_t> f16;
 
     for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+        if (storage.is_mapped(t)) {
+            continue;  // already backed by the file bytes
+        }
         const int64_t idx = gguf_find_tensor(gguf, t->name);
         if (idx < 0) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" not in gguf data", kTag, t->name);
@@ -310,14 +318,14 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
-    m->backend_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
-    if (m->backend_buffer == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: ggml_backend_alloc_ctx_tensors failed", kTag);
-        return TRANSCRIBE_ERR_OOM;
+    // Tensors widened above differ from their file bytes, so allocate_weights
+    // copies them and maps the rest.
+    if (auto st = load_common::allocate_weights(loader.path(), guard.ctx, m->ctx_meta, m->plan, params, kTag,
+                                                m->weight_storage);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
-    ggml_backend_buffer_set_usage(m->backend_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-    if (auto st = stream_weights(loader.path(), guard.ctx, m->ctx_meta); st != TRANSCRIBE_OK) {
+    if (auto st = stream_weights(loader.path(), guard.ctx, m->ctx_meta, m->weight_storage); st != TRANSCRIBE_OK) {
         return st;
     }
     if (auto st = build_derived_weights(*m); st != TRANSCRIBE_OK) {
@@ -519,9 +527,7 @@ Model::~Model() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
     }
-    if (backend_buffer != nullptr) {
-        safe_buffer_free(backend_buffer);
-    }
+    weight_storage.reset();
     if (ctx_derived != nullptr) {
         ggml_free(ctx_derived);
     }

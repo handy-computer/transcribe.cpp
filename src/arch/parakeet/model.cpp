@@ -1,11 +1,12 @@
 // arch/parakeet/model.cpp - Parakeet family handler.
 //
 // load() binds a runtime backend, opens the GGUF with no_alloc=true so
-// ggml builds the tensor catalog without touching the data section,
-// allocates a backend buffer for every tensor, and streams the data
-// section into it; afterward every borrowed ggml_tensor* in `weights`
-// points at backend memory. The persistent model state is ctx_meta +
-// backend_buffer + backends, freed in that order in the destructor.
+// ggml builds the tensor catalog without touching the data section, then
+// gives every tensor storage via load_common::load_weights (memory-mapped
+// from the file where the device allows it, copied otherwise); afterward
+// every borrowed ggml_tensor* in `weights` points at backend memory. The
+// persistent model state is ctx_meta + weight_storage + backends, freed in
+// that order in the destructor.
 // run() computes the mel front-end, runs the encoder graph, then
 // host-decodes (predictor + joint + TDT).
 
@@ -95,8 +96,8 @@ void ParakeetSession::on_scratch_released() noexcept {
 }
 
 ParakeetModel::~ParakeetModel() {
-    // Teardown order: ctx_meta → backend_buffer → plan backends. The
-    // buffer must be freed before the backends (it holds a backend ref);
+    // Teardown order: ctx_meta → weight_storage → plan backends. The
+    // buffers must be freed before the backends (they hold a backend ref);
     // backends freed in reverse init order.
     if (bn_fused_ctx != nullptr) {
         ggml_free(bn_fused_ctx);
@@ -129,12 +130,7 @@ ParakeetModel::~ParakeetModel() {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
     }
-    if (backend_buffer != nullptr) {
-        safe_buffer_free(backend_buffer);
-        backend_buffer = nullptr;
-    }
-    // After the buffer and ctx_meta, both of which point into these pages.
-    weights_map.reset();
+    weight_storage.reset();
     for (auto it = plan.scheduler_list.rbegin(); it != plan.scheduler_list.rend(); ++it) {
         safe_backend_free(*it);
     }
@@ -540,38 +536,11 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
-    // Allocate a backend buffer for every tensor in ctx_meta on the
-    // primary backend; the weight bytes are streamed in below.
-    // Prefer mapping the weights on a CPU backend: the file pages back the
-    // tensors directly, keeping the model out of anonymous memory and so out of
-    // Android's low-memory-killer budget. Safe here — BN fusion only reads the
-    // raw BN tensors and writes into its own bn_fused buffer, the conv_pw F32
-    // promotion emits new tensors, and the decoder's tensor_set targets are its
-    // own joint/LSTM buffers.
-    // Falls back to allocate-and-copy whenever mapping is unavailable.
-    ggml_backend_buffer_t weights_buffer = nullptr;
-    if (transcribe::load_common::map_tensor_data_cpu(loader.path(), gguf_data, m->ctx_meta, m->plan, &weights_buffer,
-                                                     &m->weights_map, "parakeet")) {
-        m->backend_buffer = weights_buffer;
-    } else {
-        weights_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
-        if (weights_buffer == nullptr) {
-            gguf_free(gguf_data);
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: ggml_backend_alloc_ctx_tensors failed");
-            return TRANSCRIBE_ERR_OOM;
-        }
-        m->backend_buffer = weights_buffer;
-        ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-        // Stream tensor data from the GGUF into the backend buffer slots
-        // (shared loop in transcribe-load-common.h; works on host-memory
-        // backends and discrete GPUs).
-        if (const transcribe_status st =
-                transcribe::load_common::stream_tensor_data(loader.path(), gguf_data, m->ctx_meta, "parakeet");
-            st != TRANSCRIBE_OK) {
-            gguf_free(gguf_data);
-            return st;
-        }
+    if (const transcribe_status st = transcribe::load_common::load_weights(
+            loader.path(), gguf_data, m->ctx_meta, m->plan, params, "parakeet", m->weight_storage);
+        st != TRANSCRIBE_OK) {
+        gguf_free(gguf_data);
+        return st;
     }
 
     // Multitalker bundle: claim the embedded Sortformer diarizer. The

@@ -7,6 +7,7 @@
 
 #include "transcribe-backend.h"
 #include "transcribe-langid.h"
+#include "transcribe-load-common.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "weights.h"
@@ -30,10 +31,10 @@ struct Model final : public transcribe_model {
     Weights weights;
 
     // GGUF metadata context: owns the ggml_tensor structs the weight slots
-    // above point at. Their data lives in backend_buffer.
-    ggml_context *        ctx_meta       = nullptr;
-    ggml_backend_buffer_t backend_buffer = nullptr;
-    BackendPlan           plan;
+    // above point at. Their data lives in weight_storage.
+    ggml_context *             ctx_meta = nullptr;
+    load_common::WeightStorage weight_storage;
+    BackendPlan                plan;
 
     // Load-time derived weights (Weights::blk0_w_im2col): their own metadata
     // context and backend buffer, since ctx_meta is sized for the file.

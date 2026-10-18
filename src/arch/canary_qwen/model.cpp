@@ -70,10 +70,7 @@ CanaryQwenModel::~CanaryQwenModel() {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
     }
-    if (backend_buffer != nullptr) {
-        safe_buffer_free(backend_buffer);
-        backend_buffer = nullptr;
-    }
+    weight_storage.reset();
     if (bn_fused_buffer != nullptr) {
         safe_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
@@ -648,16 +645,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
-    ggml_backend_buffer_t weights_buffer = ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
-    if (weights_buffer == nullptr) {
-        gguf_free(gguf_data);
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen: ggml_backend_alloc_ctx_tensors failed");
-        return TRANSCRIBE_ERR_OOM;
-    }
-    m->backend_buffer = weights_buffer;
-    ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-    if (auto st = load_common::stream_tensor_data(loader.path(), gguf_data, m->ctx_meta, "canary_qwen");
+    if (const transcribe_status st = load_common::load_weights(loader.path(), gguf_data, m->ctx_meta, m->plan, params,
+                                                               "canary_qwen", m->weight_storage);
         st != TRANSCRIBE_OK) {
         gguf_free(gguf_data);
         return st;
