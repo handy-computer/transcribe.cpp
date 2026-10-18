@@ -21,6 +21,7 @@ fn every_primary_device_can_be_selected_exactly() {
             &ModelOptions {
                 backend: Backend::Auto,
                 device: Some(device.clone()),
+                ..Default::default()
             },
         );
         match result {
@@ -53,6 +54,7 @@ fn explicit_backend_must_match_device() {
         &ModelOptions {
             backend: Backend::Cpu,
             device: Some(gpu),
+            ..Default::default()
         },
     )
     .unwrap_err();

@@ -113,9 +113,17 @@ public struct ModelOptions: Sendable {
     public var backend: Backend
     /// Exact process-local device. `nil` applies the backend's automatic policy.
     public var device: Device?
-    public init(backend: Backend = .auto, device: Device? = nil) {
+    /// Copy the weights into memory instead of memory-mapping the model file.
+    /// Default `false`: on the CPU and on Metal the weights are served from the
+    /// file's page cache, which the OS can reclaim and which does not count
+    /// toward the app's memory footprint. Don't truncate or rewrite a mapped
+    /// model file in place; write a new file and rename it over the old one.
+    /// The `TRANSCRIBE_NO_MMAP=1` environment variable forces `true`.
+    public var noMmap: Bool
+    public init(backend: Backend = .auto, device: Device? = nil, noMmap: Bool = false) {
         self.backend = backend
         self.device = device
+        self.noMmap = noMmap
     }
 }
 

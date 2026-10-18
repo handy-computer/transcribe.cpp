@@ -150,9 +150,16 @@ with transcribe_cpp.Model("model.gguf", device=device) as model:
     print(model.device)
 ```
 
+Weights are memory-mapped from the model file where the device can use host
+memory (CPU, Metal on Apple silicon), so they live in reclaimable page cache
+rather than process memory. Don't truncate or rewrite a model file in place
+while it is loaded; write a new file and rename it over the old one.
+`Model(no_mmap=True)` copies the weights instead.
+
 | Variable | Effect |
 |---|---|
 | `TRANSCRIBE_BACKEND` | overrides the `"auto"` default; explicit `backend=` still wins |
+| `TRANSCRIBE_NO_MMAP` | `1` copies weights instead of memory-mapping them, like `no_mmap=True` |
 | `TRANSCRIBE_NATIVE_PROVIDER` | forces an installed native provider package, for example `cu12` |
 | `TRANSCRIBE_LIBRARY` | loads exactly this shared library |
 

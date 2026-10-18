@@ -177,6 +177,15 @@ finish `init_backends()` or `init_backends_default()` before any thread
 enumerates devices, queries backend availability, or loads a model; native
 registry mutation is a startup-only operation and must not race those calls.
 
+## Memory-mapped weights
+
+Where the device can use host memory (the CPU, Metal on Apple silicon), model
+weights are memory-mapped from the file and served from the page cache, which
+the OS can reclaim, instead of being copied into process memory. Don't
+truncate or rewrite a model file in place while it is loaded; write a new file
+and rename it over the old one. Set `ModelOptions::no_mmap` (or the
+`TRANSCRIBE_NO_MMAP=1` environment variable) to copy the weights instead.
+
 ## Packaging a distributable (`shared` / `dynamic-backends`)
 
 With the **default static** build there is nothing to do — the native code is

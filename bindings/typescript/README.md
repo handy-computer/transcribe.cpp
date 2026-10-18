@@ -226,6 +226,13 @@ const exact = await TranscribeModel.load("model.gguf", { device: cpu });
 loader/driver degrades silently to CPU; an explicit backend that cannot be
 satisfied raises a `BackendError`.
 
+Where the device can use host memory (CPU, Metal on Apple silicon), weights are
+memory-mapped from the model file and served from the page cache, which the OS
+can reclaim, instead of being copied into process memory. Don't truncate or
+rewrite a model file in place while it is loaded; write a new file and rename
+it over the old one. `{ noMmap: true }` (or `TRANSCRIBE_NO_MMAP=1`) copies the
+weights instead.
+
 ## Thread-safety
 
 Your JavaScript runs on one thread, but `run`/`feed`/`finalize` dispatch the

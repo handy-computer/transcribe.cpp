@@ -1057,10 +1057,18 @@ class Model:
     the escape hatch for machines whose best-ranked device misbehaves (e.g.
     CI's paravirtualized Metal, a broken GPU driver) without touching code.
     An explicit ``backend=`` argument always wins over the environment.
+
+    The weights are memory-mapped from the model file where the device can
+    use host memory (the CPU everywhere, Metal on Apple silicon): they stay
+    in reclaimable page cache instead of process memory. Do not truncate or
+    rewrite the file in place while the model is open (write a new file and
+    rename it over the old one). ``no_mmap=True``, or the
+    ``TRANSCRIBE_NO_MMAP=1`` environment variable, copies them instead.
     """
 
     def __init__(self, path: str | os.PathLike, *,
-                 backend: Backend = "auto", device: BackendDevice | None = None):
+                 backend: Backend = "auto", device: BackendDevice | None = None,
+                 no_mmap: bool = False):
         # Live sessions, tracked weakly: close() must free them before the
         # model, because transcribe_model_free is only valid once every
         # derived session is gone (use-after-free otherwise). Created before
@@ -1078,6 +1086,7 @@ class Model:
             if not isinstance(device, BackendDevice) or device._handle is None:
                 raise TypeError("device must be a BackendDevice returned by backends()")
             params.device = device._handle
+        params.no_mmap = bool(no_mmap)
 
         handle = ctypes.c_void_p()
         status = _lib.transcribe_model_load_file(
@@ -2260,6 +2269,7 @@ def transcribe(
     *,
     backend: Backend = "auto",
     device: BackendDevice | None = None,
+    no_mmap: bool = False,
     n_threads: int = 0,
     kv_type: KVType = "auto",
     n_ctx: int = 0,
@@ -2282,8 +2292,9 @@ def transcribe(
     *model* may be a path (loaded and freed within this call) or an existing
     Model (reused and left open). Loading a model is not free, so to transcribe
     many clips keep a Model and call ``model.session().run(...)`` yourself; this
-    helper is for the one-shot case. ``backend`` / ``device`` apply only when
-    *model* is a path — they are ignored when an already-loaded Model is passed.
+    helper is for the one-shot case. ``backend`` / ``device`` / ``no_mmap``
+    apply only when *model* is a path — they are ignored when an already-loaded
+    Model is passed.
     ``family`` / ``spec_k_drafts`` and the prompting inputs (``vocabulary``,
     ``prompt``, ``prefix``) pass through to :meth:`Session.run`.
     """
@@ -2298,6 +2309,6 @@ def transcribe(
         with model.session(**session_opts) as session:
             return session.run(pcm, **run_opts)
 
-    with Model(model, backend=backend, device=device) as owned:
+    with Model(model, backend=backend, device=device, no_mmap=no_mmap) as owned:
         with owned.session(**session_opts) as session:
             return session.run(pcm, **run_opts)

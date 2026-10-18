@@ -56,6 +56,7 @@ public final class Model: @unchecked Sendable {
         transcribe_model_load_params_init(&params)
         params.backend = options.backend.cValue
         params.device = options.device?.handle
+        params.no_mmap = options.noMmap
         var out: OpaquePointer?
         let status = transcribe_model_load_file(path, &params, &out)
         try TranscribeError.check(status, context: "loading \(path)")

@@ -1759,6 +1759,7 @@ export class TranscribeModel {
       }
       p.device = handle;
     }
+    if (opts.noMmap) p.no_mmap = true;
 
     const out: any[] = [null];
     const st = await callAsync<number>(n.F.modelLoadFile, path, p, out);

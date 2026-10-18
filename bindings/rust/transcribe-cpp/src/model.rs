@@ -41,6 +41,13 @@ pub struct ModelOptions {
     /// Exact process-local compute device. `None` applies the backend's
     /// automatic policy; `Some` selects that device or fails without fallback.
     pub device: Option<crate::Device>,
+    /// Copy the weights into memory instead of memory-mapping the model file.
+    /// Default `false`: where the device can use host memory (CPU, Metal on
+    /// Apple silicon) the weights are served from the file's page cache, which
+    /// the OS can reclaim. Don't truncate or rewrite a mapped model file in
+    /// place; write a new file and rename it over the old one. The
+    /// `TRANSCRIBE_NO_MMAP=1` environment variable forces `true`.
+    pub no_mmap: bool,
 }
 
 impl Default for ModelOptions {
@@ -48,6 +55,7 @@ impl Default for ModelOptions {
         ModelOptions {
             backend: Backend::Auto,
             device: None,
+            no_mmap: false,
         }
     }
 }
@@ -154,6 +162,7 @@ impl Model {
             .device
             .as_ref()
             .map_or(std::ptr::null_mut(), |device| device.handle);
+        params.no_mmap = options.no_mmap;
 
         let mut out: *mut sys::transcribe_model = std::ptr::null_mut();
         let status = unsafe { sys::transcribe_model_load_file(c_path.as_ptr(), &params, &mut out) };

@@ -145,6 +145,13 @@ export interface ModelOptions {
   /** Exact device returned by {@link getAvailableBackends}. Omit for the
    *  backend's automatic policy. Exact selection never falls back. */
   device?: BackendInfo;
+  /** Copy the weights into memory instead of memory-mapping the model file.
+   *  Default false: where the device can use host memory (CPU, Metal on Apple
+   *  silicon) the weights are served from the file's page cache, which the OS
+   *  can reclaim. Don't truncate or rewrite a mapped model file in place;
+   *  write a new file and rename it over the old one. The
+   *  `TRANSCRIBE_NO_MMAP=1` environment variable forces true. */
+  noMmap?: boolean;
 }
 
 export interface SessionOptions {

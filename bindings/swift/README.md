@@ -168,6 +168,13 @@ Request a backend policy with `ModelOptions(backend:)`; probe availability with
 `Transcribe.devices()` to `ModelOptions(device:)`; exact selection never falls
 back to another primary device.
 
+On the CPU and on Metal, model weights are memory-mapped from the file: they
+are served from the page cache, which the OS can reclaim, and do not count
+toward the app's memory footprint (the figure jetsam enforces on iOS). Don't
+truncate or rewrite a model file in place while it is loaded; write a new file
+and rename it over the old one. `ModelOptions(noMmap: true)` copies the weights
+instead.
+
 ## Concurrency and lifetime
 
 - `Model` is shareable. In 0.x, compute is serialized per model, so concurrent
