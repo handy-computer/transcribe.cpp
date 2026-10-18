@@ -138,6 +138,11 @@ struct CohereModel final : public transcribe_model {
     ggml_context *        bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
+    // pos_bias_u/v with the encoder Q bias folded in (fuse_encoder_q_bias);
+    // block attn_pos_u/v slots point here once the fusion has run.
+    ggml_context *        q_bias_fused_ctx    = nullptr;
+    ggml_backend_buffer_t q_bias_fused_buffer = nullptr;
+
     // On CPU primary backend, the conformer 1×1 pointwise conv weights
     // are dequantized F16->F32 at load time (Zen 2 has no native F16
     // compute). Tensors live here; CohereBlock slots point at them.
