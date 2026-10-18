@@ -744,6 +744,11 @@ static ggml_backend_buffer_t ggml_backend_metal_device_buffer_mapped(ggml_backen
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
 
     ggml_metal_buffer_t res = ggml_metal_buffer_map(ctx_dev, ptr, size, max_tensor_size);
+    if (res == NULL) {
+        // transcribe.cpp patch: report the failed mapping instead of wrapping
+        // a NULL context in a buffer that crashes on first use.
+        return NULL;
+    }
 
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx_dev);
 
