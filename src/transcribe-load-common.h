@@ -175,9 +175,10 @@ transcribe_status allocate_copied_weights(ggml_context *      ctx_meta,
                                           WeightStorage &     out);
 
 // Stream tensor data from the GGUF data section on disk into
-// already-allocated backend buffer slots via ggml_backend_tensor_set.
-// Tensors that `skip` maps are left alone (they already hold the file
-// bytes); with skip == nullptr every tensor in ctx_meta is streamed.
+// already-allocated backend buffer slots: read straight into host buffers,
+// uploaded through ggml_backend_tensor_set in bounded (16 MiB) chunks
+// otherwise. Tensors that `skip` maps are left alone (they already hold the
+// file bytes); with skip == nullptr every tensor in ctx_meta is streamed.
 //
 //   path:      filesystem path to the GGUF file, reopened fresh via
 //              std::ifstream. Stable for the life of the call.

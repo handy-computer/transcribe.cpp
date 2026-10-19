@@ -724,6 +724,13 @@ transcribe_status stream_tensor_data(const std::string &   path,
         return TRANSCRIBE_ERR_GGUF;
     }
 
+    // Uploads go through a bounded staging buffer: ggml_backend_tensor_set
+    // stages each call whole, and for device memory the host cannot map,
+    // Vulkan grows a per-device staging buffer, kept for the life of the
+    // process, to the largest single write (243 MiB for Qwen3-ASR-1.7B's token
+    // embedding), on top of ours.
+    constexpr size_t k_stage_chunk = size_t(16) << 20;
+
     const size_t         data_offset = gguf_get_data_offset(gguf_data);
     std::vector<uint8_t> staging;
 
@@ -747,21 +754,36 @@ transcribe_status stream_tensor_data(const std::string &   path,
             return TRANSCRIBE_ERR_GGUF;
         }
 
-        if (staging.size() < nbytes) {
-            staging.resize(nbytes);
-        }
-        fin.read(reinterpret_cast<char *>(staging.data()), static_cast<std::streamsize>(nbytes));
-        if (!fin) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", error_tag, t->name,
-                    nbytes);
-            return TRANSCRIBE_ERR_GGUF;
+        // Host buffers (the CPU) take the file bytes directly: no staging
+        // copy. Everything else (Metal, Vulkan, CUDA, ...) is uploaded in
+        // chunks through ggml_backend_tensor_set, which needs a buffer type
+        // that accepts partial writes: every default one does (ggml's CPU
+        // repack buffers would not, and assert).
+        if (t->buffer != nullptr && ggml_backend_buffer_is_host(t->buffer)) {
+            fin.read(static_cast<char *>(t->data), static_cast<std::streamsize>(nbytes));
+            if (!fin) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", error_tag, t->name,
+                        nbytes);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            continue;
         }
 
-        // ggml_backend_tensor_set is the right call regardless of
-        // backend: on host buffers (CPU + Metal unified memory on
-        // Apple Silicon) it's a memcpy; on discrete GPUs it does
-        // the upload.
-        ggml_backend_tensor_set(t, staging.data(), 0, nbytes);
+        const size_t chunk = std::min(nbytes, k_stage_chunk);
+        if (staging.size() < chunk) {
+            staging.resize(chunk);
+        }
+        for (size_t done = 0; done < nbytes;) {
+            const size_t n = std::min(nbytes - done, staging.size());
+            fin.read(reinterpret_cast<char *>(staging.data()), static_cast<std::streamsize>(n));
+            if (!fin) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", error_tag, t->name,
+                        nbytes);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            ggml_backend_tensor_set(t, staging.data(), done, n);
+            done += n;
+        }
     }
 
     return TRANSCRIBE_OK;
