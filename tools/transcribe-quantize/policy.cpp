@@ -145,6 +145,16 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
     if (name == "frontend.mel_filterbank" || name == "frontend.window") {
         return Bucket::Norm;
     }
+    // Whistle: HadamardMLP diagonals / Kronecker factors / rank-8 correction
+    // (".hmlp"), causal q/k/v and Engram conv taps ("_taps"), scalar sigmoid
+    // gates ("_gate"), mHC lane-mixing scalars and biases (".mhc.a_" /
+    // ".mhc.b_") and the integer Hadamard permutation tables ("hada.perm").
+    // Tiny and precision-sensitive; the 512-wide vectors would otherwise land
+    // in Linear and be block-quantized, which corrupts the permutation tables.
+    if (contains(name, ".hmlp") || ends_with(name, "_taps") || ends_with(name, "_gate") ||
+        starts_with(name, "hada.perm") || contains(name, ".mhc.a_") || contains(name, ".mhc.b_")) {
+        return Bucket::Norm;
+    }
     // SenseVoice: per-feature CMVN shift/scale (1D, d_input). Applied
     // additively/multiplicatively to the LFR-stacked mel frame; loader
     // requires F32, and the tensors are too small (560 elements) to
@@ -255,21 +265,21 @@ namespace {
 
 const Preset kPresets[] = {
     // Uniform fp tiers.
-    { "F16",    GGML_TYPE_F16,  GGML_TYPE_F16,  GGML_TYPE_F16,  GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32,
-     /*MOSTLY_F16*/ 1                                                                                                                              },
+    { "F16", GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32,
+     /*MOSTLY_F16*/ 1 },
 
     // Legacy blockwise quants. Block size 32 — any sensible inner dim
     // divides cleanly, so linear_fallback is a formality.
-    { "Q4_0",   GGML_TYPE_Q4_0, GGML_TYPE_F16,  GGML_TYPE_Q4_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q4_0*/ 2    },
-    { "Q4_1",   GGML_TYPE_Q4_1, GGML_TYPE_F16,  GGML_TYPE_Q4_1, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q4_1*/ 3    },
-    { "Q5_0",   GGML_TYPE_Q5_0, GGML_TYPE_F16,  GGML_TYPE_Q5_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q5_0*/ 8    },
-    { "Q5_1",   GGML_TYPE_Q5_1, GGML_TYPE_F16,  GGML_TYPE_Q5_1, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q5_1*/ 9    },
-    { "Q8_0",   GGML_TYPE_Q8_0, GGML_TYPE_F16,  GGML_TYPE_Q8_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q8_0*/ 7    },
+    { "Q4_0", GGML_TYPE_Q4_0, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q4_0*/ 2 },
+    { "Q4_1", GGML_TYPE_Q4_1, GGML_TYPE_F16, GGML_TYPE_Q4_1, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q4_1*/ 3 },
+    { "Q5_0", GGML_TYPE_Q5_0, GGML_TYPE_F16, GGML_TYPE_Q5_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q5_0*/ 8 },
+    { "Q5_1", GGML_TYPE_Q5_1, GGML_TYPE_F16, GGML_TYPE_Q5_1, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q5_1*/ 9 },
+    { "Q8_0", GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q8_0*/ 7 },
 
     // K-quants. Block size 256; linear_fallback is Q8_0 for every K
     // preset, not a scaled-down legacy quant, because fallback triggers
@@ -284,12 +294,19 @@ const Preset kPresets[] = {
     //      vs F16 and keeps fallback quality monotonically above main.
     // The tradeoff vs Q4_1/Q5_1 fallback is a few percent on file size,
     // paid on tensors that couldn't be K-quantized anyway.
-    { "Q6_K",   GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q6_K*/ 18   },
-    { "Q5_K_M", GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q5_K_M*/ 17 },
-    { "Q4_K_M", GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16,
-     GGML_TYPE_F32,                                                                                                           /*MOSTLY_Q4_K_M*/ 15 },
+    { "Q6_K", GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q6_K*/ 18 },
+    { "Q5_K_M", GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q5_K_M*/ 17 },
+    { "Q4_K_M", GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q4_K_M*/ 15 },
+
+    // Hadamard-domain 2-bit (Preset::hadamard): Q2_K everywhere the source
+    // stores 2-bit codes, Q4_K where it stores 4-bit ones, no attn-out bump.
+    // Only valid on a Hadamard-domain input (main.cpp checks); on a plain
+    // input Q2_K is ~6x the weight error.
+    { "Q2_K_HR", GGML_TYPE_Q2_K, GGML_TYPE_Q8_0, GGML_TYPE_Q2_K, GGML_TYPE_Q4_K, GGML_TYPE_F32, GGML_TYPE_F16,
+     GGML_TYPE_F32, /*MOSTLY_Q2_K*/ 10, /*hadamard=*/true },
 };
 
 constexpr size_t kPresetCount = sizeof(kPresets) / sizeof(kPresets[0]);
@@ -346,6 +363,15 @@ ggml_type resolve_target_type(const Preset & preset, const std::string & name, i
             }
         case Bucket::Linear:
             {
+                // Hadamard presets: Whistle's mHC phi projections are 4-bit in
+                // the source, like the token embedding.
+                if (preset.hadamard && contains(name, ".mhc.phi_")) {
+                    ggml_type target = preset.linear_embed;
+                    if (const int64_t blk = ggml_blck_size(target); blk > 1 && (ne0 % blk) != 0) {
+                        target = preset.linear_fallback;
+                    }
+                    return target;
+                }
                 // Attention output projection bumped per _M recipe. Cohere
                 // and Parakeet name it "attn.linear_out.weight"; Qwen3-ASR
                 // and Whisper name it "attn.out.weight" (encoder); Qwen3-ASR
@@ -374,6 +400,10 @@ ggml_type resolve_target_type(const Preset & preset, const std::string & name, i
             }
     }
     return preset.norm;  // unreachable
+}
+
+int64_t pairs_rows(const Preset & preset, const std::string & name) {
+    return preset.hadamard && starts_with(name, "dec.engram.") && ends_with(name, ".tables.weight") ? 2 : 1;
 }
 
 }  // namespace transcribe::quantize

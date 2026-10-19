@@ -1,0 +1,70 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "whistle",
+  "variant": "whistle",
+  "source_model": {
+    "hf_repo": "Cactus-Compute/whistle",
+    "hf_revision": "b358ddadd89b7a713b5aa131f23032d3cca1b251"
+  },
+  "reference": {
+    "kind": "author_repo_cactus_needle_engine",
+    "source": "https://huggingface.co/Cactus-Compute/needle3",
+    "revision": "2ae11323dc000f5e70c49f7403efa6af12ba9e67",
+    "entrypoint": "scripts/dump_reference_whistle_engine.py",
+    "note": "Closed prebuilt Needle engine (cactus_needle-3.2.0 wheel, libneedle3) loaded via ctypes (scripts/lib/whistle_engine.py), running whistle.cact. Black-box oracle: only the encoder output (needle_embed -> enc.final) and the final decode (text, language, word times) are observable. Decode uses the engine's compiled default search (5 beams per the model card; no API knob)."
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": null,
+    "normalization": null,
+    "preemphasis": null,
+    "dither": null,
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": 8199,
+    "special_tokens": {
+      "pad": 0,
+      "eos": 1,
+      "bos": 2,
+      "unk": 3,
+      "lang_en": 8192,
+      "lang_de": 8193,
+      "lang_fr": 8194,
+      "lang_es": 8195,
+      "lang_it": 8196,
+      "lang_nl": 8197,
+      "lang_pl": 8198
+    },
+    "vocab_sha256": "ffed62a8af615389947e938ae6d958d438bc723ec6181ae5ebe2d32bd1267319"
+  },
+  "capabilities": {
+    "languages": ["en", "de", "fr", "es", "it", "nl", "pl"],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["word"],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "acceptance": {
+    "dataset": "librispeech-test-clean-le30s",
+    "manifest": "samples/wer/librispeech-test-clean-le30s.manifest.jsonl",
+    "derived_from": "samples/wer/librispeech-test-clean.manifest.jsonl",
+    "filter": "WAV duration <= 30.0 s (engine rejects longer audio)",
+    "n_utterances": 2611
+  },
+  "tolerance_file": "tests/tolerances/whistle.json",
+  "cases": [
+    {"audio": "jfk", "language": "en"},
+    {"audio": "fleurs-de", "language": null},
+    {"audio": "fleurs-fr", "language": null},
+    {"audio": "fleurs-es", "language": null}
+  ]
+}
