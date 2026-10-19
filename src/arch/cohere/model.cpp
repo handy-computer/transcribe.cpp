@@ -341,19 +341,6 @@ transcribe_status fuse_batch_norm(CohereModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// A block whose Q-bias fusion inputs are all present as F32 [d_model]
-// (weights.cpp binds them as F32 already; re-checked because the fusion reads
-// raw floats).
-bool q_bias_fusable(const CohereBlock & b, int64_t d_model) {
-    const ggml_tensor * ts[] = { b.attn_q_b, b.attn_pos_u, b.attn_pos_v };
-    for (const ggml_tensor * t : ts) {
-        if (t == nullptr || t->type != GGML_TYPE_F32 || ggml_nelements(t) != d_model) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // Fold each encoder layer's Q bias into its pos_bias_u / pos_bias_v at
 // load time. In rel_pos_mhsa:
 //   q_u = (W_q x + q_b) + pos_u = W_q x + (q_b + pos_u)
@@ -363,34 +350,18 @@ bool q_bias_fusable(const CohereBlock & b, int64_t d_model) {
 // q_bias_fused_buffer (the GGUF-backed pos_bias tensors may be a read-only
 // memory map, and weights are never written after load); the block's
 // pos_u/pos_v slots are repointed at them and attn_q_b is nulled so the
-// builder skips the add.
+// builder skips the add. weights.cpp binds all three as F32 (q_b [d_model],
+// pos_u/v [head_dim, n_heads]) and read_cohere_hparams rejects d_model not
+// divisible by n_heads, so every block fuses.
 transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     const size_t n_blocks = m.weights.blocks.size();
     if (n_blocks == 0) {
         return TRANSCRIBE_OK;
     }
 
-    const int64_t d_model  = m.hparams.enc_d_model;
-    const int64_t n_heads  = m.hparams.enc_n_heads;
-    const int64_t head_dim = n_heads > 0 ? d_model / n_heads : 0;
+    const int64_t d_model = m.hparams.enc_d_model;
 
-    if (head_dim * n_heads != d_model) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "cohere: d_model (%lld) != head_dim*n_heads; "
-                "skipping encoder Q-bias fusion",
-                (long long) d_model);
-        return TRANSCRIBE_OK;
-    }
-
-    size_t n_fusable = 0;
-    for (const auto & b : m.weights.blocks) {
-        n_fusable += q_bias_fusable(b, d_model) ? 1 : 0;
-    }
-    if (n_fusable == 0) {
-        return TRANSCRIBE_OK;
-    }
-
-    const size_t     ctx_size = n_fusable * 2 * ggml_tensor_overhead() + 256;
+    const size_t     ctx_size = n_blocks * 2 * ggml_tensor_overhead() + 256;
     ggml_init_params params   = { ctx_size, nullptr, true };
     m.q_bias_fused_ctx        = ggml_init(params);
     if (m.q_bias_fused_ctx == nullptr) {
@@ -402,9 +373,6 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     std::vector<ggml_tensor *> fused_v(n_blocks, nullptr);
     for (size_t i = 0; i < n_blocks; ++i) {
         const auto & b = m.weights.blocks[i];
-        if (!q_bias_fusable(b, d_model)) {
-            continue;
-        }
         fused_u[i] = ggml_new_tensor(m.q_bias_fused_ctx, GGML_TYPE_F32, ggml_n_dims(b.attn_pos_u), b.attn_pos_u->ne);
         fused_v[i] = ggml_new_tensor(m.q_bias_fused_ctx, GGML_TYPE_F32, ggml_n_dims(b.attn_pos_v), b.attn_pos_v->ne);
         ggml_set_name(fused_u[i], ggml_get_name(b.attn_pos_u));
@@ -424,9 +392,6 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
 
     for (size_t i = 0; i < n_blocks; ++i) {
         auto & b = m.weights.blocks[i];
-        if (fused_u[i] == nullptr) {
-            continue;
-        }
 
         ggml_backend_tensor_get(b.attn_q_b, q_bias.data(), 0, nbytes);
         ggml_backend_tensor_get(b.attn_pos_u, pos_u.data(), 0, nbytes);
@@ -448,7 +413,7 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
         b.attn_q_b   = nullptr;
     }
 
-    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "cohere: fused Q bias into pos_u/pos_v for %zu encoder blocks", n_fusable);
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "cohere: fused Q bias into pos_u/pos_v for %zu encoder blocks", n_blocks);
     return TRANSCRIBE_OK;
 }
 

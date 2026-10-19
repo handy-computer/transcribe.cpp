@@ -50,8 +50,6 @@ class MappedFile {
     // Unmap. Every tensor pointing into the mapping must be dead by now.
     void reset() noexcept;
 
-    bool valid() const noexcept { return addr_ != nullptr; }
-
     // Page-aligned base of the mapping (MapViewOfFile: allocation-granularity
     // aligned). Non-const because ggml's host-pointer buffers take void *;
     // the pages are still read-only.
