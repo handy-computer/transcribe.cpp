@@ -28,6 +28,7 @@
 #include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-prompting.h"
 #include "transcribe/parakeet.h"
 #include "weights.h"
 
@@ -40,6 +41,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <ios>
@@ -587,6 +589,10 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return st;
     }
 
+    // Vocabulary terms bias the greedy transducer decoders (TDT and RNN-T);
+    // CTC heads do not take them yet.
+    transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_VOCABULARY, m->host_decoder.head_kind != HostHeadKind::CTC);
+
     // Multitalker bundle post-load: fuse the diarizer conformer's BN (needs
     // uploaded data), build its ceil-framed mel frontend, and publish the
     // DIARIZATION capability — for a bundle it is a property of the file.
@@ -789,6 +795,56 @@ static double parakeet_ms_per_enc_frame(const ParakeetHParams & hp) {
            static_cast<double>(hp.fe_sample_rate);
 }
 
+// Logit bonus per matched vocabulary token, in natural-log units. Chosen on
+// the dev half of a term-recall set and checked against general WER; see
+// docs/prompting.md. TRANSCRIBE_VOCABULARY_BOOST overrides it for research.
+constexpr float kVocabularyBoost = 8.0f;
+
+static float vocabulary_boost_score() {
+    if (const char * v = transcribe::env::str("TRANSCRIBE_VOCABULARY_BOOST")) {
+        char *      end   = nullptr;
+        const float value = std::strtof(v, &end);
+        if (end != v && value >= 0.0f) {
+            return value;
+        }
+    }
+    return kVocabularyBoost;
+}
+
+// The phrase-boost automaton for this run's vocabulary, or nullptr when the
+// run has none. Terms are tokenized as the model writes them (with the word
+// boundary marker), so a term matches only from the start of a word.
+static const transcribe::PhraseBoost * vocabulary_boost(ParakeetSession *             pc,
+                                                        const ParakeetModel *         pm,
+                                                        const transcribe_run_params * params) {
+    std::vector<std::string> terms = transcribe::prompting::terms(params);
+    if (terms.empty() || pm->host_decoder.head_kind == HostHeadKind::CTC) {
+        return nullptr;
+    }
+    if (terms != pc->boost_terms || pc->boost.empty()) {
+        std::vector<std::vector<int32_t>> phrases;
+        for (const std::string & term : terms) {
+            std::vector<int32_t> ids;
+            if (pm->tok.encode_sentencepiece_bpe(term, ids, 0, -1, /*remove_extra_whitespaces=*/true) != TRANSCRIBE_OK) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "parakeet: this tokenizer cannot encode vocabulary terms; ignoring them");
+                return nullptr;
+            }
+            bool unknown = false;
+            for (const int32_t id : ids) {
+                unknown = unknown || pm->tok.is_unknown(id);
+            }
+            if (unknown) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "parakeet: a vocabulary term has characters the model cannot write; skipped");
+                continue;
+            }
+            phrases.push_back(std::move(ids));
+        }
+        pc->boost.build(phrases, vocabulary_boost_score());
+        pc->boost_terms = std::move(terms);
+    }
+    return pc->boost.empty() ? nullptr : &pc->boost;
+}
+
 // Host-side TDT/RNNT/CTC decode + public result-hierarchy build for one
 // utterance's encoder output. `enc` is the row-major [T_enc, d_enc]
 // activation for ONE utterance; utt_index >= 0 tags the per-utterance
@@ -827,10 +883,12 @@ static transcribe_status decode_and_populate(ParakeetSession *             pc,
         transcribe_status st = TRANSCRIBE_OK;
         switch (pm->host_decoder.head_kind) {
             case HostHeadKind::TDT:
-                st = decode_tdt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
+                st = decode_tdt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens,
+                                       vocabulary_boost(pc, pm, params));
                 break;
             case HostHeadKind::RNNT:
-                st = decode_rnnt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);
+                st = decode_rnnt_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens,
+                                        vocabulary_boost(pc, pm, params));
                 break;
             case HostHeadKind::CTC:
                 st = decode_ctc_greedy(pm->host_decoder, enc, T_enc, d_enc, pc->n_threads, pc->raw_tokens);

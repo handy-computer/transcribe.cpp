@@ -30,6 +30,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "transcribe.h"
+#include "transcribe-phrase-boost.h"
 
 #include <cstdint>
 #include <string>
@@ -218,24 +219,30 @@ struct TdtToken {
 //
 // Returns TRANSCRIBE_OK on success; cannot fail except via invalid args
 // (validated by the family driver before this is called).
-transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
-                                    const float *              enc_out,
-                                    int                        T_enc,
-                                    int                        d_enc,
-                                    int                        n_threads,
-                                    std::vector<TdtToken> &    out_tokens);
+//
+// `boost`, when non-null and non-empty, biases the token argmax toward the
+// caller's vocabulary terms (transcribe_run_params::vocabulary); see
+// transcribe-phrase-boost.h. Token confidences stay the model's own.
+transcribe_status decode_tdt_greedy(const HostDecoderWeights &      w,
+                                    const float *                   enc_out,
+                                    int                             T_enc,
+                                    int                             d_enc,
+                                    int                             n_threads,
+                                    std::vector<TdtToken> &         out_tokens,
+                                    const transcribe::PhraseBoost * boost = nullptr);
 
 // Run RNNT greedy decode end-to-end. Same predictor + joint code as TDT,
 // but the joint emits `vocab+1` logits (no duration extras) and the step
 // rule is "blank → advance one frame, non-blank → emit + stay, capped by
 // tdt_max_symbols". Per-emit duration_frames is fixed at 1. Same I/O
 // contract and TdtToken result type as decode_tdt_greedy.
-transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
-                                     const float *              enc_out,
-                                     int                        T_enc,
-                                     int                        d_enc,
-                                     int                        n_threads,
-                                     std::vector<TdtToken> &    out_tokens);
+transcribe_status decode_rnnt_greedy(const HostDecoderWeights &      w,
+                                     const float *                   enc_out,
+                                     int                             T_enc,
+                                     int                             d_enc,
+                                     int                             n_threads,
+                                     std::vector<TdtToken> &         out_tokens,
+                                     const transcribe::PhraseBoost * boost = nullptr);
 
 // Streaming variant of RNN-T greedy decode. Consumes T_enc_new encoder
 // frames (the chunk just produced) and APPENDS emitted tokens to

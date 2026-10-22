@@ -279,6 +279,20 @@ transcribe_apply_warnings(transcribe_decode_budget_unit)
 add_test(NAME transcribe_decode_budget_unit COMMAND transcribe_decode_budget_unit)
 
 # -----------------------------------------------------------------------------
+# Phrase boosting automaton (pure host, no model)
+
+add_executable(transcribe_phrase_boost_unit
+    phrase_boost_unit.cpp
+    ${CMAKE_SOURCE_DIR}/src/transcribe-phrase-boost.cpp)
+
+target_include_directories(transcribe_phrase_boost_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_phrase_boost_unit)
+
+add_test(NAME transcribe_phrase_boost_unit COMMAND transcribe_phrase_boost_unit)
+
+# -----------------------------------------------------------------------------
 # Greedy-decode repetition guard (pure host, no model)
 
 add_executable(transcribe_repetition_guard_unit
