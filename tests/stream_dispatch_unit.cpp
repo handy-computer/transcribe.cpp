@@ -828,6 +828,54 @@ void test_stream_family_token_prefix_maps_trimmed_leading_space() {
     CHECK(std::strcmp(text.tentative_text, "") == 0);
 }
 
+// A token that decodes to a bare space before a word-boundary token puts a
+// double space into the token concatenation, while parakeet's full_text has
+// space runs collapsed. The boundary must still advance, on that feed and on
+// every later one.
+void test_stream_family_token_prefix_maps_collapsed_space_run() {
+    transcribe_model model;
+    init_streaming_model(model);
+    model.arch = &sequence_arch_named_parakeet();
+    transcribe_session session;
+    session.model = &model;
+
+    g_feed_texts[0]             = "hello world";
+    g_feed_texts[1]             = "hello world again";
+    g_n_feed_texts              = 2;
+    g_n_token_rows              = 3;
+    g_token_texts[0]            = " hello";
+    g_token_texts[1]            = " ";
+    g_token_texts[2]            = " world";
+    g_forced_n_committed_tokens = 3;
+
+    CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
+
+    float                    pcm = 0.0f;
+    transcribe_stream_update upd;
+    transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(upd.committed_changed);
+
+    transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.committed_text, "hello world") == 0);
+    CHECK(std::strcmp(text.tentative_text, "") == 0);
+
+    g_n_token_rows              = 4;
+    g_token_texts[3]            = " again";
+    g_forced_n_committed_tokens = 4;
+
+    transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(upd.committed_changed);
+
+    transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.committed_text, "hello world again") == 0);
+    CHECK(std::strcmp(text.tentative_text, "") == 0);
+}
+
 void test_stream_text_stable_prefix_does_not_rewrite_committed() {
     transcribe_model model;
     init_streaming_model(model);
@@ -1636,6 +1684,7 @@ int main() {
     test_stream_auto_unknown_family_falls_back_to_generic_stable_prefix();
     test_stream_stable_prefix_known_family_uses_family_boundary();
     test_stream_family_token_prefix_maps_trimmed_leading_space();
+    test_stream_family_token_prefix_maps_collapsed_space_run();
     test_stream_text_stable_prefix_does_not_rewrite_committed();
     test_stream_text_clamps_raw_tentative_offset_after_shrink();
     test_stream_committed_row_hints_can_exceed_current_rows();
