@@ -7,7 +7,9 @@
   "params": 117711368,
   "license": {
     "spdx": "other",
-    "display": "NVIDIA Open Model License"
+    "display": "NVIDIA Open Model License",
+    "name": "nvidia-open-model-license",
+    "link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
   },
   "upstream_repo": "nvidia/diar_streaming_sortformer_4spk-v2.1",
   "upstream_commit": "fafaab5",

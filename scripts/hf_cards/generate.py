@@ -21,6 +21,8 @@ Nothing numeric or mechanical is read from the YAML; a number that belongs
 on the card belongs in the catalog first. Fetches the upstream model card at
 the pinned commit and renders template.md.j2.
 
+LICENSE and NOTICE (see license_files) are written next to the README.
+
 Default output is models/<upstream-slug>/README.md alongside the GGUFs, so
 `hf upload <repo> models/<upstream-slug> .` picks it up in the same call. When
 several records share one upstream repo (gigaam), it is models/<variant>/ instead.
@@ -37,6 +39,7 @@ import argparse
 import re
 import statistics
 import sys
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -297,6 +300,42 @@ def fetch_upstream_card(repo_id: str, revision: str) -> str:
     return content.strip()
 
 
+LICENSES = HERE / "licenses"
+
+
+def license_files(record: dict) -> dict[str, str]:
+    """LICENSE and NOTICE for the HF repo, keyed by filename.
+
+    LICENSE is the licence text from licenses/<key>/, verbatim (see
+    licenses/SOURCES.md). NOTICE leads with the attribution notice the licence
+    mandates, when licenses/<key>/NOTICE has one, then states how the files
+    differ from the original: most licences that permit redistribution ask
+    for that, and it is true of every repo. A record with no licence text
+    fails, so a new port cannot publish without one.
+    """
+    lic = record["license"]
+    key = lic.get("text") or lic.get("name") or lic["spdx"]
+    src = LICENSES / key
+    if not (src / "LICENSE").is_file():
+        raise SystemExit(f"{record['variant']}: no licence text at "
+                         f"{src.relative_to(REPO_ROOT)}/LICENSE; add it (and a row in "
+                         f"licenses/SOURCES.md), or point license.text at an existing one")
+    quantized = [d["quant"] for d in record["downloads"] if d["quant"].upper().startswith("Q")]
+    modified = (
+        f"Modifications: handy-computer converted {common.upstream_url(record)} at "
+        f"commit {record['upstream_commit']} to GGUF for transcribe.cpp "
+        f"(https://github.com/handy-computer/transcribe.cpp). Conversion repackages the "
+        f"weights, renaming and re-laying-out tensors"
+        + (f"; the quantized files ({', '.join(quantized)}) also store them at reduced "
+           f"numeric precision" if quantized else "")
+        + ". The weights were not retrained or fine-tuned."
+    )
+    notice = textwrap.fill(modified, 78, break_on_hyphens=False, break_long_words=False) + "\n"
+    if (src / "NOTICE").is_file():
+        notice = (src / "NOTICE").read_text().rstrip("\n") + "\n\n" + notice
+    return {"LICENSE": (src / "LICENSE").read_text(), "NOTICE": notice}
+
+
 def render(ctx: dict, upstream_card: str) -> str:
     env = Environment(
         loader=FileSystemLoader(HERE),
@@ -348,6 +387,7 @@ def main() -> int:
         else fetch_upstream_card(ctx["hf_repo"], card_commit)
     )
     out = render(ctx, upstream)
+    files = license_files(record)
 
     if args.stdout:
         sys.stdout.write(out)
@@ -367,6 +407,9 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(out)
     print(f"wrote {output}", file=sys.stderr)
+    for name, text in files.items():
+        (output.parent / name).write_text(text)
+        print(f"wrote {output.parent / name}", file=sys.stderr)
     return 0
 
 

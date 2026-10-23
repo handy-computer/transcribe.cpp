@@ -36,3 +36,13 @@ wer:
     statistically detectable WER degradation); Q4_K_M shows a real +0.26 pp degradation
     and is shipped for completeness but not recommended — prefer Q5_K_M if you need
     smaller than Q8_0.
+
+license_notes: |
+  MedASR is subject to the use restrictions in Section 3.2 of the HAI-DEF
+  Terms of Use, and so is anyone you redistribute it to: it must not be used
+  for the restricted uses in the
+  [Health AI Developer Foundations Prohibited Use Policy](https://developers.google.com/health-ai-developer-foundations/prohibited-use-policy),
+  for any use that could cause a health regulatory authority to deem Google a
+  manufacturer of a medical device, or in violation of applicable law.
+  Clinical use may require authorization from the relevant health regulatory
+  authority.
