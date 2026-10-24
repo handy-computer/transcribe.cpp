@@ -302,6 +302,10 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
                                   ggml_tensor *  lin2_w,
                                   ggml_tensor *  lin2_b);
 
+// GLU over ne[0]: first half * sigmoid(second half), as F.glu on the
+// channel axis. [2*C, T, B] -> [C, T, B].
+ggml_tensor * glu(ggml_context * ctx, ggml_tensor * x);
+
 // Shaw / Transformer-XL relative-position skew. Turns a
 // [pos_len, T_q, H, 1] score matrix into a [pos_len, T_q, H, 1]
 // matrix rotated so column k holds the score for relative offset k.

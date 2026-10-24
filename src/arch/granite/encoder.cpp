@@ -225,7 +225,6 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
                                   int                     conv_kernel,
                                   int                     inner_dim) {
     const int64_t d_model = x->ne[0];
-    const int64_t T       = x->ne[1];
 
     // Pre-LayerNorm with bias.
     x = layer_norm(ctx, x, b.norm_conv_w, b.norm_conv_b);
@@ -239,13 +238,7 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
         x                 = ggml_add(ctx, x, b.conv_pointwise1_b);
     }
 
-    // GLU: split ne[0] in half, gate * sigmoid(value).
-    {
-        ggml_tensor * gate  = ggml_view_2d(ctx, x, inner_dim, T, x->nb[1], /*offset=*/0);
-        ggml_tensor * value = ggml_view_2d(ctx, x, inner_dim, T, x->nb[1], inner_dim * ggml_element_size(x));
-        x                   = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
-    }
-    // x ne = [inner_dim, T]
+    x = transcribe::conformer::glu(ctx, x);  // [inner_dim, T]
 
     // Transpose for depthwise conv: [inner_dim, T] -> [T, inner_dim].
     x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
