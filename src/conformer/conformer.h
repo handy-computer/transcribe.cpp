@@ -15,7 +15,8 @@
 // debug-dump. Helpers name no intermediates except build_pre_encode (explicit
 // prefix). The f32-friendly conv helpers (conv_1d_f32, conv_2d_dw_f32,
 // conv_1d_dw_f32) work around ggml kernel limitations on Metal (see
-// conv_2d_dw_f32 in conformer.cpp); use them for f32 kernels on Metal.
+// conv_2d_dw_f32 in conformer.cpp); use them for f32 kernels on Metal. For
+// depthwise convs prefer conv_2d_dw_direct_f32, which needs no workaround.
 
 #pragma once
 
@@ -129,6 +130,13 @@ struct ConvPolicy {
     // Run the pre_encode pointwise convs (conv3, conv6) via conv_2d_f32.
     // Other variants were validated on the F16 im2col and keep it.
     bool pre_encode_f32_pointwise = false;
+
+    // Run the pre_encode stack over overlapping time windows of this many
+    // output (subsampled) frames instead of the whole utterance; 0 = whole
+    // utterance. Exact (see build_pre_encode); bounds the stack's
+    // activations, which are otherwise linear in audio length (2 GB at
+    // 306 s for 256 channels). Ignored for masked or causal stacks.
+    int pre_encode_time_chunk = 0;
 };
 
 // Resolve a conv-dispatch toggle from its env overrides. The DIRECT var forces
@@ -145,6 +153,18 @@ bool resolve_conv_direct(const char * direct_env, const char * no_direct_env, bo
 // AMD Renoir, im2col + mul_mat measured ~200 ms/encode faster than direct for
 // f32 weights. Metal and CPU prefer direct.
 bool detect_direct_pw(const char * backend);
+
+// Default pre_encode time window, in output frames (80 ms each for the 8x
+// stacks: ~20 s). Small enough that the stack's per-window activations
+// (~150 MB at 256 channels) sit well under the encoder blocks' peak, large
+// enough that the 1-frame overlap and the per-window kernel launches cost
+// nothing measurable.
+constexpr int kPreEncodeTimeChunk = 256;
+
+// ConvPolicy::pre_encode_time_chunk with its env override:
+// TRANSCRIBE_PRE_ENCODE_CHUNK=N sets the window (0 = whole utterance);
+// otherwise `family_default`.
+int resolve_pre_encode_time_chunk(int family_default);
 
 // Scalar knobs for the block forward. All fields required except the
 // optional local-attention window (att_context_left / att_context_right).
@@ -321,8 +341,9 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
                           int            padding,
                           int            dilation);
 
-// f32-friendly 2D depthwise conv. Use instead of ggml_conv_2d_dw /
-// ggml_conv_2d_dw_direct for fp32 kernels on Metal (see conformer.cpp).
+// f32-friendly 2D depthwise conv via im2col. Use instead of ggml_conv_2d_dw
+// for fp32 kernels on Metal (see conformer.cpp); conv_2d_dw_direct_f32 is
+// usually the better choice.
 ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
                              ggml_tensor *  kernel,
                              ggml_tensor *  data,
@@ -348,7 +369,9 @@ ggml_tensor * conv_2d_dw_direct_f32(ggml_context * ctx,
                                     int            d0,
                                     int            d1);
 
-// f32-friendly 1D depthwise conv. Same Metal reasoning.
+// f32-friendly 1D depthwise conv. Same Metal reasoning. Switches algorithm
+// on the batch size (im2col at B == 1, the direct op at B > 1), so callers
+// with a batch-parity requirement use conv_2d_dw_direct_f32 instead.
 ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
                              ggml_tensor *  kernel,
                              ggml_tensor *  data,

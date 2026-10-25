@@ -55,16 +55,16 @@ bool detect_direct_dw_in_block(const char * backend) {
                                      /*backend_default=*/true);
 }
 
-// Pre-encode depthwise dispatch: direct path EXCEPT on Metal, where
-// CONV_2D_DW is unsupported in this vendored ggml (see conv_2d_dw_f32 in
-// conformer.cpp) so the im2col helper is used. CPU/Vulkan have native
-// CONV_2D_DW; the direct path avoids the ~31x im2col expansion and the
-// degenerate per-channel [1 x K] matmul (~40-50ms here).
+// Pre-encode depthwise dispatch: the direct path on every backend; it avoids
+// the ~31x im2col expansion and the degenerate per-channel [1 x K] matmul
+// (~40-50ms here). This used to exclude Metal on the belief that CONV_2D_DW
+// was unsupported there, but it matched on the string "Metal" and the Metal
+// backend is named "MTL0", so Metal has always taken the direct path; it is
+// supported and tested (tests/conv_dw_direct_unit.cpp).
 bool detect_direct_dw_in_pre_encode(const char * backend) {
-    const bool is_metal =
-        backend != nullptr && (std::strstr(backend, "Metal") != nullptr || std::strstr(backend, "metal") != nullptr);
+    (void) backend;
     return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW",
-                                     /*backend_default=*/!is_metal);
+                                     /*backend_default=*/true);
 }
 
 // ----- Views ------------------------------------------------------

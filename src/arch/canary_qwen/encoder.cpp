@@ -29,7 +29,7 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
-bool detect_direct_dw_in_block(const char * /*backend*/) {
+bool detect_direct_dw(const char * /*backend*/) {
     return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW",
                                      /*backend_default=*/true);
 }
@@ -109,8 +109,13 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
                                  const char *              backend_name) {
     conf::ConvPolicy policy{};
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
-    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = false;
+    policy.direct_dw_in_block      = detect_direct_dw(backend_name);
+    // Direct pre-encode depthwise too: the im2col form materialised a 2.3 GB
+    // [9, F/4, T/4, 256] f32 copy at 306 s, the graph's largest tensor.
+    policy.direct_dw_in_pre_encode = detect_direct_dw(backend_name);
+    // And window the stack in time (exact; see build_pre_encode): its
+    // whole-utterance activations are linear in audio length, 2 GB at 306 s.
+    policy.pre_encode_time_chunk   = conf::resolve_pre_encode_time_chunk(conf::kPreEncodeTimeChunk);
 
     EncoderBuild eb{};
 

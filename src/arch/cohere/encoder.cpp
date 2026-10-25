@@ -23,13 +23,17 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
-// Depthwise dispatch policy: direct ggml_conv_2d_dw_direct on Vulkan/CUDA
-// (native kernels), im2col + mul_mat on Metal/CPU. See the ConvPolicy
-// comment in conformer.h for why the two dw sites share one detect result.
-bool detect_direct_dw(const char * backend) {
-    const bool backend_default =
-        backend != nullptr && (std::strstr(backend, "Vulkan") != nullptr || std::strstr(backend, "CUDA") != nullptr);
-    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW", backend_default);
+// Depthwise dispatch policy: the direct CONV_2D_DW op on every backend, for
+// both depthwise sites. Metal and CPU used to take im2col + mul_mat, which at
+// 306 s materialised a 2.3 GB [9, F/4, T/4, 256] f32 copy for the first
+// pre-encode depthwise conv alone (the graph's largest tensor), and the block
+// site switched algorithm at B > 1 (conv_1d_dw_f32), so a batched utterance
+// was not computed the way its single-shot self was. CONV_2D_DW is tested on
+// every device present by tests/conv_dw_direct_unit.cpp.
+// TRANSCRIBE_CONV_NO_DIRECT_DW=1 restores im2col (single-utterance only).
+bool detect_direct_dw(const char * /*backend*/) {
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     /*backend_default=*/true);
 }
 
 // ----- Views ------------------------------------------------------
@@ -116,6 +120,10 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     const bool direct_dw           = detect_direct_dw(backend_name);
     policy.direct_dw_in_block      = direct_dw;
     policy.direct_dw_in_pre_encode = direct_dw;
+    // Window the pre_encode stack in time: its whole-utterance activations
+    // were 3 GB at 306 s (conv0 output, its matmul twin, ReLU), linear in
+    // audio length. Exact; see build_pre_encode.
+    policy.pre_encode_time_chunk   = conf::resolve_pre_encode_time_chunk(conf::kPreEncodeTimeChunk);
 
     EncoderBuild eb{};
 
