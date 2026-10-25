@@ -230,8 +230,12 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     ggml_set_output(eb.out);
 
     // Build the forward cgraph. 48 blocks + enc_dec_proj means a
-    // large graph; 16384 leaves headroom.
-    eb.graph = ggml_new_graph_custom(ctx, 16384, false);
+    // large graph; 16384 leaves headroom for those. The pre_encode's time
+    // windows scale with audio length, so their nodes are added on top.
+    const size_t graph_size =
+        16384 + static_cast<size_t>(conf::kPreEncodeNodesPerWindow) *
+                    static_cast<size_t>(conf::pre_encode_window_count(n_mel_frames, policy.pre_encode_time_chunk));
+    eb.graph = ggml_new_graph_custom(ctx, graph_size, false);
     if (eb.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere encoder: ggml_new_graph_custom failed");
         return eb;

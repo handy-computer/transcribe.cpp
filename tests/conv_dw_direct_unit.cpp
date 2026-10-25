@@ -76,8 +76,10 @@ float next_uniform() {
 }
 
 // Depthwise reference in double: out[n][c][oh][ow].
-std::vector<float> reference(const Case & cs, const std::vector<float> & kernel, const std::vector<float> & data,
-                             int n_batch) {
+std::vector<float> reference(const Case &               cs,
+                             const std::vector<float> & kernel,
+                             const std::vector<float> & data,
+                             int                        n_batch) {
     const int64_t      ow = out_size(cs.w, cs.kw, cs.s0, cs.p0);
     const int64_t      oh = out_size(cs.h, cs.kh, cs.s1, cs.p1);
     std::vector<float> out(static_cast<size_t>(ow * oh * cs.c * n_batch));
@@ -115,8 +117,13 @@ struct RunResult {
 
 // Build and run one depthwise conv on `be`. Host kernel values must already
 // be representable in `ktype` (F16 cases pre-round them).
-RunResult run(ggml_backend_t be, const Case & cs, ggml_type ktype, Algo algo, const std::vector<float> & kernel,
-              const std::vector<float> & data, int n_batch) {
+RunResult run(ggml_backend_t             be,
+              const Case &               cs,
+              ggml_type                  ktype,
+              Algo                       algo,
+              const std::vector<float> & kernel,
+              const std::vector<float> & data,
+              int                        n_batch) {
     RunResult        res;
     ggml_init_params ip  = { 64 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true };
     ggml_context *   ctx = ggml_init(ip);

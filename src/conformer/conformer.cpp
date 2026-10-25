@@ -342,6 +342,29 @@ bool detect_direct_pw(const char * backend) {
     return resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_PW", "TRANSCRIBE_CONV_NO_DIRECT_PW", backend_default);
 }
 
+int pre_encode_window_count(int64_t n_mel_frames, int chunk) {
+    if (chunk <= 0 || n_mel_frames <= 0) {
+        return 1;
+    }
+    auto stage_len = [](int64_t L) {
+        return (L + 2 * 1 - 3) / 2 + 1;
+    };
+    const int64_t t_enc = stage_len(stage_len(stage_len(n_mel_frames)));
+    if (t_enc <= chunk) {
+        return 1;
+    }
+    // Matches the balanced split in build_pre_encode: ceil(T_enc / chunk)
+    // windows, capped (see kPreEncodeMaxWindows).
+    const int64_t n_win = (t_enc + chunk - 1) / chunk;
+    return static_cast<int>(std::min<int64_t>(n_win, kPreEncodeMaxWindows));
+}
+
+size_t pre_encode_meta_bytes(int64_t n_mel_frames, int chunk) {
+    constexpr size_t kBytesPerWindow = 256 * 1024;
+    const int        n_win           = pre_encode_window_count(n_mel_frames, chunk);
+    return static_cast<size_t>(n_win > 1 ? n_win - 1 : 0) * kBytesPerWindow;
+}
+
 int resolve_pre_encode_time_chunk(int family_default) {
     const char * v = transcribe::env::str("TRANSCRIBE_PRE_ENCODE_CHUNK");
     if (v == nullptr || *v == '\0') {
@@ -1435,7 +1458,7 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     } else {
         ggml_tensor * mel_t = x;
         ggml_tensor * out   = nullptr;
-        const int64_t n_win = (T_enc_out + chunk - 1) / chunk;
+        const int64_t n_win = pre_encode_window_count(T_mel, static_cast<int>(chunk));
         const int64_t base  = T_enc_out / n_win;
         const int64_t extra = T_enc_out % n_win;
         for (int64_t w = 0, a = 0; w < n_win; ++w) {

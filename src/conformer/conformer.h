@@ -161,6 +161,35 @@ bool detect_direct_pw(const char * backend);
 // nothing measurable.
 constexpr int kPreEncodeTimeChunk = 256;
 
+// Nodes a tiled pre_encode adds per window (conv stack + flatten + linear +
+// concat); measured ~44, rounded up for headroom. Callers add
+// kPreEncodeNodesPerWindow * pre_encode_window_count(...) to their graph size:
+// the window count grows with audio length, so a fixed graph size overflows
+// (GGML_ASSERT(cgraph->n_nodes < cgraph->size)) once the windows are many.
+constexpr int kPreEncodeNodesPerWindow = 64;
+
+// Upper bound on the number of time windows. Windows exist to bound the
+// stack's activations; past this many (>= 21 min of audio at the default
+// chunk) making the windows longer costs nothing, while an unbounded window
+// count would grow every graph/scheduler/metadata capacity with audio length.
+constexpr int kPreEncodeMaxWindows = 64;
+
+// Graph nodes a tiled pre_encode can add at most (window cap * per-window):
+// what a caller's graph and scheduler capacities need on top of their untiled
+// size.
+constexpr int kPreEncodeExtraGraphNodes = kPreEncodeNodesPerWindow * kPreEncodeMaxWindows;
+
+// Windows build_pre_encode builds for this mel length at this chunk (1 when it
+// runs untiled). Same arithmetic as build_pre_encode's stage lengths.
+int pre_encode_window_count(int64_t n_mel_frames, int chunk);
+
+// ggml metadata a tiled pre_encode needs for its windows, on top of an untiled
+// one (measured 217 KB/window at 256 channels, rounded up). The windows also
+// need their own tensors in the compute context, which does not grow by
+// itself: without this the context pool runs out ("ggml_new_object: not
+// enough space in the context's memory pool") at long audio or small chunks.
+size_t pre_encode_meta_bytes(int64_t n_mel_frames, int chunk);
+
 // ConvPolicy::pre_encode_time_chunk with its env override:
 // TRANSCRIBE_PRE_ENCODE_CHUNK=N sets the window (0 = whole utterance);
 // otherwise `family_default`.
