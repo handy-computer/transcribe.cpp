@@ -1324,6 +1324,15 @@ extern "C" transcribe_status transcribe_stream_get_text(const struct transcribe_
 // `committed` (optional) is set true once the call passes the pre-clear
 // gates and commits to replacing the result. The caller uses it to decide
 // whether compute scratch needs releasing.
+// A text-only TRANSCRIBE_TASK_INSTRUCT run: no audio (n_samples == 0, pcm may
+// be NULL), with the prompt being the whole input. Reads only the caller's params,
+// so it is safe before the session is dereferenced.
+static bool is_text_only_run(int n_samples, const struct transcribe_run_params * params) {
+    return n_samples == 0 && params != nullptr &&
+           params->struct_size >= TRANSCRIBE_FIELD_END(transcribe_run_params, task) &&
+           enum_field_raw(&params->task) == TRANSCRIBE_TASK_INSTRUCT;
+}
+
 static transcribe_status run_one_inner(struct transcribe_session *          session,
                                        const float *                        pcm,
                                        int                                  n_samples,
@@ -1338,13 +1347,14 @@ static transcribe_status run_one_inner(struct transcribe_session *          sess
     // replacement happens when the call is well-formed enough that
     // the dispatcher is willing to dereference session. A call that
     // isn't well-formed isn't considered to have "run".
-    if (session == nullptr || pcm == nullptr) {
+    if (session == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     // n_samples must be strictly positive, matching transcribe_stream_feed.
     // There is no meaningful "transcribe zero samples" operation; a
     // zero-length batch is treated as a caller error, not an empty run.
-    if (n_samples <= 0) {
+    // The one exception is a text-only INSTRUCT run (see is_text_only_run).
+    if (!is_text_only_run(n_samples, params) && (pcm == nullptr || n_samples <= 0)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     // NULL params means "all defaults" (transcribe vs translate, no
@@ -1488,7 +1498,7 @@ static transcribe_status transcribe_run_impl(struct transcribe_session *        
     if (pcm != nullptr && n_samples > 0 && !pcm_is_finite(pcm, n_samples)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    if (session != nullptr && pcm != nullptr && n_samples > 0) {
+    if (session != nullptr && ((pcm != nullptr && n_samples > 0) || is_text_only_run(n_samples, params))) {
         session->batch_results.clear();
     }
     // run_one_inner arms the guard at its commit point, so a pre-clear
