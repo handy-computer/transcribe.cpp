@@ -20,9 +20,9 @@ Fermion Research's Apache-2.0 container reader at
 `FermionResearch/Phonon-2@7e153e4054c0a10db6d47d6fff5c062d4c77c154`.
 Copyright 2026 Fermion Research. Modifications add strict record validation,
 pinned artifact handling and F32 conversion. Its license text is
-[`scripts/lib/phonon-LICENSE-Apache-2.0.txt`](scripts/lib/phonon-LICENSE-Apache-2.0.txt).
+[`scripts/lib/phonon-LICENSE-Apache-2.0.txt`](https://github.com/handy-computer/transcribe.cpp/blob/main/scripts/lib/phonon-LICENSE-Apache-2.0.txt).
 It is not linked into native binaries. Model-weight attribution and licenses
-are separate; see [`docs/models/phonon-2.md`](docs/models/phonon-2.md).
+are separate; see [`docs/models/phonon-2.md`](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/phonon-2.md).
 
 ---
 

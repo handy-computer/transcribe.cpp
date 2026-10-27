@@ -47,6 +47,7 @@ include = [
     "/ggml/src/**",
     "/ggml/scripts/**",
     "/ggml/LICENSE",
+    "/ggml/UPSTREAM",
     "/ggml/AUTHORS",
     "/ggml/ggml.pc.in",
     "/bindings/rust/sys/**",
