@@ -23,6 +23,7 @@
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-env.h"
+#include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
@@ -535,6 +536,10 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
+
+    bool dec_use_flash   = false;  // no attention decoder
+    m->encoder_use_flash = transcribe::flash::per_head_mask_supported(m->plan.primary_kind);
+    transcribe::flash::apply_env_overrides(m->encoder_use_flash, dec_use_flash);
 
     if (const transcribe_status st = transcribe::load_common::load_weights(
             loader.path(), gguf_data, m->ctx_meta, m->plan, params, "parakeet", m->weight_storage);
@@ -1138,9 +1143,10 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     }
     const int    mt_keep_frames = static_cast<int>(mt_keep.size());
     const bool   kestrel_masks  = pm->hparams.kestrel_length_masking;
-    EncoderBuild eb = build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames, resolved_kv,
-                                          pm->backend.c_str(), /*buf_mask=*/nullptr, /*n_batch=*/1,
-                                          /*batch_var_len=*/kestrel_masks, spk_supervision, mt_keep_frames);
+    EncoderBuild eb =
+        build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames, resolved_kv, pm->encoder_use_flash,
+                            pm->backend.c_str(), /*buf_mask=*/nullptr, /*n_batch=*/1,
+                            /*batch_var_len=*/kestrel_masks, spk_supervision, mt_keep_frames);
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;  // build_encoder_graph logged
     }
@@ -1852,7 +1858,7 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
     }
 
     EncoderBuild eb = build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, T_max, resolved_kv,
-                                          pm->backend.c_str(), /*buf_mask=*/nullptr,
+                                          pm->encoder_use_flash, pm->backend.c_str(), /*buf_mask=*/nullptr,
                                           /*n_batch=*/n, /*batch_var_len=*/var_len);
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
@@ -2569,7 +2575,7 @@ transcribe_status emit_streaming_chunk(ParakeetSession * pc,
         }
 
         eb = build_encoder_graph_streaming(pc->compute_ctx, pm->weights, hp, n_mel_chunk_frames, drop_extra_pre_encoded,
-                                           cache_io, resolved_kv, pm->backend.c_str(),
+                                           cache_io, resolved_kv, pm->encoder_use_flash, pm->backend.c_str(),
                                            /*spk_supervision=*/mt_supervised);
         if (eb.out == nullptr || eb.graph == nullptr) {
             return TRANSCRIBE_ERR_GGUF;
@@ -2986,7 +2992,7 @@ transcribe_status emit_buffered_chunk(ParakeetSession * pc,
     buf_mask.valid_frames = effective_T;
 
     EncoderBuild eb = build_encoder_graph(pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames, resolved_kv,
-                                          pm->backend.c_str(), &buf_mask);
+                                          pm->encoder_use_flash, pm->backend.c_str(), &buf_mask);
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }

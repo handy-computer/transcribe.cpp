@@ -170,7 +170,8 @@ struct CohereSession final : public transcribe_session {
     std::vector<float> enc_host;
 
     // Flash-attn is per-stage: encoder dk=160 has no Metal flash_attn_ext
-    // kernel (default OFF on Metal; manual path ties anyway); decoder
+    // kernel (default OFF on Metal; manual path ties anyway), and CUDA/ROCm
+    // can't take its per-head rel-pos mask (default OFF there too); decoder
     // dk=128 works everywhere (default ON). TRANSCRIBE_NO_FLASH /
     // TRANSCRIBE_FORCE_FLASH apply to both stages at once.
     bool encoder_use_flash = true;

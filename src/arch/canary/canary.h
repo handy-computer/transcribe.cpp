@@ -135,7 +135,8 @@ struct CanarySession final : public transcribe_session {
 
     // Per-stage flash-attention controls. ggml's Metal flash kernel lacks a
     // path for some encoder rel-pos MHSA dk values (96 for 180m-flash, 128
-    // otherwise), so encoder flash defaults off on Metal; decoder defaults on.
+    // otherwise), and CUDA/ROCm can't take the per-head rel-pos mask, so
+    // encoder flash defaults off on those backends; decoder defaults on.
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
