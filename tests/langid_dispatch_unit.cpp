@@ -147,12 +147,14 @@ void test_role_checks_and_labels() {
     CHECK(transcribe_langid_label_index(&model, "xx") == 0);
     CHECK(transcribe_langid_label_index(&model, "zz") == -1);
 
-    // A negative thread count is rejected up front.
+    // A negative thread count, or one above ggml's limit, is rejected up front.
     transcribe_langid_session_params sp;
     transcribe_langid_session_params_init(&sp);
-    sp.n_threads = -1;
-    CHECK(transcribe_langid_session_init(&model, &sp, &s) == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(s == nullptr);
+    for (const int n_threads : { -1, 513 }) {
+        sp.n_threads = n_threads;
+        CHECK(transcribe_langid_session_init(&model, &sp, &s) == TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(s == nullptr);
+    }
 }
 
 void test_ranking() {

@@ -1085,7 +1085,9 @@ TRANSCRIBE_API void transcribe_model_load_params_init(struct transcribe_model_lo
  * Session init params.
  *
  * n_threads: number of CPU threads for ops that run on CPU. 0 means
- *            "library picks a sensible default".
+ *            "library picks a sensible default". At most 512 (ggml's
+ *            thread limit); negative or larger values are rejected with
+ *            TRANSCRIBE_ERR_INVALID_ARG.
  *
  * kv_type:   data type for K/V activations in flash attention.
  *            AUTO (default) uses f16 for quantized models, f32 for f32.

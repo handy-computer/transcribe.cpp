@@ -27,6 +27,7 @@ using transcribe::check_struct_size;
 using transcribe::copy_out_prefix;
 using transcribe::VadSegmentEntry;
 using transcribe::VadSegmentParams;
+using transcribe::valid_n_threads;
 
 namespace {
 
@@ -349,7 +350,7 @@ static transcribe_status vad_session_init_impl(transcribe_model *               
     if (const auto st = check_input_struct_size(params->struct_size, k_min_session_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (params->n_threads < 0) {
+    if (!valid_n_threads(params->n_threads)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     std::unique_ptr<transcribe_vad_session> s(ops->new_session());

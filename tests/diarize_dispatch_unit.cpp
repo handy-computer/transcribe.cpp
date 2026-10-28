@@ -135,9 +135,11 @@ void test_role_checks() {
 
     transcribe_diarize_session_params sp;
     transcribe_diarize_session_params_init(&sp);
-    sp.n_threads = -1;
-    CHECK(transcribe_diarize_session_init(&model, &sp, &s) == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(s == nullptr);
+    for (const int n_threads : { -1, 513 }) {
+        sp.n_threads = n_threads;
+        CHECK(transcribe_diarize_session_init(&model, &sp, &s) == TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(s == nullptr);
+    }
     sp.n_threads = 2;
     CHECK(transcribe_diarize_session_init(&model, &sp, &s) == TRANSCRIBE_OK);
     CHECK(s != nullptr);

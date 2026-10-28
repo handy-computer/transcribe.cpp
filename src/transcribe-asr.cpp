@@ -42,6 +42,7 @@ using transcribe::api_guard_value;
 using transcribe::api_guard_void;
 using transcribe::enum_field_raw;
 using transcribe::pcm_is_finite;
+using transcribe::valid_n_threads;
 
 namespace {
 
@@ -771,11 +772,11 @@ static transcribe_status transcribe_session_init_impl(struct transcribe_model * 
         return st;
     }
     // n_threads contract from include/transcribe.h: 0 means "library
-    // picks a sensible default", positive means "use this many." A
-    // negative value is undefined input, not a documented sentinel —
-    // reject it here so individual family handlers don't have to
-    // re-check the same condition.
-    if (params->n_threads < 0) {
+    // picks a sensible default", positive means "use this many", up to
+    // ggml's thread limit. Anything else is undefined input, not a
+    // documented sentinel — reject it here so individual family handlers
+    // don't have to re-check the same condition.
+    if (!valid_n_threads(params->n_threads)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     // Raw-validate kv_type before the families' first enum-typed load of it
