@@ -262,7 +262,6 @@ ggml_tensor * conv_module(ggml_context *              ctx,
                           int                         stride,
                           ggml_tensor *               frame_mask) {
     const int64_t d_model = x->ne[0];
-    const int64_t T       = x->ne[1];
     const int64_t B       = x->ne[2];
 
     x = layer_norm(ctx, x, b.norm_conv_w, b.norm_conv_b);
@@ -270,14 +269,8 @@ ggml_tensor * conv_module(ggml_context *              ctx,
     x = ggml_mul_mat(ctx, b.conv_pointwise1_w, x);  // [2*inner, T, B]
     x = ggml_add(ctx, x, b.conv_pointwise1_b);
 
-    // GLU over ne[0]: first half * sigmoid(second half). Matches
-    // F.glu(dim=-1) on the reference's [B, T, 2*inner] layout.
-    {
-        ggml_tensor * gate = ggml_view_3d(ctx, x, inner_dim, T, B, x->nb[1], x->nb[2], /*offset=*/0);
-        ggml_tensor * value =
-            ggml_view_3d(ctx, x, inner_dim, T, B, x->nb[1], x->nb[2], inner_dim * ggml_element_size(x));
-        x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
-    }
+    // Matches F.glu(dim=-1) on the reference's [B, T, 2*inner] layout.
+    x = transcribe::conformer::glu(ctx, x);
 
     // Zero the padded frames before the depthwise conv, matching the
     // reference's `masked_fill(~attention_mask.unsqueeze(-1), 0.0)`. This
