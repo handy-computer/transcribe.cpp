@@ -19,6 +19,16 @@ void check_predict(const char * what, int audio_tokens, double ms_per_audio_toke
     }
 }
 
+void check_predict_rate(const char * what, int audio_tokens, double ms_per_audio_token, int tokens_per_sec,
+                        int expected) {
+    const int got = transcribe::predict_transcript_tokens(audio_tokens, ms_per_audio_token, tokens_per_sec);
+    if (got != expected) {
+        std::fprintf(stderr, "FAIL %s: predict_transcript_tokens(%d, %.3f, %d) = %d, expected %d\n", what, audio_tokens,
+                     ms_per_audio_token, tokens_per_sec, got, expected);
+        ++g_failures;
+    }
+}
+
 void check_budget(const char * what, int predicted, int floor_tokens, int t_prompt, int ceiling, int expected) {
     const int got = transcribe::pick_decode_budget(predicted, floor_tokens, t_prompt, ceiling);
     if (got != expected) {
@@ -36,6 +46,15 @@ int main(void) {
                   /*expected=*/2364);
     check_predict("480 ms LFR encoder, same 197 s", /*audio_tokens=*/410, /*ms_per_audio_token=*/480.0,
                   /*expected=*/2361);
+
+    // Families that transcribe dense-script languages pass a higher rate:
+    // Qwen3-ASR's tokenizer realizes ~6 tokens/word for Bengali and ~4.6 for
+    // Hindi vs ~1.2 for English, so fast speech in those scripts (~21 tok/s)
+    // truncates at the default 12 tok/s estimate (~25 s of continuous
+    // Bengali). 45 covers the fastest measured speech with 2x margin.
+    check_predict_rate("dense-script rate, 197 s", 2463, 80.0, 45, 8866);
+    check_predict_rate("26 s Bengali at the default rate truncates", 329, 80.0, 12, 315);
+    check_predict_rate("26 s Bengali at the dense-script rate completes", 329, 80.0, 45, 1184);
 
     // An unpublished rate falls back to the audio-token count.
     check_predict("unknown rate falls back", 2463, 0.0, 2463);
