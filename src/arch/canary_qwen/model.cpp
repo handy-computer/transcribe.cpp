@@ -19,6 +19,7 @@
 
 #include "canary_qwen.h"
 #include "causal_lm/causal_lm.h"
+#include "conformer/conformer.h"
 #include "decoder.h"
 #include "encoder.h"
 #include "ggml-alloc.h"
@@ -802,7 +803,8 @@ transcribe_status run(transcribe_session *          context,
     }
     {
         ggml_init_params ip{};
-        ip.mem_size     = 32 * 1024 * 1024;
+        ip.mem_size     = 32 * 1024 * 1024 + static_cast<size_t>(conformer::pre_encode_meta_bytes(
+                                                 mel_n_frames, conformer::kPreEncodeTimeChunk));
         ip.mem_buffer   = nullptr;
         ip.no_alloc     = true;
         cc->compute_ctx = ggml_init(ip);
@@ -820,7 +822,8 @@ transcribe_status run(transcribe_session *          context,
 
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, /*parallel=*/false,
+                                           static_cast<int>(cm->plan.scheduler_list.size()),
+                                           16384 + conformer::kPreEncodeExtraGraphNodes, /*parallel=*/false,
                                            /*op_offload=*/true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen run: ggml_backend_sched_new failed");
@@ -1316,7 +1319,8 @@ transcribe_status encode_one(CanaryQwenSession *        cc,
 
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+                                           static_cast<int>(cm->plan.scheduler_list.size()),
+                                           16384 + conformer::kPreEncodeExtraGraphNodes, false, true);
         if (cc->sched == nullptr) {
             return TRANSCRIBE_ERR_BACKEND;
         }

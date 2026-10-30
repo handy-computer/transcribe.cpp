@@ -6,6 +6,7 @@
 // on the ggml graph (not host-side like Parakeet's LSTM).
 
 #include "cohere.h"
+#include "conformer/conformer.h"
 #include "decoder.h"
 #include "encoder.h"
 #include "ggml-alloc.h"
@@ -713,9 +714,11 @@ transcribe_status run(transcribe_session *          session,
 
     // ----- Build encoder graph -------------------------------------
     {
-        // 48 encoder blocks + decoder = large graph. 8 MB metadata arena.
+        // 48 encoder blocks + decoder = large graph. 8 MB metadata arena, plus
+        // the pre_encode's per-window tensors (it tiles in time).
         ggml_init_params init_params{};
-        init_params.mem_size   = 8 * 1024 * 1024;
+        init_params.mem_size =
+            8 * 1024 * 1024 + conformer::pre_encode_meta_bytes(mel_n_frames, conformer::kPreEncodeTimeChunk);
         init_params.mem_buffer = nullptr;
         init_params.no_alloc   = true;
         cc->compute_ctx        = ggml_init(init_params);
@@ -743,7 +746,8 @@ transcribe_status run(transcribe_session *          session,
     // ----- Allocate + compute encoder graph -------------------------
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+                                           static_cast<int>(cm->plan.scheduler_list.size()),
+                                           16384 + conformer::kPreEncodeExtraGraphNodes, false, true);
         if (cc->sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_BACKEND;
@@ -1408,7 +1412,8 @@ transcribe_status encode_one_to_host(CohereSession *            cc,
 
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(cm->plan.scheduler_list.data(), nullptr,
-                                           static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+                                           static_cast<int>(cm->plan.scheduler_list.size()),
+                                           16384 + conformer::kPreEncodeExtraGraphNodes, false, true);
         if (cc->sched == nullptr) {
             return TRANSCRIBE_ERR_BACKEND;
         }

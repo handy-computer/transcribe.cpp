@@ -326,10 +326,11 @@ conf::ConvPolicy sf_conv_policy(const char * backend) {
     // Parakeet block/pre_encode depthwise defaults (encoder.cpp:50-66).
     policy.direct_dw_in_block = conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW",
                                                           /*backend_default=*/true);
-    const bool is_metal =
-        backend != nullptr && (std::strstr(backend, "Metal") != nullptr || std::strstr(backend, "metal") != nullptr);
+    // Direct on every backend, Metal included (parakeet's
+    // detect_direct_dw_in_pre_encode explains the old Metal exclusion, which
+    // never matched the "MTL0" backend name).
     policy.direct_dw_in_pre_encode = conf::resolve_conv_direct(
-        "TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW", /*backend_default=*/!is_metal);
+        "TRANSCRIBE_CONV_DIRECT_DW", "TRANSCRIBE_CONV_NO_DIRECT_DW", /*backend_default=*/true);
     policy.causal_pre_encode = false;  // NEST offline subsample (Regular att)
     return policy;
 }
