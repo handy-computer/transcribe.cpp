@@ -7,6 +7,10 @@
 #include <immintrin.h>
 #endif
 
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -284,6 +288,17 @@ static uint64_t ggml_x86_xgetbv0() {
 #endif
 }
 
+#if defined(__APPLE__)
+// macOS enables AVX-512 state lazily: XCR0 bits 5-7 stay clear until the thread first
+// executes an AVX-512 instruction, which the kernel then traps and enables. XCR0 alone
+// would wrongly reject AVX-512 variants, so ask the kernel instead (as cpu_features does).
+static bool ggml_x86_darwin_avx512_enabled() {
+    int    val = 0;
+    size_t len = sizeof(val);
+    return sysctlbyname("hw.optional.avx512f", &val, &len, nullptr, 0) == 0 && val != 0;
+}
+#endif
+
 // XCR0 bits this build variant needs the OS to have enabled.
 static uint64_t ggml_x86_required_xcr0() {
     uint64_t required = 0;
@@ -307,6 +322,8 @@ static bool ggml_x86_os_supports_variant(uint64_t xcr0) {
 
 // xcr0 is passed in (0 when OSXSAVE is clear) so the decision can be tested
 static int ggml_backend_cpu_x86_score_xcr0(cpuid_x86 & is, uint64_t xcr0) {
+    GGML_UNUSED(is); // the x64 variant checks no CPUID bits
+
     if (!ggml_x86_os_supports_variant(xcr0)) {
         return 0;
     }
@@ -372,7 +389,12 @@ static int ggml_backend_cpu_x86_score_xcr0(cpuid_x86 & is, uint64_t xcr0) {
 static int ggml_backend_cpu_x86_score() {
     cpuid_x86 is;
     // xgetbv is only valid when the OS has set CR4.OSXSAVE
-    const uint64_t xcr0 = is.OSXSAVE() ? ggml_x86_xgetbv0() : 0;
+    uint64_t xcr0 = is.OSXSAVE() ? ggml_x86_xgetbv0() : 0;
+#if defined(__APPLE__)
+    if ((xcr0 & (GGML_XCR0_SSE | GGML_XCR0_YMM)) == (GGML_XCR0_SSE | GGML_XCR0_YMM) && ggml_x86_darwin_avx512_enabled()) {
+        xcr0 |= GGML_XCR0_OPMASK | GGML_XCR0_ZMM_HI256 | GGML_XCR0_HI16_ZMM;
+    }
+#endif
     return ggml_backend_cpu_x86_score_xcr0(is, xcr0);
 }
 
