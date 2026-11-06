@@ -1,0 +1,89 @@
+diff --git a/src/ggml-cpu/arch/x86/cpu-feats.cpp b/src/ggml-cpu/arch/x86/cpu-feats.cpp
+index d775a036..df74bd10 100644
+--- a/src/ggml-cpu/arch/x86/cpu-feats.cpp
++++ b/src/ggml-cpu/arch/x86/cpu-feats.cpp
+@@ -4,8 +4,10 @@
+ 
+ #ifdef _MSC_VER
+ #include <intrin.h>
++#include <immintrin.h>
+ #endif
+ 
++#include <cstdint>
+ #include <cstring>
+ #include <vector>
+ #include <bitset>
+@@ -260,11 +262,56 @@ void test_x86_is() {
+ }
+ #endif
+ 
+-static int ggml_backend_cpu_x86_score() {
+-    // FIXME: this does not check for OS support
++// XCR0 state components the OS must enable before the matching registers can be used
++// (Intel SDM Vol. 1, 13.1). CPUID only reports what the hardware supports; if the OS
++// leaves a component disabled, the first instruction touching it raises #UD.
++#define GGML_XCR0_SSE       (1ull << 1)
++#define GGML_XCR0_YMM       (1ull << 2)
++#define GGML_XCR0_OPMASK    (1ull << 5)
++#define GGML_XCR0_ZMM_HI256 (1ull << 6)
++#define GGML_XCR0_HI16_ZMM  (1ull << 7)
++#define GGML_XCR0_XTILECFG  (1ull << 17)
++#define GGML_XCR0_XTILEDATA (1ull << 18)
++
++static uint64_t ggml_x86_xgetbv0() {
++#if defined(_MSC_VER) && !defined(__clang__)
++    return _xgetbv(0);
++#else
++    // inline asm rather than the intrinsic, so this builds without -mxsave
++    uint32_t eax, edx;
++    __asm__ __volatile__("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
++    return ((uint64_t) edx << 32) | eax;
++#endif
++}
++
++// XCR0 bits this build variant needs the OS to have enabled.
++static uint64_t ggml_x86_required_xcr0() {
++    uint64_t required = 0;
++#if defined(GGML_AVX) || defined(GGML_AVX2) || defined(GGML_FMA) || defined(GGML_F16C) || defined(GGML_AVX_VNNI)
++    required |= GGML_XCR0_SSE | GGML_XCR0_YMM;
++#endif
++#if defined(GGML_AVX512) || defined(GGML_AVX512_VBMI) || defined(GGML_AVX512_VNNI) || defined(GGML_AVX512_BF16)
++    required |= GGML_XCR0_SSE | GGML_XCR0_YMM | GGML_XCR0_OPMASK | GGML_XCR0_ZMM_HI256 | GGML_XCR0_HI16_ZMM;
++#endif
++#if defined(GGML_AMX_TILE) || defined(GGML_AMX_INT8)
++    required |= GGML_XCR0_XTILECFG | GGML_XCR0_XTILEDATA;
++#endif
++    return required;
++}
++
++// true if the OS state in xcr0 covers everything this build variant uses
++static bool ggml_x86_os_supports_variant(uint64_t xcr0) {
++    const uint64_t required = ggml_x86_required_xcr0();
++    return (xcr0 & required) == required;
++}
++
++// xcr0 is passed in (0 when OSXSAVE is clear) so the decision can be tested
++static int ggml_backend_cpu_x86_score_xcr0(cpuid_x86 & is, uint64_t xcr0) {
++    if (!ggml_x86_os_supports_variant(xcr0)) {
++        return 0;
++    }
+ 
+     int score = 1;
+-    cpuid_x86 is;
+ 
+ #ifdef GGML_FMA
+     if (!is.FMA()) { return 0; }
+@@ -322,6 +369,13 @@ static int ggml_backend_cpu_x86_score() {
+     return score;
+ }
+ 
++static int ggml_backend_cpu_x86_score() {
++    cpuid_x86 is;
++    // xgetbv is only valid when the OS has set CR4.OSXSAVE
++    const uint64_t xcr0 = is.OSXSAVE() ? ggml_x86_xgetbv0() : 0;
++    return ggml_backend_cpu_x86_score_xcr0(is, xcr0);
++}
++
+ GGML_BACKEND_DL_SCORE_IMPL(ggml_backend_cpu_x86_score)
+ 
+ #endif // defined(__x86_64__) || (defined(_MSC_VER) && defined(_M_AMD64))
