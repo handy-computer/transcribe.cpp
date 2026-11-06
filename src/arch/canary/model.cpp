@@ -25,6 +25,7 @@
 #include "transcribe-meta.h"
 #include "transcribe-prompting.h"
 #include "transcribe-repetition-guard.h"
+#include "vocab_boost.h"
 #include "weights.h"
 
 #include <algorithm>
@@ -384,9 +385,12 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
     // Transcript prefix: canary2's user_prefix (measured clean on all three
     // canary2 checkpoints). Needs a sub-vocab range for aggregate tokenizers.
-    transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX,
-                            m->hparams.prompt_format == "canary2" &&
-                                (m->hparams.tokenizer_single_sp || !m->hparams.tok_lang_codes.empty()));
+    // Vocabulary terms are encoded the same way and bias the greedy decode
+    // (vocab_boost.h).
+    const bool encodes_text =
+        m->hparams.prompt_format == "canary2" && (m->hparams.tokenizer_single_sp || !m->hparams.tok_lang_codes.empty());
+    transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX, encodes_text);
+    transcribe::set_feature(m.get(), TRANSCRIBE_FEATURE_VOCABULARY, encodes_text);
 
     // Publish the input-length ceiling now that the encoder positional span
     // and frontend rate are known (apply_family_invariants ran before the
@@ -988,6 +992,7 @@ transcribe_status run(transcribe_session *          session,
 
     std::vector<int32_t> prompt_ids;
     std::vector<int32_t> prefix_ids;
+    VocabBoost           boost;
     if (cm->hparams.prompt_format == "canary2") {
         if (const transcribe_status st =
                 encode_canary2_prefix(*cm, params != nullptr ? params->prefix : nullptr, tgt_lang, prefix_ids);
@@ -995,6 +1000,33 @@ transcribe_status run(transcribe_session *          session,
             return st;
         }
         prompt_ids = build_prompt_canary2(*cm, cm->hparams, src_id, tgt_id, task, pnc, prefix_ids);
+        if (params != nullptr && params->n_vocabulary > 0) {
+            boost.strength = vocab_boost_strength();
+            // Each term as given and with its first ASCII letter's case flipped:
+            // the transcript starts a sentence capitalized and runs on lowercase.
+            for (std::string spelling : transcribe::prompting::terms(params)) {
+                for (int form = 0; form < 2; ++form) {
+                    if (form == 1) {
+                        char & c = spelling[0];
+                        if (c >= 'a' && c <= 'z') {
+                            c = static_cast<char>(c - 'a' + 'A');
+                        } else if (c >= 'A' && c <= 'Z') {
+                            c = static_cast<char>(c - 'A' + 'a');
+                        } else {
+                            break;
+                        }
+                    }
+                    std::vector<int32_t> ids;
+                    if (const transcribe_status st = encode_canary2_prefix(*cm, spelling.c_str(), tgt_lang, ids);
+                        st != TRANSCRIBE_OK) {
+                        return st;
+                    }
+                    if (!ids.empty()) {
+                        boost.terms.push_back(std::move(ids));
+                    }
+                }
+            }
+        }
     } else if (cm->hparams.prompt_format == "canary") {
         prompt_ids = build_prompt_canary(cm->hparams, src_id, tgt_id, task, pnc);
     }
@@ -1183,7 +1215,7 @@ transcribe_status run(transcribe_session *          session,
                                            k_gen_reserve, prompt_len, cc->kv_cache.n_ctx);
 
         int next_token = 0;
-        if (prompt_skip_softmax && db.argmax_out != nullptr) {
+        if (!boost.active() && prompt_skip_softmax && db.argmax_out != nullptr) {
             int32_t argmax_id = 0;
             ggml_backend_tensor_get(db.argmax_out, &argmax_id, 0, sizeof(int32_t));
             next_token = argmax_id;
@@ -1192,13 +1224,7 @@ transcribe_status run(transcribe_session *          session,
             std::vector<float> logits_host(static_cast<size_t>(vocab_size) * prompt_len);
             ggml_backend_tensor_get(db.out, logits_host.data(), 0, logits_host.size() * sizeof(float));
             const float * last_logits = logits_host.data() + static_cast<size_t>(prompt_len - 1) * vocab_size;
-            float         best        = last_logits[0];
-            for (int j = 1; j < static_cast<int>(vocab_size); ++j) {
-                if (last_logits[j] > best) {
-                    best       = last_logits[j];
-                    next_token = j;
-                }
-            }
+            next_token                = boost.pick(last_logits, vocab_size, {});
         }
 
         std::vector<int> generated_ids;
@@ -1206,7 +1232,8 @@ transcribe_status run(transcribe_session *          session,
             generated_ids.push_back(next_token);
         }
 
-        int n_past = prompt_len;
+        int                n_past = prompt_len;
+        std::vector<float> step_logits;  // host copy of a step's logits, only under a vocabulary bias
 
         // Commit accumulated generated_ids as the run's segment + full
         // text. Called both on normal loop exit and on abort so the
@@ -1361,7 +1388,14 @@ transcribe_status run(transcribe_session *          session,
                 cc->kv_cache.head = n_past;
 
                 int32_t argmax_id = 0;
-                ggml_backend_tensor_get(sb.argmax_out, &argmax_id, 0, sizeof(int32_t));
+                if (boost.active()) {
+                    const int64_t vocab_size = sb.logits_out->ne[0];
+                    step_logits.resize(static_cast<size_t>(vocab_size));
+                    ggml_backend_tensor_get(sb.logits_out, step_logits.data(), 0, step_logits.size() * sizeof(float));
+                    argmax_id = boost.pick(step_logits.data(), vocab_size, generated_ids);
+                } else {
+                    ggml_backend_tensor_get(sb.argmax_out, &argmax_id, 0, sizeof(int32_t));
+                }
                 next_token = argmax_id;
 
                 if (next_token != eos_id) {
@@ -1438,7 +1472,14 @@ transcribe_status run(transcribe_session *          session,
                 cc->kv_cache.head = n_past;
 
                 int32_t argmax_id = 0;
-                ggml_backend_tensor_get(db_step.argmax_out, &argmax_id, 0, sizeof(int32_t));
+                if (boost.active()) {
+                    const int64_t vocab_size = db_step.out->ne[0];
+                    step_logits.resize(static_cast<size_t>(vocab_size));
+                    ggml_backend_tensor_get(db_step.out, step_logits.data(), 0, step_logits.size() * sizeof(float));
+                    argmax_id = boost.pick(step_logits.data(), vocab_size, generated_ids);
+                } else {
+                    ggml_backend_tensor_get(db_step.argmax_out, &argmax_id, 0, sizeof(int32_t));
+                }
                 next_token = argmax_id;
 
                 if (next_token != eos_id) {
@@ -1608,7 +1649,10 @@ transcribe_status run_batch(transcribe_session *          session,
     const bool primary_is_gpu = cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
                                 cm->plan.primary_kind != transcribe::BackendKind::Accel &&
                                 cm->plan.primary_kind != transcribe::BackendKind::Unknown;
-    if (n == 1 || !cc->decoder_use_flash || !primary_is_gpu || transcribe::debug::enabled()) {
+    // The batched decode takes a shared argmax; a vocabulary bias needs the
+    // per-utterance logits, so it runs serial.
+    const bool has_vocabulary = params != nullptr && params->n_vocabulary > 0;
+    if (n == 1 || !cc->decoder_use_flash || !primary_is_gpu || has_vocabulary || transcribe::debug::enabled()) {
         return run_batch_serial(cc, pcm, n_samples, n, params);
     }
 
