@@ -26,6 +26,9 @@ on:
       - "include/**"
       - "src/**"
       - "scripts/lib/**"
+      - "scripts/convert-gigaam.py"
+      - "scripts/dump_reference_gigaam_author.py"
+      - "scripts/test_convert_gigaam.py"
       - "tests/**"
       - "ggml/**"
       - "CMakeLists.txt"
@@ -38,6 +41,9 @@ on:
       - "include/**"
       - "src/**"
       - "scripts/lib/**"
+      - "scripts/convert-gigaam.py"
+      - "scripts/dump_reference_gigaam_author.py"
+      - "scripts/test_convert_gigaam.py"
       - "tests/**"
       - "ggml/**"
       - "CMakeLists.txt"
@@ -82,6 +88,12 @@ jobs:
         run: uv run --no-project bindings/python/_generate/check_version_sync.py
       - name: GGUF writer layout
         run: uv run scripts/lib/test_gguf_writer.py
+      - name: Hugging Face snapshot commit check
+        run: uv run scripts/lib/test_hf_source.py
+      - name: GigaAM variant sources and loader
+        run: uv run scripts/lib/test_gigaam_hf.py
+      - name: GigaAM converter profiles
+        run: uv run scripts/test_convert_gigaam.py
 
   python-shared:
     runs-on: blacksmith-2vcpu-ubuntu-2404

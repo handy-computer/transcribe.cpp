@@ -1,0 +1,225 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "gigaam",
+  "hf_repo": "ai-sage/GigaAM-Multilingual",
+  "hf_revision": "3905cd51c3ed4e88c8edf33f3302969ba480a327",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Branch large_ctc (the repo's main branch is the 220M ctc model). Hydra-style config under cfg.model.cfg: same encoder classes as gigaam-v3 at 24 layers, d_model=1024, 16 heads; head=CTCHead with feat_in=1024, num_classes=71 (70 chars + 1 blank). decoding=CTCGreedyDecoding with an inline character vocabulary. model_name=multilingual_large_ctc; model_class=ctc."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "Frontend declared inside config.json under cfg.model.cfg.preprocessor (features=64, n_fft=320, hop=160, win=320, center=false). Unlike the v3 configs it does not list mel_scale / mel_norm; gigaam's FeatureExtractor never passes them to torchaudio, so the frontend is the same HTK, unnormalized filterbank as v3."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "Charwise tokenizer; vocabulary is inline in config.json under cfg.model.cfg.decoding.vocabulary: 70 strings (space, apostrophe, a-z, 33 Russian letters including ё, and і ғ қ ң ү ұ һ ә ө for Kazakh, Kyrgyz and Uzbek Cyrillic)."
+    },
+    "tokenizer_model": {
+      "kind": "hf_file",
+      "path": "tokenizer.model",
+      "status": "missing",
+      "detail": "Branch has no tokenizer.model file: `Tokenizer.charwise=True` path, as in gigaam-v3-ctc."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Not used."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Decoding is CTC greedy; no HF generation_config."
+    },
+    "model_weights": {
+      "kind": "hf_file",
+      "path": "pytorch_model.bin",
+      "status": "found",
+      "detail": "PyTorch pickle, 2,341,592,643 bytes, LFS sha256 c3fabefb50b41f08f4d7ad44e02c26c37d242882704cdcca2ebd98e45eff73d1. All tensors float32, every key prefixed `model.` by the HF wrapper."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "Repo ships PyTorch pickle, not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "status": "found",
+      "detail": "One card covers the ssl, ctc, large_ssl and large_ctc branches; WER table on Common Voice, FLEURS and internal sets for ru, en, kk, ky, uz."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/salute-developers/GigaAM (gigaam package classes, built from the HF snapshot by scripts/lib/gigaam_hf.py)",
+      "status": "found",
+      "detail": "Author-first PyTorch implementation, MIT. The pinned package commit 6e4b027c predates gigaam.load_model('multilingual_large_ctc') (added in 559d88d), but its preprocessor, ConformerEncoder, CTCHead and CTCGreedyDecoding already cover this config; the commits from 6e4b027c to 7447938 change the encoder only for padded batch inputs. The HF repo also ships modeling_gigaam.py with the same classes."
+    }
+  },
+  "variants": [
+    {
+      "name": "gigaam-multilingual-large-ctc",
+      "memory_gb": 2.34,
+      "files": [
+        "config.json",
+        "modeling_gigaam.py",
+        "pytorch_model.bin"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-ctc"
+    ],
+    "key_fields": {
+      "model_type": "gigaam",
+      "model_class": "ctc",
+      "model_name": "multilingual_large_ctc",
+      "encoder.type": "ConformerEncoder",
+      "encoder.feat_in": 64,
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 16,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.self_attention_model": "rotary",
+      "encoder.pos_emb_max_len": 5000,
+      "encoder.subsampling": "conv1d",
+      "encoder.subs_kernel_size": 5,
+      "encoder.subsampling_factor": 4,
+      "encoder.conv_kernel_size": 5,
+      "encoder.conv_norm_type": "layer_norm",
+      "head.type": "CTCHead",
+      "head.feat_in": 1024,
+      "head.num_classes": 71,
+      "decoding": "CTCGreedyDecoding",
+      "tokenizer.kind": "charwise",
+      "tokenizer.vocab_size_plus_blank": 71,
+      "tokenizer.vocab_inline": "70 entries: space, apostrophe, a-z, а-я, ё, і, ғ, қ, ң, ү, ұ, һ, ә, ө."
+    },
+    "varying_across_variants": [
+      "encoder.n_layers",
+      "encoder.d_model",
+      "head.feat_in",
+      "head.num_classes",
+      "tokenizer.vocab_inline"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "Every tensor in pytorch_model.bin is torch.float32 (824 tensors, 585,319,495 parameters outside the frontend buffers).",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": null,
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "other",
+    "vocab_size": 70,
+    "special_tokens": {
+      "blank": 70
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "c74f14b62f397a12ab3d1d2db0986ae1ae929f11a65465bd8ea2db06e8022f49"
+  },
+  "capabilities": {
+    "languages": ["ru", "en", "kk", "ky", "uz"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "FLEURS",
+      "language": "ru",
+      "metric": "wer",
+      "score": 3.0,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "GigaAM Multilingual Large column. Utterances over 30 s and references with digits excluded; lowercased, punctuation removed, numerals to words; greedy decoding."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "kk",
+      "metric": "wer",
+      "score": 4.4,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "Same column and normalization as the ru row."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "ky",
+      "metric": "wer",
+      "score": 5.5,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "Same column and normalization as the ru row."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "uz",
+      "metric": "wer",
+      "score": 7.3,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "Same column and normalization as the ru row."
+    },
+    {
+      "dataset": "FLEURS",
+      "language": "en",
+      "metric": "wer",
+      "score": 9.4,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-Multilingual",
+      "notes": "Same column and normalization as the ru row."
+    }
+  ],
+  "reference_framework": "author_repo_gigaam",
+  "reference_rationale": "Same as the rest of the gigaam family: the salute-developers `gigaam` package (MIT) at the family pin 6e4b027c. Its classes are instantiated from the pinned HF snapshot (config.json + pytorch_model.bin at large_ctc 3905cd51) by scripts/lib/gigaam_hf.py, because the package's own download for this variant needs a newer package and a CDN that the family does not pin.",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "Encoder is the gigaam-v3 Conformer at 24 layers, d_model=1024; the C++ graph reads both from GGUF KV and has only been validated at 16 x 768 before this variant.",
+    "CTCHead is `nn.Conv1d(1024, num_classes=71, kernel_size=1)` + `log_softmax(-1)`. Blank id = 70 = num_classes - 1, appended after the inline vocab.",
+    "Charwise tokenizer: the inline vocab order is the CTC class order; the converter must keep it, including the non-ASCII Kazakh / Kyrgyz / Uzbek letters, and must not sort or deduplicate.",
+    "No language input and no language-detection output: the model picks characters from all five languages' alphabets per frame, so a --language hint has no effect on decoding.",
+    "Conv1d subsampling, SpecScaler log, center=false, HTK mel without area normalization, rotary attention: same gotchas as gigaam-v3.",
+    "Upstream evaluates WER on lowercased, punctuation-free text with numerals spelled out; the model emits no digits, casing or punctuation, so WER comparisons need the same normalization.",
+    "Only the ru golden case is in the manifest; numerical parity for the other four languages rests on the shared graph and is not dumped."
+  ],
+  "intake_gaps": [
+    {
+      "field": "upstream_benchmarks",
+      "reason": "Published scores are context only. The Oracle reference WER baseline (Stage 2 Step 7) and the per-language WER sweep (Stage 7) have not been run for this variant."
+    },
+    {
+      "field": "dtype.expected_f32_tensors",
+      "reason": "Converter emits every tensor at F32 (reference dtype); same as the v3 variants."
+    }
+  ]
+}

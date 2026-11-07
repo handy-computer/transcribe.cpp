@@ -6,13 +6,19 @@ ASR variants (`gigaam-v3-e2e-rnnt`, `gigaam-v3-rnnt`, `gigaam-v3-ctc`,
 `gigaam-v3-e2e-ctc`) ready for HF upload. `v3_ssl` (encoder-only HuBERT
 pretraining checkpoint) intentionally out of scope.
 
+`gigaam-multilingual-large-ctc` (ai-sage/GigaAM-Multilingual, branch
+`large_ctc`) converts and validates at F32 on the existing runtime with no
+C++ change; WER, benchmarks, and publication are not done. See
+[GigaAM Multilingual Large CTC](#gigaam-multilingual-large-ctc).
+
 ## Identity
 
 - Family key: `gigaam`
 - Upstream architecture string: `gigaam` (HF `model_type`); paper name "GigaAM" (Sber/ai-sage, InterSpeech 2025, arXiv:2506.01192)
 - Hugging Face repo: `ai-sage/GigaAM-v3` (five sibling branches upstream; four ported)
+- Also converted, not yet published: `gigaam-multilingual-large-ctc` from `ai-sage/GigaAM-Multilingual`, see [GigaAM Multilingual Large CTC](#gigaam-multilingual-large-ctc)
 - License: MIT
-- Variants in scope (one HF branch each):
+- v3 variants in scope (one HF branch each):
 
   | Variant | HF branch | Head | num_classes | Vocab style |
   |---|---|---|---|---|
@@ -33,7 +39,7 @@ pretraining checkpoint) intentionally out of scope.
   encoder-output emission CLI, so `v3_ssl` has no user-observable
   capability here and is intentionally **out of scope** for this port.
 
-Canonical bench samples: `ru` (model is Russian-only; English `jfk`/`dots` would decode to garbage).
+Canonical bench samples for the v3 variants: `ru` (model is Russian-only; English `jfk`/`dots` would decode to garbage).
 
 ## References
 
@@ -220,3 +226,101 @@ them from the converter source.
   The intake's hypothesis of shared encoder weights was wrong;
   the converter emits a full GGUF per variant, not a shared encoder
   GGUF with per-variant head shards.
+
+## GigaAM Multilingual Large CTC
+
+Variant `gigaam-multilingual-large-ctc` is the `large_ctc` branch of
+[`ai-sage/GigaAM-Multilingual`](https://huggingface.co/ai-sage/GigaAM-Multilingual),
+pinned at commit `3905cd51c3ed4e88c8edf33f3302969ba480a327` (the repo's
+`main` branch is the smaller `ctc` model). It is the v3 encoder at 24
+layers, d_model=1024, 16 heads, with a CTC head over 71 classes: a
+70-entry charwise vocab (space, apostrophe, a-z, Russian а-я and ё, and
+і ғ қ ң ү ұ һ ә ө) plus blank at id 70. Languages: ru, en, kk, ky, uz.
+Offline only; there is no language input or language-detection output.
+
+| Item | Path |
+|---|---|
+| Intake | `reports/porting/gigaam/gigaam-multilingual-large-ctc/intake.json` |
+| Golden manifest | `tests/golden/gigaam/gigaam-multilingual-large-ctc.manifest.json` |
+| Tolerances | `tests/tolerances/gigaam-multilingual-large-ctc.json` |
+| Variant sources and snapshot loader | `scripts/lib/gigaam_hf.py` (tests: `scripts/lib/test_gigaam_hf.py`) |
+
+### Commands
+
+Conversion (writes `models/gigaam-multilingual-large-ctc/gigaam-multilingual-large-ctc-F32.gguf`,
+2341378624 bytes, 824 tensors):
+
+```bash
+uv run --project scripts/envs/gigaam scripts/convert-gigaam.py ai-sage/GigaAM-Multilingual \
+  --repo-id gigaam-multilingual-large-ctc
+```
+
+The converter downloads the snapshot (2.3 GB) at the pinned commit into
+`$TRANSCRIBE_MODELS_DIR/<slug>@<commit>/` or the Hugging Face cache, both
+of which keep each commit in its own directory; with `HF_HUB_OFFLINE=1`
+it uses that local copy without network access, and fails when the
+pinned commit was never downloaded. Unlike converters that take
+`lib.hf_source.resolve_model_dir`, it accepts no other repo id and no local directory, so `general.repo_url`
+and the reference dumps' `hf_revision` name the source the weights came
+from.
+
+The repo and commit of every GigaAM variant are in `VARIANTS` of
+`scripts/lib/gigaam_hf.py`, which the converter, the reference dumper,
+and the WER runner read. `scripts/lib/test_gigaam_hf.py` fails when a
+golden manifest names another source, and the dumper refuses the
+`--revision` that `validate.py` passes from the manifest when it differs
+from the pin. Change the pin and the manifest together.
+
+Reference dumps and validation use the same pin:
+
+```bash
+uv run scripts/preflight.py --family gigaam --variant gigaam-multilingual-large-ctc --gate A
+uv run scripts/preflight.py --family gigaam --variant gigaam-multilingual-large-ctc --gate B
+uv run scripts/validate.py all --family gigaam --variant gigaam-multilingual-large-ctc
+uv run scripts/quantize-all.py models/gigaam-multilingual-large-ctc/gigaam-multilingual-large-ctc-F32.gguf
+TRANSCRIBE_GIGAAM_GGUF=$PWD/models/gigaam-multilingual-large-ctc/gigaam-multilingual-large-ctc-F16.gguf \
+  ctest --test-dir build -R gigaam
+```
+
+### Reference
+
+The reference is the family's `gigaam` package pin (6e4b027c), as for v3.
+That commit has no `load_model("multilingual_large_ctc")`, so
+`scripts/lib/gigaam_hf.py` instantiates the package's `FeatureExtractor`,
+`ConformerEncoder`, `CTCHead`, and `CTCGreedyDecoding` from the snapshot's
+`config.json`, whose `_target_` entries name the same classes in
+`modeling_gigaam`, and loads `pytorch_model.bin` with its `model.` key
+prefix removed. The upstream commits from 6e4b027c to 7447938 change the
+encoder only for padded batch inputs. The repo's own `modeling_gigaam.py`
+on the same weights produces bit-identical `frontend.mel.out`, `enc.out`,
+and `ctc.log_probs` on `samples/ru.wav`.
+
+The v3 config lists `mel_scale: htk` and `mel_norm: null`; the
+Multilingual config omits both. The package's `FeatureExtractor` passes
+neither to torchaudio and defaults `center` to true, so the converter
+reads the values the module sets (sample rate, FFT, window and hop
+lengths, mel count, `center`, mel scale and norm, frequency range) from
+it, `htk` with no norm for every variant, and refuses a config value that
+disagrees. The rest of `stt.frontend.*` (periodic Hann window, no dither,
+pre-emphasis, or normalization) is fixed by `FeatureExtractor`'s code.
+
+### Capability Validation
+
+| Capability | Mode | Command / test | Expected observable | Status |
+|------------|------|----------------|---------------------|--------|
+| Transcribe (ru, en, kk, ky, uz) | auto / no language hint | `build/bin/transcribe-cli -m <gguf> <wav>` | transcript equal to the reference's | PASS on `samples/ru.wav`, `samples/fleurs-ru.wav`, `samples/fleurs-en.wav`, and two FLEURS validation utterances each for kk, ky, uz (not in the repo): exact match for F32, F16, Q8_0 on CPU and Metal and Q6_K, Q5_K_M on Metal; Q4_K_M on Metal differs in one letter on one kk utterance. |
+| Transcribe | explicit language hint | same with `--language kk` (or any of the five) | same transcript as without the hint | PASS. The hint has no effect on CTC decoding; a language outside `general.languages`, such as `--language de`, fails with `run: unsupported language`. |
+| Translate, language detection, streaming | n/a | n/a | n/a | SKIP (not exposed upstream or by the runtime), as for v3. |
+| Word timestamps | n/a | n/a | n/a | ACCEPTED GAP, as for v3: token timestamps only. |
+
+Numerical validation at F32 on CPU, one thread, against the ru golden
+case is within the per-variant tolerances, with an exact transcript; the
+observed drift is in the `_comment` of the tolerance file. The other four
+languages have no golden case: their numerical parity rests on the shared
+graph and on the transcript checks above. The reference WER baseline, the
+per-language WER sweep, and benchmarks have not been run;
+`scripts/wer/run_reference_gigaam_author.py --variant multilingual_large_ctc`
+runs the reference side.
+
+`TRANSCRIBE_GIGAAM_GGUF=<gguf> ctest --test-dir build -R gigaam` passes
+with the F32, F16, and Q8_0 GGUFs of this variant.

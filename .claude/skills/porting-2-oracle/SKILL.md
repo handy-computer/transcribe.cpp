@@ -20,7 +20,8 @@ reference WER, and provisional tolerances.
   creates a skeleton following the contract in `scripts/lib/ref_dump.py`
   (or in one of the existing dumpers).
 - A committed reference checkpoint is available to the reference framework
-  (HF download or `$TRANSCRIBE_MODELS_DIR/<slug>/`).
+  (HF download, `$TRANSCRIBE_MODELS_DIR/<slug>/`, or
+  `$TRANSCRIBE_MODELS_DIR/<slug>@<commit>/` for a revision pinned to a commit hash).
 - `uv` is installed.
 
 ## Oracle packet contents

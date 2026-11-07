@@ -223,7 +223,11 @@ each entry with explicit justification.** Recipe:
 
 - `1.5 × observed < provisional`: C++ drift is well below the magnitude
   budget — common on simple tensors. Keep the magnitude budget;
-  tighten only with user confirmation.
+  tighten only with user confirmation. A variant added to a family whose
+  finalized tolerance file already tightened to `max(1.5 × observed,
+  1e-6)` (such as `tests/tolerances/gigaam.json`) takes that recipe, so
+  the family's entries stay comparable; its `_comment` names the file
+  whose recipe it follows.
 - `1.5 × observed ≈ provisional`: C++ within budget. Preserve provisional.
 - `1.5 × observed > provisional`: C++ drift exceeds the magnitude
   budget. Record the widening factor in `_comment` and name the

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 dump_reference_gigaam_author.py - generate GigaAM reference tensors via
-the salute-developers/GigaAM author package.
+the salute-developers/GigaAM author package. The v3 variants load through
+gigaam.load_model; multilingual_large_ctc is built by the same package from
+its pinned Hugging Face snapshot (scripts/lib/gigaam_hf.py).
 
 Single subcommand `decode` runs the full forward pass (frontend +
 encoder + optional decode) and dumps every stage. The `encoder` alias
@@ -17,12 +19,14 @@ Usage:
       --audio samples/ru.wav \\
       --out build/validate/gigaam/gigaam-v3-e2e-rnnt/ru/decode/ref
 
-Dump points (match tests/tolerances/gigaam.json):
+Dump points (match tests/tolerances/gigaam.json, or the variant's own
+tolerance file named in its golden manifest):
 
     frontend.mel.out          log-mel features after FeatureExtractor (preprocessor)
     enc.subsample.out         after pre_encode (StridingSubsampling, conv1d factor 4)
     enc.pos_emb               rotary [cos; sin] stacked PE tensor
-    enc.block.{0,7,15}.out    sparse ConformerLayer outputs (16 layers total)
+    enc.block.{0,7,15}.out    sparse ConformerLayer outputs (first, middle,
+                              last; {0,11,23} for the 24-layer Multilingual)
     enc.out                   final encoder output (post-transpose)
 
     For RNN-T heads (rnnt, e2e_rnnt):
@@ -51,17 +55,8 @@ import numpy as np
 # the on-disk contract is identical across families.
 _THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_THIS_DIR))
+from lib.gigaam_hf import VARIANTS, load_model, variant_source  # noqa: E402
 from lib.ref_dump import write_tensor, write_transcript  # noqa: E402
-
-
-# Branch SHA pin per variant — locked at Stage 1 intake.
-_VARIANT_REVISIONS = {
-    "v3_e2e_rnnt": "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",  # main
-    "v3_e2e_ctc":  "cec030b4c4f35d928e4a9044a3bdb29ebd499fac",
-    "v3_rnnt":     "c7f128b8accdd9624df905e5c2d7b7a48c27c0d8",
-    "v3_ctc":      "15ef3b5a88da78f93134b3cb7f015c70aefa8946",
-}
-_HF_REPO = "ai-sage/GigaAM-v3"
 
 
 def configure_torch(args: argparse.Namespace) -> None:
@@ -119,32 +114,12 @@ def hook_module(module, hook: CaptureHook):
 
 
 def load_reference(args: argparse.Namespace):
-    """Load a GigaAM-v3 variant via gigaam.load_model.
+    """Load a GigaAM variant in F32 on `args.device` via lib.gigaam_hf.
 
-    Forces fp16_encoder=False (the package default is True; F32 is what
-    our intake declares and what every other reference dumper uses).
-    Forces device=cpu so the autocast branch in GigaAMASR.forward is
-    skipped — the cuda path enters torch.autocast(float16) regardless of
-    fp16_encoder.
+    Use device=cpu for reference dumps: on cuda, GigaAMASR.forward enters
+    torch.autocast(float16) whatever fp16_encoder is.
     """
-    import gigaam
-
-    if args.variant not in _VARIANT_REVISIONS:
-        raise SystemExit(
-            f"unknown variant {args.variant!r}; expected one of "
-            f"{sorted(_VARIANT_REVISIONS)}"
-        )
-    print(
-        f"Loading gigaam.load_model({args.variant!r}, fp16_encoder=False, "
-        f"device={args.device!r})"
-    )
-    model = gigaam.load_model(
-        args.variant,
-        fp16_encoder=False,
-        device=args.device,
-    )
-    model.eval()
-    return model
+    return load_model(args.variant, args.device)
 
 
 def is_rnnt_variant(variant: str) -> bool:
@@ -156,6 +131,16 @@ def is_ctc_variant(variant: str) -> bool:
 
 
 def cmd_decode(args: argparse.Namespace) -> int:
+    try:
+        pinned = variant_source(args.variant, args.revision)
+    except ValueError as e:
+        raise SystemExit(f"error: {e}") from None
+    if pinned.from_snapshot and args.model not in (None, pinned.repo_id):
+        raise SystemExit(
+            f"error: {args.variant} loads from the Hugging Face repo "
+            f"{pinned.repo_id} at {pinned.revision}, got --model {args.model!r}"
+        )
+
     import torch
 
     configure_torch(args)
@@ -180,8 +165,8 @@ def cmd_decode(args: argparse.Namespace) -> int:
     source: dict[str, Any] = {
         "kind": "gigaam-author",
         "framework": "author_repo_gigaam",
-        "hf_repo": _HF_REPO,
-        "hf_revision": _VARIANT_REVISIONS[args.variant],
+        "hf_repo": pinned.repo_id,
+        "hf_revision": pinned.revision,
         "variant": args.variant,
         "device": args.device,
         "torch_threads": args.torch_threads,
@@ -218,7 +203,8 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     layers = list(encoder.layers)
     n_layers = len(layers)
-    # Sparse layer dumps: first, mid, last. For 16-layer Conformer that's 0/7/15.
+    # Sparse layer dumps: first, mid, last. For 16-layer Conformer that's
+    # 0/7/15, for 24 layers 0/11/23.
     layer_idxs = sorted({0, n_layers // 2 - 1, n_layers - 1})
     layer_hooks: dict[int, CaptureHook] = {}
     for i in layer_idxs:
@@ -319,9 +305,9 @@ def cmd_decode(args: argparse.Namespace) -> int:
 def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--variant", required=True,
-        choices=sorted(_VARIANT_REVISIONS),
-        help="GigaAM-v3 variant key (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, "
-             "v3_ctc)",
+        choices=sorted(VARIANTS),
+        help="GigaAM variant key (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, "
+             "v3_ctc, multilingual_large_ctc)",
     )
     p.add_argument("--audio", required=True, help="16 kHz mono WAV path")
     p.add_argument("--out", required=True, help="Output directory for dumps")
@@ -329,19 +315,27 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--torch-threads", type=int, default=1,
                    help="torch.set_num_threads (0 = unchanged)")
     # Standard dumper CLI shape compatibility (validate.py always passes
-    # --model and optionally --language). GigaAM loads via
-    # gigaam.load_model(variant_key), so --model is accepted but the
-    # value is informational only. --language is a no-op (monolingual ru).
-    p.add_argument("--model", default=_HF_REPO,
-                   help="HF repo id (informational; load path is "
-                        "gigaam.load_model(variant_key))")
+    # --model and optionally --language). The v3 variants load via
+    # gigaam.load_model(variant_key), so for them --model is
+    # informational only. --language is a no-op: no GigaAM head takes a
+    # language input.
+    p.add_argument("--model", default=None,
+                   help="HF repo id. Informational for v3 (load path is "
+                        "gigaam.load_model(variant_key)); for "
+                        "multilingual_large_ctc, the repo fetched at the "
+                        "pinned commit (default: the variant's repo)")
     p.add_argument("--language", default=None,
-                   help="Language hint (no-op; GigaAM is monolingual ru)")
+                   help="Language hint (no-op; GigaAM heads take no language input)")
+    p.add_argument("--revision", default=None,
+                   help="Commit the caller expects the variant to come from, "
+                        "e.g. the golden manifest's hf_revision. The dump is "
+                        "refused when it differs from the pin in "
+                        "scripts/lib/gigaam_hf.py; the pin is what loads.")
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
-        description="GigaAM-v3 reference dumper (salute-developers/GigaAM)."
+        description="GigaAM reference dumper (salute-developers/GigaAM)."
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
