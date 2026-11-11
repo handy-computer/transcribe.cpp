@@ -13,6 +13,8 @@
 
 #include "decoder.h"
 
+#include <limits>
+
 #include "parakeet.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
@@ -966,6 +968,31 @@ int argmax_range(const float * data, int n) {
     return best_i;
 }
 
+// Token argmax, biased toward the vocabulary when there is one.
+//
+// The model alone decides between blank and a token: only when its own
+// argmax emits something does the vocabulary re-rank the non-blank tokens.
+// Biasing can then change which word is written but never whether one is,
+// so it cannot invent speech on silence or noise. The model's own logits are
+// left untouched for the confidence that follows.
+static int biased_argmax(const float *                   token_logits,
+                         int                             n_token_cls,
+                         int                             blank_id,
+                         const transcribe::PhraseBoost * boost,
+                         int                             boost_state,
+                         std::vector<float> &            scratch) {
+    const int unbiased = argmax_range(token_logits, n_token_cls);
+    if (boost == nullptr || boost->empty() || unbiased == blank_id) {
+        return unbiased;
+    }
+    scratch.assign(token_logits, token_logits + n_token_cls);
+    boost->apply(boost_state, scratch.data(), n_token_cls, blank_id);
+    if (blank_id >= 0 && blank_id < n_token_cls) {
+        scratch[static_cast<size_t>(blank_id)] = -std::numeric_limits<float>::infinity();
+    }
+    return argmax_range(scratch.data(), n_token_cls);
+}
+
 // Entropy-based confidence over a token-logit slice. Mirrors the
 // reference ParakeetTDT.decode_greedy path:
 //
@@ -1015,12 +1042,13 @@ float token_confidence(const float * token_logits, int n_token_classes, std::vec
 // Greedy decode driver
 // ---------------------------------------------------------------------------
 
-transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
-                                    const float *              enc_out,
-                                    int                        T_enc,
-                                    int                        d_enc,
-                                    int                        n_threads,
-                                    std::vector<TdtToken> &    out_tokens) {
+transcribe_status decode_tdt_greedy(const HostDecoderWeights &      w,
+                                    const float *                   enc_out,
+                                    int                             T_enc,
+                                    int                             d_enc,
+                                    int                             n_threads,
+                                    std::vector<TdtToken> &         out_tokens,
+                                    const transcribe::PhraseBoost * boost) {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1097,6 +1125,10 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     // the unconditional path.
     bool predictor_dirty = true;
 
+    // Vocabulary biasing state; untouched when no terms were given.
+    int                boost_state = transcribe::PhraseBoost::root;
+    std::vector<float> boosted;
+
     // See ParakeetHParams::tdt_global_symbol_budget.
     const bool global_budget   = w.tdt_global_symbol_budget;
     int64_t    steps_remaining = static_cast<int64_t>(w.tdt_max_symbols) * T_enc;
@@ -1131,7 +1163,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         const float * token_logits    = logits.data();
         const float * duration_logits = logits.data() + n_token_cls;
 
-        const int pred_token = argmax_range(token_logits, n_token_cls);
+        const int pred_token = biased_argmax(token_logits, n_token_cls, blank_id, boost, boost_state, boosted);
         const int decision   = argmax_range(duration_logits, n_dur);
         const int duration   = w.tdt_durations[static_cast<size_t>(decision)];
 
@@ -1172,6 +1204,9 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
             last_token = pred_token;
             std::swap(state, next_state);  // commit
             predictor_dirty = true;
+            if (boost != nullptr) {
+                boost_state = boost->next(boost_state, pred_token);
+            }
         }
 
         if (global_budget) {
@@ -1249,12 +1284,13 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
 // duration). Matches the reference dump points (`dec.embed.0`,
 // `dec.lstm.{layer}.{h,c}.0`, `dec.joint.0`) emitted on iter 1.
 
-transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
-                                     const float *              enc_out,
-                                     int                        T_enc,
-                                     int                        d_enc,
-                                     int                        n_threads,
-                                     std::vector<TdtToken> &    out_tokens) {
+transcribe_status decode_rnnt_greedy(const HostDecoderWeights &      w,
+                                     const float *                   enc_out,
+                                     int                             T_enc,
+                                     int                             d_enc,
+                                     int                             n_threads,
+                                     std::vector<TdtToken> &         out_tokens,
+                                     const transcribe::PhraseBoost * boost) {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1316,6 +1352,9 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
     // RNN-T iters/token ratio.
     bool predictor_dirty = true;
 
+    int                boost_state = transcribe::PhraseBoost::root;
+    std::vector<float> boosted;
+
     while (step < T_enc && iter < max_iters) {
         ++iter;
 
@@ -1342,7 +1381,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 
         // RNNT joint output is just `n_token_cls` floats (no duration extras).
         const float * token_logits = logits.data();
-        const int     pred_token   = argmax_range(token_logits, n_token_cls);
+        const int     pred_token   = biased_argmax(token_logits, n_token_cls, blank_id, boost, boost_state, boosted);
 
         if (iter == 1 && transcribe::debug::enabled()) {
             const long long s_h = H;
@@ -1377,6 +1416,9 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
             last_token = pred_token;
             std::swap(state, next_state);
             predictor_dirty = true;
+            if (boost != nullptr) {
+                boost_state = boost->next(boost_state, pred_token);
+            }
 
             new_symbols += 1;
             if (w.tdt_max_symbols > 0 && new_symbols >= w.tdt_max_symbols) {

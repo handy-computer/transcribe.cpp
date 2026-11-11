@@ -318,6 +318,9 @@ struct ParakeetSession final : public transcribe_session {
     std::vector<float>    pos_div_term;
     std::vector<float>    enc_host;
     std::vector<TdtToken> raw_tokens;
+    // Vocabulary biasing, rebuilt only when the run's terms change.
+    std::vector<std::string> boost_terms;
+    transcribe::PhraseBoost  boost;
 
     // Multitalker bundle scratch: streaming-diarizer AOSC/FIFO state for
     // the embedded sortformer forward (diarize=ON runs only).
