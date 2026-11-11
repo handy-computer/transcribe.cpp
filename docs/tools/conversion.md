@@ -38,7 +38,9 @@ source format:
   `voxtral_realtime`, `granite`, `granite_nar`, `moonshine`,
   `moonshine_streaming`, `qwen3_asr`, `medasr`, `cohere`
 - **FunASR**: `sensevoice`, `funasr_nano`
-- **Author package**: `gigaam` (the upstream `gigaam` pip package)
+- **Author package**: `gigaam` (the upstream `gigaam` pip package; GigaAM
+  Multilingual is built from that package's classes and a pinned Hugging Face
+  snapshot)
 
 Each converter is a single-file script with inline documentation of its
 tensor catalog, hparam map, and layout transforms. No base class. See
