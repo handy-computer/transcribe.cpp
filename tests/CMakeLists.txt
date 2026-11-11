@@ -211,6 +211,14 @@ transcribe_apply_warnings(transcribe_parakeet_chunked_limited_window_mask_unit)
 add_test(NAME transcribe_parakeet_chunked_limited_window_mask_unit
     COMMAND transcribe_parakeet_chunked_limited_window_mask_unit)
 
+# NeMo valid-length mel framing (#252): the trailing center-pad frame is
+# dropped before the encoder on non-kestrel checkpoints.
+add_executable(transcribe_parakeet_mel_valid_length_unit parakeet_mel_valid_length_unit.cpp)
+target_link_libraries(transcribe_parakeet_mel_valid_length_unit PRIVATE transcribe ggml)
+target_include_directories(transcribe_parakeet_mel_valid_length_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+transcribe_apply_warnings(transcribe_parakeet_mel_valid_length_unit)
+add_test(NAME transcribe_parakeet_mel_valid_length_unit COMMAND transcribe_parakeet_mel_valid_length_unit)
+
 # Long-form pause segmenter vs kestrel-generated expected cut points.
 add_executable(transcribe_parakeet_longform_unit parakeet_longform_unit.cpp)
 target_link_libraries(transcribe_parakeet_longform_unit PRIVATE transcribe ggml)
