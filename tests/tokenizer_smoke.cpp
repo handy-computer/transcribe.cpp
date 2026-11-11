@@ -298,9 +298,9 @@ void test_v3_fixture() {
 // n_threads validation in transcribe_session_init (Finding 3)
 // ---------------------------------------------------------------------------
 //
-// Negative n_threads is undefined input per the public header (0 means
-// "library picks", positive means "use this many"). The central
-// dispatcher rejects it before the family handler runs.
+// Negative n_threads, or more than 512, is undefined input per the public
+// header (0 means "library picks", positive means "use this many"). The
+// central dispatcher rejects it before the family handler runs.
 void test_n_threads_validation() {
     struct transcribe_model * model = load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
     if (model == nullptr) {
@@ -321,6 +321,24 @@ void test_n_threads_validation() {
         std::fprintf(stderr, "FAIL n_threads<0: out_ctx not cleared\n");
         ++g_failures;
     }
+
+    // Above ggml's thread limit is rejected the same way; the limit itself is accepted.
+    cp.n_threads                     = 513;
+    ctx                              = (struct transcribe_session *) 0xdeadbeef;
+    const transcribe_status st_above = transcribe_session_init(model, &cp, &ctx);
+    if (st_above != TRANSCRIBE_ERR_INVALID_ARG || ctx != nullptr) {
+        std::fprintf(stderr, "FAIL n_threads=513: expected INVALID_ARG and cleared out_ctx, got %s\n",
+                     transcribe_status_string(st_above));
+        ++g_failures;
+    }
+    cp.n_threads                     = 512;
+    ctx                              = nullptr;
+    const transcribe_status st_limit = transcribe_session_init(model, &cp, &ctx);
+    if (st_limit != TRANSCRIBE_OK || ctx == nullptr) {
+        std::fprintf(stderr, "FAIL n_threads=512: expected OK, got %s\n", transcribe_status_string(st_limit));
+        ++g_failures;
+    }
+    transcribe_session_free(ctx);
 
     // Sanity: n_threads == 0 (library default) succeeds.
     cp.n_threads                  = 0;

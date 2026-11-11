@@ -30,7 +30,7 @@ struct transcribe_diarize_info {
 
 struct transcribe_diarize_session_params {
     uint64_t struct_size;
-    int32_t  n_threads; /* 0 = library default */
+    int32_t  n_threads; /* 0 = library default; at most 512 */
 };
 
 struct transcribe_diarize_params {
