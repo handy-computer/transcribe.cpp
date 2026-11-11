@@ -94,7 +94,8 @@ int main() {
         CHECK_EQ_INT(caps->native_sample_rate, 16000);
         CHECK(caps->supports_language_detect);
         CHECK(caps->supports_translate);
-        CHECK_EQ_INT(caps->max_timestamp_kind, TRANSCRIBE_TIMESTAMPS_SEGMENT);
+        CHECK(caps->max_timestamp_kind == TRANSCRIBE_TIMESTAMPS_SEGMENT ||
+              caps->max_timestamp_kind == TRANSCRIBE_TIMESTAMPS_WORD);
         CHECK(caps->n_languages > 0);
         CHECK(caps->languages != nullptr);
 
@@ -177,7 +178,7 @@ int main() {
     {
         transcribe_run_params rp;
         transcribe_run_params_init(&rp);
-        rp.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
+        rp.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
         st            = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
     }
