@@ -75,6 +75,14 @@ struct CanaryHParams {
     int32_t     nopnc_id             = -1;
     int32_t     itn_id               = -1;
     int32_t     noitn_id             = -1;
+    // Indic-Transcribe (Bodhan AI) canary2 variant: a tenth prompt slot
+    // after <|itn|> selects native vs romanized (Latin) output. Absent on
+    // stock canary GGUFs, which keep the nine-slot prompt.
+    int32_t     romanized_id         = -1;
+    int32_t     noromanized_id       = -1;
+    // Output mode used when the caller leaves itn at DEFAULT:
+    // "native" (noitn, noromanized), "mixed" (itn), "romanized".
+    std::string default_mode = "native";
     int32_t     timestamp_id         = -1;
     int32_t     notimestamp_id       = -1;
     int32_t     diarize_id           = -1;
