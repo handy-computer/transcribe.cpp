@@ -463,6 +463,7 @@ StreamInferBuild build_stream_infer_graph(ggml_context *              ctx,
                                           const pk::ParakeetWeights & conformer,
                                           const SortformerWeights &   w,
                                           const char *                backend,
+                                          bool                        use_flash,
                                           int                         T_concat) {
     StreamInferBuild b{};
     const int        ed        = chp.enc_d_model;
@@ -479,13 +480,11 @@ StreamInferBuild build_stream_infer_graph(ggml_context *              ctx,
     ggml_set_input(pos_emb_in);
 
     conf::BlockParams bp{};
-    bp.d_model         = ed;
-    bp.n_head          = chp.enc_n_heads;
-    bp.conv_kernel     = chp.enc_conv_kernel;
-    bp.kv_type         = GGML_TYPE_F32;
-    bool enc_use_flash = true, dec_use_flash = false;
-    transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
-    bp.use_flash          = enc_use_flash;
+    bp.d_model            = ed;
+    bp.n_head             = chp.enc_n_heads;
+    bp.conv_kernel        = chp.enc_conv_kernel;
+    bp.kv_type            = GGML_TYPE_F32;
+    bp.use_flash          = use_flash;
     bp.policy             = sf_conv_policy(backend);
     bp.att_context_left   = -1;  // full (offline) attention over the concat
     bp.att_context_right  = -1;
@@ -588,6 +587,10 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     m->backend         = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
+    bool dec_use_flash   = false;  // no attention decoder
+    m->encoder_use_flash = transcribe::flash::per_head_mask_supported(m->plan.primary_kind);
+    transcribe::flash::apply_env_overrides(m->encoder_use_flash, dec_use_flash);
+
     if (const transcribe_status st = transcribe::load_common::load_weights(
             loader.path(), gguf_data, m->ctx_meta, m->plan, params, "sortformer", m->weight_storage);
         st != TRANSCRIBE_OK) {
@@ -670,8 +673,8 @@ static transcribe_status run_offline_forward(SortformerSession * pc, SortformerM
     }
     ggml_context * ctx = pc->compute_ctx;
 
-    pk::EncoderBuild eb =
-        pk::build_encoder_graph(ctx, pm->conformer, pm->conformer_hp, mel_n_frames, GGML_TYPE_F32, pm->backend.c_str());
+    pk::EncoderBuild eb = pk::build_encoder_graph(ctx, pm->conformer, pm->conformer_hp, mel_n_frames, GGML_TYPE_F32,
+                                                  pm->encoder_use_flash, pm->backend.c_str());
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -740,6 +743,7 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
                                           const pk::ParakeetWeights &    conformer,
                                           const SortformerWeights &      w,
                                           const char *                   backend,
+                                          bool                           use_flash,
                                           ggml_backend_sched_t           sched,
                                           int                            n_threads,
                                           const SortformerStreamParams & P,
@@ -872,7 +876,7 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &            sc,
                   sc.concat_host.begin() + static_cast<size_t>(S + F) * ed);
 
         // ---- Graph B: xscale + 17 blocks + proj + 18 tf + head ----
-        StreamInferBuild B = build_stream_infer_graph(ctx, hp, chp, conformer, w, backend, T_concat);
+        StreamInferBuild B = build_stream_infer_graph(ctx, hp, chp, conformer, w, backend, use_flash, T_concat);
         if (B.graph == nullptr) {
             transcribe::debug::pop_name_prefix();
             return TRANSCRIBE_ERR_GGUF;
@@ -923,9 +927,9 @@ static transcribe_status run_streaming(SortformerSession *          pc,
     }
 
     const int64_t           t_stream_start = ggml_time_us();
-    const transcribe_status st = run_diar_streaming_core(pc->scratch, pm->hparams, pm->conformer_hp, pm->conformer,
-                                                         pm->weights, pm->backend.c_str(), pc->sched, pc->n_threads, P,
-                                                         pc->mel_buf.data(), mel_n_mels, mel_n_frames, pc);
+    const transcribe_status st             = run_diar_streaming_core(
+        pc->scratch, pm->hparams, pm->conformer_hp, pm->conformer, pm->weights, pm->backend.c_str(),
+        pm->encoder_use_flash, pc->sched, pc->n_threads, P, pc->mel_buf.data(), mel_n_mels, mel_n_frames, pc);
     if (st != TRANSCRIBE_OK) {
         return st;
     }

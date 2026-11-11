@@ -193,6 +193,8 @@ struct EncoderBuild {
 // count) the struct has nullptr fields and a diagnostic is logged.
 // kv_type: GGML type for K/V activations in flash attention;
 // GGML_TYPE_COUNT means "auto" (f16 for quantized weights, f32 for f32).
+// use_flash: flash attention in the conformer blocks; callers pass their
+// model's encoder_use_flash (resolved at load).
 // backend_name: primary backend name ("MTL0", "Vulkan0", "CPU") for
 // auto-detecting conv strategy; env vars override.
 //
@@ -221,6 +223,7 @@ EncoderBuild build_encoder_graph(ggml_context *                     compute_ctx,
                                  const ParakeetHParams &            hp,
                                  int                                n_mel_frames,
                                  ggml_type                          kv_type         = GGML_TYPE_COUNT,
+                                 bool                               use_flash       = true,
                                  const char *                       backend_name    = "",
                                  const BufferedStreamMaskOverride * buf_mask        = nullptr,
                                  int                                n_batch         = 1,
@@ -334,6 +337,7 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            compute_ctx
                                            int                       drop_extra_pre_encoded,
                                            StreamingEncoderCacheIO & cache_io,
                                            ggml_type                 kv_type         = GGML_TYPE_COUNT,
+                                           bool                      use_flash       = true,
                                            const char *              backend_name    = "",
                                            // Multitalker streaming pass: expose the
                                            // per-chunk speaker/background supervision

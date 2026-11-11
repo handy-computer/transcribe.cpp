@@ -411,8 +411,8 @@ transcribe_status run_multitalker(ParakeetSession *             pc,
     const int64_t t_diar_start = ggml_time_us();
     transcribe::debug::push_name_prefix("mt.diar");
     const transcribe_status dst = sf::run_diar_streaming_core(
-        pc->diar_scratch, diar.hp, diar.conformer_hp, diar.conformer, diar.weights, pm->backend.c_str(), pc->sched,
-        pc->n_threads, P, diar_mel.data(), dm_mels, dm_frames, pc);
+        pc->diar_scratch, diar.hp, diar.conformer_hp, diar.conformer, diar.weights, pm->backend.c_str(),
+        pm->encoder_use_flash, pc->sched, pc->n_threads, P, diar_mel.data(), dm_mels, dm_frames, pc);
     transcribe::debug::pop_name_prefix();
     if (dst != TRANSCRIBE_OK) {
         return dst;
