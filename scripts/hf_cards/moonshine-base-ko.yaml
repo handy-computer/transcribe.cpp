@@ -43,7 +43,6 @@ license_notes: |
   US$1M annual revenue; read the
   [license](https://github.com/moonshine-ai/moonshine/blob/main/LICENSE)
   before using it. Moonshine AI releases its English and streaming models
-  under MIT; only these legacy language fine-tunes carry this license. The
-  agreement (`LICENSE`) and the required `NOTICE` ship in this repository.
+  under MIT; only these legacy language fine-tunes carry this license.
 
   Powered by Moonshine AI.

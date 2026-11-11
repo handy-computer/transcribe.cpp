@@ -53,6 +53,10 @@
         "link": {
           "type": "string",
           "description": "HF card license_link -- URL of the full licence text."
+        },
+        "text": {
+          "type": "string",
+          "description": "Directory under scripts/hf_cards/licenses/ holding the LICENSE (and any mandated NOTICE) shipped to the HF repo. Defaults to name, else spdx; set it where those do not identify one text (MIT copyright holders)."
         }
       }
     },

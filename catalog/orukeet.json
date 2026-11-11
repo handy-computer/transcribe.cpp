@@ -6,7 +6,8 @@
   "params": 627052166,
   "license": {
     "spdx": "cc-by-sa-4.0",
-    "display": "CC-BY-SA-4.0"
+    "display": "CC-BY-SA-4.0",
+    "text": "orukeet"
   },
   "upstream_repo": "oruk/orukeet",
   "upstream_commit": "b59c13a",

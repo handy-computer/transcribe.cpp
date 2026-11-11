@@ -8,7 +8,8 @@
     "spdx": "other",
     "display": "model-license (FunASR MODEL_LICENSE)",
     "name": "model-license",
-    "link": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE"
+    "link": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+    "text": "funasr-model-license-v1.1"
   },
   "upstream_repo": "FunAudioLLM/SenseVoiceSmall",
   "upstream_commit": "3eb3b4e",

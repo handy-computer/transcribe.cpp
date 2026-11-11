@@ -1,0 +1,70 @@
+# Attribution and license scope
+
+Orukeet is an adaptation of **NVIDIA Parakeet TDT 0.6B v3**. NVIDIA retains
+copyright in its model and upstream work. The base weights are distributed
+under [CC BY 4.0](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3).
+Oruk AI's changes comprise multilingual/accent continuation training, parameter
+blending, fitted and frozen Gabor-kernel replacement and recovery, native and ONNX
+export, application integration and evaluation. [Model stages](https://github.com/Oruk-AI/orukeet/blob/main/release/model-stages.json)
+identifies r3 as the source of every current Orukeet download and records its ancestry.
+
+The r3 NeMo, ONNX INT8, Q8 GGUF and F16 GGUF weights, and their fitted Gabor kernels,
+are designated **CC BY-SA 4.0**.
+The complete license is in [LICENSE-WEIGHTS](LICENSE-WEIGHTS). This permits
+commercial use and modification, with attribution and applicable ShareAlike
+requirements. Earlier checkpoints retain their source notices and are not
+silently relicensed by this file. Orukeet v0.1.0 distributes the final r3 checkpoint in all four formats.
+
+Python and integration code in this repository is MIT unless a file specifies
+otherwise. The native bindings, audio windowing and worker transport derive
+from OpenWhisper by Knuckles92 and its Oruk AI integration; their MIT notice is
+retained in [LICENSE](LICENSE). The downloaded NVIDIA NeMo-Speech.cpp SDK and
+its bundled dependencies retain their own notices, including Apache-2.0 and
+MIT components. Keep the SDK's license files when redistributing it. The
+[pinned source](https://github.com/NVIDIA/NeMo-Speech.cpp/tree/4f9676226f667d14608487df744f375db87127f8)
+is the authority for those terms.
+
+The ONNX exporter follows sherpa-onnx's Parakeet TDT v3 conversion script.
+Its upstream reference and Apache-2.0 license are retained in
+[export/onnx](https://github.com/Oruk-AI/orukeet/blob/main/export/onnx/README.md). The ONNX archive includes the weight
+license and source attribution. The optimized ONNX encoder uses exactly equivalent FP32 arithmetic for 24 quantized depthwise convolutions, with existing runtime operators and unchanged quantized values. Original export and separate optimization receipts are retained in the GitHub repository under `evidence/onnx-r3-20260910/` and `evidence/speed20260910/`.
+
+Training data credits:
+
+- Mozilla/Common Voice contributors: Common Voice 22, CC0.
+- Google and the FLEURS authors: FLEURS, CC BY 4.0.
+- Google and the OpenSLR 83 authors, with the `ylacombe/english_dialects`
+  restructuring: English dialect speech, CC BY-SA 4.0.
+- Beijing Kingline Data Technology and the SpeechOcean762 authors:
+  SpeechOcean762, CC BY 4.0.
+- SpeechColab and the GigaSpeechBench authors: 17 English accent/domain splits
+  in the final continuation. Their paper identifies Creative Commons source audio;
+  the source record below preserves the available license details.
+- DISCO at ETH Zurich and the EuroSpeech contributors: Bulgarian, Greek and
+  Italian parliamentary speech, with the providers' country-specific terms.
+- SberDevices and the Golos authors: Golos Crowd, under the
+  [Public license with attribution and conditions reserved](https://github.com/sberdevices/golos/blob/master/license/en_us.pdf).
+- Nordisk Språkteknologi, the National Library of Norway and the Alexandra
+  Institute: NST Swedish and Danish, distributed under CC0.
+- ILSP/Athena Research Center and the Lesbian Speech Corpus contributors:
+  dialect speech from Lesbos. The source card does not specify a reuse license.
+
+Data were filtered, split, normalized and sampled as described in
+[data and licenses](https://github.com/Oruk-AI/orukeet/blob/main/docs/data-and-licenses.md). Corpus copyrights and source
+terms remain with their owners. Evaluation-only data have separate terms.
+No endorsement by NVIDIA, Mozilla, Google or the other source projects is implied.
+
+The generated statistical records in `evidence/metric-evidence.tar.gz`, the
+Gabor recovery count bundles under `training/gabor_half/results/`, and the
+FT-4035 benchmark counts under `evidence/regression-ft-20260907/` are
+designated CC BY 4.0, attributed to Oruk AI. This designation covers the
+prepared metric records; it does not relicense the original corpus recordings
+or transcripts, which are not included in that archive.
+
+The r3 numeric benchmark records in `evidence/standard-asr-r3-20260908/` and
+`evidence/domains-r3-20260908/` are released under CC BY 4.0. They contain
+error counts and recording identifiers; dataset audio remains with its providers.
+
+The paired ONNX application benchmark counts in `evidence/onnx-r3-20260910/`
+are also released under CC BY 4.0. These records contain numeric errors,
+timings and recording identifiers, without corpus audio or transcripts.

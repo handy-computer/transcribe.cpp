@@ -1,58 +1,3 @@
-The code in this repo (https://github.com/moonshine-ai/moonshine), apart from 
-the source in core/third-party, is licensed under the MIT License. Moonshine 
-models are released under the MIT License by default, in every language and at 
-every size. This includes all streaming speech-to-text models and all 
-English-language models. See SECTION 1 for terms.
-
-The only speech-to-text models that are NOT MIT are the legacy non-streaming 
-models for languages other than English, which remain under the Moonshine 
-Community License, a non-commercial license. That list is exhaustive: 
-
-  Arabic      Base, Tiny 
-  Japanese    Base, Tiny 
-  Korean      Base, Tiny 
-  Mandarin    Base, Tiny 
-  Spanish     Base 
-  Ukrainian   Base, Tiny 
-  Vietnamese  Base, Tiny 
-
-Any speech-to-text model not named in that list is MIT, including every 
-streaming model and the English Tiny and Base models. See SECTION 2 for the 
-Community License terms.
-
-Separately, the text to speech and grapheme to phoneme models and data files 
-are not covered by the MIT default: they are licensed under the terms listed in 
-their own readmes and source repositories, since they derive from third-party 
-work. See core/moonshine-tts/data/README.md.
-
-
-SECTION 1 -----------------------------------------------------------------
-
-MIT License
-
-Copyright (c) 2025 Useful Sensors, Inc. (dba Moonshine AI)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-SECTION 2 -----------------------------------------------------------------
-
  MOONSHINE AI COMMUNITY LICENSE AGREEMENT 
  
  Last Updated: June 15th, 2025
@@ -75,7 +20,7 @@ annual revenue of less than US $1,000,000 (or local currency equivalent).
 
 
 By clicking "I Accept" or by using or distributing or using any portion or
-element of the Stability Materials or Derivative Works, You agree that You have
+element of the Moonshine Materials or Derivative Works, You agree that You have
 read, understood and are bound by the terms of this Agreement. If You are acting
 on behalf of a company, organization or other entity, then "You" includes you
 and that entity, and You agree that You: (i) are an authorized representative of
@@ -118,7 +63,7 @@ more than USD $1,000,000 in annual revenue (or the equivalent thereof in Your
 local currency), regardless of whether that revenue is generated directly or
 indirectly from the Moonshine AI Materials or Derivative Works, any licenses
 granted to You under this Agreement shall terminate as of such date. You must
-request a license from Moonshine AI at (https://moonshine.ai/enterprise) , which
+request a license from Moonshine AI at (https://moonshine.ai/license) , which
 Moonshine AI may grant to You in its sole discretion. If you receive Moonshine
 AI Materials, or any Derivative Works thereof, from a Licensee as part of an
 integrated end user product, then Section III of this Agreement will not apply
@@ -219,12 +164,10 @@ the output of any Model. "Documentation" means any specifications, manuals,
 documentation, and other written information provided by Moonshine AI related to
 the Software or Models. "Model(s)" means, collectively, Moonshine AI's
 proprietary models and algorithms, including machine-learning models, trained
-model weights and other elements of the foregoing listed on Stability's Core
-Models Webpage available at, https://moonshine.ai/core-models, as may be updated
-from time to time. "Moonshine AI" or "we" means Moonshine AI Ltd. and its
-Affiliates. "Software" means Moonshine AI's proprietary software made available
-under this Agreement now or in the future. "Moonshine AI Materials" means,
-collectively, Stability's proprietary Models, Software and Documentation (and
-any portion or combination thereof) made available under this Agreement. "Trade
-Control Laws" means any applicable U.S. and non-U.S. export control and trade
-sanctions laws and regulations.
+model weights and other elements of the foregoing. "Moonshine AI" or "we" means
+Moonshine AI Ltd. and its Affiliates. "Software" means Moonshine AI's
+proprietary software made available under this Agreement now or in the future. "
+Moonshine AI Materials" means, collectively, Moonshine's proprietary Models,
+Software and Documentation (and any portion or combination thereof) made
+available under this Agreement. "Trade Control Laws" means any applicable U.S.
+and non-U.S. export control and trade sanctions laws and regulations.
