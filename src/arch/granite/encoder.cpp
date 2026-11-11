@@ -252,9 +252,23 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
 
     // Depthwise conv1d: kernel [k, 1, inner_dim], symmetric pad (k-1)/2
     // (= 7 for k=15). Granite's depthwise has no bias.
+    //
+    // Direct depthwise op, not conv_1d_dw_f32's im2col + mul_mat: im2col
+    // materialises a [conv_kernel, T, inner_dim] f32 copy (15 x 2048 x 50
+    // frames/s: ~1.9 GB at 5 minutes, the encoder's largest tensor by 7x)
+    // to feed a matmul whose K is only conv_kernel. Same swap as
+    // granite_nar and granite5_ctc; not bitwise identical (accumulation
+    // order), so it is gated on transcripts.
     const int padding = (conv_kernel - 1) / 2;
-    x                 = transcribe::conformer::conv_1d_dw_f32(ctx, b.conv_depthwise_w, x,
-                                                              /*stride=*/1, /*padding=*/padding, /*dilation=*/1);
+    {
+        ggml_tensor * knl = ggml_reshape_4d(ctx, b.conv_depthwise_w, conv_kernel, 1, 1, inner_dim);
+        ggml_tensor * img = ggml_reshape_4d(ctx, x, T, 1, inner_dim, 1);
+        x                 = transcribe::conformer::conv_2d_dw_direct_f32(ctx, knl, img,
+                                                                         /*s0=*/1, /*s1=*/1,
+                                                                         /*p0=*/padding, /*p1=*/0,
+                                                                         /*d0=*/1, /*d1=*/1);
+        x                 = ggml_reshape_2d(ctx, x, T, inner_dim);
+    }
 
     // Fused BatchNorm: y = x * fused_scale + fused_bias, with 1-D scale
     // and bias broadcast across the time axis.
