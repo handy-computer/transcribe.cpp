@@ -21,7 +21,7 @@ Offline multilingual speech-to-text and translation. The model takes a
 - **Translation** between English and German, Spanish, or French (both
   directions).
 
-**Prompting:** transcript prefix (`--prefix`) via NeMo's `user_prefix` turn. The decoder-context slot is not exposed: any context text made this model stop early in testing.
+**Prompting:** transcript prefix (`--prefix`) via NeMo's `user_prefix` turn. The decoder-context slot is not exposed: any context text made this model stop early in testing. Vocabulary (`--vocabulary`) biases the greedy decode toward the terms, as on [canary-1b-v2](canary-1b-v2.md); measured on 1b-v2 only.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-flash)
 for training data, intended use, and upstream evaluation methodology.

@@ -33,7 +33,7 @@ variants (180m-flash, 1b-flash) cover only English/German/Spanish/French.
 Not a streaming model. Word and segment timestamps from the upstream
 model are not exposed in the v1 port.
 
-**Prompting:** transcript prefix (`--prefix`) via NeMo's `user_prefix` turn. The decoder-context slot is not exposed: context text made the output loop and over-insert in testing.
+**Prompting:** transcript prefix (`--prefix`) via NeMo's `user_prefix` turn. The decoder-context slot is not exposed: context text made the output loop and over-insert in testing. Vocabulary (`--vocabulary`) biases the greedy decode toward the terms instead (shallow fusion on the logits, strength 3, `TRANSCRIBE_CANARY_VOCAB_BOOST` to tune, `0` turns it off): on 312 phone turns answering "which area?" it read 21 more area names, about 5 of them inserted into unrelated speech. Batch runs with a vocabulary decode one utterance at a time.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-v2)
 for training data, intended use, and upstream evaluation methodology.

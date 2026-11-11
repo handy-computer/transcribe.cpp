@@ -17,7 +17,7 @@ Probe `transcribe_model_supports()` for the matching feature bit.
 | Voxtral (2507) | | | yes | |
 | Granite 4.0-1b / 4.1-2b | yes | | | |
 | Granite 4.1-2b-plus | yes | | | yes |
-| Canary 180m-flash / 1b-flash / 1b-v2 | | | | yes |
+| Canary 180m-flash / 1b-flash / 1b-v2 | yes | | | yes |
 | Fun-ASR-Nano | yes | | | |
 | MOSS-Transcribe-Diarize | yes | | | |
 
