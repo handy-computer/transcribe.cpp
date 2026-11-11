@@ -1,0 +1,111 @@
+diff --git a/src/ggml-cpu/arch/x86/cpu-feats.cpp b/src/ggml-cpu/arch/x86/cpu-feats.cpp
+index d775a036..0d742e4e 100644
+--- a/src/ggml-cpu/arch/x86/cpu-feats.cpp
++++ b/src/ggml-cpu/arch/x86/cpu-feats.cpp
+@@ -4,8 +4,14 @@
+ 
+ #ifdef _MSC_VER
+ #include <intrin.h>
++#include <immintrin.h>
+ #endif
+ 
++#if defined(__APPLE__)
++#include <sys/sysctl.h>
++#endif
++
++#include <cstdint>
+ #include <cstring>
+ #include <vector>
+ #include <bitset>
+@@ -260,11 +266,69 @@ void test_x86_is() {
+ }
+ #endif
+ 
+-static int ggml_backend_cpu_x86_score() {
+-    // FIXME: this does not check for OS support
++// XCR0 state components the OS must enable before the matching registers can be used
++// (Intel SDM Vol. 1, 13.1). CPUID only reports what the hardware supports; if the OS
++// leaves a component disabled, the first instruction touching it raises #UD.
++#define GGML_XCR0_SSE       (1ull << 1)
++#define GGML_XCR0_YMM       (1ull << 2)
++#define GGML_XCR0_OPMASK    (1ull << 5)
++#define GGML_XCR0_ZMM_HI256 (1ull << 6)
++#define GGML_XCR0_HI16_ZMM  (1ull << 7)
++#define GGML_XCR0_XTILECFG  (1ull << 17)
++#define GGML_XCR0_XTILEDATA (1ull << 18)
++
++static uint64_t ggml_x86_xgetbv0() {
++#if defined(_MSC_VER) && !defined(__clang__)
++    return _xgetbv(0);
++#else
++    // inline asm rather than the intrinsic, so this builds without -mxsave
++    uint32_t eax, edx;
++    __asm__ __volatile__("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0));
++    return ((uint64_t) edx << 32) | eax;
++#endif
++}
++
++#if defined(__APPLE__)
++// macOS enables AVX-512 state lazily: XCR0 bits 5-7 stay clear until the thread first
++// executes an AVX-512 instruction, which the kernel then traps and enables. XCR0 alone
++// would wrongly reject AVX-512 variants, so ask the kernel instead (as cpu_features does).
++static bool ggml_x86_darwin_avx512_enabled() {
++    int    val = 0;
++    size_t len = sizeof(val);
++    return sysctlbyname("hw.optional.avx512f", &val, &len, nullptr, 0) == 0 && val != 0;
++}
++#endif
++
++// XCR0 bits this build variant needs the OS to have enabled.
++static uint64_t ggml_x86_required_xcr0() {
++    uint64_t required = 0;
++#if defined(GGML_AVX) || defined(GGML_AVX2) || defined(GGML_FMA) || defined(GGML_F16C) || defined(GGML_AVX_VNNI)
++    required |= GGML_XCR0_SSE | GGML_XCR0_YMM;
++#endif
++#if defined(GGML_AVX512) || defined(GGML_AVX512_VBMI) || defined(GGML_AVX512_VNNI) || defined(GGML_AVX512_BF16)
++    required |= GGML_XCR0_SSE | GGML_XCR0_YMM | GGML_XCR0_OPMASK | GGML_XCR0_ZMM_HI256 | GGML_XCR0_HI16_ZMM;
++#endif
++#if defined(GGML_AMX_TILE) || defined(GGML_AMX_INT8)
++    required |= GGML_XCR0_XTILECFG | GGML_XCR0_XTILEDATA;
++#endif
++    return required;
++}
++
++// true if the OS state in xcr0 covers everything this build variant uses
++static bool ggml_x86_os_supports_variant(uint64_t xcr0) {
++    const uint64_t required = ggml_x86_required_xcr0();
++    return (xcr0 & required) == required;
++}
++
++// xcr0 is passed in (0 when OSXSAVE is clear) so the decision can be tested
++static int ggml_backend_cpu_x86_score_xcr0(cpuid_x86 & is, uint64_t xcr0) {
++    GGML_UNUSED(is); // the x64 variant checks no CPUID bits
++
++    if (!ggml_x86_os_supports_variant(xcr0)) {
++        return 0;
++    }
+ 
+     int score = 1;
+-    cpuid_x86 is;
+ 
+ #ifdef GGML_FMA
+     if (!is.FMA()) { return 0; }
+@@ -322,6 +386,18 @@ static int ggml_backend_cpu_x86_score() {
+     return score;
+ }
+ 
++static int ggml_backend_cpu_x86_score() {
++    cpuid_x86 is;
++    // xgetbv is only valid when the OS has set CR4.OSXSAVE
++    uint64_t xcr0 = is.OSXSAVE() ? ggml_x86_xgetbv0() : 0;
++#if defined(__APPLE__)
++    if ((xcr0 & (GGML_XCR0_SSE | GGML_XCR0_YMM)) == (GGML_XCR0_SSE | GGML_XCR0_YMM) && ggml_x86_darwin_avx512_enabled()) {
++        xcr0 |= GGML_XCR0_OPMASK | GGML_XCR0_ZMM_HI256 | GGML_XCR0_HI16_ZMM;
++    }
++#endif
++    return ggml_backend_cpu_x86_score_xcr0(is, xcr0);
++}
++
+ GGML_BACKEND_DL_SCORE_IMPL(ggml_backend_cpu_x86_score)
+ 
+ #endif // defined(__x86_64__) || (defined(_MSC_VER) && defined(_M_AMD64))
