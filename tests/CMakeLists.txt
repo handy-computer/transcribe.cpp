@@ -1252,9 +1252,26 @@ endif()
 # Loads a real Whisper GGUF and verifies the public capabilities match the
 # runtime behavior: language detection runs when no language hint is supplied,
 # default params use no-timestamp decode, explicit SEGMENT returns segment
-# timestamps, and WORD timestamps are rejected until the DTW alignment path lands.
+# timestamps, and TOKEN timestamps are rejected. WORD timestamps (DTW) are
+# covered by whisper_word_timestamps_smoke.
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_whisper_word_timestamps_smoke
+        whisper_word_timestamps_smoke.cpp)
+
+    target_link_libraries(transcribe_whisper_word_timestamps_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_whisper_word_timestamps_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_whisper_word_timestamps_smoke)
+
+    add_test(NAME transcribe_whisper_word_timestamps_smoke
+        COMMAND transcribe_whisper_word_timestamps_smoke)
+    set_tests_properties(transcribe_whisper_word_timestamps_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
     add_executable(transcribe_whisper_e2e_smoke
         whisper_e2e_smoke.cpp)
 
@@ -1595,6 +1612,19 @@ transcribe_apply_warnings(transcribe_whisper_bin_suppress_unit)
 
 add_test(NAME transcribe_whisper_bin_suppress_unit
     COMMAND transcribe_whisper_bin_suppress_unit)
+
+add_executable(transcribe_whisper_alignment_unit
+    whisper_alignment_unit.cpp)
+
+target_link_libraries(transcribe_whisper_alignment_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_whisper_alignment_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_whisper_alignment_unit)
+
+add_test(NAME transcribe_whisper_alignment_unit
+    COMMAND transcribe_whisper_alignment_unit)
 
 # -----------------------------------------------------------------------------
 # Whisper .bin parser unit test

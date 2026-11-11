@@ -15,9 +15,8 @@ void apply_family_invariants(transcribe_model & model) {
     caps.supports_translate       = true;
     // supports_streaming left at its zero-init default (false).
 
-    // Segment timestamps via the timestamp-token stream (ids 50364+).
-    // Word-level DTW timing is not yet implemented; cap at SEGMENT so the
-    // dispatcher rejects WORD-grain requests rather than falling back.
+    // Segment timestamps are available for all variants. The GGUF loader
+    // advertises word timestamps when it can identify an alignment preset.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
 
     // Run knobs are reached through transcribe_whisper_run_ext. No PNC/ITN

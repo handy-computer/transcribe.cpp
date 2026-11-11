@@ -16,6 +16,7 @@
 
 #include "decoder.h"
 
+#include "alignment.h"
 #include "conformer/conformer.h"
 #include "encoder.h"  // for transcribe::conformer namespace alias context
 #include "ggml.h"
@@ -368,21 +369,27 @@ ggml_tensor * mha_self_step(ggml_context *   ctx,
     return o;
 }
 
+struct CrossAttention {
+    ggml_tensor * queries = nullptr;
+    ggml_tensor * keys    = nullptr;
+};
+
 // Cross-attention reading the pre-populated cross KV cache.
 // x: [d_model, n_tokens] query input -> returns [d_model, n_tokens].
-ggml_tensor * mha_cross_cached(ggml_context *   ctx,
-                               ggml_tensor *    x,
-                               WhisperKvCache & kv_cache,
-                               ggml_tensor *    mask,
-                               ggml_tensor *    q_w,
-                               ggml_tensor *    q_b,
-                               ggml_tensor *    out_w,
-                               ggml_tensor *    out_b,
-                               int              n_heads,
-                               int              d_model,
-                               int              il,
-                               int              T_enc,
-                               bool             use_flash) {
+ggml_tensor * mha_cross_cached(ggml_context *         ctx,
+                               ggml_tensor *          x,
+                               const WhisperKvCache & kv_cache,
+                               ggml_tensor *          mask,
+                               ggml_tensor *          q_w,
+                               ggml_tensor *          q_b,
+                               ggml_tensor *          out_w,
+                               ggml_tensor *          out_b,
+                               int                    n_heads,
+                               int                    d_model,
+                               int                    il,
+                               int                    T_enc,
+                               bool                   use_flash,
+                               CrossAttention *       attention = nullptr) {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t n_tokens = x->ne[1];
@@ -391,7 +398,6 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
     // written). FA reads the padded shape — kernel-friendly seq dim at the cost
     // of small dilution unless the caller masks the padded slots.
     const int T_enc_pad = kv_cache.T_enc_pad > 0 ? kv_cache.T_enc_pad : T_enc;
-    (void) T_enc;
 
     // Q from current input; K / V read from the cross cache.
     ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
@@ -406,6 +412,11 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
     ggml_tensor * K =
         ggml_view_3d(ctx, kv_cache.cross_k, head_dim, T_enc_pad, n_heads, k_elem * d_model, k_elem * head_dim,
                      k_elem * static_cast<size_t>(static_cast<int64_t>(il) * T_enc_pad * d_model));
+
+    if (attention != nullptr) {
+        attention->queries = Q;
+        attention->keys    = K;
+    }
 
     const size_t  v_elem = ggml_element_size(kv_cache.cross_v);
     ggml_tensor * V =
@@ -434,6 +445,108 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
 }
 
 }  // namespace
+
+AlignmentBuild build_decoder_alignment_graph(ggml_context *                      ctx,
+                                             const WhisperWeights &              w,
+                                             const WhisperHParams &              hp,
+                                             const WhisperKvCache &              kv_cache,
+                                             int                                 seq_len,
+                                             int                                 n_audio_frames,
+                                             const std::vector<alignment_head> & heads,
+                                             bool                                use_flash) {
+    AlignmentBuild ab{};
+    const int      T_enc   = kv_cache.T_enc;
+    const int      d_model = hp.dec_d_model;
+    const int      n_heads = hp.dec_n_heads;
+    if (ctx == nullptr || seq_len <= 0 || seq_len > hp.dec_max_target_positions || n_audio_frames <= 0 ||
+        n_audio_frames > T_enc || kv_cache.n_batch != 1 || kv_cache.cross_k == nullptr || kv_cache.cross_v == nullptr ||
+        heads.empty()) {
+        return ab;
+    }
+
+    int last_layer = 0;
+    for (const auto & head : heads) {
+        if (head.layer < 0 || head.layer >= static_cast<int>(w.dec_blocks.size()) || head.head < 0 ||
+            head.head >= n_heads) {
+            return ab;
+        }
+        last_layer = std::max(last_layer, head.layer);
+    }
+
+    ab.graph = ggml_new_graph_custom(ctx, 8192, false);
+    if (ab.graph == nullptr) {
+        return ab;
+    }
+    ab.attention_out.resize(heads.size());
+    ab.token_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, seq_len);
+    named(ab.token_ids_in, "alignment.token_ids");
+    ggml_set_input(ab.token_ids_in);
+
+    ggml_tensor * causal_mask = nullptr;
+    if (seq_len > 1) {
+        ab.causal_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, seq_len, seq_len);
+        named(ab.causal_mask_in, "alignment.causal_mask");
+        ggml_set_input(ab.causal_mask_in);
+        causal_mask = ggml_cast(ctx, ab.causal_mask_in, GGML_TYPE_F16);
+    }
+
+    ggml_tensor * cross_mask = nullptr;
+    if (last_layer > 0 && kv_cache.T_enc_pad > T_enc) {
+        ab.cross_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kv_cache.T_enc_pad, seq_len);
+        named(ab.cross_mask_in, "alignment.cross_mask");
+        ggml_set_input(ab.cross_mask_in);
+        cross_mask = ggml_cast(ctx, ab.cross_mask_in, GGML_TYPE_F16);
+    }
+
+    ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_top.token_embd_w, ab.token_ids_in);
+    ggml_tensor * pos_emb = ggml_view_2d(ctx, w.dec_top.pos_emb_w, d_model, seq_len, w.dec_top.pos_emb_w->nb[1], 0);
+    ggml_tensor * x       = ggml_add(ctx, tok_emb, pos_emb);
+
+    const int   head_dim = d_model / n_heads;
+    const float scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    for (int i = 0; i <= last_layer; ++i) {
+        const auto & b = w.dec_blocks[i];
+
+        ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, b.norm_self_b);
+        y = mha_decoder(ctx, y, /*context=*/nullptr, causal_mask, b.self_q_w, b.self_q_b, b.self_k_w, b.self_v_w,
+                        b.self_v_b, b.self_out_w, b.self_out_b, n_heads, d_model, use_flash);
+        x = ggml_add(ctx, x, y);
+
+        CrossAttention attention;
+        y = layer_norm(ctx, x, b.norm_cross_w, b.norm_cross_b);
+        y = mha_cross_cached(ctx, y, kv_cache, cross_mask, b.cross_q_w, b.cross_q_b, b.cross_out_w, b.cross_out_b,
+                             n_heads, d_model, i, T_enc, use_flash, &attention);
+
+        // Use only the selected heads and real audio frames for the alignment
+        // softmax. The full cross-attention is still needed by subsequent layers.
+        for (size_t j = 0; j < heads.size(); ++j) {
+            if (heads[j].layer != i) {
+                continue;
+            }
+            const size_t  head   = static_cast<size_t>(heads[j].head);
+            ggml_tensor * q      = ggml_view_2d(ctx, attention.queries, head_dim, seq_len, attention.queries->nb[1],
+                                                head * attention.queries->nb[2]);
+            ggml_tensor * k      = ggml_view_2d(ctx, attention.keys, head_dim, n_audio_frames, attention.keys->nb[1],
+                                                head * attention.keys->nb[2]);
+            ggml_tensor * scores = ggml_mul_mat(ctx, k, q);
+            ggml_tensor * probs  = ggml_soft_max_ext(ctx, scores, nullptr, scale, 0.0f);
+            ggml_set_output(probs);
+            ggml_build_forward_expand(ab.graph, probs);
+            ab.attention_out[j] = probs;
+        }
+
+        // No subsequent decoder layer needs this residual or the logits.
+        if (i == last_layer) {
+            break;
+        }
+        x = ggml_add(ctx, x, y);
+        y = layer_norm(ctx, x, b.norm_ffn_w, b.norm_ffn_b);
+        y = ffn(ctx, y, b.ffn_fc1_w, b.ffn_fc1_b, b.ffn_fc2_w, b.ffn_fc2_b);
+        x = ggml_add(ctx, x, y);
+    }
+
+    return ab;
+}
 
 DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
                                          const WhisperWeights & w,
