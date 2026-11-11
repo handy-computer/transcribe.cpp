@@ -9,10 +9,11 @@ and a from-source build breaks; ship too much and multi-GB model/dump/report
 trees leak into the registry. This is the Rust twin of the sdist content audit
 (pyproject `sdist.exclude` + its CI assertion).
 
-Three gates, all from `cargo package`:
+Four gates, all from `cargo package`:
 
   - REQUIRED prefixes present  (the vendored sources a build needs)
   - FORBIDDEN prefixes absent  (models/dumps/reports/etc. — never in a package)
+  - relative links in packaged Markdown resolve to packaged files
   - compressed size under crates.io's 10 MB default cap
 
 `cargo package` enumerates from the git index, so run it where the crate
@@ -23,6 +24,8 @@ Stdlib only. Exit 0 on a clean audit, 1 on any violation.
 
 from __future__ import annotations
 
+import posixpath
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +68,9 @@ FORBIDDEN_PREFIXES = [
 
 MAX_COMPRESSED_BYTES = 10 * 1024 * 1024  # crates.io default cap
 
+# Markdown link targets: [text](target).
+MARKDOWN_LINK = re.compile(r"\]\(([^)\s]+)\)")
+
 
 def package_file_list() -> list[str]:
     out = subprocess.run(
@@ -75,6 +81,22 @@ def package_file_list() -> list[str]:
         text=True,
     )
     return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+
+
+def dead_links(files: list[str]) -> list[str]:
+    """Relative links in packaged Markdown whose target is not packaged."""
+    packaged = set(files)
+    dead = []
+    for doc in (f for f in files if f.endswith(".md")):
+        text = (REPO / doc).read_text(encoding="utf-8")
+        for target in MARKDOWN_LINK.findall(text):
+            path = target.split("#", 1)[0]
+            if not path or ":" in path:  # in-page anchor, URL or mailto
+                continue
+            resolved = posixpath.join(posixpath.dirname(doc), path)
+            if posixpath.normpath(resolved) not in packaged:
+                dead.append(f"{doc}: {target}")
+    return dead
 
 
 def build_crate() -> Path:
@@ -105,6 +127,9 @@ def main() -> int:
                 f"FORBIDDEN path present ({prefix}): "
                 f"{hits[0]}{' …' if len(hits) > 1 else ''} ({len(hits)} files)"
             )
+
+    for link in dead_links(files):
+        failures.append(f"DEAD link (target not packaged): {link}")
 
     crate = build_crate()
     size = crate.stat().st_size
