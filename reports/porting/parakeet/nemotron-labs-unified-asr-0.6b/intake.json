@@ -1,0 +1,289 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/nemotron-labs-unified-asr-0.6b",
+  "hf_revision": "023ce907267a09a308a5cb69239447cb3d0c1597",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only. Values below read from model_config.yaml streamed out of nemotron-labs-unified-asr-0.6b.nemo at the pinned revision (tar order: tokenizer.model, model_config.yaml, model_weights.ckpt). nemo_version in the cfg: 3.1.0+7be3e2bf6."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "From model_config.yaml preprocessor block (AudioToMelSpectrogramPreprocessor): sample_rate=16000, features=128, n_fft=512, window_size=0.025, window_stride=0.01, window=hann, normalize=per_feature, dither=1e-05, pad_to=0, frame_splicing=1. preemph absent from cfg -> NeMo default 0.97. Identical to parakeet-unified-en-0.6b."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "SentencePiece BPE inside .nemo (4f9d8986eb094812a3106e13d84db5bd_tokenizer.model). Inspected: 4095 pieces, unk=0, no bos/eos/pad, and only one angle-bracket piece (<unk>). No <lang-XX> tag tokens, unlike nemotron-3.5-asr-streaming-0.6b."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "No fast-tokenizer JSON; SentencePiece proto only."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Decoding cfg inside .nemo: strategy=greedy_batch, max_symbols=10. Streaming geometry lives on encoder.att_chunk_context_size (L/C/R menu), not on decoding."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "PyTorch state_dict inside .nemo tarball (model_weights.ckpt, 2.51 GB), not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/nemotron-labs-unified-asr-0.6b",
+      "status": "found",
+      "detail": "Multilingual (25 European languages) version of parakeet-unified-en-0.6b: Unified FastConformer-RNNT, 24 encoder layers, 600M params, one checkpoint for offline (full context) and buffered streaming (chunked_limited_with_rc, latency = chunk + right context, 2080ms down to 160ms in 80ms steps, default left context 5.6s). Encoder initialized from parakeet-tdt-0.6b-v3. Language-ID prompt conditioning on the encoder output as in nemotron-3.5-asr-streaming-0.6b; target_lang=<code> or target_lang=auto. Native PnC. License OpenMDW-1.1. Runtime: NeMo Speech 3.1.0."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/, NeMo nemo.collections.asr.models.rnnt_bpe_models_prompt.EncDecRNNTBPEModelWithPrompt, NeMo examples/asr/asr_chunked_inference/rnnt/speech_to_text_streaming_infer_rnnt.py",
+      "status": "found",
+      "detail": "Both halves already exist in the parakeet port: the buffered chunked_limited_with_rc streaming path + DCC conv (parakeet-unified-en-0.6b) and the prompt MLP + prompt_dictionary KVs + resolve_prompt_id (nemotron-3.5-asr-streaming-0.6b). New is the combination: the buffered streaming path (emit_buffered_chunk) does not fill prompt.one_hot.in today."
+    }
+  },
+  "variants": [
+    {
+      "name": "nemotron-labs-unified-asr-0.6b",
+      "memory_gb": 2.5,
+      "files": [
+        "nemotron-labs-unified-asr-0.6b.nemo"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "architectures": [
+        "EncDecRNNTBPEModelWithPrompt"
+      ],
+      "nemo_target_class": "nemo.collections.asr.models.rnnt_bpe_models_prompt.EncDecRNNTBPEModelWithPrompt",
+      "model_type": "parakeet_rnnt_unified_multilingual_prompt",
+      "encoder.type": "Unified FastConformer (offline + buffered streaming, shared weights)",
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.conv_norm_type": "batch_norm",
+      "encoder.conv_context_style": "dcc",
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.causal_downsampling": false,
+      "encoder.self_attention_model": "rel_pos",
+      "encoder.att_context_size": [
+        -1,
+        -1
+      ],
+      "encoder.att_context_style": "chunked_limited_with_rc",
+      "encoder.att_chunk_context_size": [
+        [
+          70
+        ],
+        [
+          1,
+          2,
+          7,
+          13
+        ],
+        [
+          0,
+          1,
+          2,
+          3,
+          4,
+          7,
+          13
+        ]
+      ],
+      "encoder.att_chunk_context_size.units": "80ms encoder frames (L menu, C menu, R menu)",
+      "encoder.xscaling": true,
+      "encoder.untie_biases": true,
+      "encoder.pos_emb_max_len": 5000,
+      "encoder.feat_in": 128,
+      "language_conditioning.num_prompts": 128,
+      "language_conditioning.initialize_prompt_feature": true,
+      "language_conditioning.prompt_field": "target_lang",
+      "language_conditioning.auto_id": 127,
+      "language_conditioning.prompt_dictionary_entries": 128,
+      "language_conditioning.tag_tokens_in_spm_vocab": false,
+      "decoder.type": "RNNTDecoder (predictor)",
+      "decoder.pred_rnn_layers": 2,
+      "decoder.pred_hidden": 640,
+      "decoder.blank_as_pad": true,
+      "joint.type": "RNNTJoint",
+      "joint.encoder_hidden": 1024,
+      "joint.joint_hidden": 640,
+      "joint.activation": "relu",
+      "joint.num_classes": 4095,
+      "joint.durations": null,
+      "aux_ctc": null,
+      "decoding.strategy": "greedy_batch",
+      "decoding.max_symbols": 10,
+      "train_ds.max_duration_s": 40.0,
+      "loss.offline_loss_weight": 0.5,
+      "loss.streaming_loss_weight": 0.5,
+      "tokenizer.vocab_size": 4095,
+      "tokenizer.has_punctuation_capitalization": true
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo archive ships a float32 PyTorch state_dict (model_weights.ckpt 2,507,285,799 bytes ~= 627M params x 4 bytes), consistent with every parakeet-family variant.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 4095,
+    "special_tokens": {
+      "unk": 0,
+      "blank": 4095
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "f910aa78502daf04410654c3211180e6f83aafd6ef23a38739f25b6568421ba7"
+  },
+  "capabilities": {
+    "languages": [
+      "bg",
+      "hr",
+      "cs",
+      "da",
+      "nl",
+      "en",
+      "et",
+      "fi",
+      "fr",
+      "de",
+      "el",
+      "hu",
+      "it",
+      "lv",
+      "lt",
+      "mt",
+      "pl",
+      "pt",
+      "ro",
+      "sk",
+      "sl",
+      "es",
+      "sv",
+      "ru",
+      "uk"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word"
+    ],
+    "streaming": true,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean (offline)",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.38,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-labs-unified-asr-0.6b",
+      "notes": "Offline / full context, explicit target_lang. Streaming on the same set: 1.49 (1.12s), 1.57 (0.56s), 1.75 (0.32s), 2.42 (0.16s). Context only; Stage 7 gates on the measured NeMo reference baseline."
+    },
+    {
+      "dataset": "LibriSpeech test-other (offline)",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.81,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-labs-unified-asr-0.6b",
+      "notes": "Offline / full context, explicit target_lang."
+    },
+    {
+      "dataset": "Open ASR Leaderboard English, 7 cleaned sets (offline)",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.68,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-labs-unified-asr-0.6b",
+      "notes": "Cleaned AMI/GigaSpeech/VoxPopuli, AA-chunked Earnings22; not comparable with the older uncleaned suite. Streaming: 5.41 (1.12s), 5.68 (0.56s), 6.27 (0.32s), 7.87 (0.16s)."
+    },
+    {
+      "dataset": "FLEURS + MCV + MLS, 25 languages, 44 runs (offline)",
+      "language": null,
+      "metric": "wer",
+      "score": 9.49,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-labs-unified-asr-0.6b",
+      "notes": "Mean over 44 dataset-language runs, explicit language prompt. Streaming: 11.85 (1.12s), 13.25 (0.56s), 15.24 (0.32s), 19.19 (0.16s). Per-language offline range 3.61 (es) to 21.93 (lv)."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NVIDIA NeMo first-party framework (card names NeMo Speech 3.1.0 as the runtime). The HF repo ships only a .nemo archive consumed by ASRModel.from_pretrained -> EncDecRNNTBPEModelWithPrompt; there is no Transformers class and no safetensors. Offline oracle: asr_model.transcribe(..., target_lang=<code>). Streaming oracle: NeMo examples/asr/asr_chunked_inference/rnnt/speech_to_text_streaming_infer_rnnt.py with left/chunk/right_context_secs, att_context_size_as_chunk=true, target_lang=<code>, the same script that oracled parakeet-unified-en-0.6b streaming.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Combination gap in the C++ buffered streaming path: emit_buffered_chunk (src/arch/parakeet/model.cpp, the parakeet-unified-en path) builds the offline encoder graph per buffer, which now carries the prompt MLP, but never fills prompt.one_hot.in. Stage 4 must resolve the session's language hint once at stream begin and feed the one-hot on every buffered chunk; otherwise the prompt input is uninitialized and streaming output is garbage or silently language-agnostic.",
+    "Prompt dictionary aliases are not all the same slot: es -> 3 but es-ES -> 2; pt -> 13 (= pt-PT) but pt-BR -> 12; en -> 0 (= en-US) but en-GB -> 1. The card's documented codes are the bare 2-letter forms and all 25 are present. Stage 2 must confirm which slot the training lang_field (source_lang) actually populated per language; slots never seen in training (e.g. es-ES=2 if training used es=3) will run without error and degrade WER. Advertise and accept only the bare codes (see the --language decision below); region-tagged aliases are rejected.",
+    "The 128-slot prompt dictionary carries ~100 locales the model was not trained on (zh, ja, ar, hi, ...) plus region aliases, inherited from the nemotron-3.5 table, and resolve_prompt_id accepts all of them. Decision (CJ, 2026-11-10): --language is limited to the 25 advertised bare codes (capabilities.languages / general.languages). Any other hint, including dictionary entries like zh or es-ES, returns UNSUPPORTED_LANGUAGE; an empty hint still selects the auto slot (127). Stage 4 gates the hint against the advertised list before the prompt-dictionary lookup, scoped to this variant so nemotron-3.5 behavior is unchanged.",
+    "Auto mode emits no language tag: the SPM vocab has no <lang-XX> pieces (unlike nemotron-3.5), so target_lang=auto (prompt slot 127) is a language-agnostic transcription mode, not language detection. capabilities.language_detection is false; the runtime must not advertise a detected language. The card recommends an explicit language for low-latency streaming because auto mode can emit wrong-language tokens in the first chunks.",
+    "Streaming geometry menu vs model card: att_chunk_context_size is L=[70], C=[1,2,7,13], R=[0,1,2,3,4,7,13] (the training sampling menu, not an inference constraint; NeMo's streaming script builds the mask from arbitrary seconds). The card's 0.56s recommendation (C=2, R=5) is off-menu and resolve_buffered_stream_geom rejects it today. Decision (CJ, 2026-11-10): Stage 4 replaces the menu-membership check with exact-80ms-multiple, C>=1, L>=0, R>=0 validation, verified byte-equal vs NeMo at (5.6, 0.16, 0.40)s on this variant AND on parakeet-unified-en-0.6b (shared code path). Off-menu accuracy at extremes (L<2s per the card, L>5.6s untrained) is a model property to document, not a runtime error.",
+    "Buffered streaming recomputes the left context every chunk (card's own 'Streaming Inference Limitation'); no K/V cache reuse. Cost per chunk scales with L+C+R (70+13+13 frames at the default), so low-latency settings (C=1) are many times more expensive per second of audio than the cache-aware nemotron-3.5. A perf property, not a correctness one, but it bounds what Stage 6 can show for 160ms latency on the weak rig.",
+    "Offline long-form: with_rc variants are excluded from the parakeet [256,256] local-attention load-time default (rule requires att_context_style=regular), so offline inference is full attention, quadratic in length, as on parakeet-unified-en-0.6b. Trained on <=40s utterances. The encoder is v3-initialized, so the v3 long-context implicit-language-drift finding may apply less here because the prompt pins the language, but long-form behavior is unmeasured.",
+    "NeMo version: cfg was written by NeMo 3.1.0; scripts/envs/parakeet pins nemo-toolkit 2.8.0rc0 (6967f48fda2a). The env already loads EncDecRNNTBPEModelWithPrompt (nemotron-3.5) and the converter has a _DirectNemoArchive fallback for att_chunk_context_size (unified-en), but whether that NeMo can instantiate the combined class + with_rc encoder and whether its speech_to_text_streaming_infer_rnnt.py accepts target_lang is unverified. If not, Stage 2 needs a separate env pinned to NeMo Speech 3.1.0 (repo moved to github.com/NVIDIA-NeMo/Speech).",
+    "Tokenizer changed again: 4095 pieces (unified-en 1024, nemotron-3.5 13087, v3 8192); blank = 4095. The converter profile needs expected_vocab_size=4095 and the joint output dim is 4096. The vocab includes Cyrillic/Greek pieces; WER scoring for el/bg/ru/uk needs the multilingual normalizer path used by the FLEURS matrix sweep.",
+    "aux_ctc block absent from the cfg (unlike nemotron-3.5); expect no ctc_decoder.* tensors. Convert should fail fast if any appear rather than silently dropping them.",
+    "No CTC head and plain RNN-T joint (no durations): same head as parakeet-unified-en-0.6b and nemotron-3.5; already handled by head_kind=rnnt.",
+    "Encoder frontend is per_feature normalized (offline-style), unlike the cache-aware nemotron variants (normalize=NA). In buffered streaming the per-feature stats are computed over each buffer, matching how unified-en already streams; must stay that way for this variant.",
+    "License: OpenMDW-1.1 (same as nemotron-3.5; unified-en was NVIDIA Open Model License). HF card YAML at Stage 8 must carry openmdw-1.1."
+  ],
+  "intake_gaps": [
+    {
+      "field": "language_conditioning prompt tensors",
+      "reason": "prompt_kernel.0/.2 tensor presence and shapes (expected [prompt_hidden, 1024+128] and [1024, prompt_hidden]) not verified; the 2.5 GB model_weights.ckpt was not downloaded at intake. The converter's PROMPT_MLP_TABLE shape check validates this at Stage 3."
+    },
+    {
+      "field": "prompt slot used per language in training",
+      "reason": "The prompt_dictionary maps aliases to different slots (es=3 vs es-ES=2, pt=13 vs pt-BR=12). Which slot the training source_lang field hit is not stated. Stage 2 resolves by running NeMo transcribe with each alias on a FLEURS clip per affected language."
+    },
+    {
+      "field": "NeMo env compatibility",
+      "reason": "Stage 2 must confirm the pinned nemo-toolkit 2.8.0rc0 loads this 3.1.0-authored checkpoint and runs the buffered streaming script with target_lang; otherwise add a NeMo Speech 3.1.0 env."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "2.5 GB is the F32 checkpoint size, not measured peak inference memory."
+    }
+  ]
+}
