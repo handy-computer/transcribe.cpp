@@ -469,7 +469,9 @@ TRANSCRIBE_API void transcribe_log_set(transcribe_log_callback cb, void * userda
 /* ----------------------------------------------------------------------- */
 
 /* INSTRUCT: transcribe_run_params::prompt is the instruction and the output
- * is free text (only full_text / raw_text are guaranteed). Offline only. */
+ * is free text (only full_text / raw_text are guaranteed). Offline only.
+ * transcribe_run with n_samples == 0 (pcm may be NULL) runs the instruction
+ * on its own, with no audio. */
 typedef enum {
     TRANSCRIBE_TASK_TRANSCRIBE = 0,
     TRANSCRIBE_TASK_TRANSLATE  = 1,
@@ -1690,7 +1692,9 @@ TRANSCRIBE_API const struct transcribe_model * transcribe_get_model(const struct
  *             in place. Silence is valid.
  * n_samples:  number of samples in pcm. Must be strictly positive;
  *             a non-positive count returns TRANSCRIBE_ERR_INVALID_ARG
- *             (same rule as transcribe_stream_feed).
+ *             (same rule as transcribe_stream_feed). The exception is
+ *             TRANSCRIBE_TASK_INSTRUCT: 0 (pcm may then be NULL) is a
+ *             text-only run on the prompt alone.
  * params:     run params, or NULL for defaults.
  *
  * v1 supports only 16 kHz mono float32 PCM and does not link a

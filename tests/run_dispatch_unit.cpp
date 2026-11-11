@@ -700,6 +700,17 @@ void test_prompting_validation() {
     p.timestamps      = TRANSCRIBE_TIMESTAMPS_NONE;
     CHECK(prompt_run(model, p) == TRANSCRIBE_OK);
 
+    // No audio: INSTRUCT runs on the prompt alone; any other task is malformed.
+    {
+        transcribe_session session;
+        session.model = &model;
+        CHECK(transcribe_run(&session, nullptr, 0, &p) == TRANSCRIBE_OK);
+        CHECK(g_seen_params.task == TRANSCRIBE_TASK_INSTRUCT);
+        p.task = TRANSCRIBE_TASK_TRANSCRIBE;
+        CHECK(transcribe_run(&session, nullptr, 0, &p) == TRANSCRIBE_ERR_INVALID_ARG);
+        p.task = TRANSCRIBE_TASK_INSTRUCT;
+    }
+
     // Prefix: hard gate, and never under INSTRUCT.
     p.prefix = "Good morning";
     CHECK(prompt_run(model, p) == TRANSCRIBE_ERR_INVALID_ARG);

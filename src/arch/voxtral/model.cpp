@@ -6,9 +6,12 @@
 //
 //   transcription : [BOS][INST][BEGIN_AUDIO][AUDIO]*N[/INST](lang:<l>)?[TRANSCRIBE]
 //   instruct      : [BOS][INST][BEGIN_AUDIO][AUDIO]*N BPE(instruction)[/INST]
+//   text instruct : [BOS][INST] BPE(instruction)[/INST]
 //
 // Instruct mode covers translation (task TRANSLATE synthesizes "Translate this
-// to {Language}.") and free-text prompting.
+// to {Language}.") and free-text prompting. A TRANSCRIBE_TASK_INSTRUCT run
+// with no audio (n_samples == 0) skips the encoder and runs the text-only
+// mistral-common chat template.
 
 #include "causal_lm/causal_lm.h"
 #include "decoder.h"
@@ -343,7 +346,8 @@ bool instruct_instruction(const transcribe_run_params * params, std::string & in
     return false;
 }
 
-// Build the instruct prompt: audio + BPE(instruction) + [/INST].
+// Build the instruct prompt: audio + BPE(instruction) + [/INST]. With no
+// audio (n_audio == 0) the [BEGIN_AUDIO] marker is left out too.
 transcribe_status build_instruct_prompt(const VoxtralModel &   m,
                                         const std::string &    instruction,
                                         int                    n_audio,
@@ -354,8 +358,10 @@ transcribe_status build_instruct_prompt(const VoxtralModel &   m,
     out_ids.clear();
     out_ids.push_back(s.bos);
     out_ids.push_back(s.inst);
-    out_ids.push_back(s.begin_audio);
-    prefix_len = static_cast<int>(out_ids.size());  // 3
+    if (n_audio > 0) {
+        out_ids.push_back(s.begin_audio);
+    }
+    prefix_len = static_cast<int>(out_ids.size());  // 3, or 2 without audio
     for (int i = 0; i < n_audio; ++i) {
         out_ids.push_back(m.hparams.audio_token_id);
     }
@@ -583,7 +589,9 @@ transcribe_status run(transcribe_session *          session,
                       const float *                 pcm,
                       int                           n_samples,
                       const transcribe_run_params * params) {
-    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
+    // No audio is only valid as a text-only INSTRUCT run.
+    const bool text_only = n_samples == 0 && params != nullptr && params->task == TRANSCRIBE_TASK_INSTRUCT;
+    if (session == nullptr || (!text_only && (pcm == nullptr || n_samples <= 0))) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     auto * cc = static_cast<VoxtralSession *>(session);
@@ -616,38 +624,42 @@ transcribe_status run(transcribe_session *          session,
                                                                       samples_per_chunk / cm->hparams.fe_hop_length;
     const int audio_per_chunk  = cm->hparams.audio_tokens_per_chunk();
 
-    const int    n_chunks = std::max(1, (n_samples + samples_per_chunk - 1) / samples_per_chunk);
+    // Text-only: no chunks, so the mel and encoder steps below do nothing.
+    const int    n_chunks = text_only ? 0 : std::max(1, (n_samples + samples_per_chunk - 1) / samples_per_chunk);
     const size_t padded   = static_cast<size_t>(n_chunks) * samples_per_chunk;
 
-    std::vector<float> pcm_padded(padded, 0.0f);
-    std::memcpy(pcm_padded.data(), pcm, static_cast<size_t>(n_samples) * sizeof(float));
+    int mel_n_mels = 0, mel_n_frames = 0;
+    if (!text_only) {
+        std::vector<float> pcm_padded(padded, 0.0f);
+        std::memcpy(pcm_padded.data(), pcm, static_cast<size_t>(n_samples) * sizeof(float));
 
-    const int64_t t_mel_start = ggml_time_us();
-    int           mel_n_mels = 0, mel_n_frames = 0;
-    if (const transcribe_status mst =
-            cm->mel->compute(pcm_padded.data(), padded, cc->mel_buf, mel_n_mels, mel_n_frames, cc->n_threads);
-        mst != TRANSCRIBE_OK) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: MelFrontend::compute failed (%s)",
-                transcribe_status_string(mst));
-        return mst;
-    }
-    cc->t_mel_us = ggml_time_us() - t_mel_start;
+        const int64_t t_mel_start = ggml_time_us();
+        if (const transcribe_status mst =
+                cm->mel->compute(pcm_padded.data(), padded, cc->mel_buf, mel_n_mels, mel_n_frames, cc->n_threads);
+            mst != TRANSCRIBE_OK) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: MelFrontend::compute failed (%s)",
+                    transcribe_status_string(mst));
+            return mst;
+        }
+        cc->t_mel_us = ggml_time_us() - t_mel_start;
 
-    if (mel_n_mels != cm->hparams.enc_num_mel_bins) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: mel bins %d != %d", mel_n_mels, cm->hparams.enc_num_mel_bins);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (mel_n_frames < n_chunks * frames_per_chunk) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: mel frames %d < %d*%d", mel_n_frames, n_chunks,
-                frames_per_chunk);
-        return TRANSCRIBE_ERR_GGUF;
-    }
+        if (mel_n_mels != cm->hparams.enc_num_mel_bins) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: mel bins %d != %d", mel_n_mels,
+                    cm->hparams.enc_num_mel_bins);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (mel_n_frames < n_chunks * frames_per_chunk) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: mel frames %d < %d*%d", mel_n_frames, n_chunks,
+                    frames_per_chunk);
+            return TRANSCRIBE_ERR_GGUF;
+        }
 
-    // enc.mel.in dump: mel-major [n_mels, n_frames], matching the reference.
-    if (transcribe::debug::enabled()) {
-        const long long shape[2] = { mel_n_mels, mel_n_frames };
-        transcribe::debug::dump_host_f32("enc.mel.in", cc->mel_buf.data(), static_cast<long long>(cc->mel_buf.size()),
-                                         shape, 2, "frontend.mel.norm");
+        // enc.mel.in dump: mel-major [n_mels, n_frames], matching the reference.
+        if (transcribe::debug::enabled()) {
+            const long long shape[2] = { mel_n_mels, mel_n_frames };
+            transcribe::debug::dump_host_f32("enc.mel.in", cc->mel_buf.data(),
+                                             static_cast<long long>(cc->mel_buf.size()), shape, 2, "frontend.mel.norm");
+        }
     }
 
     // ----- Encoder + projector, per 30 s chunk -----
@@ -821,11 +833,13 @@ transcribe_status run(transcribe_session *          session,
     const int          chunk_size = causal_lm::prefill_chunk_size();
     std::vector<float> logits(vocab);
 
-    if (T_prompt > chunk_size) {
+    // A text-only prompt also goes through the chunked path: it already
+    // handles chunks with no audio rows, which the single-shot graph does not.
+    if (T_prompt > chunk_size || n_audio_total == 0) {
         // Long prompt: chunk it. A single flash-attention call is capped at
         // 65535 query rows on Metal, and the [T, T] mask is O(T^2) on both
         // host and device — see decoder.h.
-        if (dumps_on) {
+        if (dumps_on && T_prompt > chunk_size) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                                 "voxtral run: T_prompt=%d exceeds the %d-token prefill chunk — only "
                                 "dec.logits_raw is dumped (per-chunk hidden states have no single-shot "

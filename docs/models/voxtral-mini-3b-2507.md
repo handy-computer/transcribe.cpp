@@ -25,7 +25,7 @@ mono WAV and produces a transcript via greedy decoding.
   mistral-common instruct template ("Translate this to {Language}.") to
   translate non-English speech into the target language's text.
 
-**Prompting:** `--task instruct --prompt "<instruction>"` replaces the transcription request with a free-text instruction (summaries, questions, reformatting); the output is free text.
+**Prompting:** `--task instruct --prompt "<instruction>"` replaces the transcription request with a free-text instruction (summaries, questions, reformatting); the output is free text. With no audio (`n_samples == 0`), the instruction runs on its own as a text-only chat turn.
 
 See Mistral's [model card](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507)
 for training data, intended use, and upstream evaluation.
