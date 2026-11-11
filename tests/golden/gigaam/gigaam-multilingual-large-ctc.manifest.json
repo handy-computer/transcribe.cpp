@@ -1,0 +1,61 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "gigaam",
+  "variant": "gigaam-multilingual-large-ctc",
+  "source_model": {
+    "hf_repo": "ai-sage/GigaAM-Multilingual",
+    "hf_revision": "3905cd51c3ed4e88c8edf33f3302969ba480a327"
+  },
+  "reference": {
+    "kind": "author_repo_gigaam",
+    "source": "https://github.com/salute-developers/GigaAM",
+    "revision": "6e4b027c6fb554e09e8b9059b757a175295ab879",
+    "entrypoint": "scripts/dump_reference_gigaam_author.py",
+    "variant_key": "multilingual_large_ctc",
+    "dump_args": ["--variant", "multilingual_large_ctc"]
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "win_length": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "center": false,
+    "mel_filterbank_norm": "htk",
+    "log_scale": "log(clamp(x, 1e-9, 1e9))"
+  },
+  "tokenizer_summary": {
+    "type": "other",
+    "vocab_size": 70,
+    "special_tokens": {
+      "blank": 70
+    },
+    "_charwise_vocab_size": 70
+  },
+  "capabilities": {
+    "languages": [
+      "ru",
+      "en",
+      "kk",
+      "ky",
+      "uz"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "head_type": "ctc",
+  "tolerance_file": "tests/tolerances/gigaam-multilingual-large-ctc.json",
+  "cases": [
+    {
+      "audio": "ru",
+      "language": "ru"
+    }
+  ]
+}

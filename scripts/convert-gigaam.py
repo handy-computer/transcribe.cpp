@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-convert-gigaam.py - convert a salute-developers/GigaAM-v3 checkpoint into
-a GGUF that transcribe.cpp's loader can ingest end-to-end. Loads via the
-upstream `gigaam` package (gigaam.load_model). Source dtype is F32; use
+convert-gigaam.py - convert a salute-developers GigaAM checkpoint into
+a GGUF that transcribe.cpp's loader can ingest end-to-end. Models are
+built from the upstream `gigaam` package: the v3 variants through
+gigaam.load_model, GigaAM Multilingual Large CTC from its pinned Hugging
+Face snapshot (scripts/lib/gigaam_hf.py). Source dtype is F32; use
 tools/transcribe-quantize for deployment quantization.
 
 Run through the per-family reference environment:
@@ -12,10 +14,19 @@ Run through the per-family reference environment:
       --repo-id gigaam-v3-e2e-rnnt \\
       --variant-key v3_e2e_rnnt
 
-The HF repo argument is informational only — the `gigaam` package
-downloads from its own URL list keyed by --variant-key. The --repo-id
-controls the output slug; it must be one of the five GigaAM-v3 family
-slugs in `VARIANT_PROFILES`.
+For the v3 variants the HF repo argument is informational only — the
+`gigaam` package downloads from its own URL list keyed by --variant-key.
+GigaAM Multilingual Large CTC reads the weights from the HF repo at the
+commit pinned in scripts/lib/gigaam_hf.py; the argument must be that repo
+id. Unlike the converters that take a local directory, this one refuses
+one: a directory carries no commit for the GGUF to record.
+
+    uv run --project scripts/envs/gigaam \\
+      scripts/convert-gigaam.py ai-sage/GigaAM-Multilingual \\
+      --repo-id gigaam-multilingual-large-ctc
+
+The --repo-id controls the output slug; it must be one of the slugs in
+`VARIANT_PROFILES`.
 
 The four ported variants share a 16-layer Conformer encoder with
 rotary attention. They differ in head + tokenizer:
@@ -24,6 +35,11 @@ rotary attention. They differ in head + tokenizer:
   v3_e2e_ctc  -> CTC   head, SentencePiece 256  + punctuation/casing
   v3_rnnt     -> RNN-T head, charwise 33 entries (lowercased Russian)
   v3_ctc      -> CTC   head, charwise 33 entries (lowercased Russian)
+
+GigaAM Multilingual Large CTC (multilingual_large_ctc) uses the same
+encoder blocks at 24 layers, d=1024, 16 heads, and a CTC head over a
+70-entry charwise vocab (space, apostrophe, Latin and Cyrillic letters
+for ru, en, kk, ky, uz).
 
 The upstream `v3_ssl` (HuBERT-CTC pretraining checkpoint, encoder-only)
 is out of scope for this runtime — it has no head, no tokenizer, no
@@ -38,10 +54,10 @@ KV emitted (matches the per-family read_gigaam_hparams the Stage 4
 loader will define):
 
   general.architecture       = "gigaam"
-  general.basename           = "gigaam-v3"
-  general.size_label         = "242M"
-  general.version            = "v3"
-  general.languages          = ["ru"]
+  general.basename           = "gigaam-v3" | "gigaam-multilingual"
+  general.size_label         = "242M" (v3 RNN-T) | "585M" (Multilingual Large)
+  general.version            = "v3" (v3 variants only)
+  general.languages          = ["ru"] | ["ru", "en", "kk", "ky", "uz"]
   stt.variant                = profile["variant"]
   stt.gigaam.head_kind       = "rnnt" | "ctc"
 
@@ -101,6 +117,7 @@ from lib.gguf_common import (  # noqa: E402
     safe_id,
     slug_from_repo_id,
 )
+from lib.gigaam_hf import frontend_params, load_model, variant_source  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -117,11 +134,16 @@ REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 # Variant profiles
 # ---------------------------------------------------------------------------
 #
-# All five GigaAM-v3 variants share the same Conformer encoder shape
-# (16 layers, d=768, 16 heads). They differ only in head + tokenizer.
+# The v3 variants share one Conformer encoder shape (16 layers, d=768,
+# 16 heads) and differ only in head + tokenizer; Multilingual Large CTC
+# has 24 layers, d=1024. The converter reads the shape from the model.
 # The slug (HF-style basename used as the output directory + GGUF base
 # name) is the key the converter dispatches on; --variant-key picks the
-# actual `gigaam.load_model(...)` argument.
+# scripts/lib/gigaam_hf.py VARIANTS entry, which says where the weights
+# come from.
+# basename / version / languages fill the general.* identity block.
+
+_V3_IDENTITY = {"basename": "gigaam-v3", "version": "v3", "languages": ["ru"]}
 
 VARIANT_PROFILES: dict[str, dict] = {
     "gigaam-v3-e2e-rnnt": {
@@ -130,6 +152,7 @@ VARIANT_PROFILES: dict[str, dict] = {
         "head_kind": "rnnt",
         "tokenizer": "sentencepiece",
         "expected_num_classes": 1025,  # vocab(1024) + 1 blank
+        **_V3_IDENTITY,
     },
     "gigaam-v3-e2e-ctc": {
         "variant": "gigaam-v3-e2e-ctc",
@@ -137,6 +160,7 @@ VARIANT_PROFILES: dict[str, dict] = {
         "head_kind": "ctc",
         "tokenizer": "sentencepiece",
         "expected_num_classes": 257,   # vocab(256) + 1 blank
+        **_V3_IDENTITY,
     },
     "gigaam-v3-rnnt": {
         "variant": "gigaam-v3-rnnt",
@@ -144,6 +168,7 @@ VARIANT_PROFILES: dict[str, dict] = {
         "head_kind": "rnnt",
         "tokenizer": "charwise",
         "expected_num_classes": 34,    # 33 chars + 1 blank
+        **_V3_IDENTITY,
     },
     "gigaam-v3-ctc": {
         "variant": "gigaam-v3-ctc",
@@ -151,13 +176,19 @@ VARIANT_PROFILES: dict[str, dict] = {
         "head_kind": "ctc",
         "tokenizer": "charwise",
         "expected_num_classes": 34,
+        **_V3_IDENTITY,
+    },
+    "gigaam-multilingual-large-ctc": {
+        "variant": "gigaam-multilingual-large-ctc",
+        "variant_key": "multilingual_large_ctc",
+        "head_kind": "ctc",
+        "tokenizer": "charwise",
+        "expected_num_classes": 71,    # 70 chars + 1 blank
+        "basename": "gigaam-multilingual",
+        "version": None,
+        "languages": ["ru", "en", "kk", "ky", "uz"],
     },
 }
-
-
-GENERAL_BASENAME = "gigaam-v3"
-GENERAL_VERSION  = "v3"
-GENERAL_LANGUAGES = ["ru"]
 
 
 # Friendly general.name per variant slug (== profile["variant"]).
@@ -166,26 +197,8 @@ VARIANT_DISPLAY_NAMES: dict[str, str] = {
     "gigaam-v3-e2e-ctc":  "GigaAM v3 E2E-CTC",
     "gigaam-v3-rnnt":     "GigaAM v3 RNN-T",
     "gigaam-v3-e2e-rnnt": "GigaAM v3 E2E-RNN-T",
+    "gigaam-multilingual-large-ctc": "GigaAM Multilingual Large CTC",
 }
-
-
-# ---------------------------------------------------------------------------
-# Model loading
-# ---------------------------------------------------------------------------
-
-
-def load_gigaam(variant_key: str):
-    """Load a GigaAM-v3 variant via the upstream `gigaam` package.
-
-    Forces fp16_encoder=False (F32) and device='cpu' to match the
-    Stage 2 reference dumps.
-    """
-    import gigaam
-
-    print(f"Loading gigaam.load_model({variant_key!r}, fp16_encoder=False, device='cpu')")
-    model = gigaam.load_model(variant_key, fp16_encoder=False, device="cpu")
-    model.eval()
-    return model
 
 
 # ---------------------------------------------------------------------------
@@ -243,10 +256,11 @@ def extract_sp_tokenizer(sp, blank_piece: str = "<blank>") -> dict:
 
 
 def extract_charwise_tokenizer(vocab: list[str], blank_piece: str = "<blank>") -> dict:
-    """Emit a charwise GigaAM vocab (33 entries: space + 32 Cyrillic
-    letters) as a tokenizer.ggml payload. Scores are all zero (charwise
-    has no learned scores). Blank goes last and is the only CONTROL
-    token; the 33 chars are all NORMAL.
+    """Emit a charwise GigaAM vocab (v3: 33 entries, space + 32 Cyrillic
+    letters; Multilingual: 70 entries) as a tokenizer.ggml payload.
+    Scores are all zero (charwise has no learned scores). Blank goes last
+    and is the only CONTROL token; the vocab entries are all NORMAL and
+    keep their config.json order, which is the CTC class order.
     """
     tokens: list[str] = list(vocab)
     scores: list[float] = [0.0] * len(vocab)
@@ -281,14 +295,15 @@ def read_hparams(config: dict, model) -> dict:
     enc = config["encoder"]
     pre = config["preprocessor"]
 
-    sample_rate = int(pre["sample_rate"])
-    n_fft       = int(pre["n_fft"])
-    hop_length  = int(pre["hop_length"])
-    win_length  = int(pre["win_length"])
-    n_mels      = int(pre["features"])
-    mel_scale   = str(pre["mel_scale"])
-    mel_norm_raw = pre.get("mel_norm")
-    center      = bool(pre.get("center", False))
+    fe = frontend_params(pre, model.preprocessor)
+    sample_rate  = fe["sample_rate"]
+    n_fft        = fe["n_fft"]
+    hop_length   = fe["hop_length"]
+    win_length   = fe["win_length"]
+    n_mels       = fe["n_mels"]
+    center       = fe["center"]
+    mel_scale    = fe["mel_scale"]
+    mel_norm_raw = fe["mel_norm"]
 
     # SpecScaler clamp constants used by GigaAM's preprocessor:
     # log(clamp(x, 1e-9, 1e9)). The upper clamp is so large it never
@@ -343,8 +358,8 @@ def read_hparams(config: dict, model) -> dict:
         "fe_normalize":    "none",            # no per-utterance/feature normalize
         "fe_dither":       0.0,
         "fe_pre_emphasis": 0.0,
-        "fe_f_min":        0.0,
-        "fe_f_max":        float(sample_rate) / 2.0,
+        "fe_f_min":        fe["f_min"],
+        "fe_f_max":        fe["f_max"],
         "fe_center":       center,
         # `mel_scale` encodes both the HTK frequency formula and the
         # absence of slaney area normalization (mel_norm=null). The C++
@@ -488,7 +503,7 @@ def tensor_to_fp32_numpy(t) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def convert(variant_key: str, slug: str, out_path: Path, repo_id: str | None = None) -> None:
+def convert(variant_key: str, slug: str, out_path: Path, repo_id: str) -> None:
     from omegaconf import OmegaConf
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
@@ -508,7 +523,7 @@ def convert(variant_key: str, slug: str, out_path: Path, repo_id: str | None = N
     print(f"Variant: {profile['variant']} (head_kind={head_kind}, "
           f"tokenizer={profile['tokenizer']})")
 
-    model = load_gigaam(variant_key)
+    model = load_model(variant_key)
     config = OmegaConf.to_container(model.cfg, resolve=True)
     hp = read_hparams(config, model)
 
@@ -609,11 +624,11 @@ def convert(variant_key: str, slug: str, out_path: Path, repo_id: str | None = N
     add_general_identity(
         writer,
         name=VARIANT_DISPLAY_NAMES[profile["variant"]],
-        basename=GENERAL_BASENAME,
+        basename=profile["basename"],
         size_label=size_label,
-        version=GENERAL_VERSION,
+        version=profile["version"],
         file_type=REFERENCE_FILE_TYPE,
-        languages=GENERAL_LANGUAGES,
+        languages=profile["languages"],
         author="Salute Developers",
         organization="ai-sage",
         license="mit",
@@ -800,14 +815,17 @@ def convert(variant_key: str, slug: str, out_path: Path, repo_id: str | None = N
 
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
-        description="Convert a GigaAM-v3 author-repo checkpoint to a GGUF.",
+        description="Convert a GigaAM author-repo checkpoint to a GGUF.",
     )
     p.add_argument(
         "model",
         type=str,
-        help="HF repo id (informational; e.g. ai-sage/GigaAM-v3) — the "
-             "gigaam package downloads from its own URL list keyed by "
-             "--variant-key.",
+        help="HF repo id. Informational for v3 (e.g. ai-sage/GigaAM-v3): "
+             "the gigaam package downloads from its own URL list keyed by "
+             "--variant-key. For gigaam-multilingual-large-ctc, the source "
+             "of the weights: ai-sage/GigaAM-Multilingual, fetched at the "
+             "commit pinned in scripts/lib/gigaam_hf.py. A local directory "
+             "is refused, because the GGUF records that commit.",
     )
     p.add_argument(
         "out_path",
@@ -820,15 +838,17 @@ def main(argv: list[str]) -> int:
         "--repo-id",
         type=str,
         default=None,
-        help="One of the five gigaam-v3-* family slugs (drives the output "
-             "filename and selects the VARIANT_PROFILES entry).",
+        help="A VARIANT_PROFILES slug, e.g. gigaam-v3-ctc or "
+             "gigaam-multilingual-large-ctc (drives the output filename "
+             "and selects the profile).",
     )
     p.add_argument(
         "--variant-key",
         type=str,
         default=None,
-        help="gigaam.load_model() key (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, "
-             "v3_ctc). If omitted, derived from --repo-id.",
+        help="gigaam variant key (v3_e2e_rnnt, v3_e2e_ctc, v3_rnnt, "
+             "v3_ctc, multilingual_large_ctc). If omitted, derived from "
+             "--repo-id.",
     )
     args = p.parse_args(argv[1:])
 
@@ -847,6 +867,16 @@ def main(argv: list[str]) -> int:
     profile = VARIANT_PROFILES[slug]
 
     variant_key = args.variant_key or profile["variant_key"]
+    source = variant_source(variant_key)
+    if source.from_snapshot and args.model != source.repo_id:
+        # The GGUF records the pinned repo and commit; another repo or a
+        # local directory would not be the source it names.
+        print(
+            f"error: {variant_key} converts from the Hugging Face repo "
+            f"{source.repo_id} at {source.revision}, got {args.model!r}",
+            file=sys.stderr,
+        )
+        return 2
 
     out_path = args.out_path
     if out_path is None:

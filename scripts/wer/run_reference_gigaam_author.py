@@ -2,13 +2,12 @@
 """
 run_reference_gigaam_author.py — GigaAM author-repo batch transcribe.
 
-Loads a GigaAM-v3 variant via `gigaam.load_model(variant, fp16_encoder=False)`
-once and runs greedy decode over a WER manifest. Writes run.py-compatible
-JSONL so scripts/wer/score.py can score the output the same way it scores
-the C++ port's report.
+Loads a GigaAM variant once through scripts/lib/gigaam_hf.py, the loader
+the reference dumper uses, and runs greedy decode over a WER manifest.
+Writes run.py-compatible JSONL so scripts/wer/score.py can score the
+output the same way it scores the C++ port's report.
 
-Mirrors the dump-time setup (scripts/dump_reference_gigaam_author.py):
-forces fp16_encoder=False so the encoder runs in fp32 on CPU.
+The model runs in F32 on CPU, as in the reference dumps.
 
 Usage (from repo root):
 
@@ -27,13 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-# Same per-variant revision pins as the dumper.
-_VARIANT_REVISIONS = {
-    "v3_e2e_rnnt": "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
-    "v3_e2e_ctc":  "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
-    "v3_rnnt":     "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
-    "v3_ctc":      "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo scripts/
+from lib.gigaam_hf import VARIANTS, load_model  # noqa: E402
 
 
 def main() -> int:
@@ -46,8 +40,8 @@ def main() -> int:
     p.add_argument("--out", type=Path, required=True,
                    help="Output JSONL path (run.py-compatible).")
     p.add_argument("--variant", required=True,
-                   choices=sorted(_VARIANT_REVISIONS.keys()),
-                   help="GigaAM variant key passed to gigaam.load_model.")
+                   choices=sorted(VARIANTS),
+                   help="GigaAM variant key of scripts/lib/gigaam_hf.py VARIANTS.")
     p.add_argument("--torch-threads", type=int, default=1,
                    help="torch intra-op threads for deterministic runs.")
     p.add_argument("--limit", type=int, default=0,
@@ -64,20 +58,8 @@ def main() -> int:
     if args.torch_threads > 0:
         torch.set_num_threads(args.torch_threads)
 
-    import gigaam
-
-    print(
-        f"loading: gigaam.load_model({args.variant!r}, "
-        f"fp16_encoder=False, device='cpu')",
-        flush=True,
-    )
     t0 = time.monotonic()
-    model = gigaam.load_model(
-        args.variant,
-        fp16_encoder=False,
-        device="cpu",
-    )
-    model.eval()
+    model = load_model(args.variant)
     load_ms = (time.monotonic() - t0) * 1000
 
     with open(args.manifest) as f:
@@ -98,7 +80,7 @@ def main() -> int:
             "load_ms": round(load_ms, 1),
             "framework": "gigaam-author",
             "model": args.variant,
-            "model_revision": _VARIANT_REVISIONS[args.variant],
+            "model_revision": VARIANTS[args.variant].revision,
         }) + "\n")
         fout.flush()
 

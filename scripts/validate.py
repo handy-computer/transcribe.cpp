@@ -411,9 +411,10 @@ def cmd_ref(args: argparse.Namespace) -> int:
 
         # Pin the HF revision when the manifest declares one and the
         # family's dumper accepts --revision. The dumper itself ignores
-        # --revision when --model resolves to a local directory.
+        # --revision when --model resolves to a local directory. The gigaam
+        # dumper loads its own pinned commit and refuses a different one.
         hf_revision = (manifest.get("source_model") or {}).get("hf_revision")
-        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc", "ecapa_tdnn"):
+        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc", "ecapa_tdnn", "gigaam"):
             common_args += ["--revision", str(hf_revision)]
 
         # Forward any manifest-declared dumper args verbatim. Used today

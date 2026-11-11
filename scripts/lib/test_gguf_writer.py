@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -127,6 +128,9 @@ def _main() -> int:
         except AssertionError as e:
             failed += 1
             print(f"FAIL {t.__name__}: {e}")
+        except Exception:
+            failed += 1
+            print(f"ERROR {t.__name__}:\n{traceback.format_exc()}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     return 1 if failed else 0
 
