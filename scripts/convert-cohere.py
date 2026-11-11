@@ -554,9 +554,9 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
                 )
             # Read as torch bf16 tensor, convert to fp32 numpy.
             t = st.get_tensor(src_name)
-            if t.dtype != torch.bfloat16:
+            if t.dtype not in (torch.bfloat16, torch.float32):
                 raise ValueError(
-                    f"{src_name}: expected source dtype torch.bfloat16, got {t.dtype}"
+                    f"{src_name}: expected source dtype torch.bfloat16 or torch.float32, got {t.dtype}"
                 )
             arr = t.float().numpy()
             arr = transform(arr)
@@ -609,11 +609,31 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
         for src_name, gguf_name, transform in HEAD_TABLE:
             add(src_name, gguf_name, transform)
 
+        # Some fine-tunes (e.g. syvai/hviske-v5*) train the head separately
+        # from the embedding. Store it as head.weight so the runtime does
+        # not fall back to the tied embedding.
+        head_untied = not torch.equal(
+            st.get_tensor(tied_key),
+            st.get_tensor("transf_decoder._embedding.token_embedding.weight"),
+        )
+        if head_untied:
+            print("Head weight is untied from the embedding; writing head.weight")
+            add(tied_key, "head.weight", passthrough)
+
         # Mel frontend buffers (filterbank + window) — always stored as f32.
         # These are the exact values the model was trained with; using them
         # instead of recomputing from scratch eliminates mel-level divergence.
         fb_src = "preprocessor.featurizer.fb"
-        fb_tensor = st.get_tensor(fb_src).float().numpy()
+        if fb_src in st_keys:
+            fb_tensor = st.get_tensor(fb_src).float().numpy()
+        else:
+            # Checkpoints saved without the preprocessor buffer: rebuild it the
+            # way the remote-code CohereAsrFeatureExtractor does.
+            import librosa
+            fb_tensor = librosa.filters.mel(
+                sr=hp["fe_sample_rate"], n_fft=hp["fe_n_fft"], n_mels=hp["fe_num_mels"],
+                fmin=0.0, fmax=hp["fe_sample_rate"] / 2, norm="slaney",
+            ).astype(np.float32)
         if fb_tensor.ndim == 3:
             fb_tensor = fb_tensor.squeeze(0)  # [1, 128, 257] -> [128, 257]
         writer.add_tensor("frontend.mel_filterbank", fb_tensor)
@@ -645,6 +665,7 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
             + hp["dec_n_layers"] * len(DECODER_BLOCK_TABLE)    # 8 * 26 = 208
             + len(DEC_FINAL_NORM_TABLE)                        # 2
             + len(HEAD_TABLE)                                  # 1
+            + int(head_untied)                                 # optional head.weight
             + 2                                                # frontend fb + window
         )
         if n_added != expected:
