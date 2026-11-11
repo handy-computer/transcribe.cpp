@@ -15,6 +15,12 @@ Prebuilt artifacts (the Swift xcframework, the native Python wheels, and the
 npm platform packages) carry these same texts alongside the binaries — see each
 binding's packaging for the bundled `LICENSE.ggml` / `LICENSE.miniz` / `LICENSE.silero_vad` files.
 
+The Whisper alignment-head presets come from
+[whisper.cpp v1.8.3](https://github.com/ggml-org/whisper.cpp/blob/v1.8.3/src/whisper.cpp),
+copyright (c) 2023–2024 The ggml authors, under the
+[MIT license](https://github.com/ggml-org/whisper.cpp/blob/v1.8.3/LICENSE)
+(the terms are reproduced under ggml below).
+
 Conversion-time tooling also includes `scripts/lib/phonon.py`, adapted from
 Fermion Research's Apache-2.0 container reader at
 `FermionResearch/Phonon-2@7e153e4054c0a10db6d47d6fff5c062d4c77c154`.

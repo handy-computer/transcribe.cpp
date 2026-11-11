@@ -97,9 +97,7 @@ All Whisper variants support:
 - **Transcription** of 16 kHz mono WAV input.
 - **Long-form audio** via 30-second chunked decoding with the
   prev-context window assembly described in the family doc.
-- **Segment timestamps** — the finest granularity the library emits for
-  Whisper (`max_timestamp_kind = segment`). Word-level timestamps are not
-  currently exposed.
+- **Segment timestamps** — the default under `AUTO`, when no transcript prefix is set.
 - **Translation** (any supported language → English) on multilingual
   checkpoints — `.en` variants are transcribe-only.
 
@@ -107,3 +105,18 @@ What's not supported (consistent across the family): real-time
 streaming (whisper is not streaming-first; chunked 30-second windows
 only), VAD, speaker diarization. See the family doc for the full
 runtime contract.
+
+## Word timestamps
+
+The OpenAI Whisper GGUF variants advertise `TRANSCRIBE_TIMESTAMPS_WORD`
+as their maximum timestamp granularity. Request it with
+`transcribe_run_params::timestamps` or `--timestamps word` in the CLI.
+The decoder aligns the accepted text to the audio with a second cross-attention
+pass and dynamic time warping (DTW). Word times are in milliseconds relative to
+the input, including across 30-second windows. Languages such as Japanese
+use complete UTF-8 token pieces as timing units.
+
+This mode adds decoder work and uses the serial path for offline batches.
+It requires a model-specific alignment-head preset, so legacy `.bin` models
+and other Whisper variants advertise segment granularity. A transcript prefix
+requires `AUTO` or `NONE`.

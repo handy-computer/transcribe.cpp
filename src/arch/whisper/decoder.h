@@ -30,6 +30,7 @@ namespace transcribe::whisper {
 struct WhisperHParams;
 struct WhisperWeights;
 struct WhisperKvCache;
+struct alignment_head;
 
 struct DecoderDumps {
     ggml_tensor *              token_emb = nullptr;
@@ -86,6 +87,29 @@ DecoderBuild build_cross_kv_graph(ggml_context *         compute_ctx,
                                   WhisperKvCache &       kv_cache,
                                   ggml_tensor *          encoder_out,
                                   int                    T_enc);
+
+struct AlignmentBuild {
+    ggml_tensor *              token_ids_in   = nullptr;  // i32 [seq_len]
+    ggml_tensor *              causal_mask_in = nullptr;  // f32 [seq_len, seq_len], optional
+    ggml_tensor *              cross_mask_in  = nullptr;  // f32 [T_enc_pad, seq_len], optional
+    std::vector<ggml_tensor *> attention_out;             // one f32 [n_audio_frames, seq_len] per selected head
+    ggml_cgraph *              graph = nullptr;
+};
+
+// Forced decoder pass over the alignment prompt and accepted text. Reads the
+// populated cross cache without writing the self cache. The residual stream
+// attends to all T_enc encoded frames. Output probabilities are normalized
+// over the first n_audio_frames only, in the order of the supplied heads.
+// Caller fills masks with 0 for visible positions and -inf for future tokens
+// (causal_mask_in) or cache padding beyond T_enc (cross_mask_in).
+AlignmentBuild build_decoder_alignment_graph(ggml_context *                      compute_ctx,
+                                             const WhisperWeights &              weights,
+                                             const WhisperHParams &              hp,
+                                             const WhisperKvCache &              kv_cache,
+                                             int                                 seq_len,
+                                             int                                 n_audio_frames,
+                                             const std::vector<alignment_head> & heads,
+                                             bool                                use_flash = true);
 
 // Build a KV-cached decoder graph. Works for both prompt pass
 // (n_tokens > 1, n_past = 0) and step pass (n_tokens = 1, n_past =

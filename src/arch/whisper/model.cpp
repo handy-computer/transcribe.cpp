@@ -4,6 +4,7 @@
 // path below; TRANSCRIBE_MEL_FROM_REF can inject a reference mel tensor
 // to isolate encoder/decoder drift during numerical validation.
 
+#include "alignment.h"
 #include "decoder.h"
 #include "encoder.h"
 #include "ggml-alloc.h"
@@ -21,6 +22,7 @@
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
 #include "transcribe-prompting.h"
+#include "transcribe-unicode.h"
 #include "weights.h"
 #include "whisper.h"
 
@@ -40,6 +42,7 @@
 #include <ios>
 #include <memory>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -493,6 +496,9 @@ transcribe_status whisper_load(Loader &                             loader,
 
     if (const transcribe_status st = read_capability_kv(loader.gguf(), m->caps); st != TRANSCRIBE_OK) {
         return st;
+    }
+    if (!alignment_heads_for_variant(m->variant, m->hparams.dec_n_layers, m->hparams.dec_n_heads).empty()) {
+        m->caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_WORD;
     }
     if (const transcribe_status st = read_languages_kv(loader.gguf(), *m); st != TRANSCRIBE_OK) {
         return st;
@@ -1107,6 +1113,8 @@ void apply_whisper_timestamp_rules(std::vector<float> &         logits,
 struct WhisperSegmentResult {
     std::vector<transcribe_session::SegmentEntry> segments;
     std::vector<std::vector<int32_t>>             prev_chunk_segments;
+    std::vector<int>                              word_token_ids;
+    std::vector<size_t>                           word_token_ends;  // exclusive end of each segment in word_token_ids
     int                                           segment_offset_frames = 0;
 };
 
@@ -1120,7 +1128,8 @@ WhisperSegmentResult whisper_retrieve_segment(const std::vector<int32_t> &  gene
                                               int                           seek_num_frames,
                                               bool                          want_segment_timestamps,
                                               int                           timestamp_begin,
-                                              int64_t                       vocab_size) {
+                                              int64_t                       vocab_size,
+                                              bool                          collect_word_tokens = false) {
     WhisperSegmentResult out;
     out.segment_offset_frames = seek_num_frames;
 
@@ -1153,7 +1162,12 @@ WhisperSegmentResult whisper_retrieve_segment(const std::vector<int32_t> &  gene
         if (ids_int.empty()) {
             return std::string();
         }
-        return trim_ascii(tok.decode(ids_int.data(), static_cast<int>(ids_int.size())));
+        std::string text = trim_ascii(tok.decode(ids_int.data(), static_cast<int>(ids_int.size())));
+        if (collect_word_tokens && !text.empty()) {
+            out.word_token_ids.insert(out.word_token_ids.end(), ids_int.begin(), ids_int.end());
+            out.word_token_ends.push_back(out.word_token_ids.size());
+        }
+        return text;
     };
 
     const int gn = static_cast<int>(generated_ids.size());
@@ -1246,6 +1260,154 @@ WhisperSegmentResult whisper_retrieve_segment(const std::vector<int32_t> &  gene
         out.segment_offset_frames = seek_num_frames;
     }
     return out;
+}
+
+transcribe_status whisper_align_tokens(WhisperSession *                    cc,
+                                       const std::vector<alignment_head> & heads,
+                                       const std::vector<int32_t> &        ids,
+                                       int                                 first_row,
+                                       int                                 n_audio_frames,
+                                       std::vector<int> &                  boundaries) {
+    const auto * cm       = static_cast<const WhisperModel *>(cc->model);
+    const int    n_tokens = static_cast<int>(ids.size());
+    // Align against the real audio within the encoded window.
+    const int    n_frames = std::min(cc->kv_cache.T_enc, n_audio_frames);
+    if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) {
+        return TRANSCRIBE_ERR_OOM;
+    }
+    const AlignmentBuild build = build_decoder_alignment_graph(cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
+                                                               n_tokens, n_frames, heads, cc->decoder_use_flash);
+    if (build.graph == nullptr) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(cc->sched);
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(cc->sched, build.graph, "whisper")) {
+        return TRANSCRIBE_ERR_OOM;
+    }
+
+    ggml_backend_tensor_set(build.token_ids_in, ids.data(), 0, ids.size() * sizeof(ids[0]));
+    if (build.causal_mask_in != nullptr) {
+        std::vector<float> mask(ids.size() * ids.size(), -INFINITY);
+        for (size_t q = 0; q < ids.size(); ++q) {
+            std::fill_n(mask.data() + q * ids.size(), q + 1, 0.0f);
+        }
+        ggml_backend_tensor_set(build.causal_mask_in, mask.data(), 0, mask.size() * sizeof(float));
+    }
+    if (build.cross_mask_in != nullptr) {
+        const int          stride = cc->kv_cache.T_enc_pad;
+        std::vector<float> mask(ids.size() * stride, -INFINITY);
+        for (size_t q = 0; q < ids.size(); ++q) {
+            std::fill_n(mask.data() + q * stride, cc->kv_cache.T_enc, 0.0f);
+        }
+        ggml_backend_tensor_set(build.cross_mask_in, mask.data(), 0, mask.size() * sizeof(float));
+    }
+    if (const ggml_status st = ggml_backend_sched_graph_compute(cc->sched, build.graph); st != GGML_STATUS_SUCCESS) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: alignment graph compute failed (%d)", static_cast<int>(st));
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+
+    const size_t       head_size = ids.size() * n_frames;
+    std::vector<float> attention(heads.size() * head_size);
+    for (size_t head = 0; head < heads.size(); ++head) {
+        ggml_backend_tensor_get(build.attention_out[head], attention.data() + head * head_size, 0,
+                                head_size * sizeof(float));
+    }
+    // The no_timestamps row predicts the first text token. The last text row
+    // predicts EOT and provides the final boundary. EOT itself contributes to
+    // normalization only, like the preceding SOT/language/task rows.
+    if (!align_attention(attention, static_cast<int>(heads.size()), n_tokens, n_frames, first_row,
+                         n_tokens - first_row - 1, boundaries)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: could not align decoded text");
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    return TRANSCRIBE_OK;
+}
+
+// Whisper BPE tokens can contain partial UTF-8 codepoints. Hold their bytes
+// until the full piece is available before assigning it to a word.
+bool whisper_complete_piece(const std::string & piece, size_t & begin, size_t & end, bool & punctuation) {
+    begin       = piece.size();
+    end         = 0;
+    punctuation = true;
+    for (size_t pos = 0; pos < piece.size();) {
+        const size_t start = pos;
+        if (piece.size() - start < unicode::len_utf8(piece[start])) {
+            return false;
+        }
+        uint32_t cp = 0;
+        try {
+            cp = unicode::cpt_from_utf8(piece, pos);
+        } catch (const std::invalid_argument &) {
+            // Treat a malformed byte as text. A truncated, otherwise valid
+            // sequence is handled above and may complete in the next token.
+            pos = start + 1;
+        }
+        const auto flags = unicode::flags_from_cpt(cp);
+        if (!flags.is_whitespace()) {
+            begin       = std::min(begin, start);
+            end         = pos;
+            punctuation = punctuation && (flags.bits & unicode::CptFlags::PUNCTUATION) != 0;
+        }
+    }
+    return true;
+}
+
+void whisper_append_words(WhisperSession &         cc,
+                          WhisperSegmentResult &   chunk,
+                          const std::vector<int> & frames,
+                          int64_t                  start_ms,
+                          int64_t                  end_ms,
+                          std::string_view         language) {
+    const auto & tok              = static_cast<const WhisperModel *>(cc.model)->tok;
+    // Same language split as OpenAI Whisper's tokenizer. For languages
+    // without spaces between words, use complete UTF-8 token pieces.
+    const bool   split_on_unicode = language == "zh" || language == "ja" || language == "th" || language == "lo" ||
+                                    language == "my" || language == "yue";
+    auto         time_at          = [&](size_t token) {
+        return std::min(start_ms + int64_t{ 20 } * frames[token], end_ms);
+    };
+    size_t token = 0;
+    for (size_t s = 0; s < chunk.segments.size(); ++s) {
+        auto &       segment     = chunk.segments[s];
+        const size_t segment_end = chunk.word_token_ends[s];
+        const int    seg_index   = static_cast<int>(cc.segments.size() + s);
+        segment.first_word       = static_cast<int>(cc.words.size());
+        std::string piece;
+        size_t      piece_start = token;
+        for (; token < segment_end; ++token) {
+            piece += tok.decode(&chunk.word_token_ids[token], 1);
+            size_t begin       = 0;
+            size_t end         = 0;
+            bool   punctuation = false;
+            if (!whisper_complete_piece(piece, begin, end, punctuation)) {
+                continue;
+            }
+            if (begin < end) {
+                const bool has_word = static_cast<int>(cc.words.size()) > segment.first_word;
+                if (!has_word || (!punctuation && (split_on_unicode || begin > 0))) {
+                    transcribe_session::WordEntry word;
+                    word.text      = piece.substr(begin, end - begin);
+                    word.t0_ms     = time_at(piece_start);
+                    word.t1_ms     = time_at(token + 1);
+                    word.seg_index = seg_index;
+                    cc.words.push_back(std::move(word));
+                } else {
+                    auto & word = cc.words.back();
+                    word.text.append(piece, 0, end);
+                    if (!punctuation) {
+                        word.t1_ms = time_at(token + 1);
+                    }
+                }
+            }
+            piece.clear();
+            piece_start = token + 1;
+        }
+        segment.n_words = static_cast<int>(cc.words.size()) - segment.first_word;
+        if (segment.n_words > 0) {
+            segment.t0_ms = cc.words[segment.first_word].t0_ms;
+            segment.t1_ms = cc.words.back().t1_ms;
+        }
+    }
 }
 
 // Render an accepted raw token stream for transcribe_raw_text. Timestamp
@@ -1403,15 +1565,21 @@ transcribe_status whisper_run(transcribe_session *          session,
 
     const transcribe_timestamp_kind requested_timestamps =
         params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_NONE;
-    if (requested_timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
+    const bool want_word_timestamps = requested_timestamps == TRANSCRIBE_TIMESTAMPS_WORD;
+    const auto alignment_heads =
+        want_word_timestamps ?
+            alignment_heads_for_variant(cm->variant, cm->hparams.dec_n_layers, cm->hparams.dec_n_heads) :
+            std::vector<alignment_head>{};
+    if (want_word_timestamps && alignment_heads.empty()) {
         return TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS;
     }
     // AUTO resolves to NONE under a transcript prefix: the timestamp rules
     // restart after the prefix and force an initial timestamp near 0 s while
     // the prefix's speech is still playing, which derails the continuation.
-    // An explicit SEGMENT request with a prefix is rejected in run_validate.
+    // Explicit SEGMENT and WORD requests with a prefix are rejected in run_validate.
     const bool has_prefix              = params != nullptr && transcribe::prompting::has_text(params->prefix);
-    const bool want_segment_timestamps = (requested_timestamps == TRANSCRIBE_TIMESTAMPS_AUTO && !has_prefix) ||
+    const bool want_segment_timestamps = want_word_timestamps ||
+                                         (requested_timestamps == TRANSCRIBE_TIMESTAMPS_AUTO && !has_prefix) ||
                                          requested_timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT;
 
     // Multilingual variants emit <|lang|> + <|task|> in the decoder prefix;
@@ -1527,7 +1695,9 @@ transcribe_status whisper_run(transcribe_session *          session,
         }
         cc->raw_text    = whisper_decode_raw(cm->tok, all_raw_ids, timestamp_begin);
         cc->full_text   = std::move(text);
-        cc->result_kind = want_segment_timestamps ? TRANSCRIBE_TIMESTAMPS_SEGMENT : TRANSCRIBE_TIMESTAMPS_NONE;
+        cc->result_kind = want_word_timestamps    ? TRANSCRIBE_TIMESTAMPS_WORD :
+                          want_segment_timestamps ? TRANSCRIBE_TIMESTAMPS_SEGMENT :
+                                                    TRANSCRIBE_TIMESTAMPS_NONE;
         cc->has_result  = true;
 
         if (whisper_perf_enabled()) {
@@ -2537,8 +2707,48 @@ transcribe_status whisper_run(transcribe_session *          session,
         //   - no pairs: emit one full-chunk segment, advance seek_num_frames.
         // TIMESTAMPS_NONE includes <|notimestamps|>, so no ts tokens -> "no
         // pairs" branch, full-chunk advance, no per-chunk segment emission.
-        WhisperSegmentResult seg_res = whisper_retrieve_segment(generated_ids, cm->tok, time_offset_ms, seek_num_frames,
-                                                                want_segment_timestamps, timestamp_begin, vocab_size);
+        WhisperSegmentResult seg_res =
+            whisper_retrieve_segment(generated_ids, cm->tok, time_offset_ms, seek_num_frames, want_segment_timestamps,
+                                     timestamp_begin, vocab_size, want_word_timestamps);
+        if (want_word_timestamps && !seg_res.word_token_ids.empty()) {
+            if (cc->poll_abort()) {
+                commit_result();
+                return TRANSCRIBE_ERR_ABORTED;
+            }
+            const int     consumed_frames = seg_res.segment_offset_frames > 0 ?
+                                                std::min(seg_res.segment_offset_frames, seek_num_frames) :
+                                                seek_num_frames;
+            const int64_t audio_end_ms    = static_cast<int64_t>(n_samples) * 1000 / cm->caps.native_sample_rate;
+            const int64_t chunk_end_ms    = std::min(audio_end_ms, time_offset_ms + int64_t{ 10 } * consumed_frames);
+            // Align the selected text with the standard unconditioned Whisper
+            // prompt. History and the caller's prompt are not part of this audio.
+            std::vector<int32_t> alignment_ids(prompt_ids.begin() + sot_index, prompt_ids.end());
+            const int            first_row = static_cast<int>(alignment_ids.size());
+            alignment_ids.push_back(cm->hparams.no_timestamps_token_id);
+            alignment_ids.insert(alignment_ids.end(), seg_res.word_token_ids.begin(), seg_res.word_token_ids.end());
+            alignment_ids.push_back(eos_id);
+            std::string_view language = "en";
+            if (is_multilingual && params->task != TRANSCRIBE_TASK_TRANSLATE) {
+                language = params->language != nullptr && params->language[0] != '\0' ?
+                               std::string_view(params->language) :
+                               std::string_view(cc->detected_language);
+            }
+            // Use full 20 ms frames within the PCM bounds, as in Whisper's
+            // reference alignment. The mel frontend can include a final
+            // centered frame that extends past the end of the recording.
+            const int        n_audio_frames = std::max(1, static_cast<int>((chunk_end_ms - time_offset_ms) / 20));
+            std::vector<int> boundaries;
+            const transcribe_status st =
+                whisper_align_tokens(cc, alignment_heads, alignment_ids, first_row, n_audio_frames, boundaries);
+            if (st != TRANSCRIBE_OK) {
+                return st;
+            }
+            if (cc->poll_abort()) {
+                commit_result();
+                return TRANSCRIBE_ERR_ABORTED;
+            }
+            whisper_append_words(*cc, seg_res, boundaries, time_offset_ms, chunk_end_ms, language);
+        }
         for (auto & seg : seg_res.segments) {
             cc->segments.push_back(std::move(seg));
         }
@@ -2654,7 +2864,7 @@ transcribe_status whisper_run_batch(transcribe_session *          session,
     // ---- Global gates: only what the batched graph genuinely can't do. ----
     // Segment timestamps, temperature>0 fallback, and initial_prompt are now
     // all handled in-batch; what still peels the WHOLE call to serial is the
-    // device/topology constraints + word timestamps (unsupported) + the
+    // device/topology constraints + the per-utterance word alignment pass + the
     // ALL_SEGMENTS-without-condition error (let serial surface it).
     const bool                      primary_is_gpu = cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
                                                      cm->plan.primary_kind != transcribe::BackendKind::Accel &&
@@ -3518,15 +3728,16 @@ static transcribe_status whisper_run_validate(const transcribe_session * ctx, co
         st != TRANSCRIBE_OK) {
         return st;
     }
-    // Transcript prefix: with explicit SEGMENT timestamps the timestamp rules
+    // Transcript prefix: with explicit SEGMENT or WORD the timestamp rules
     // restart after the prefix and force an initial timestamp while the
     // prefix's speech is still playing, which in practice ends the decode
     // (AUTO resolves to NONE instead; see whisper_run). And like openai, the
     // prefix may take at most half the decoder window.
     if (params != nullptr && transcribe::prompting::has_text(params->prefix)) {
-        if (params->timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                    "whisper run: a transcript prefix does not compose with segment timestamps; use NONE or AUTO");
+        if (params->timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT || params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
+            log_msg(
+                TRANSCRIBE_LOG_LEVEL_ERROR,
+                "whisper run: a transcript prefix does not compose with segment or word timestamps; use NONE or AUTO");
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
         const auto *         cm = static_cast<const WhisperModel *>(ctx->model);
