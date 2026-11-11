@@ -173,6 +173,20 @@ class MelFrontend {
     // Matches NeMo: floor(n_samples / hop_length) + 1.
     int n_frames_for(size_t n_samples) const;
 
+    // Drop the trailing center-pad frame NeMo does not count (#252).
+    //
+    // The centered STFT emits floor(n / hop) + 1 frames, but NeMo's
+    // get_seq_len reports floor(n / hop) and masks everything past it in
+    // pre_encode, attention and the conv module. Masking a conv input to
+    // zero past its valid length equals truncating it there, so NeMo's valid
+    // encoder frames are what the encoder computes on the first
+    // floor(n / hop) mel frames. Fed unmasked, the padding frame becomes an
+    // extra encoder frame whenever floor(n / hop) is a multiple of 8.
+    //
+    // Truncates compute()'s row-major [num_mels, n_frames] buffer in place
+    // and returns the new frame count.
+    int drop_nemo_padding_frame(std::vector<float> & mel, int n_frames, size_t n_samples) const;
+
     // Read-only accessors for unit tests. Not part of the runtime
     // API; the goal is to validate the precomputed buffers in
     // isolation without running the full pipeline.

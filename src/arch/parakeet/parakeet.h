@@ -40,28 +40,6 @@ inline int pre_encode_time_out(int input_frames, bool causal) {
     return causal ? (input_frames / 2 + 1) : ((input_frames - 1) / 2 + 1);
 }
 
-// Drop the trailing center-pad mel frame NeMo does not count (#252).
-//
-// The constant-pad STFT emits floor(n / hop) + 1 frames, but NeMo's
-// FilterbankFeatures.get_seq_len reports floor(n / hop): the last frame is
-// padding (MelFrontend already zeroes it and leaves it out of the
-// normalization stats). NeMo masks every pre_encode stage, the attention
-// keys and the conv module to the lengths derived from that count. Masking a
-// conv input to zero past its valid length is the same as truncating it
-// there, so NeMo's valid encoder frames are exactly what the encoder computes
-// on the first floor(n / hop) mel frames. Feeding the padding frame instead
-// adds an encoder frame whenever floor(n / hop) is a multiple of 8, and that
-// frame leaks into every real frame through attention.
-//
-// Compacts the row-major [n_mels, n_frames] buffer in place and returns the
-// new frame count. No-op for kestrel-masked checkpoints, which mask the
-// padding in-graph.
-int drop_nemo_padding_mel_frame(const ParakeetHParams & hp,
-                                std::vector<float> &    mel,
-                                int                     n_mels,
-                                int                     n_frames,
-                                int                     n_samples);
-
 // Host-side attention-mask helpers for the chunked-attention paths. Declared
 // here so the per-mask unit tests can call them without a ggml backend
 // or a GGUF on disk.

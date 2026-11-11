@@ -794,6 +794,14 @@ transcribe_status run(transcribe_session *          context,
         return mst;
     }
     cc->t_mel_us = ggml_time_us() - t_mel_start;
+    // Dump the full frontend output (what NeMo's preprocessor returns)
+    // before the padding frame is dropped.
+    if (transcribe::debug::enabled()) {
+        const long long shape[2] = { mel_n_mels, mel_n_frames };
+        transcribe::debug::dump_host_f32("enc.mel.in", cc->mel_buf.data(), static_cast<long long>(cc->mel_buf.size()),
+                                         shape, 2, "frontend.mel.norm");
+    }
+    mel_n_frames = cm->mel->drop_nemo_padding_frame(cc->mel_buf, mel_n_frames, static_cast<size_t>(n_samples));
 
     // Encoder.
     if (cc->compute_ctx != nullptr) {
@@ -835,11 +843,6 @@ transcribe_status run(transcribe_session *          context,
     }
 
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(), 0, cc->mel_buf.size() * sizeof(float));
-    if (transcribe::debug::enabled()) {
-        const long long shape[2] = { mel_n_mels, mel_n_frames };
-        transcribe::debug::dump_host_f32("enc.mel.in", cc->mel_buf.data(), static_cast<long long>(cc->mel_buf.size()),
-                                         shape, 2, "frontend.mel.norm");
-    }
 
     // Upload relative-position embedding.
     if (eb.pos_emb_in != nullptr) {
@@ -1411,7 +1414,7 @@ transcribe_status run_batch(transcribe_session *          session,
         int nm = 0, nf = 0;
         if (cm->mel->compute(pcm[b], static_cast<size_t>(n_samples[b]), mel_bufs[b], nm, nf, /*n_threads=*/1) ==
             TRANSCRIBE_OK) {
-            mel_nf[b] = nf;
+            mel_nf[b] = cm->mel->drop_nemo_padding_frame(mel_bufs[b], nf, static_cast<size_t>(n_samples[b]));
         }
         return true;
     });

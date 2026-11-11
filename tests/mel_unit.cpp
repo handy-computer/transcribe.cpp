@@ -213,6 +213,40 @@ void test_n_frames_for() {
     CHECK(mf.n_frames_for(0) == 1);
 }
 
+// #252: the frontend emits floor(n / hop) + 1 frames, NeMo counts
+// floor(n / hop). The trailing frame of every mel row must go and the
+// row-major layout must survive the in-place compaction.
+void test_drop_nemo_padding_frame() {
+    const transcribe::MelFrontend mf(parakeet_config());
+    const int                     n_mels = mf.num_mels();
+    // The #252 clips (80640, 168960 samples) and unaligned neighbours.
+    for (const size_t n : { size_t{ 80640 }, size_t{ 80639 }, size_t{ 168960 }, size_t{ 160 }, size_t{ 1601 } }) {
+        const int          n_frames = mf.n_frames_for(n);
+        const int          valid    = n_frames - 1;
+        std::vector<float> mel(static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
+        for (int m = 0; m < n_mels; ++m) {
+            for (int t = 0; t < n_frames; ++t) {
+                mel[static_cast<size_t>(m) * static_cast<size_t>(n_frames) + static_cast<size_t>(t)] =
+                    static_cast<float>(m * 10000 + t);
+            }
+        }
+        CHECK(mf.drop_nemo_padding_frame(mel, n_frames, n) == valid);
+        CHECK(mel.size() == static_cast<size_t>(n_mels) * static_cast<size_t>(valid));
+        bool layout_ok = true;
+        for (int m = 0; m < n_mels; ++m) {
+            for (int t = 0; t < valid; ++t) {
+                layout_ok =
+                    layout_ok && mel[static_cast<size_t>(m) * static_cast<size_t>(valid) + static_cast<size_t>(t)] ==
+                                     static_cast<float>(m * 10000 + t);
+            }
+        }
+        CHECK(layout_ok);
+        // Already at the valid length: untouched.
+        CHECK(mf.drop_nemo_padding_frame(mel, valid, n) == valid);
+        CHECK(mel.size() == static_cast<size_t>(n_mels) * static_cast<size_t>(valid));
+    }
+}
+
 // SpeechBrain (ecapa_tdnn) config: periodic Hamming, constant pad, no
 // pre-emphasis, 10*log10 with an 80 dB top-dB floor, per-bin mean only.
 // The filterbank is a synthetic one-hot bank (mel m reads FFT bin 3*m),
@@ -317,6 +351,7 @@ int main() {
     test_window();
     test_mel_filterbank();
     test_n_frames_for();
+    test_drop_nemo_padding_frame();
     test_hamming_window();
     test_sentence_mean();
 

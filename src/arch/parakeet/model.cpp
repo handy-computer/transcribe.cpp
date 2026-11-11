@@ -139,28 +139,6 @@ ParakeetModel::~ParakeetModel() {
     plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
-// Contract in parakeet.h.
-int drop_nemo_padding_mel_frame(const ParakeetHParams & hp,
-                                std::vector<float> &    mel,
-                                int                     n_mels,
-                                int                     n_frames,
-                                int                     n_samples) {
-    if (hp.kestrel_length_masking || hp.fe_hop_length <= 0) {
-        return n_frames;
-    }
-    const int valid = n_samples / hp.fe_hop_length;
-    if (valid <= 0 || valid >= n_frames) {
-        return n_frames;
-    }
-    for (int m = 1; m < n_mels; ++m) {
-        const float * src = mel.data() + static_cast<size_t>(m) * static_cast<size_t>(n_frames);
-        float *       dst = mel.data() + static_cast<size_t>(m) * static_cast<size_t>(valid);
-        std::memmove(dst, src, static_cast<size_t>(valid) * sizeof(float));
-    }
-    mel.resize(static_cast<size_t>(n_mels) * static_cast<size_t>(valid));
-    return valid;
-}
-
 namespace {
 
 constexpr float kBnEps = 1e-5f;
@@ -1089,7 +1067,10 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         transcribe::debug::dump_host_f32("enc.mel.in", pc->mel_buf.data(), static_cast<long long>(pc->mel_buf.size()),
                                          shape, 2, "encoder.mel");
     }
-    mel_n_frames = drop_nemo_padding_mel_frame(pm->hparams, pc->mel_buf, mel_n_mels, mel_n_frames, n_samples);
+    // Kestrel-masked checkpoints mask the padding frame in-graph instead.
+    if (!pm->hparams.kestrel_length_masking) {
+        mel_n_frames = pm->mel->drop_nemo_padding_frame(pc->mel_buf, mel_n_frames, static_cast<size_t>(n_samples));
+    }
 
     // Multitalker masked mode (NeMo mask_features): binarize the target
     // speaker's per-diar-frame activity, expand 8x to feature frames from
@@ -2142,7 +2123,9 @@ transcribe_status run_batch(transcribe_session *          session,
         if (st != TRANSCRIBE_OK || this_frames <= 0) {
             return false;
         }
-        nf[i]         = drop_nemo_padding_mel_frame(pm->hparams, mels[i], this_mels, this_frames, n_samples[i]);
+        nf[i]         = pm->hparams.kestrel_length_masking ?
+                            this_frames :
+                            pm->mel->drop_nemo_padding_frame(mels[i], this_frames, static_cast<size_t>(n_samples[i]));
         n_mels_per[i] = this_mels;
         return true;
     });

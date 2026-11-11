@@ -791,6 +791,14 @@ transcribe_status run(transcribe_session *          session,
         return mst;
     }
     cc->t_mel_us = ggml_time_us() - t_mel_start;
+    // Dump the full frontend output (what NeMo's preprocessor returns)
+    // before the padding frame is dropped.
+    if (transcribe::debug::enabled()) {
+        const long long shape[2] = { mel_n_mels, mel_n_frames };
+        transcribe::debug::dump_host_f32("enc.mel.in", cc->mel_buf.data(), static_cast<long long>(cc->mel_buf.size()),
+                                         shape, 2, "encoder.mel");
+    }
+    mel_n_frames = cm->mel->drop_nemo_padding_frame(cc->mel_buf, mel_n_frames, static_cast<size_t>(n_samples));
 
     // Input-length gate: T_enc must stay within enc_pos_emb_max_len or the
     // runtime pos table aliases past the trained range. T_enc is a
@@ -859,7 +867,6 @@ transcribe_status run(transcribe_session *          session,
     }
 
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(), 0, cc->mel_buf.size() * sizeof(float));
-    transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
 
     // Sinusoidal relative positional embedding.
     if (eb.pos_emb_in != nullptr) {
@@ -1669,7 +1676,7 @@ transcribe_status run_batch(transcribe_session *          session,
         if (cm->mel->compute(pcm[b], static_cast<size_t>(n_samples[b]), mel_bufs[b], nm, nf, /*n_threads=*/1) ==
                 TRANSCRIBE_OK &&
             nf > 0) {
-            mel_nf[b] = nf;
+            mel_nf[b] = cm->mel->drop_nemo_padding_frame(mel_bufs[b], nf, static_cast<size_t>(n_samples[b]));
             valid[b]  = 1;
         }
         return true;
