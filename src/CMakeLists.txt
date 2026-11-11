@@ -225,18 +225,57 @@ elseif(TRANSCRIBE_USE_SYSTEM_BLAS)
     # (e.g. -DBLA_VENDOR=OpenBLAS). find_package probes the system.
     find_package(BLAS QUIET)
     if(BLAS_FOUND)
-        # find_package(BLAS) may find a Fortran-only BLAS (e.g. libblas3
-        # on Debian/Ubuntu) that lacks the cblas C wrappers. Verify that
-        # cblas.h exists before enabling; otherwise the build compiles
-        # cblas_sgemv calls but the linker can't resolve them.
-        include(CheckIncludeFile)
-        check_include_file(cblas.h HAVE_CBLAS_H)
-        if(HAVE_CBLAS_H)
-            target_link_libraries(transcribe PRIVATE ${BLAS_LIBRARIES})
-            target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_BLAS=1)
-            message(STATUS "transcribe: BLAS found — decoder will use cblas_sgemv")
+        # find_package(BLAS) may find a Fortran-only BLAS that lacks the cblas
+        # C wrappers (e.g. Netlib `blas` on Arch/Fedora, where they live in a
+        # separate libcblas). The header can be present while the library is
+        # not, and a shared libtranscribe still links (undefined symbols are
+        # allowed), then dies at runtime with "undefined symbol: cblas_sgemm".
+        # So check that the symbols actually link, not just that cblas.h exists.
+        # OpenBLAS on Arch (blas-openblas) and Fedora (openblas-devel) puts
+        # cblas.h under include/openblas/, off the default search path.
+        include(CheckSymbolExists)
+        include(CMakePushCheckState)
+        find_path(TRANSCRIBE_CBLAS_INCLUDE_DIR cblas.h PATH_SUFFIXES openblas)
+        if(TRANSCRIBE_CBLAS_INCLUDE_DIR)
+            set(HAVE_CBLAS_H TRUE)
         else()
-            message(STATUS "transcribe: BLAS found but cblas.h missing — decoder uses scalar fallback (install libopenblas-dev)")
+            set(HAVE_CBLAS_H FALSE)
+        endif()
+        set(_transcribe_cblas_libs "")
+        if(HAVE_CBLAS_H)
+            cmake_push_check_state(RESET)
+            set(CMAKE_REQUIRED_INCLUDES ${TRANSCRIBE_CBLAS_INCLUDE_DIR})
+            set(CMAKE_REQUIRED_LIBRARIES ${BLAS_LIBRARIES})
+            check_symbol_exists(cblas_sgemm "cblas.h" TRANSCRIBE_BLAS_HAS_CBLAS_SGEMM)
+            check_symbol_exists(cblas_sgemv "cblas.h" TRANSCRIBE_BLAS_HAS_CBLAS_SGEMV)
+            cmake_pop_check_state()
+            if(TRANSCRIBE_BLAS_HAS_CBLAS_SGEMM AND TRANSCRIBE_BLAS_HAS_CBLAS_SGEMV)
+                set(_transcribe_cblas_libs ${BLAS_LIBRARIES})
+            else()
+                # Fortran-only BLAS: try the separate reference CBLAS library.
+                find_library(TRANSCRIBE_CBLAS_LIBRARY NAMES cblas)
+                if(TRANSCRIBE_CBLAS_LIBRARY)
+                    cmake_push_check_state(RESET)
+                    set(CMAKE_REQUIRED_INCLUDES ${TRANSCRIBE_CBLAS_INCLUDE_DIR})
+                    set(CMAKE_REQUIRED_LIBRARIES ${TRANSCRIBE_CBLAS_LIBRARY} ${BLAS_LIBRARIES})
+                    check_symbol_exists(cblas_sgemm "cblas.h" TRANSCRIBE_LIBCBLAS_HAS_CBLAS_SGEMM)
+                    check_symbol_exists(cblas_sgemv "cblas.h" TRANSCRIBE_LIBCBLAS_HAS_CBLAS_SGEMV)
+                    cmake_pop_check_state()
+                    if(TRANSCRIBE_LIBCBLAS_HAS_CBLAS_SGEMM AND TRANSCRIBE_LIBCBLAS_HAS_CBLAS_SGEMV)
+                        set(_transcribe_cblas_libs ${TRANSCRIBE_CBLAS_LIBRARY} ${BLAS_LIBRARIES})
+                    endif()
+                endif()
+            endif()
+        endif()
+        if(_transcribe_cblas_libs)
+            target_include_directories(transcribe PRIVATE ${TRANSCRIBE_CBLAS_INCLUDE_DIR})
+            target_link_libraries(transcribe PRIVATE ${_transcribe_cblas_libs})
+            target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_BLAS=1)
+            message(STATUS "transcribe: CBLAS found (${_transcribe_cblas_libs}) — decoder will use cblas_sgemm/cblas_sgemv")
+        elseif(NOT HAVE_CBLAS_H)
+            message(STATUS "transcribe: BLAS found but cblas.h missing — decoder uses scalar fallback (install OpenBLAS)")
+        else()
+            message(WARNING "transcribe: BLAS found (${BLAS_LIBRARIES}) but it does not provide cblas_sgemm/cblas_sgemv — decoder uses scalar fallback (install OpenBLAS or pass -DBLA_VENDOR=OpenBLAS)")
         endif()
     else()
         message(STATUS "transcribe: no BLAS found — decoder uses scalar fallback")
