@@ -78,6 +78,18 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
     return ggml_add(ctx, x, y);
 }
 
+// GLU over ne[0]. Both halves are strided views of x. ggml-cuda runs unary
+// ops only on contiguous sources, so sigmoid on the strided half would be
+// scheduled on the CPU, with a device round trip in every conv module.
+ggml_tensor * glu(ggml_context * ctx, ggml_tensor * x) {
+    assert(x->ne[0] % 2 == 0);
+    const int64_t half  = x->ne[0] / 2;
+    ggml_tensor * gate  = ggml_view_4d(ctx, x, half, x->ne[1], x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3], 0);
+    ggml_tensor * value = ggml_view_4d(ctx, x, half, x->ne[1], x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3],
+                                       half * ggml_element_size(x));
+    return ggml_mul(ctx, gate, ggml_sigmoid(ctx, ggml_cont(ctx, value)));
+}
+
 // Shaw / Transformer-XL relative-position skew. Rotates each row of the
 // [pos_len, T_q, H, 1] score matrix so column k holds relative offset k.
 ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
@@ -385,17 +397,7 @@ ggml_tensor * conv_module(ggml_context * ctx, ggml_tensor * x, const BlockView &
             }
         }
 
-        // GLU: split ne[0] in half, gate * sigmoid(value). The views carry
-        // the batch axis (ne[2]) so the split is per-utterance.
-        {
-            const int64_t T     = x->ne[1];
-            const int64_t half  = x->ne[0] / 2;
-            ggml_tensor * gate  = ggml_view_3d(ctx, x, half, T, B, x->nb[1], x->nb[2],
-                                               /*offset=*/0);
-            ggml_tensor * value = ggml_view_3d(ctx, x, half, T, B, x->nb[1], x->nb[2], half * ggml_element_size(x));
-            x                   = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
-        }
-        // x ne = [d_model, T, B]
+        x = glu(ctx, x);  // [d_model, T, B]
 
         // Transpose for depthwise conv: [d_model, T, B] -> [T, d_model, B].
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
