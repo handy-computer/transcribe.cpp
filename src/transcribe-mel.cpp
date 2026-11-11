@@ -373,6 +373,20 @@ int MelFrontend::n_frames_for(size_t n_samples) const {
     return static_cast<int>(n_samples / static_cast<size_t>(cfg_.hop_length)) + 1;
 }
 
+int MelFrontend::drop_nemo_padding_frame(std::vector<float> & mel, int n_frames, size_t n_samples) const {
+    const int valid = static_cast<int>(n_samples / static_cast<size_t>(cfg_.hop_length));
+    if (valid >= n_frames) {
+        return n_frames;
+    }
+    const size_t n_mels = static_cast<size_t>(cfg_.num_mels);
+    for (size_t m = 1; m < n_mels; ++m) {
+        std::memmove(mel.data() + m * static_cast<size_t>(valid), mel.data() + m * static_cast<size_t>(n_frames),
+                     static_cast<size_t>(valid) * sizeof(float));
+    }
+    mel.resize(n_mels * static_cast<size_t>(valid));
+    return valid;
+}
+
 transcribe_status MelFrontend::compute(const float *        pcm,
                                        size_t               n_samples,
                                        std::vector<float> & out_mel,
