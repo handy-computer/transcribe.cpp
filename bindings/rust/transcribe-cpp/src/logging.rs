@@ -10,11 +10,19 @@ use std::ffi::CStr;
 use transcribe_cpp_sys as sys;
 
 /// The C log callback: map the level and forward the message to `log`.
+///
+/// A panic must not unwind into C (that aborts the process), and the installed
+/// logger can panic, e.g. fern when stdout and stderr are both closed pipes. A
+/// failed log line is dropped instead.
 extern "C" fn log_trampoline(
     level: sys::transcribe_log_level,
     msg: *const std::os::raw::c_char,
     _userdata: *mut std::os::raw::c_void,
 ) {
+    let _ = std::panic::catch_unwind(|| forward_log(level, msg));
+}
+
+fn forward_log(level: sys::transcribe_log_level, msg: *const std::os::raw::c_char) {
     if msg.is_null() {
         return;
     }
