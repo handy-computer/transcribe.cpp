@@ -77,6 +77,13 @@ constexpr const char k_default_variant[] = "qwen3-asr";
 
 // Generation reserve: what the input gate keeps free, and the decode-budget floor.
 constexpr int k_gen_reserve = 256;
+// Qwen3-ASR's tokenizer fragments dense-script languages: measured 6.0
+// tokens/word for Bengali and 4.6 for Hindi, vs 1.2 for English. Fast speech
+// in those scripts reaches ~21 tokens/s, so the shared 12 tok/s estimate
+// truncates mid-clip (~25 s of continuous Bengali). 45 covers the fastest
+// measured speech with 2x margin; the context ceiling still clamps runaway
+// decodes.
+constexpr int k_transcript_tokens_per_sec = 45;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
 // optionally lowered — never raised — by the caller's session n_ctx knob.
@@ -853,7 +860,8 @@ transcribe_status run(transcribe_session *          session,
     }
 
     const int max_new = transcribe::pick_decode_budget(
-        transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token), k_gen_reserve, T_prompt, ceiling);
+        transcribe::predict_transcript_tokens(T_enc, cm->limits.ms_per_audio_token, k_transcript_tokens_per_sec),
+        k_gen_reserve, T_prompt, ceiling);
 
     // KV cache init (grow-to-fit, clamped to the context ceiling). Size to
     // hold prompt + decode budget, rounded up to a power of two (the step
@@ -1739,7 +1747,8 @@ transcribe_status run_batch(transcribe_session *          session,
         return TRANSCRIBE_OK;
     }
     const int max_new =
-        transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(max_T_enc, cm->limits.ms_per_audio_token),
+        transcribe::pick_decode_budget(transcribe::predict_transcript_tokens(max_T_enc, cm->limits.ms_per_audio_token,
+                                                                            k_transcript_tokens_per_sec),
                                        k_gen_reserve, max_T_prompt, ceiling);
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) {
