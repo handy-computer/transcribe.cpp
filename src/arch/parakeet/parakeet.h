@@ -108,6 +108,15 @@ struct ParakeetModel final : public transcribe_model {
     transcribe::BackendPlan                plan;
     transcribe::load_common::WeightStorage weight_storage;
 
+    // Encoder flash attention, resolved at load() from the primary backend
+    // (off on CUDA/ROCm, see transcribe::flash::per_head_mask_supported)
+    // and the TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH overrides.
+    // NO_FLASH selects the F32 mul_mat + soft_max path used by CPU tensor
+    // validation (flash casts the relative-position mask to F16). On CPU at
+    // streaming geometry the flash kernel is much slower (~33 ms/layer vs
+    // ~1 ms on a Cortex-A55).
+    bool encoder_use_flash = true;
+
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.
     ggml_context *        bn_fused_ctx    = nullptr;
