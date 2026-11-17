@@ -97,7 +97,8 @@ static transcribe_status run_streaming_passes(ParakeetSession *             pc,
     const int64_t      t_mel_start = ggml_time_us();
     std::vector<float> mel;
     int                n_mels = 0, n_frames = 0;
-    if (const transcribe_status st = pm->mel->compute(pcm, static_cast<size_t>(n_samples), mel, n_mels, n_frames);
+    if (const transcribe_status st =
+            pm->mel->compute(pcm, static_cast<size_t>(n_samples), mel, n_mels, n_frames, pc->n_threads);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -377,7 +378,7 @@ transcribe_status run_multitalker(ParakeetSession *             pc,
     std::vector<float> diar_mel;
     int                dm_mels = 0, dm_frames = 0;
     if (const transcribe_status st =
-            pm->diar_mel->compute(pcm, static_cast<size_t>(n_samples), diar_mel, dm_mels, dm_frames);
+            pm->diar_mel->compute(pcm, static_cast<size_t>(n_samples), diar_mel, dm_mels, dm_frames, pc->n_threads);
         st != TRANSCRIBE_OK) {
         return st;
     }

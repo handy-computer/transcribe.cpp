@@ -1359,7 +1359,8 @@ transcribe_status whisper_run(transcribe_session *          session,
 
         int                mel_n_mels = 0, mel_n_frames = 0;
         std::vector<float> mel_mn;  // [n_mels, n_frames] (MelFrontend layout)
-        if (const transcribe_status mst = cm->mel->compute(pcm_in, pcm_in_n, mel_mn, mel_n_mels, mel_n_frames);
+        if (const transcribe_status mst =
+                cm->mel->compute(pcm_in, pcm_in_n, mel_mn, mel_n_mels, mel_n_frames, cc->n_threads);
             mst != TRANSCRIBE_OK) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: MelFrontend::compute failed (%d)", static_cast<int>(mst));
             return mst;

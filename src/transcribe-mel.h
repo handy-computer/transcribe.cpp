@@ -136,11 +136,12 @@ class MelFrontend {
     // mel buffer is resized to num_mels * n_frames in row-major
     // [num_mels, n_frames] layout.
     //
-    // n_threads controls STFT parallelism. 0 (default) auto-detects
-    // via std::thread::hardware_concurrency() capped at 8. The STFT
-    // loop is the dominant cost of compute(); the filterbank matmul
-    // is handed to cblas_sgemm and is already multi-threaded on
-    // Accelerate / OpenBLAS.
+    // n_threads controls STFT parallelism and has no default: a caller
+    // passes its session's n_threads, so the session's thread budget
+    // also bounds the front-end, or 1 when it already runs one compute()
+    // per worker thread. 0 picks default_n_threads(). The STFT loop is
+    // the dominant cost of compute(); the filterbank matmul is handed to
+    // cblas_sgemm and is already multi-threaded on Accelerate / OpenBLAS.
     //
     // out_frames overrides how many leading frames the per_utterance /
     // global normalize modes emit. 0 (default) keeps each mode's own
@@ -163,7 +164,7 @@ class MelFrontend {
                               std::vector<float> & out_mel,
                               int &                out_n_mels,
                               int &                out_n_frames,
-                              int                  n_threads  = 0,
+                              int                  n_threads,
                               int                  out_frames = 0) const;
 
     // Number of mel bins (matches MelConfig::num_mels).

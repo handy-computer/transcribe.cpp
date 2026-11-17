@@ -1136,7 +1136,7 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
     int           mel_n_mels   = 0;
     int           mel_n_frames = 0;
     if (const transcribe_status mst =
-            pm->mel->compute(pcm, static_cast<size_t>(n_samples), pc->mel_buf, mel_n_mels, mel_n_frames);
+            pm->mel->compute(pcm, static_cast<size_t>(n_samples), pc->mel_buf, mel_n_mels, mel_n_frames, pc->n_threads);
         mst != TRANSCRIBE_OK) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet run: MelFrontend::compute failed (%s)",
                 transcribe_status_string(mst));
@@ -1592,7 +1592,8 @@ transcribe_status run_vad_block(ParakeetSession *    pc,
                                 std::vector<float> & probs) {
     std::vector<float> mel;
     int                n_mels = 0, n_frames = 0;
-    if (const transcribe_status st = pm->mel->compute(pcm, static_cast<size_t>(n_samples), mel, n_mels, n_frames);
+    if (const transcribe_status st =
+            pm->mel->compute(pcm, static_cast<size_t>(n_samples), mel, n_mels, n_frames, pc->n_threads);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -2201,8 +2202,8 @@ transcribe_status run_batch(transcribe_session *          session,
             return false;
         }
         int                     this_mels = 0, this_frames = 0;
-        const transcribe_status st =
-            pm->mel->compute(pcm[i], static_cast<size_t>(n_samples[i]), mels[i], this_mels, this_frames);
+        const transcribe_status st = pm->mel->compute(pcm[i], static_cast<size_t>(n_samples[i]), mels[i], this_mels,
+                                                      this_frames, /*n_threads=*/1);
         if (st != TRANSCRIBE_OK || this_frames <= 0) {
             return false;
         }
@@ -3037,8 +3038,8 @@ transcribe_status emit_buffered_chunk(ParakeetSession * pc,
     const int64_t t_mel_start  = ggml_time_us();
     int           mel_n_mels   = 0;
     int           mel_n_frames = 0;
-    if (const transcribe_status mst =
-            pm->mel->compute(window_pcm.data(), window_pcm.size(), pc->mel_buf, mel_n_mels, mel_n_frames);
+    if (const transcribe_status mst = pm->mel->compute(window_pcm.data(), window_pcm.size(), pc->mel_buf, mel_n_mels,
+                                                       mel_n_frames, pc->n_threads);
         mst != TRANSCRIBE_OK) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet buffered: MelFrontend::compute failed (%s)",
                 transcribe_status_string(mst));
