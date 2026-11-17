@@ -34,7 +34,7 @@ struct transcribe_vad_info {
 
 struct transcribe_vad_session_params {
     uint64_t struct_size; /* struct size in bytes; set by the init function */
-    int32_t  n_threads;   /* number of processing threads; 0 uses the default */
+    int32_t  n_threads;   /* number of processing threads; 0 uses the default, at most 512 */
 };
 
 /* Settings for transcribe_vad_run. Durations are in milliseconds and

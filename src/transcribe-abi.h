@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "ggml.h"
 #include "transcribe.h"
 
 #include <cmath>
@@ -64,6 +65,13 @@ inline transcribe_status check_struct_size(uint64_t got, uint64_t want) {
 // shortcut); defaults come from NULL.
 inline transcribe_status check_input_struct_size(uint64_t got, uint64_t want) {
     return check_struct_size(got, want);
+}
+
+// Session n_threads (ASR, VAD, langid, diarize): 0 selects the library
+// default; the maximum is ggml's GGML_MAX_N_THREADS. Larger counts stall the
+// CPU backend or fail at thread creation, reported as out-of-memory.
+inline bool valid_n_threads(int32_t n_threads) {
+    return n_threads >= 0 && n_threads <= GGML_MAX_N_THREADS;
 }
 
 // Copy min(caller_size, library_size) bytes from a library-staged struct

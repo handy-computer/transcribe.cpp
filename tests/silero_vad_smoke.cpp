@@ -94,7 +94,14 @@ void test_model() {
     CHECK(transcribe_vad_get_info(m, &info) == TRANSCRIBE_OK);
     CHECK(info.sample_rate == 16000 && info.frame_samples == 512);
 
-    transcribe_vad_session * s = nullptr;
+    transcribe_vad_session *      s = nullptr;
+    transcribe_vad_session_params sp;
+    transcribe_vad_session_params_init(&sp);
+    for (const int n_threads : { -1, 513 }) {
+        sp.n_threads = n_threads;
+        CHECK(transcribe_vad_session_init(m, &sp, &s) == TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(s == nullptr);
+    }
     CHECK(transcribe_vad_session_init(m, nullptr, &s) == TRANSCRIBE_OK);
 
     // Crosses the encoder's 256-frame block boundary with a partial tail.
