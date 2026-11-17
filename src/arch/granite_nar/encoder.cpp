@@ -183,11 +183,7 @@ ggml_tensor * conv_module(ggml_context *             ctx,
         x                 = ggml_mul_mat(ctx, pw1, x);
         x                 = ggml_add(ctx, x, b.conv_pointwise1_b);
     }
-    {
-        ggml_tensor * gate  = ggml_view_2d(ctx, x, inner_dim, T, x->nb[1], 0);
-        ggml_tensor * value = ggml_view_2d(ctx, x, inner_dim, T, x->nb[1], inner_dim * ggml_element_size(x));
-        x                   = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
-    }
+    x                 = transcribe::conformer::glu(ctx, x);
     x                 = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     const int padding = (conv_kernel - 1) / 2;
     // Direct depthwise op, not conv_1d_dw_f32's im2col + mul_mat: im2col

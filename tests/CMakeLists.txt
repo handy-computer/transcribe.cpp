@@ -367,6 +367,23 @@ add_test(NAME transcribe_conv_pw_promote_unit
     COMMAND transcribe_conv_pw_promote_unit)
 
 # -----------------------------------------------------------------------------
+# Conformer GLU helper (pure graph, no model)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_conformer_glu_unit
+    conformer_glu_unit.cpp)
+
+target_link_libraries(transcribe_conformer_glu_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_conformer_glu_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_conformer_glu_unit)
+
+add_test(NAME transcribe_conformer_glu_unit
+    COMMAND transcribe_conformer_glu_unit)
+
+# -----------------------------------------------------------------------------
 # causal_lm::pack_gate_up: alias / copy / mismatch, no model needed
 # -----------------------------------------------------------------------------
 
