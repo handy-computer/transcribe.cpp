@@ -30,6 +30,8 @@ note under [`models/`](models/).
   `prompt` keeps its most recent text, both with a WARN. An INSTRUCT prompt
   that does not fit is an error.
 - INSTRUCT requires `target_language == NULL` and timestamps NONE or AUTO.
+- INSTRUCT also runs with no audio: `transcribe_run` with `n_samples == 0`
+  sends the prompt alone, i.e. for post-processing.
 - `prefix`: the audio must contain the prefix's speech, and long-form models
   apply it to the first window only.
 - A feature bit covers plain transcription. Under another task or output mode
