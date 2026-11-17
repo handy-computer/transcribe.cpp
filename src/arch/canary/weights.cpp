@@ -192,6 +192,21 @@ transcribe_status read_canary_hparams(const gguf_context * gguf, CanaryHParams &
     if (auto st = opt_special("stt.canary.special.noitn_id", hp.noitn_id); st != TRANSCRIBE_OK) {
         return st;
     }
+    if (auto st = opt_special("stt.canary.special.romanized_id", hp.romanized_id); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = opt_special("stt.canary.special.noromanized_id", hp.noromanized_id); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_string_kv(gguf, "stt.canary.default_mode", kFamilyTag, "native", hp.default_mode);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (hp.default_mode != "native" && hp.default_mode != "mixed" && hp.default_mode != "romanized") {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stt.canary.default_mode '%s' is not native, mixed or romanized",
+                kFamilyTag, hp.default_mode.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
     if (auto st = opt_special("stt.canary.special.timestamp_id", hp.timestamp_id); st != TRANSCRIBE_OK) {
         return st;
     }
