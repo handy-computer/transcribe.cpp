@@ -6,7 +6,8 @@
   "params": 27092736,
   "license": {
     "spdx": "mit",
-    "display": "MIT"
+    "display": "MIT",
+    "text": "mit-moonshine"
   },
   "upstream_repo": "UsefulSensors/moonshine-tiny",
   "upstream_commit": "390624e",

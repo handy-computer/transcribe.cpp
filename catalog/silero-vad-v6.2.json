@@ -6,7 +6,8 @@
   "params": 309633,
   "license": {
     "spdx": "mit",
-    "display": "MIT"
+    "display": "MIT",
+    "text": "mit-silero"
   },
   "upstream_repo": "snakers4/silero-vad",
   "upstream_commit": "5cd7945",

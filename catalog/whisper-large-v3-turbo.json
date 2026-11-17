@@ -6,7 +6,8 @@
   "params": 808904208,
   "license": {
     "spdx": "mit",
-    "display": "MIT"
+    "display": "MIT",
+    "text": "mit-openai"
   },
   "upstream_repo": "openai/whisper-large-v3-turbo",
   "upstream_commit": "41f01f3",
