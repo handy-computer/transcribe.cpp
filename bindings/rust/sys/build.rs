@@ -447,8 +447,9 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
         println!("cargo:rustc-link-lib={kind}={name}");
     }
 
-    // Absolute library paths (e.g. ROCm SDK libraries, compiler-rt, or a
-    // find_package(BLAS) result). Express conventional library files as
+    // Absolute library paths (e.g. ROCm SDK libraries, compiler-rt — on Apple
+    // this carries libclang_rt.osx.a for ggml-metal's `@available` checks, which
+    // an LTO consumer otherwise loses — or a find_package(BLAS) result). Express conventional library files as
     // search-dir + rustc-link-lib rather than a raw rustc-link-arg: native
     // library directives propagate from this -sys crate to final downstream
     // binaries, while link arguments only affect this crate's own artifacts.

@@ -105,6 +105,47 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
     # The archives are C++; the consumer may be C or Rust.
     if(APPLE)
         list(APPEND _system_libs c++ m)
+
+        # Clang lowers `@available(...)` (ggml-metal's macOS 15 residency-set
+        # guards on arm64) to calls to `__isPlatformVersionAtLeast` whenever
+        # the deployment target predates the guarded API. That helper lives in
+        # compiler-rt's builtins archive, which the clang driver links
+        # implicitly but a non-clang link does not: rustc links Apple targets
+        # with -nodefaultlibs, and although recent Rust std defines its own copy,
+        # `lto = true` internalizes it away (only native code references it),
+        # leaving `___isPlatformVersionAtLeast` undefined. Record the archive
+        # explicitly. Archive semantics make it a no-op when nothing references
+        # it (e.g. builds targeting a new-enough macOS, or x86_64, where ggml
+        # compiles the macOS 15 paths out). Ask the compiler that built the
+        # archives, with its target flags, so it picks the right platform
+        # flavor (libclang_rt.osx.a vs .ios.a).
+        if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+            set(_crt_query_args "")
+            if(CMAKE_C_COMPILER_TARGET)
+                list(APPEND _crt_query_args "--target=${CMAKE_C_COMPILER_TARGET}")
+            endif()
+            if(CMAKE_OSX_SYSROOT AND IS_ABSOLUTE "${CMAKE_OSX_SYSROOT}")
+                list(APPEND _crt_query_args -isysroot "${CMAKE_OSX_SYSROOT}")
+            endif()
+            separate_arguments(_crt_c_flags NATIVE_COMMAND "${CMAKE_C_FLAGS}")
+            execute_process(
+                COMMAND "${CMAKE_C_COMPILER}" ${_crt_query_args} ${_crt_c_flags}
+                    -print-libgcc-file-name --rtlib=compiler-rt
+                OUTPUT_VARIABLE _apple_compiler_rt
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+                RESULT_VARIABLE _apple_compiler_rt_result)
+            if(_apple_compiler_rt_result EQUAL 0
+                    AND IS_ABSOLUTE "${_apple_compiler_rt}"
+                    AND EXISTS "${_apple_compiler_rt}")
+                list(APPEND _library_paths "${_apple_compiler_rt}")
+            else()
+                message(WARNING
+                    "transcribe install: could not locate compiler-rt builtins "
+                    "via ${CMAKE_C_COMPILER}; non-clang static consumers (Rust "
+                    "with LTO) may fail with undefined ___isPlatformVersionAtLeast")
+            endif()
+        endif()
     elseif(WIN32)
         # MSVC links the CRT and the C++ runtime implicitly. ggml-cpu reads the
         # registry for CPU feature detection (RegOpenKeyEx/RegCloseKey), so the
