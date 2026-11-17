@@ -1,0 +1,104 @@
+name: cuda13-windows
+
+# Builds + packaging-smokes the transcribe-cpp-native-cu13 wheel for
+# win_amd64. Same design as the Windows CUDA 12 wheel:
+#   - the CUDA runtime is NEVER vendored: cudart/cublas come from the
+#     nvidia-*-cu13 runtime wheels (win_amd64 wheels exist — the PyTorch
+#     layout), preloaded by the package's prepare() hook, which knows the
+#     Windows DLL names (cudart64_13.dll, cublasLt64_13.dll,
+#     cublas64_13.dll under nvidia/<pkg>/bin/); nvcuda.dll is the driver.
+#   - the ggml-vulkan module is bundled alongside CUDA (superset-of-default
+#     rationale in bindings/python-native-cu13/pyproject.toml: a CUDA
+#     install on an AMD/Intel-GPU Windows box must not silently lose Vulkan
+#     acceleration), built against the LunarG SDK like wheel-windows.
+#   - delvewheel repair EXCLUDES the CUDA 13 DLLs + the driver + vulkan-1.dll,
+#     mirroring auditwheel's excludes on Linux.
+#   - GPU-less smoke: cu13 provider selected, declared backends
+#     {cuda, vulkan, cpu}, the cuda/vulkan modules quietly absent without a
+#     driver, CPU transcribes, full pytest suite.
+#
+# Trimmed cadence: NOT per PR push. Releases (tags) and manual dispatch only
+# — nvcc over ggml-cuda × 5 arches is the heaviest build in the project.
+#
+# CUDA 13.3 toolkit.
+
+on:
+  # Called by publish.yml on release tags.
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  PYTHONUTF8: "1"  # hf CLI prints ✓; Windows cp1252 console chokes
+
+jobs:
+  cuda13-wheel-windows:
+    # 16vcpu: nvcc over ggml-cuda x 5 arches under MSVC.
+    runs-on: blacksmith-16vcpu-windows-2025
+    timeout-minutes: 180
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      CMAKE_GENERATOR: Ninja
+      # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
+      # Keep in lockstep with wheel-windows (python-wheels.yml) and
+      # rust-windows-deep-path (rust-ci.yml).
+      VULKAN_VERSION: "1.4.350.0"
+    steps:
+      - uses: actions/checkout@v6
+      # vcvars for the whole job: nvcc needs cl.exe, and the Ninja generator
+      # needs the MSVC environment.
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }} (glslc for the ggml-vulkan module)
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+      - name: Install CUDA toolkit 13.3 (network installer, lean subset)
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: "13.3.0"
+          method: network
+          use-github-cache: false
+          use-local-cache: false
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+      - uses: astral-sh/setup-uv@v8.2.0
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Build the raw cu13 wheel (scikit-build-core; lane posture in
+              bindings/python-native-cu13/pyproject.toml)
+        run: uv build --wheel bindings/python-native-cu13 --out-dir dist-cu13-raw
+      - name: Repair (delvewheel; CUDA runtime + driver + Vulkan loader stay OUT)
+        run: |
+          uvx delvewheel repair `
+            --exclude cudart64_13.dll `
+            --exclude cublas64_13.dll `
+            --exclude cublasLt64_13.dll `
+            --exclude nvcuda.dll `
+            --exclude vulkan-1.dll `
+            -w wheelhouse-cu13 (Get-Item dist-cu13-raw/*.whl).FullName
+          Get-ChildItem wheelhouse-cu13
+      - name: GPU-less packaging smoke (mirrors Modal's packaging_check)
+        run: |
+          uv venv --seed --python 3.12 smoke-venv
+          smoke-venv/Scripts/pip install -q --find-links wheelhouse-cu13 `
+            transcribe-cpp-native-cu13 "pytest>=7" numpy huggingface_hub
+          $env:TRANSCRIBE_SMOKE_PROVIDER = "transcribe-cpp-native-cu13"
+          # The default provider is deliberately absent (its pin can't
+          # resolve pre-release); wheel_smoke installs the API package
+          # dep-free. Declared-backends gate asserts {cuda, vulkan, cpu}.
+          $env:TRANSCRIBE_SMOKE_PIP_NO_DEPS = "1"
+          $env:CI = "1"
+          smoke-venv/Scripts/python scripts/ci/wheel_smoke.py .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cuda-dist-windows-x86_64-cu13
+          path: wheelhouse-cu13/*.whl
+      - name: Extract the native bundle
+        run: |
+          python scripts/ci/extract_native_bundle.py --wheel-dir wheelhouse-cu13 `
+            --tuple windows-x86_64-cuda --out bundles
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-windows-x86_64-cuda-cu13
+          path: bundles/*.tar.gz
