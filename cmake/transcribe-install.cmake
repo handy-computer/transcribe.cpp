@@ -153,6 +153,32 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
             list(APPEND _system_libs vulkan)
         endif()
     endif()
+    if("cuda" IN_LIST _kinds)
+        # ggml-cuda is an archive in this posture, so the consumer must also
+        # link what ggml-cuda links: the CUDA runtime, cuBLAS (which brings
+        # cublasLt) and, unless GGML_CUDA_NO_VMM, the driver API. Those are
+        # CUDA:: imported targets scoped to ggml-cuda's directory, so find the
+        # same toolkit here and record them as absolute paths.
+        find_package(CUDAToolkit REQUIRED)
+        set(_cuda_libs cudart cublas cublasLt)
+        if(NOT GGML_CUDA_NO_VMM)
+            list(APPEND _cuda_libs cuda_driver)
+        endif()
+        foreach(_cuda_lib IN LISTS _cuda_libs)
+            if(NOT TARGET CUDA::${_cuda_lib})
+                message(FATAL_ERROR
+                    "transcribe install: could not resolve CUDA library "
+                    "${_cuda_lib} for the static link manifest")
+            endif()
+            # A driver stub (build host without an NVIDIA driver) is imported
+            # as IMPORTED_IMPLIB: a link-time input, never a runtime path.
+            get_target_property(_cuda_path CUDA::${_cuda_lib} IMPORTED_LOCATION)
+            if(NOT _cuda_path)
+                get_target_property(_cuda_path CUDA::${_cuda_lib} IMPORTED_IMPLIB)
+            endif()
+            list(APPEND _library_paths "${_cuda_path}")
+        endforeach()
+    endif()
     if("rocm" IN_LIST _kinds)
         # ggml-hip is an archive in this posture, but its HIP/rocBLAS/hipBLAS
         # dependencies are shared ROCm SDK libraries. CMake propagates those
