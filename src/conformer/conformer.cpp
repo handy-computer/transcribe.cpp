@@ -13,6 +13,7 @@
 #include "transcribe-env.h"
 #include "transcribe-log.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -179,9 +180,13 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
 // kernel's real type to im2col). CANONICAL Metal conv-quirk note: vendored
 // ggml's ggml_conv_2d_dw hardcodes F16 im2col, which routes the matmul to
 // a `kernel_mul_mv_f32_f16_short` Metal kernel that isn't compiled in;
-// forcing f32 lands on the available `kernel_mul_mv_f32_f32_short`. The
-// alternative ggml_conv_2d_dw_direct can't help: its CONV_2D_DW op is
-// unsupported on Metal, so the im2col + mul_mat path here is what works.
+// forcing f32 lands on the available `kernel_mul_mv_f32_f32_short`.
+//
+// Prefer conv_2d_dw_direct_f32 below for new code: CONV_2D_DW runs on Metal,
+// CPU, Vulkan and CUDA (tests/conv_dw_direct_unit.cpp checks it on every
+// device present), takes one algorithm at every batch size, and does not
+// materialise the kernel-width-fold copy this im2col form does (2.3 GB for
+// the conformer pre-encode's first depthwise conv at 306 s).
 ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
                              ggml_tensor *  kernel,  // [KW, KH, 1, C]
                              ggml_tensor *  data,    // [W, H, C, N]
@@ -211,8 +216,8 @@ ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
 // BF16-reference conformer (e.g. cohere) ships its depthwise kernels at F16,
 // so promote to F32 in-graph before any direct depthwise op. The depthwise
 // kernel is tiny, so the cast is negligible; F32 kernels pass through
-// untouched. Only the direct_dw path (CUDA/Vulkan) routes here — the im2col
-// fallback used on Metal/CPU takes the kernel's real type and is unaffected.
+// untouched. Only the direct depthwise paths route here; the im2col forms
+// take the kernel's real type and are unaffected.
 static ggml_tensor * dw_kernel_for_direct(ggml_context * ctx, ggml_tensor * kernel) {
     if (kernel == nullptr || kernel->type == GGML_TYPE_F32) {
         return kernel;
@@ -335,6 +340,38 @@ bool detect_direct_pw(const char * backend) {
     // direct.
     const bool backend_default = !(backend != nullptr && std::strstr(backend, "Vulkan") != nullptr);
     return resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_PW", "TRANSCRIBE_CONV_NO_DIRECT_PW", backend_default);
+}
+
+int pre_encode_window_count(int64_t n_mel_frames, int chunk) {
+    if (chunk <= 0 || n_mel_frames <= 0) {
+        return 1;
+    }
+    auto stage_len = [](int64_t L) {
+        return (L + 2 * 1 - 3) / 2 + 1;
+    };
+    const int64_t t_enc = stage_len(stage_len(stage_len(n_mel_frames)));
+    if (t_enc <= chunk) {
+        return 1;
+    }
+    // Matches the balanced split in build_pre_encode: ceil(T_enc / chunk)
+    // windows, capped (see kPreEncodeMaxWindows).
+    const int64_t n_win = (t_enc + chunk - 1) / chunk;
+    return static_cast<int>(std::min<int64_t>(n_win, kPreEncodeMaxWindows));
+}
+
+size_t pre_encode_meta_bytes(int64_t n_mel_frames, int chunk) {
+    constexpr size_t kBytesPerWindow = 256 * 1024;
+    const int        n_win           = pre_encode_window_count(n_mel_frames, chunk);
+    return static_cast<size_t>(n_win > 1 ? n_win - 1 : 0) * kBytesPerWindow;
+}
+
+int resolve_pre_encode_time_chunk(int family_default) {
+    const char * v = transcribe::env::str("TRANSCRIBE_PRE_ENCODE_CHUNK");
+    if (v == nullptr || *v == '\0') {
+        return family_default;
+    }
+    const long n = std::strtol(v, nullptr, 10);
+    return n > 0 ? static_cast<int>(n) : 0;
 }
 
 // Conv module (pointwise -> GLU -> depthwise -> BN/LN -> SiLU -> pointwise).
@@ -496,7 +533,7 @@ ggml_tensor * conv_module(ggml_context * ctx, ggml_tensor * x, const BlockView &
         // Output: [T_out, 1, d_model, B] → [T_out, d_model, B].
         x                  = ggml_reshape_3d(ctx, x, x->ne[0], x->ne[2], x->ne[3]);
     } else {
-        // im2col depthwise (cohere on Metal/CPU); single-utterance only.
+        // im2col depthwise (TRANSCRIBE_CONV_NO_DIRECT_DW); single-utterance only.
         x = conv_1d_dw_f32(ctx, b.conv_dw_w, x,
                            /*s=*/1, /*p=*/padding_op, /*d=*/1);
     }
@@ -1225,144 +1262,234 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
         return ggml_mul_inplace(ctx, t, m);
     };
 
-    // conv0 (standard 2D conv: 1 in, channels out, k=3 s=2)
-    if (policy.direct_conv0_in_pre_encode) {
-        x = ggml_conv_2d_direct(ctx, pe.conv0_w, x,
-                                /*s0=*/2, /*s1=*/2,
-                                /*p0=*/pe_p_op, /*p1=*/pe_p_op,
-                                /*d0=*/1, /*d1=*/1);
-    } else {
-        x = ggml_conv_2d(ctx, pe.conv0_w, x,
-                         /*s0=*/2, /*s1=*/2,
-                         /*p0=*/pe_p_op, /*p1=*/pe_p_op,
-                         /*d0=*/1, /*d1=*/1);
-    }
-    x = add_conv_bias(ctx, x, pe.conv0_b);
-    x = name_prefixed(x, name_prefix, "conv0");
-    x = ggml_relu(ctx, x);
-    x = name_prefixed(x, name_prefix, "relu0");
-    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s1 : nullptr, "pre_encode.valid_mask.s1");
-    x = zero_causal_tail(x);
-
-    // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2).
-    // im2col path (conv_2d_dw_f32) when direct_dw_in_pre_encode is false.
-    if (policy.direct_dw_in_pre_encode) {
-        x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv2_w), x,
-                                   /*s0=*/2, /*s1=*/2,
-                                   /*p0=*/pe_p_op, /*p1=*/pe_p_op,
-                                   /*d0=*/1, /*d1=*/1);
-    } else {
-        x = conv_2d_dw_f32(ctx, pe.conv2_w, x,
-                           /*s0=*/2, /*s1=*/2,
-                           /*p0=*/pe_p_op, /*p1=*/pe_p_op,
-                           /*d0=*/1, /*d1=*/1);
-    }
-    x                       = add_conv_bias(ctx, x, pe.conv2_b);
-    x                       = name_prefixed(x, name_prefix, "conv2");
-    const bool after_stride = policy.pre_encode_mask_after_stride;
-    if (after_stride) {
-        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
-    }
-
-    // conv3 (pointwise: channels -> channels, k=1 s=1 p=0)
-    x = policy.pre_encode_f32_pointwise ?
-            conv_2d_f32(ctx, pe.conv3_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
-            ggml_conv_2d(ctx, pe.conv3_w, x,
-                         /*s0=*/1, /*s1=*/1,
-                         /*p0=*/0, /*p1=*/0,
-                         /*d0=*/1, /*d1=*/1);
-    x = add_conv_bias(ctx, x, pe.conv3_b);
-    x = name_prefixed(x, name_prefix, "conv3");
-    x = ggml_relu(ctx, x);
-    x = name_prefixed(x, name_prefix, "relu3");
-    if (!after_stride) {
-        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
-    } else {
-        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2_extent : nullptr, "pre_encode.extent_mask.s2");
-    }
-    x = zero_causal_tail(x);
-
-    // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
-    if (policy.direct_dw_in_pre_encode) {
-        x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv5_w), x,
-                                   /*s0=*/2, /*s1=*/2,
-                                   /*p0=*/pe_p_op, /*p1=*/pe_p_op,
-                                   /*d0=*/1, /*d1=*/1);
-    } else {
-        x = conv_2d_dw_f32(ctx, pe.conv5_w, x,
-                           /*s0=*/2, /*s1=*/2,
-                           /*p0=*/pe_p_op, /*p1=*/pe_p_op,
-                           /*d0=*/1, /*d1=*/1);
-    }
-    x = add_conv_bias(ctx, x, pe.conv5_b);
-    x = name_prefixed(x, name_prefix, "conv5");
-    if (after_stride) {
-        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
-    }
-
-    x = policy.pre_encode_f32_pointwise ?
-            conv_2d_f32(ctx, pe.conv6_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
-            ggml_conv_2d(ctx, pe.conv6_w, x,
-                         /*s0=*/1, /*s1=*/1,
-                         /*p0=*/0, /*p1=*/0,
-                         /*d0=*/1, /*d1=*/1);
-    x = add_conv_bias(ctx, x, pe.conv6_b);
-    x = name_prefixed(x, name_prefix, "conv6");
-    x = ggml_relu(ctx, x);
-    x = name_prefixed(x, name_prefix, "relu6");
-    if (!after_stride) {
-        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
-    } else {
-        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3_extent : nullptr, "pre_encode.extent_mask.s3");
-    }
-    // Causal: drop the spurious tail of the last stage as a view; the
-    // flatten's cont below materializes the exact [F', T_enc] extent.
-    if (causal_pe) {
-        want_w = want_w / 2 + 1;
-        want_h = want_h / 2 + 1;
-        assert(x->ne[0] >= want_w && x->ne[0] - want_w <= 1 && x->ne[1] >= want_h && x->ne[1] - want_h <= 1);
-        if (x->ne[0] != want_w || x->ne[1] != want_h) {
-            x = ggml_view_4d(ctx, x, want_w, want_h, x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3], /*offset=*/0);
+    // The conv stack proper: [F, H, 1, B] mel slice -> [F', H', C, B]. A
+    // lambda so the time-tiled path below can run it once per chunk; the
+    // masked and causal paths (which carry whole-utterance state) only ever
+    // run it once.
+    auto conv_stack = [&](ggml_tensor * x) -> ggml_tensor * {
+        // conv0 (standard 2D conv: 1 in, channels out, k=3 s=2)
+        if (policy.direct_conv0_in_pre_encode) {
+            x = ggml_conv_2d_direct(ctx, pe.conv0_w, x,
+                                    /*s0=*/2, /*s1=*/2,
+                                    /*p0=*/pe_p_op, /*p1=*/pe_p_op,
+                                    /*d0=*/1, /*d1=*/1);
+        } else {
+            x = ggml_conv_2d(ctx, pe.conv0_w, x,
+                             /*s0=*/2, /*s1=*/2,
+                             /*p0=*/pe_p_op, /*p1=*/pe_p_op,
+                             /*d0=*/1, /*d1=*/1);
         }
+        x = add_conv_bias(ctx, x, pe.conv0_b);
+        x = name_prefixed(x, name_prefix, "conv0");
+        x = ggml_relu(ctx, x);
+        x = name_prefixed(x, name_prefix, "relu0");
+        x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s1 : nullptr, "pre_encode.valid_mask.s1");
+        x = zero_causal_tail(x);
+
+        // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2).
+        // im2col path (conv_2d_dw_f32) when direct_dw_in_pre_encode is false.
+        if (policy.direct_dw_in_pre_encode) {
+            x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv2_w), x,
+                                       /*s0=*/2, /*s1=*/2,
+                                       /*p0=*/pe_p_op, /*p1=*/pe_p_op,
+                                       /*d0=*/1, /*d1=*/1);
+        } else {
+            x = conv_2d_dw_f32(ctx, pe.conv2_w, x,
+                               /*s0=*/2, /*s1=*/2,
+                               /*p0=*/pe_p_op, /*p1=*/pe_p_op,
+                               /*d0=*/1, /*d1=*/1);
+        }
+        x                       = add_conv_bias(ctx, x, pe.conv2_b);
+        x                       = name_prefixed(x, name_prefix, "conv2");
+        const bool after_stride = policy.pre_encode_mask_after_stride;
+        if (after_stride) {
+            x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+        }
+
+        // conv3 (pointwise: channels -> channels, k=1 s=1 p=0)
+        x = policy.pre_encode_f32_pointwise ?
+                conv_2d_f32(ctx, pe.conv3_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
+                ggml_conv_2d(ctx, pe.conv3_w, x,
+                             /*s0=*/1, /*s1=*/1,
+                             /*p0=*/0, /*p1=*/0,
+                             /*d0=*/1, /*d1=*/1);
+        x = add_conv_bias(ctx, x, pe.conv3_b);
+        x = name_prefixed(x, name_prefix, "conv3");
+        x = ggml_relu(ctx, x);
+        x = name_prefixed(x, name_prefix, "relu3");
+        if (!after_stride) {
+            x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr, "pre_encode.valid_mask.s2");
+        } else {
+            x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2_extent : nullptr, "pre_encode.extent_mask.s2");
+        }
+        x = zero_causal_tail(x);
+
+        // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
+        if (policy.direct_dw_in_pre_encode) {
+            x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv5_w), x,
+                                       /*s0=*/2, /*s1=*/2,
+                                       /*p0=*/pe_p_op, /*p1=*/pe_p_op,
+                                       /*d0=*/1, /*d1=*/1);
+        } else {
+            x = conv_2d_dw_f32(ctx, pe.conv5_w, x,
+                               /*s0=*/2, /*s1=*/2,
+                               /*p0=*/pe_p_op, /*p1=*/pe_p_op,
+                               /*d0=*/1, /*d1=*/1);
+        }
+        x = add_conv_bias(ctx, x, pe.conv5_b);
+        x = name_prefixed(x, name_prefix, "conv5");
+        if (after_stride) {
+            x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+        }
+
+        x = policy.pre_encode_f32_pointwise ?
+                conv_2d_f32(ctx, pe.conv6_w, x, /*s0=*/1, /*s1=*/1, /*p0=*/0, /*p1=*/0, /*d0=*/1, /*d1=*/1) :
+                ggml_conv_2d(ctx, pe.conv6_w, x,
+                             /*s0=*/1, /*s1=*/1,
+                             /*p0=*/0, /*p1=*/0,
+                             /*d0=*/1, /*d1=*/1);
+        x = add_conv_bias(ctx, x, pe.conv6_b);
+        x = name_prefixed(x, name_prefix, "conv6");
+        x = ggml_relu(ctx, x);
+        x = name_prefixed(x, name_prefix, "relu6");
+        if (!after_stride) {
+            x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr, "pre_encode.valid_mask.s3");
+        } else {
+            x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3_extent : nullptr, "pre_encode.extent_mask.s3");
+        }
+        // Causal: drop the spurious tail of the last stage as a view; the
+        // flatten's cont below materializes the exact [F', T_enc] extent.
+        if (causal_pe) {
+            want_w = want_w / 2 + 1;
+            want_h = want_h / 2 + 1;
+            assert(x->ne[0] >= want_w && x->ne[0] - want_w <= 1 && x->ne[1] >= want_h && x->ne[1] - want_h <= 1);
+            if (x->ne[0] != want_w || x->ne[1] != want_h) {
+                x = ggml_view_4d(ctx, x, want_w, want_h, x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3],
+                                 /*offset=*/0);
+            }
+        }
+        return x;
+    };
+
+    // Flatten + linear, without the output bias: [F', T, C, B] -> [d_model,
+    // T, B]. Frame-local, so the tiled path applies it per chunk.
+    auto flatten_linear = [&](ggml_tensor * x) -> ggml_tensor * {
+        // At this point ne = [F'=16, T_enc, channels=256, 1] where
+        // T_enc = floor(T_mel / 8). Flatten (F', C) into one feature axis
+        // matching pre_encode_in = channels * (n_mels / subsampling_factor).
+        // The reference uses flat index = c*F' + f' (C slow, F' fast), which in
+        // ggml ne is: permute F' to axis 0, C to axis 1, then collapse 0 and 1:
+        //   permute (0, 2, 1, 3): [F', T, C, 1] -> [F', C, T, 1]
+        //   ggml_cont; reshape -> [F'*C, T] = [pre_encode_in, T_enc]
+        const int64_t F_prime       = x->ne[0];
+        const int64_t T_enc         = x->ne[1];
+        const int64_t C             = x->ne[2];
+        // Utterance batch rides the conv "N" axis (ne[3]) through the stem; the
+        // flatten + linear below land it on ne[2] == B for the conformer blocks.
+        const int64_t B             = x->ne[3];
+        const int64_t pre_encode_in = F_prime * C;
+
+        // Sanity check: the linear layer expects exactly pre_encode_in features.
+        if (pe.out_w != nullptr && pre_encode_in != pe.out_w->ne[0]) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "%s encoder: pre_encode_in mismatch: "
+                    "F'*C=%lld but out_w expects %lld",
+                    error_tag != nullptr ? error_tag : "conformer", static_cast<long long>(pre_encode_in),
+                    static_cast<long long>(pe.out_w->ne[0]));
+            return nullptr;
+        }
+
+        x = ggml_permute(ctx, x, /*axis0=*/0, /*axis1=*/2,
+                         /*axis2=*/1, /*axis3=*/3);
+        x = name_prefixed(x, name_prefix, "permuted");
+        x = ggml_cont(ctx, x);
+        x = name_prefixed(x, name_prefix, "flat_pre");
+        // [F', C, T_enc, B] -> [F'*C, T_enc, B]. B at ne[2] after the collapse.
+        x = ggml_reshape_3d(ctx, x, pre_encode_in, T_enc, B);
+        x = name_prefixed(x, name_prefix, "flat");
+
+        // Linear projection to d_model (out_w ne=[pre_encode_in, d_model]).
+        x = ggml_mul_mat(ctx, pe.out_w, x);
+        x = name_prefixed(x, name_prefix, "linear");
+        return x;
+    };
+
+    // Time tiling (policy.pre_encode_time_chunk > 0). The whole-utterance
+    // stack keeps conv0's [F/2, T/2, C] f32 output alive (with its im2col
+    // matmul twin) next to the first depthwise conv's input: 2 GB at 306 s
+    // for C=256, linear in audio length. Instead run the stack over
+    // overlapping mel windows and keep each window's exact output frames.
+    //
+    // Exactness. With k=3, s=2, p=1 at every stage, output frame o reads
+    // mel rows [8o-7, 8o+7]. A window starting at mel row m0 = 8(a-1)
+    // (a multiple of 8, so every stage's local grid lands on the global
+    // one) computes global frame a-1+j as its local frame j; local frame 0
+    // reads the window's left zero pad where the utterance has real rows,
+    // so it is dropped, and local frames >= 1 read only rows inside the
+    // window. Ending the window at mel row 8b makes frame b-1 (rows up to
+    // 8b-1) the last exact one. The first window starts at row 0 and the
+    // last ends at T_mel, so the utterance edges see the same zero padding
+    // as the untiled graph. Every kept frame is computed from the same
+    // inputs by the same per-element ops, so the result is the untiled one.
+    // Bitwise, it matches wherever the backend's matmul kernel choice does
+    // not depend on the extent: Metal does (tests/pre_encode_tile_unit.cpp,
+    // and cohere's encoder dumps at 11-306 s) as long as no window drops to
+    // its few-row kernels (<= 16 columns), hence balanced windows, equal to
+    // within one frame and never shorter than half of `chunk`. CPU picks its
+    // matmul path by extent, so there the vendored F16-im2col pointwise
+    // convs differ by accumulation order (~1e-4 relative, F16 territory).
+    //
+    // Masked (batched variable-length) and causal stacks keep the
+    // whole-utterance path: their masks and causal tail are indexed by
+    // global length.
+    const int64_t T_mel     = x->ne[1];
+    auto          stage_len = [](int64_t L) {
+        return (L + 2 * 1 - 3) / 2 + 1;
+    };
+    const int64_t T_enc_out = stage_len(stage_len(stage_len(T_mel)));
+    const int64_t chunk     = policy.pre_encode_time_chunk;
+    const bool    tiled     = chunk > 0 && valid_masks == nullptr && !causal_pe && T_enc_out > chunk;
+    if (!tiled) {
+        x = conv_stack(x);
+        x = (x != nullptr) ? flatten_linear(x) : nullptr;
+        if (x == nullptr) {
+            return nullptr;
+        }
+    } else {
+        ggml_tensor * mel_t = x;
+        ggml_tensor * out   = nullptr;
+        const int64_t n_win = pre_encode_window_count(T_mel, static_cast<int>(chunk));
+        const int64_t base  = T_enc_out / n_win;
+        const int64_t extra = T_enc_out % n_win;
+        for (int64_t w = 0, a = 0; w < n_win; ++w) {
+            const int64_t b    = a + base + (w < extra ? 1 : 0);
+            const int64_t skip = (a == 0) ? 0 : 1;
+            const int64_t m0   = 8 * (a - skip);
+            const int64_t m1   = (b == T_enc_out) ? T_mel : 8 * b;
+            ggml_tensor * win =
+                ggml_view_4d(ctx, mel_t, mel_t->ne[0], m1 - m0, mel_t->ne[2], mel_t->ne[3], mel_t->nb[1], mel_t->nb[2],
+                             mel_t->nb[3], static_cast<size_t>(m0) * mel_t->nb[1]);
+            ggml_tensor * y = conv_stack(ggml_cont(ctx, win));
+            if (y == nullptr) {
+                return nullptr;
+            }
+            assert(y->ne[1] == b - a + skip);
+            if (skip != 0) {
+                y = ggml_view_4d(ctx, y, y->ne[0], b - a, y->ne[2], y->ne[3], y->nb[1], y->nb[2], y->nb[3],
+                                 static_cast<size_t>(skip) * y->nb[1]);
+            }
+            y = flatten_linear(y);
+            if (y == nullptr) {
+                return nullptr;
+            }
+            // Chaining the concat keeps the windows in dependency order, so
+            // the allocator retires one window's activations before the next.
+            out = (out == nullptr) ? y : ggml_concat(ctx, out, y, /*dim=*/1);
+            a   = b;
+        }
+        assert(out->ne[1] == T_enc_out);
+        x = out;
     }
-
-    // At this point ne = [F'=16, T_enc, channels=256, 1] where
-    // T_enc = floor(T_mel / 8). Flatten (F', C) into one feature axis
-    // matching pre_encode_in = channels * (n_mels / subsampling_factor).
-    // The reference uses flat index = c*F' + f' (C slow, F' fast), which in
-    // ggml ne is: permute F' to axis 0, C to axis 1, then collapse 0 and 1:
-    //   permute (0, 2, 1, 3): [F', T, C, 1] -> [F', C, T, 1]
-    //   ggml_cont; reshape -> [F'*C, T] = [pre_encode_in, T_enc]
-    const int64_t F_prime       = x->ne[0];
-    const int64_t T_enc         = x->ne[1];
-    const int64_t C             = x->ne[2];
-    // Utterance batch rides the conv "N" axis (ne[3]) through the stem; the
-    // flatten + linear below land it on ne[2] == B for the conformer blocks.
-    const int64_t B             = x->ne[3];
-    const int64_t pre_encode_in = F_prime * C;
-
-    // Sanity check: the linear layer expects exactly pre_encode_in features.
-    if (pe.out_w != nullptr && pre_encode_in != pe.out_w->ne[0]) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "%s encoder: pre_encode_in mismatch: "
-                "F'*C=%lld but out_w expects %lld",
-                error_tag != nullptr ? error_tag : "conformer", static_cast<long long>(pre_encode_in),
-                static_cast<long long>(pe.out_w->ne[0]));
-        return nullptr;
-    }
-
-    x = ggml_permute(ctx, x, /*axis0=*/0, /*axis1=*/2,
-                     /*axis2=*/1, /*axis3=*/3);
-    x = name_prefixed(x, name_prefix, "permuted");
-    x = ggml_cont(ctx, x);
-    x = name_prefixed(x, name_prefix, "flat_pre");
-    // [F', C, T_enc, B] -> [F'*C, T_enc, B]. B at ne[2] after the collapse.
-    x = ggml_reshape_3d(ctx, x, pre_encode_in, T_enc, B);
-    x = name_prefixed(x, name_prefix, "flat");
-
-    // Linear projection to d_model (out_w ne=[pre_encode_in, d_model]).
-    x = ggml_mul_mat(ctx, pe.out_w, x);
-    x = name_prefixed(x, name_prefix, "linear");
 
     // Add bias [d_model], broadcast to [d_model, T_enc, 1, 1].
     if (pe.out_b != nullptr) {

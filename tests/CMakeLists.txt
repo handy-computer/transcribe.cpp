@@ -367,6 +367,44 @@ add_test(NAME transcribe_conv_pw_promote_unit
     COMMAND transcribe_conv_pw_promote_unit)
 
 # -----------------------------------------------------------------------------
+# CONV_2D_DW (direct depthwise) on every device present
+# -----------------------------------------------------------------------------
+#
+# Evidence for the conformer depthwise policy: the direct op matches a host
+# reference and the im2col helpers it replaces, is batch-invariant, and is
+# supported on Metal and CPU (a regression fails rather than skips).
+
+add_executable(transcribe_conv_dw_direct_unit
+    conv_dw_direct_unit.cpp)
+
+target_link_libraries(transcribe_conv_dw_direct_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_conv_dw_direct_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_conv_dw_direct_unit)
+
+add_test(NAME transcribe_conv_dw_direct_unit
+    COMMAND transcribe_conv_dw_direct_unit)
+
+# -----------------------------------------------------------------------------
+# build_pre_encode time tiling (ConvPolicy::pre_encode_time_chunk) is exact
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_pre_encode_tile_unit
+    pre_encode_tile_unit.cpp)
+
+target_link_libraries(transcribe_pre_encode_tile_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_pre_encode_tile_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_pre_encode_tile_unit)
+
+add_test(NAME transcribe_pre_encode_tile_unit
+    COMMAND transcribe_pre_encode_tile_unit)
+
+# -----------------------------------------------------------------------------
 # causal_lm::pack_gate_up: alias / copy / mismatch, no model needed
 # -----------------------------------------------------------------------------
 
