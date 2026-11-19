@@ -1,8 +1,8 @@
 diff --git a/include/ggml-backend.h b/include/ggml-backend.h
-index cc3f8cd3..764ffe84 100644
+index afb8633..324160f 100644
 --- a/include/ggml-backend.h
 +++ b/include/ggml-backend.h
-@@ -259,6 +259,13 @@ extern "C" {
+@@ -276,6 +276,13 @@ extern "C" {
      GGML_API void               ggml_backend_load_all(void);
      GGML_API void               ggml_backend_load_all_from_path(const char * dir_path);
  
@@ -17,7 +17,7 @@ index cc3f8cd3..764ffe84 100644
      // Backend scheduler
      //
 diff --git a/src/ggml-backend-reg.cpp b/src/ggml-backend-reg.cpp
-index 1c18b82c..7c076862 100644
+index c3bc926..dc801ba 100644
 --- a/src/ggml-backend-reg.cpp
 +++ b/src/ggml-backend-reg.cpp
 @@ -3,6 +3,7 @@
@@ -171,8 +171,8 @@ index 1c18b82c..7c076862 100644
      // enumerate all the files that match [lib]ggml-name-*.[so|dll] in the search paths
      const fs::path name_path = fs::u8path(name);
      const fs::path file_prefix = backend_filename_prefix().native() + name_path.native() + fs::u8path("-").native();
-@@ -599,7 +652,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
-     ggml_backend_load_best("cpu", silent, dir_path);
+@@ -593,7 +646,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
+     ggml_backend_load_best("cpu",      silent, dir_path);
      // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend
      const char * backend_path = std::getenv("GGML_BACKEND_PATH");
 -    if (backend_path) {
@@ -181,7 +181,7 @@ index 1c18b82c..7c076862 100644
      }
  }
 diff --git a/src/ggml-hip/CMakeLists.txt b/src/ggml-hip/CMakeLists.txt
-index a6a6b727..9b963dd5 100644
+index 75d4d60..8dec5ee 100644
 --- a/src/ggml-hip/CMakeLists.txt
 +++ b/src/ggml-hip/CMakeLists.txt
 @@ -81,6 +81,8 @@ ggml_add_backend_library(ggml-hip
@@ -194,10 +194,10 @@ index a6a6b727..9b963dd5 100644
  
  add_compile_definitions(GGML_USE_HIP)
 diff --git a/src/ggml-musa/CMakeLists.txt b/src/ggml-musa/CMakeLists.txt
-index 82b754f4..6cb178eb 100644
+index 721621a..f451b0c 100644
 --- a/src/ggml-musa/CMakeLists.txt
 +++ b/src/ggml-musa/CMakeLists.txt
-@@ -63,6 +63,8 @@ if (MUSAToolkit_FOUND)
+@@ -66,6 +66,8 @@ if (MUSAToolkit_FOUND)
      # TODO: do not use CUDA definitions for MUSA
      if (NOT GGML_BACKEND_DL)
          target_compile_definitions(ggml PUBLIC GGML_USE_CUDA)
