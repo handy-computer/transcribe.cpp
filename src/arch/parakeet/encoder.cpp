@@ -309,6 +309,37 @@ ggml_tensor * apply_spk_kernel_injection(ggml_context *          ctx,
     return x;
 }
 
+// ----- Fluid Speech Pro pre-Conformer block -----
+//
+// FrameCleaner in FluidVoice-Labs/fluid-speech-pro's fluid_speech.py:
+//
+//   h = down(LayerNorm(x))              # [T, d_model] -> [T, dim]
+//   h = gelu(mix(h^T))                  # depthwise Conv1d over time, k taps
+//   x = x + up(h^T)                     # [T, d_model]
+//
+// x ne=[d_model, T, B]; the depthwise conv runs in the [T, dim, B] layout
+// the shared conformer conv module uses, with symmetric (kernel-1)/2
+// padding. PyTorch's F.gelu is the exact erf form, so use ggml_gelu_erf
+// (CPU/Vulkan/Metal all implement it).
+ggml_tensor * build_pre_block(ggml_context * ctx, ggml_tensor * x, const ParakeetPreBlock & b, int kernel) {
+    ggml_tensor * h = conf::layer_norm(ctx, x, b.norm_w, b.norm_b);
+    h               = ggml_mul_mat(ctx, b.down_w, h);
+    h               = ggml_add(ctx, h, b.down_b);
+
+    h                   = ggml_cont(ctx, ggml_permute(ctx, h, 1, 0, 2, 3));
+    h                   = conf::conv_1d_dw_f32(ctx, b.mix_w, h, /*s=*/1, /*p=*/kernel / 2, /*d=*/1);
+    // Conv output is [T, dim, B]; reshape the bias to [1, dim] so it
+    // broadcasts along time rather than the channel axis.
+    ggml_tensor * mix_b = ggml_reshape_2d(ctx, b.mix_b, 1, h->ne[1]);
+    h                   = ggml_add(ctx, h, mix_b);
+    h                   = ggml_gelu_erf(ctx, h);
+    h                   = ggml_cont(ctx, ggml_permute(ctx, h, 1, 0, 2, 3));
+
+    h = ggml_mul_mat(ctx, b.up_w, h);
+    h = ggml_add(ctx, h, b.up_b);
+    return ggml_add(ctx, x, h);
+}
+
 }  // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *                     ctx,
@@ -403,6 +434,17 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     }
     eb.dumps.pre_encode_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
+
+    // Fluid Speech Pro's residual block runs on the subsample output,
+    // before the first Conformer layer and before xscaling (NeMo's
+    // positional encoding applies the scale later, inside the encoder
+    // stack, so the reference hook sees the unscaled frames here).
+    if (hp.enc_pre_block_kernel > 0) {
+        x                      = build_pre_block(ctx, x, w.pre_block, hp.enc_pre_block_kernel);
+        x                      = conf::named(x, "enc.pre_block.out");
+        eb.dumps.pre_block_out = x;
+        transcribe::debug::mark_tensor_for_dump(x);
+    }
 
     // ----- xscaling -----
     //
@@ -831,6 +873,13 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
                                              /*error_tag=*/"parakeet stream");
     if (x == nullptr) {
         return eb;
+    }
+
+    // Same pre-Conformer block as the offline path, before xscaling and
+    // before drop_extra_pre_encoded trims the chunk overlap.
+    if (hp.enc_pre_block_kernel > 0) {
+        x = build_pre_block(ctx, x, w.pre_block, hp.enc_pre_block_kernel);
+        x = conf::named(x, "stream.enc.pre_block.out");
     }
 
     if (hp.enc_xscaling) {

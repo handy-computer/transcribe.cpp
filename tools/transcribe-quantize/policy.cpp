@@ -210,6 +210,12 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
     if (contains(name, ".conv.") && ends_with(name, ".weight")) {
         return Bucket::Conv;
     }
+    // Fluid Speech Pro's depthwise time conv in the pre-Conformer block.
+    // Named "mix" rather than ".conv.", but it is a Conv1d kernel the
+    // loader reads through GET_CONV (F32/F16 only).
+    if (name == "enc.pre_block.mix.weight") {
+        return Bucket::Conv;
+    }
     // granite_nar depthwise conv kernel uses the underscore form
     // (`conv_depthwise.weight`) without a `.conv.` separator.
     if (ends_with(name, ".conv_depthwise.weight")) {

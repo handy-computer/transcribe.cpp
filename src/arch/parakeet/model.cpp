@@ -1445,6 +1445,7 @@ transcribe_status run_one_shot_inner(ParakeetSession *             pc,
         }
     };
     try_dump("enc.pre_encode.out", eb.dumps.pre_encode_out, "encoder.pre_encode");
+    try_dump("enc.pre_block.out", eb.dumps.pre_block_out, "encoder.pre_block");
     try_dump("enc.block.0.ff1", eb.dumps.block0_after_ff1, "encoder.block0.ff1");
     try_dump("enc.block.0.attn", eb.dumps.block0_after_attn, "encoder.block0.attn");
     try_dump("enc.block.0.conv", eb.dumps.block0_after_conv, "encoder.block0.conv");
@@ -2094,6 +2095,9 @@ static transcribe_status run_batch_encode(ParakeetSession *                     
     if (transcribe::debug::enabled() && transcribe::debug::dump_all_blocks_requested()) {
         if (eb.dumps.pre_encode_out != nullptr) {
             transcribe::debug::dump_tensor("enc.pre_encode.out", eb.dumps.pre_encode_out, "encoder.pre_encode");
+        }
+        if (eb.dumps.pre_block_out != nullptr) {
+            transcribe::debug::dump_tensor("enc.pre_block.out", eb.dumps.pre_block_out, "encoder.pre_block");
         }
         for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
             ggml_tensor * t = eb.dumps.all_block_outs[i];
@@ -3179,6 +3183,7 @@ transcribe_status emit_buffered_chunk(ParakeetSession * pc,
             }
         };
         try_dump("enc.pre_encode.out", eb.dumps.pre_encode_out, "encoder.pre_encode");
+        try_dump("enc.pre_block.out", eb.dumps.pre_block_out, "encoder.pre_block");
         try_dump("enc.block.0.ff1", eb.dumps.block0_after_ff1, "encoder.block0.ff1");
         try_dump("enc.block.0.attn", eb.dumps.block0_after_attn, "encoder.block0.attn");
         try_dump("enc.block.0.conv", eb.dumps.block0_after_conv, "encoder.block0.conv");

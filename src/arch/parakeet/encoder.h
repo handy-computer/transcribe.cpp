@@ -44,6 +44,9 @@ struct ParakeetWeights;
 struct EncoderDumps {
     // Pre-encode. ne=[d_model, T_enc, 1, 1].
     ggml_tensor * pre_encode_out    = nullptr;
+    // Fluid Speech Pro's pre-Conformer block output, after subsampling.
+    // ne=[d_model, T_enc, 1, 1]. Null on models without the block.
+    ggml_tensor * pre_block_out     = nullptr;
     // Block 0 sub-step outputs. Each ne=[d_model, T_enc, 1, 1].
     ggml_tensor * block0_after_ff1  = nullptr;
     ggml_tensor * block0_after_attn = nullptr;

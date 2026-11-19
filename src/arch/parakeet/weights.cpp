@@ -86,6 +86,49 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         return st;
     }
 
+    // Fluid Speech Pro's extra pre-Conformer block. pre_block_kernel
+    // announces it (absent = no block); pre_block_dim is required with the
+    // kernel and must not appear alone, which would mean a converter bug
+    // that silently dropped the block from the graph.
+    {
+        int32_t kernel = 0;
+        switch (read_int32_kv(gguf, "stt.parakeet.encoder.pre_block_kernel", kernel)) {
+            case KvResult::Ok:
+                if (kernel <= 0 || (kernel % 2) == 0) {
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                            "parakeet: stt.parakeet.encoder.pre_block_kernel=%d "
+                            "must be a positive odd kernel (Fluid Speech Pro uses 15)",
+                            kernel);
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                hp.enc_pre_block_kernel = kernel;
+                break;
+            case KvResult::Absent:
+                break;
+            case KvResult::BadType:
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: stt.parakeet.encoder.pre_block_kernel must be int32");
+                return TRANSCRIBE_ERR_GGUF;
+        }
+
+        int32_t        dim    = 0;
+        const KvResult dim_kv = read_int32_kv(gguf, "stt.parakeet.encoder.pre_block_dim", dim);
+        if (hp.enc_pre_block_kernel > 0) {
+            if (dim_kv != KvResult::Ok || dim <= 0) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "parakeet: pre_block_kernel=%d requires a positive "
+                        "stt.parakeet.encoder.pre_block_dim",
+                        hp.enc_pre_block_kernel);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            hp.enc_pre_block_dim = dim;
+        } else if (dim_kv != KvResult::Absent) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "parakeet: stt.parakeet.encoder.pre_block_dim is set without "
+                    "stt.parakeet.encoder.pre_block_kernel");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
     // Local attention window. Default -1/-1 = full attention.
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_left", kFamilyTag, -1,
                                          hp.enc_att_context_left);
@@ -917,6 +960,23 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
     GET_F32(weights.pre_encode.conv6_b, "enc.pre_encode.conv.6.bias", channels);
     GET_LIN(weights.pre_encode.out_w, "enc.pre_encode.out.weight", pre_encode_in, d_model);
     GET_F32(weights.pre_encode.out_b, "enc.pre_encode.out.bias", d_model);
+
+    // ----- Fluid Speech Pro pre-Conformer block -----
+    // Present only when the GGUF announced it. A missing or mis-shaped
+    // tensor here is a load error: running without the block silently
+    // changes the model.
+    if (hp.enc_pre_block_kernel > 0) {
+        auto &        pb            = weights.pre_block;
+        const int64_t pre_block_dim = hp.enc_pre_block_dim;
+        GET_F32(pb.norm_w, "enc.pre_block.norm.weight", d_model);
+        GET_F32(pb.norm_b, "enc.pre_block.norm.bias", d_model);
+        GET_LIN(pb.down_w, "enc.pre_block.down.weight", d_model, pre_block_dim);
+        GET_F32(pb.down_b, "enc.pre_block.down.bias", pre_block_dim);
+        GET_CONV(pb.mix_w, "enc.pre_block.mix.weight", hp.enc_pre_block_kernel, 1, pre_block_dim);
+        GET_F32(pb.mix_b, "enc.pre_block.mix.bias", pre_block_dim);
+        GET_LIN(pb.up_w, "enc.pre_block.up.weight", pre_block_dim, d_model);
+        GET_F32(pb.up_b, "enc.pre_block.up.bias", d_model);
+    }
 
     // ----- encoder blocks -----
     weights.blocks.assign(hp.enc_n_layers, ParakeetBlock{});
