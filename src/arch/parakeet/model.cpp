@@ -795,21 +795,10 @@ static double parakeet_ms_per_enc_frame(const ParakeetHParams & hp) {
            static_cast<double>(hp.fe_sample_rate);
 }
 
-// Logit bonus per matched vocabulary token, in natural-log units. Chosen on
-// the dev half of a term-recall set and checked against general WER; see
-// docs/prompting.md. TRANSCRIBE_VOCABULARY_BOOST overrides it for research.
-constexpr float kVocabularyBoost = 8.0f;
-
-static float vocabulary_boost_score() {
-    if (const char * v = transcribe::env::str("TRANSCRIBE_VOCABULARY_BOOST")) {
-        char *      end   = nullptr;
-        const float value = std::strtof(v, &end);
-        if (end != v && value >= 0.0f) {
-            return value;
-        }
-    }
-    return kVocabularyBoost;
-}
+// Logit bonus per matched vocabulary token after a term's first, in
+// natural-log units. The lowest value that kept the term-recall gains while
+// leaving transcripts of unrelated speech unchanged; see docs/prompting.md.
+constexpr float kVocabularyBoost = 3.0f;
 
 // The phrase-boost automaton for this run's vocabulary, or nullptr when the
 // run has none. Terms are tokenized as the model writes them (with the word
@@ -837,12 +826,12 @@ static const transcribe::PhraseBoost * vocabulary_boost(ParakeetSession *       
             }
             if (unknown) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
-                        "parakeet: a vocabulary term has characters the model cannot write; skipped");
+                        "parakeet: vocabulary term '%s' has characters the model cannot write; skipped", term.c_str());
                 continue;
             }
             phrases.push_back(std::move(ids));
         }
-        pc->boost.build(phrases, vocabulary_boost_score());
+        pc->boost.build(phrases, kVocabularyBoost);
         pc->boost_terms = std::move(terms);
     }
     return pc->boost.empty() ? nullptr : &pc->boost;
@@ -3466,6 +3455,15 @@ transcribe_status stream_begin(transcribe_session *             session,
     }
 
     pc->stream_audio_input_samples = 0;
+
+    // Vocabulary biasing is wired into the offline decoders only; say so
+    // rather than drop the terms silently.
+    if (run_params->n_vocabulary > 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                "parakeet: vocabulary terms are not applied on the streaming API yet; ignoring %d term(s) "
+                "(use transcribe_run)",
+                run_params->n_vocabulary);
+    }
 
     // -------- Buffered streaming path (parakeet-unified-en-0.6b) --------
     //

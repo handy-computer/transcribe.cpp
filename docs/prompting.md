@@ -33,14 +33,15 @@ at a word boundary, and the terms form an Aho-Corasick automaton over token
 ids. The model alone decides between blank and a token on every greedy step.
 When it emits a token, the vocabulary re-ranks the non-blank tokens. Once the
 model has begun a term on its own, each further piece that extends the match
-earns a logit bonus (8.0 by default, chosen on a held-out term set), a token
-that breaks the match gives back what the unfinished match earned, and a
-completed term keeps its bonus. Biasing therefore changes which word is
+earns a logit bonus of 3.0, a token that breaks the match gives back what the
+unfinished match earned, and a completed term keeps its bonus. 3.0 is the
+lowest bonus that kept the term-recall gains while leaving transcripts of
+unrelated speech unchanged. Biasing therefore changes which word is
 written, never whether one is, so it cannot invent speech on silence. The
 reported token confidences stay the model's own, and with no terms decoding is
 bit-exact. Terms with characters the tokenizer cannot write are skipped with a
-WARN. Offline runs and batches take terms; streaming ignores them, and CTC
-heads do not take them yet.
+WARN. Offline runs and batches take terms; streaming ignores them with a WARN,
+and CTC heads do not take them yet.
 
 ## Limits
 

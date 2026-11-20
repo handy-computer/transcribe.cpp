@@ -10,6 +10,8 @@
 
 namespace {
 
+using Phrases = std::vector<std::vector<int32_t>>;
+
 int g_failures = 0;
 
 void expect(const char * what, float got, float expected) {
@@ -36,15 +38,14 @@ float walk(const transcribe::PhraseBoost & b, const std::vector<int32_t> & token
 }  // namespace
 
 int main(void) {
+    const Phrases terms = {
+        { 1, 2, 3 },
+        { 2, 4 },
+        {},
+        { 1, 2, 3 }
+    };
     transcribe::PhraseBoost b;
-    b.build(
-        {
-            { 1, 2, 3 },
-            { 2, 4 },
-            {},
-            { 1, 2, 3 }
-    },
-        1.0f);
+    b.build(terms, 1.0f);
 
     // A term's first piece earns nothing; each later matched piece earns the
     // score; an unrelated token earns nothing.
@@ -65,6 +66,17 @@ int main(void) {
     int state = 0;
     expect("suffix completes another term", walk(b, { 1, 2, 4 }, &state), 1.0f);
     expect("and keeps it", walk(b, { 1, 2, 4, 9 }), 1.0f);
+
+    // A term completed only as the tail of a longer unfinished match is not
+    // kept when that match breaks: {2, 3} inside {1, 2, 3, 4}.
+    const Phrases tail_terms = {
+        { 1, 2, 3, 4 },
+        { 2, 3 }
+    };
+    transcribe::PhraseBoost tail;
+    tail.build(tail_terms, 1.0f);
+    expect("tail term on its own", walk(tail, { 2, 3, 9 }), 1.0f);
+    expect("tail term inside a broken match", walk(tail, { 1, 2, 3, 9 }), 0.0f);
 
     // apply() adds exactly delta() to each non-blank token and leaves blank.
     int s12 = 0;

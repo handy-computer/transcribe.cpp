@@ -9,6 +9,9 @@
 //   - a token that breaks it gives back what the unfinished match earned and
 //     may start a new match through the failure links;
 //   - a completed term keeps its bonus, so later tokens never take it back.
+//     A term completed only as the tail of a longer, still unfinished match
+//     ("York City" inside "New York City") is not kept when that match
+//     breaks.
 //
 // The blank token never moves the automaton and is never adjusted. With no
 // terms the decoder skips every call, so unbiased decoding stays bit-exact.
