@@ -487,9 +487,21 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
     }
     // Windows has no rpath: a shared-posture binary resolves transcribe.dll +
-    // the ggml DLLs from its OWN directory. Stage the installed DLLs next to
-    // every artifact cargo produces so tests/examples/bins run in place.
+    // the ggml DLLs from PATH or its OWN directory.
+    //
+    // 1. Search path (layout-independent): `cargo run` / `cargo test` prepend
+    //    every build-script `rustc-link-search` dir that lies inside the
+    //    target/build dir to PATH. Since Cargo 1.100's build-dir layout, test
+    //    executables run from a per-unit `build/<pkg>/<hash>/out/` dir that no
+    //    build script can predict, so this is what keeps tests working. It
+    //    covers prebuilt TRANSCRIBE_DIR prefixes only if they are under target/.
+    // 2. Copies: for artifacts launched directly (not via cargo), stage the
+    //    DLLs next to the uplifted bins/examples.
     if shared && is_windows {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            prefix.join("bin").display()
+        );
         stage_windows_dlls(prefix);
     }
 
@@ -532,9 +544,11 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
 /// consumer's tests/examples/bins find them with no rpath (Windows has none)
 /// and no PATH fiddling. Windows + `shared` only; a no-op anywhere else.
 ///
-/// Windows resolves a process's DLLs from the EXE's own directory first, and
-/// cargo emits tests into `deps/`, examples into `examples/`, and bins into the
-/// profile root — so all three get the DLLs. This runs from the -sys build
+/// Windows resolves a process's DLLs from the EXE's own directory first. Bins
+/// are uplifted into the profile root and examples into `examples/`; tests
+/// lived in `deps/` before Cargo 1.100, so all three get the DLLs. (Tests now
+/// run from a per-unit build dir and find the DLLs through the
+/// `rustc-link-search` PATH entry instead; see emit_link_lines.) This runs from the -sys build
 /// script (it owns the native build), which is always in the dep graph, so it
 /// covers the safe crate's artifacts too. Best-effort: copy failures warn
 /// rather than fail the build.
@@ -555,10 +569,16 @@ fn stage_windows_dlls(prefix: &Path) {
         );
         return;
     }
-    // OUT_DIR = <target>/<profile>/build/<crate>-<hash>/out; the profile root is
-    // four ancestors up. tests -> deps/, examples -> examples/, bins -> root.
+    // OUT_DIR is <profile>/build/<crate>-<hash>/out (Cargo < 1.100) or
+    // <profile>/build/<crate>/<hash>/out (the new build-dir layout); the
+    // profile root is the parent of the `build` ancestor in both.
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
-    let Some(profile_dir) = out_dir.ancestors().nth(3) else {
+    let Some(profile_dir) = out_dir
+        .ancestors()
+        .skip(1)
+        .find(|p| p.file_name().is_some_and(|n| n == "build"))
+        .and_then(Path::parent)
+    else {
         return;
     };
     for sub in ["", "deps", "examples"] {
