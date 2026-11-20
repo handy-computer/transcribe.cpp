@@ -313,11 +313,11 @@ struct ParakeetSession final : public transcribe_session {
     ggml_tensor * encoder_out = nullptr;
 
     // Per-context scratch reused across runs.
-    std::vector<float>    mel_buf;
-    std::vector<float>    pos_buf;
-    std::vector<float>    pos_div_term;
-    std::vector<float>    enc_host;
-    std::vector<TdtToken> raw_tokens;
+    std::vector<float>       mel_buf;
+    std::vector<float>       pos_buf;
+    std::vector<float>       pos_div_term;
+    std::vector<float>       enc_host;
+    std::vector<TdtToken>    raw_tokens;
     // Vocabulary biasing, rebuilt only when the run's terms change.
     std::vector<std::string> boost_terms;
     transcribe::PhraseBoost  boost;

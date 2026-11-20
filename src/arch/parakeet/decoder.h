@@ -29,8 +29,8 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "transcribe.h"
 #include "transcribe-phrase-boost.h"
+#include "transcribe.h"
 
 #include <cstdint>
 #include <string>

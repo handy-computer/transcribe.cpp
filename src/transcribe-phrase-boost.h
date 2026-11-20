@@ -54,7 +54,7 @@ class PhraseBoost {
 
   private:
     struct Node {
-        std::vector<std::pair<int32_t, int>> children;  // sorted by token
+        std::vector<std::pair<int32_t, int>> children;       // sorted by token
         int                                  fail   = 0;
         float                                earned = 0.0f;  // bonus a partial match to here has collected
         float                                locked = 0.0f;  // part of `earned` that completed terms keep

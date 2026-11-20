@@ -54,8 +54,9 @@ void PhraseBoost::build(const std::vector<std::vector<int32_t>> & phrases, float
     // its failure target are always finished before it.
     std::deque<int> queue;
     for (const auto & [token, c] : nodes_[root].children) {
-        nodes_[static_cast<size_t>(c)].fail   = root;
-        nodes_[static_cast<size_t>(c)].locked = end[static_cast<size_t>(c)] ? nodes_[static_cast<size_t>(c)].earned : 0.0f;
+        nodes_[static_cast<size_t>(c)].fail = root;
+        nodes_[static_cast<size_t>(c)].locked =
+            end[static_cast<size_t>(c)] ? nodes_[static_cast<size_t>(c)].earned : 0.0f;
         queue.push_back(c);
     }
     while (!queue.empty()) {
@@ -68,8 +69,9 @@ void PhraseBoost::build(const std::vector<std::vector<int32_t>> & phrases, float
             }
             const int target                      = child(f, token);
             nodes_[static_cast<size_t>(v)].fail   = (target >= 0 && target != v) ? target : root;
-            nodes_[static_cast<size_t>(v)].locked = end[static_cast<size_t>(v)] ? nodes_[static_cast<size_t>(v)].earned :
-                                                                                  nodes_[static_cast<size_t>(u)].locked;
+            nodes_[static_cast<size_t>(v)].locked = end[static_cast<size_t>(v)] ?
+                                                        nodes_[static_cast<size_t>(v)].earned :
+                                                        nodes_[static_cast<size_t>(u)].locked;
             queue.push_back(v);
         }
     }

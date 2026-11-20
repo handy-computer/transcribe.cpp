@@ -825,8 +825,10 @@ static const transcribe::PhraseBoost * vocabulary_boost(ParakeetSession *       
         std::vector<std::vector<int32_t>> phrases;
         for (const std::string & term : terms) {
             std::vector<int32_t> ids;
-            if (pm->tok.encode_sentencepiece_bpe(term, ids, 0, -1, /*remove_extra_whitespaces=*/true) != TRANSCRIBE_OK) {
-                log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "parakeet: this tokenizer cannot encode vocabulary terms; ignoring them");
+            if (pm->tok.encode_sentencepiece_bpe(term, ids, 0, -1, /*remove_extra_whitespaces=*/true) !=
+                TRANSCRIBE_OK) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                        "parakeet: this tokenizer cannot encode vocabulary terms; ignoring them");
                 return nullptr;
             }
             bool unknown = false;
@@ -834,7 +836,8 @@ static const transcribe::PhraseBoost * vocabulary_boost(ParakeetSession *       
                 unknown = unknown || pm->tok.is_unknown(id);
             }
             if (unknown) {
-                log_msg(TRANSCRIBE_LOG_LEVEL_WARN, "parakeet: a vocabulary term has characters the model cannot write; skipped");
+                log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+                        "parakeet: a vocabulary term has characters the model cannot write; skipped");
                 continue;
             }
             phrases.push_back(std::move(ids));

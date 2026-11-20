@@ -37,7 +37,14 @@ float walk(const transcribe::PhraseBoost & b, const std::vector<int32_t> & token
 
 int main(void) {
     transcribe::PhraseBoost b;
-    b.build({ { 1, 2, 3 }, { 2, 4 }, {}, { 1, 2, 3 } }, 1.0f);
+    b.build(
+        {
+            { 1, 2, 3 },
+            { 2, 4 },
+            {},
+            { 1, 2, 3 }
+    },
+        1.0f);
 
     // A term's first piece earns nothing; each later matched piece earns the
     // score; an unrelated token earns nothing.
