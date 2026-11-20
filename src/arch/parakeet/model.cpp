@@ -800,9 +800,29 @@ static double parakeet_ms_per_enc_frame(const ParakeetHParams & hp) {
 // leaving transcripts of unrelated speech unchanged; see docs/prompting.md.
 constexpr float kVocabularyBoost = 3.0f;
 
+// `term` with the case of its first letter flipped ("Postgres" ->
+// "postgres"), or "" when it does not start with an ASCII letter. Sentence
+// position decides that letter's case in the transcript, not the term list.
+static std::string flip_first_letter(const std::string & term) {
+    std::string out = transcribe::prompting::strip(term);
+    if (out.empty()) {
+        return "";
+    }
+    const char c = out[0];
+    if (c >= 'a' && c <= 'z') {
+        out[0] = static_cast<char>(c - 'a' + 'A');
+    } else if (c >= 'A' && c <= 'Z') {
+        out[0] = static_cast<char>(c - 'A' + 'a');
+    } else {
+        return "";
+    }
+    return out;
+}
+
 // The phrase-boost automaton for this run's vocabulary, or nullptr when the
 // run has none. Terms are tokenized as the model writes them (with the word
-// boundary marker), so a term matches only from the start of a word.
+// boundary marker), so a term matches only from the start of a word. Each
+// term also matches with its first letter's case flipped.
 static const transcribe::PhraseBoost * vocabulary_boost(ParakeetSession *             pc,
                                                         const ParakeetModel *         pm,
                                                         const transcribe_run_params * params) {
@@ -830,6 +850,19 @@ static const transcribe::PhraseBoost * vocabulary_boost(ParakeetSession *       
                 continue;
             }
             phrases.push_back(std::move(ids));
+
+            const std::string flipped = flip_first_letter(term);
+            if (!flipped.empty() &&
+                pm->tok.encode_sentencepiece_bpe(flipped, ids, 0, -1,
+                                                 /*remove_extra_whitespaces=*/true) == TRANSCRIBE_OK) {
+                bool flipped_unknown = false;
+                for (const int32_t id : ids) {
+                    flipped_unknown = flipped_unknown || pm->tok.is_unknown(id);
+                }
+                if (!flipped_unknown) {
+                    phrases.push_back(std::move(ids));
+                }
+            }
         }
         pc->boost.build(phrases, kVocabularyBoost);
         pc->boost_terms = std::move(terms);

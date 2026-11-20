@@ -36,7 +36,9 @@ model has begun a term on its own, each further piece that extends the match
 earns a logit bonus of 3.0, a token that breaks the match gives back what the
 unfinished match earned, and a completed term keeps its bonus. 3.0 is the
 lowest bonus that kept the term-recall gains while leaving transcripts of
-unrelated speech unchanged. Biasing therefore changes which word is
+unrelated speech unchanged. Each term also matches with the case of its first
+letter flipped, since sentence position decides that letter's case in the
+transcript; other letters match as given. Biasing therefore changes which word is
 written, never whether one is, so it cannot invent speech on silence. The
 reported token confidences stay the model's own, and with no terms decoding is
 bit-exact. Terms with characters the tokenizer cannot write are skipped with a
