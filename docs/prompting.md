@@ -20,9 +20,30 @@ Probe `transcribe_model_supports()` for the matching feature bit.
 | Canary 180m-flash / 1b-flash / 1b-v2 | | | | yes |
 | Fun-ASR-Nano | yes | | | |
 | MOSS-Transcribe-Diarize | yes | | | |
+| Parakeet (TDT and RNN-T heads) | yes | | | |
 
 Per-model formats and restrictions are in each model doc's **Prompting:**
 note under [`models/`](models/).
+
+## Parakeet vocabulary
+
+Parakeet has no prompt slot, so its transducer decoders take vocabulary terms
+as phrase boosting: each term is tokenized the way the model writes it, starting
+at a word boundary, and the terms form an Aho-Corasick automaton over token
+ids. The model alone decides between blank and a token on every greedy step.
+When it emits a token, the vocabulary re-ranks the non-blank tokens. Once the
+model has begun a term on its own, each further piece that extends the match
+earns a logit bonus of 3.0, a token that breaks the match gives back what the
+unfinished match earned, and a completed term keeps its bonus. 3.0 is the
+lowest bonus that kept the term-recall gains while leaving transcripts of
+unrelated speech unchanged. Each term also matches with the case of its first
+letter flipped, since sentence position decides that letter's case in the
+transcript; other letters match as given. Biasing therefore changes which word is
+written, never whether one is, so it cannot invent speech on silence. The
+reported token confidences stay the model's own, and with no terms decoding is
+bit-exact. Terms with characters the tokenizer cannot write are skipped with a
+WARN. Offline runs and batches take terms; streaming ignores them with a WARN,
+and CTC heads do not take them yet.
 
 ## Limits
 
