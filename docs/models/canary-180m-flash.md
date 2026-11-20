@@ -25,7 +25,7 @@ Not a streaming model. Word and segment timestamps are upstream-experimental
 and not exposed in the v1 port (deferred — would require porting the
 `_timestamps_asr_model` CTC aligner from the `.nemo` archive).
 
-**Prompting:** transcript prefix (`--prefix`) via NeMo's `user_prefix` turn. The decoder-context slot is not exposed: any context text made this model stop early in testing.
+**Prompting:** transcript prefix (`--prefix`) via NeMo's `user_prefix` turn. The decoder-context slot is not exposed: any context text made this model stop early in testing. Vocabulary (`--vocabulary`) biases the greedy decode toward the terms, as on [canary-1b-v2](canary-1b-v2.md); measured on 1b-v2 only.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-180m-flash)
 for training data, intended use, and upstream evaluation methodology.

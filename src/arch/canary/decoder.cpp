@@ -614,6 +614,10 @@ StepBuild build_step_graph(ggml_context *        ctx,
         logits = ggml_add(ctx, logits, w.head.bias);
     }
 
+    sb.logits_out = logits;
+    ggml_set_name(sb.logits_out, "step.logits_raw");
+    ggml_set_output(sb.logits_out);
+
     sb.argmax_out = ggml_argmax(ctx, logits);
     ggml_set_name(sb.argmax_out, "step.argmax");
     ggml_set_output(sb.argmax_out);
