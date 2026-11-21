@@ -467,6 +467,39 @@ static bool starts_with_bytes(const std::string & s, const std::string & prefix)
     return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
 }
 
+// Bytes of full_text covered by prefix, allowing full_text to have dropped
+// the single leading space a word-boundary token decodes to.
+static size_t token_prefix_match_bytes(const std::string & full_text, const std::string & prefix) {
+    if (starts_with_bytes(full_text, prefix)) {
+        return prefix.size();
+    }
+    if (!prefix.empty() && prefix.front() == ' ' && (full_text.empty() || full_text.front() != ' ')) {
+        const std::string normalized_prefix = prefix.substr(1);
+        if (starts_with_bytes(full_text, normalized_prefix)) {
+            return normalized_prefix.size();
+        }
+        return common_prefix_bytes(full_text, normalized_prefix);
+    }
+    return common_prefix_bytes(full_text, prefix);
+}
+
+// Collapse runs of ASCII spaces to one, the same way families such as
+// parakeet normalize full_text.
+static std::string collapse_space_runs(const std::string & s) {
+    std::string out;
+    out.reserve(s.size());
+    bool prev_space = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const bool is_space = s[i] == ' ';
+        if (is_space && prev_space) {
+            continue;
+        }
+        out.push_back(s[i]);
+        prev_space = is_space;
+    }
+    return out;
+}
+
 static size_t token_prefix_raw_bytes(const transcribe_session * session, int n_tokens) {
     if (session == nullptr || n_tokens <= 0 || session->tokens.empty()) {
         return 0;
@@ -477,17 +510,14 @@ static size_t token_prefix_raw_bytes(const transcribe_session * session, int n_t
     for (int i = 0; i < capped; ++i) {
         prefix += session->tokens[static_cast<size_t>(i)].text;
     }
-    if (starts_with_bytes(session->full_text, prefix)) {
-        return prefix.size();
-    }
-    if (!prefix.empty() && prefix.front() == ' ' && (session->full_text.empty() || session->full_text.front() != ' ')) {
-        const std::string normalized_prefix = prefix.substr(1);
-        if (starts_with_bytes(session->full_text, normalized_prefix)) {
-            return normalized_prefix.size();
-        }
-        return common_prefix_bytes(session->full_text, normalized_prefix);
-    }
-    return common_prefix_bytes(session->full_text, prefix);
+    // Per-token texts are decoded in isolation, while full_text may have had
+    // space runs collapsed. A token that decodes to a bare space before a
+    // word-boundary token then leaves a double space in the concatenation
+    // that full_text never contains, and without the collapsed comparison the
+    // boundary could never advance past that point again.
+    const size_t exact     = token_prefix_match_bytes(session->full_text, prefix);
+    const size_t collapsed = token_prefix_match_bytes(session->full_text, collapse_space_runs(prefix));
+    return std::max(exact, collapsed);
 }
 
 static size_t family_candidate_raw_prefix_bytes(const transcribe_session * session) {
