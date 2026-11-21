@@ -32,6 +32,9 @@ Nothing is released until both models work and the owner locks the API.
   8 Smart Turn clips saves only 4-7% of CPU.
 - SAVA keeps stream == run bit for bit (the 4-column padding stays; no ggml
   patch). Ship F32, F16 and Q8_0 for both models.
+- No ggml patches for speed are carried (owner decision). The measured ones
+  (any-column sgemm, ARM F16 x F32 sgemm) stay in `tc-turn-perf/reports/perf/patches/`
+  for reference; F16 is documented as slower than F32 on ARM CPUs.
 
 - SAVA's recommended cut-off is 0.9 (Inworld's policy), also for a whole clip.
   Inworld's clip benchmark reports accuracy at 0.5; the AUC is threshold-free.
