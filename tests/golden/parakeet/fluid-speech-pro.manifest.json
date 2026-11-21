@@ -1,0 +1,78 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "fluid-speech-pro",
+  "source_model": {
+    "hf_repo": "FluidVoice-Labs/fluid-speech-pro",
+    "hf_revision": "46027a3bffc5817ce8f9b29add0a062610134a90"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "config",
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA-NeMo/NeMo",
+    "revision": "v2.7.2",
+    "entrypoint": "scripts/dump_reference_parakeet_nemo.py",
+    "dump_args": [
+      "--revision",
+      "46027a3bffc5817ce8f9b29add0a062610134a90"
+    ]
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 8193,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": [
+      "bg",
+      "hr",
+      "cs",
+      "da",
+      "nl",
+      "en",
+      "et",
+      "fi",
+      "fr",
+      "de",
+      "el",
+      "hu",
+      "it",
+      "lv",
+      "lt",
+      "mt",
+      "pl",
+      "pt",
+      "ro",
+      "ru",
+      "sk",
+      "sl",
+      "es",
+      "sv",
+      "uk"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [
+      "word",
+      "token"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/parakeet.json",
+  "cases": [
+    "jfk"
+  ]
+}

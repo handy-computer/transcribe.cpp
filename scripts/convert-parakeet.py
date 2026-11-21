@@ -191,6 +191,29 @@ VARIANT_PROFILES: dict[str, dict] = {
         "license_name": "Creative Commons Attribution 4.0",
         "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
+    # Fluid Speech Pro: v3 plus FluidVoice's residual block between the
+    # subsampler and Conformer layer 0 (model_config.yaml `fluid_speech`).
+    # The block's eight tensors are encoder.fv_insert.* in the .nemo. The
+    # archive also carries clean_mode.* (an optional low-rank adapter that
+    # fluid_speech.load(clean_mode=True) folds into the weights); the
+    # default verbatim mode does not use it and neither does this GGUF.
+    "fluid-speech-pro": {
+        "variant": "tdt-0.6b-fluid-speech-pro",
+        "display_name": "Fluid Speech Pro",
+        "version": "v1",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
+        "languages": V3_LANGUAGES,
+        "lang_detect": True,
+        "author": "FluidVoice",
+        "organization": "FluidVoice-Labs",
+        "prefer_direct_load": True,
+        "expected_unused_prefixes": ("clean_mode.",),
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
+    },
     # primeLine's German fine-tune of v3. The .nemo carries a
     # model_config.yaml whose encoder/decoder/joint/decoding/
     # preprocessor/tokenizer/model_defaults/loss sections are identical
@@ -1162,6 +1185,14 @@ def read_hparams(config: dict) -> dict:
         # loader treats this as required-with-default (default false
         # for legacy GGUFs without the KV).
         "enc_xscaling":             bool(enc.get("xscaling", True)),
+        # Fluid Speech Pro's extra pre-Conformer block. Its spec lives at
+        # the model-config root (`fluid_speech: {insert_dim, insert_kernel}`)
+        # and its weights are `encoder.fv_insert.*`; absent for every other
+        # Parakeet variant.
+        "enc_pre_block_kernel":     int(config["fluid_speech"]["insert_kernel"])
+                                    if config.get("fluid_speech") else 0,
+        "enc_pre_block_dim":        int(config["fluid_speech"]["insert_dim"])
+                                    if config.get("fluid_speech") else 0,
         # att_context_size: [-1, -1] = full attention. Local attention
         # ([left, right] with non-negative values, e.g. [128, 128] for
         # tdt_ctc-1.1b) restricts each query to keys within the band
@@ -1487,6 +1518,21 @@ PRE_ENCODE_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# Fluid Speech Pro's residual block on the subsampled frames. Present only
+# when the Nemo config carries `fluid_speech` (FluidVoice's fluid_speech.py
+# registers it as encoder.fv_insert).
+PRE_BLOCK_TABLE: list[tuple[str, str]] = [
+    ("encoder.fv_insert.ln.weight",    "enc.pre_block.norm.weight"),
+    ("encoder.fv_insert.ln.bias",      "enc.pre_block.norm.bias"),
+    ("encoder.fv_insert.down.weight",  "enc.pre_block.down.weight"),
+    ("encoder.fv_insert.down.bias",    "enc.pre_block.down.bias"),
+    ("encoder.fv_insert.mix.weight",   "enc.pre_block.mix.weight"),
+    ("encoder.fv_insert.mix.bias",     "enc.pre_block.mix.bias"),
+    ("encoder.fv_insert.up.weight",    "enc.pre_block.up.weight"),
+    ("encoder.fv_insert.up.bias",      "enc.pre_block.up.bias"),
+]
+
+
 JOINT_TABLE: list[tuple[str, str]] = [
     ("joint.enc.weight",          "joint.enc.weight"),
     ("joint.enc.bias",            "joint.enc.bias"),
@@ -1579,7 +1625,10 @@ EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED = ("ctc_decoder.",)
 
 
 def is_expected_unused(key: str, head_kind: str, drop_aux_ctc: bool,
-                       has_prompt: bool) -> bool:
+                       has_prompt: bool,
+                       profile_prefixes: tuple[str, ...] = ()) -> bool:
+    if profile_prefixes and key.startswith(profile_prefixes):
+        return True
     if key.startswith(EXPECTED_UNUSED_PREFIXES_BASE):
         return True
     if key.endswith(EXPECTED_UNUSED_SUFFIXES):
@@ -1777,6 +1826,25 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     hp["enc_use_bias"] = bool(bias_present[0])
     print(f"Encoder use_bias: {hp['enc_use_bias']}")
 
+    # Fluid Speech Pro's pre-Conformer block: the config spec and the
+    # weights must agree, and only the `insert: pre` placement (on the
+    # encoder.pre_encode output) is implemented.
+    has_pre_block_weights = any(k.startswith("encoder.fv_insert.") for k in sd_keys)
+    if hp["enc_pre_block_kernel"] > 0:
+        insert = str(config["fluid_speech"].get("insert", "pre"))
+        if insert != "pre":
+            raise ValueError(f"fluid_speech.insert={insert!r}; only 'pre' is supported")
+        mix_shape = tuple(sd["encoder.fv_insert.mix.weight"].shape)
+        if mix_shape != (hp["enc_pre_block_dim"], 1, hp["enc_pre_block_kernel"]):
+            raise ValueError(
+                f"encoder.fv_insert.mix.weight shape {mix_shape} does not match "
+                f"fluid_speech insert_dim={hp['enc_pre_block_dim']} "
+                f"insert_kernel={hp['enc_pre_block_kernel']}"
+            )
+        print(f"Pre-Conformer block: dim={hp['enc_pre_block_dim']} kernel={hp['enc_pre_block_kernel']}")
+    elif has_pre_block_weights:
+        raise ValueError("state_dict carries encoder.fv_insert.* but the config has no fluid_speech section")
+
     print(f"Writing GGUF to {out_path}")
     writer = gguf_writer(str(out_path), "parakeet")
 
@@ -1860,6 +1928,9 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     writer.add_uint32("stt.parakeet.encoder.pos_emb_max_len",      hp["enc_pos_emb_max_len"])
     writer.add_bool  ("stt.parakeet.encoder.use_bias",             hp["enc_use_bias"])
     writer.add_bool  ("stt.parakeet.encoder.xscaling",             hp["enc_xscaling"])
+    if hp["enc_pre_block_kernel"] > 0:
+        writer.add_int32("stt.parakeet.encoder.pre_block_kernel", hp["enc_pre_block_kernel"])
+        writer.add_int32("stt.parakeet.encoder.pre_block_dim",    hp["enc_pre_block_dim"])
     writer.add_int32 ("stt.parakeet.encoder.att_context_left",     hp["enc_att_context_left"])
     writer.add_int32 ("stt.parakeet.encoder.att_context_right",    hp["enc_att_context_right"])
     # New KVs added to support cache-aware streaming variants. Loader
@@ -2096,6 +2167,11 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     for nemo_name, gguf_name in PRE_ENCODE_TABLE:
         add(nemo_name, gguf_name)
 
+    # Fluid Speech Pro's extra block, when the checkpoint carries one.
+    if hp["enc_pre_block_kernel"] > 0:
+        for nemo_name, gguf_name in PRE_BLOCK_TABLE:
+            add(nemo_name, gguf_name)
+
     # encoder layers
     use_bn_running = (hp["enc_conv_norm_type"] == "batch_norm")
     for i in range(hp["enc_n_layers"]):
@@ -2190,8 +2266,10 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     else:
         spk_tensors = 0
     vad_tensors = len(VAD_HEAD_TABLE) if has_vad_head else 0
+    pre_block_tensors = len(PRE_BLOCK_TABLE) if hp["enc_pre_block_kernel"] > 0 else 0
     expected = (
         len(PRE_ENCODE_TABLE)
+        + pre_block_tensors
         + hp["enc_n_layers"] * per_layer_tensors
         + head_tensors
         + prompt_tensors
@@ -2206,7 +2284,8 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
 
     unused = sorted(
         k for k in (sd_keys - consumed)
-        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt)
+        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt,
+                                  tuple(profile.get("expected_unused_prefixes", ())))
     )
     if unused:
         print(

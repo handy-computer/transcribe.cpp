@@ -64,6 +64,13 @@ struct ParakeetHParams {
     // xscaling=True. Default false so legacy GGUFs (v2/v3, xscaling=False)
     // keep working unchanged.
     bool    enc_xscaling             = false;
+    // Fluid Speech Pro's residual block between the subsampling output and
+    // Conformer layer 0 (FluidVoice's fluid_speech.py attaches it to
+    // encoder.pre_encode). stt.parakeet.encoder.pre_block_kernel announces
+    // it and gives the depthwise time-conv kernel; 0 = no block.
+    // pre_block_dim is the width of the projections inside the block.
+    int32_t enc_pre_block_kernel     = 0;
+    int32_t enc_pre_block_dim        = 0;
     // Local attention window. -1/-1 = full attention (most variants).
     // When non-negative, each query attends to keys within [left, right]
     // per enc_att_context_style below:
@@ -414,8 +421,28 @@ struct ParakeetVadHead {
     ggml_tensor * out_b  = nullptr;  // [1]
 };
 
+// Fluid Speech Pro's residual block on the subsampled frames. Mirrors
+// FrameCleaner in FluidVoice-Labs/fluid-speech-pro's fluid_speech.py:
+//
+//   x + up(gelu(mix(down(LayerNorm(x)))))
+//
+// `mix` is a depthwise Conv1d over time with `enc_pre_block_kernel` taps
+// and symmetric (kernel-1)/2 padding. Loaded only when the GGUF carries
+// stt.parakeet.encoder.pre_block_kernel.
+struct ParakeetPreBlock {
+    ggml_tensor * norm_w = nullptr;  // [d_model]
+    ggml_tensor * norm_b = nullptr;  // [d_model]
+    ggml_tensor * down_w = nullptr;  // [d_model, dim]
+    ggml_tensor * down_b = nullptr;  // [dim]
+    ggml_tensor * mix_w  = nullptr;  // [kernel, 1, dim] depthwise time conv
+    ggml_tensor * mix_b  = nullptr;  // [dim]
+    ggml_tensor * up_w   = nullptr;  // [dim, d_model]
+    ggml_tensor * up_b   = nullptr;  // [d_model]
+};
+
 struct ParakeetWeights {
     ParakeetPreEncode              pre_encode;
+    ParakeetPreBlock               pre_block;    // populated when hp.enc_pre_block_kernel > 0
     std::vector<ParakeetBlock>     blocks;       // hp.enc_n_layers entries
     ParakeetPredictor              predictor;    // empty when head_kind=CTC
     ParakeetJoint                  joint;        // empty when head_kind=CTC

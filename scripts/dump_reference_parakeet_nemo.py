@@ -198,6 +198,51 @@ def _patch_conformer_for_offline(force_regular_att_style: bool = False) -> None:
     ce.ConformerEncoder._transcribe_offline_patched = True
 
 
+FLUID_SPEECH_LOADER = "fluid_speech.py"
+
+
+def load_fluid_speech(model_id: str, revision: str | None):
+    """Load a FluidVoice Fluid Speech checkpoint through the publisher's own
+    fluid_speech.py, or return None when `model_id` is not one.
+
+    Their .nemo carries an extra pre-Conformer block (encoder.fv_insert.*)
+    that plain ASRModel.restore_from rejects; fluid_speech.load() restores
+    the base model, attaches the block as a forward hook on
+    encoder.pre_encode and loads every tensor strictly. The loader module
+    is fetched from the same pinned repo revision as the .nemo and run
+    with clean mode off (the verbatim default)."""
+    import importlib.util
+
+    local = Path(model_id).expanduser()
+    if local.exists():
+        loader_path = local.parent / FLUID_SPEECH_LOADER
+        if local.suffix != ".nemo" or not loader_path.exists():
+            return None
+        nemo_path = local
+    else:
+        if "/" not in model_id:
+            return None
+        from huggingface_hub import hf_hub_download, list_repo_files
+
+        files = list_repo_files(model_id, revision=revision)
+        if FLUID_SPEECH_LOADER not in files:
+            return None
+        nemo_files = [f for f in files if f.endswith(".nemo")]
+        if len(nemo_files) != 1:
+            raise SystemExit(f"expected one .nemo in {model_id}@{revision}, found {nemo_files}")
+        loader_path = Path(hf_hub_download(model_id, FLUID_SPEECH_LOADER, revision=revision))
+        nemo_path = Path(hf_hub_download(model_id, nemo_files[0], revision=revision))
+
+    print(f"Loading Fluid Speech via publisher loader {loader_path} on {nemo_path}")
+    spec = importlib.util.spec_from_file_location("fluid_speech", loader_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    model = module.load(str(nemo_path), map_location="cpu", clean_mode=False)
+    if not hasattr(model.encoder, "fv_insert"):
+        raise SystemExit("fluid_speech.load() did not attach encoder.fv_insert")
+    return model
+
+
 def load_model(args: argparse.Namespace):
     """Load a Parakeet model via NeMo. Architecture is inferred at runtime."""
     _patch_conformer_for_offline(force_regular_att_style=bool(getattr(args, "offline_only", False)))
@@ -207,7 +252,10 @@ def load_model(args: argparse.Namespace):
     model_id = args.model
     local = Path(model_id).expanduser()
 
-    if local.exists():
+    model = load_fluid_speech(model_id, getattr(args, "revision", None))
+    if model is not None:
+        pass
+    elif local.exists():
         print(f"Loading Parakeet from local path: {local}")
         try:
             model = ASRModel.restore_from(str(local), map_location="cpu")
@@ -413,7 +461,13 @@ def capture_intermediates(model, block_indices: list[int],
         return fn
 
     hooks.append(model.preprocessor.register_forward_hook(_hook("mel", 0)))
-    hooks.append(model.encoder.pre_encode.register_forward_hook(_hook("enc.pre_encode.out", 0)))
+    # prepend=True: a model-owned pre_encode hook (Fluid Speech's
+    # pre-Conformer block) replaces the output, and enc.pre_encode.out is
+    # the subsampler output before it.
+    hooks.append(model.encoder.pre_encode.register_forward_hook(
+        _hook("enc.pre_encode.out", 0), prepend=True))
+    if hasattr(model.encoder, "fv_insert"):
+        hooks.append(model.encoder.fv_insert.register_forward_hook(_hook("enc.pre_block.out", 0)))
     hooks.append(model.encoder.pos_enc.register_forward_hook(_hook("enc.pos_emb", 1)))
     hooks.append(model.encoder.register_forward_hook(_hook("enc.encoder_out", 0)))
 
@@ -690,6 +744,8 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     dump("enc.mel.in", intermediates["mel"], "frontend.mel.norm")
     dump("enc.pre_encode.out", intermediates["enc.pre_encode.out"], "encoder.pre_encode")
+    if "enc.pre_block.out" in intermediates:
+        dump("enc.pre_block.out", intermediates["enc.pre_block.out"], "encoder.pre_block")
     dump("enc.pos_emb", intermediates["enc.pos_emb"], "encoder.pos_emb")
 
     for i in block_indices:
@@ -1526,6 +1582,12 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         "--model",
         required=True,
         help="HF model name (e.g. nvidia/parakeet-tdt-0.6b-v2) or local .nemo path",
+    )
+    p.add_argument(
+        "--revision",
+        default=None,
+        help="HF revision for repos loaded through a publisher loader "
+             "(Fluid Speech's fluid_speech.py); ignored otherwise",
     )
     p.add_argument("--audio", required=True, help="16 kHz mono wav file")
     p.add_argument("--out", required=True, help="Output directory")

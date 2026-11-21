@@ -115,6 +115,11 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
         name == "dec.norm.weight") {
         return Bucket::Norm;
     }
+    // Fluid Speech Pro's pre-Conformer block LayerNorm scale
+    // (enc.pre_block.norm.weight); the loader requires F32.
+    if (name == "enc.pre_block.norm.weight") {
+        return Bucket::Norm;
+    }
     // Per-head positional biases — added directly to fp32 q via ggml_add
     // inside rel_pos_mhsa.
     if (ends_with(name, ".pos_bias_u") || ends_with(name, ".pos_bias_v")) {
@@ -208,6 +213,12 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
     // ".conv." (with dots on both sides) distinguishes these from
     // norm_conv.weight which we already routed above.
     if (contains(name, ".conv.") && ends_with(name, ".weight")) {
+        return Bucket::Conv;
+    }
+    // Fluid Speech Pro's depthwise time conv in the pre-Conformer block.
+    // Named "mix" rather than ".conv.", but it is a Conv1d kernel the
+    // loader reads through GET_CONV (F32/F16 only).
+    if (name == "enc.pre_block.mix.weight") {
         return Bucket::Conv;
     }
     // granite_nar depthwise conv kernel uses the underscore form

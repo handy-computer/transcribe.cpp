@@ -41,6 +41,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 
 #ifndef TRANSCRIBE_TEST_FIXTURES_DIR
@@ -93,6 +94,160 @@ bool file_exists(const std::string & path) {
 // init_context / run.
 const transcribe::parakeet::ParakeetModel * parakeet_view(const struct transcribe_model * m) {
     return static_cast<const transcribe::parakeet::ParakeetModel *>(m);
+}
+
+// Fluid Speech Pro's pre-Conformer block. pre_block_kernel announces it;
+// the KV pair must be consistent, only the offline (regular) attention
+// style may carry it, and a file that announces it without the eight
+// enc.pre_block.* tensors must fail to load rather than silently run the
+// plain encoder.
+void check_pre_block(const std::string & fixture) {
+    using transcribe::parakeet::ParakeetHParams;
+    using transcribe::parakeet::read_parakeet_hparams;
+
+    gguf_init_params gp{};
+    gp.no_alloc       = true;
+    gguf_context * kv = gguf_init_from_file(fixture.c_str(), gp);
+    CHECK(kv != nullptr);
+    if (kv == nullptr) {
+        return;
+    }
+    {
+        ParakeetHParams hp{};
+        CHECK(read_parakeet_hparams(kv, hp) == TRANSCRIBE_OK);
+        CHECK_EQ_INT(hp.enc_pre_block_kernel, 0);
+    }
+    gguf_set_val_i32(kv, "stt.parakeet.encoder.pre_block_kernel", 3);
+    {
+        ParakeetHParams hp{};  // kernel without dim
+        CHECK(read_parakeet_hparams(kv, hp) == TRANSCRIBE_ERR_GGUF);
+    }
+    gguf_set_val_i32(kv, "stt.parakeet.encoder.pre_block_dim", 4);
+    {
+        ParakeetHParams hp{};
+        CHECK(read_parakeet_hparams(kv, hp) == TRANSCRIBE_OK);
+        CHECK_EQ_INT(hp.enc_pre_block_kernel, 3);
+        CHECK_EQ_INT(hp.enc_pre_block_dim, 4);
+    }
+    gguf_set_val_i32(kv, "stt.parakeet.encoder.pre_block_kernel", 4);
+    {
+        ParakeetHParams hp{};  // even kernel
+        CHECK(read_parakeet_hparams(kv, hp) == TRANSCRIBE_ERR_GGUF);
+    }
+    gguf_set_val_i32(kv, "stt.parakeet.encoder.pre_block_kernel", 3);
+    gguf_set_val_str(kv, "stt.parakeet.encoder.att_context_style", "chunked_limited");
+    {
+        ParakeetHParams hp{};  // streaming encoder style
+        CHECK(read_parakeet_hparams(kv, hp) == TRANSCRIBE_ERR_GGUF);
+    }
+    gguf_free(kv);
+
+    // Rewrite the fixture with the KVs, first without and then with the
+    // block's tensors, and load each through the public ABI.
+    // gguf_write_to_file reads tensor bytes through the ggml tensors it was
+    // given, so copy the KVs into a fresh context and re-add the fixture's
+    // tensors from the data context the reader filled.
+    ggml_context *   data_ctx = nullptr;
+    gguf_init_params dp{};
+    dp.no_alloc        = false;
+    dp.ctx             = &data_ctx;
+    gguf_context * src = gguf_init_from_file(fixture.c_str(), dp);
+    CHECK(src != nullptr);
+    if (src == nullptr) {
+        return;
+    }
+    gguf_context * gf = gguf_init_empty();
+    gguf_set_kv(gf, src);
+    for (ggml_tensor * t = ggml_get_first_tensor(data_ctx); t != nullptr; t = ggml_get_next_tensor(data_ctx, t)) {
+        gguf_add_tensor(gf, t);
+    }
+    gguf_set_val_i32(gf, "stt.parakeet.encoder.pre_block_kernel", 3);
+    gguf_set_val_i32(gf, "stt.parakeet.encoder.pre_block_dim", 4);
+
+    std::error_code             ec;
+    const std::filesystem::path dir     = std::filesystem::temp_directory_path(ec);
+    const std::string           missing = (dir / "transcribe_parakeet_pre_block_missing.gguf").string();
+    const std::string           present = (dir / "transcribe_parakeet_pre_block_present.gguf").string();
+
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+
+    CHECK(gguf_write_to_file(gf, missing.c_str(), false));
+    {
+        transcribe_model * m  = nullptr;
+        transcribe_status  st = transcribe_model_load_file(missing.c_str(), &mp, &m);
+        CHECK(st != TRANSCRIBE_OK);
+        CHECK(m == nullptr);
+        if (m != nullptr) {
+            transcribe_model_free(m);
+        }
+    }
+
+    // d_model=8 in the fixture; dim=4, kernel=3.
+    ggml_init_params ip{};
+    ip.mem_size          = 64 * 1024;
+    ip.no_alloc          = false;
+    ggml_context * extra = ggml_init(ip);
+    CHECK(extra != nullptr);
+    if (extra != nullptr) {
+        struct spec {
+            const char * name;
+            int64_t      ne0, ne1, ne2;
+        };
+
+        const spec specs[] = {
+            { "enc.pre_block.norm.weight", 8, 1, 1 },
+            { "enc.pre_block.norm.bias",   8, 1, 1 },
+            { "enc.pre_block.down.weight", 8, 4, 1 },
+            { "enc.pre_block.down.bias",   4, 1, 1 },
+            { "enc.pre_block.mix.weight",  3, 1, 4 },
+            { "enc.pre_block.mix.bias",    4, 1, 1 },
+            { "enc.pre_block.up.weight",   4, 8, 1 },
+            { "enc.pre_block.up.bias",     8, 1, 1 },
+        };
+        for (const spec & sp : specs) {
+            ggml_tensor * t = nullptr;
+            if (sp.ne2 > 1) {
+                t = ggml_new_tensor_3d(extra, GGML_TYPE_F32, sp.ne0, sp.ne1, sp.ne2);
+            } else if (sp.ne1 > 1) {
+                t = ggml_new_tensor_2d(extra, GGML_TYPE_F32, sp.ne0, sp.ne1);
+            } else {
+                t = ggml_new_tensor_1d(extra, GGML_TYPE_F32, sp.ne0);
+            }
+            ggml_set_name(t, sp.name);
+            float * d = static_cast<float *>(t->data);
+            for (int64_t i = 0; i < ggml_nelements(t); ++i) {
+                d[i] = 0.01f * static_cast<float>(i % 7);
+            }
+            gguf_add_tensor(gf, t);
+        }
+        CHECK(gguf_write_to_file(gf, present.c_str(), false));
+
+        transcribe_model * m  = nullptr;
+        transcribe_status  st = transcribe_model_load_file(present.c_str(), &mp, &m);
+        CHECK(st == TRANSCRIBE_OK);
+        if (m != nullptr) {
+            const auto * pm = parakeet_view(m);
+            CHECK_EQ_INT(pm->hparams.enc_pre_block_kernel, 3);
+            CHECK_EQ_INT(pm->hparams.enc_pre_block_dim, 4);
+            CHECK(pm->weights.pre_block.norm_w != nullptr);
+            CHECK(pm->weights.pre_block.up_b != nullptr);
+            CHECK(pm->weights.pre_block.mix_w != nullptr);
+            if (pm->weights.pre_block.mix_w != nullptr) {
+                CHECK_EQ_INT(pm->weights.pre_block.mix_w->ne[0], 3);
+                CHECK_EQ_INT(pm->weights.pre_block.mix_w->ne[2], 4);
+            }
+            CHECK(!pm->caps.supports_streaming);
+            transcribe_model_free(m);
+        }
+        ggml_free(extra);
+    }
+
+    gguf_free(gf);
+    gguf_free(src);
+    ggml_free(data_ctx);
+    std::filesystem::remove(missing, ec);
+    std::filesystem::remove(present, ec);
 }
 
 }  // namespace
@@ -333,6 +488,8 @@ int main() {
         CHECK(transcribe::parakeet::read_parakeet_hparams(metadata, parsed) == TRANSCRIBE_ERR_GGUF);
         gguf_free(metadata);
     }
+
+    check_pre_block(fixture);
 
     // ----- Lifecycle -----
     // Polymorphic delete via the base virtual destructor. The

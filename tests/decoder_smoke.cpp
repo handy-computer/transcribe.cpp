@@ -159,6 +159,9 @@ int main() {
         if (variant == "tdt-0.6b-phonon-2") {
             reference_text    = k_phonon_jfk_reference_text;
             max_edit_distance = 0;
+        } else if (variant == "tdt-0.6b-fluid-speech-pro") {
+            // NeMo (fluid_speech.py) emits the v2 reference text exactly.
+            max_edit_distance = 0;
         } else if (variant != "tdt-0.6b-v2") {
             std::fprintf(stderr,
                          "decoder_smoke: no transcript golden for variant "
