@@ -4,6 +4,7 @@
 #include "transcribe-diarize.h"
 #include "transcribe-langid.h"
 #include "transcribe-model.h"
+#include "transcribe-turn.h"
 #include "transcribe-vad.h"
 #include "transcribe.h"
 
@@ -83,11 +84,24 @@ transcribe::Arch make_vad_arch() {
 
 const transcribe::Arch k_vad_arch = make_vad_arch();
 
+const transcribe::TurnOps k_turn_ops = {};
+
+transcribe::Arch make_vad_turn_arch() {
+    transcribe::Arch a = {};
+    a.name             = "fake_vad_turn";
+    a.vad              = &k_vad_ops;
+    a.turn             = &k_turn_ops;
+    return a;
+}
+
+const transcribe::Arch k_vad_turn_arch = make_vad_turn_arch();
+
 void test_resolve_roles() {
     constexpr uint32_t ASR = TRANSCRIBE_ROLE_ASR;
     constexpr uint32_t DIA = TRANSCRIBE_ROLE_DIARIZE;
     constexpr uint32_t LID = TRANSCRIBE_ROLE_LANGID;
     constexpr uint32_t VAD = TRANSCRIBE_ROLE_VAD;
+    constexpr uint32_t TRN = TRANSCRIBE_ROLE_TURN;
 
     struct Case {
         const transcribe::Arch * arch;
@@ -97,27 +111,30 @@ void test_resolve_roles() {
     };
 
     const Case cases[] = {
-        { &k_asr_arch,      0,                TRANSCRIBE_OK,                  ASR }, // defaults to ASR
-        { &k_asr_arch,      ASR,              TRANSCRIBE_OK,                  ASR },
-        { &k_diarize_arch,  DIA,              TRANSCRIBE_OK,                  DIA },
-        { &k_diarize_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no default for non-ASR roles
-        { &k_no_role_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_half_asr_arch, 0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_half_asr_arch, ASR,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      DIA,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_diarize_arch,  ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   LID,              TRANSCRIBE_OK,                  LID },
-        { &k_langid_arch,   0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      LID,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no langid ops table
-        { &k_diarize_arch,  DIA | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   ASR | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_vad_arch,      VAD,              TRANSCRIBE_OK,                  VAD },
-        { &k_vad_arch,      0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   VAD,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no vad ops table
-        { &k_vad_arch,      ASR | VAD,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      ASR | (1u << 31), TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // unknown bit
-        { nullptr,          0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_asr_arch,      0,                TRANSCRIBE_OK,                  ASR       }, // defaults to ASR
+        { &k_asr_arch,      ASR,              TRANSCRIBE_OK,                  ASR       },
+        { &k_diarize_arch,  DIA,              TRANSCRIBE_OK,                  DIA       },
+        { &k_diarize_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no default for non-ASR roles
+        { &k_no_role_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_half_asr_arch, 0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_half_asr_arch, ASR,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_asr_arch,      DIA,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_asr_arch,      ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_diarize_arch,  ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_langid_arch,   LID,              TRANSCRIBE_OK,                  LID       },
+        { &k_langid_arch,   0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_asr_arch,      LID,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no langid ops table
+        { &k_diarize_arch,  DIA | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_langid_arch,   ASR | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_vad_arch,      VAD,              TRANSCRIBE_OK,                  VAD       },
+        { &k_vad_arch,      0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_langid_arch,   VAD,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no vad ops table
+        { &k_vad_arch,      ASR | VAD,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_vad_turn_arch, VAD | TRN,        TRANSCRIBE_OK,                  VAD | TRN },
+        { &k_vad_turn_arch, TRN,              TRANSCRIBE_OK,                  TRN       },
+        { &k_vad_arch,      VAD | TRN,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no turn ops table
+        { &k_asr_arch,      ASR | (1u << 31), TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // unknown bit
+        { nullptr,          0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
     };
     for (const Case & c : cases) {
         transcribe_model model;

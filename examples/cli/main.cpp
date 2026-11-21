@@ -91,6 +91,8 @@ void print_usage(const char * argv0) {
                  "                        candidates (0 = all; default)\n"
                  "  --vad-threshold P     (VAD) speech probability threshold in [0, 1]\n"
                  "                        (default: the library's, 0.5)\n"
+                 "  --turn-threshold P    (turn) end-of-turn probability threshold in [0, 1]\n"
+                 "                        (default: the model's recommended cut-off)\n"
                  "  --raw-tokens          keep <|...|> control tokens in output text\n"
                  "  --stream-chunk-ms N   (ASR) single-file: drive the streaming API by\n"
                  "                        feeding N-ms PCM slices; requires model to\n"
@@ -467,6 +469,16 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 std::fprintf(stderr, "error: --vad-threshold must be in [0, 1]\n");
                 return false;
             }
+        } else if (a == "--turn-threshold") {
+            const char * v = take_value(a.c_str());
+            if (!v) {
+                return false;
+            }
+            out.turn_threshold = std::atof(v);
+            if (!(out.turn_threshold >= 0.0 && out.turn_threshold <= 1.0)) {
+                std::fprintf(stderr, "error: --turn-threshold must be in [0, 1]\n");
+                return false;
+            }
         } else if (a == "--diarize") {
             out.diarize     = true;
             out.diarize_set = true;
@@ -639,6 +651,10 @@ int run_file(const cli_args & args, std::ofstream * output) {
     }
     if ((roles & TRANSCRIBE_ROLE_LANGID) != 0) {
         return transcribe_cli::run_langid_file(args, model, pcm, output);
+    }
+    // A model that also detects speech (SAVA) is driven as a turn model.
+    if ((roles & TRANSCRIBE_ROLE_TURN) != 0) {
+        return transcribe_cli::run_turn_file(args, model, pcm, duration_s, output);
     }
     if ((roles & TRANSCRIBE_ROLE_VAD) != 0) {
         return transcribe_cli::run_vad_file(args, model, pcm, duration_s, output);

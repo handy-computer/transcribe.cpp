@@ -45,7 +45,7 @@ with the reference's defaults:
 
 | field | meaning | default |
 |---|---|---|
-| `threshold` | a frame with `p >= threshold` starts speech | 0.5 |
+| `threshold` | a frame with `p >= threshold` starts speech (< 0 = the model's `transcribe_vad_info::threshold`) | -1: the model's, 0.5 for Silero |
 | `neg_threshold` | inside speech, `p < neg_threshold` is silence (< 0 = default) | `max(threshold - 0.15, 0.01)` |
 | `min_speech_ms` | shorter segments are dropped | 250 |
 | `min_silence_ms` | silence this long ends a segment | 100 |
@@ -58,7 +58,14 @@ with the reference's defaults:
 probabilities of the frames each call completes; `first_frame` is the stream
 position of the first one. `transcribe_vad_stream_flush` scores the buffered
 remainder zero padded and ends the stream; `transcribe_vad_stream_reset` ends
-it without scoring. On CPU, stream probabilities are bit-identical to an
+it without scoring.
+
+A model with lookahead (`transcribe_vad_info::lookahead_frames` > 0) judges a
+frame only after hearing the frames that follow it: frame t's probability
+comes out once frame t + lookahead_frames is complete. Feed returns the frames
+judged during the call (`first_frame` is the first of them), and flush steps
+lookahead_frames frames of silence so every frame of the stream is judged.
+Silero has no lookahead. On CPU, stream probabilities are bit-identical to an
 offline run over the same audio.
 
 ```c

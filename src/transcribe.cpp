@@ -31,6 +31,7 @@
 #include "transcribe-path.h"
 #include "transcribe/diarize.h"
 #include "transcribe/langid.h"
+#include "transcribe/turn.h"
 #include "transcribe/vad.h"
 
 #if defined(TRANSCRIBE_GGML_BACKEND_DL) && defined(_WIN32)
@@ -203,6 +204,16 @@ extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
             return sizeof(struct transcribe_vad_result);
         case TRANSCRIBE_ABI_VAD_SEGMENT:
             return sizeof(struct transcribe_vad_segment);
+        case TRANSCRIBE_ABI_TURN_INFO:
+            return sizeof(struct transcribe_turn_info);
+        case TRANSCRIBE_ABI_TURN_SESSION_PARAMS:
+            return sizeof(struct transcribe_turn_session_params);
+        case TRANSCRIBE_ABI_TURN_PARAMS:
+            return sizeof(struct transcribe_turn_params);
+        case TRANSCRIBE_ABI_TURN_RESULT:
+            return sizeof(struct transcribe_turn_result);
+        case TRANSCRIBE_ABI_TURN_SEGMENT:
+            return sizeof(struct transcribe_turn_segment);
     }
     return 0;  // unknown id: "cannot verify", never a real size
 }
@@ -267,6 +278,16 @@ extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
             return alignof(struct transcribe_vad_result);
         case TRANSCRIBE_ABI_VAD_SEGMENT:
             return alignof(struct transcribe_vad_segment);
+        case TRANSCRIBE_ABI_TURN_INFO:
+            return alignof(struct transcribe_turn_info);
+        case TRANSCRIBE_ABI_TURN_SESSION_PARAMS:
+            return alignof(struct transcribe_turn_session_params);
+        case TRANSCRIBE_ABI_TURN_PARAMS:
+            return alignof(struct transcribe_turn_params);
+        case TRANSCRIBE_ABI_TURN_RESULT:
+            return alignof(struct transcribe_turn_result);
+        case TRANSCRIBE_ABI_TURN_SEGMENT:
+            return alignof(struct transcribe_turn_segment);
     }
     return 0;
 }

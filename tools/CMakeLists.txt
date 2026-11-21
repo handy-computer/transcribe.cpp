@@ -7,3 +7,4 @@
 
 add_subdirectory(transcribe-quantize)
 add_subdirectory(transcribe-bench)
+add_subdirectory(transcribe-turn-eval)

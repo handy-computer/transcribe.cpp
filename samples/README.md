@@ -65,6 +65,33 @@ split, licensed **CC-BY-4.0**.
 | `fleurs-ru.wav` | 7.92 s | `ru_ru` | 1917 |
 | `fleurs-id.wav` | 8.58 s | `id_id` | 1909 |
 
+## Turn detection clips (Smart Turn v3.2 test set)
+
+Fixtures for the smart_turn (TURN) family's golden manifest
+(`tests/golden/smart_turn/`). Human (non-synthetic) English recordings from
+the v3.2 test set, written byte-for-byte from the 16-bit FLAC to 16-bit WAV.
+`label` is the dataset's `endpoint_bool`. Picked from shard
+`data/train-00000-of-00010.parquet` for a complete / incomplete pair shorter
+than 8 s (left padding), an incomplete one longer than 8 s (crop) and one the
+reference scores mid-range (p 0.27).
+
+Source: [pipecat-ai/smart-turn-data-v3.2-test](https://huggingface.co/datasets/pipecat-ai/smart-turn-data-v3.2-test)
+@ `dfc17924`, licensed **CC-BY-4.0**.
+
+| file | duration | dataset | label | id |
+| --- | ---: | --- | --- | --- |
+| `turn-complete-en.wav` | 3.64 s | `human_5` | complete | 04e498ae-93e5-4225-8908-68192e741a8b |
+| `turn-incomplete-en.wav` | 6.10 s | `human_5` | incomplete | 05ecd804-d938-454e-80a9-9a607b6e5ef7 |
+| `turn-incomplete-en-long.wav` | 11.97 s | `liva_1` | incomplete | 0d9b7d86-2b05-4638-81bd-cf0cc8558f5d |
+| `turn-uncertain-en.wav` | 5.51 s | `human_convcollector_1` | incomplete | 0d5b073c-5acf-4934-9c68-bba53b9462e1 |
+
+## SAVA clips
+
+| file | duration | source |
+| --- | ---: | --- |
+| `sava-speech.wav` | 22.94 s | Inworld SAVA's golden fixture, byte-for-byte (`inworld-ai/sava@v1.0.0`, `tests/fixtures/speech.wav`): a speech clip provided by Inworld (Apache-2.0) mixed into a public-domain street recording ([aporee_40228_45942](https://archive.org/details/aporee_40228_45942)). Backs `tests/golden/sava/`. |
+| `silence.wav` | 8.01 s | 128,160 zero samples (digital silence, partial last 640-sample frame), generated. |
+
 ## Everything else
 
 These predate this file and arrived inside unrelated commits, so their source

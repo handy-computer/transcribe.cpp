@@ -1,0 +1,36 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "sava",
+  "family": "sava",
+  "display_name": "SAVA",
+  "params": 25521558,
+  "license": {
+    "spdx": "apache-2.0",
+    "display": "Apache-2.0"
+  },
+  "upstream_repo": "inworld/sava",
+  "upstream_commit": "1beae7c",
+  "published_repo": "handy-computer/sava-gguf",
+  "docs_page": "sava.md",
+  "languages": [],
+  "long_form_strategy": "chunked-unbounded",
+  "capabilities": {
+    "transcribe": {"supported":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":true,"verified":true},
+    "diarize": {"supported":false},
+    "batching": {"supported":false}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"sava-F32.gguf","size_bytes":102841856},
+    {"quant":"F16","filename":"sava-F16.gguf","size_bytes":51863008},
+    {"quant":"Q8_0","filename":"sava-Q8_0.gguf","size_bytes":28459168}
+  ],
+  "accuracy_benchmarks": [],
+  "headline_benchmark": null,
+  "speed_benchmarks": [],
+  "role": "turn",
+  "upstream_url": "https://github.com/inworld-ai/sava"
+}

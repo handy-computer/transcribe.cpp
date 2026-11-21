@@ -43,7 +43,7 @@ int main() {
         p.speech_pad_ms  = t.speech_pad_ms;
         p.max_speech_ms  = t.max_speech_ms;
         transcribe::VadSegmentParams sp;
-        if (transcribe::resolve_vad_params(&p, sp) != TRANSCRIBE_OK) {
+        if (transcribe::resolve_vad_params(&p, 0.5, sp) != TRANSCRIBE_OK) {
             std::fprintf(stderr, "FAIL vector %zu: params rejected\n", v);
             ++failures;
             continue;

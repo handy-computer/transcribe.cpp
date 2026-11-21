@@ -88,6 +88,17 @@ NORM = [
     "frontend.window",                      # window frontend buffer
     "blk.1.tdnn1.bn.scale",                 # ecapa_tdnn folded BN affine (.bn.)
     "blk.1.res2.0.conv.bias",               # ecapa_tdnn conv bias (.bias)
+    "frontend.dft_basis",                   # sava windowed DFT basis
+    "rope.freqs",                           # sava RoPE frequency table
+    "trunk.0.ssm.a",                        # sava Mamba-2 A (F32-only ggml_ssm_scan)
+    "trunk.0.ssm.d",                        # sava Mamba-2 D skip
+    "trunk.0.ssm.conv1d.weight",            # sava Mamba-2 conv (F32-only ggml_ssm_conv)
+    "head.turn.speech_embed.weight",        # sava speech-probability embedding
+    "trunk.0.norm_mix.weight",              # sava block norm (norm_ prefix)
+    "head.cls.1.weight",                    # smart_turn classifier LayerNorm scale
+    "head.cls.1.bias",                      # smart_turn classifier LayerNorm bias (.bias)
+    "head.pool.2.weight",                   # smart_turn one-row pooling-score projection
+    "head.cls.6.weight",                    # smart_turn one-row logit projection
 ]
 
 # Conv bucket: 2D / depthwise / 1x1 pointwise conv kernels. The loader has no
@@ -137,6 +148,10 @@ LINEAR = [
     "blk.1.tdnn1.weight",                   # ecapa_tdnn 1x1 TDNN (a matmul operand)
     "asp.attn.weight",                      # ecapa_tdnn ASP attention 1x1 (NOT .conv.)
     "cls.out.weight",                       # ecapa_tdnn classifier head
+    "trunk.0.ssm.in.weight",                # sava Mamba-2 fused in_proj
+    "head.vad.readout.weight",              # sava VAD readout (NOT the parakeet vad. conv rule)
+    "head.pool.0.weight",                   # smart_turn attention-pooling Linear
+    "head.cls.0.weight",                    # smart_turn classifier Linear (NOT the cls.1 LayerNorm)
 ]
 
 # KNOWN DRIFT — policy.cpp::classify_tensor places these in the Norm (F32) or

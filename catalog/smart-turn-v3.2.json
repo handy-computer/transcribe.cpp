@@ -1,0 +1,35 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "smart-turn-v3.2",
+  "family": "smart_turn",
+  "display_name": "Smart Turn v3.2",
+  "params": 8000386,
+  "license": {
+    "spdx": "bsd-2-clause",
+    "display": "BSD-2-Clause"
+  },
+  "upstream_repo": "pipecat-ai/smart-turn-v3",
+  "upstream_commit": "f766f81",
+  "published_repo": "handy-computer/smart-turn-v3.2-gguf",
+  "docs_page": "smart-turn-v3.2.md",
+  "languages": ["ar", "bn", "zh", "da", "nl", "de", "en", "fi", "fr", "hi", "id", "it", "ja", "ko", "mr", "no", "pl", "pt", "ru", "es", "tr", "uk", "vi"],
+  "long_form_strategy": "hard-cap",
+  "capabilities": {
+    "transcribe": {"supported":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":false},
+    "timestamps": {"supported":false},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":false}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"smart-turn-v3.2-F32.gguf","size_bytes":32075328},
+    {"quant":"F16","filename":"smart-turn-v3.2-F16.gguf","size_bytes":17493536},
+    {"quant":"Q8_0","filename":"smart-turn-v3.2-Q8_0.gguf","size_bytes":10658336}
+  ],
+  "accuracy_benchmarks": [],
+  "headline_benchmark": null,
+  "speed_benchmarks": [],
+  "role": "turn"
+}

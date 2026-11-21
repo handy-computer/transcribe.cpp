@@ -25,7 +25,7 @@
       "description": "Loader family (the GGUF's general.architecture)"
     },
     "role": {
-      "enum": ["asr", "diarize", "langid", "vad"],
+      "enum": ["asr", "diarize", "langid", "vad", "turn"],
       "description": "The role the model is published for (transcribe_model_roles). Absent means asr."
     },
     "display_name": {
@@ -575,6 +575,6 @@
       ]
     }
   },
-  "if": {"required": ["role"], "properties": {"role": {"const": "vad"}}},
+  "if": {"required": ["role"], "properties": {"role": {"enum": ["vad", "turn"]}}},
   "else": {"properties": {"languages": {"minItems": 1}}}
 }

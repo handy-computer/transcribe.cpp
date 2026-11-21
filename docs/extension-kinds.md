@@ -34,6 +34,8 @@ entry-point family whose `family` field the typed extension is pointed at:
   validated by `transcribe_stream_begin`.
 - `TRANSCRIBE_EXT_SLOT_DIARIZE_RUN` — `transcribe_diarize_params::family`,
   validated by `transcribe_diarize_run`.
+- `TRANSCRIBE_EXT_SLOT_TURN_RUN` — `transcribe_turn_params::family`,
+  validated by `transcribe_turn_run`.
 
 Mismatched-slot extensions are rejected with `TRANSCRIBE_ERR_INVALID_ARG`
 at the entry point. A future slot (e.g. `_SESSION`, `_MODEL_LOAD`,

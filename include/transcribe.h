@@ -406,6 +406,12 @@ typedef enum {
     TRANSCRIBE_ABI_VAD_PARAMS             = 26,
     TRANSCRIBE_ABI_VAD_RESULT             = 27,
     TRANSCRIBE_ABI_VAD_SEGMENT            = 28,
+    /* include/transcribe/turn.h */
+    TRANSCRIBE_ABI_TURN_INFO              = 29,
+    TRANSCRIBE_ABI_TURN_SESSION_PARAMS    = 30,
+    TRANSCRIBE_ABI_TURN_PARAMS            = 31,
+    TRANSCRIBE_ABI_TURN_RESULT            = 32,
+    TRANSCRIBE_ABI_TURN_SEGMENT           = 33,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.
@@ -695,6 +701,8 @@ typedef enum {
     TRANSCRIBE_EXT_SLOT_STREAM      = 1,
     /* transcribe_diarize_params::family (include/transcribe/diarize.h) */
     TRANSCRIBE_EXT_SLOT_DIARIZE_RUN = 2,
+    /* transcribe_turn_params::family (include/transcribe/turn.h) */
+    TRANSCRIBE_EXT_SLOT_TURN_RUN    = 3,
 } transcribe_ext_slot;
 
 /*
@@ -1405,6 +1413,7 @@ typedef enum {
     TRANSCRIBE_ROLE_DIARIZE = 1u << 1,
     TRANSCRIBE_ROLE_LANGID  = 1u << 2,
     TRANSCRIBE_ROLE_VAD     = 1u << 3,
+    TRANSCRIBE_ROLE_TURN    = 1u << 4,
 } transcribe_role;
 
 /*

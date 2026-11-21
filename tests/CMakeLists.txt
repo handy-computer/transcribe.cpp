@@ -419,7 +419,7 @@ add_test(NAME transcribe_run_dispatch_unit
 # input, throwing stream hooks, DIARIZE and LANGID roles, VAD segmentation
 # -----------------------------------------------------------------------------
 
-foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch vad_segments)
+foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch vad_segments vad_lookahead turn_dispatch)
     add_executable(transcribe_${_t}_unit ${_t}_unit.cpp)
     target_link_libraries(transcribe_${_t}_unit PRIVATE transcribe)
     target_include_directories(transcribe_${_t}_unit PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -594,7 +594,10 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_hop0.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_ecapa_tdnn_bad_win_gt_fft.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad_misaligned.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_silero_vad_misaligned.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_smart_turn.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_smart_turn_bad_window.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_sava.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -866,6 +869,34 @@ if(TRANSCRIBE_UV)
     transcribe_apply_warnings(transcribe_silero_vad_smoke)
     add_dependencies(transcribe_silero_vad_smoke fixtures)
     add_test(NAME transcribe_silero_vad_smoke COMMAND transcribe_silero_vad_smoke)
+endif()
+
+# -----------------------------------------------------------------------------
+# sava (TURN + VAD roles) fixture smoke: stream == run bit for bit
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_sava_smoke sava_smoke.cpp)
+    target_link_libraries(transcribe_sava_smoke PRIVATE transcribe)
+    target_compile_definitions(transcribe_sava_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_sava_smoke)
+    add_dependencies(transcribe_sava_smoke fixtures)
+    add_test(NAME transcribe_sava_smoke COMMAND transcribe_sava_smoke)
+endif()
+
+# -----------------------------------------------------------------------------
+# smart_turn (TURN role) fixture smoke
+# -----------------------------------------------------------------------------
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_smart_turn_smoke smart_turn_smoke.cpp)
+    target_link_libraries(transcribe_smart_turn_smoke PRIVATE transcribe)
+    target_compile_definitions(transcribe_smart_turn_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+    transcribe_apply_warnings(transcribe_smart_turn_smoke)
+    add_dependencies(transcribe_smart_turn_smoke fixtures)
+    add_test(NAME transcribe_smart_turn_smoke COMMAND transcribe_smart_turn_smoke)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1515,6 +1546,42 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_test(NAME transcribe_silero_vad_real_smoke
         COMMAND transcribe_silero_vad_real_smoke)
     set_tests_properties(transcribe_silero_vad_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # sava on the TURN and VAD roles: upstream's golden clip score and turn
+    # segments, stream == run bit for bit (jfk.wav, dots.wav past the
+    # 512-frame window) at 1 and 4 threads, the VAD speech track, no turn in
+    # silence / noise, for the F32, F16 and Q8_0 GGUFs. TRANSCRIBE_SAVA_GGUF /
+    # _F16_GGUF / _Q8_0_GGUF, else models/sava/sava-{F32,F16,Q8_0}.gguf (RC 77
+    # skip when none exists).
+    add_executable(transcribe_sava_real_smoke
+        sava_real_smoke.cpp)
+    target_link_libraries(transcribe_sava_real_smoke
+        PRIVATE transcribe transcribe-common-example)
+    target_compile_definitions(transcribe_sava_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
+        "TRANSCRIBE_SAVA_DEFAULT_GGUF=\"${CMAKE_SOURCE_DIR}/models/sava/sava-F32.gguf\""
+        "TRANSCRIBE_SAVA_DEFAULT_F16_GGUF=\"${CMAKE_SOURCE_DIR}/models/sava/sava-F16.gguf\""
+        "TRANSCRIBE_SAVA_DEFAULT_Q8_0_GGUF=\"${CMAKE_SOURCE_DIR}/models/sava/sava-Q8_0.gguf\"")
+    transcribe_apply_warnings(transcribe_sava_real_smoke)
+    add_test(NAME transcribe_sava_real_smoke
+        COMMAND transcribe_sava_real_smoke)
+    set_tests_properties(transcribe_sava_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # smart_turn on the TURN role: clip scores of committed samples against
+    # onnxruntime, decisions, the 8 s crop and a threshold override.
+    # Gated by TRANSCRIBE_SMART_TURN_GGUF (RC 77 skip).
+    add_executable(transcribe_smart_turn_real_smoke
+        smart_turn_real_smoke.cpp)
+    target_link_libraries(transcribe_smart_turn_real_smoke
+        PRIVATE transcribe transcribe-common-example)
+    target_compile_definitions(transcribe_smart_turn_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+    transcribe_apply_warnings(transcribe_smart_turn_real_smoke)
+    add_test(NAME transcribe_smart_turn_real_smoke
+        COMMAND transcribe_smart_turn_real_smoke)
+    set_tests_properties(transcribe_smart_turn_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
 

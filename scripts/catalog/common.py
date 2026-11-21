@@ -268,6 +268,8 @@ def capabilities_summary(record: dict) -> str:
         out.append(f"language ID ({len(record.get('languages', []))} languages)")
     if record.get("role") == "vad":
         out.append("voice activity detection")
+    if record.get("role") == "turn":
+        out.append("end-of-turn detection")
     for name, label in (("translate", "translate"), ("streaming", "streaming"),
                         ("diarize", "diarize")):
         if caps.get(name, {}).get("supported"):

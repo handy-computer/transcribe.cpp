@@ -204,6 +204,15 @@ def reference_dtype_for(
         return GGMLQuantizationType.F32
     if name in ("frontend.mel_filterbank", "frontend.window"):
         return GGMLQuantizationType.F32
+    # SAVA: DFT basis, RoPE frequency table, Mamba-2 per-head scalars and
+    # conv kernel (F32-only in ggml_ssm_scan / ggml_ssm_conv), speech embed.
+    if name in ("frontend.dft_basis", "rope.freqs") or \
+       name.endswith((".ssm.a", ".ssm.d", ".ssm.conv1d.weight", ".speech_embed.weight")):
+        return GGMLQuantizationType.F32
+    # Smart Turn: classifier LayerNorm scale (reference classifier.1) and the
+    # one-row score / logit projections.
+    if name in ("head.cls.1.weight", "head.pool.2.weight", "head.cls.6.weight"):
+        return GGMLQuantizationType.F32
 
     # Conv bucket (pointwise + depthwise + 2D).
     is_convpw = (

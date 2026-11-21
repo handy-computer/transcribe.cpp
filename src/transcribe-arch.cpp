@@ -98,6 +98,14 @@ namespace silero_vad {
 extern const Arch arch;
 }
 
+namespace smart_turn {
+extern const Arch arch;
+}
+
+namespace sava {
+extern const Arch arch;
+}
+
 const Arch * find_arch(const char * name) {
     if (name == nullptr) {
         return nullptr;
@@ -108,7 +116,7 @@ const Arch * find_arch(const char * name) {
         &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch,    &moonshine::arch,    &moonshine_streaming::arch,
         &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,     &granite::arch,      &granite_nar::arch,
         &medasr::arch,           &moss::arch,        &sortformer::arch, &granite5_ctc::arch, &ecapa_tdnn::arch,
-        &silero_vad::arch,
+        &silero_vad::arch,       &smart_turn::arch,  &sava::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 
@@ -134,12 +142,14 @@ transcribe_status resolve_roles(transcribe_model * model) {
     const bool   has_diarize = arch.diarize != nullptr;
     const bool   has_langid  = arch.langid != nullptr;
     const bool   has_vad     = arch.vad != nullptr;
+    const bool   has_turn    = arch.turn != nullptr;
 
     if (model->roles == 0 && has_asr) {
         model->roles = TRANSCRIBE_ROLE_ASR;
     }
 
-    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_LANGID | TRANSCRIBE_ROLE_VAD;
+    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_LANGID |
+                           TRANSCRIBE_ROLE_VAD | TRANSCRIBE_ROLE_TURN;
     const char *   why   = nullptr;
     if (model->roles == 0) {
         why = "serves no role";
@@ -153,6 +163,8 @@ transcribe_status resolve_roles(transcribe_model * model) {
         why = "sets the LANGID role without a langid ops table";
     } else if ((model->roles & TRANSCRIBE_ROLE_VAD) != 0 && !has_vad) {
         why = "sets the VAD role without a vad ops table";
+    } else if ((model->roles & TRANSCRIBE_ROLE_TURN) != 0 && !has_turn) {
+        why = "sets the TURN role without a turn ops table";
     }
     if (why != nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: arch '%s' %s (roles 0x%x)", name, why,

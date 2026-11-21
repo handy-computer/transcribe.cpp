@@ -17,6 +17,7 @@ class Loader;
 struct DiarizeOps;
 struct LangidOps;
 struct VadOps;
+struct TurnOps;
 
 // Per-family trait. Function pointers may be null when an entry point is
 // not yet implemented; the central dispatch converts null entries into
@@ -137,6 +138,7 @@ struct Arch {
     const DiarizeOps * diarize;
     const LangidOps *  langid;
     const VadOps *     vad;
+    const TurnOps *    turn;
 };
 
 // Look up an architecture by name. Returns nullptr if no registered

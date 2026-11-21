@@ -1,0 +1,129 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "sava",
+  "hf_repo": "inworld/sava",
+  "hf_revision": "1beae7c1dd0df6b0f92030644fc905eb087dc6a0",
+  "sources": {
+    "config": {
+      "kind": "reference_code",
+      "path": "sava.safetensors metadata['config'] (inworld.sava.config.SavaConfig)",
+      "status": "manual",
+      "detail": "No config.json on HF. The release safetensors carries its config as JSON metadata (format=sava); it equals the SavaConfig defaults: hidden 512, ffn 2048, rms_eps 1e-6, layers [mamba, mamba, mamba, attention], Mamba-2 expand 2 / head_dim 64 / state 128 / groups 1 / conv 4 / chunk 64, attention 8 heads / 2 kv heads / head_dim 64 / window 512 / rope_theta 1e4 / xsa alpha 1, vad and turn branches hidden 512 / ffn 1536 with the same attention, turn_horizons [0, 5, 10, 20], vad_embed_size 64, lookahead_frames 3, mixer_context_frames 2, log_energy_floor 1e-5."
+    },
+    "preprocessor": {
+      "kind": "reference_code",
+      "path": "inworld/sava/mel.py (MelFrontend) + modules.FrameMixer.rows",
+      "status": "manual",
+      "detail": "Causal Whisper-style log-mel: 240 zero samples of left context, 400-sample periodic-Hann DFT every 160 samples (window ends where its hop ends), power, 128 Slaney mel bins (0-8 kHz), log10(max(x, 1e-10)), (x + 4) / 4, no max-8 clamp. A 640-sample frame is its 4 hops hop-major (512 values) plus ln(max(rms(frame), 1e-5))."
+    },
+    "tokenizer_config": {"kind": "hf_file", "path": "tokenizer_config.json", "status": "missing"},
+    "tokenizer_json": {"kind": "hf_file", "path": "tokenizer.json", "status": "missing"},
+    "generation_config": {"kind": "hf_file", "path": "generation_config.json", "status": "missing"},
+    "safetensors_metadata": {
+      "kind": "reference_code",
+      "path": "sava.safetensors header",
+      "status": "manual",
+      "detail": "77 tensors, all bfloat16, 25,521,558 parameters; sha256 aa610ee9b5d3d1be96f70581a8a3affe7cf20d06816b4ada1efdd8ab6274be34 (pinned in inworld.sava.registry). HF's safetensors-metadata API does not report it."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "inworld-sava==1.0.0: inworld.sava.run / Session / segment",
+      "status": "found",
+      "detail": "Upstream's own package; PyPI 1.0.0 is byte-identical to https://github.com/inworld-ai/sava tag v1.0.0 (commit b4221a54458ea60df8c777911d0567418994cacc). Its golden test (tests/fixtures/speech_expected.npz, atol 2e-4) passes in scripts/envs/sava."
+    }
+  },
+  "variants": [
+    {
+      "name": "sava",
+      "memory_gb": 0.1,
+      "files": ["sava.safetensors"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-classifier"],
+    "key_fields": {
+      "sample_rate": 16000,
+      "frame_samples": 640,
+      "hidden_size": 512,
+      "ffn_size": 2048,
+      "layers": ["mamba", "mamba", "mamba", "attention"],
+      "mamba_expand": 2,
+      "mamba_head_dim": 64,
+      "mamba_state_size": 128,
+      "mamba_num_groups": 1,
+      "mamba_conv_kernel": 4,
+      "attention_heads": 8,
+      "attention_kv_heads": 2,
+      "attention_head_dim": 64,
+      "sliding_window": 512,
+      "rope_theta": 10000.0,
+      "xsa": true,
+      "xsa_alpha": 1.0,
+      "branch_hidden_size": 512,
+      "branch_ffn_size": 1536,
+      "turn_horizons": [0, 5, 10, 20],
+      "vad_embed_size": 64,
+      "lookahead_frames": 3,
+      "mixer_context_frames": 2,
+      "log_energy_floor": 1e-05,
+      "rms_eps": 1e-06,
+      "n_params": 25521558
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "Weights are stored bfloat16; inworld.sava.checkpoint.load upcasts them to fp32 on CPU and every reference run (golden fixture, benchmarks on A100 fp32) is fp32. bf16 -> fp32 is exact, so the F32 GGUF holds exactly the reference's weights. BF16 is the source dtype and a lossless size option for Stage 5.",
+    "details": {"config_declared": null, "header_distribution": {"bfloat16": 25521558}},
+    "expected_f32_tensors": ["frontend.*", "rope.freqs", "*norm_*.weight", "*.q_norm.weight", "*.k_norm.weight", "*.bias", "*.ssm.a", "*.ssm.d", "*.ssm.conv1d.weight", "*.speech_embed.weight"]
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": "zero",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {"type": "other", "vocab_size": 0, "special_tokens": {}, "has_language_tokens": false, "vocab_sha256": null},
+  "capabilities": {
+    "languages": [],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": true,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Inworld VAD suite (nine public dataset readings) and end-of-turn clip sets",
+      "language": null,
+      "metric": "other",
+      "score": null,
+      "source": "https://github.com/inworld-ai/sava/blob/v1.0.0/bench/README.md",
+      "notes": "Publisher reports frame AUC for voice activity (vs Silero VAD) and clip AUC for end of turn (vs smart-turn v3.2), per dataset, no combined score. Not a port contract. Acceptance is per-frame probability parity and exact turn-segment parity with inworld.sava.run / sava.segment; there is no WER."
+    }
+  ],
+  "reference_framework": "author_repo_sava",
+  "reference_rationale": "Inworld publishes the model only with its own plain-PyTorch package (no HF config, no transformers class). inworld.sava.run (whole recording = Session push + flush) and Session are the canonical inference paths; sava.segment / TurnSegmenter with the default Policy is the reference turn rule. Pinned to inworld-sava 1.0.0 (git v1.0.0, b4221a5) on torch 2.14.1, fp32, CPU, 1 thread, weights inworld/sava@1beae7c1.",
+  "architecture_pattern": "encoder-classifier",
+  "known_risks": [
+    "New TURN role (docs/turn.md) plus the VAD role with lookahead: acceptance is per-frame speech / turn probability parity and exact turn-segment parity with sava.segment, not WER.",
+    "Streaming, causal, stateful: mel context (240 samples), mixer tail (1 row), 3 Mamba-2 conv tails + SSM states, 3 sliding-window KV caches (512 frames), the previous frame's speech probability, and the frame counter. Frames must be processed in order.",
+    "Lookahead: the released speech probability of frame t is emitted at step t + 3; steps 0..2 emit NO_SPEECH_LOGIT (-30). Flush pads the partial frame with zeros, then steps 3 frames of silence; their turn scores (flush_turns) feed sava.segment.",
+    "run == push(all) + flush only up to rounding in the reference (<= 3.1e-6 in probability): offline uses the chunked SSD scan and 512-frame attention windows, streaming the per-frame recurrence.",
+    "RoPE uses absolute fp32 positions that never reset within a stream: the reference's own outputs drift with stream age (speech max 3.3e-5 at 5 min, 4.2e-4 at 1 h, 3e-3 at 11 h vs the same audio at position 0), though the model is mathematically shift invariant. ggml_rope's iterated theta_scale does not reproduce torch's per-index frequencies.",
+    "Mamba-2 maps onto ggml_ssm_conv / ggml_ssm_scan (A {1, n_head}); the conv kernel and A must be F32 for those ops; dt softplus happens inside ggml_ssm_scan; the D skip, gating and grouped RMSNorm are separate ops.",
+    "Exclusive self attention (XSA) removes each head's projection on its own frame's value: no ggml op; built from mul / sum_rows.",
+    "Turn head depends on sigmoid(previous step's on-time speech logit): the turn branch is sequential across frames in a stream (offline it is a one-step shift of the VAD head output).",
+    "sava.segment turns may overlap (a closed turn ends at decision step + 1, up to 3 frames past the judged frame; the next turn's 800 ms pre-roll is not clamped) and include dropped (kept=false) turns.",
+    "Segment parity is threshold-sensitive on long audio: on dots-full a pause-frame turn score sits 2.9e-6 from 0.9.",
+    "Weights are bf16; the reference computes in fp32. F32 GGUF is the parity artifact; BF16 is lossless storage but bf16 matmuls would not be."
+  ],
+  "intake_gaps": []
+}

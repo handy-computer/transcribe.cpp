@@ -1,0 +1,27 @@
+[project]
+name = "transcribe-smart_turn-env"
+version = "0.1.0"
+description = "Python env for Smart Turn v3.2 (pipecat-ai) reference dumps and conversion (ONNX Runtime + a rebuilt PyTorch twin)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Canonical reference: onnxruntime on upstream's fp32 ONNX
+    # (smart-turn-v3.2-gpu.onnx), run as smart-turn's inference.py does.
+    # tests/tolerances/smart_turn.json was measured against THESE versions,
+    # which are the ones smart-turn's requirements.txt pins for export.
+    # onnx / onnxruntime are reference tooling only (owner approved).
+    "onnx==1.19.1",
+    "onnxruntime==1.23.2",
+    # WhisperFeatureExtractor (the front end) and WhisperEncoder (the
+    # instrumented PyTorch twin). Exact pin: upstream trains and exports
+    # with transformers 4.48.2.
+    "transformers==4.48.2",
+    # CPU torch, fp32, one thread: the parity regime of the PyTorch twin.
+    "torch==2.9.0",
+    "numpy==2.3.4",
+    "soundfile>=0.12",
+    "huggingface-hub>=0.30",
+    # Converter.
+    "gguf>=0.10",
+    # pipecat-ai/smart-turn-data-v3.2-test parquet shards (golden clips).
+    "pyarrow>=15",
+]

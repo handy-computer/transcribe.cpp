@@ -1,0 +1,130 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "smart_turn",
+  "hf_repo": "pipecat-ai/smart-turn-v3",
+  "hf_revision": "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
+  "sources": {
+    "config": {
+      "kind": "reference_code",
+      "path": "smart-turn train.py SmartTurnV3Model + openai/whisper-tiny config (github.com/pipecat-ai/smart-turn @ 4e12f2b)",
+      "status": "manual",
+      "detail": "No HF config.json: the repo ships ONNX files only. Geometry from train.py (WhisperEncoder from whisper-tiny with config.max_source_positions = 400; pool_attention Linear(384,256)-Tanh-Linear(256,1); classifier Linear(384,256)-LayerNorm(256)-GELU-Dropout-Linear(256,64)-GELU-Linear(64,1); sigmoid), confirmed against the ONNX graph and initializer shapes by scripts/convert-smart_turn.py (check_graph / check_geometry)."
+    },
+    "preprocessor": {
+      "kind": "reference_code",
+      "path": "smart-turn inference.py + audio_utils.py; Pipecat src/pipecat/audio/turn/smart_turn/_whisper_features.py",
+      "status": "manual",
+      "detail": "truncate_audio_to_last_n_seconds(audio, 8): keep the last 128000 samples or left-pad with zeros to 128000; WhisperFeatureExtractor(chunk_length=8)(..., padding='max_length', max_length=128000, truncation=True, do_normalize=True): zero mean / unit variance over the whole 128000-sample window (padding included, eps 1e-7, float32), then Whisper log-mel (reflect pad 200, periodic Hann 400, hop 160, |X|^2, slaney 80-bin filterbank, log10 floor 1e-10, drop last frame, clamp to max-8, (x+4)/4) -> [80, 800]."
+    },
+    "tokenizer_config": {"kind": "hf_file", "path": "tokenizer_config.json", "status": "missing"},
+    "tokenizer_json": {"kind": "hf_file", "path": "tokenizer.json", "status": "missing"},
+    "generation_config": {"kind": "hf_file", "path": "generation_config.json", "status": "missing"},
+    "safetensors_metadata": {
+      "kind": "reference_code",
+      "path": "smart-turn-v3.2-gpu.onnx initializers",
+      "status": "manual",
+      "detail": "No safetensors. The fp32 ONNX (opset 18, exported by pytorch 2.9.0+cu128) holds 8,000,386 float32 weights: 53 named inner.* initializers plus 26 anonymous, transposed MatMul weights (val_17 ...), named by graph walk in scripts/lib/smart_turn_onnx.py."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "onnxruntime on smart-turn-v3.2-gpu.onnx, run as smart-turn inference.py predict_endpoint",
+      "status": "found",
+      "detail": "Upstream's own inference path (inference.py; Pipecat LocalSmartTurnAnalyzerV3 runs the same graph with a vendored numpy copy of the feature extractor). Instrumented twin: train.py's SmartTurnV3Model rebuilt in transformers 4.48.2 with the ONNX weights mapped in; matches onnxruntime to <= 5.4e-6 in p on the golden clips and <= 5.4e-7 on random inputs."
+    }
+  },
+  "variants": [
+    {
+      "name": "smart-turn-v3.2",
+      "memory_gb": 0.03,
+      "files": ["smart-turn-v3.2-gpu.onnx", "smart-turn-v3.2-cpu.onnx"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-classifier"],
+    "key_fields": {
+      "encoder": "whisper-tiny encoder",
+      "d_model": 384,
+      "encoder_layers": 4,
+      "encoder_attention_heads": 6,
+      "encoder_ffn_dim": 1536,
+      "num_mel_bins": 80,
+      "max_source_positions": 400,
+      "activation": "gelu (erf)",
+      "layer_norm_eps": 1e-05,
+      "k_proj_bias": false,
+      "pool_hidden": 256,
+      "classifier_hidden": [256, 64],
+      "max_audio_samples": 128000,
+      "mel_frames": 800,
+      "threshold": 0.5,
+      "waveform_normalize_eps": 1e-07,
+      "n_params": 8000386
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "weights_header",
+    "evidence": "Every initializer of smart-turn-v3.2-gpu.onnx is float32 (the fp32 export; README: 'GPU version uses fp32 weights'). smart-turn-v3.2-cpu.onnx is upstream's static int8 QDQ quantization of the same model and is not a conversion source.",
+    "details": {"config_declared": null, "header_distribution": {"float32": 8000386}}
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hann_periodic",
+    "normalization": null,
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {"type": "other", "vocab_size": 0, "special_tokens": {}, "has_language_tokens": false, "vocab_sha256": null},
+  "capabilities": {
+    "languages": ["ar", "bn", "zh", "da", "nl", "de", "en", "fi", "fr", "hi", "id", "it", "ja", "ko", "mr", "no", "pl", "pt", "ru", "es", "tr", "uk", "vi"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "pipecat-ai/smart-turn-data-v3.2-test",
+      "language": null,
+      "metric": "accuracy",
+      "score": 93.71,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/pipecat-ai/smart-turn-v3/blob/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/benchmarks/smart-turn-v3.2-gpu.md",
+      "notes": "fp32 ONNX (smart-turn-v3.2-gpu.onnx), 31,527 clips, 23 languages, decision p > 0.5. Measured by scripts/turn/run_reference_smart_turn_onnx.py (onnxruntime 1.23.2, arm64): 93.71%, FPR 3.51%, FNR 2.78% of 31,527, identical to the published report. TURN role: binary end-of-turn accuracy, not WER."
+    },
+    {
+      "dataset": "pipecat-ai/smart-turn-data-v3.2-test",
+      "language": null,
+      "metric": "accuracy",
+      "score": 92.63,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/pipecat-ai/smart-turn-v3/blob/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/benchmarks/smart-turn-v3.2-cpu.md",
+      "notes": "Upstream's int8 ONNX (smart-turn-v3.2-cpu.onnx), same 31,527 clips; the bar our quantized GGUFs are compared to. Measured: 92.62% (FPR 4.76%, FNR 2.63%); published 92.63% (FPR 4.73%, FNR 2.64%): int8 kernels differ by host."
+    }
+  ],
+  "reference_framework": "author_repo_smart_turn",
+  "reference_rationale": "Upstream publishes only ONNX files and runs them with onnxruntime (smart-turn inference.py, Pipecat LocalSmartTurnAnalyzerV3); no PyTorch checkpoint exists. The canonical reference is therefore onnxruntime 1.23.2 on the fp32 ONNX at the pinned HF revision, CPU, 1 thread, with transformers 4.48.2's WhisperFeatureExtractor on its numpy path (the path inference.py's requirements and Pipecat's vendored copy run). Intermediates come from the same graph with the dump points exposed as outputs; a PyTorch twin (train.py SmartTurnV3Model with the mapped weights) is the instrumented cross-check.",
+  "architecture_pattern": "encoder-classifier",
+  "known_risks": [
+    "Role is TURN (new role, include/transcribe/turn.h): acceptance is head.prob parity and decision parity (p > 0.5) with onnxruntime on the golden clips and on pipecat-ai/smart-turn-data-v3.2-test, plus test-set accuracy vs the measured reference; not WER, and LibriSpeech does not apply.",
+    "ONNX-only source: 26 Linear weights are anonymous MatMul initializers stored transposed ([in, out]); they are named by graph walk (the bias Add consuming each MatMul, or for k_proj the layer's self_attn_layer_norm), and the mapping is validated by reloading them into train.py's SmartTurnV3Model.",
+    "Fixed 8 s window: input longer than 128000 samples keeps its LAST 8 s; shorter input is LEFT-padded with zeros. Audio before the last 8 s has no effect.",
+    "Waveform normalisation runs over the whole padded window (padding included), so the amount of padding changes the statistics; the C++ must normalise the 128000-sample window, not the clip. All-zero input has variance 0 and relies on eps 1e-7 (features become a constant -1.5).",
+    "Front end: transformers picks a float32 torch STFT when torch is importable and a float64 numpy STFT otherwise; the reference pins the numpy path (inference.py's requirements and Pipecat's production copy). The mel filterbank is computed by transformers (mel_filter_bank, slaney), not whisper-tiny's preprocessor_config table.",
+    "Whisper massive activations: from encoder block 2, channel 375 (then 16, 128, 247) reaches |x| 80-153 at a few positions, so fp32 reduction order moves enc.block.2/3.out by up to 2e-2 between two correct implementations (PyTorch twin vs onnxruntime); p moves by <= 5.4e-6. Stage 4 will likely widen those tolerances.",
+    "Positional table has 400 rows and is close to but not exactly transformers' sinusoids(400, 384) (max 3.1e-5 off, an export-time float difference); the GGUF stores the exported table and the C++ must load it, not recompute it.",
+    "Attention: the k projection has no bias (Whisper); the export splits the 1/sqrt(64) scale as 64**-0.25 on q and on k (torch SDPA decomposition).",
+    "Decision rule: upstream uses p > 0.5; the draft TURN API uses p >= threshold (docs/turn.md O2). Silence scores p = 0.4615, close to the cut-off.",
+    "No streaming: the model scores one clip per call; transcribe_turn_stream_* is NOT_IMPLEMENTED for this family.",
+    "Upstream's int8 ONNX (static QDQ) is a different artifact from our GGUF quants; its accuracy (92.63% published, 92.62% measured) is the comparison point for Stage 5. It disagrees with fp32 on 3.9% of test-set decisions (silence: fp32 0.46, int8 0.99).",
+    "Quant policy: head.cls.1.weight is a LayerNorm scale whose name the norm rules in reference_dtype_for / policy.cpp do not match; Stage 5 must keep it (and all 1-D head tensors) F32."
+  ],
+  "intake_gaps": []
+}

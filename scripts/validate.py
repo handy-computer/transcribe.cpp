@@ -343,6 +343,17 @@ def parse_cli_segments(output: str) -> list[dict[str, int]]:
             for m in re.finditer(r"^\s*segment: \d+ start=(\d+) end=(\d+)", output, re.M)]
 
 
+def parse_cli_turn(output: str) -> dict[str, Any] | None:
+    """The TURN CLI's `turn: p=<p> ended=<0|1> threshold=<t>` line and its
+    `segment: <i> start=<sample> end=<sample> ... end=<reason>` lines."""
+    m = re.search(r"^turn: p=(\S+) ended=([01]) threshold=(\S+)", output, re.M)
+    if m is None:
+        return None
+    segments = [{"start": int(s[1]), "end": int(s[2]), "reason": s[3]}
+                for s in re.finditer(r"^\s*segment: \d+ start=(\d+) end=(\d+) .* end=(\w+)$", output, re.M)]
+    return {"p": float(m[1]), "ended": m[2] == "1", "threshold": float(m[3]), "segments": segments}
+
+
 def write_cpp_transcript(
     out_dir: Path,
     *,
@@ -414,7 +425,8 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # --revision when --model resolves to a local directory. The gigaam
         # dumper loads its own pinned commit and refuses a different one.
         hf_revision = (manifest.get("source_model") or {}).get("hf_revision")
-        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc", "ecapa_tdnn", "gigaam"):
+        if hf_revision and args.family in ("qwen3_asr", "granite_nar", "granite5_ctc", "ecapa_tdnn", "gigaam",
+                                          "smart_turn"):
             common_args += ["--revision", str(hf_revision)]
 
         # Forward any manifest-declared dumper args verbatim. Used today
@@ -449,10 +461,11 @@ def cmd_ref(args: argparse.Namespace) -> int:
         #
         # ecapa_tdnn (language ID) is one forward pass: the `encoder`
         # subcommand dumps the front end, encoder, classifier and
-        # prediction.json from a single classify_batch call.
+        # prediction.json from a single classify_batch call. smart_turn (TURN)
+        # is one forward pass too: `encoder` dumps every stage and turn.json.
         if args.family == "sortformer":
             stages = ["encoder", "diarize"]
-        elif args.family in ("ecapa_tdnn", "silero_vad"):
+        elif args.family in ("ecapa_tdnn", "silero_vad", "smart_turn"):
             stages = ["encoder"]
         else:
             stages = case_stages(case, ["encoder", "decode"])
@@ -599,6 +612,16 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             (out_dir / "segments.json").write_text(json.dumps({"segments": segments}, indent=2) + "\n")
             print(f"  wrote {out_dir / 'segments.json'}", file=sys.stderr)
             continue
+        if manifest.get("role") == "turn":
+            # A turn model: its behavioural artifacts are the clip score, the
+            # decision and (for models that also score speech) the turn
+            # segments, compared against the reference's turn.json.
+            turn = parse_cli_turn(result.stdout or "")
+            if turn is None:
+                raise SystemExit(f"error: cpp dump [{args.family}/{case_name}] did not emit a turn line")
+            (out_dir / "turn.json").write_text(json.dumps(turn, indent=2) + "\n")
+            print(f"  wrote {out_dir / 'turn.json'}", file=sys.stderr)
+            continue
         transcript = parse_cli_transcript(result.stdout or "")
         if transcript is None and "speaker segments:" in (result.stdout or ""):
             continue  # a diarizer has no transcript
@@ -737,6 +760,29 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 print(f"\n  Segments: ok ({len(ref_segs)} identical)")
             else:
                 print(f"\n  Segments: FAIL\n    reference: {ref_segs}\n    c++:       {cpp_segs}")
+
+        # TURN: the gate is the clip score within the manifest's p tolerance,
+        # the same decision, and identical turn segments when the reference
+        # has them. A missing artifact on either side is a failure.
+        if manifest.get("role") == "turn":
+            ref_turn, cpp_turn = ((json.loads(f.read_text()) if f.exists() else None)
+                                  for f in (ref_dir / "turn.json", cpp_dir / "turn.json"))
+            p_tol = float((manifest.get("turn") or {}).get("p_abs_tolerance", 1e-4))
+            ok = ref_turn is not None and cpp_turn is not None
+            dp = abs(cpp_turn["p"] - ref_turn["p"]) if ok else float("inf")
+            ok = ok and dp <= p_tol and cpp_turn["ended"] == ref_turn["ended"]
+            if ok and "segments" in ref_turn:
+                ok = [(s["start"], s["end"], s["reason"]) for s in ref_turn["segments"]] == \
+                     [(s["start"], s["end"], s["reason"]) for s in cpp_turn["segments"]]
+            all_passed = all_passed and ok
+            transcript_results.append({"case": case_name, "match": ok, "mode": "turn",
+                                       "reference": ref_turn, "cpp": cpp_turn, "p_abs_diff": dp})
+            if ok:
+                print(f"\n  Turn: ok (p {cpp_turn['p']:.6f}, |dp| {dp:.2e} <= {p_tol:.0e}, "
+                      f"ended {cpp_turn['ended']})")
+            else:
+                print(f"\n  Turn: FAIL\n    reference: {ref_turn and {k: ref_turn.get(k) for k in ('p', 'ended')}}"
+                      f"\n    c++:       {cpp_turn and {k: cpp_turn.get(k) for k in ('p', 'ended')}}")
 
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists() and args.family != "sortformer":
