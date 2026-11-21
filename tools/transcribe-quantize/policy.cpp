@@ -115,6 +115,11 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
         name == "dec.norm.weight") {
         return Bucket::Norm;
     }
+    // Fluid Speech Pro's pre-Conformer block LayerNorm scale
+    // (enc.pre_block.norm.weight); the loader requires F32.
+    if (name == "enc.pre_block.norm.weight") {
+        return Bucket::Norm;
+    }
     // Per-head positional biases — added directly to fp32 q via ggml_add
     // inside rel_pos_mhsa.
     if (ends_with(name, ".pos_bias_u") || ends_with(name, ".pos_bias_v")) {
