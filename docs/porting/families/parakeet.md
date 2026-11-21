@@ -226,7 +226,8 @@ FluidVoice's retrain of `parakeet-tdt-0.6b-v3` with one extra residual block
 before xscaling. Reference is NeMo on the `.nemo` through the publisher's
 `fluid_speech.py` (fetched at the pinned revision; plain `restore_from`
 rejects the archive's `encoder.fv_insert.*` and `clean_mode.*` keys), clean
-mode off. KVs `stt.parakeet.encoder.pre_block_{kernel,dim}` and tensors
+mode off. The clean-mode adapter is converted raw but not applied (see the
+table). KVs `stt.parakeet.encoder.pre_block_{kernel,dim}` and tensors
 `enc.pre_block.*` match the third-party `TalkMate/fluid-speech-pro-gguf`.
 Intake: `reports/porting/parakeet/fluid-speech-pro/intake.json`.
 
@@ -239,7 +240,8 @@ Intake: `reports/porting/parakeet/fluid-speech-pro/intake.json`.
 | Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | PASS — same decoder path as v3 |
 | Pre-block load contract | load | `ctest --test-dir build -R parakeet_smoke` | KV without tensors, KV pair mismatch, even kernel, or chunked attention style fail to load | MUST PASS | PASS |
 | Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE | SKIP — not exposed by runtime; the pre-block KV is a load error on the streaming attention styles |
-| Clean mode | n/a | n/a | n/a | OUT OF SCOPE — optional LoRA-style adapter (`clean_mode.*`) folded by `fluid_speech.load(clean_mode=True)` | SKIP — not converted |
+| Clean-mode adapter in the GGUF | load | `ctest --test-dir build -R parakeet_smoke` | rank-32 adapter stored as `enc.blocks.N.<module>.clean_mode.{a,b}` (A ne [in, rank], B ne [rank, out]; F32 in F32, F16 in every quant via the quantizer's Adapter bucket), `pred.lstm.0.clean_mode.bias` (= `weight_ih_l0 @ decoder_input`, pre-multiplied) and `joint.pred.clean_mode.bias`, KVs `stt.parakeet.clean_mode.{rank,alpha,modules}`; the loader validates it and binds nothing; partial, mis-shaped, quantized or KV-less adapters fail to load; default output bit-identical to the adapter-free files | MUST PASS | PASS — F32 adapter folds to `fluid_speech.load(clean_mode=True)`'s state dict exactly (264/264 encoder weights, joint bias, `bias_ih_l0`) |
+| Clean mode (applied) | n/a | n/a | edited text per `fluid_speech.load(clean_mode=True)` | OUT OF SCOPE (later: runtime switch + API) | SKIP — not applied by runtime |
 | Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE | SKIP — not exposed by runtime |
 | Translation | n/a | n/a | n/a | OUT OF SCOPE | SKIP — not exposed by runtime |
 

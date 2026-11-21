@@ -5,8 +5,8 @@ pin_date: 2026-11-21
 
 validation:
   reference: NeMo (FluidVoice fluid_speech.py loader)
-  commit: 30ee38a
-  date: 2026-11-21
+  commit: 1281464
+  date: 2026-11-22
 
 pipeline_tag: automatic-speech-recognition
 tags:
@@ -25,13 +25,15 @@ summary: |
   encoder's subsampling and its first Conformer layer, so it needs a
   transcribe.cpp build that knows that block. Give it a 16 kHz mono WAV and it
   gives you back text with punctuation and capitals. Same languages and API as
-  v3. Does not stream and does not translate.
+  v3. Does not stream and does not translate. The files also carry
+  FluidVoice's clean-mode adapter (edited, non-verbatim text); transcribe.cpp
+  does not apply it yet, so output is verbatim.
 
 wer:
   notes: |
     Greedy transducer decoding, verbatim mode. FluidVoice's leaderboard
     numbers use beam search with 4 beams, and on SPGISpeech their optional
-    clean mode, which this GGUF does not include.
+    clean mode, which these files carry but transcribe.cpp does not apply yet.
 
 license_notes: |
   CC BY 4.0. Credit it as **Fluid Speech Pro by FluidVoice**. Built on

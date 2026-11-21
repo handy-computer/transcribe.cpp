@@ -8,7 +8,9 @@ European languages and works offline. It adds one small block between the
 encoder's subsampling and its first Conformer layer, so it needs a
 transcribe.cpp build that knows that block. Give it a 16 kHz mono WAV and it
 gives you back text with punctuation and capitals. Same languages and API as
-v3. Does not stream and does not translate.
+v3. Does not stream and does not translate. The files also carry
+FluidVoice's clean-mode adapter (edited, non-verbatim text); transcribe.cpp
+does not apply it yet, so output is verbatim.
 <!-- /catalog -->
 
 ## What it does
@@ -20,11 +22,17 @@ time, GELU, projection) between the encoder's subsampling and its first
 Conformer layer. Same languages and API as v3; about 2 M more parameters.
 
 It does not stream and it does not translate. FluidVoice's optional clean
-mode (edited, non-verbatim text) is not included; these files transcribe
-verbatim.
+mode (edited, non-verbatim text; FluidVoice: it removes repeated words and
+filler words) is a rank-32 low-rank adapter. These files carry it
+(`enc.blocks.N.<module>.clean_mode.{a,b}` for 11 modules per Conformer
+layer, plus two bias deltas on the predictor and joint, and the
+`stt.parakeet.clean_mode.{rank,alpha,modules}` keys), at F32 in the F32 file
+and F16 in every other file (about 55 MB). transcribe.cpp checks the adapter
+when it loads the file but does not apply it yet: output is verbatim, the
+same as without it.
 
 <!-- catalog:pin -->
-Licensed CC-BY-4.0. Ported from upstream commit [`46027a3`](https://huggingface.co/FluidVoice-Labs/fluid-speech-pro/commit/46027a3), pinned 2026-11-21. Validated against the NeMo (FluidVoice fluid_speech.py loader) reference at transcribe.cpp commit [`30ee38a`](https://github.com/handy-computer/transcribe.cpp/tree/30ee38a) on 2026-11-21.
+Licensed CC-BY-4.0. Ported from upstream commit [`46027a3`](https://huggingface.co/FluidVoice-Labs/fluid-speech-pro/commit/46027a3), pinned 2026-11-21. Validated against the NeMo (FluidVoice fluid_speech.py loader) reference at transcribe.cpp commit [`1281464`](https://github.com/handy-computer/transcribe.cpp/tree/1281464) on 2026-11-22.
 <!-- /catalog -->
 
 ## Download
@@ -32,12 +40,12 @@ Licensed CC-BY-4.0. Ported from upstream commit [`46027a3`](https://huggingface.
 <!-- catalog:downloads -->
 | Quantization | Download |    Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32          | [fluid-speech-pro-F32.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-F32.gguf) | 2.52 GB | - |
-| F16          | [fluid-speech-pro-F16.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-F16.gguf) | 1.26 GB | - |
-| Q8_0         | [fluid-speech-pro-Q8_0.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q8_0.gguf) |  742 MB | - |
-| Q6_K         | [fluid-speech-pro-Q6_K.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q6_K.gguf) |  612 MB | - |
-| Q5_K_M       | [fluid-speech-pro-Q5_K_M.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q5_K_M.gguf) |  550 MB | - |
-| Q4_K_M       | [fluid-speech-pro-Q4_K_M.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q4_K_M.gguf) |  487 MB | - |
+| F32          | [fluid-speech-pro-F32.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-F32.gguf) | 2.63 GB | - |
+| F16          | [fluid-speech-pro-F16.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-F16.gguf) | 1.32 GB | - |
+| Q8_0         | [fluid-speech-pro-Q8_0.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q8_0.gguf) |  797 MB | - |
+| Q6_K         | [fluid-speech-pro-Q6_K.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q6_K.gguf) |  667 MB | - |
+| Q5_K_M       | [fluid-speech-pro-Q5_K_M.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q5_K_M.gguf) |  606 MB | - |
+| Q4_K_M       | [fluid-speech-pro-Q4_K_M.gguf](https://huggingface.co/handy-computer/fluid-speech-pro-gguf/resolve/main/fluid-speech-pro-Q4_K_M.gguf) |  542 MB | - |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
@@ -46,7 +54,7 @@ Licensed CC-BY-4.0. Ported from upstream commit [`46027a3`](https://huggingface.
 <!-- catalog:prose field=wer.notes -->
 Greedy transducer decoding, verbatim mode. FluidVoice's leaderboard
 numbers use beam search with 4 beams, and on SPGISpeech their optional
-clean mode, which this GGUF does not include.
+clean mode, which these files carry but transcribe.cpp does not apply yet.
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
@@ -145,7 +153,7 @@ include.
 
 - No streaming.
 - No translation.
-- No clean mode.
+- Clean mode is in the files but not applied yet; output is verbatim.
 - Timestamps are per token, not per word.
 - Long files go through in one pass. Nothing cuts them up for you.
 - Needs a transcribe.cpp build with the pre-Conformer block. Older builds

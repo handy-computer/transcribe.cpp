@@ -73,7 +73,7 @@ quant matrix and the comparison to NVIDIA's self-reported numbers.
 | `parakeet-ultra`           |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.80% | token timestamps            | [parakeet-ultra.md](parakeet-ultra.md) |
 | `parakeet-tdt-0.6b-v3`     |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.94% | token timestamps            | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
 | `orukeet`                  |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.86% | token timestamps            | [orukeet.md](orukeet.md) |
-| `fluid-speech-pro`         |   629M | 25 languages + auto-detect |    742 MB | LibriSpeech test-clean (WER) |     - | token timestamps            | [fluid-speech-pro.md](fluid-speech-pro.md) |
+| `fluid-speech-pro`         |   629M | 25 languages + auto-detect |    797 MB | LibriSpeech test-clean (WER) |     - | token timestamps            | [fluid-speech-pro.md](fluid-speech-pro.md) |
 | `phonon-2`                 |   627M | en                         |    740 MB | LibriSpeech test-clean (WER) | 2.15% | token timestamps            | [phonon-2.md](phonon-2.md) |
 | `parakeet-primeline`       |   627M | 25 languages + auto-detect |    740 MB | FLEURS de (WER)              | 5.98% | token timestamps            | [parakeet-primeline.md](parakeet-primeline.md) |
 | `parakeet-tdt-1.1b`        |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.38% | token timestamps            | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |

@@ -29,12 +29,12 @@
     "batching": {"supported":true,"verified":true}
   },
   "downloads": [
-    {"quant":"F32","filename":"fluid-speech-pro-F32.gguf","size_bytes":2516906880},
-    {"quant":"F16","filename":"fluid-speech-pro-F16.gguf","size_bytes":1260146816},
-    {"quant":"Q8_0","filename":"fluid-speech-pro-Q8_0.gguf","size_bytes":741819456},
-    {"quant":"Q6_K","filename":"fluid-speech-pro-Q6_K.gguf","size_bytes":612145216},
-    {"quant":"Q5_K_M","filename":"fluid-speech-pro-Q5_K_M.gguf","size_bytes":550470720},
-    {"quant":"Q4_K_M","filename":"fluid-speech-pro-Q4_K_M.gguf","size_bytes":486687808}
+    {"quant":"F32","filename":"fluid-speech-pro-F32.gguf","size_bytes":2627062656},
+    {"quant":"F16","filename":"fluid-speech-pro-F16.gguf","size_bytes":1315252352},
+    {"quant":"Q8_0","filename":"fluid-speech-pro-Q8_0.gguf","size_bytes":796924992},
+    {"quant":"Q6_K","filename":"fluid-speech-pro-Q6_K.gguf","size_bytes":667250752},
+    {"quant":"Q5_K_M","filename":"fluid-speech-pro-Q5_K_M.gguf","size_bytes":605576256},
+    {"quant":"Q4_K_M","filename":"fluid-speech-pro-Q4_K_M.gguf","size_bytes":541793344}
   ],
   "accuracy_benchmarks": [],
   "headline_benchmark": {
