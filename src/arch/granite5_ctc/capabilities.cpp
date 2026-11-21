@@ -27,9 +27,10 @@ void apply_family_invariants(transcribe_model & model) {
     // next token's emitting frame, or the last frame before the next
     // word's onset) plus something to check it against.
 
-    // English-only ASR. No translation, no language identification, no
-    // diarizer, and the frontend is non-causal (centered STFT plus a
-    // per-utterance log-mel floor), so no streaming either.
+    // ASR only; the language list comes from general.languages. No
+    // translation, no language identification, no diarizer, and the
+    // frontend is non-causal (centered STFT plus a per-utterance log-mel
+    // floor), so no streaming either.
     caps.supports_translate = false;
 
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);

@@ -117,6 +117,13 @@ void build_result(transcribe_session &          cc,
 
     cc.tokens.reserve(tokens.size());
     for (const CtcToken & t : tokens) {
+        // CONTROL pieces (<|nospeech|>, <pad>, <|spltokenN|>, ... on the
+        // multilingual checkpoint) are special tokens the reference drops via
+        // batch_decode(skip_special_tokens=True). Reserved pieces typed USER
+        // (-nc <|tokN|>) are not special upstream and stay.
+        if (tok.is_control(t.id)) {
+            continue;
+        }
         transcribe_session::TokenEntry te;
         te.id   = t.id;
         te.p    = t.p;

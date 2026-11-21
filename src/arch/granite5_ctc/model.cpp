@@ -436,9 +436,9 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
 
     transcribe::debug::init();
 
-    // The model is monolingual English and carries no language
-    // conditioning anywhere in the graph, so an explicit `--language`
-    // hint and auto both run the identical forward. Nothing to branch on.
+    // No language conditioning anywhere in the graph (the multilingual
+    // checkpoint shares one CTC vocabulary across its languages), so an
+    // explicit `--language` hint and auto both run the identical forward.
     return encode_and_decode(cc, cm, pcm, n_samples);
 }
 
