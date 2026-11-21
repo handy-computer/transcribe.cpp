@@ -570,6 +570,15 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
         hp.tdt_global_symbol_budget = (budget == "global");
     }
 
+    // The pre-Conformer block (Fluid Speech Pro) is validated on the
+    // offline full-context encoder only; the streaming encoders do not run it.
+    if (hp.enc_pre_block_kernel > 0 && hp.enc_att_context_style != ParakeetHParams::AttContextStyle::Regular) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "parakeet: stt.parakeet.encoder.pre_block_kernel is only supported with "
+                "att_context_style=regular");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
     // Long-form attention window. A full-attention GGUF (Regular,
     // att_context (-1, -1)) runs NeMo's rel_pos_local_attn window
     // [256, 256] by default: the same post-hoc switch as

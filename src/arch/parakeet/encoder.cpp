@@ -319,15 +319,38 @@ ggml_tensor * apply_spk_kernel_injection(ggml_context *          ctx,
 //
 // x ne=[d_model, T, B]; the depthwise conv runs in the [T, dim, B] layout
 // the shared conformer conv module uses, with symmetric (kernel-1)/2
-// padding. PyTorch's F.gelu is the exact erf form, so use ggml_gelu_erf
-// (CPU/Vulkan/Metal all implement it).
-ggml_tensor * build_pre_block(ggml_context * ctx, ggml_tensor * x, const ParakeetPreBlock & b, int kernel) {
+// padding, through the same depthwise op the Conformer blocks pick
+// (direct_dw: one algorithm at every batch size). PyTorch's F.gelu is the
+// exact erf form, so use ggml_gelu_erf (CPU/Vulkan/Metal all implement it).
+//
+// valid_mask (ne=[T, 1, B, 1], 1 real / 0 padded, may be null) zeroes the
+// padded tail of each utterance in a variable-length batch before the time
+// conv, so a real frame near the end sees the same zero padding as when
+// the utterance runs alone.
+ggml_tensor * build_pre_block(ggml_context *           ctx,
+                              ggml_tensor *            x,
+                              const ParakeetPreBlock & b,
+                              int                      kernel,
+                              bool                     direct_dw,
+                              ggml_tensor *            valid_mask) {
     ggml_tensor * h = conf::layer_norm(ctx, x, b.norm_w, b.norm_b);
     h               = ggml_mul_mat(ctx, b.down_w, h);
     h               = ggml_add(ctx, h, b.down_b);
 
-    h                   = ggml_cont(ctx, ggml_permute(ctx, h, 1, 0, 2, 3));
-    h                   = conf::conv_1d_dw_f32(ctx, b.mix_w, h, /*s=*/1, /*p=*/kernel / 2, /*d=*/1);
+    h = ggml_cont(ctx, ggml_permute(ctx, h, 1, 0, 2, 3));
+    if (valid_mask != nullptr) {
+        h = ggml_mul(ctx, h, valid_mask);
+    }
+    if (direct_dw) {
+        const int64_t dim  = h->ne[1];
+        ggml_tensor * knl  = ggml_reshape_4d(ctx, b.mix_w, kernel, 1, 1, dim);
+        ggml_tensor * data = ggml_reshape_4d(ctx, h, h->ne[0], 1, dim, h->ne[2]);
+        h                  = conf::conv_2d_dw_direct_f32(ctx, knl, data, /*s0=*/1, /*s1=*/1, /*p0=*/kernel / 2,
+                                                         /*p1=*/0, /*d0=*/1, /*d1=*/1);
+        h                  = ggml_reshape_3d(ctx, h, h->ne[0], h->ne[2], h->ne[3]);
+    } else {
+        h = conf::conv_1d_dw_f32(ctx, b.mix_w, h, /*s=*/1, /*p=*/kernel / 2, /*d=*/1);
+    }
     // Conv output is [T, dim, B]; reshape the bias to [1, dim] so it
     // broadcasts along time rather than the channel axis.
     ggml_tensor * mix_b = ggml_reshape_2d(ctx, b.mix_b, 1, h->ne[1]);
@@ -439,9 +462,18 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
     // before the first Conformer layer and before xscaling (NeMo's
     // positional encoding applies the scale later, inside the encoder
     // stack, so the reference hook sees the unscaled frames here).
+    // In a variable-length batch its time conv needs the per-utterance
+    // valid-frame mask; the Conformer conv modules below reuse the same one.
     if (hp.enc_pre_block_kernel > 0) {
-        x                      = build_pre_block(ctx, x, w.pre_block, hp.enc_pre_block_kernel);
-        x                      = conf::named(x, "enc.pre_block.out");
+        ggml_tensor * pre_block_mask = nullptr;
+        if (var_len_masks) {
+            pre_block_mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, x->ne[1], 1, n_batch, 1);
+            ggml_set_name(pre_block_mask, "conv.pad_mask.batch.in");
+            ggml_set_input(pre_block_mask);
+            eb.conv_pad_mask_in = pre_block_mask;
+        }
+        x = build_pre_block(ctx, x, w.pre_block, hp.enc_pre_block_kernel, policy.direct_dw_in_block, pre_block_mask);
+        x = conf::named(x, "enc.pre_block.out");
         eb.dumps.pre_block_out = x;
         transcribe::debug::mark_tensor_for_dump(x);
     }
@@ -624,10 +656,14 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
                 eb.attn_pad_mask_in = attn_pad_mask_in;
             }
 
-            conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, 1, n_batch, 1);
-            ggml_set_name(conv_pad_mask_in, "conv.pad_mask.batch.in");
-            ggml_set_input(conv_pad_mask_in);
-            eb.conv_pad_mask_in = conv_pad_mask_in;
+            if (eb.conv_pad_mask_in != nullptr && eb.conv_pad_mask_in->ne[0] == T_enc) {
+                conv_pad_mask_in = eb.conv_pad_mask_in;  // allocated for the pre-Conformer block
+            } else {
+                conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, T_enc, 1, n_batch, 1);
+                ggml_set_name(conv_pad_mask_in, "conv.pad_mask.batch.in");
+                ggml_set_input(conv_pad_mask_in);
+                eb.conv_pad_mask_in = conv_pad_mask_in;
+            }
         }
 
         conf::BlockParams bparams{};
@@ -875,11 +911,12 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
         return eb;
     }
 
-    // Same pre-Conformer block as the offline path, before xscaling and
-    // before drop_extra_pre_encoded trims the chunk overlap.
+    // The pre-Conformer block (Fluid Speech Pro) is offline-only:
+    // read_parakeet_hparams rejects it on the chunked attention styles that
+    // reach this builder.
     if (hp.enc_pre_block_kernel > 0) {
-        x = build_pre_block(ctx, x, w.pre_block, hp.enc_pre_block_kernel);
-        x = conf::named(x, "stream.enc.pre_block.out");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet streaming encoder: pre-Conformer block is not supported");
+        return eb;
     }
 
     if (hp.enc_xscaling) {
