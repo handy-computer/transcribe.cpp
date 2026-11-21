@@ -6,6 +6,8 @@
 //     a run, on jfk.wav and on dots.wav (884 frames, past the 512-frame
 //     attention window);
 //   - the VAD role returns the TURN session's speech track;
+//   - transcribe_turn_stream_feed_batch over 4 users in ragged chunks equals
+//     each user's run, bit for bit;
 //   - digital silence and low noise hold no turn.
 // Models: TRANSCRIBE_SAVA_GGUF, TRANSCRIBE_SAVA_F16_GGUF and
 // TRANSCRIBE_SAVA_Q8_0_GGUF (else models/sava/sava-{F32,F16,Q8_0}.gguf), each
@@ -184,6 +186,87 @@ void test_quiet(transcribe_model * m, const char * name) {
     transcribe_turn_session_free(s);
 }
 
+// A ragged chunk size for user u at call k: 0 (sometimes) to 2000 samples.
+int ragged(int u, int k) {
+    const uint32_t h        = static_cast<uint32_t>(u * 7919 + k * 104729) * 2654435761u;
+    const int      sizes[6] = { 0, 13, 640, 777, 1280 + 3 * u, 2000 };
+    return sizes[static_cast<int>(h >> 20) % 6];
+}
+
+// transcribe_turn_stream_feed_batch over 4 users with different audio and
+// lengths, ragged chunks and a rotating first session, equals each user's
+// run, bit for bit (stream == run holds per session).
+void test_batch(transcribe_model * m) {
+    const char *                    names[] = { "jfk.wav", "dots.wav", "sava-speech.wav", "noise.wav" };
+    const size_t                    limit[] = { 176000, 16000 * 15, 16000 * 12, 16000 * 8 };
+    std::vector<std::vector<float>> pcm;
+    std::vector<Track>              want;
+    transcribe_turn_session *       ref = turn_session(m, 1);
+    for (size_t u = 0; u < 4; ++u) {
+        std::vector<float> x;
+        if (!load_sample(names[u], x)) {
+            transcribe_turn_session_free(ref);
+            return;
+        }
+        x.resize(std::min(x.size(), limit[u]));
+        pcm.push_back(x);
+        want.push_back(run(ref, x));
+    }
+    transcribe_turn_session_free(ref);
+
+    std::vector<transcribe_turn_session *> s;
+    for (size_t u = 0; u < 4; ++u) {
+        s.push_back(turn_session(m, u == 0 ? 4 : 1));
+    }
+    std::vector<Track>  got(4);
+    std::vector<size_t> off(4, 0);
+    auto                collect = [&](size_t i) {
+        transcribe_turn_result r;
+        transcribe_turn_result_init(&r);
+        CHECK(transcribe_turn_get_result(s[i], &r) == TRANSCRIBE_OK);
+        CHECK(r.first_frame == static_cast<int64_t>(got[i].turn.size()));
+        if (const float * p = transcribe_turn_probs(s[i])) {
+            got[i].turn.insert(got[i].turn.end(), p, p + r.n_probs);
+        }
+        if (const float * p = transcribe_turn_speech_probs(s[i])) {
+            got[i].speech.insert(got[i].speech.end(), p, p + r.n_speech_probs);
+        }
+    };
+    for (int k = 0;; ++k) {
+        bool any = false;
+        for (size_t i = 0; i < 4; ++i) {
+            any = any || off[i] < pcm[i].size();
+        }
+        if (!any) {
+            break;
+        }
+        transcribe_turn_session * list[4];
+        const float *             ptr[4];
+        int                       len[4];
+        size_t                    who[4];
+        for (size_t j = 0; j < 4; ++j) {
+            const size_t i = (j + static_cast<size_t>(k / 5)) % 4;
+            const size_t c = std::min(static_cast<size_t>(ragged(static_cast<int>(i), k)), pcm[i].size() - off[i]);
+            who[j]         = i;
+            list[j]        = s[i];
+            ptr[j]         = c > 0 ? pcm[i].data() + off[i] : nullptr;
+            len[j]         = static_cast<int>(c);
+            off[i] += c;
+        }
+        CHECK(transcribe_turn_stream_feed_batch(list, ptr, len, 4) == TRANSCRIBE_OK);
+        for (size_t j = 0; j < 4; ++j) {
+            collect(who[j]);
+        }
+    }
+    for (size_t i = 0; i < 4; ++i) {
+        CHECK(transcribe_turn_stream_flush(s[i]) == TRANSCRIBE_OK);
+        collect(i);
+        CHECK(got[i].turn == want[i].turn);
+        CHECK(got[i].speech == want[i].speech);
+        transcribe_turn_session_free(s[i]);
+    }
+}
+
 int test_file(const std::string & path) {
     std::printf("model: %s\n", path.c_str());
     transcribe_model_load_params mp;
@@ -208,6 +291,7 @@ int test_file(const std::string & path) {
     test_parity(m, "dots.wav", { { 640 }, { 4999 } });
     test_quiet(m, "silence.wav");
     test_quiet(m, "noise.wav");
+    test_batch(m);
 
     transcribe_model_free(m);
     return 1;

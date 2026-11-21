@@ -252,7 +252,38 @@ transcribe_status turn_step(transcribe_turn_session * session,
     return stream_step(s, s.st, static_cast<const Model &>(*session->model), pcm, n_frames, turn, speech);
 }
 
-const TurnOps k_turn_ops = { turn_info, turn_new_session, nullptr, turn_reset, turn_step };
+// One frame for each of count sessions in one graph, owned by sessions[0].
+// With TRANSCRIBE_DUMP_DIR set the sessions are stepped one by one instead
+// (the same values), so each stream's validation trace stays complete.
+transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
+                                  int                               count,
+                                  const float * const *             frame_pcm,
+                                  float *                           turn,
+                                  float *                           speech) {
+    const Model & m = static_cast<const Model &>(*sessions[0]->model);
+    if (debug::init() && debug::enabled()) {
+        for (int i = 0; i < count; ++i) {
+            auto & s = static_cast<TurnSession &>(*sessions[i]);
+            if (auto st = stream_step(s, s.st, m, frame_pcm[i], 1, turn + i, speech != nullptr ? speech + i : nullptr);
+                st != TRANSCRIBE_OK) {
+                return st;
+            }
+        }
+        return TRANSCRIBE_OK;
+    }
+    std::vector<Stream *>      streams(static_cast<size_t>(count));
+    std::vector<SessionCore *> cores(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        auto & s                        = static_cast<TurnSession &>(*sessions[i]);
+        streams[static_cast<size_t>(i)] = &s.st;
+        cores[static_cast<size_t>(i)]   = &s;
+    }
+    auto & first = static_cast<TurnSession &>(*sessions[0]);
+    return stream_step_batch(first.batch, m, streams.data(), cores.data(), count, first.n_threads, frame_pcm, turn,
+                             speech);
+}
+
+const TurnOps k_turn_ops = { turn_info, turn_new_session, nullptr, turn_reset, turn_step, turn_step_batch };
 
 // ---------------------------------------------------------------------------
 // VAD ops

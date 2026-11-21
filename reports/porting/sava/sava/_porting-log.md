@@ -88,3 +88,20 @@ Surprises worth feeding back into the docs and tooling.
   - **Measurement noise.** Speed numbers taken while other worktrees ran
     batch jobs (load 10-36) were off by 2-25x; only idle-machine numbers
     are recorded.
+
+## Batching and the exact speedups (from the turn-perf prototype)
+
+- **`TurnOps::step_batch` is implemented in `stream_step_batch`.** Shared
+  matmuls run over all sessions' columns; the per-session ops run in the
+  shapes of a 1-frame step, so results are bit-identical to unbatched.
+- **The batch graph lives in the first session of the batch,** keyed by
+  process-unique stream ids. There is no model-level scratch.
+- **Two speedups, both bit-exact:**
+  - a contiguous attention query (variant B), so K.Q also takes tinyBLAS;
+  - the V ring stored transposed, which drops a per-step copy.
+
+  The query change moves the outputs by up to ~1e-5 against the old C++
+  dumps (a different K.Q kernel). `validate.py` stays green.
+- **Speed.** A streamed frame dropped from 5.4 to 4.6 ms (F32) and from 3.9
+  to 3.0 ms (Q8_0) at 1 thread. 8 batched users take 10.1 ms per tick (F32)
+  and 8.1 ms (Q8_0) at 1 thread.

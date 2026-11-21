@@ -464,6 +464,10 @@ padding columns come after the real ones. Why:
   kernel below that, with a different reduction order.
 - Every other op (`rms_norm`, `soft_max`, `ssm_conv`, `ssm_scan`) computes a
   column the same way whatever `n` is.
+- The attention query is made contiguous (`ggml_cont`) before K.Q, so that
+  matmul takes tinyBLAS too. Its per-element order no longer depends on the
+  column count either, and it is 9% faster for 1 user, 15% for batches of
+  4-8 (turn-perf's "variant B").
 - So each frame is computed bit for bit the same whatever the chunking:
   stream == run on the CPU, at any thread count. `transcribe_sava_smoke` and
   `transcribe_sava_real_smoke` check this bit for bit.
@@ -477,7 +481,11 @@ after its last read:
   state. `ggml_ssm_scan` is called with `K = n - n_real + 1` snapshots, so
   the state after the last real column is snapshot slot `n - n_real`.
 - Per attention layer (trunk block 3, VAD head, turn head), K and V rings of
-  `window + 64` slots:
+  `window + 64` slots. The K ring is ne `[KV hd, ring]`. The V ring is
+  stored transposed, ne `[ring, KV hd]`, written with one-element
+  `set_rows`, so the value product reads it in place; before, a transposed
+  copy of every ring was made per step (11% of a 1-frame step). Outputs are
+  byte-identical to the untransposed ring.
   - position `p` is written to slot `p % ring` with `ggml_set_rows` before
     the block's attention, without evicting a key any query of the block
     still reads;
@@ -496,22 +504,71 @@ Conditions for stream == run, documented here:
   rounds a graph's first token differently from the others. The toy fixture
   uses `d_state` 64 for this reason.
 
-Speed, Apple M1, F32 GGUF, `jfk.wav`, ms per 40 ms frame:
+### Batched streams (`TurnOps::step_batch`)
 
-| threads | whole clip (`turn_run`) | stream, 640-sample feeds |
-|---:|---:|---:|
-| 1 | 0.94 | 5.4 |
-| 2 | 0.62 | 4.2 |
-| 4 | 0.38 | 3.4 |
-| default (8) | 0.44 | 3.4 |
+`transcribe_turn_stream_feed_batch` steps one frame of each of N sessions
+in one graph (`stream_step_batch` in `graph.cpp`). Columns are sessions.
+
+- **Shared work:** the weight matmuls, norms and element-wise ops run once
+  over `n = max(N, 4)` columns. Padding columns repeat session 0 and write no
+  state.
+- **Per-session work,** each on that session's own state buffer and in the
+  shape a 1-frame `stream_step` uses:
+  - the Mamba-2 conv and scan (1 token);
+  - the K / V ring writes;
+  - attention, with the query repeated to 4 columns so K.Q and the value
+    product take the same kernels;
+  - the state write-backs.
+- **Result:** every session gets bit for bit the values of its own feed.
+  `transcribe_sava_smoke` checks 1, 2, 3, 5 and 8 sessions with ragged
+  chunks, a rotating first session and 1 and 4 threads.
+  `transcribe_sava_real_smoke` checks 4 users with F32, F16 and Q8_0.
+- **Where the graph lives:** in the session listed first (`TurnSession::batch`:
+  its own context and scheduler, freed with the session's scratch). It is
+  reused while the list of streams is the same, keyed by `Stream::uid`, which
+  is unique for the process lifetime, so a freed session's graph is never
+  reused. A different list rebuilds it, which costs about 0.5 ms at N = 8.
+- **No model-level scratch:** the one-compute-per-model rule is not needed
+  for safety.
+- **Debug dumps:** with `TRANSCRIBE_DUMP_DIR` set, the batch steps sessions
+  one by one, with the same values, so each stream's validation trace stays
+  complete.
+
+### Speed
+
+Apple M1, idle machine, ms per 40 ms frame (clip: `jfk.wav`; stream:
+640-sample feeds):
+
+| | clip, 1 thread | clip, 4 threads | stream, 1 thread | stream, 4 threads |
+|---|---:|---:|---:|---:|
+| F32 | 0.90 | 0.38 | 4.6 | 3.3 |
+| F16 | 1.81 | 0.59 | 7.2 | 2.9 |
+| Q8_0 | 0.70 | 0.28 | 3.0 | 1.5 |
+
+8 users batched, ms per tick (one frame each):
+
+| | 1 thread | 4 threads |
+|---|---:|---:|
+| F32 | 10.1 | 6.3 |
+| F16 | 17.2 | 6.9 |
+| Q8_0 | 8.1 | 4.9 |
+
+Before the contiguous query and the transposed V ring, a streamed frame took
+5.4 ms (F32) and 3.9 ms (Q8_0) at 1 thread.
 
 For comparison, the reference (torch 2.14.1) on the same machine with 1
 thread takes 0.37 ms per frame for a whole clip and 10.5 ms per frame
 streaming.
 
-A streamed frame runs a 4-column graph for 1 real column, so it pays for
-four. Halving that needs a matmul path that is column-invariant without
-padding (for example the vec_dot path for every `n`), or BF16 weights.
+A streamed frame still runs a 4-column graph for 1 real column. Dropping
+the padding needs either:
+
+- a ggml change that gives every column count the same kernel (turn-perf's
+  "variant E", about 25% faster for 1 user, bit-exact), or
+- accepting stream != run (up to 1.4e-6).
+
+Both were decided against for now. On ARM the F16 file runs 1.6-1.9x
+slower than F32: ggml's F16 x F32 matmul has no tiled kernel there.
 
 ## Quantization (Stage 5)
 

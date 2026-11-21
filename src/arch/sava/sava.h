@@ -203,7 +203,7 @@ struct Model final : public transcribe_model {
 // written by the step graph, plus the host-side context.
 struct AttnState {
     ggml_tensor * k_ring = nullptr;  // ne [KV hd, ring]: normed, rotated keys, slot = position % ring
-    ggml_tensor * v_ring = nullptr;  // ne [KV hd, ring]
+    ggml_tensor * v_ring = nullptr;  // ne [ring, KV hd]: values, transposed (the value product reads it in place)
     int32_t       ring   = 0;        // window + k_block_frames
     int32_t       window = 0;
 };
@@ -271,7 +271,8 @@ struct Stream {
 
     // Host scratch.
     std::vector<float>   mel, log_energy, mask, rope;
-    std::vector<double>  fft_re, fft_im, fft_scratch;
+    std::vector<double>  fft_re, fft_im, fft_scratch, fe_win, fe_power;
+    std::vector<float>   fe_buf;
     std::vector<int64_t> slots;
     std::vector<float>   logit, logit_la, turn;
 
@@ -281,7 +282,12 @@ struct Stream {
 
     DumpTrace trace;
 
-    Stream() = default;
+    // Unique for the process lifetime: keys the batch graphs that read this
+    // stream's state (BatchGraph::key), so a freed stream's graph is never
+    // reused for another stream at the same address.
+    const uint64_t uid;
+
+    Stream();
     ~Stream();
     Stream(const Stream &)             = delete;
     Stream & operator=(const Stream &) = delete;
@@ -305,14 +311,68 @@ transcribe_status stream_step(SessionCore & core,
 // Write the stream's trace (TRANSCRIBE_DUMP_DIR only), then drop it.
 void stream_dump(Stream & st, const Model & m);
 
+// The graph of one batched step (stream_step_batch): one frame for each of a
+// list of streams. Owned by the session listed first in the batch, with its
+// own compute context and scheduler (the session's single-stream graph keeps
+// its own), and reused while the stream list is the same.
+struct BatchGraph {
+    ggml_context *        ctx   = nullptr;
+    ggml_backend_sched_t  sched = nullptr;
+    ggml_cgraph *         graph = nullptr;
+    std::vector<uint64_t> key;    // Stream::uid of each column's stream
+    int                   n = 0;  // columns (>= the stream count, padded)
+
+    // Inputs.
+    ggml_tensor *                           mel_in     = nullptr;  // ne [mel_width, n]
+    ggml_tensor *                           log_energy = nullptr;  // ne [1, n]
+    ggml_tensor *                           ssm_ids    = nullptr;  // I32 [1]
+    ggml_tensor *                           rope_cos   = nullptr;  // ne [hd / 2, 1, n]
+    ggml_tensor *                           rope_sin   = nullptr;
+    std::vector<std::vector<ggml_tensor *>> slots;                 // [attention layer][stream]: I64 [1]
+    std::vector<std::vector<ggml_tensor *>> masks;                 // [attention layer][stream]: ne [ring, 4]
+
+    // Outputs.
+    ggml_tensor * logit    = nullptr;  // ne [1, n]
+    ggml_tensor * logit_la = nullptr;  // ne [1, n]
+    ggml_tensor * turn     = nullptr;  // ne [n_horizons, n]
+
+    // Host scratch.
+    std::vector<float> mel, log_energy_h, rope, mask, logit_h, logit_la_h, turn_h;
+
+    void release() noexcept;
+    BatchGraph() = default;
+
+    ~BatchGraph() { release(); }
+
+    BatchGraph(const BatchGraph &)             = delete;
+    BatchGraph & operator=(const BatchGraph &) = delete;
+};
+
+// One frame, pcm[i][0, frame_samples), for each of count distinct streams of
+// m, in one compute with bg's graph and n_threads threads. Writes turn[i] /
+// speech[i] as stream_step does for streams[i], with exactly its values: per
+// column the same kernels in the same reduction order (docs/porting/
+// families/sava.md). Adds the compute time to each core's t_encode_us.
+transcribe_status stream_step_batch(BatchGraph &          bg,
+                                    const Model &         m,
+                                    Stream * const *      streams,
+                                    SessionCore * const * cores,
+                                    int                   count,
+                                    int                   n_threads,
+                                    const float * const * pcm,
+                                    float *               turn,
+                                    float *               speech);
+
 struct TurnSession final : public transcribe_turn_session {
-    Stream st;
+    Stream     st;
+    BatchGraph batch;  // used when this session is listed first in a batched step
 
   protected:
     void on_scratch_released() noexcept override {
         st.g          = GraphTensors{};
         st.graph_n    = 0;
         st.graph_real = 0;
+        batch.release();
     }
 };
 

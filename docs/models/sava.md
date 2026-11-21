@@ -129,17 +129,35 @@ On the 8 golden recordings (`tests/golden/sava/`):
 
 ## Performance
 
-Apple M1, CPU, `jfk.wav`, idle machine, ms of compute per 40 ms frame:
+Apple M1, CPU, idle machine. Milliseconds of compute per 40 ms frame:
 
-| File | Whole clip, 1 thread | Whole clip, 4 threads | Stream (640-sample feeds), 1 thread | Stream, 4 threads |
+| File | Whole clip (`jfk.wav`), 1 thread | Whole clip, 4 threads | Stream (640-sample feeds), 1 thread | Stream, 4 threads |
 | --- | ---: | ---: | ---: | ---: |
-| F32 | 0.94 | 0.38 | 5.4 | 3.4 |
-| F16 | 1.80 | 0.59 | 8.1 | 3.0 |
-| Q8_0 | 0.75 | 0.30 | 3.9 | 1.7 |
+| F32 | 0.90 | 0.38 | 4.6 | 3.3 |
+| F16 | 1.81 | 0.59 | 7.2 | 2.9 |
+| Q8_0 | 0.70 | 0.28 | 3.0 | 1.5 |
 
-F16 is slower than F32 on this CPU. ggml multiplies F16 weights by fp32
-activations without its fast tiled kernel on ARM; x86 with F16C has one (not
-measured). Choose a file by need:
+Several live users on one model: `transcribe_turn_stream_feed_batch` steps
+one frame of every user in one compute, reading the weights once. Times are
+per tick, one 640-sample frame for each of 8 users:
+
+| File | 8 users, batched, 1 thread | 8 users, batched, 4 threads | 8 users fed one by one, 1 thread |
+| --- | ---: | ---: | ---: |
+| F32 | 10.1 ms (1.27 per user) | 6.3 ms (0.79 per user) | about 37 ms |
+| F16 | 17.2 ms (2.15 per user) | 6.9 ms (0.86 per user) | about 58 ms |
+| Q8_0 | 8.1 ms (1.01 per user) | 4.9 ms (0.61 per user) | about 24 ms |
+
+At 1 thread, one core serves about 30 users in real time with F32 and about
+40 with Q8_0. Each user's scores are bit-identical to feeding that session
+alone.
+
+On a shared machine, prefer 1 thread per compute. With other jobs running,
+multi-threaded steps can be far slower than single-threaded ones.
+
+**On ARM CPUs, the F16 file currently runs 1.6-1.9x slower than F32.** ggml
+multiplies F16 weights by fp32 activations without its fast tiled kernel on
+ARM; x86 with F16C has one (not measured). On ARM, prefer F32 or Q8_0. Choose
+a file by need:
 
 - **Q8_0:** the fastest and smallest.
 - **F16:** half the size of F32 with F32's results.
@@ -148,8 +166,9 @@ measured). Choose a file by need:
 A whole clip runs in blocks of up to 64 frames. A streamed frame runs a
 4-frame graph: the padding makes a stream bit-identical to a whole-clip run
 for any chunking, at the cost of computing 4 columns for 1. This holds for
-F32, F16 and Q8_0. For comparison, upstream's PyTorch (1 thread) takes 0.37
-ms per clip frame and 10.5 ms per streamed frame on the same machine.
+F32, F16 and Q8_0, batched or not. For comparison, upstream's PyTorch (1
+thread) takes 0.37 ms per clip frame and 10.5 ms per streamed frame on the
+same machine.
 
 `AUTO` selects the CPU, the validated path.
 

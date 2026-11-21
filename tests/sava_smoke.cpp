@@ -1,8 +1,10 @@
 // sava_smoke.cpp - the toy sava fixture through the public TURN and VAD APIs:
 // load, info, a run on synthetic audio, streaming parity with the run (bit
 // for bit) across ragged chunkings and thread counts, the VAD speech track,
-// flush and reset. The toy's 8- and 6-frame attention windows and 72-frame
-// KV rings wrap many times over the clip.
+// flush and reset; transcribe_turn_stream_feed_batch over 1-8 sessions in
+// ragged chunks equals each session fed alone, bit for bit. The toy's 8- and
+// 6-frame attention windows and 72-frame KV rings wrap many times over the
+// clip.
 
 #include "transcribe.h"
 #include "transcribe/turn.h"
@@ -156,6 +158,112 @@ std::vector<float> vad_stream(transcribe_vad_session * s, const std::vector<floa
     return out;
 }
 
+// A ragged chunk size for user u at call k: 0 (sometimes) to a few frames.
+int ragged(int u, int k) {
+    const uint32_t h        = static_cast<uint32_t>(u * 7919 + k * 104729) * 2654435761u;
+    const int      r        = static_cast<int>(h >> 20) % 6;
+    const int      sizes[6] = { 0, 13, 640, 777, 1280 + 3 * u, 2000 };
+    return sizes[r];
+}
+
+// Feed every user's pcm through transcribe_turn_stream_feed_batch in ragged
+// chunks (rotating which session is listed first), then flush each, and
+// collect each session's tracks with their frame indices checked.
+std::vector<Track> batch_tracks(const std::vector<transcribe_turn_session *> & s,
+                                const std::vector<std::vector<float>> &        pcm) {
+    const size_t        n = s.size();
+    std::vector<Track>  out(n);
+    std::vector<size_t> off(n, 0);
+    auto                collect = [&](size_t i) {
+        transcribe_turn_result r;
+        transcribe_turn_result_init(&r);
+        CHECK(transcribe_turn_get_result(s[i], &r) == TRANSCRIBE_OK);
+        CHECK(r.first_frame == static_cast<int64_t>(out[i].turn.size()));
+        CHECK(r.speech_first_frame == static_cast<int64_t>(out[i].speech.size()));
+        if (const float * p = transcribe_turn_probs(s[i])) {
+            out[i].turn.insert(out[i].turn.end(), p, p + r.n_probs);
+        }
+        if (const float * p = transcribe_turn_speech_probs(s[i])) {
+            out[i].speech.insert(out[i].speech.end(), p, p + r.n_speech_probs);
+        }
+    };
+    for (int k = 0;; ++k) {
+        bool any = false;
+        for (size_t i = 0; i < n; ++i) {
+            any = any || off[i] < pcm[i].size();
+        }
+        if (!any) {
+            break;
+        }
+        // Rotate the order so the session that owns the batch graph changes.
+        std::vector<transcribe_turn_session *> list(n);
+        std::vector<const float *>             ptr(n);
+        std::vector<int>                       len(n);
+        std::vector<size_t>                    who(n);
+        for (size_t j = 0; j < n; ++j) {
+            const size_t i = (j + static_cast<size_t>(k / 3)) % n;
+            const size_t c = std::min(static_cast<size_t>(ragged(static_cast<int>(i), k)), pcm[i].size() - off[i]);
+            who[j]         = i;
+            list[j]        = s[i];
+            ptr[j]         = c > 0 ? pcm[i].data() + off[i] : nullptr;
+            len[j]         = static_cast<int>(c);
+            off[i] += c;
+        }
+        CHECK(transcribe_turn_stream_feed_batch(list.data(), ptr.data(), len.data(), static_cast<int>(n)) ==
+              TRANSCRIBE_OK);
+        for (size_t j = 0; j < n; ++j) {
+            collect(who[j]);
+        }
+    }
+    for (size_t i = 0; i < n; ++i) {
+        CHECK(transcribe_turn_stream_flush(s[i]) == TRANSCRIBE_OK);
+        collect(i);
+    }
+    return out;
+}
+
+// feed_batch over 1..8 sessions with ragged chunks equals each session fed
+// alone (and, through stream == run, its run), bit for bit.
+void test_batch(transcribe_model * m) {
+    const int                       max_users = 8;
+    std::vector<std::vector<float>> pcm;
+    std::vector<Track>              alone;
+    transcribe_turn_session *       ref = turn_session(m, 1);
+    for (int u = 0; u < max_users; ++u) {
+        // Different audio and lengths per user (40 to 110 frames).
+        std::vector<float> x = signal((40 + 10 * u) * k_frame + 37 * u);
+        for (size_t i = 0; i < x.size(); ++i) {
+            x[i] *= 0.5f + 0.1f * static_cast<float>(u);
+        }
+        pcm.push_back(x);
+        alone.push_back(run_track(ref, x));
+    }
+    transcribe_turn_session_free(ref);
+
+    for (const int n_users : { 1, 2, 3, 5, 8 }) {
+        for (const int threads : { 1, 4 }) {
+            if (threads == 4 && n_users != 5) {
+                continue;
+            }
+            std::vector<transcribe_turn_session *> s;
+            for (int u = 0; u < n_users; ++u) {
+                s.push_back(turn_session(m, threads));
+            }
+            const std::vector<std::vector<float>> in(pcm.begin(), pcm.begin() + n_users);
+            for (int pass = 0; pass < 2; ++pass) {  // the second pass reuses the sessions
+                const std::vector<Track> got = batch_tracks(s, in);
+                for (int u = 0; u < n_users; ++u) {
+                    CHECK(got[static_cast<size_t>(u)].turn == alone[static_cast<size_t>(u)].turn);
+                    CHECK(got[static_cast<size_t>(u)].speech == alone[static_cast<size_t>(u)].speech);
+                }
+            }
+            for (transcribe_turn_session * x : s) {
+                transcribe_turn_session_free(x);
+            }
+        }
+    }
+}
+
 bool abort_now(void *) {
     return true;
 }
@@ -260,6 +368,8 @@ void test_model() {
         CHECK(vad_stream(v, pcm, c) == run.speech);
     }
     transcribe_vad_session_free(v);
+
+    test_batch(m);
 
     transcribe_model_free(m);
 }

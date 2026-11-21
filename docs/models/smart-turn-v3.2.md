@@ -86,3 +86,8 @@ the default threads (front end 2 ms of it). onnxruntime on the same machine:
 
 `AUTO` selects the CPU: the model is small, runs once per pause, and the CPU
 path is the validated one.
+
+**On ARM CPUs, the F16 file currently runs 1.6-1.9x slower than F32**: 224
+vs 117 ms per window with 1 thread and 80 vs 46 ms with 4 threads on an M1.
+ggml multiplies F16 weights by fp32 activations without its fast tiled
+kernel on ARM. CPU users should prefer F32 or Q8_0.
