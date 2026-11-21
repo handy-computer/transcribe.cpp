@@ -15,15 +15,12 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
-#include "transcribe-path.h"
 #include "weights.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <ios>
 #include <memory>
 #include <string>
 #include <vector>
@@ -122,13 +119,13 @@ transcribe_status stream_weights(const std::string &                path,
                                  const gguf_context *               gguf,
                                  ggml_context *                     ctx_meta,
                                  const load_common::WeightStorage & storage) {
-    std::ifstream fin(path_from_utf8(path), std::ios::binary);
-    if (!fin) {
+    load_common::BinaryFile file;
+    if (!file.open(path)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen %s for tensor data", kTag, path.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    const size_t             data_offset = gguf_get_data_offset(gguf);
+    const uint64_t           data_offset = static_cast<uint64_t>(gguf_get_data_offset(gguf));
     const ggml_to_float_t    q8_to_f32   = ggml_get_type_traits(GGML_TYPE_Q8_0)->to_float;
     std::vector<uint8_t>     staging;
     std::vector<float>       f32;
@@ -156,13 +153,15 @@ transcribe_status stream_weights(const std::string &                path,
             return TRANSCRIBE_ERR_GGUF;
         }
 
-        fin.seekg(static_cast<std::streamoff>(data_offset) +
-                  static_cast<std::streamoff>(gguf_get_tensor_offset(gguf, idx)));
+        const uint64_t toffset = static_cast<uint64_t>(gguf_get_tensor_offset(gguf, idx));
+        if (toffset > UINT64_MAX - data_offset) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: seek failed for tensor \"%s\"", kTag, t->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
         if (staging.size() < nbytes) {
             staging.resize(nbytes);
         }
-        fin.read(reinterpret_cast<char *>(staging.data()), static_cast<std::streamsize>(nbytes));
-        if (!fin) {
+        if (!file.read_at(data_offset + toffset, staging.data(), nbytes)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", kTag, t->name, nbytes);
             return TRANSCRIBE_ERR_GGUF;
         }

@@ -4,6 +4,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "transcribe-load-common.h"
 #include "transcribe-log.h"
 #include "transcribe-path.h"
 
@@ -378,8 +379,8 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
 transcribe_status stream_tensor_data_from_bin(const std::string &                path,
                                               const std::vector<BinStreamSlot> & slots,
                                               const char *                       error_tag) {
-    std::ifstream fin(path_from_utf8(path), std::ios::binary);
-    if (!fin) {
+    load_common::BinaryFile file;
+    if (!file.open(path)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen %s for tensor data", error_tag, path.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -404,13 +405,7 @@ transcribe_status stream_tensor_data_from_bin(const std::string &               
         if (staging.size() < want) {
             staging.resize(want);
         }
-        fin.seekg(static_cast<std::streamoff>(s.src_off));
-        if (!fin) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: seek failed for tensor \"%s\"", error_tag, s.dst->name);
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        fin.read(reinterpret_cast<char *>(staging.data()), static_cast<std::streamsize>(want));
-        if (!fin || static_cast<size_t>(fin.gcount()) != want) {
+        if (!file.read_at(s.src_off, staging.data(), want)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\"", error_tag, s.dst->name);
             return TRANSCRIBE_ERR_GGUF;
         }

@@ -22,6 +22,11 @@
 #include "transcribe-mmap.h"
 #include "transcribe.h"
 
+#include <cstddef>
+#include <cstdint>
+#if !defined(_WIN32) && !defined(__unix__) && !defined(__APPLE__)
+#    include <cstdio>
+#endif
 #include <string>
 #include <vector>
 
@@ -174,6 +179,47 @@ transcribe_status allocate_copied_weights(ggml_context *      ctx_meta,
                                           const char *        error_tag,
                                           WeightStorage &     out);
 
+// Read-only binary file for bulk weight streaming.
+//
+// Avoids std::ifstream on Windows: MSVC's basic_filebuf::xsgetn splits every
+// read() into a loop of 4095-byte fread() calls even on std::ios::binary
+// streams, defeating UCRT's direct-read bypass and issuing one 4 KiB ReadFile
+// syscall per chunk (~683k syscalls for a 2.67 GiB GGUF). Using CreateFileW
+// (with FILE_FLAG_SEQUENTIAL_SCAN) + ReadFile on Windows and open + pread
+// (with POSIX_FADV_SEQUENTIAL on Linux) on POSIX preserves the caller's chunk
+// size and honors UTF-8 paths via path_from_utf8().
+class BinaryFile {
+  public:
+    BinaryFile() = default;
+
+    ~BinaryFile() { close(); }
+
+    BinaryFile(const BinaryFile &)             = delete;
+    BinaryFile & operator=(const BinaryFile &) = delete;
+    BinaryFile(BinaryFile &&)                  = delete;
+    BinaryFile & operator=(BinaryFile &&)      = delete;
+
+    // Open `path` (UTF-8) read-only. Closes any previously open handle first.
+    bool open(const std::string & path);
+
+    void close() noexcept;
+
+    // Read `nbytes` starting at `offset` into `dst`. Returns false on invalid
+    // state, seek/I/O error, or unexpected EOF.
+    bool read_at(uint64_t offset, void * dst, size_t nbytes);
+
+  private:
+#if defined(_WIN32)
+    void *   handle_  = nullptr;
+    uint64_t pos_     = 0;
+    bool     pos_set_ = false;
+#elif defined(__unix__) || defined(__APPLE__)
+    int fd_ = -1;
+#else
+    std::FILE * fp_ = nullptr;
+#endif
+};
+
 // Stream tensor data from the GGUF data section on disk into
 // already-allocated backend buffer slots: read straight into host buffers,
 // uploaded through ggml_backend_tensor_set in bounded (16 MiB) chunks
@@ -181,7 +227,7 @@ transcribe_status allocate_copied_weights(ggml_context *      ctx_meta,
 // file bytes); with skip == nullptr every tensor in ctx_meta is streamed.
 //
 //   path:      filesystem path to the GGUF file, reopened fresh via
-//              std::ifstream. Stable for the life of the call.
+//              BinaryFile. Stable for the life of the call.
 //   gguf_data: the full gguf_context from gguf_init_from_file with
 //              no_alloc=true. Used to resolve each tensor's data
 //              offset.
@@ -258,7 +304,7 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(const BackendPlan &         
 //   - byte count is divisible by sizeof(float)
 //   - byte count matches expected_elems * sizeof(float) when
 //     expected_elems > 0 (pass 0 to skip the size check)
-//   - ifstream read consumed exactly the right number of bytes
+//   - file read consumed exactly the right number of bytes
 //
 // On success, `out` is resized and filled. On every other return
 // (including Absent), `out` is cleared so stale data cannot leak.
