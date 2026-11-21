@@ -110,14 +110,14 @@ SP_SPACE = "\u2581"  # SentencePiece word-boundary marker
 def _detect_decode_flavor(tok: dict) -> str:
     """Return "gpt2" or "bpe" from tokenizer.json's own decoder spec.
 
-    The two shipped Granite Speech 5.0 TurboCTC checkpoints carry different
-    tokenizer FAMILIES behind identical config.json files:
+    Granite Speech 5.0 TurboCTC checkpoints carry different tokenizer
+    FAMILIES behind near-identical config.json files:
 
       granite-speech-5.0-470m-turboctc      GPT-2 byte-level BPE
-                                            decoder: ByteLevel
-      granite-speech-5.0-470m-turboctc-nc   SentencePiece-derived BPE
-                                            decoder: Sequence[Replace(U+2581 -> " "),
-                                                              ByteFallback, Fuse, Strip]
+        up to 18ca3c1 (English-only)        decoder: ByteLevel
+      granite-speech-5.0-470m-turboctc      SentencePiece-derived BPE
+        from 121ff64 (multilingual)         decoder: Sequence[Replace(U+2581 -> " "),
+      granite-speech-5.0-470m-turboctc-nc                     ByteFallback, Fuse, Strip]
 
     The decoder chain is the authoritative statement of how pieces reassemble
     into text, so it — not a guess from the vocab — decides the GGUF
@@ -159,8 +159,9 @@ def read_tokenizer(model_dir: Path, pad_token: str | None) -> dict:
     """tokenizer.json (16384 entries) -> GGUF arrays.
 
     The vocabulary is contiguous over [0, 16384) and the CTC blank occupies
-    id 0, where it doubles as pad_token_id. Its PIECE differs per variant
-    (`<|blank|>` on the Apache-2.0 checkpoint, `<unk>` on the -nc one), so the
+    id 0, where it doubles as pad_token_id. Its PIECE differs per checkpoint
+    (`<|blank|>` on the English-only Apache-2.0 revision, `<unk>` on -nc and on
+    the multilingual Apache-2.0 revision), so the
     blank is located by the `pad_token` that tokenizer_config.json declares and
     then cross-checked against config.pad_token_id by the caller. A CTC model
     never encodes text, so there is no bos/eos to carry.
@@ -185,9 +186,16 @@ def read_tokenizer(model_dir: Path, pad_token: str | None) -> dict:
         if flavor == "gpt2":
             # Byte-level checkpoint: the only added token is the blank.
             types[at["id"]] = TOKEN_TYPE_CONTROL
-        elif at.get("special"):
-            # -nc: <unk> only. It is the blank/pad and the declared unk.
+        elif at.get("special") and at["content"] == model.get("unk_token"):
+            # <unk>: the blank/pad and the declared unk (-nc and the
+            # multilingual release alike).
             types[at["id"]] = TOKEN_TYPE_UNKNOWN
+        elif at.get("special"):
+            # Multilingual release: <|nospeech|>, <pad>, <|endoftext|>, ...,
+            # <|spltokenN|> are declared special=true, so the reference
+            # (batch_decode(skip_special_tokens=True)) drops them from the
+            # transcript. CONTROL tells the runtime to do the same.
+            types[at["id"]] = TOKEN_TYPE_CONTROL
         else:
             # -nc: the 254 reserved <|tokN|> placeholders, declared
             # special=false. USER, deliberately NOT CONTROL: the reference
@@ -257,21 +265,65 @@ def read_tokenizer(model_dir: Path, pad_token: str | None) -> dict:
     }
 
 
+# ----- Model card -----------------------------------------------------------
+
+
+def read_card_languages(model_dir: Path) -> list[str]:
+    """ISO 639-1 codes from the README.md YAML front matter `language:` list.
+
+    The checkpoint's config files carry no language list, so the model card is
+    the only upstream statement of it: `[en]` up to revision 18ca3c1, and
+    `[multilingual, en, fr, de, es, pt, it, ja]` from the 2026-10-21 release.
+    The `multilingual` tag is not a language and is dropped.
+    """
+    readme = model_dir / "README.md"
+    if not readme.exists():
+        raise SystemExit(f"{readme} missing; cannot read the card's language list")
+    lines = readme.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise SystemExit(f"{readme} has no YAML front matter")
+    langs: list[str] = []
+    in_list = False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if line.startswith("language:"):
+            in_list = True
+            inline = line.split(":", 1)[1].strip()
+            if inline:
+                langs.append(inline)
+                in_list = False
+            continue
+        if in_list:
+            item = line.strip()
+            if item.startswith("- "):
+                langs.append(item[2:].strip())
+            elif item:
+                in_list = False
+    langs = [x for x in langs if x != "multilingual"]
+    if not langs or any(len(x) != 2 or not x.isalpha() for x in langs):
+        raise SystemExit(f"unexpected model-card language list in {readme}: {langs!r}")
+    return langs
+
+
 # ----- Hyperparameters ------------------------------------------------------
 
 
 def read_hparams(config: dict, preproc: dict, processor: dict) -> dict:
     """Merge config.json + the two front-end config files into GGUF hparams.
 
-    The repo ships two front-end descriptions that must agree:
+    Front-end descriptions:
       processor_config.json   mainline GraniteSpeech5FeatureExtractor (the one
                               transformers>=5.16 actually instantiates), which
                               names the stacked width as `feature_size`.
       preprocessor_config.json  the stale trust_remote_code CtcConformerProcessor,
                               the only file that spells `stack_factor`/`deltas`.
-    Mainline wins on every shared field; the stale file is read only for the two
-    keys mainline omits, and every overlapping value is cross-checked so a
-    future snapshot cannot let them drift apart silently.
+                              Shipped up to the English-only revision 18ca3c1;
+                              removed upstream at 621ff2e (2026-10-21), so it is
+                              optional (`preproc` is {} when absent).
+    Mainline wins on every shared field. When the legacy file is present every
+    overlapping value is cross-checked so a snapshot cannot let them drift
+    apart silently.
     """
     enc = config["encoder_config"]
     fe = (processor or {}).get("feature_extractor") or {}
@@ -334,7 +386,11 @@ def read_hparams(config: dict, preproc: dict, processor: dict) -> dict:
     hp["fe_dither"] = 0.0
     hp["fe_delta_win_length"] = int(pick("delta_win_length", "delta_win_length", 3))
     hp["fe_logmel_floor_db"] = float(pick("logmel_floor_db", "logmel_floor_db", 8.0))
-    # Mainline omits both; only the legacy processor spells them out.
+    # Mainline does not expose these as config: GraniteSpeech5FeatureExtractor
+    # hard-codes them as class constants (delta_expansion = 2, i.e. deltas on,
+    # and frame_stacking = 2) and derives feature_size from them. Only the
+    # legacy processor spells them out; without it, use those class constants.
+    # The feature_size check below is what keeps this fallback honest.
     hp["fe_deltas"] = bool(preproc.get("deltas", True))
     hp["fe_stack_factor"] = int(preproc.get("stack_factor", 2))
 
@@ -345,6 +401,12 @@ def read_hparams(config: dict, preproc: dict, processor: dict) -> dict:
     # the mainline feature extractor's feature_size, the derived
     # (mel x delta x stack) product, and the encoder's input_linear.
     feature_size = fe.get("feature_size")
+    if feature_size is None and not preproc:
+        raise SystemExit(
+            "neither preprocessor_config.json (stack_factor/deltas) nor "
+            "processor_config.json[feature_extractor][feature_size] is present; "
+            "the encoder input width cannot be verified"
+        )
     if feature_size is not None and int(feature_size) != hp["enc_input_dim"]:
         raise SystemExit(
             f"front-end width disagreement: processor_config.json"
@@ -516,7 +578,9 @@ def main(argv: list[str]) -> int:
     print(f"Source: {model_dir}")
 
     config = json.loads((model_dir / "config.json").read_text())
-    preproc = json.loads((model_dir / "preprocessor_config.json").read_text())
+    # Optional: removed upstream with the multilingual release (see read_hparams).
+    preproc_path = model_dir / "preprocessor_config.json"
+    preproc = json.loads(preproc_path.read_text()) if preproc_path.exists() else {}
     processor_path = model_dir / "processor_config.json"
     processor = json.loads(processor_path.read_text()) if processor_path.exists() else {}
     tok_config = json.loads((model_dir / "tokenizer_config.json").read_text())
@@ -529,6 +593,7 @@ def main(argv: list[str]) -> int:
         )
 
     hp = read_hparams(config, preproc, processor)
+    languages = read_card_languages(model_dir)
     tok = read_tokenizer(model_dir, tok_config.get("pad_token"))
 
     if tok["blank_id"] != hp["blank_id"]:
@@ -554,6 +619,7 @@ def main(argv: list[str]) -> int:
     print(f"  CTC vocab: {hp['vocab_size']} "
           f"(blank={tok['blank_piece']}@{hp['blank_id']}), "
           f"{len(tok['merges'])} merges, tied head={hp['tie_word_embeddings']}")
+    print(f"  languages: {','.join(languages)}")
     print(f"  tokenizer flavor: {tok['flavor']} "
           f"({'SentencePiece, U+2581 + byte fallback' if tok['flavor'] == 'bpe' else 'GPT-2 byte-level'})")
 
@@ -602,7 +668,7 @@ def main(argv: list[str]) -> int:
         version="5.0",
         size_label=size_label,
         file_type=int(reference_file_type),
-        languages=["en"],
+        languages=languages,
         author="IBM",
         organization="ibm-granite",
         license=license_id,
@@ -610,7 +676,8 @@ def main(argv: list[str]) -> int:
         license_link=license_url,
         repo_url=f"https://huggingface.co/{repo_id}",
         description=(
-            "English encoder-CTC ASR. 16-block Granite Conformer encoder with "
+            ("English" if languages == ["en"] else "Multilingual") +
+            " encoder-CTC ASR. 16-block Granite Conformer encoder with "
             "block-local Shaw attention, 8x temporal subsampling and "
             "self-conditioned CTC over a 16384-entry BPE vocabulary; "
             "non-autoregressive greedy decode." + license_note
@@ -669,8 +736,8 @@ def main(argv: list[str]) -> int:
     writer.add_uint32("stt.frontend.stack_factor",     hp["fe_stack_factor"])
 
     # ---- tokenizer.ggml.* ----
-    # Per-variant: the two checkpoints ship different tokenizer FAMILIES behind
-    # byte-identical config.json files. `model` selects DecodeMode in
+    # Per-checkpoint: they ship different tokenizer FAMILIES behind
+    # near-identical config.json files. `model` selects DecodeMode in
     # src/transcribe-tokenizer.cpp, so it is load-bearing, not cosmetic.
     writer.add_string("tokenizer.ggml.model", tok["flavor"])
     if tok["flavor"] == "gpt2":
@@ -682,8 +749,8 @@ def main(argv: list[str]) -> int:
     writer.add_array("tokenizer.ggml.tokens",     tok["tokens"])
     writer.add_array("tokenizer.ggml.token_type", tok["types"])
     writer.add_array("tokenizer.ggml.merges",     tok["merges"])
-    # The blank piece is <|blank|> on the Apache-2.0 checkpoint and <unk> on the
-    # -nc one; either way it is both the CTC blank and pad_token_id. No bos/eos:
+    # The blank piece is <|blank|> on the English-only Apache-2.0 revision and
+    # <unk> on -nc and the multilingual revision; either way it is both the CTC blank and pad_token_id. No bos/eos:
     # the model never encodes text.
     writer.add_uint32("tokenizer.ggml.blank_token_id",   tok["blank_id"])
     writer.add_uint32("tokenizer.ggml.padding_token_id", tok["blank_id"])
