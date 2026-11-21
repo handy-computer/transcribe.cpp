@@ -63,6 +63,16 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
         return Bucket::Embed;
     }
 
+    // Fluid Speech Pro: clean-mode adapter factors
+    // (enc.blocks.<N>.<module>.clean_mode.{a,b}). The runtime folds
+    // W += alpha/rank * B A at load; block-quantizing the rank-32 factors
+    // would put quant noise into every adapted weight, and keeping them
+    // F32 doubles their ~55 MB (F16) cost for no measurable gain. Its two bias
+    // deltas (*.clean_mode.bias) fall through to the generic .bias rule.
+    if (contains(name, ".clean_mode.") && (ends_with(name, ".clean_mode.a") || ends_with(name, ".clean_mode.b"))) {
+        return Bucket::Adapter;
+    }
+
     // --- Generic rules (apply to every family) ---
 
     // Biases of every kind — short and precision-sensitive.
@@ -330,6 +340,8 @@ ggml_type resolve_target_type(const Preset & preset, const std::string & name, i
     switch (b) {
         case Bucket::Norm:
             return preset.norm;
+        case Bucket::Adapter:
+            return GGML_TYPE_F16;
         case Bucket::Conv:
             return preset.conv;
         case Bucket::ConvPw:

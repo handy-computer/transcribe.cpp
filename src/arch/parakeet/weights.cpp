@@ -14,10 +14,12 @@
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <string>
 
 namespace transcribe::parakeet {
 
@@ -28,6 +30,31 @@ namespace transcribe::parakeet {
 namespace {
 
 constexpr const char * kFamilyTag = "parakeet";
+
+// The Conformer-block modules Fluid Speech Pro's clean-mode adapter may
+// target, in GGUF naming, with their (in, out) widths. Returns false for
+// a module the adapter cannot name.
+bool clean_mode_module_dims(const std::string & module, const ParakeetHParams & hp, int64_t & in, int64_t & out) {
+    const int64_t d    = hp.enc_d_model;
+    const int64_t d_ff = hp.enc_d_ff;
+    if (module == "attn.linear_q" || module == "attn.linear_k" || module == "attn.linear_v" ||
+        module == "attn.linear_out" || module == "attn.linear_pos" || module == "conv.pointwise2") {
+        in  = d;
+        out = d;
+    } else if (module == "ff1.linear1" || module == "ff2.linear1") {
+        in  = d;
+        out = d_ff;
+    } else if (module == "ff1.linear2" || module == "ff2.linear2") {
+        in  = d_ff;
+        out = d;
+    } else if (module == "conv.pointwise1") {
+        in  = d;
+        out = 2 * d;
+    } else {
+        return false;
+    }
+    return true;
+}
 
 }  // namespace
 
@@ -568,6 +595,49 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf, ParakeetHPara
             return TRANSCRIBE_ERR_GGUF;
         }
         hp.tdt_global_symbol_budget = (budget == "global");
+    }
+
+    // Fluid Speech Pro's clean-mode adapter. rank, alpha and modules come
+    // together or not at all; a partial set is a converter bug.
+    {
+        uint32_t                 rank  = 0;
+        float                    alpha = 0.0f;
+        std::vector<std::string> modules;
+        const KvResult           rank_kv  = read_uint32_kv(gguf, "stt.parakeet.clean_mode.rank", rank);
+        const KvResult           alpha_kv = read_float32_kv(gguf, "stt.parakeet.clean_mode.alpha", alpha);
+        const KvResult           mod_kv   = read_string_array_kv(gguf, "stt.parakeet.clean_mode.modules", modules);
+        if (rank_kv != KvResult::Absent || alpha_kv != KvResult::Absent || mod_kv != KvResult::Absent) {
+            if (rank_kv != KvResult::Ok || rank == 0 || rank > 4096 || alpha_kv != KvResult::Ok ||
+                !std::isfinite(alpha) || alpha <= 0.0f || mod_kv != KvResult::Ok || modules.empty()) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "parakeet: stt.parakeet.clean_mode.{rank,alpha,modules} must all be present "
+                        "(uint32 rank > 0, float32 alpha > 0, non-empty string array)");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            if (hp.head_kind == HeadKind::CTC) {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "parakeet: stt.parakeet.clean_mode needs a predictor and joint (head_kind=ctc)");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            for (size_t i = 0; i < modules.size(); ++i) {
+                int64_t in = 0, out = 0;
+                if (!clean_mode_module_dims(modules[i], hp, in, out)) {
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: unknown stt.parakeet.clean_mode module \"%s\"",
+                            modules[i].c_str());
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                for (size_t j = 0; j < i; ++j) {
+                    if (modules[j] == modules[i]) {
+                        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                "parakeet: stt.parakeet.clean_mode.modules lists \"%s\" twice", modules[i].c_str());
+                        return TRANSCRIBE_ERR_GGUF;
+                    }
+                }
+            }
+            hp.clean_mode_rank    = static_cast<int32_t>(rank);
+            hp.clean_mode_alpha   = alpha;
+            hp.clean_mode_modules = std::move(modules);
+        }
     }
 
     // The pre-Conformer block (Fluid Speech Pro) is validated on the
@@ -1144,6 +1214,57 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_F32(weights.vad.ctx_b, "vad.ctx.bias", h);
         GET_CONV(weights.vad.out_w, "vad.out.weight", 1, h, 1);
         GET_F32(weights.vad.out_b, "vad.out.bias", 1);
+    }
+
+    // ----- Fluid Speech Pro clean-mode adapter -----
+    // Carried in the file, not applied yet: check that the announced
+    // adapter is complete and well-shaped, and that no clean-mode tensor
+    // appears without the KVs or outside the announced set. Nothing binds
+    // these tensors, so default output is unchanged.
+    {
+        size_t expected = 0;
+        if (hp.clean_mode_rank > 0) {
+            const int64_t rank = hp.clean_mode_rank;
+            char          name[160];
+            for (int i = 0; i < hp.enc_n_layers; ++i) {
+                for (const std::string & module : hp.clean_mode_modules) {
+                    int64_t in = 0, out = 0;
+                    clean_mode_module_dims(module, hp, in, out);  // validated with the KVs
+                    // A: [rank, in] in PyTorch = ggml ne [in, rank]; B: [out, rank] = ne [rank, out].
+                    std::snprintf(name, sizeof(name), "enc.blocks.%d.%s.clean_mode.a", i, module.c_str());
+                    if (transcribe::weights::find_tensor(ctx_meta, name, { GGML_TYPE_F32, GGML_TYPE_F16 }, { in, rank },
+                                                         kTag) == nullptr) {
+                        return TRANSCRIBE_ERR_GGUF;
+                    }
+                    std::snprintf(name, sizeof(name), "enc.blocks.%d.%s.clean_mode.b", i, module.c_str());
+                    if (transcribe::weights::find_tensor(ctx_meta, name, { GGML_TYPE_F32, GGML_TYPE_F16 },
+                                                         { rank, out }, kTag) == nullptr) {
+                        return TRANSCRIBE_ERR_GGUF;
+                    }
+                    expected += 2;
+                }
+            }
+            // Bias deltas: W_ih(layer 0) @ decoder_input for the predictor's
+            // fused LSTM bias, and joint_hidden for the joint's pred bias.
+            ggml_tensor * unused = nullptr;
+            GET_F32(unused, "pred.lstm.0.clean_mode.bias", 4 * pred_h);
+            GET_F32(unused, "joint.pred.clean_mode.bias", joint_h);
+            (void) unused;
+            expected += 2;
+        }
+        size_t found = 0;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
+            if (std::strstr(ggml_get_name(t), ".clean_mode.") != nullptr) {
+                ++found;
+            }
+        }
+        if (found != expected) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "parakeet: %zu clean_mode tensors in the file, %zu expected from "
+                    "stt.parakeet.clean_mode.*",
+                    found, expected);
+            return TRANSCRIBE_ERR_GGUF;
+        }
     }
 
     return TRANSCRIBE_OK;

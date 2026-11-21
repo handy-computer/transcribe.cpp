@@ -79,6 +79,7 @@ per-preset bucket policy for every canonical tensor name.
 | `ConvPw` | 1×1 pointwise conv kernels in conformer blocks                        | F16 (im2col+matmul supports F16 matmul)        |
 | `Conv`   | Non-pointwise conv kernels: 2D pre-encode, depthwise                  | F32 or F16 (no quantized im2col in ggml)       |
 | `Norm`   | Biases, LayerNorm/BatchNorm/RMSNorm weights, per-head q_norm/k_norm, positional bias/encoding, frontend buffers | F32 (precision-sensitive, tiny) |
+| `Adapter` | Low-rank adapter factors kept for a later load-time fold: Fluid Speech Pro's clean mode (`*.clean_mode.a` / `*.clean_mode.b`) | F16 in every preset, never block-quantized (not a preset column) |
 
 Classification rules live in `classify_tensor()` in
 `tools/transcribe-quantize/policy.cpp`. They are substring-based on the

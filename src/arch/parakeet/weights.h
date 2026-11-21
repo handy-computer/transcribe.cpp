@@ -51,26 +51,37 @@ struct ParakeetHParams {
     HeadKind head_kind = HeadKind::TDT;
 
     // Encoder (Conformer).
-    int32_t enc_n_layers             = 0;
-    int32_t enc_d_model              = 0;
-    int32_t enc_n_heads              = 0;
-    int32_t enc_d_ff                 = 0;  // d_model * ff_expansion_factor
-    int32_t enc_conv_kernel          = 0;  // depthwise conv kernel inside the Conformer block
-    int32_t enc_subsampling_factor   = 0;  // total downsampling on the time axis
-    int32_t enc_subsampling_channels = 0;  // intermediate channel count in pre_encode
-    int32_t enc_pos_emb_max_len      = 0;
-    bool    enc_use_bias             = false;
+    int32_t                  enc_n_layers             = 0;
+    int32_t                  enc_d_model              = 0;
+    int32_t                  enc_n_heads              = 0;
+    int32_t                  enc_d_ff                 = 0;  // d_model * ff_expansion_factor
+    int32_t                  enc_conv_kernel          = 0;  // depthwise conv kernel inside the Conformer block
+    int32_t                  enc_subsampling_factor   = 0;  // total downsampling on the time axis
+    int32_t                  enc_subsampling_channels = 0;  // intermediate channel count in pre_encode
+    int32_t                  enc_pos_emb_max_len      = 0;
+    bool                     enc_use_bias             = false;
     // NeMo's RelPositionalEncoding multiplies x by sqrt(d_model) when
     // xscaling=True. Default false so legacy GGUFs (v2/v3, xscaling=False)
     // keep working unchanged.
-    bool    enc_xscaling             = false;
+    bool                     enc_xscaling             = false;
     // Fluid Speech Pro's residual block between the subsampling output and
     // Conformer layer 0 (FluidVoice's fluid_speech.py attaches it to
     // encoder.pre_encode). stt.parakeet.encoder.pre_block_kernel announces
     // it and gives the depthwise time-conv kernel; 0 = no block.
     // pre_block_dim is the width of the projections inside the block.
-    int32_t enc_pre_block_kernel     = 0;
-    int32_t enc_pre_block_dim        = 0;
+    int32_t                  enc_pre_block_kernel     = 0;
+    int32_t                  enc_pre_block_dim        = 0;
+    // Fluid Speech Pro's clean-mode adapter: a rank-`clean_mode_rank`
+    // low-rank delta per adapted encoder linear (W += alpha/rank * B A)
+    // plus two bias deltas on the predictor and joint, which FluidVoice's
+    // fluid_speech.load(clean_mode=True) folds into the weights.
+    // stt.parakeet.clean_mode.rank announces it (0 = absent);
+    // clean_mode_modules lists the adapted Conformer-block modules in GGUF
+    // naming (e.g. "attn.linear_q"). The loader validates the tensors
+    // but does not apply them yet: default output ignores the adapter.
+    int32_t                  clean_mode_rank          = 0;
+    float                    clean_mode_alpha         = 0.0f;
+    std::vector<std::string> clean_mode_modules;
     // Local attention window. -1/-1 = full attention (most variants).
     // When non-negative, each query attends to keys within [left, right]
     // per enc_att_context_style below:
@@ -80,8 +91,8 @@ struct ParakeetHParams {
     //   ChunkedLimited — full RelPositionalEncoding (pos_emb 2T-1) plus a
     //     host-side chunked mask; chunk_size = right+1, left_chunks =
     //     left/chunk_size. nemotron-speech-streaming-en-0.6b ([70, 13]).
-    int32_t enc_att_context_left     = -1;
-    int32_t enc_att_context_right    = -1;
+    int32_t                  enc_att_context_left  = -1;
+    int32_t                  enc_att_context_right = -1;
 
     // Multi-lookahead training menu for cache-aware streaming models. A
     // flat GGUF int32 array [L0,R0,L1,R1,...]; index 0 is the default
