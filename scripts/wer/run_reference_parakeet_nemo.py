@@ -42,6 +42,9 @@ def main() -> int:
                    help="Output JSONL path (run.py-compatible).")
     p.add_argument("--model", required=True,
                    help="HF repo id or local .nemo path for the ASRModel checkpoint.")
+    p.add_argument("--revision", default=None,
+                   help="HF revision for repos loaded through a publisher "
+                        "loader (Fluid Speech's fluid_speech.py).")
     p.add_argument("--torch-threads", type=int, default=1,
                    help="torch intra-op threads for deterministic runs.")
     p.add_argument("--limit", type=int, default=0,
@@ -141,6 +144,7 @@ def main() -> int:
         resolve_prompt_id,
         apply_prompt,
         switch_attention,
+        load_fluid_speech,
     )
     _patch_conformer_for_offline(force_regular_att_style=args.offline_only)
 
@@ -166,8 +170,15 @@ def main() -> int:
         print(f"resolved {args.model} -> {local}")
     is_local = local.exists()
     loader = "restore_from" if is_local else "from_pretrained"
+    # FluidVoice checkpoints carry an extra pre-Conformer block that only
+    # their own loader attaches; plain restore_from rejects the archive.
+    model = load_fluid_speech(args.model, args.revision)
+    if model is not None:
+        loader = "fluid_speech.load"
     try:
-        if is_local:
+        if model is not None:
+            pass
+        elif is_local:
             model = ASRModel.restore_from(str(local), map_location="cpu")
         else:
             model = ASRModel.from_pretrained(args.model, map_location="cpu")
