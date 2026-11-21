@@ -144,6 +144,18 @@
     "max_abs": 2200.0,
     "mean_abs": 5.0
   },
+  "enc.pre_block.out": {
+    "_comment": [
+      "fluid-speech-pro only: FluidVoice's residual pre-Conformer block on",
+      "enc.pre_encode.out. Its error is the inherited subsampler drift: on jfk",
+      "enc.pre_encode.out differs by 1.098/0.0600 and enc.pre_block.out by",
+      "1.096/0.0599, while the block's own residual (pre_block - pre_encode)",
+      "matches NeMo to 0.035 max_abs, 5.2e-5 relative RMS. Budget = 2x the",
+      "observed pre_encode drift."
+    ],
+    "max_abs": 2.5,
+    "mean_abs": 0.15
+  },
   "enc.block.0.out": {
     "max_abs": 50.0,
     "mean_abs": 0.15

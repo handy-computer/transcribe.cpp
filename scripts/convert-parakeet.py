@@ -193,7 +193,10 @@ VARIANT_PROFILES: dict[str, dict] = {
     },
     # Fluid Speech Pro: v3 plus FluidVoice's residual block between the
     # subsampler and Conformer layer 0 (model_config.yaml `fluid_speech`).
-    # The block's eight tensors are encoder.fv_insert.* in the .nemo.
+    # The block's eight tensors are encoder.fv_insert.* in the .nemo. The
+    # archive also carries clean_mode.* (an optional low-rank adapter that
+    # fluid_speech.load(clean_mode=True) folds into the weights); the
+    # default verbatim mode does not use it and neither does this GGUF.
     "fluid-speech-pro": {
         "variant": "tdt-0.6b-fluid-speech-pro",
         "display_name": "Fluid Speech Pro",
@@ -205,6 +208,8 @@ VARIANT_PROFILES: dict[str, dict] = {
         "lang_detect": True,
         "author": "FluidVoice",
         "organization": "FluidVoice-Labs",
+        "prefer_direct_load": True,
+        "expected_unused_prefixes": ("clean_mode.",),
         "license": "cc-by-4.0",
         "license_name": "Creative Commons Attribution 4.0",
         "license_link": "https://creativecommons.org/licenses/by/4.0/",
@@ -1620,7 +1625,10 @@ EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED = ("ctc_decoder.",)
 
 
 def is_expected_unused(key: str, head_kind: str, drop_aux_ctc: bool,
-                       has_prompt: bool) -> bool:
+                       has_prompt: bool,
+                       profile_prefixes: tuple[str, ...] = ()) -> bool:
+    if profile_prefixes and key.startswith(profile_prefixes):
+        return True
     if key.startswith(EXPECTED_UNUSED_PREFIXES_BASE):
         return True
     if key.endswith(EXPECTED_UNUSED_SUFFIXES):
@@ -1817,6 +1825,25 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
         )
     hp["enc_use_bias"] = bool(bias_present[0])
     print(f"Encoder use_bias: {hp['enc_use_bias']}")
+
+    # Fluid Speech Pro's pre-Conformer block: the config spec and the
+    # weights must agree, and only the `insert: pre` placement (on the
+    # encoder.pre_encode output) is implemented.
+    has_pre_block_weights = any(k.startswith("encoder.fv_insert.") for k in sd_keys)
+    if hp["enc_pre_block_kernel"] > 0:
+        insert = str(config["fluid_speech"].get("insert", "pre"))
+        if insert != "pre":
+            raise ValueError(f"fluid_speech.insert={insert!r}; only 'pre' is supported")
+        mix_shape = tuple(sd["encoder.fv_insert.mix.weight"].shape)
+        if mix_shape != (hp["enc_pre_block_dim"], 1, hp["enc_pre_block_kernel"]):
+            raise ValueError(
+                f"encoder.fv_insert.mix.weight shape {mix_shape} does not match "
+                f"fluid_speech insert_dim={hp['enc_pre_block_dim']} "
+                f"insert_kernel={hp['enc_pre_block_kernel']}"
+            )
+        print(f"Pre-Conformer block: dim={hp['enc_pre_block_dim']} kernel={hp['enc_pre_block_kernel']}")
+    elif has_pre_block_weights:
+        raise ValueError("state_dict carries encoder.fv_insert.* but the config has no fluid_speech section")
 
     print(f"Writing GGUF to {out_path}")
     writer = gguf_writer(str(out_path), "parakeet")
@@ -2257,7 +2284,8 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
 
     unused = sorted(
         k for k in (sd_keys - consumed)
-        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt)
+        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt,
+                                  tuple(profile.get("expected_unused_prefixes", ())))
     )
     if unused:
         print(

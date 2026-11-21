@@ -1,0 +1,192 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "FluidVoice-Labs/fluid-speech-pro",
+  "hf_revision": "46027a3bffc5817ce8f9b29add0a062610134a90",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "nemo_archive",
+      "path": "fluid-speech-pro.nemo:model_config.yaml#preprocessor",
+      "status": "found",
+      "detail": "AudioToMelSpectrogramPreprocessor: 16 kHz, 128 mels, n_fft 512, win 0.025 s, hop 0.01 s, hann, per_feature, dither 1e-5. Same values as nvidia/parakeet-tdt-0.6b-v3; processor_config.json (transformers export) agrees."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    }
+  },
+  "variants": [
+    {
+      "name": "fluid-speech-pro",
+      "memory_gb": 2.6,
+      "files": [
+        "fluid-speech-pro.nemo",
+        "fluid_speech.py",
+        "model.safetensors",
+        "config.json",
+        "tokenizer.json"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "architectures": [
+        "ParakeetForTDT"
+      ],
+      "hidden_act": "relu",
+      "model_type": "parakeet_tdt",
+      "vocab_size": 8193
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "config",
+    "evidence": "config.dtype=float32; .nemo model_weights.ckpt is all F32 (plus I64 BN counters). The .nemo is the F32 source; converted GGUF is fluid-speech-pro-F32.gguf.",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "I64": 24,
+        "F32": 699
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 8192,
+    "special_tokens": {
+      "pad": 2,
+      "blank": 8192,
+      "decoder_start": 8192
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "7c21c04ff6ff2f806ca43a8420479091479c805d2b7952825ae2acc4fec9424d"
+  },
+  "capabilities": {
+    "languages": [
+      "bg",
+      "hr",
+      "cs",
+      "da",
+      "nl",
+      "en",
+      "et",
+      "fi",
+      "fr",
+      "de",
+      "el",
+      "hu",
+      "it",
+      "lv",
+      "lt",
+      "mt",
+      "pl",
+      "pt",
+      "ro",
+      "ru",
+      "sk",
+      "sl",
+      "es",
+      "sv",
+      "uk"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/FluidVoice-Labs/fluid-speech-pro",
+      "notes": "Not reported on the card. Acceptance dataset for the family (catalog benchmark); the gate is our measured NeMo oracle run."
+    },
+    {
+      "dataset": "Open ASR Leaderboard, English average (7 public + 2 private sets)",
+      "language": "en",
+      "metric": "wer",
+      "score": 6.06,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/FluidVoice-Labs/fluid-speech-pro",
+      "notes": "Beam search, 4 beams (malsd_batch); SPGISpeech scored in clean mode. v3 = 7.04 on the same board. transcribe.cpp decodes greedily, verbatim mode."
+    },
+    {
+      "dataset": "VoxPopuli (cleaned), Open ASR Leaderboard",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.7,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/FluidVoice-Labs/fluid-speech-pro",
+      "notes": "Beam 4. v3 = 3.05."
+    },
+    {
+      "dataset": "FLEURS test, 24 non-English languages (mean)",
+      "language": null,
+      "metric": "wer",
+      "score": 9.13,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/FluidVoice-Labs/fluid-speech-pro",
+      "notes": "Greedy decoding, leaderboard multilingual normalization; mean of per-language WER. v3 = 11.35 on the same pipeline. de 3.52, es 2.66, fr 4.65, it 1.91, pt 3.57."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "Fluid Speech Pro is nvidia/parakeet-tdt-0.6b-v3 retrained with one extra residual block (FrameCleaner) between the subsampler and Conformer layer 0. The publisher states the NeMo checkpoint is the reference model; it loads through fluid_speech.py in the same repo, which restores the base model non-strictly, attaches the block as a forward hook on encoder.pre_encode and then loads every tensor strictly. The oracle runs that loader unmodified (fetched at the pinned revision) with clean mode off. The repo's transformers export leaves the block out (card: 'nearly the same results'), so it is not a reference. Their ONNX/MLX/Core ML/parakeet.cpp GGUF exports and the third-party TalkMate/fluid-speech-pro-gguf (transcribe.cpp format, converted by a downstream fork) are cross-checks, not inputs.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Architecture delta vs v3: FrameCleaner x + up(gelu(mix(down(LayerNorm(x))))) on the subsampler output, before xscaling (v3 has xscaling=false anyway). down/up are Linear(1024,1024), mix is a depthwise Conv1d over time, k=15, padding 7, with bias; gelu is the exact erf form. model_config.yaml `fluid_speech: {insert: pre, insert_dim: 1024, insert_kernel: 15}`; weights encoder.fv_insert.{ln,down,mix,up}.{weight,bias}. Runtime KVs stt.parakeet.encoder.pre_block_{kernel,dim}, tensors enc.pre_block.{norm,down,mix,up}.{weight,bias}, matching the existing TalkMate GGUF.",
+    "Plain ASRModel.restore_from rejects the archive (unexpected keys encoder.fv_insert.*, clean_mode.*). Any loader that drops the block silently runs a different model; the C++ loader errors when the KV is present without the tensors and the converter errors when the weights are present without the config.",
+    "Clean mode: the .nemo carries a rank-32 LoRA-style adapter (clean_mode.*, 530 tensors) that fluid_speech.load(clean_mode=True) folds into the encoder, LSTM input bias and joint.pred bias. Off by default; not converted. A clean-mode GGUF would be a separate folded conversion.",
+    "Batched inference: the k=15 time conv mixes up to 7 padded frames into the last real frames of a shorter utterance in a variable-length batch; the runtime must zero padded frames before the conv.",
+    "Streaming: the checkpoint is offline full-context (att_context_style regular); the block is not supported on the streaming encoder graphs.",
+    "Publisher numbers are beam-4 (leaderboard) or greedy FLEURS with leaderboard normalization; transcribe.cpp is greedy and uses our normalizer, so only our measured NeMo oracle is a gate.",
+    "Tokenizer: SentencePiece BPE 8192 + blank, vocab sha256 identical to v3.",
+    "License CC-BY-4.0 with attribution 'Fluid Speech Pro by FluidVoice. Built on NVIDIA Parakeet TDT 0.6B v3 and Moondream Parakeet Ultra.' (NOTICE)."
+  ],
+  "intake_gaps": []
+}
