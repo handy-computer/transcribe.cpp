@@ -2,9 +2,13 @@
 
 Status, per variant:
 
-- `granite-speech-5.0-470m-turboctc` (Apache-2.0): shipped (Stages 1-8; private
-  HF repo only, public flip deferred). Stage 6 covers both required publication
-  rigs (Apple M4 Max and AMD Ryzen 7 PRO 4750U), plus Apple M4 iteration data.
+- `granite-speech-5.0-470m-turboctc` (Apache-2.0): **re-pinned** to the
+  multilingual, cased and punctuated release (upstream `91dcb06`; weights
+  replaced in place at `121ff64`, 2026-10-21). Stages 1-5 redone for the new
+  weights; the publication WER/speed sweep and the HF re-upload are pending.
+  See **Re-pin to the multilingual release** below. The Stage 4-8 sections
+  further down were written for the English-only `18ca3c1` weights unless they
+  say otherwise.
 - `granite-speech-5.0-470m-turboctc-nc` (CC-BY-NC-SA-4.0): **Stages 1-7 complete**,
   including Stage 6 on both required publication rigs (Apple M4 Max and AMD
   Ryzen 7 PRO 4750U), plus Apple M4 iteration data. Gates A and B are green,
@@ -13,24 +17,140 @@ Status, per variant:
   privately. Stage 8 has not started.
 
 Everything below that is not explicitly marked per-variant was established for
-the Apache-2.0 variant and applies unchanged to the `-nc` variant: `config.json`,
-`preprocessor_config.json`, `processor_config.json` and `generation_config.json`
-are byte-identical between the two repos, and the 550 shipped tensor names are an
-exact set match. The `-nc` deltas are the tokenizer, the licence, and the training
-corpus -- see **Tokenizer**, **Identity** and **Notes**.
+the Apache-2.0 variant and applies unchanged to the `-nc` variant: at the
+English-only Apache pin `18ca3c1`, `config.json`, `preprocessor_config.json`,
+`processor_config.json` and `generation_config.json` were byte-identical between
+the two repos, and the 550 shipped tensor names are an exact set match (still
+true at `91dcb06`, which differs from `-nc` only in `transformers_version` and the
+missing `preprocessor_config.json`). The `-nc` deltas are the tokenizer, the
+licence, the languages and the training corpus -- see **Tokenizer**, **Identity**
+and **Notes**.
+
+## Re-pin to the multilingual release (2026-11)
+
+IBM replaced the Apache-2.0 weights in place on 2026-10-21: `121ff64` "Upload 13
+files" (new weights, tokenizer and card), `621ff2e` "Remove legacy custom-code
+files" (deletes `preprocessor_config.json` and the stale `ctc_conformer` `.py`
+files), then card/plot-only commits up to `91dcb06`. The old weights stay
+reachable at `18ca3c1` (the card points at `947f59a` for them). `-nc` did not
+change: its latest commit `af0a8e8` is README-only, and `config.json`,
+tokenizer files, processor files and `model.safetensors` (sha256 `e78ded1c...`)
+are identical to our pin `0eb7b4f`, so `-nc` stays pinned.
+
+What changed between `18ca3c1` and `91dcb06`:
+
+| File | Change | Effect on the port |
+|---|---|---|
+| `config.json`, `generation_config.json` | `transformers_version` 5.16.0.dev0 -> 5.16.1 only | none |
+| `processor_config.json` | unchanged (`feature_size=320`, same STFT/mel/delta/floor params) | none |
+| `preprocessor_config.json` | deleted | converter read it unconditionally; now optional (see below) |
+| `tokenizer.json` | GPT-2 byte-level BPE (16127 merges, one added token `<|blank|>`) -> SentencePiece BPE with byte fallback (20731 merges, 255 special added tokens, cased pieces and punctuation), i.e. the same tokenizer family as `-nc` but a different vocabulary | GGUF `tokenizer.ggml.model` flips `gpt2` -> `bpe`; handled by the existing flavor detection |
+| `tokenizer_config.json` | `pad_token` `<|blank|>` -> `<unk>`, adds `unk_token=<unk>` | blank stays id 0 |
+| `model.safetensors` | same 550 names and shapes; the 16 BatchNorm affine pairs (`conv.norm.{weight,bias}`) now stored F32 instead of BF16 | none: the converter already emits them F32; tensor data is 947,138,560 bytes either way |
+| `README.md` | `language: [multilingual, en, fr, de, es, pt, it, ja]`; cased and punctuated output; 5.51% average Open ASR English WER vs 5.78% for the English-only release | `general.languages` |
+
+Converter changes (`scripts/convert-granite5_ctc.py`):
+
+- `preprocessor_config.json` is optional. Mainline
+  `GraniteSpeech5FeatureExtractor` hard-codes `delta_expansion = 2` and
+  `frame_stacking = 2` as class constants and derives `feature_size` from them,
+  so without the legacy file `deltas=true` / `stack_factor=2` are those
+  constants, and the derived width (80 x 2 x 2) must equal
+  `processor_config.json` `feature_size` or conversion aborts. When the legacy
+  file exists, the old cross-check still runs.
+- `general.languages` comes from the model card front matter (the
+  `multilingual` tag is dropped) instead of a hard-coded `["en"]`.
+- Special added tokens other than `<unk>` (`<|nospeech|>`, `<pad>`,
+  `<|endoftext|>`, `<|startoftranscript|>`, `<|pnc|>`, ..., `<|spltokenN|>`,
+  ids 1..254) are typed CONTROL. The reference drops them via
+  `batch_decode(skip_special_tokens=True)`; `decoder.cpp` now drops CONTROL ids
+  from the token list and transcript. On `-nc` the reserved `<|tokN|>` ids are
+  `special=false`, stay USER and still decode literally.
+- Converting `18ca3c1` with the new converter is byte-identical to the old one
+  (sha256 `8b17c76f...`), and so is `-nc` at `0eb7b4f` (sha256 `5a6b4c79...`).
+
+Validation on `91dcb06` (BF16 reference GGUF sha256
+`e55b3a443bb58f0a2d3d74569a6c36c0c15bcab9bf65f1de19755af575c5e49b`, 947,881,056
+bytes): preflight Gate A WARN (frontend normalization artifact, no GGUF) and Gate
+B WARN (architecture-string note) with every other check PASS; `validate.py all`
+green after re-finalizing the tolerances (see the `_comment` in
+`tests/tolerances/granite5_ctc.json`): F32 control exact to ~1e-5 relative, BF16
+drift concentrated in a massive-activation channel (4) in blocks 10-13, argmax
+agreement 137/137 and 441/441, transcripts identical. The manifest now dumps all
+16 blocks, like `-nc`.
+Batch parity: the 24-utterance golden was re-frozen from the new BF16 GGUF and
+`batch_parity.py` matches serial and golden at batch 2/4/8;
+`batch_tensor_parity.py` at batch 4 is bit-exact (max_abs 0.0) on
+`dec.ctc_logits`.
+
+Quant matrix (`scripts/quantize-all.py`, same policy and tensor types as
+before): BF16 947,881,056; F16 948,339,808; Q8_0 505,663,072; Q6_K 391,892,576;
+Q5_K_M 335,793,760; Q4_K_M 279,170,656 bytes. All load and transcribe jfk.
+Q8_0 sha256 `704d848ab7e9ef2d2dd039c858e867e5f6025237c9febf1e1f8fbffb1fefc45d`.
+
+Local WER (Apple M1, Metal, batch 8, `--language <code>`; not publication
+cells, which run on CUDA through the publication sweep). LibriSpeech
+test-clean, 2620 utterances:
+
+| run | WER (whisper-normalizer 1.0.1) | WER (0.1.12) | S / D / I (1.0.1) |
+|---|---|---|---|
+| reference, transformers 5.17.0 F32 (MPS), `91dcb06` | 1.30% [1.17, 1.44] | 1.33% | 540 / 86 / 62 |
+| C++ BF16 `91dcb06` | 1.30% [1.17, 1.44] | 1.33% | 539 / 86 / 61 |
+| C++ Q8_0 `91dcb06` | 1.31% [1.18, 1.45] | 1.34% | 545 / 86 / 62 |
+| C++ Q4_K_M `91dcb06` | 1.35% [1.22, 1.50] | 1.37% | 563 / 85 / 65 |
+| C++ BF16 `18ca3c1` (English-only) | 2.02% [1.85, 2.21] | 1.34% | 714 / 75 / 280 |
+
+Ref-dtype gate: reference 1.30, C++ BF16 1.30, max allowed 1.31: PASS. 10 of 2620
+BF16 hypotheses differ from the reference text at all. F16, Q6_K and Q5_K_M
+were scored on the first 500 utterances only: 1.17% / 1.17% / 1.16% against
+BF16 1.17% and reference 1.18% on the same subset.
+
+The two normalizer columns differ because `scripts/wer/score.py` does not pin
+`whisper-normalizer`. 0.1.12 rewrites a possessive `'s` to ` is`; 1.0.1 drops
+the apostrophe. The English-only model emits possessives as `X is` (the
+transformers reference at `18ca3c1` does too), so 1.0.1 charges it ~0.7 pp.
+Scored with 0.1.12, the `18ca3c1` C++ BF16 run reproduces the published
+catalog row exactly (1.34%, 529 / 87 / 92), which is how the published numbers
+were scored. English accuracy is therefore unchanged by the re-pin under the
+old scorer (1.33% vs 1.34%) and better under the current one.
+
+FLEURS test, C++ Q8_0, `--language <code>` (ja is CER):
+
+| language | n | error rate |
+|---|---|---|
+| en | 647 | 4.70% WER [4.30, 5.21] (0.1.12: 4.74%; `18ca3c1` BF16: 5.52% / 4.65%) |
+| fr | 676 | 7.06% WER [6.49, 7.67] |
+| de | 862 | 5.57% WER [5.08, 6.09] |
+| es | 908 | 4.67% WER [4.22, 5.15] |
+| ja | 650 | 5.00% CER [4.51, 5.49] |
+
+pt and it were not run locally. No transformers reference was run on FLEURS.
+
+Catalog state for the re-pin: `upstream_commit`, `languages` and download sizes
+are updated; the accuracy rows (measured on `18ca3c1`) were removed, so the
+`asr-publication-v2` profile reports 13 missing cells (LibriSpeech test-clean at
+all six quants, FLEURS Q8_0 for the seven languages) until the publication
+sweep runs against the re-uploaded GGUFs. The speed rows were measured on
+`18ca3c1` GGUFs; the graph, tensor shapes and tensor types are unchanged, so
+they are kept until the publication bench is re-run.
 
 ## Identity
 
 - Family key: `granite5_ctc`
 - Upstream architecture string: `granite_speech5_ctc` (`GraniteSpeech5ForCTC`); encoder `granite_speech5_encoder` (`GraniteSpeech5Encoder`)
 - Variants:
-  - `granite-speech-5.0-470m-turboctc`: 473 M params, English-only, encoder + CTC
-    head, non-autoregressive greedy decode.
+  - `granite-speech-5.0-470m-turboctc`: 473 M params, multilingual (en, fr, de,
+    es, pt, it, ja), cased and punctuated, encoder + CTC head,
+    non-autoregressive greedy decode.
     - Hugging Face repo: `ibm-granite/granite-speech-5.0-470m-turboctc`
-    - Hugging Face revision: `18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0`
+    - Hugging Face revision: `91dcb0605daf65f88dbb04fef015c423241d941d`
+      (English-only predecessor: `18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0`)
     - License: Apache-2.0
-    - Tokenizer: GPT-2-style byte-level BPE (GGUF `tokenizer.ggml.model = "gpt2"`)
-    - Training corpus: ~60,000 h English
+    - Tokenizer: SentencePiece-derived BPE with byte fallback (GGUF
+      `tokenizer.ggml.model = "bpe"`); `18ca3c1` was GPT-2-style byte-level BPE
+      (`"gpt2"`)
+    - Training corpus: ~153,000 h multilingual (model card); `18ca3c1` was
+      ~60,000 h English
   - `granite-speech-5.0-470m-turboctc-nc`: same 473 M params and the same
     architecture, shapes and frontend; differs only in tokenizer, licence and
     training data.
@@ -154,15 +274,27 @@ granite-4.x extractor except the normalization formula.
 
 ## Tokenizer
 
-This is the **only** structural difference between the two variants, and it is a
-different tokenizer family, not just a different vocabulary. Both are 16384 entries
+At the English-only pin this was the **only** structural difference between the two
+variants, and it was a different tokenizer family, not just a different vocabulary.
+Since the multilingual re-pin both variants are SentencePiece-derived BPE with byte
+fallback, with different vocabularies. Both are 16384 entries
 with the CTC blank at id 0 and both declare `tokenizer_class=ParakeetTokenizer`
 (load-bearing: `ParakeetTokenizer._decode` is where the CTC run-length collapse
 lives, see Notes).
 
 ### `granite-speech-5.0-470m-turboctc` (Apache-2.0)
 
-GPT-2-style byte-level BPE, 16384 entries, no normalizer, `ByteLevel` pre-tokenizer
+At `91dcb06`: SentencePiece-derived BPE, 16384 entries, 20731 merges,
+`byte_fallback = true`, `unk_token = <unk>`. Same normalizer and decoder chain as
+`-nc` below. Layout: id 0 `<unk>` (CTC blank, `pad_token_id`, unk); ids 1..254
+special added tokens (`<|nospeech|>`, `<pad>`, `<|endoftext|>`,
+`<|startoftranscript|>`, `<|pnc|>`, ..., `<|spltoken33|>`), typed CONTROL and
+dropped from transcripts like the reference's `skip_special_tokens=True`; ids
+255..510 `<0x00>`..`<0xFF>`; the rest word pieces, cased, with punctuation and
+CJK pieces. `vocab_sha256`:
+`fe99d8c73d6991d43cf7b0c69715e95bf437c7bec570e5d2f4c2598f6d31e38f`.
+
+At `18ca3c1` (English-only, superseded): GPT-2-style byte-level BPE, 16384 entries, no normalizer, `ByteLevel` pre-tokenizer
 (`add_prefix_space=false`) and `ByteLevel` decoder (`add_prefix_space=true`), 16127
 merges. The only added token is `<|blank|>` at id 0, which is simultaneously the CTC
 blank and `pad_token_id`. Spaces come from the byte-level round-trip, not from
@@ -1171,11 +1303,11 @@ downgraded without the user re-signing.
 
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |------------|------|----------------|---------------------|--------|--------|
-| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | MUST PASS | PASS — `and so my fellow americans ask not what your country can do for you ask what you can do for your country`, character-identical to the reference transcript |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf samples/jfk.wav` | same transcript as the hinted run (the model has no language conditioning, so `--language` is inert) | MUST PASS | PASS — byte-identical to the hinted run, as expected (`--language` reaches no branch) |
+| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | MUST PASS | PASS at `91dcb06` — `And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country.`, character-identical to the reference transcript (`18ca3c1`: the lowercase unpunctuated form) |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf samples/jfk.wav` | same transcript as the hinted run (the model has no language conditioning, so `--language` is inert) | MUST PASS | PASS — byte-identical to the hinted run, as expected (`--language` reaches no branch). At `91dcb06` `--language fr`/`ja` are accepted and give the same output; `--language ko` (not in `general.languages`) is rejected with `unsupported language` |
 | Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model models/granite-speech-5.0-470m-turboctc/granite-speech-5.0-470m-turboctc-BF16.gguf --list tests/golden/batch/granite-speech-5.0-470m-turboctc.list --batch-sizes 2,4,8 --backend cpu --golden-in tests/golden/batch/granite-speech-5.0-470m-turboctc.cpu.json`<br>`uv run scripts/batch_tensor_parity.py --model <same> --wav samples/jfk.wav --batch 4 --backend cpu --dump-name dec.ctc_logits` | byte-identical hypotheses + CPU tensor parity | MUST PASS | PASS — text byte-equal vs serial at 2/4/8 over 24 mixed-length utterances (golden `tests/golden/batch/granite-speech-5.0-470m-turboctc.cpu.json`, frozen over the 24 utterances in `...turboctc.list`; `--samples-dir samples/wer/test-clean` globs all 2620 and does NOT reproduce the golden); same-length CPU tensor parity bit-exact (max_abs=0.0) at batch=4; full test-clean batch-8 WER equals batch-1 |
-| Language detection | auto-detect | not exercised | model is English-only; no detection branch and no language tokens in the 16384-entry vocab | OUT OF SCOPE — monolingual English model; would return in scope only if IBM ships a multilingual Granite 5.0 CTC variant | SKIP — not exposed by runtime |
-| Translate | `--target-language` | not exercised | no translation head, no prompt surface, no non-English training data | OUT OF SCOPE — English-only ASR; would return in scope only with an upstream AST-capable variant | SKIP — not exposed by runtime |
+| Language detection | auto-detect | not exercised | no detection branch and no language tokens in the 16384-entry vocab | OUT OF SCOPE — at `91dcb06` the model is multilingual but emits text only, with no language-ID output or language tokens to read one from; would return in scope only with an upstream language-ID surface | SKIP — not exposed by runtime |
+| Translate | `--target-language` | not exercised | no translation head, no prompt surface | OUT OF SCOPE — ASR only; would return in scope only with an upstream AST-capable variant | SKIP — not exposed by runtime |
 | Segment timestamps | segment granularity | `build/bin/transcribe-cli -m <BF16> --timestamps segment samples/jfk.wav` | `TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS` | OUT OF SCOPE — no segmentation policy is defined for this family; would return in scope once a split rule (silence or max-duration) is chosen | SKIP — not exposed by runtime. `max_timestamp_kind` is `TRANSCRIBE_TIMESTAMPS_NONE`, so the request is rejected. One segment is still built internally to carry the text; it spans the clip bounds and makes no timing claim |
 | Word timestamps | word granularity | `build/bin/transcribe-cli -m <BF16> --timestamps word samples/jfk.wav` | `TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS` | OUT OF SCOPE — **re-signed by CJ 2026-09-12**, down from MUST PASS at intake. An implementation existed and passed the structural check, but its word END times were wrong (see below) and there is no reference alignment to validate against, so it was stripped rather than shipped. Returns in scope with a real word-end rule plus something to check it against | SKIP — not exposed by runtime; the word-building code was removed from `decoder.cpp` and `max_timestamp_kind` left at `TRANSCRIBE_TIMESTAMPS_NONE` |
 | Streaming | `--stream-chunk-ms` | not exercised | `capabilities.streaming: false`; and the `per_utterance` log-mel floor depends on an utterance-global maximum, so chunked decoding changes the feature values | OUT OF SCOPE — non-streaming model with a non-causal frontend; would return in scope only with a fixed-max ("global") frontend variant plus an upstream streaming recipe | SKIP — not exposed by runtime |
@@ -1256,11 +1388,11 @@ Drawn from the intake capability flags and what the port actually surfaced.
 Nothing here is speculative; each item is either a declared upstream
 capability the model does not have, or a measured result from Stages 4-7.
 
-**English only.** Monolingual. The 16384-entry byte-level BPE vocab carries
-no language tokens and the graph has no language-conditioning branch, so
-`--language` reaches nothing and is inert. There is no language-detection
-path to expose. A multilingual Granite 5.0 CTC variant would change this;
-none is published.
+**No language conditioning.** The Apache-2.0 variant covers en, fr, de, es,
+pt, it and ja through one shared 16384-entry vocabulary with no language
+tokens, and the graph has no language-conditioning branch, so `--language`
+(accepted for the listed codes) reaches nothing. There is no
+language-detection output. The `-nc` variant is English-only.
 
 **No translation.** No AST head, no prompt surface, no non-English training
 data.
