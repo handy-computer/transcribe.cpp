@@ -4,14 +4,16 @@
   "variant": "granite-speech-5.0-470m-turboctc",
   "source_model": {
     "hf_repo": "ibm-granite/granite-speech-5.0-470m-turboctc",
-    "hf_revision": "18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0"
+    "hf_revision": "91dcb0605daf65f88dbb04fef015c423241d941d"
   },
   "reference": {
     "kind": "transformers",
     "source": "https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc",
-    "revision": "18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0",
+    "revision": "91dcb0605daf65f88dbb04fef015c423241d941d",
     "entrypoint": "scripts/dump_reference_granite5_ctc_transformers.py",
-    "comment": "First-party HF Transformers integration: granite_speech5_ctc / granite_speech5_encoder, GraniteSpeech5ForCTC, GraniteSpeech5FeatureExtractor and GraniteSpeech5Processor ship inside mainline transformers from v5.16 (dumped with 5.17.0). No trust_remote_code - config.json has no auto_map. The dumper mirrors the model card path: AutoProcessor + AutoModelForCTC + model.generate + processor.batch_decode(skip_special_tokens=True). attn_implementation=eager (GraniteSpeech5 sets _supports_flash_attn=False because the Shaw relative-position bias is a float attention mask). The repo ALSO ships stale ctc_conformer remote code (granite_encoder.py, modeling_ctc_conformer.py) using granite-speech-4.x tensor names; it cannot load this checkpoint and is not the reference."
+    "dump_args": ["--enc-blocks", "3", "4", "5", "6", "9", "10", "11", "12", "13", "14"],
+    "dump_args_comment": "Dump ALL 16 encoder blocks, not the dumper's 6-block default (0,1,2,7,8,15). Added with the re-pin to the multilingual weights: blocks 10-13 carry a massive-activation channel (4) at |value| up to 344 while the rest of those tensors sit at p99 6-9, and BF16 drift peaks there (enc.block.12.out max_abs 3.1 on dots). Without these blocks the drift is only observable after the fact at enc.out. Same treatment as the -nc manifest.",
+    "comment": "First-party HF Transformers integration: granite_speech5_ctc / granite_speech5_encoder, GraniteSpeech5ForCTC, GraniteSpeech5FeatureExtractor and GraniteSpeech5Processor ship inside mainline transformers from v5.16 (dumped with 5.17.0). No trust_remote_code - config.json has no auto_map. The dumper mirrors the model card path: AutoProcessor + AutoModelForCTC + model.generate + processor.batch_decode(skip_special_tokens=True). attn_implementation=eager (GraniteSpeech5 sets _supports_flash_attn=False because the Shaw relative-position bias is a float attention mask). Pinned to the multilingual, cased and punctuated release (weights replaced upstream at 121ff64, 2026-10-21; the stale ctc_conformer remote code and preprocessor_config.json were removed at 621ff2e). The English-only weights were 18ca3c1."
   },
   "expected_dtype": "bfloat16",
   "dtype_source": "config",
@@ -45,16 +47,16 @@
       "pad": 0
     },
     "has_language_tokens": false,
-    "comment": "GPT-2-style byte-level BPE. No normalizer; ByteLevel pre-tokenizer (add_prefix_space=false) and ByteLevel decoder (add_prefix_space=true). The only added token is <|blank|> at id 0, which is simultaneously the CTC blank and pad_token_id. The model id space is 1:1 with the tokenizer - no offset, no special-token block to strip - so decoding the post-collapse ids directly yields the transcript. tokenizer_config.json declares tokenizer_class=ParakeetTokenizer, but the artifact is byte-level BPE: spaces come from the byte-level round-trip, and a word opens on a raw piece beginning with U+0120 (C4 A0), not the SentencePiece U+2581."
+    "comment": "SentencePiece-derived BPE with byte fallback (same tokenizer family as the -nc sibling; the English-only revision 18ca3c1 shipped GPT-2 byte-level BPE). Decoder: Replace(U+2581 -> ' '), ByteFallback, Fuse, Strip(1 leading space). Vocab carries cased pieces and punctuation. <unk> at id 0 is simultaneously the CTC blank, pad_token_id and unk_token. Ids 1..254 are special added tokens (<|nospeech|>, <pad>, <|endoftext|>, <|startoftranscript|>, ..., <|spltokenN|>) that the reference drops via batch_decode(skip_special_tokens=True); the converter types them CONTROL and the runtime drops them too. Ids 255..510 are <0x00>..<0xFF> byte-fallback pieces. No language tokens: the model has no language conditioning. tokenizer_class=ParakeetTokenizer, whose _decode does the CTC groupby-then-drop-pad collapse."
   },
   "capabilities": {
-    "languages": ["en"],
+    "languages": ["en", "fr", "de", "es", "pt", "it", "ja"],
     "language_detection": false,
     "translation": false,
     "timestamps": [],
     "streaming": false,
     "speaker_diarization": false,
-    "comment": "Monolingual English encoder-CTC with no timestamp surface. CTC emission frames do not provide trustworthy word durations, and upstream publishes no alignment reference, so segment, word, and token timestamp requests are unsupported. Upstream publishes benchmarks only as bar-chart images; the single numeric public figure is 5.00% aggregate Open ASR leaderboard WER. Stage 4 and Stage 7 gate against the measured Oracle reference baseline on LibriSpeech test-clean - see reports/wer/granite-speech-5.0-470m-turboctc-REF.test-clean.{jsonl,score.json}."
+    "comment": "Multilingual (en, fr, de, es, pt, it, ja per the model card) cased and punctuated encoder-CTC with no language conditioning, no language identification output and no timestamp surface. CTC emission frames do not provide trustworthy word durations, and upstream publishes no alignment reference, so segment, word, and token timestamp requests are unsupported. Upstream publishes benchmarks only as bar-chart images; the model card states 5.51% average Open ASR leaderboard English WER for this release (5.78% for the English-only one). Stage 4 and Stage 7 gate against the measured Oracle reference baseline on LibriSpeech test-clean - see reports/wer/granite-speech-5.0-470m-turboctc-REF.test-clean.{jsonl,score.json}."
   },
   "tolerance_file": "tests/tolerances/granite5_ctc.json",
   "transcript_compare": "normalized",
