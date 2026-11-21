@@ -219,6 +219,30 @@ License is CC-BY-SA-4.0, not CC-BY-4.0. Intake:
 | Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE — not a diarizer | SKIP — not exposed by runtime |
 | Translation | n/a | n/a | n/a | OUT OF SCOPE — not advertised | SKIP — not exposed by runtime |
 
+### fluid-speech-pro (FluidVoice-Labs/fluid-speech-pro)
+
+FluidVoice's retrain of `parakeet-tdt-0.6b-v3` with one extra residual block
+(their `FrameCleaner`) between the subsampler output and Conformer layer 0,
+before xscaling. Reference is NeMo on the `.nemo` through the publisher's
+`fluid_speech.py` (fetched at the pinned revision; plain `restore_from`
+rejects the archive's `encoder.fv_insert.*` and `clean_mode.*` keys), clean
+mode off. KVs `stt.parakeet.encoder.pre_block_{kernel,dim}` and tensors
+`enc.pre_block.*` match the third-party `TalkMate/fluid-speech-pro-gguf`.
+Intake: `reports/porting/parakeet/fluid-speech-pro/intake.json`.
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|---|---|---|---|---|---|
+| Transcribe | explicit en | `build/bin/transcribe-cli -m models/fluid-speech-pro/fluid-speech-pro-F32.gguf --language en samples/jfk.wav` | English transcript with PnC | MUST PASS | PASS — jfk byte-equal to NeMo (validate.py compare 19/19 incl. `enc.pre_block.out`, transcript exact) |
+| Transcribe | auto | `build/bin/transcribe-cli -m models/fluid-speech-pro/fluid-speech-pro-F32.gguf samples/jfk.wav` | English transcript, no hint | MUST PASS | PASS |
+| Transcribe | explicit non-English | `… --language de samples/german.wav` | transcript in source language | MUST PASS | PASS — german / ru-short / uk-short transcribed in-language with no hint (batch golden) |
+| Offline batch | batch | `uv run scripts/batch_parity.py --model <gguf> --list tests/golden/batch/fluid-speech-pro.list --golden-in tests/golden/batch/fluid-speech-pro.cpu.json --batch-sizes 2,4,8 --backend cpu` | per-item transcripts equal to serial | MUST PASS | PASS — 7 clips incl. dots/love-loss/whole-earth; same-length CPU tensor parity bit-exact (jfk x4); varied-length 4-clip batch within 4.2e-7 at `dec.enc_out`, same order as v3 F32 (6.3e-7); without the pre-block padding mask it was 2.2e-2 |
+| Timestamps (token/word/segment) | output | `… --timestamps word samples/jfk.wav` | monotonic word times, same TDT duration math as v3 | MUST PASS | PASS — same decoder path as v3 |
+| Pre-block load contract | load | `ctest --test-dir build -R parakeet_smoke` | KV without tensors, KV pair mismatch, even kernel, or chunked attention style fail to load | MUST PASS | PASS |
+| Streaming | streaming | n/a (offline full-context model, `streaming: false`) | n/a | OUT OF SCOPE | SKIP — not exposed by runtime; the pre-block KV is a load error on the streaming attention styles |
+| Clean mode | n/a | n/a | n/a | OUT OF SCOPE — optional LoRA-style adapter (`clean_mode.*`) folded by `fluid_speech.load(clean_mode=True)` | SKIP — not converted |
+| Speaker diarization | n/a | n/a | n/a | OUT OF SCOPE | SKIP — not exposed by runtime |
+| Translation | n/a | n/a | n/a | OUT OF SCOPE | SKIP — not exposed by runtime |
+
 ## Open decisions before Stage 3 (convert)
 
 These decisions block converter design for the new variants and should

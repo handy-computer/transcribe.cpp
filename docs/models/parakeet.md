@@ -7,8 +7,8 @@ head), classical RNN-T, or CTC — and a TDT+CTC hybrid that ships both
 heads in one checkpoint. All variants take 16 kHz mono PCM through a
 mel frontend; English-only across the family, except
 `parakeet-tdt-0.6b-v3`, Moondream's post-trained `parakeet-ultra`, Oruk's
-retune `orukeet` and the German fine-tune `parakeet-primeline`, which
-cover 25 European languages.
+retune `orukeet`, FluidVoice's retrain `fluid-speech-pro` and the German
+fine-tune `parakeet-primeline`, which cover 25 European languages.
 
 For the architecture deep-dive, validation contract, and porting notes,
 see the family doc at
@@ -28,6 +28,10 @@ Most users want one of three:
 - **Multilingual, alternative → `orukeet`.** Oruk AI's retune of v3. Same
   size and speed, a bit more accurate than v3, less accurate than
   `parakeet-ultra`. CC-BY-SA-4.0 weights. See [orukeet.md](orukeet.md).
+- **Multilingual, alternative → `fluid-speech-pro`.** FluidVoice's retrain
+  of v3 with one extra block before the first Conformer layer. Same
+  languages and API as v3; needs a build with that block. CC-BY-4.0
+  weights. See [fluid-speech-pro.md](fluid-speech-pro.md).
 - **German → `parakeet-primeline`.** primeLine's German fine-tune of
   v3. Same size and speed; tuned for German while keeping the other 24
   v3 languages usable.
@@ -62,13 +66,14 @@ WER is on LibriSpeech test-clean for the **Q8_0** preset, measured by
 transcribe.cpp's WER pipeline. See each per-variant doc for the full
 quant matrix and the comparison to NVIDIA's self-reported numbers.
 
-<!-- catalog:family variants=parakeet-tdt-0.6b-v2,parakeet-ultra,parakeet-tdt-0.6b-v3,orukeet,phonon-2,parakeet-primeline,parakeet-tdt-1.1b,parakeet-tdt_ctc-110m,parakeet-tdt_ctc-1.1b,parakeet-rnnt-0.6b,parakeet-rnnt-1.1b,parakeet-ctc-0.6b,parakeet-ctc-1.1b,parakeet-unified-en-0.6b -->
+<!-- catalog:family variants=parakeet-tdt-0.6b-v2,parakeet-ultra,parakeet-tdt-0.6b-v3,orukeet,fluid-speech-pro,phonon-2,parakeet-primeline,parakeet-tdt-1.1b,parakeet-tdt_ctc-110m,parakeet-tdt_ctc-1.1b,parakeet-rnnt-0.6b,parakeet-rnnt-1.1b,parakeet-ctc-0.6b,parakeet-ctc-1.1b,parakeet-unified-en-0.6b -->
 | Variant                    | Params | Languages                  | Q8_0 size | Benchmark                    |  Q8_0 | Capabilities                | Doc |
 | --- | ---: | --- | ---: | --- | ---: | --- | --- |
 | `parakeet-tdt-0.6b-v2`     |   618M | en                         |    730 MB | LibriSpeech test-clean (WER) | 1.69% | token timestamps            | [parakeet-tdt-0.6b-v2.md](parakeet-tdt-0.6b-v2.md) |
 | `parakeet-ultra`           |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.80% | token timestamps            | [parakeet-ultra.md](parakeet-ultra.md) |
 | `parakeet-tdt-0.6b-v3`     |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.94% | token timestamps            | [parakeet-tdt-0.6b-v3.md](parakeet-tdt-0.6b-v3.md) |
 | `orukeet`                  |   627M | 25 languages + auto-detect |    740 MB | LibriSpeech test-clean (WER) | 1.86% | token timestamps            | [orukeet.md](orukeet.md) |
+| `fluid-speech-pro`         |   629M | 25 languages + auto-detect |    742 MB | LibriSpeech test-clean (WER) |     - | token timestamps            | [fluid-speech-pro.md](fluid-speech-pro.md) |
 | `phonon-2`                 |   627M | en                         |    740 MB | LibriSpeech test-clean (WER) | 2.15% | token timestamps            | [phonon-2.md](phonon-2.md) |
 | `parakeet-primeline`       |   627M | 25 languages + auto-detect |    740 MB | FLEURS de (WER)              | 5.98% | token timestamps            | [parakeet-primeline.md](parakeet-primeline.md) |
 | `parakeet-tdt-1.1b`        |   1.1B | en                         |   1.27 GB | LibriSpeech test-clean (WER) | 1.38% | token timestamps            | [parakeet-tdt-1.1b.md](parakeet-tdt-1.1b.md) |
@@ -101,7 +106,7 @@ the [input-length contract](../input-limits.md).
 ### Long-form audio
 
 Variants whose checkpoint uses full self-attention (`parakeet-tdt-0.6b-v2`,
-`parakeet-tdt-0.6b-v3`, `orukeet`, `parakeet-primeline`, the 1.1B and 110M
+`parakeet-tdt-0.6b-v3`, `orukeet`, `fluid-speech-pro`, `parakeet-primeline`, the 1.1B and 110M
 TDT/RNN-T/CTC variants) run NeMo's `rel_pos_local_attn` window of
 `[256, 256]` encoder frames (20.5 s each side). NVIDIA documents this window
 as the family's long-audio mode (`change_attention_model("rel_pos_local_attn",

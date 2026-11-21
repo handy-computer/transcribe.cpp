@@ -1,0 +1,42 @@
+# Spec for the HF README of handy-computer/fluid-speech-pro-gguf.
+# Prose only; numbers and metadata come from catalog/<variant>.json. See README.md.
+
+pin_date: 2026-11-21
+
+validation:
+  reference: NeMo (FluidVoice fluid_speech.py loader)
+  commit: 30ee38a
+  date: 2026-11-21
+
+pipeline_tag: automatic-speech-recognition
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - tdt
+  - multilingual
+
+summary: |
+  FluidVoice's retrain of parakeet-tdt-0.6b-v3. Turns speech into text in 25
+  European languages and works offline. It adds one small block between the
+  encoder's subsampling and its first Conformer layer, so it needs a
+  transcribe.cpp build that knows that block. Give it a 16 kHz mono WAV and it
+  gives you back text with punctuation and capitals. Same languages and API as
+  v3. Does not stream and does not translate.
+
+wer:
+  notes: |
+    Greedy transducer decoding, verbatim mode. FluidVoice's leaderboard
+    numbers use beam search with 4 beams, and on SPGISpeech their optional
+    clean mode, which this GGUF does not include.
+
+license_notes: |
+  CC BY 4.0. Credit it as **Fluid Speech Pro by FluidVoice**. Built on
+  [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+  (CC BY 4.0, NVIDIA Corporation) and
+  [Moondream Parakeet Ultra](https://huggingface.co/moondream/parakeet-ultra)
+  (CC BY 4.0, Moondream). Converted to GGUF by transcribe.cpp; the weights are
+  FluidVoice's, unchanged except for the quantization named in each file.
