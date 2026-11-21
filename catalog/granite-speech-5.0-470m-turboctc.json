@@ -9,10 +9,10 @@
     "display": "Apache-2.0"
   },
   "upstream_repo": "ibm-granite/granite-speech-5.0-470m-turboctc",
-  "upstream_commit": "18ca3c1",
+  "upstream_commit": "91dcb06",
   "published_repo": "handy-computer/granite-speech-5.0-470m-turboctc-gguf",
   "docs_page": "granite-speech-5.0-turboctc.md",
-  "languages": ["en"],
+  "languages": ["en","fr","de","es","pt","it","ja"],
   "language_tag_form": "bare-bcp47",
   "long_form_strategy": "soft-window",
   "capabilities": {
@@ -25,22 +25,14 @@
     "batching": {"supported":true,"verified":false}
   },
   "downloads": [
-    {"quant":"BF16","filename":"granite-speech-5.0-470m-turboctc-BF16.gguf","size_bytes":947824480},
-    {"quant":"F16","filename":"granite-speech-5.0-470m-turboctc-F16.gguf","size_bytes":947824480},
-    {"quant":"Q8_0","filename":"granite-speech-5.0-470m-turboctc-Q8_0.gguf","size_bytes":505606496},
-    {"quant":"Q6_K","filename":"granite-speech-5.0-470m-turboctc-Q6_K.gguf","size_bytes":391836000},
-    {"quant":"Q5_K_M","filename":"granite-speech-5.0-470m-turboctc-Q5_K_M.gguf","size_bytes":335737184},
-    {"quant":"Q4_K_M","filename":"granite-speech-5.0-470m-turboctc-Q4_K_M.gguf","size_bytes":279114080}
+    {"quant":"BF16","filename":"granite-speech-5.0-470m-turboctc-BF16.gguf","size_bytes":947881056},
+    {"quant":"F16","filename":"granite-speech-5.0-470m-turboctc-F16.gguf","size_bytes":948339808},
+    {"quant":"Q8_0","filename":"granite-speech-5.0-470m-turboctc-Q8_0.gguf","size_bytes":505663072},
+    {"quant":"Q6_K","filename":"granite-speech-5.0-470m-turboctc-Q6_K.gguf","size_bytes":391892576},
+    {"quant":"Q5_K_M","filename":"granite-speech-5.0-470m-turboctc-Q5_K_M.gguf","size_bytes":335793760},
+    {"quant":"Q4_K_M","filename":"granite-speech-5.0-470m-turboctc-Q4_K_M.gguf","size_bytes":279170656}
   ],
-  "accuracy_benchmarks": [
-    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"BF16","metric":"wer","err_pct":1.34,"ci95":[1.21,1.47],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":529,"del":87,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
-    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"F16","metric":"wer","err_pct":1.33,"ci95":[1.2,1.47],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":527,"del":87,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
-    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q8_0","metric":"wer","err_pct":1.33,"ci95":[1.2,1.46],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":527,"del":85,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
-    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q6_K","metric":"wer","err_pct":1.33,"ci95":[1.2,1.46],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":524,"del":88,"ins":93},"empty_hyp":0,"utts_over_50pct":2},
-    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q5_K_M","metric":"wer","err_pct":1.34,"ci95":[1.21,1.47],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":531,"del":86,"ins":93},"empty_hyp":0,"utts_over_50pct":2},
-    {"dataset":"librispeech","split":"test-clean","language":"en","language_hint":"en","backend":"cuda","quant":"Q4_K_M","metric":"wer","err_pct":1.35,"ci95":[1.22,1.49],"n_utts":2620,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":533,"del":91,"ins":92},"empty_hyp":0,"utts_over_50pct":2},
-    {"dataset":"fleurs","split":"test","language":"en","language_hint":"en","backend":"cuda","quant":"Q8_0","metric":"wer","err_pct":4.61,"ci95":[4.19,5.07],"n_utts":647,"batch_size":8,"timestamps":"none","engine_sha":"9daf396","publication_profile":"asr-publication-v2","measured_on":null,"errors":{"sub":477,"del":115,"ins":79},"empty_hyp":0,"utts_over_50pct":1}
-  ],
+  "accuracy_benchmarks": [],
   "headline_benchmark": {
     "dataset": "librispeech",
     "split": "test-clean",
