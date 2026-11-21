@@ -158,7 +158,9 @@ int main() {
     const bool        is_v2     = (variant == "tdt-0.6b-v2");
     const bool        is_v3     = (variant == "tdt-0.6b-v3");
     const bool        is_phonon = (variant == "tdt-0.6b-phonon-2");
-    if (!is_v2 && !is_v3 && !is_phonon) {
+    // Fluid Speech Pro: v3 plus a pre-Conformer block.
+    const bool        is_fluid  = (variant == "tdt-0.6b-fluid-speech-pro");
+    if (!is_v2 && !is_v3 && !is_phonon && !is_fluid) {
         std::fprintf(stderr, "FAIL: unexpected variant \"%s\"\n", variant.c_str());
         ++g_failures;
     }
@@ -180,7 +182,7 @@ int main() {
                 CHECK_STR_EQ(caps->languages[0], "en");
             }
         }
-        if (is_v3) {
+        if (is_v3 || is_fluid) {
             CHECK(caps->supports_language_detect == true);
             CHECK_EQ_INT(caps->n_languages, 25);
             if (caps->n_languages == 25 && caps->languages != nullptr) {
@@ -219,7 +221,7 @@ int main() {
         CHECK_EQ_INT(hp.pred_vocab, 1025);         // 1024 + 1 start row
         CHECK_EQ_INT(hp.joint_n_classes(), 1030);  // 1024 + 5 + 1
     }
-    if (is_v3 || is_phonon) {
+    if (is_v3 || is_phonon || is_fluid) {
         CHECK_EQ_INT(hp.pred_vocab, 8193);         // 8192 + 1 start row
         CHECK_EQ_INT(hp.joint_n_classes(), 8198);  // 8192 + 5 + 1
     }
@@ -229,6 +231,24 @@ int main() {
         CHECK(hp.tdt_global_symbol_budget);
         CHECK(!hp.has_vad_head);
         CHECK(caps != nullptr && !caps->supports_streaming);
+    }
+    if (is_fluid) {
+        CHECK_EQ_INT(hp.enc_pre_block_kernel, 15);
+        CHECK_EQ_INT(hp.enc_pre_block_dim, 1024);
+        CHECK(caps != nullptr && !caps->supports_streaming);
+        const auto & pb = pm->weights.pre_block;
+        CHECK(pb.norm_w != nullptr && pb.norm_b != nullptr && pb.down_b != nullptr && pb.mix_b != nullptr &&
+              pb.up_b != nullptr);
+        CHECK(pb.down_w != nullptr && pb.up_w != nullptr);
+        if (pb.mix_w != nullptr) {
+            CHECK_EQ_INT(pb.mix_w->ne[0], 15);
+            CHECK_EQ_INT(pb.mix_w->ne[1], 1);
+            CHECK_EQ_INT(pb.mix_w->ne[2], 1024);
+        } else {
+            CHECK(pb.mix_w != nullptr);
+        }
+    } else {
+        CHECK_EQ_INT(hp.enc_pre_block_kernel, 0);
     }
     CHECK_EQ_INT(hp.joint_hidden, 640);
     CHECK_EQ_INT(hp.joint_num_extra_outputs, 5);

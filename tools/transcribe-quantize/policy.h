@@ -22,13 +22,16 @@ namespace transcribe::quantize {
 // Tensor role. classify_tensor() maps a canonical GGUF tensor name to
 // exactly one bucket; each preset maps each bucket to one ggml_type.
 enum class Bucket {
-    Linear,  // ggml_mul_mat operands — full linear allowlist.
-    Embed,   // Decoder token embedding. Mixed _M presets bump to Q6_K
-             // where shape-compatible; otherwise the preset's
-             // linear_fallback (Q8_0 for all K presets).
-    ConvPw,  // 1×1 pointwise convs in conformer blocks (F16 on im2col + mul_mat).
-    Conv,    // Non-pointwise conv kernels (F32 / F16 — no quant im2col).
-    Norm,    // Biases, LayerNorm/BN, pos_bias, pos_enc, frontend buffers (F32).
+    Linear,   // ggml_mul_mat operands — full linear allowlist.
+    Embed,    // Decoder token embedding. Mixed _M presets bump to Q6_K
+              // where shape-compatible; otherwise the preset's
+              // linear_fallback (Q8_0 for all K presets).
+    ConvPw,   // 1×1 pointwise convs in conformer blocks (F16 on im2col + mul_mat).
+    Conv,     // Non-pointwise conv kernels (F32 / F16 — no quant im2col).
+    Norm,     // Biases, LayerNorm/BN, pos_bias, pos_enc, frontend buffers (F32).
+    Adapter,  // Low-rank adapter factors stored for a later load-time fold
+              // (Fluid Speech Pro's clean mode). F16 in every preset, never
+              // block-quantized.
 };
 
 // Map a canonical tensor name to its bucket. Substring-based; family-

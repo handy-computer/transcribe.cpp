@@ -63,6 +63,16 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
         return Bucket::Embed;
     }
 
+    // Fluid Speech Pro: clean-mode adapter factors
+    // (enc.blocks.<N>.<module>.clean_mode.{a,b}). The runtime folds
+    // W += alpha/rank * B A at load; block-quantizing the rank-32 factors
+    // would put quant noise into every adapted weight, and keeping them
+    // F32 doubles their ~55 MB (F16) cost for no measurable gain. Its two bias
+    // deltas (*.clean_mode.bias) fall through to the generic .bias rule.
+    if (contains(name, ".clean_mode.") && (ends_with(name, ".clean_mode.a") || ends_with(name, ".clean_mode.b"))) {
+        return Bucket::Adapter;
+    }
+
     // --- Generic rules (apply to every family) ---
 
     // Biases of every kind — short and precision-sensitive.
@@ -113,6 +123,11 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
     // Also dec.norm.weight (final post-decoder layer norm).
     if (ends_with(name, ".norm1.weight") || ends_with(name, ".norm2.weight") || ends_with(name, ".norm3.weight") ||
         name == "dec.norm.weight") {
+        return Bucket::Norm;
+    }
+    // Fluid Speech Pro's pre-Conformer block LayerNorm scale
+    // (enc.pre_block.norm.weight); the loader requires F32.
+    if (name == "enc.pre_block.norm.weight") {
         return Bucket::Norm;
     }
     // Per-head positional biases — added directly to fp32 q via ggml_add
@@ -208,6 +223,12 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
     // ".conv." (with dots on both sides) distinguishes these from
     // norm_conv.weight which we already routed above.
     if (contains(name, ".conv.") && ends_with(name, ".weight")) {
+        return Bucket::Conv;
+    }
+    // Fluid Speech Pro's depthwise time conv in the pre-Conformer block.
+    // Named "mix" rather than ".conv.", but it is a Conv1d kernel the
+    // loader reads through GET_CONV (F32/F16 only).
+    if (name == "enc.pre_block.mix.weight") {
         return Bucket::Conv;
     }
     // granite_nar depthwise conv kernel uses the underscore form
@@ -319,6 +340,8 @@ ggml_type resolve_target_type(const Preset & preset, const std::string & name, i
     switch (b) {
         case Bucket::Norm:
             return preset.norm;
+        case Bucket::Adapter:
+            return GGML_TYPE_F16;
         case Bucket::Conv:
             return preset.conv;
         case Bucket::ConvPw:

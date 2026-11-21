@@ -78,6 +78,7 @@ NORM = [
     "enc.blocks.0.self_attn.pos_bias_v",    # conformer rel-pos bias v
     "enc.blocks.3.conv.bn.running_mean",    # granite5_ctc BN running stat
     "enc.blocks.3.conv.bn.running_var",     # granite5_ctc BN running stat
+    "pred.lstm.0.clean_mode.bias",          # fluid-speech-pro clean-mode bias delta (.bias)
     "tf.blocks.0.norm_1.weight",            # sortformer transformer post-LN (norm_ prefix)
     "tf.blocks.0.attn.q.bias",              # sortformer transformer attn bias (.bias)
     "diar.spk_head.bias",                   # sortformer diarization head bias (.bias)
@@ -110,6 +111,10 @@ CONV = [
     "blk.1.res2.0.conv.weight",             # ecapa_tdnn tap-major k>1 kernel
     "vad.proj.weight",                      # parakeet-ultra VAD head 1x1 conv
     "vad.ctx.weight",                       # parakeet-ultra VAD head k=5 conv
+    # Not convs: Fluid Speech Pro's clean-mode adapter factors (Adapter bucket,
+    # F16 in every preset). Same reference-tier rule: F32/F16 only, no BF16.
+    "enc.blocks.3.conv.pointwise1.clean_mode.a",
+    "enc.blocks.3.attn.linear_q.clean_mode.b",
 ]
 
 # Linear / Embed: ggml_mul_mat operands and the decoder token embedding.

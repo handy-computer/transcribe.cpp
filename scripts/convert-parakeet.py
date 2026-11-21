@@ -191,6 +191,28 @@ VARIANT_PROFILES: dict[str, dict] = {
         "license_name": "Creative Commons Attribution 4.0",
         "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
+    # Fluid Speech Pro: v3 plus FluidVoice's residual block between the
+    # subsampler and Conformer layer 0 (model_config.yaml `fluid_speech`).
+    # The block's eight tensors are encoder.fv_insert.* in the .nemo. The
+    # archive also carries clean_mode.* (an optional low-rank adapter that
+    # fluid_speech.load(clean_mode=True) folds into the weights). The GGUF
+    # carries it (CLEAN_MODE_* below); the runtime does not apply it yet.
+    "fluid-speech-pro": {
+        "variant": "tdt-0.6b-fluid-speech-pro",
+        "display_name": "Fluid Speech Pro",
+        "version": "v1",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
+        "languages": V3_LANGUAGES,
+        "lang_detect": True,
+        "author": "FluidVoice",
+        "organization": "FluidVoice-Labs",
+        "prefer_direct_load": True,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
+    },
     # primeLine's German fine-tune of v3. The .nemo carries a
     # model_config.yaml whose encoder/decoder/joint/decoding/
     # preprocessor/tokenizer/model_defaults/loss sections are identical
@@ -1162,6 +1184,18 @@ def read_hparams(config: dict) -> dict:
         # loader treats this as required-with-default (default false
         # for legacy GGUFs without the KV).
         "enc_xscaling":             bool(enc.get("xscaling", True)),
+        # Fluid Speech Pro's extra pre-Conformer block. Its spec lives at
+        # the model-config root (`fluid_speech: {insert_dim, insert_kernel}`)
+        # and its weights are `encoder.fv_insert.*`; absent for every other
+        # Parakeet variant.
+        "enc_pre_block_kernel":     int(config["fluid_speech"]["insert_kernel"])
+                                    if config.get("fluid_speech") else 0,
+        "enc_pre_block_dim":        int(config["fluid_speech"]["insert_dim"])
+                                    if config.get("fluid_speech") else 0,
+        # Fluid Speech Pro's clean-mode adapter (`fluid_speech.clean_mode:
+        # {rank, alpha}`); 0 = none.
+        "clean_mode_rank":          int((config.get("fluid_speech") or {}).get("clean_mode", {}).get("rank", 0)),
+        "clean_mode_alpha":         float((config.get("fluid_speech") or {}).get("clean_mode", {}).get("alpha", 0.0)),
         # att_context_size: [-1, -1] = full attention. Local attention
         # ([left, right] with non-negative values, e.g. [128, 128] for
         # tdt_ctc-1.1b) restricts each query to keys within the band
@@ -1487,6 +1521,50 @@ PRE_ENCODE_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# Fluid Speech Pro's residual block on the subsampled frames. Present only
+# when the Nemo config carries `fluid_speech` (FluidVoice's fluid_speech.py
+# registers it as encoder.fv_insert).
+PRE_BLOCK_TABLE: list[tuple[str, str]] = [
+    ("encoder.fv_insert.ln.weight",    "enc.pre_block.norm.weight"),
+    ("encoder.fv_insert.ln.bias",      "enc.pre_block.norm.bias"),
+    ("encoder.fv_insert.down.weight",  "enc.pre_block.down.weight"),
+    ("encoder.fv_insert.down.bias",    "enc.pre_block.down.bias"),
+    ("encoder.fv_insert.mix.weight",   "enc.pre_block.mix.weight"),
+    ("encoder.fv_insert.mix.bias",     "enc.pre_block.mix.bias"),
+    ("encoder.fv_insert.up.weight",    "enc.pre_block.up.weight"),
+    ("encoder.fv_insert.up.bias",      "enc.pre_block.up.bias"),
+]
+
+
+# Fluid Speech Pro's clean-mode adapter (fluid_speech.py fold_clean_mode):
+#
+#   encoder.layers.N.<module>.weight += (alpha / rank) * B @ A
+#   decoder.prediction.dec_rnn.lstm.bias_ih_l0 += weight_ih_l0 @ decoder_input
+#   joint.pred.bias += joint_hidden
+#
+# A is [rank, in], B is [out, rank]; both are stored raw as
+# enc.blocks.N.<gguf module>.clean_mode.{a,b}. The predictor's vector is
+# stored pre-multiplied (pred.lstm.0.clean_mode.bias = weight_ih_l0 @
+# decoder_input, [4*hidden]): the GGUF keeps only the fused LSTM bias
+# (bias_ih + bias_hh), and pred.lstm.0.Wx may be block-quantized, so the
+# product from the F32 source weights is the exact delta for that fused
+# bias in every quant. joint_hidden is a plain bias delta
+# (joint.pred.clean_mode.bias). NeMo module name -> GGUF module name:
+CLEAN_MODE_MODULES: list[tuple[str, str]] = [
+    ("feed_forward1.linear1", "ff1.linear1"),
+    ("feed_forward1.linear2", "ff1.linear2"),
+    ("self_attn.linear_q",    "attn.linear_q"),
+    ("self_attn.linear_k",    "attn.linear_k"),
+    ("self_attn.linear_v",    "attn.linear_v"),
+    ("self_attn.linear_out",  "attn.linear_out"),
+    ("self_attn.linear_pos",  "attn.linear_pos"),
+    ("conv.pointwise_conv1",  "conv.pointwise1"),
+    ("conv.pointwise_conv2",  "conv.pointwise2"),
+    ("feed_forward2.linear1", "ff2.linear1"),
+    ("feed_forward2.linear2", "ff2.linear2"),
+]
+
+
 JOINT_TABLE: list[tuple[str, str]] = [
     ("joint.enc.weight",          "joint.enc.weight"),
     ("joint.enc.bias",            "joint.enc.bias"),
@@ -1579,7 +1657,10 @@ EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED = ("ctc_decoder.",)
 
 
 def is_expected_unused(key: str, head_kind: str, drop_aux_ctc: bool,
-                       has_prompt: bool) -> bool:
+                       has_prompt: bool,
+                       profile_prefixes: tuple[str, ...] = ()) -> bool:
+    if profile_prefixes and key.startswith(profile_prefixes):
+        return True
     if key.startswith(EXPECTED_UNUSED_PREFIXES_BASE):
         return True
     if key.endswith(EXPECTED_UNUSED_SUFFIXES):
@@ -1777,6 +1858,70 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     hp["enc_use_bias"] = bool(bias_present[0])
     print(f"Encoder use_bias: {hp['enc_use_bias']}")
 
+    # Fluid Speech Pro's pre-Conformer block: the config spec and the
+    # weights must agree, and only the `insert: pre` placement (on the
+    # encoder.pre_encode output) is implemented.
+    has_pre_block_weights = any(k.startswith("encoder.fv_insert.") for k in sd_keys)
+    if hp["enc_pre_block_kernel"] > 0:
+        insert = str(config["fluid_speech"].get("insert", "pre"))
+        if insert != "pre":
+            raise ValueError(f"fluid_speech.insert={insert!r}; only 'pre' is supported")
+        mix_shape = tuple(sd["encoder.fv_insert.mix.weight"].shape)
+        if mix_shape != (hp["enc_pre_block_dim"], 1, hp["enc_pre_block_kernel"]):
+            raise ValueError(
+                f"encoder.fv_insert.mix.weight shape {mix_shape} does not match "
+                f"fluid_speech insert_dim={hp['enc_pre_block_dim']} "
+                f"insert_kernel={hp['enc_pre_block_kernel']}"
+            )
+        print(f"Pre-Conformer block: dim={hp['enc_pre_block_dim']} kernel={hp['enc_pre_block_kernel']}")
+    elif has_pre_block_weights:
+        raise ValueError("state_dict carries encoder.fv_insert.* but the config has no fluid_speech section")
+
+    # Fluid Speech Pro's clean-mode adapter: config and tensors must agree,
+    # every adapted module must have A and B on every layer with shapes that
+    # fold into its weight, and no clean_mode.* key may go unaccounted for.
+    clean_keys = sorted(k for k in sd_keys if k.startswith("clean_mode."))
+    clean_modules: list[tuple[str, str]] = []
+    if hp["clean_mode_rank"] > 0:
+        rank = hp["clean_mode_rank"]
+        if not clean_keys:
+            raise ValueError("config has fluid_speech.clean_mode but the state_dict has no clean_mode.* tensors")
+        if not hp["clean_mode_alpha"] > 0:
+            raise ValueError(f"fluid_speech.clean_mode.alpha={hp['clean_mode_alpha']} must be > 0")
+        if head_kind == "ctc":
+            raise ValueError("clean_mode needs a predictor and joint; head_kind=ctc")
+        adapted = {k.split(".")[3] + "." + k.split(".")[4]
+                   for k in clean_keys if k.startswith("clean_mode.layers.")}
+        known = dict(CLEAN_MODE_MODULES)
+        unknown = sorted(adapted - set(known))
+        if unknown:
+            raise ValueError(f"clean_mode adapts modules this converter cannot name: {unknown}")
+        clean_modules = [(n, g) for n, g in CLEAN_MODE_MODULES if n in adapted]
+        expected_keys = {"clean_mode.decoder_input", "clean_mode.joint_hidden"}
+        for i in range(hp["enc_n_layers"]):
+            for nemo_mod, _ in clean_modules:
+                a = sd[f"clean_mode.layers.{i}.{nemo_mod}.A"]
+                b = sd[f"clean_mode.layers.{i}.{nemo_mod}.B"]
+                w = sd[f"encoder.layers.{i}.{nemo_mod}.weight"]
+                out_dim, in_dim = int(w.shape[0]), int(w.numel() // w.shape[0])
+                if tuple(a.shape) != (rank, in_dim) or tuple(b.shape) != (out_dim, rank):
+                    raise ValueError(
+                        f"clean_mode.layers.{i}.{nemo_mod}: A {tuple(a.shape)} / B {tuple(b.shape)} "
+                        f"do not fold into weight {tuple(w.shape)} at rank {rank}")
+                expected_keys |= {f"clean_mode.layers.{i}.{nemo_mod}.A", f"clean_mode.layers.{i}.{nemo_mod}.B"}
+        extra = sorted(set(clean_keys) - expected_keys)
+        missing = sorted(expected_keys - set(clean_keys))
+        if extra or missing:
+            raise ValueError(f"clean_mode tensors: missing {missing[:5]}, unexpected {extra[:5]}")
+        if tuple(sd["clean_mode.decoder_input"].shape) != (hp["pred_hidden"],):
+            raise ValueError(f"clean_mode.decoder_input shape {tuple(sd['clean_mode.decoder_input'].shape)}")
+        if tuple(sd["clean_mode.joint_hidden"].shape) != (hp["joint_hidden"],):
+            raise ValueError(f"clean_mode.joint_hidden shape {tuple(sd['clean_mode.joint_hidden'].shape)}")
+        print(f"Clean-mode adapter: rank={rank} alpha={hp['clean_mode_alpha']} "
+              f"modules={len(clean_modules)} tensors={len(clean_keys)}")
+    elif clean_keys:
+        raise ValueError("state_dict carries clean_mode.* but the config has no fluid_speech.clean_mode section")
+
     print(f"Writing GGUF to {out_path}")
     writer = gguf_writer(str(out_path), "parakeet")
 
@@ -1860,6 +2005,14 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     writer.add_uint32("stt.parakeet.encoder.pos_emb_max_len",      hp["enc_pos_emb_max_len"])
     writer.add_bool  ("stt.parakeet.encoder.use_bias",             hp["enc_use_bias"])
     writer.add_bool  ("stt.parakeet.encoder.xscaling",             hp["enc_xscaling"])
+    if hp["enc_pre_block_kernel"] > 0:
+        writer.add_int32("stt.parakeet.encoder.pre_block_kernel", hp["enc_pre_block_kernel"])
+        writer.add_int32("stt.parakeet.encoder.pre_block_dim",    hp["enc_pre_block_dim"])
+    if clean_modules:
+        # Fold rule: W += alpha / rank * B @ A (see CLEAN_MODE_MODULES).
+        writer.add_uint32 ("stt.parakeet.clean_mode.rank",    hp["clean_mode_rank"])
+        writer.add_float32("stt.parakeet.clean_mode.alpha",   hp["clean_mode_alpha"])
+        writer.add_array  ("stt.parakeet.clean_mode.modules", [g for _, g in clean_modules])
     writer.add_int32 ("stt.parakeet.encoder.att_context_left",     hp["enc_att_context_left"])
     writer.add_int32 ("stt.parakeet.encoder.att_context_right",    hp["enc_att_context_right"])
     # New KVs added to support cache-aware streaming variants. Loader
@@ -2096,6 +2249,11 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     for nemo_name, gguf_name in PRE_ENCODE_TABLE:
         add(nemo_name, gguf_name)
 
+    # Fluid Speech Pro's extra block, when the checkpoint carries one.
+    if hp["enc_pre_block_kernel"] > 0:
+        for nemo_name, gguf_name in PRE_BLOCK_TABLE:
+            add(nemo_name, gguf_name)
+
     # encoder layers
     use_bn_running = (hp["enc_conv_norm_type"] == "batch_norm")
     for i in range(hp["enc_n_layers"]):
@@ -2146,6 +2304,25 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
         for nemo_name, gguf_name in JOINT_TABLE:
             add(nemo_name, gguf_name)
 
+    # Clean-mode adapter, last so the base tensors keep their order.
+    if clean_modules:
+        import torch
+
+        for i in range(hp["enc_n_layers"]):
+            for nemo_mod, gguf_mod in clean_modules:
+                add(f"clean_mode.layers.{i}.{nemo_mod}.A", f"enc.blocks.{i}.{gguf_mod}.clean_mode.a")
+                add(f"clean_mode.layers.{i}.{nemo_mod}.B", f"enc.blocks.{i}.{gguf_mod}.clean_mode.b")
+        # Same expression as fluid_speech.fold_clean_mode, so the delta is
+        # the one NeMo adds to bias_ih_l0.
+        with torch.no_grad():
+            dec_delta = sd["decoder.prediction.dec_rnn.lstm.weight_ih_l0"] @ sd["clean_mode.decoder_input"]
+        arr = tensor_to_fp32_numpy(dec_delta)
+        writer.add_tensor("pred.lstm.0.clean_mode.bias", arr)
+        consumed.add("clean_mode.decoder_input")
+        bytes_out += int(arr.nbytes)
+        n_added += 1
+        add("clean_mode.joint_hidden", "joint.pred.clean_mode.bias")
+
     # VAD head: three Conv1d layers, PyTorch [out, in, k] layout.
     if has_vad_head:
         for nemo_name, gguf_name in VAD_HEAD_TABLE:
@@ -2190,13 +2367,17 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
     else:
         spk_tensors = 0
     vad_tensors = len(VAD_HEAD_TABLE) if has_vad_head else 0
+    pre_block_tensors = len(PRE_BLOCK_TABLE) if hp["enc_pre_block_kernel"] > 0 else 0
+    clean_mode_tensors = (2 * hp["enc_n_layers"] * len(clean_modules) + 2) if clean_modules else 0
     expected = (
         len(PRE_ENCODE_TABLE)
+        + pre_block_tensors
         + hp["enc_n_layers"] * per_layer_tensors
         + head_tensors
         + prompt_tensors
         + spk_tensors
         + vad_tensors
+        + clean_mode_tensors
     )
     if n_added != expected:
         raise RuntimeError(
@@ -2206,7 +2387,8 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None,
 
     unused = sorted(
         k for k in (sd_keys - consumed)
-        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt)
+        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt,
+                                  tuple(profile.get("expected_unused_prefixes", ())))
     )
     if unused:
         print(

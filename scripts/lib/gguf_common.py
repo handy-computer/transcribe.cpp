@@ -204,6 +204,9 @@ def reference_dtype_for(
         return GGMLQuantizationType.F32
     if name in ("frontend.mel_filterbank", "frontend.window"):
         return GGMLQuantizationType.F32
+    # Fluid Speech Pro's pre-Conformer block LayerNorm scale.
+    if name == "enc.pre_block.norm.weight":
+        return GGMLQuantizationType.F32
 
     # Conv bucket (pointwise + depthwise + 2D).
     is_convpw = (
@@ -214,7 +217,13 @@ def reference_dtype_for(
     is_conv = ".conv." in name and name.endswith(".weight")
     # parakeet-ultra VAD head kernels (vad.{proj,ctx,out}.weight).
     is_vad = name.startswith("vad.") and name.endswith(".weight")
-    if is_convpw or is_conv or is_vad:
+    # Fluid Speech Pro's depthwise time conv (enc.pre_block.mix.weight).
+    is_pre_block_mix = name == "enc.pre_block.mix.weight"
+    # Fluid Speech Pro's clean-mode adapter factors (Adapter bucket in
+    # policy.cpp: F16 in every preset). The loader takes them F32/F16 only.
+    is_adapter = ".clean_mode." in name and (
+        name.endswith(".clean_mode.a") or name.endswith(".clean_mode.b"))
+    if is_convpw or is_conv or is_vad or is_pre_block_mix or is_adapter:
         if reference_type == GGMLQuantizationType.BF16:
             return GGMLQuantizationType.F16  # loader has no BF16 conv kernel
         return reference_type

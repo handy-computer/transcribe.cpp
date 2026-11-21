@@ -1,0 +1,49 @@
+{
+  "schema": "transcribe-catalog-v1",
+  "variant": "fluid-speech-pro",
+  "family": "parakeet",
+  "display_name": "Fluid Speech Pro",
+  "params": 629169798,
+  "license": {
+    "spdx": "cc-by-4.0",
+    "display": "CC-BY-4.0"
+  },
+  "upstream_repo": "FluidVoice-Labs/fluid-speech-pro",
+  "upstream_commit": "46027a3",
+  "published_repo": "handy-computer/fluid-speech-pro-gguf",
+  "docs_page": "parakeet.md",
+  "languages": [
+    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu",
+    "it", "lv", "lt", "mt", "pl", "pt", "ro", "ru", "sk", "sl", "es", "sv",
+    "uk"
+  ],
+  "language_tag_form": "bare-bcp47",
+  "long_form_strategy": "chunked-unbounded",
+  "capabilities": {
+    "transcribe": {"supported":true,"verified":false},
+    "translate": {"supported":false},
+    "lang_detect": {"supported":true,"verified":false},
+    "timestamps": {"supported":true,"verified":false,"granularities":["token"]},
+    "streaming": {"supported":false},
+    "diarize": {"supported":false},
+    "batching": {"supported":true,"verified":true}
+  },
+  "downloads": [
+    {"quant":"F32","filename":"fluid-speech-pro-F32.gguf","size_bytes":2627062656},
+    {"quant":"F16","filename":"fluid-speech-pro-F16.gguf","size_bytes":1315252352},
+    {"quant":"Q8_0","filename":"fluid-speech-pro-Q8_0.gguf","size_bytes":796924992},
+    {"quant":"Q6_K","filename":"fluid-speech-pro-Q6_K.gguf","size_bytes":667250752},
+    {"quant":"Q5_K_M","filename":"fluid-speech-pro-Q5_K_M.gguf","size_bytes":605576256},
+    {"quant":"Q4_K_M","filename":"fluid-speech-pro-Q4_K_M.gguf","size_bytes":541793344}
+  ],
+  "accuracy_benchmarks": [],
+  "headline_benchmark": {
+    "dataset": "librispeech",
+    "split": "test-clean",
+    "language": "en",
+    "metric": "wer",
+    "batch_size": null,
+    "timestamps": "none"
+  },
+  "speed_benchmarks": []
+}
