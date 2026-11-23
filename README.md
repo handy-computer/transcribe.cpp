@@ -56,6 +56,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 <!-- /catalog -->
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
+Fine-tunes published by their authors, which this project has not verified, are listed in [`docs/community-finetunes.md`](docs/community-finetunes.md).
 
 ## Model catalog
 
