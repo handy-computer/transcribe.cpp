@@ -127,10 +127,12 @@ Surprises worth feeding back into the docs and tooling.
   aggregates only).
 - **Validation pin.** `validate.py all --family sava` passes at `8f97ab5b`
   on 2026-11-24.
-- **Metadata audit.** `audit_gguf_metadata.py` flags the SAVA GGUFs:
+- **Metadata audit.** `audit_gguf_metadata.py` flagged the SAVA GGUFs:
   general.languages is missing, and the streaming flag trips the audit's
-  name heuristic (a false positive). Reported to the converter's owner; not
-  changed here.
+  name heuristic (a false positive). Both are ASR assumptions: the audit now
+  exempts the VAD / TURN architectures (silero_vad, sava, smart_turn) from
+  general.languages and from the slug streaming heuristic; the GGUFs are
+  unchanged and all six turn GGUFs audit clean.
 - **Results at 8f97ab5b.** F32 and F16 93.36% (AUC 0.97946, unchanged from
   the Stage 5 rows); Q8_0 93.36% (AUC 0.97935; Stage 5 had 93.37%). Q8_0 vs
   F32: 76 flips at 0.5, 126 at 0.9 (Stage 5: 75 / 124). The sava-F16 header
