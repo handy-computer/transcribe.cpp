@@ -83,12 +83,14 @@ projections stay F32.
 
 ## Performance
 
-Measured on an Apple M1 (Mac mini), CPU, standing in for the Apple M4
-reference machine, which was unreachable. `jfk-8s` is one 8 s window:
-`transcribe_turn_run` on the first 8 s of `samples/jfk.wav` (shorter audio
-is padded to the same window, so it costs the same). `-1t` runs on one
-thread; without it, the library's default thread count (all 8 cores of the
-M1).
+CPU on two machines: an Apple M1 (Mac mini), standing in for the Apple M4
+reference machine, which was unreachable, and an AMD Ryzen 7 PRO 4750U.
+`jfk-8s` is one 8 s window: `transcribe_turn_run` on the first 8 s of
+`samples/jfk.wav` (shorter audio is padded to the same window, so it costs
+the same). `-1t` runs on one thread; without it, the library's default
+thread count (all 8 cores of the M1, 16 hardware threads of the Ryzen).
+
+### Apple M1 (proxy for the M4)
 
 <!-- catalog:perf machine=m1 dp_ms=1 -->
 Compute latency (front end + model), speedup over realtime in parentheses; profile `turn-publication-v1`: mean over 20 iterations after 3 warmup.
@@ -101,12 +103,28 @@ Compute latency (front end + model), speedup over realtime in parentheses; profi
 Apple M1 (proxy for the Apple M4 reference machine, which was unreachable): transcribe.cpp `8f97ab5b` on 2026-11-24.
 <!-- /catalog -->
 
-onnxruntime on the same M1: 83 ms / 28 ms per window (fp32 ONNX, 1 / 4
+### AMD Ryzen 7 PRO 4750U
+
+<!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
+Compute latency (front end + model), speedup over realtime in parentheses; profile `turn-publication-v1`: mean over 20 iterations after 3 warmup.
+
+| Backend | Sample           |               F32 |               F16 |              Q8_0 |
+| ------- | ---------------- | ----------------: | ----------------: | ----------------: |
+| CPU     | jfk-8s (8.0s)    | 40.6 ms (196.81×) | 43.1 ms (185.80×) | 38.9 ms (205.81×) |
+| CPU     | jfk-8s-1t (8.0s) | 148.2 ms (53.97×) | 167.0 ms (47.90×) | 170.7 ms (46.86×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8415e8e2` on 2026-11-24.
+<!-- /catalog -->
+
+onnxruntime on the M1: 83 ms / 28 ms per window (fp32 ONNX, 1 / 4
 threads), 40 ms / 15 ms (int8 ONNX).
 
 `AUTO` selects the CPU: the model is small, runs once per pause, and the CPU
 path is the validated one.
 
-**On ARM CPUs, the F16 file currently runs about 2x slower than F32** (one
-thread, in the table above). ggml multiplies F16 weights by fp32 activations
-without its fast tiled kernel on ARM. CPU users should prefer F32 or Q8_0.
+**F16 and Q8_0 are not faster than F32 everywhere.** On the M1 (ARM), F16
+runs about 2x slower than F32 on one thread: ggml multiplies F16 weights by
+fp32 activations without its fast tiled kernel on ARM. Q8_0 is the fastest
+there. On the Ryzen (x86), F16 and Q8_0 are both slower than F32 on one
+thread and about as fast with the default threads. On ARM prefer F32 or
+Q8_0; on x86, F32 is as fast as either.

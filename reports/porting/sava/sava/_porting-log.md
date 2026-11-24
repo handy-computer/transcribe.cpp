@@ -105,3 +105,29 @@ Surprises worth feeding back into the docs and tooling.
 - **Speed.** A streamed frame dropped from 5.4 to 4.6 ms (F32) and from 3.9
   to 3.0 ms (Q8_0) at 1 thread. 8 batched users take 10.1 ms per tick (F32)
   and 8.1 ms (Q8_0) at 1 thread.
+
+## Stages 6-8 (publication, profile turn-publication-v1)
+
+- **Speed, two targets, CPU only.** `scripts/turn/bench.py` (raw C ABI
+  through the Python binding): `jfk-8s` run, `jfk-40ms` stream frame,
+  `jfk-40ms-x8` 8-user batched tick, each at the default threads and `-1t`.
+  `m1`: Apple M1 standing in for the unreachable M4, engine `8f97ab5b`.
+  `ryzen-4750u`: engine `8415e8e2` (scripts-only difference), Tctl below
+  55 C at each cell's start. The x8 tick feeds the same clip to all 8
+  sessions (the compute does not depend on the audio).
+- **Rig-built GGUFs.** The Ryzen rows were measured on GGUFs converted on the
+  rig, whose sha256 differ from the canonical files (F32 45ca0a80...,
+  F16 55bd69f2..., Q8_0 b44d5ce8...) only by the converter's last-bit
+  constants (rig: F32 907d6da0..., F16 4100d5b4..., Q8_0 e0c78a78...).
+  ingest_perf.py keys a cell by quant, not hash; recorded here.
+- **Accuracy re-run.** The Pipecat rows were produced before 6b130f91 changed
+  the graph (300-clip check at HEAD: F32 max |dp| 6.6e-7, Q8_0 4.6e-3), so
+  all three quants were re-run at `8f97ab5b` and scored by
+  `scripts/turn/score.py` (no per-clip reference column: Inworld publishes
+  aggregates only).
+- **Validation pin.** `validate.py all --family sava` passes at `8f97ab5b`
+  on 2026-11-24.
+- **Metadata audit.** `audit_gguf_metadata.py` flags the SAVA GGUFs:
+  general.languages is missing, and the streaming flag trips the audit's
+  name heuristic (a false positive). Reported to the converter's owner; not
+  changed here.

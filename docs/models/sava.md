@@ -78,7 +78,7 @@ The release weights are bf16, and upstream runs them in fp32:
 - **F16** holds them exactly except 1,065 of 25.5M tiny values (each off by
   at most 3e-8). It computes like F32, because ggml keeps the activations of
   an F16 matmul in fp32. Its scores match F32 to 4e-6.
-- **Q8_0** is the smallest and fastest file.
+- **Q8_0** is the smallest file, and the fastest for a streamed frame.
 
 To convert and quantize it yourself:
 
@@ -133,8 +133,9 @@ On the 8 golden recordings (`tests/golden/sava/`):
 
 ## Performance
 
-The catalog's cells, measured on an Apple M1 (Mac mini), CPU, standing in
-for the Apple M4 reference machine, which was unreachable:
+The catalog's cells, CPU, on two machines: an Apple M1 (Mac mini), standing
+in for the Apple M4 reference machine, which was unreachable, and an AMD
+Ryzen 7 PRO 4750U:
 
 - `jfk-8s`: `transcribe_turn_run` on the first 8 s of `samples/jfk.wav`
   (200 frames).
@@ -143,7 +144,9 @@ for the Apple M4 reference machine, which was unreachable:
 - `jfk-40ms-x8`: one `transcribe_turn_stream_feed_batch` tick for 8 users
   (a 640-sample frame each, so 0.32 s of audio per tick).
 - `-1t` runs on one thread; without it, the library's default thread count
-  (all 8 cores of the M1).
+  (all 8 cores of the M1, 16 hardware threads of the Ryzen).
+
+### Apple M1 (proxy for the M4)
 
 <!-- catalog:perf machine=m1 dp_ms=1 -->
 Compute latency (front end + model), speedup over realtime in parentheses; profile `turn-publication-v1`: mean over 20 iterations after 3 warmup.
@@ -160,7 +163,26 @@ Compute latency (front end + model), speedup over realtime in parentheses; profi
 Apple M1 (proxy for the Apple M4 reference machine, which was unreachable): transcribe.cpp `8f97ab5b` on 2026-11-24.
 <!-- /catalog -->
 
-The same M1, idle machine, with 4 threads and per frame. Milliseconds of
+### AMD Ryzen 7 PRO 4750U
+
+<!-- catalog:perf machine=ryzen-4750u dp_ms=1 -->
+Compute latency (front end + model), speedup over realtime in parentheses; profile `turn-publication-v1`: mean over 20 iterations after 3 warmup.
+
+| Backend | Sample           |               F32 |               F16 |              Q8_0 |
+| ------- | ---------------- | ----------------: | ----------------: | ----------------: |
+| CPU     | jfk-40ms         |    5.9 ms (6.73×) |    4.4 ms (9.03×) |   3.7 ms (10.80×) |
+| CPU     | jfk-40ms-1t      |    9.8 ms (4.08×) |    8.4 ms (4.75×) |    6.9 ms (5.77×) |
+| CPU     | jfk-40ms-x8      |  13.6 ms (23.46×) |  12.1 ms (26.38×) |  11.8 ms (27.21×) |
+| CPU     | jfk-40ms-x8-1t   |  20.1 ms (15.94×) |  19.1 ms (16.75×) |  18.0 ms (17.78×) |
+| CPU     | jfk-8s (8.0s)    | 107.5 ms (74.41×) | 106.2 ms (75.36×) | 109.1 ms (73.34×) |
+| CPU     | jfk-8s-1t (8.0s) | 221.6 ms (36.10×) | 245.7 ms (32.57×) | 248.0 ms (32.26×) |
+
+AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8415e8e2` on 2026-11-24.
+<!-- /catalog -->
+
+### Per frame, 4 threads (M1)
+
+The M1, idle machine, with 4 threads and per frame. Milliseconds of
 compute per 40 ms frame:
 
 | File | Whole clip (`jfk.wav`), 1 thread | Whole clip, 4 threads | Stream (640-sample feeds), 1 thread | Stream, 4 threads |
@@ -186,12 +208,15 @@ alone.
 On a shared machine, prefer 1 thread per compute. With other jobs running,
 multi-threaded steps can be far slower than single-threaded ones.
 
-**On ARM CPUs, the F16 file currently runs 1.6-1.9x slower than F32.** ggml
-multiplies F16 weights by fp32 activations without its fast tiled kernel on
-ARM; x86 with F16C has one (not measured). On ARM, prefer F32 or Q8_0. Choose
-a file by need:
+**F16 and Q8_0 are not faster than F32 everywhere.** On the M1 (ARM), F16
+runs 1.6-2.0x slower than F32 on one thread: ggml multiplies F16 weights by
+fp32 activations without its fast tiled kernel on ARM. On the Ryzen (x86),
+F16 and Q8_0 are both about 10% slower than F32 for a whole clip on one
+thread, while for a streamed frame F16 is faster than F32 and Q8_0 the
+fastest. Q8_0 is the fastest streamed frame on both machines. Choose a file
+by need:
 
-- **Q8_0:** the fastest and smallest.
+- **Q8_0:** the smallest, and the fastest for live streams.
 - **F16:** half the size of F32 with F32's results.
 - **F32:** the reference.
 

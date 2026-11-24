@@ -45,3 +45,26 @@ Surprises worth feeding back into the docs and tooling.
 - **Test-set baseline.** `scripts/turn/run_reference_smart_turn_onnx.py`
   reproduces upstream's published accuracy (fp32 93.71% / int8 92.63%) from
   the HF test set (fp32 exactly; int8 within 0.01 points of accuracy); per-clip p for both ONNX files is kept as the debug oracle.
+
+## Stages 6-8 (publication, profile turn-publication-v1)
+
+- **Speed, two targets, CPU only.** `scripts/turn/bench.py` through the
+  Python binding's raw C ABI. `m1`: an Apple M1 standing in for the M4
+  reference machine (unreachable), engine `8f97ab5b`, load 1.5-2.9 at each
+  cell's start. `ryzen-4750u`: the Ryzen 7 PRO 4750U rig, engine `8415e8e2`
+  (scripts-only difference), Tctl below 55 C and load below 3 at each cell's
+  start. Load and Tctl per cell are in the bench reports.
+- **Rig-built GGUFs.** The Ryzen rows were measured on GGUFs converted on the
+  rig. Their sha256 differ from the canonical files (F32 7c3d8410...,
+  F16 c647e9e8..., Q8_0 23ff4cde...) only by the converter's last-bit
+  constants (rig: F32 6ec842d1..., F16 f8f60806..., Q8_0 f7362588...), as
+  checked by the rig agent. ingest_perf.py identifies a
+  cell by the file name's quant, not by hash, so nothing checks this; it is
+  recorded here instead.
+- **Accuracy.** The Pipecat runs were repeated at `8f97ab5b` (the earlier
+  rows predated any commit), with `eval_cpp.py` now recording its engine
+  commit; scored by `scripts/turn/score.py --ref-column p_fp32`.
+- **Validation pin.** `validate.py all --family smart_turn` passes at
+  `8f97ab5b` on 2026-11-24.
+- **Forward map.** `reports/porting/smart_turn/forward-map.md` was missing
+  (Stage 4 artifact); written from the finished port.
