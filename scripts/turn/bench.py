@@ -22,8 +22,13 @@ transcribe_turn_get_timings; wall time is recorded beside it):
   -1t suffix         one thread; without it the library default (n_threads 0)
 
 Before every cell it waits for a quiet machine (1-minute load average below
---max-load and none of the --busy processes running) and records the load
-averages before and after it. Writes one bench-driver report (scripts/bench/
+--max-load and none of the --busy processes running) and, on a target with
+cooldown_tctl_c (ryzen-4750u), for the CPU to cool below it, as
+scripts/bench/run.py does; it records the load averages (and Tctl, where the
+machine reports it) before and after each cell. The same driver serves every
+profile target: it benches the target this machine's CPU maps to (m1 on an
+Apple M1, ryzen-4750u on the Ryzen 7 PRO 4750U host). --library is the
+shared libtranscribe (.dylib on macOS, .so on Linux). Writes one bench-driver report (scripts/bench/
 run.py's shape) to reports/perf/<machine-slug>/<variant>-publication_<variant>_cpu.json.
 """
 
@@ -62,7 +67,9 @@ def bench_driver():
 def busy_processes(names: tuple[str, ...]) -> list[str]:
     out = subprocess.run(["ps", "-Ao", "comm="], capture_output=True, text=True).stdout
     running = {Path(line.strip()).name for line in out.splitlines() if line.strip()}
-    return sorted(name for name in names if name in running)
+    # Linux truncates comm to 15 characters (transcribe-turn-eval -> transcribe-turn-).
+    return sorted(name for name in names
+                  if name in running or any(len(r) == 15 and name.startswith(r) for r in running))
 
 
 def wait_quiet(max_load: float, names: tuple[str, ...], timeout_s: float) -> bool:
@@ -115,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     if any(not CELL_RE.match(sample) for sample in samples):
         p.error(f"unparsed samples: {[s for s in samples if not CELL_RE.match(s)]}")
     warmup, repeat = int(profile["speed"]["warmup"]), int(profile["speed"]["iterations"])
+    cooldown_c = float(target.get("cooldown_tctl_c", 0.0))
     if args.smoke:
         warmup, repeat = 0, 1
 
@@ -214,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
 
                 if not wait_quiet(args.max_load, busy_names, args.quiet_timeout):
                     raise SystemExit(f"error: the machine did not get quiet for {sample}")
+                if not args.smoke:
+                    driver.cooldown_wait(cooldown_c, 300.0, 10.0)
+                tctl_before = driver._read_tctl_c() if cooldown_c > 0 else None
                 load_before = [round(x, 2) for x in os.getloadavg()]
                 for _ in range(warmup):
                     once()
@@ -223,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
                     per_iter.append({"mel_ms": mel, "encode_ms": enc, "decode_ms": dec,
                                      "total_ms": mel + enc + dec, "wall_ms": wall})
                 load_after = [round(x, 2) for x in os.getloadavg()]
+                tctl_after = driver._read_tctl_c() if cooldown_c > 0 else None
                 for h in handles:
                     lib.transcribe_turn_session_free(h)
                 runs.append({
@@ -236,6 +248,8 @@ def main(argv: list[str] | None = None) -> int:
                     "load_ms": round(load_ms, 1),
                     "load_avg_before": load_before,
                     "load_avg_after": load_after,
+                    "tctl_c_before": tctl_before,
+                    "tctl_c_after": tctl_after,
                     "per_iter": per_iter,
                     "summary": {field: {"mean": statistics.fmean(it[field] for it in per_iter),
                                         "median": statistics.median(it[field] for it in per_iter),
