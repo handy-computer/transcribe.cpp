@@ -17,7 +17,9 @@ files, this rewrites only the regions a doc explicitly delegates:
 
 Blocks: `downloads`, `perf machine=<slug>`, `accuracy` (one table per
 dataset split beyond the headline), `agreement` (language ID: headline
-accuracy and reference agreement per GGUF), `recipe` (the mechanical WER
+accuracy and reference agreement per GGUF), `turn` (end-of-turn: headline
+accuracy, false positives / negatives, AUC and reference agreement per GGUF;
+`reference=` names the reference column), `recipe` (the mechanical WER
 sentence from the headline rows), `pin` (licence, upstream and validation pins),
 `intro` (upstream link plus the card spec's `summary`), `prose
 field=wer.notes` (any `|` text field of the spec, dotted path), `family variants=a,b,c` (a roll-up row per variant, for
@@ -85,7 +87,7 @@ def block_downloads(record: dict, attrs: dict[str, str]) -> list[str]:
     aligns = ["l", "l", "r"]
     if want_metric:
         label = attrs.get("label") or common.headline_label(record)
-        metric = attrs.get("metric_name") or common.metric_label(target["metric"])
+        metric = attrs.get("metric_name") or common.metric_label(target["metric"], record.get("role"))
         header.append(f"{metric} ({label})")
         aligns.append("r")
 
@@ -165,7 +167,8 @@ def block_perf(record: dict, attrs: dict[str, str]) -> list[str]:
 def perf_methodology(record: dict, rows: dict) -> list[str]:
     """What a cell is. Iterations and warmup are claimed only for rows that
     name the profile they were measured under."""
-    stages = "mel + encode" if record.get("role") == "langid" else "mel + encode + decode"
+    stages = {"langid": "mel + encode", "turn": "front end + model"}.get(
+        record.get("role"), "mel + encode + decode")
     line = f"Compute latency ({stages}), speedup over realtime in parentheses"
     ids = sorted({row["publication_profile"] for row in rows.values()
                   if row.get("publication_profile")})
@@ -355,9 +358,24 @@ def block_agreement(record: dict, attrs: dict[str, str]) -> list[str]:
     if not any(cells[2] != "-" for cells in body):
         raise RenderError("no headline row carries an agreement")
     table = common.render_table(
-        ["GGUF", f"{common.metric_label(common.headline(record)['metric'])} (95% CI)",
+        ["GGUF", f"{common.metric_label(common.headline(record)['metric'], record.get('role'))} (95% CI)",
          f"Top-1 agreement with {reference}", "Max abs logit difference"],
         ["l", "r", "r", "r"], body)
+    builds = sorted({(row["engine_sha"], row.get("measured_on") or "")
+                     for row in rows.values() if row.get("engine_sha")})
+    line = "Measured at " + "; ".join(
+        f"transcribe.cpp `{sha}`" + (f" on {date}" if date else "") for sha, date in builds) + "."
+    return table + ["", line] if builds else table
+
+
+def block_turn(record: dict, attrs: dict[str, str]) -> list[str]:
+    """TURN: per shipped GGUF, the headline accuracy with its interval, false
+    positives and negatives, AUC and (where measured) the decision agreement
+    with the reference, then which build measured it."""
+    table = common.turn_table(record, attrs.get("reference") or "the reference")
+    if not table:
+        raise RenderError("no headline row carries a turn object")
+    rows = common.headline_rows(record)
     builds = sorted({(row["engine_sha"], row.get("measured_on") or "")
                      for row in rows.values() if row.get("engine_sha")})
     line = "Measured at " + "; ".join(
@@ -386,7 +404,7 @@ def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:
         body.append([
             f"`{name}`", common.fmt_params(record["params"]), common.languages_summary(record),
             common.fmt_size(download["size_bytes"]) if download else "-",
-            (f"{common.headline_label(record)} ({common.metric_label(headline['metric'])})"
+            (f"{common.headline_label(record)} ({common.metric_label(headline['metric'], record.get('role'))})"
              if headline else "-"),
             common.fmt_err(common.headline_rows(record).get(quant)),
             common.capabilities_summary(record), link])
@@ -436,7 +454,8 @@ def block_family_index(records: dict[str, dict], attrs: dict[str, str]) -> list[
 
 BLOCKS = {"downloads": block_downloads, "perf": block_perf,
           "intro": block_intro, "prose": block_prose, "accuracy": block_accuracy,
-          "recipe": block_recipe, "pin": block_pin, "agreement": block_agreement}
+          "recipe": block_recipe, "pin": block_pin, "agreement": block_agreement,
+          "turn": block_turn}
 
 
 # --------------------------------------------------------------------------

@@ -103,6 +103,8 @@ def dataset_spec(row: dict) -> str:
 DATASET_LABELS = {
     ("librispeech", "test-clean"): "LibriSpeech test-clean",
     ("ami", "ihm-test"): "AMI IHM test",
+    # pipecat-ai/smart-turn-data-v3.2-test: end-of-turn clips (TURN role).
+    ("smart-turn-data-v3.2", "test"): "Pipecat Smart Turn v3.2 test",
 }
 
 
@@ -114,10 +116,12 @@ def dataset_label(dataset: str, split: str, language: str) -> str:
     return DATASET_LABELS.get((dataset, split), f"{dataset} {split}")
 
 
-def metric_label(metric: str) -> str:
-    """A metric as a column header prints it: WER / CER / DER / CPWER, or
-    "Top-1 accuracy" for language ID."""
-    return "Top-1 accuracy" if metric == "accuracy" else metric.upper()
+def metric_label(metric: str, role: str | None = None) -> str:
+    """A metric as a column header prints it: WER / CER / DER / CPWER,
+    "Top-1 accuracy" for language ID, "Accuracy" for end-of-turn (TURN)."""
+    if metric == "accuracy":
+        return "Accuracy" if role == "turn" else "Top-1 accuracy"
+    return metric.upper()
 
 
 def headline(record: dict) -> dict | None:
@@ -165,11 +169,19 @@ def headline_recipe(record: dict) -> str:
     n_utts = max(row["n_utts"] for row in rows)
     unit = "meetings" if target["metric"] in ("der", "cpwer") else "utterances"
     # Language ID scores a pooled, cropped subset (the row's notes say which),
-    # and has no batch size or timestamps.
-    lid = target["metric"] == "accuracy"
+    # and has no batch size or timestamps. TURN scores whole clips at a
+    # decision threshold.
+    turn = record.get("role") == "turn"
+    lid = target["metric"] == "accuracy" and not turn
     scope = "" if lid else "the full "
-    parts = [f"{metric_label(target['metric'])} on {scope}{headline_label(record)} "
+    if turn:
+        unit = "clips"
+    parts = [f"{metric_label(target['metric'], record.get('role'))} on {scope}{headline_label(record)} "
              f"{'' if lid else 'split '}({n_utts:,} {unit})"]
+    thresholds = sorted({row["turn"]["threshold"] for row in rows if row.get("turn")})
+    if turn and thresholds:
+        parts.append("a clip called complete when p > " + " or ".join(f"{t:g}" for t in thresholds))
+    lid = lid or turn
     batch_sizes = sorted({row["batch_size"] for row in rows
                           if row.get("batch_size") is not None and not lid})
     if len(batch_sizes) == 1:
@@ -205,6 +217,33 @@ def fmt_err(row: dict | None, dp: int = 2) -> str:
     if row is None:
         return "-"
     return f"{row_pct(row):.{dp}f}%"
+
+
+def turn_table(record: dict, reference: str = "the reference") -> list[str]:
+    """TURN: per shipped GGUF, the headline accuracy with its interval, the
+    false positives and false negatives (shares of all clips), the AUC and,
+    where the row has one, the decision agreement with the reference."""
+    rows = headline_rows(record)
+    present = [(item["quant"], rows[item["quant"]]) for item in record.get("downloads", [])
+               if item["quant"] in rows and rows[item["quant"]].get("turn")]
+    if not present:
+        return []
+    agree = any(row.get("agreement") for _, row in present)
+    header = ["GGUF", "Accuracy (95% CI)", "False positives", "False negatives", "AUC"]
+    if agree:
+        header += [f"Same decision as {reference}", "Max abs p difference"]
+    body = []
+    for quant, row in present:
+        turn, lo_hi = row["turn"], row["ci95"]
+        cells = [quant, fmt_err(row) + ("" if lo_hi[0] is None else f" ({lo_hi[0]:.2f}-{lo_hi[1]:.2f})"),
+                 f"{turn['fp_pct']:.2f}%", f"{turn['fn_pct']:.2f}%", f"{turn['auc']:.5f}"]
+        if agree:
+            a = row.get("agreement") or {}
+            delta = a.get("max_abs_p_delta")
+            cells += [f"{a['n_agree']:,} / {a['n']:,}" if a else "-",
+                      "-" if delta is None else f"{delta:.2g}"]
+        body.append(cells)
+    return render_table(header, ["l"] + ["r"] * (len(header) - 1), body)
 
 
 # --------------------------------------------------------------------------

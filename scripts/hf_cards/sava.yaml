@@ -2,8 +2,8 @@
 pin_date: 2026-11-21
 validation:
   reference: inworld-sava 1.0.0 (torch 2.14.1, CPU, fp32) on inworld/sava@1beae7c
-  commit: pending
-  date: pending
+  commit: 8f97ab5b
+  date: 2026-11-24
 pipeline_tag: voice-activity-detection
 default_quant: Q8_0
 tags:
@@ -21,6 +21,16 @@ summary: |
   model: it serves the TURN role (live stream or whole clip, with Inworld's
   turn rule cutting a clip into turns) and the VAD role. Any language. CPU is
   the default backend.
+wer:
+  notes: |
+    A clip's score is the turn score of its last 40 ms frame
+    (`transcribe_turn_run`'s `p` on the whole clip, scored as one stream);
+    the clip is called complete when `p > 0.5`, Inworld's benchmark rule.
+    The API's default cut-off is 0.9, Inworld's live rule. False positives
+    (incomplete clips called complete) and false negatives (the reverse) are
+    shares of all clips, as Pipecat publishes them. Inworld publishes 93.35%
+    and an AUC of 0.97946 for SAVA (fp32, A100); it publishes no per-clip
+    scores, so there is no per-clip agreement column.
 usage: |
   Build transcribe.cpp and run on a mono 16 kHz WAV:
 

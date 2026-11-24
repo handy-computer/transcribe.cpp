@@ -12,7 +12,10 @@
   "upstream_commit": "f766f81",
   "published_repo": "handy-computer/smart-turn-v3.2-gguf",
   "docs_page": "smart-turn-v3.2.md",
-  "languages": ["ar", "bn", "zh", "da", "nl", "de", "en", "fi", "fr", "hi", "id", "it", "ja", "ko", "mr", "no", "pl", "pt", "ru", "es", "tr", "uk", "vi"],
+  "languages": [
+    "ar", "bn", "zh", "da", "nl", "de", "en", "fi", "fr", "hi", "id", "it",
+    "ja", "ko", "mr", "no", "pl", "pt", "ru", "es", "tr", "uk", "vi"
+  ],
   "long_form_strategy": "hard-cap",
   "capabilities": {
     "transcribe": {"supported":false},
@@ -30,6 +33,13 @@
   ],
   "accuracy_benchmarks": [],
   "headline_benchmark": null,
-  "speed_benchmarks": [],
+  "speed_benchmarks": [
+    {"machine":"m1","backend":"cpu","quant":"F16","sample":"jfk-8s","sample_duration_s":8.0,"total_ms":54.1,"xrt_compute":147.77,"wall_ms":54.5,"xrt_wall":146.66,"load_ms":3.2,"mel_ms":2.2,"encode_ms":52.0,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},
+    {"machine":"m1","backend":"cpu","quant":"F16","sample":"jfk-8s-1t","sample_duration_s":8.0,"total_ms":212.5,"xrt_compute":37.64,"wall_ms":212.9,"xrt_wall":37.57,"load_ms":3.2,"mel_ms":7.1,"encode_ms":205.4,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},
+    {"machine":"m1","backend":"cpu","quant":"F32","sample":"jfk-8s","sample_duration_s":8.0,"total_ms":33.1,"xrt_compute":241.74,"wall_ms":33.6,"xrt_wall":238.41,"load_ms":4.9,"mel_ms":2.3,"encode_ms":30.8,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},
+    {"machine":"m1","backend":"cpu","quant":"F32","sample":"jfk-8s-1t","sample_duration_s":8.0,"total_ms":106.3,"xrt_compute":75.23,"wall_ms":106.8,"xrt_wall":74.93,"load_ms":4.9,"mel_ms":7.1,"encode_ms":99.3,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},
+    {"machine":"m1","backend":"cpu","quant":"Q8_0","sample":"jfk-8s","sample_duration_s":8.0,"total_ms":38.2,"xrt_compute":209.57,"wall_ms":38.6,"xrt_wall":207.34,"load_ms":3.5,"mel_ms":2.2,"encode_ms":36.0,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},
+    {"machine":"m1","backend":"cpu","quant":"Q8_0","sample":"jfk-8s-1t","sample_duration_s":8.0,"total_ms":90.1,"xrt_compute":88.83,"wall_ms":90.5,"xrt_wall":88.44,"load_ms":3.5,"mel_ms":7.1,"encode_ms":83.0,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null}
+  ],
   "role": "turn"
 }

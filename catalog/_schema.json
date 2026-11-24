@@ -320,7 +320,7 @@
           },
           "metric": {
             "enum": ["wer","cer","der","cpwer","accuracy"],
-            "description": "CER for zh/yue/ja/ko/th/km/lo/my; der/cpwer for diarization; accuracy for LID."
+            "description": "CER for zh/yue/ja/ko/th/km/lo/my; der/cpwer for diarization; accuracy for LID and TURN."
           },
           "err_pct": {
             "type": "number",
@@ -331,7 +331,7 @@
             "type": "number",
             "minimum": 0,
             "maximum": 100,
-            "description": "Top-1 accuracy in percent; only on metric=accuracy rows (language ID), in place of err_pct."
+            "description": "Accuracy in percent; only on metric=accuracy rows, in place of err_pct: top-1 for language ID, the share of clips whose end-of-turn decision matches the label for TURN."
           },
           "ci95": {
             "type": "array",
@@ -410,9 +410,23 @@
             "properties": {
               "n_agree": {"type": "integer", "minimum": 0},
               "n": {"type": "integer", "minimum": 1},
-              "max_abs_logit_delta": {"type": ["number", "null"], "minimum": 0}
+              "max_abs_logit_delta": {"type": ["number", "null"], "minimum": 0},
+              "max_abs_p_delta": {"type": ["number", "null"], "minimum": 0}
             },
-            "description": "Language ID only: top-1 decisions of the run this row was scored from that match the reference implementation on the same audio (scripts/langid/score.py --ref, the port's ship gate), over every crop of the sweep rather than only the scored one, and the largest logit difference seen."
+            "description": "Language ID and TURN: decisions of the run this row was scored from that match the reference implementation on the same audio (the port's ship gate). Language ID: top-1 over every crop of the sweep rather than only the scored one (scripts/langid/score.py --ref), and the largest logit difference seen. TURN: the end-of-turn decision at turn.threshold on every clip (scripts/turn/score.py --ref-column), and the largest difference in the score p. Absent where the reference publishes no per-clip scores."
+          },
+          "turn": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["threshold", "n_complete", "fp_pct", "fn_pct", "auc"],
+            "properties": {
+              "threshold": {"type": "number", "minimum": 0, "maximum": 1, "description": "A clip is called complete when p > threshold (the benchmark rule; the API's own default cut-off may differ)."},
+              "n_complete": {"type": "integer", "minimum": 0, "description": "Clips labelled complete (turn ended); n_utts minus this are labelled incomplete."},
+              "fp_pct": {"type": "number", "minimum": 0, "maximum": 100, "description": "Incomplete clips called complete, in percent of ALL clips (Pipecat's convention for its published false positives), so acc_pct + fp_pct + fn_pct = 100. The conventional false-positive rate is fp_pct * n_utts / (n_utts - n_complete)."},
+              "fn_pct": {"type": "number", "minimum": 0, "maximum": 100, "description": "Complete clips called incomplete, in percent of ALL clips. The conventional false-negative rate is fn_pct * n_utts / n_complete."},
+              "auc": {"type": "number", "minimum": 0, "maximum": 1, "description": "Area under the ROC curve of p against the label: threshold-free ranking quality."}
+            },
+            "description": "TURN rows only (role turn, scripts/turn/score.py): the decision rule and the error split behind acc_pct, and the threshold-free AUC."
           }
         },
         "allOf": [

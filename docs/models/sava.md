@@ -19,7 +19,11 @@ Source weights: `sava.safetensors` (bf16) from
 `1beae7c1dd0df6b0f92030644fc905eb087dc6a0` (SHA256
 `aa610ee9b5d3d1be96f70581a8a3affe7cf20d06816b4ada1efdd8ab6274be34`).
 Upstream code: [`inworld-ai/sava`](https://github.com/inworld-ai/sava)
-(`inworld-sava` 1.0.0). Apache-2.0.
+(`inworld-sava` 1.0.0).
+
+<!-- catalog:pin -->
+Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://github.com/inworld-ai/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (torch 2.14.1, CPU, fp32) on inworld/sava@1beae7c reference at transcribe.cpp commit [`8f97ab5b`](https://github.com/handy-computer/transcribe.cpp/tree/8f97ab5b) on 2026-11-24.
+<!-- /catalog -->
 
 ## How to use it
 
@@ -64,7 +68,7 @@ into segments with Silero's rule on 40 ms frames.
 | Quantization | Download |   Size |
 | --- | --- | ---: |
 | F32          | [sava-F32.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-F32.gguf) | 103 MB |
-| F16          | [sava-F16.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-F16.gguf) | 52 MB |
+| F16          | [sava-F16.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-F16.gguf) |  52 MB |
 | Q8_0         | [sava-Q8_0.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-Q8_0.gguf) |  28 MB |
 <!-- /catalog -->
 
@@ -129,7 +133,35 @@ On the 8 golden recordings (`tests/golden/sava/`):
 
 ## Performance
 
-Apple M1, CPU, idle machine. Milliseconds of compute per 40 ms frame:
+The catalog's cells, measured on an Apple M1 (Mac mini), CPU, standing in
+for the Apple M4 reference machine, which was unreachable:
+
+- `jfk-8s`: `transcribe_turn_run` on the first 8 s of `samples/jfk.wav`
+  (200 frames).
+- `jfk-40ms`: one streamed frame, the mean time of a 640-sample
+  `transcribe_turn_stream_feed` over the whole clip.
+- `jfk-40ms-x8`: one `transcribe_turn_stream_feed_batch` tick for 8 users
+  (a 640-sample frame each, so 0.32 s of audio per tick).
+- `-1t` runs on one thread; without it, the library's default thread count
+  (all 8 cores of the M1).
+
+<!-- catalog:perf machine=m1 dp_ms=1 -->
+Compute latency (front end + model), speedup over realtime in parentheses; profile `turn-publication-v1`: mean over 20 iterations after 3 warmup.
+
+| Backend | Sample           |               F32 |               F16 |              Q8_0 |
+| ------- | ---------------- | ----------------: | ----------------: | ----------------: |
+| CPU     | jfk-40ms         |   3.2 ms (12.43×) |   2.8 ms (14.06×) |   2.1 ms (19.13×) |
+| CPU     | jfk-40ms-1t      |    4.4 ms (9.09×) |    7.1 ms (5.63×) |   3.1 ms (12.97×) |
+| CPU     | jfk-40ms-x8      |   7.4 ms (43.36×) |   8.0 ms (40.15×) |   6.5 ms (49.26×) |
+| CPU     | jfk-40ms-x8-1t   |  10.0 ms (32.10×) |  16.5 ms (19.36×) |   8.2 ms (39.18×) |
+| CPU     | jfk-8s (8.0s)    | 73.9 ms (108.21×) | 108.5 ms (73.74×) | 78.6 ms (101.83×) |
+| CPU     | jfk-8s-1t (8.0s) | 177.8 ms (44.99×) | 354.7 ms (22.55×) | 139.6 ms (57.30×) |
+
+Apple M1 (proxy for the Apple M4 reference machine, which was unreachable): transcribe.cpp `8f97ab5b` on 2026-11-24.
+<!-- /catalog -->
+
+The same M1, idle machine, with 4 threads and per frame. Milliseconds of
+compute per 40 ms frame:
 
 | File | Whole clip (`jfk.wav`), 1 thread | Whole clip, 4 threads | Stream (640-sample feeds), 1 thread | Stream, 4 threads |
 | --- | ---: | ---: | ---: | ---: |

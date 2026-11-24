@@ -18,7 +18,10 @@ Source weights: `smart-turn-v3.2-gpu.onnx` (the fp32 export) from
 at `f766f81d3cfdf7737ac64aad813d91bbfd56bf93` (SHA256
 `ab8dc64b88713f90b571c15b714bd1330e6c883cad8763dacf65c9376dc539be`).
 Upstream code: [`pipecat-ai/smart-turn`](https://github.com/pipecat-ai/smart-turn).
-BSD-2-Clause.
+
+<!-- catalog:pin -->
+Licensed BSD-2-Clause. Ported from upstream commit [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81), pinned 2026-11-21. Validated against the onnxruntime 1.23.2 on smart-turn-v3.2-gpu.onnx (CPU, F32) reference at transcribe.cpp commit [`8f97ab5b`](https://github.com/handy-computer/transcribe.cpp/tree/8f97ab5b) on 2026-11-24.
+<!-- /catalog -->
 
 ## How to use it
 
@@ -80,14 +83,30 @@ projections stay F32.
 
 ## Performance
 
-One 8 s window on an Apple M1, CPU, F32: 106 ms with one thread, 32 ms with
-the default threads (front end 2 ms of it). onnxruntime on the same machine:
-83 ms / 28 ms (fp32 ONNX, 1 / 4 threads), 40 ms / 15 ms (int8 ONNX).
+Measured on an Apple M1 (Mac mini), CPU, standing in for the Apple M4
+reference machine, which was unreachable. `jfk-8s` is one 8 s window:
+`transcribe_turn_run` on the first 8 s of `samples/jfk.wav` (shorter audio
+is padded to the same window, so it costs the same). `-1t` runs on one
+thread; without it, the library's default thread count (all 8 cores of the
+M1).
+
+<!-- catalog:perf machine=m1 dp_ms=1 -->
+Compute latency (front end + model), speedup over realtime in parentheses; profile `turn-publication-v1`: mean over 20 iterations after 3 warmup.
+
+| Backend | Sample           |               F32 |               F16 |              Q8_0 |
+| ------- | ---------------- | ----------------: | ----------------: | ----------------: |
+| CPU     | jfk-8s (8.0s)    | 33.1 ms (241.74×) | 54.1 ms (147.77×) | 38.2 ms (209.57×) |
+| CPU     | jfk-8s-1t (8.0s) | 106.3 ms (75.23×) | 212.5 ms (37.64×) |  90.1 ms (88.83×) |
+
+Apple M1 (proxy for the Apple M4 reference machine, which was unreachable): transcribe.cpp `8f97ab5b` on 2026-11-24.
+<!-- /catalog -->
+
+onnxruntime on the same M1: 83 ms / 28 ms per window (fp32 ONNX, 1 / 4
+threads), 40 ms / 15 ms (int8 ONNX).
 
 `AUTO` selects the CPU: the model is small, runs once per pause, and the CPU
 path is the validated one.
 
-**On ARM CPUs, the F16 file currently runs 1.6-1.9x slower than F32**: 224
-vs 117 ms per window with 1 thread and 80 vs 46 ms with 4 threads on an M1.
-ggml multiplies F16 weights by fp32 activations without its fast tiled
-kernel on ARM. CPU users should prefer F32 or Q8_0.
+**On ARM CPUs, the F16 file currently runs about 2x slower than F32** (one
+thread, in the table above). ggml multiplies F16 weights by fp32 activations
+without its fast tiled kernel on ARM. CPU users should prefer F32 or Q8_0.

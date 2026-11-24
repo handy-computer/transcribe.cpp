@@ -17,6 +17,11 @@ reports/langid/, named after the GGUF like a WER score
 (`<gguf stem>.fleurs-mul.score.json`, with its `.agreement.json`); the profile
 names the crop, and the importer checks the sweep's own recipe against it
 instead of a stamp.
+
+TURN records likewise: scripts/turn/score.py writes reports/turn/<gguf
+stem>.smart-turn-data-v3.2-test.score.json from one scripts/turn/eval_cpp.py
+run, and the importer checks its dataset, backend, threshold and full-split
+coverage against the profile cell.
 """
 from __future__ import annotations
 
@@ -32,6 +37,8 @@ import profiles  # noqa: E402
 REPORTS = common.REPO / "reports" / "wer"
 LANGID_REPORTS = common.REPO / "reports" / "langid"
 LANGID_SCORE = "transcribe-langid-score-v1"
+TURN_REPORTS = common.REPO / "reports" / "turn"
+TURN_SCORE = "transcribe-turn-score-v1"
 
 
 def score_path(record: dict, cell: dict, reports: pathlib.Path) -> pathlib.Path:
@@ -132,6 +139,60 @@ def langid_row(record: dict, cell: dict, score: dict, agreement: dict | None,
     return row, []
 
 
+def turn_row(record: dict, cell: dict, score: dict,
+             profile_id: str) -> tuple[dict | None, list[str]]:
+    """The catalog row for one TURN cell, or why the score cannot be it."""
+    filename = next(item["filename"] for item in record["downloads"]
+                    if item["quant"] == cell["quant"])
+    reasons = []
+    if score.get("schema") != TURN_SCORE:
+        reasons.append(f"schema={score.get('schema')!r}")
+    if score.get("engine") != "cpp":
+        reasons.append(f"engine={score.get('engine')!r}")
+    if pathlib.PurePath(str(score.get("model", ""))).name != filename:
+        reasons.append(f"model={score.get('model')!r}")
+    for field in ("dataset", "split", "language", "backend", "threshold"):
+        if score.get(field) != cell.get(field):
+            reasons.append(f"{field}={score.get(field)!r}")
+    if not score.get("full_split"):
+        reasons.append("not the full split")
+    if not score.get("engine_sha"):
+        reasons.append("engine_sha is empty")
+    if reasons:
+        return None, reasons
+    row = {
+        "dataset": cell["dataset"],
+        "split": cell["split"],
+        "language": cell["language"],
+        "backend": cell["backend"],
+        "quant": cell["quant"],
+        "metric": cell["metric"],
+        "acc_pct": score["acc_pct"],
+        "ci95": score["ci95"],
+        "n_utts": score["n"],
+        "batch_size": cell["batch_size"],
+        "timestamps": cell["timestamps"],
+        "engine_sha": score["engine_sha"],
+        "publication_profile": profile_id,
+        "measured_on": (score.get("run_created") or score.get("created") or "")[:10] or None,
+    }
+    agreement = score.get("agreement")
+    if agreement:
+        row["agreement"] = {
+            "n_agree": agreement["n_agree"],
+            "n": agreement["n"],
+            "max_abs_p_delta": float(f"{agreement['max_abs_p_delta']:.2g}"),
+        }
+    row["turn"] = {
+        "threshold": score["threshold"],
+        "n_complete": score["n_complete"],
+        "fp_pct": score["fp_pct"],
+        "fn_pct": score["fn_pct"],
+        "auc": score["auc"],
+    }
+    return row, []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports", default=None,
@@ -157,8 +218,9 @@ def main() -> int:
             continue
         profile_id, profile = profiles.profile_for(record, args.profile)
         langid = profile.get("role") == "langid"
+        turn = profile.get("role") == "turn"
         reports = pathlib.Path(args.reports) if args.reports else (
-            LANGID_REPORTS if langid else REPORTS)
+            LANGID_REPORTS if langid else TURN_REPORTS if turn else REPORTS)
         path = common.CATALOG_DIR / f"{variant}.json"
         rows = record.get("accuracy_benchmarks", [])
         changed = False
@@ -178,6 +240,8 @@ def main() -> int:
                 agreement = (json.loads(agreement_path.read_text())
                              if agreement_path.exists() else None)
                 new_row, reasons = langid_row(record, cell, score, agreement, profile_id)
+            elif turn:
+                new_row, reasons = turn_row(record, cell, score, profile_id)
             else:
                 new_row, reasons = None, []
                 recipe = score.get("recipe") or {}

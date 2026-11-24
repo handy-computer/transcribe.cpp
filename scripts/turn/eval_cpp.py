@@ -13,13 +13,18 @@ run_reference_smart_turn_onnx.py.
 
 Rows: the reference row plus "p_cpp" and "ended_cpp". The summary has the
 accuracy with upstream's rule (p > 0.5), the decision agreement with the
-reference fp32 and int8 ONNX, and |p_cpp - p_fp32| statistics.
+reference fp32 and int8 ONNX, and |p_cpp - p_fp32| statistics. The header
+records the transcribe.cpp commit the tool was built at (engine_sha; the run
+refuses an engine tree with uncommitted changes, so the commit is the code),
+the backend, the thread count and the time. scripts/turn/score.py turns a run
+into the catalog's score.
 """
 from __future__ import annotations
 
 import argparse
 import io
 import json
+import datetime
 import queue
 import subprocess
 import sys
@@ -45,8 +50,23 @@ def decode(flac: bytes) -> np.ndarray:
     return np.ascontiguousarray(pcm, dtype=np.float32)
 
 
-def worker(tool: Path, model: Path, jobs: queue.Queue, results: dict, threads: int) -> None:
-    proc = subprocess.Popen([str(tool), str(model), "--threads", str(threads)], stdin=subprocess.PIPE,
+ENGINE_PATHS = ("src", "include", "ggml", "tools/transcribe-turn-eval", "CMakeLists.txt", "cmake")
+
+
+def engine_sha() -> str:
+    """The commit the engine sources are at; refuses uncommitted changes to
+    them, since the number would then name a commit that did not run."""
+    dirty = subprocess.run(["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--", *ENGINE_PATHS],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    if dirty:
+        raise SystemExit(f"error: uncommitted engine changes; commit them first:\n{dirty}")
+    return subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--short=8", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def worker(tool: Path, model: Path, jobs: queue.Queue, results: dict, threads: int, backend: str) -> None:
+    proc = subprocess.Popen([str(tool), str(model), "--threads", str(threads), "--backend", backend],
+                            stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     assert proc.stdin and proc.stdout
     while True:
@@ -84,7 +104,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--jobs", type=int, default=6)
     p.add_argument("--threads", type=int, default=1, help="threads per tool process")
     p.add_argument("--limit", type=int, default=0, help="score only the first N clips (0 = all)")
+    p.add_argument("--backend", choices=("cpu", "auto"), default="cpu")
     args = p.parse_args(argv)
+    sha = engine_sha()
+    created = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     lines = args.ref.read_text().splitlines()
     header = json.loads(lines[0])
@@ -92,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs: queue.Queue = queue.Queue(maxsize=64)
     results: dict = {}
-    pool = [threading.Thread(target=worker, args=(args.tool, args.model, jobs, results, args.threads))
+    pool = [threading.Thread(target=worker, args=(args.tool, args.model, jobs, results, args.threads, args.backend))
             for _ in range(args.jobs)]
     for t in pool:
         t.start()
@@ -132,7 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     out_header = {"schema": "transcribe-turn-cpp-v1", "model": str(args.model), "ref": str(args.ref),
                   "dataset": header["dataset"], "dataset_revision": header["dataset_revision"],
-                  "threshold": THRESHOLD, "rule": "p > 0.5 (as the reference)", "summary": summary}
+                  "threshold": THRESHOLD, "rule": "p > 0.5 (as the reference)", "engine_sha": sha,
+                  "backend": args.backend, "threads": args.threads, "created": created,
+                  "limit": args.limit, "summary": summary}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w") as f:
         f.write(json.dumps(out_header) + "\n")

@@ -82,3 +82,38 @@ def test_the_shipped_profile_keeps_the_voxtral_minis_and_drops_the_24b():
     assert profiles.target_admits(records["voxtral-mini-3b-2507"], target)
     assert profiles.target_admits(records["voxtral-mini-4b-realtime-2602"], target)
     assert not profiles.target_admits(records["voxtral-small-24b-2507"], target)
+
+
+STREAMING_PROFILE = {
+    "speed": {
+        "quants": "all-downloads",
+        "samples": ["jfk-8s"],
+        "streaming_samples": ["jfk-40ms", "jfk-40ms-x8"],
+        "iterations": 1,
+        "warmup": 0,
+        "targets": [UNCAPPED],
+    }
+}
+
+
+def test_streaming_samples_apply_only_to_streaming_models():
+    still = record({"F32": GIB})
+    live = {**record({"F32": GIB}), "capabilities": {"streaming": {"supported": True, "verified": True}}}
+    assert profiles.speed_samples(still, STREAMING_PROFILE) == ["jfk-8s"]
+    assert profiles.speed_samples(live, STREAMING_PROFILE) == ["jfk-8s", "jfk-40ms", "jfk-40ms-x8"]
+    assert "jfk-40ms-x8" in profiles.all_speed_samples(STREAMING_PROFILE, {})
+
+
+def test_turn_records_follow_the_turn_profile_on_the_m1_proxy():
+    records = profiles.common.load_records()
+    for variant in ("smart-turn-v3.2", "sava"):
+        profile_id, profile = profiles.profile_for(records[variant])
+        assert profile_id == "turn-publication-v1"
+        assert profiles.target_for_machine(profile, "apple-m1")["machine"] == "m1"
+        cells = profiles.expected_accuracy(records[variant], profile)
+        assert {cell["quant"] for cell in cells} == {"F32", "F16", "Q8_0"}
+        assert all(cell["threshold"] == 0.5 and cell["language"] == "mul" for cell in cells)
+    smart, sava = (profiles.expected_speed(records[v], profiles.profile_for(records[v])[1])
+                   for v in ("smart-turn-v3.2", "sava"))
+    assert not any("40ms" in cell["sample"] for cell in smart)
+    assert any(cell["sample"] == "jfk-40ms-x8" for cell in sava)

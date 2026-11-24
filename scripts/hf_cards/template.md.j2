@@ -57,6 +57,10 @@ on {{ validation.date }}.
 {%- endfor %}
 
 {{ wer.recipe }}
+{%- if turn_table %}
+
+{{ turn_table }}
+{%- endif %}
 
 {{ wer.notes }}
 {%- else -%}

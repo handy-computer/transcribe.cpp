@@ -212,6 +212,32 @@ uv run scripts/preflight.py --family smart_turn --variant smart-turn-v3.2 --gate
 
 # Validation (Stage 4)
 uv run scripts/validate.py all --family smart_turn --variant smart-turn-v3.2
+
+# Quants (Stage 5)
+build/bin/transcribe-quantize models/smart-turn-v3.2/smart-turn-v3.2-F32.gguf \
+  models/smart-turn-v3.2/smart-turn-v3.2-F16.gguf --quant F16
+build/bin/transcribe-quantize models/smart-turn-v3.2/smart-turn-v3.2-F32.gguf \
+  models/smart-turn-v3.2/smart-turn-v3.2-Q8_0.gguf --quant Q8_0
+
+# Speed (Stage 6, profile turn-publication-v1; shared build for the Python binding)
+cmake -B build-shared -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_BUILD_EXAMPLES=OFF
+cmake --build build-shared --target transcribe
+uv run --project scripts/envs/smart_turn scripts/turn/bench.py --variant smart-turn-v3.2 \
+  --library build-shared/src/libtranscribe.dylib
+uv run scripts/catalog/ingest_perf.py
+
+# Accuracy (Stage 7): Pipecat test set per quant, scored against the fp32 ONNX column
+cmake --build build --target transcribe-turn-eval
+for q in F32 F16 Q8_0; do
+  uv run --project scripts/envs/smart_turn scripts/turn/eval_cpp.py \
+    --model models/smart-turn-v3.2/smart-turn-v3.2-$q.gguf \
+    --ref reports/turn/smart-turn-v3.2-REF.smart-turn-data-v3.2-test.jsonl \
+    --out reports/turn/smart-turn-v3.2-$q.smart-turn-data-v3.2-test.jsonl
+  uv run --project scripts/envs/smart_turn scripts/turn/score.py \
+    reports/turn/smart-turn-v3.2-$q.smart-turn-data-v3.2-test.jsonl --ref-column p_fp32
+done
+uv run scripts/catalog/ingest_accuracy.py --models smart-turn-v3.2
+uv run scripts/catalog/render.py
 ```
 
 ## Capability Validation
@@ -237,13 +263,15 @@ uv run scripts/validate.py all --family smart_turn --variant smart-turn-v3.2
   role's `turn.json` (p within the manifest tolerance, decision, segments).
 - Tolerances finalized: see `tests/tolerances/smart_turn.json` `_comment`
   (widened entries and the massive-activation mechanism).
-- Speed (M1, F32, 8 s window): 106 ms with 1 thread, 32 ms default threads;
-  onnxruntime fp32 83 / 28 ms (1 / 4 threads), int8 40 / 15 ms.
+- Speed: the catalog's cells (profile `turn-publication-v1`) were measured on
+  an Apple M1 standing in for the unreachable M4 reference machine; see the
+  [model page](../../models/smart-turn-v3.2.md#performance). onnxruntime on the
+  same M1: fp32 83 / 28 ms per 8 s window (1 / 4 threads), int8 40 / 15 ms.
 - Quant policy: `head.cls.1.weight` (a LayerNorm scale whose name the generic
   norm rules miss) and the one-row projections `head.pool.2.weight` /
   `head.cls.6.weight` are pinned to the Norm bucket (F32) in
   `tools/transcribe-quantize/policy.cpp` and `reference_dtype_for`; the conv
   stem is in the Conv bucket (F32 under Q8_0), `enc.pos_emb.weight` and
   `frontend.*` in Norm. Q8_0 (`build/bin/transcribe-quantize ... --quant
-  Q8_0`) has 27 Q8_0 and 54 F32 tensors, 10.7 MB. Shipped: F32 and Q8_0;
+  Q8_0`) has 27 Q8_0 and 54 F32 tensors, 10.7 MB. Shipped: F32, F16 and Q8_0;
   test-set results are on the [model page](../../models/smart-turn-v3.2.md#accuracy).

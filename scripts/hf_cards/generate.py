@@ -21,7 +21,8 @@ Nothing numeric or mechanical is read from the YAML; a number that belongs
 on the card belongs in the catalog first. Fetches the upstream model card at
 the pinned commit and renders template.md.j2.
 
-Default output is models/<upstream-slug>/README.md alongside the GGUFs, so
+Default output is models/<upstream-slug>/README.md (models/<variant>/ when the
+GGUFs are there) alongside the GGUFs, so
 `hf upload <repo> models/<upstream-slug> .` picks it up in the same call. When
 several records share one upstream repo (gigaam), it is models/<variant>/ instead.
 
@@ -237,7 +238,9 @@ def build_context(record: dict, spec: dict) -> dict:
         "transcribe_docs_url": docs_url(record),
     }
     if headline.get("metric"):
-        ctx["metric"] = common.metric_label(headline["metric"])
+        ctx["metric"] = common.metric_label(headline["metric"], record.get("role"))
+    # End-of-turn: the error split and AUC behind the headline accuracy.
+    ctx["turn_table"] = "\n".join(common.turn_table(record))
     for key in ("name", "link"):
         if record["license"].get(key):
             ctx[f"license_{key}"] = record["license"][key]
@@ -363,6 +366,12 @@ def main() -> int:
     upstream_slug = ctx["hf_repo"].rsplit("/", 1)[-1]
     shared = sum(r["upstream_repo"] == record["upstream_repo"] for r in common.load_records().values()) > 1
     model_dir = args.spec.stem if shared else upstream_slug
+    # A converter that names its directory after the variant rather than the
+    # upstream repo (smart-turn-v3.2 from pipecat-ai/smart-turn-v3): the card
+    # goes where the GGUFs are.
+    own = REPO_ROOT / "models" / args.spec.stem
+    if any((own / item["filename"]).exists() for item in record.get("downloads", [])):
+        model_dir = args.spec.stem
     output = args.output or (REPO_ROOT / "models" / model_dir / "README.md")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(out)

@@ -2,8 +2,8 @@
 pin_date: 2026-11-21
 validation:
   reference: onnxruntime 1.23.2 on smart-turn-v3.2-gpu.onnx (CPU, F32)
-  commit: pending
-  date: pending
+  commit: 8f97ab5b
+  date: 2026-11-24
 pipeline_tag: audio-classification
 default_quant: F32
 tags:
@@ -18,6 +18,15 @@ summary: |
   current turn's audio (the last 8 s) with one probability that the turn is
   complete. Run it when a VAD hears a pause. 23 languages. CPU is the default
   backend.
+wer:
+  notes: |
+    A clip's score is `transcribe_turn_run`'s `p` on the whole clip (the
+    model sees its last 8 s); the clip is called complete when `p > 0.5`,
+    upstream's benchmark rule. False positives (incomplete clips called
+    complete) and false negatives (the reverse) are shares of all clips, as
+    Pipecat publishes them. The reference is upstream's fp32 ONNX
+    (`smart-turn-v3.2-gpu.onnx`) under onnxruntime on the same clips.
+    Pipecat publishes 93.71% for it and 92.63% for its int8 ONNX.
 usage: |
   Build transcribe.cpp and run on a mono 16 kHz WAV of one turn:
 
