@@ -586,7 +586,7 @@ F16 and Q8_0.
 | Golden turns vs F32 | identical, 8 of 8 | 7 of 8; `dots-full` 6 of 59 change | 7 of 8; `dots-full` 5 of 59 change |
 | F32 tolerance gate (`validate.py --gguf`) | passes, 32/32 tensors x 8 | - | - |
 | Pipecat AUC (F32 0.97946) | 0.97946 | 0.97935 | 0.97991 on the first 3,000 clips (F32 0.97990) |
-| Pipecat decision flips vs F32, at 0.5 / 0.9 | 0 / 0 of 31,527 | 75 / 124 of 31,527 | 1 / 3 of 3,000 (F16 0 / 0, Q8_0 9 / 11 on those) |
+| Pipecat decision flips vs F32, at 0.5 / 0.9 | 0 / 0 of 31,527 | 76 / 126 of 31,527 (at 8f97ab5b; 75 / 124 before the batching commit) | 1 / 3 of 3,000 (F16 0 / 0, Q8_0 9 / 11 on those) |
 | Clip frame, ms, 1 / 4 threads (F32 0.94 / 0.38) | 1.80 / 0.59 | 0.75 / 0.30 | 20.7 / 5.7 |
 | Streamed frame, ms, 1 / 4 threads (F32 5.4 / 3.4) | 8.1 / 3.0 | 3.9 / 1.7 | 82 / 22 |
 
@@ -597,12 +597,16 @@ of 0.9 or 0.03 of 0.5 (details in `docs/models/sava.md`; per-case numbers in
 Speed notes (Apple M1, idle machine):
 
 - On NEON, ggml has no tiled kernel for F16 weights x F32 activations, so F16
-  per clip frame is slower than F32. x86 with F16C has one.
+  per clip frame is slower than F32. On the Ryzen 7 PRO 4750U (AVX2, F16C)
+  F16 is not faster than F32 either for a whole clip on one thread (245.7 vs
+  221.6 ms for 8 s); it is faster for a streamed frame (8.4 vs 9.8 ms).
+  Q8_0 is the fastest streamed frame on both machines.
 - BF16 has no native support on the M1; CPUs with AVX512-BF16 or ARMv8.6
   BF16 were not measured.
-- Bit-identity was checked on M1 NEON only. On CPUs with int8 matmul
-  instructions (i8mm, AVX-VNNI) or with x86 F16 tinyBLAS, ggml may pick
-  per-column-count kernels; re-run `transcribe_sava_real_smoke` there.
+- Bit-identity (stream == run, batched == alone) was checked on M1 NEON and
+  on the Ryzen 7 PRO 4750U (AVX2) for F32, F16 and Q8_0. On CPUs with int8
+  matmul instructions (i8mm, AVX-VNNI) ggml may pick per-column-count
+  kernels; re-run `transcribe_sava_real_smoke` there.
 
 Recommendation: ship F16, not BF16.
 

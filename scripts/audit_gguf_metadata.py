@@ -54,6 +54,13 @@ IDENTITY_CORE = {"general.name", "general.size_label", "general.author",
 # Slug tokens that imply the model is a streaming variant.
 STREAMING_HINTS = ("streaming", "unified", "nemotron", "realtime")
 
+# VAD / TURN architectures: no transcription language list (the catalog
+# schema exempts their roles from `languages`; SAVA and Silero are
+# language-agnostic), and their streaming flag is not an ASR slug property,
+# so the slug heuristic does not apply. scripts/catalog/sync_capabilities.py
+# --check still holds the flag to the catalog record.
+NON_ASR_STREAM_ARCHES = {"silero_vad", "sava", "smart_turn"}
+
 
 def field_value(field):
     if field is None or not field.types:
@@ -70,8 +77,11 @@ def audit_reader(reader: GGUFReader, label: str) -> dict:
     keys = list(reader.fields.keys())
     kset = set(keys)
 
-    missing = [k for k in IDENTITY_KEYS if k not in kset]
-    identity_fail = bool(IDENTITY_CORE - kset)
+    arch = field_value(reader.fields.get("general.architecture"))
+    non_asr = arch in NON_ASR_STREAM_ARCHES
+    expected = [k for k in IDENTITY_KEYS if not (non_asr and k == "general.languages")]
+    missing = [k for k in expected if k not in kset]
+    identity_fail = bool((IDENTITY_CORE - ({"general.languages"} if non_asr else set())) - kset)
 
     present_bulk = [k for k in BULK_KV_KEYS if k in kset]
     if present_bulk:
@@ -97,7 +107,9 @@ def audit_reader(reader: GGUFReader, label: str) -> dict:
     looks_streaming = any(h in str(ident).lower() for h in STREAMING_HINTS)
     sval = field_value(reader.fields.get("stt.capability.streaming"))
     streaming = "ABSENT" if sval is None else bool(sval)
-    if looks_streaming and streaming is not True:
+    if non_asr:
+        streaming_suspect = None
+    elif looks_streaming and streaming is not True:
         streaming_suspect = f"slug implies streaming but flag={streaming}"
     elif (not looks_streaming) and streaming is True:
         streaming_suspect = "flag=true but slug implies offline"
