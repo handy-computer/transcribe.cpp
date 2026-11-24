@@ -68,3 +68,11 @@ Surprises worth feeding back into the docs and tooling.
   `8f97ab5b` on 2026-11-24.
 - **Forward map.** `reports/porting/smart_turn/forward-map.md` was missing
   (Stage 4 artifact); written from the finished port.
+- **Engine SHA of the Pipecat runs.** All six runs used one tool binary built
+  at `8f97ab5b`. The F16 and Q8_0 headers first recorded HEAD
+  (`8415e8e2` / `dcb63a1b`): scripts-only commits made while they ran, with
+  the same engine sources. The headers now say `8f97ab5b` and keep the
+  recorded value as `engine_sha_recorded`. `eval_cpp.py --engine-sha` now
+  names a prebuilt tool's commit, after checking the engine sources match.
+- **Results at 8f97ab5b.** F32 93.71% (AUC 0.98252, 31,527/31,527 decisions
+  equal to the fp32 ONNX), F16 93.70% (31,525), Q8_0 93.68% (31,478).

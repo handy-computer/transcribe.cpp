@@ -131,3 +131,8 @@ Surprises worth feeding back into the docs and tooling.
   general.languages is missing, and the streaming flag trips the audit's
   name heuristic (a false positive). Reported to the converter's owner; not
   changed here.
+- **Results at 8f97ab5b.** F32 and F16 93.36% (AUC 0.97946, unchanged from
+  the Stage 5 rows); Q8_0 93.36% (AUC 0.97935; Stage 5 had 93.37%). Q8_0 vs
+  F32: 76 flips at 0.5, 126 at 0.9 (Stage 5: 75 / 124). The sava-F16 header
+  first recorded HEAD `8415e8e2` (a scripts-only commit made during the run;
+  the tool was built at `8f97ab5b`) and was corrected, as for Smart Turn.

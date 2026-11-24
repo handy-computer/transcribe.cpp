@@ -38,12 +38,12 @@ build/bin/transcribe-cli -m smart-turn-v3.2-F32.gguf turn.wav
 
 ## Downloads
 
-<!-- catalog:downloads metric=false -->
-| Quantization | Download |  Size |
-| --- | --- | ---: |
-| F32          | [smart-turn-v3.2-F32.gguf](https://huggingface.co/handy-computer/smart-turn-v3.2-gguf/resolve/main/smart-turn-v3.2-F32.gguf) | 32 MB |
-| F16          | [smart-turn-v3.2-F16.gguf](https://huggingface.co/handy-computer/smart-turn-v3.2-gguf/resolve/main/smart-turn-v3.2-F16.gguf) | 17 MB |
-| Q8_0         | [smart-turn-v3.2-Q8_0.gguf](https://huggingface.co/handy-computer/smart-turn-v3.2-gguf/resolve/main/smart-turn-v3.2-Q8_0.gguf) | 11 MB |
+<!-- catalog:downloads -->
+| Quantization | Download |  Size | Accuracy (Pipecat Smart Turn v3.2 test) |
+| --- | --- | ---: | ---: |
+| F32          | [smart-turn-v3.2-F32.gguf](https://huggingface.co/handy-computer/smart-turn-v3.2-gguf/resolve/main/smart-turn-v3.2-F32.gguf) | 32 MB | 93.71% |
+| F16          | [smart-turn-v3.2-F16.gguf](https://huggingface.co/handy-computer/smart-turn-v3.2-gguf/resolve/main/smart-turn-v3.2-F16.gguf) | 17 MB | 93.70% |
+| Q8_0         | [smart-turn-v3.2-Q8_0.gguf](https://huggingface.co/handy-computer/smart-turn-v3.2-gguf/resolve/main/smart-turn-v3.2-Q8_0.gguf) | 11 MB | 93.68% |
 <!-- /catalog -->
 
 To convert it yourself:
@@ -54,19 +54,39 @@ uv run --project scripts/envs/smart_turn scripts/convert-smart_turn.py
 
 ## Accuracy
 
-Pipecat's test set `pipecat-ai/smart-turn-data-v3.2-test` (31,527 clips, 23
-languages), upstream's decision rule `p > 0.5`:
+<!-- catalog:recipe -->
+Accuracy on the full Pipecat Smart Turn v3.2 test split (31,527 clips), a clip called complete when p > 0.5, scored on cpu. Measured at transcribe.cpp `8f97ab5b` on 2026-11-24.
+<!-- /catalog -->
+
+<!-- catalog:prose field=wer.notes -->
+A clip's score is `transcribe_turn_run`'s `p` on the whole clip (the
+model sees its last 8 s); the clip is called complete when `p > 0.5`,
+upstream's benchmark rule. False positives (incomplete clips called
+complete) and false negatives (the reverse) are shares of all clips, as
+Pipecat publishes them. The reference is upstream's fp32 ONNX
+(`smart-turn-v3.2-gpu.onnx`) under onnxruntime on the same clips.
+Pipecat publishes 93.71% for it and 92.63% for its int8 ONNX.
+<!-- /catalog -->
+
+<!-- catalog:turn reference="the fp32 ONNX" -->
+| GGUF | Accuracy (95% CI) | False positives | False negatives |     AUC | Same decision as the fp32 ONNX | Max abs p difference |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| F32  | 93.71% (93.45-93.97) | 3.51% | 2.78% | 0.98252 | 31,527 / 31,527 | 2.4e-05 |
+| F16  | 93.70% (93.44-93.97) | 3.51% | 2.78% | 0.98252 | 31,525 / 31,527 | 0.0038 |
+| Q8_0 | 93.68% (93.43-93.96) | 3.53% | 2.78% | 0.98249 | 31,478 / 31,527 | 0.13 |
+
+Measured at transcribe.cpp `8f97ab5b` on 2026-11-24.
+<!-- /catalog -->
+
+Upstream's ONNX files on the same clips (onnxruntime, CPU):
 
 | Model | Accuracy | False positives | False negatives |
 | --- | ---: | ---: | ---: |
-| transcribe.cpp F32 (CPU) | 93.71% | 3.51% | 2.78% |
-| transcribe.cpp F16 (CPU) | 93.70% | 3.51% | 2.78% |
-| transcribe.cpp Q8_0 (CPU) | 93.68% | 3.53% | 2.78% |
-| upstream fp32 ONNX (onnxruntime) | 93.71% | 3.51% | 2.78% |
-| upstream int8 ONNX (onnxruntime) | 92.62% | 4.76% | 2.63% |
+| upstream fp32 ONNX | 93.71% | 3.51% | 2.78% |
+| upstream int8 ONNX | 92.62% | 4.76% | 2.63% |
 
-The F32 port makes the same decision as the fp32 ONNX on every clip; the
-largest probability difference is 2.4e-5 (mean 2.9e-7). F16 makes the same
+Against the fp32 ONNX, the F32 port's mean probability difference is
+2.9e-7. Against F32, F16 makes the same
 decision as F32 on 99.99% of clips (2 differ, both with F32 p within 3.4e-4
 of the cut-off; mean |dp| 4.6e-5, max 0.0038). Q8_0 makes the same
 decision as F32 on 99.84% of clips (49 differ, all with F32 p within 0.07 of
@@ -74,7 +94,7 @@ the cut-off; mean |dp| 0.0019, 99th percentile 0.034, max 0.13) and loses
 0.03 points of accuracy; upstream's int8 ONNX loses 1.09 points against its
 fp32 ONNX and agrees with it on 96.12% (mean |dp| 0.042, max 0.95). Rows:
 `reports/turn/smart-turn-v3.2-{F32,F16,Q8_0}.smart-turn-data-v3.2-test.jsonl`
-(`scripts/turn/eval_cpp.py`).
+from `scripts/turn/eval_cpp.py`, scored by `scripts/turn/score.py`.
 
 F16 and Q8_0 store the encoder's attention and FFN matrices and the head's
 hidden projections (384 to 256, 256 to 64) at that type; the conv stem,

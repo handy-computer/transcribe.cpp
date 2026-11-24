@@ -28,8 +28,19 @@
     {"quant":"F16","filename":"sava-F16.gguf","size_bytes":51863008},
     {"quant":"Q8_0","filename":"sava-Q8_0.gguf","size_bytes":28459168}
   ],
-  "accuracy_benchmarks": [],
-  "headline_benchmark": null,
+  "accuracy_benchmarks": [
+    {"dataset":"smart-turn-data-v3.2","split":"test","language":"mul","backend":"cpu","quant":"F32","metric":"accuracy","acc_pct":93.36,"ci95":[93.08,93.64],"n_utts":31527,"batch_size":1,"timestamps":"none","engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","turn":{"threshold":0.5,"n_complete":15698,"fp_pct":3.58,"fn_pct":3.06,"auc":0.97946}},
+    {"dataset":"smart-turn-data-v3.2","split":"test","language":"mul","backend":"cpu","quant":"F16","metric":"accuracy","acc_pct":93.36,"ci95":[93.08,93.64],"n_utts":31527,"batch_size":1,"timestamps":"none","engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","turn":{"threshold":0.5,"n_complete":15698,"fp_pct":3.58,"fn_pct":3.06,"auc":0.97946}},
+    {"dataset":"smart-turn-data-v3.2","split":"test","language":"mul","backend":"cpu","quant":"Q8_0","metric":"accuracy","acc_pct":93.36,"ci95":[93.08,93.63],"n_utts":31527,"batch_size":1,"timestamps":"none","engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","turn":{"threshold":0.5,"n_complete":15698,"fp_pct":3.6,"fn_pct":3.03,"auc":0.97935}}
+  ],
+  "headline_benchmark": {
+    "dataset": "smart-turn-data-v3.2",
+    "split": "test",
+    "language": "mul",
+    "metric": "accuracy",
+    "batch_size": 1,
+    "timestamps": "none"
+  },
   "speed_benchmarks": [
     {"machine":"m1","backend":"cpu","quant":"F16","sample":"jfk-40ms","sample_duration_s":0.04,"total_ms":2.8,"xrt_compute":14.06,"wall_ms":2.9,"xrt_wall":13.96,"load_ms":10.9,"mel_ms":0.0,"encode_ms":2.8,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},
     {"machine":"m1","backend":"cpu","quant":"F16","sample":"jfk-40ms-1t","sample_duration_s":0.04,"total_ms":7.1,"xrt_compute":5.63,"wall_ms":7.1,"xrt_wall":5.62,"load_ms":10.9,"mel_ms":0.0,"encode_ms":7.1,"decode_ms":0.0,"engine_sha":"8f97ab5b","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},

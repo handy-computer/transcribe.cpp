@@ -53,15 +53,22 @@ def decode(flac: bytes) -> np.ndarray:
 ENGINE_PATHS = ("src", "include", "ggml", "tools/transcribe-turn-eval", "CMakeLists.txt", "cmake")
 
 
-def engine_sha() -> str:
+def engine_sha(built_at: str | None = None) -> str:
     """The commit the engine sources are at; refuses uncommitted changes to
-    them, since the number would then name a commit that did not run."""
-    dirty = subprocess.run(["git", "-C", str(REPO_ROOT), "status", "--porcelain", "--", *ENGINE_PATHS],
-                           capture_output=True, text=True, check=True).stdout.strip()
+    them, since the number would then name a commit that did not run. With
+    built_at (the commit a prebuilt --tool was built at), that commit, once
+    the engine sources are checked to be the same at HEAD."""
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(REPO_ROOT), *args], capture_output=True, text=True)
+
+    dirty = git("status", "--porcelain", "--", *ENGINE_PATHS).stdout.strip()
     if dirty:
         raise SystemExit(f"error: uncommitted engine changes; commit them first:\n{dirty}")
-    return subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--short=8", "HEAD"],
-                          capture_output=True, text=True, check=True).stdout.strip()
+    if built_at:
+        if git("diff", "--quiet", built_at, "HEAD", "--", *ENGINE_PATHS).returncode != 0:
+            raise SystemExit(f"error: the engine sources changed between {built_at} and HEAD")
+        return git("rev-parse", "--short=8", built_at).stdout.strip()
+    return git("rev-parse", "--short=8", "HEAD").stdout.strip()
 
 
 def worker(tool: Path, model: Path, jobs: queue.Queue, results: dict, threads: int, backend: str) -> None:
@@ -105,8 +112,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--threads", type=int, default=1, help="threads per tool process")
     p.add_argument("--limit", type=int, default=0, help="score only the first N clips (0 = all)")
     p.add_argument("--backend", choices=("cpu", "auto"), default="cpu")
+    p.add_argument("--engine-sha", default=None,
+                   help="the commit a prebuilt --tool was built at (default: HEAD)")
     args = p.parse_args(argv)
-    sha = engine_sha()
+    sha = engine_sha(args.engine_sha)
     created = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     lines = args.ref.read_text().splitlines()

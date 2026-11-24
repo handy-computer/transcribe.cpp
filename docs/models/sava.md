@@ -64,12 +64,12 @@ into segments with Silero's rule on 40 ms frames.
 
 ## Downloads
 
-<!-- catalog:downloads metric=false -->
-| Quantization | Download |   Size |
-| --- | --- | ---: |
-| F32          | [sava-F32.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-F32.gguf) | 103 MB |
-| F16          | [sava-F16.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-F16.gguf) |  52 MB |
-| Q8_0         | [sava-Q8_0.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-Q8_0.gguf) |  28 MB |
+<!-- catalog:downloads -->
+| Quantization | Download |   Size | Accuracy (Pipecat Smart Turn v3.2 test) |
+| --- | --- | ---: | ---: |
+| F32          | [sava-F32.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-F32.gguf) | 103 MB | 93.36% |
+| F16          | [sava-F16.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-F16.gguf) |  52 MB | 93.36% |
+| Q8_0         | [sava-Q8_0.gguf](https://huggingface.co/handy-computer/sava-gguf/resolve/main/sava-Q8_0.gguf) |  28 MB | 93.36% |
 <!-- /catalog -->
 
 The release weights are bf16, and upstream runs them in fp32:
@@ -90,18 +90,42 @@ build/bin/transcribe-quantize models/sava/sava-F32.gguf models/sava/sava-Q8_0.gg
 
 ## Accuracy
 
-Pipecat's test set `pipecat-ai/smart-turn-data-v3.2-test` (31,527 clips, 23
-languages). The score of a clip is the turn score of its last frame
-(`transcribe_turn_run`'s `p`). Accuracy uses Inworld's benchmark rule
-`p > 0.5`; the API's default cut-off is 0.9.
+<!-- catalog:recipe -->
+Accuracy on the full Pipecat Smart Turn v3.2 test split (31,527 clips), a clip called complete when p > 0.5, scored on cpu. Measured at transcribe.cpp `8f97ab5b` on 2026-11-24.
+<!-- /catalog -->
 
-| Model | AUC | Accuracy (0.5) | Accuracy (0.9) | Best accuracy (threshold) |
+<!-- catalog:prose field=wer.notes -->
+A clip's score is the turn score of its last 40 ms frame
+(`transcribe_turn_run`'s `p` on the whole clip, scored as one stream);
+the clip is called complete when `p > 0.5`, Inworld's benchmark rule.
+The API's default cut-off is 0.9, Inworld's live rule. False positives
+(incomplete clips called complete) and false negatives (the reverse) are
+shares of all clips, as Pipecat publishes them. Inworld publishes 93.35%
+and an AUC of 0.97946 for SAVA (fp32, A100); it publishes no per-clip
+scores, so there is no per-clip agreement column.
+<!-- /catalog -->
+
+<!-- catalog:turn -->
+| GGUF | Accuracy (95% CI) | False positives | False negatives |     AUC |
 | --- | ---: | ---: | ---: | ---: |
-| transcribe.cpp F32 (CPU) | 0.97946 | 93.36% | 88.29% | 93.51% (0.45) |
-| transcribe.cpp F16 (CPU) | 0.97946 | 93.36% | 88.29% | 93.51% (0.45) |
-| transcribe.cpp Q8_0 (CPU) | 0.97935 | 93.37% | 88.24% | 93.48% (0.45) |
-| Inworld's published SAVA (fp32, A100) | 0.97946 | 93.35% | - | 93.51% (0.45) |
-| Inworld's published smart-turn v3.2 | 0.98250 | 93.71% | - | 93.81% (0.36) |
+| F32  | 93.36% (93.08-93.64) | 3.58% | 3.06% | 0.97946 |
+| F16  | 93.36% (93.08-93.64) | 3.58% | 3.06% | 0.97946 |
+| Q8_0 | 93.36% (93.08-93.63) | 3.60% | 3.03% | 0.97935 |
+
+Measured at transcribe.cpp `8f97ab5b` on 2026-11-24.
+<!-- /catalog -->
+
+At the API's cut-off (0.9) and at the best threshold:
+
+| GGUF | Accuracy (0.9) | Best accuracy (threshold) |
+| --- | ---: | ---: |
+| F32  | 88.29% | 93.51% (0.45) |
+| F16  | 88.29% | 93.51% (0.45) |
+| Q8_0 | 88.23% | 93.48% (0.45) |
+
+Inworld's published figures on the same set: SAVA (fp32, A100) 93.35% at
+0.5, AUC 0.97946, best 93.51% (0.45); Smart Turn v3.2 93.71%, AUC 0.98250,
+best 93.81% (0.36).
 
 Details:
 
@@ -109,13 +133,13 @@ Details:
   recordings accuracy is 95.84% (Inworld: 95.86%); on synthetic ones 92.79%
   (Inworld: 92.78%).
 - **F16 vs F32:** the same decision on every clip at 0.5 and at 0.9. The
-  clip score differs by at most 3.9e-6.
-- **Q8_0 vs F32:** the same decision on 99.76% of clips at 0.5 (75 flips)
-  and 99.61% at 0.9 (124 flips). The clip score differs by 2.8e-3 on average
+  clip score differs by at most 4.2e-6.
+- **Q8_0 vs F32:** the same decision on 99.76% of clips at 0.5 (76 flips)
+  and 99.60% at 0.9 (126 flips). The clip score differs by 2.8e-3 on average
   (p99 3.5e-2).
-- **Rows:** `reports/turn/sava-{F32,F16,Q8_0}.smart-turn-data-v3.2-test.jsonl`,
-  from `scripts/turn/eval_cpp.py`. Its `p_fp32` / `p_int8` columns are Smart
-  Turn's.
+- **Rows:** `reports/turn/sava-{F32,F16,Q8_0}.smart-turn-data-v3.2-test.jsonl`
+  from `scripts/turn/eval_cpp.py`, scored by `scripts/turn/score.py`. The
+  runs' `p_fp32` / `p_int8` columns are Smart Turn's.
 
 On the 8 golden recordings (`tests/golden/sava/`):
 
