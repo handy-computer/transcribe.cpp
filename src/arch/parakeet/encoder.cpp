@@ -25,7 +25,6 @@
 #include "conformer/conformer.h"
 #include "ggml.h"
 #include "transcribe-debug.h"
-#include "transcribe-flash-policy.h"
 #include "transcribe-log.h"
 #include "weights.h"
 
@@ -316,6 +315,7 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
                                  const ParakeetHParams &            hp,
                                  int                                n_mel_frames,
                                  ggml_type                          kv_type,
+                                 bool                               use_flash,
                                  const char *                       backend_name,
                                  const BufferedStreamMaskOverride * buf_mask,
                                  int                                n_batch,
@@ -589,16 +589,11 @@ EncoderBuild build_encoder_graph(ggml_context *                     ctx,
         }
 
         conf::BlockParams bparams{};
-        bparams.d_model     = hp.enc_d_model;
-        bparams.n_head      = hp.enc_n_heads;
-        bparams.conv_kernel = hp.enc_conv_kernel;
-        bparams.kv_type     = kv_type;
-        // Flash attention is the default. TRANSCRIBE_NO_FLASH selects the F32
-        // mul_mat + soft_max path used by CPU tensor validation; flash casts
-        // the relative-position mask to F16. Parakeet has no attention decoder.
-        bool enc_use_flash = true, dec_use_flash = false;
-        transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
-        bparams.use_flash          = enc_use_flash;
+        bparams.d_model            = hp.enc_d_model;
+        bparams.n_head             = hp.enc_n_heads;
+        bparams.conv_kernel        = hp.enc_conv_kernel;
+        bparams.kv_type            = kv_type;
+        bparams.use_flash          = use_flash;
         bparams.policy             = policy;
         bparams.att_context_left   = band_covers_all ? -1 : hp.enc_att_context_left;
         bparams.att_context_right  = band_covers_all ? -1 : hp.enc_att_context_right;
@@ -775,6 +770,7 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
                                            int                       drop_extra_pre_encoded,
                                            StreamingEncoderCacheIO & cache_io,
                                            ggml_type                 kv_type,
+                                           bool                      use_flash,
                                            const char *              backend_name,
                                            bool                      spk_supervision) {
     conf::ConvPolicy policy{};
@@ -916,17 +912,11 @@ EncoderBuild build_encoder_graph_streaming(ggml_context *            ctx,
     }
 
     conf::BlockParams bparams{};
-    bparams.d_model     = hp.enc_d_model;
-    bparams.n_head      = hp.enc_n_heads;
-    bparams.conv_kernel = hp.enc_conv_kernel;
-    bparams.kv_type     = kv_type;
-    // Flash-attention opt-out (TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH).
-    // On CPU at streaming geometry the flash kernel is dramatically slower
-    // (~33 ms/layer vs ~1 ms on a Cortex-A55). Parakeet has no attention
-    // decoder, so the decoder flag is a throwaway.
-    bool enc_use_flash = true, dec_use_flash = false;
-    transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
-    bparams.use_flash          = enc_use_flash;
+    bparams.d_model            = hp.enc_d_model;
+    bparams.n_head             = hp.enc_n_heads;
+    bparams.conv_kernel        = hp.enc_conv_kernel;
+    bparams.kv_type            = kv_type;
+    bparams.use_flash          = use_flash;
     bparams.policy             = policy;
     // No att_context_left/right: ChunkedLimited derives the band entirely
     // from attn_chunked_mask (build_conformer_block reads them only on the

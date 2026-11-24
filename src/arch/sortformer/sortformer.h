@@ -57,6 +57,10 @@ struct SortformerModel final : public transcribe_model {
     transcribe::BackendPlan                plan;
     transcribe::load_common::WeightStorage weight_storage;
 
+    // Conformer flash attention, resolved at load() like
+    // ParakeetModel::encoder_use_flash.
+    bool encoder_use_flash = true;
+
     // Fused conformer BN params (computed at load from the raw BN tensors).
     ggml_context *        bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t bn_fused_buffer = nullptr;
@@ -239,6 +243,7 @@ transcribe_status run_diar_streaming_core(DiarStreamScratch &                   
                                           const transcribe::parakeet::ParakeetWeights & conformer,
                                           const SortformerWeights &                     w,
                                           const char *                                  backend,
+                                          bool                                          use_flash,
                                           ggml_backend_sched_t                          sched,
                                           int                                           n_threads,
                                           const SortformerStreamParams &                P,

@@ -538,7 +538,7 @@ transcribe_status init_context(transcribe_model *                model,
     auto *     cm       = static_cast<CanaryModel *>(model);
     const bool is_metal = (cm->plan.primary_kind == transcribe::BackendKind::Metal);
 
-    cc->encoder_use_flash = !is_metal;
+    cc->encoder_use_flash = !is_metal && transcribe::flash::per_head_mask_supported(cm->plan.primary_kind);
     cc->decoder_use_flash = true;
 
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);

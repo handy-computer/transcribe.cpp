@@ -635,11 +635,12 @@ transcribe_status init_context(transcribe_model *                model,
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     // Flash-attention policy — see CohereSession (cohere.h). Encoder
-    // auto-disables on Metal; decoder defaults on; env overrides apply globally.
+    // auto-disables on Metal, CUDA and ROCm; decoder defaults on; env
+    // overrides apply globally.
     auto *     cm       = static_cast<CohereModel *>(model);
     const bool is_metal = (cm->plan.primary_kind == transcribe::BackendKind::Metal);
 
-    cc->encoder_use_flash = !is_metal;
+    cc->encoder_use_flash = !is_metal && transcribe::flash::per_head_mask_supported(cm->plan.primary_kind);
     cc->decoder_use_flash = true;
 
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
