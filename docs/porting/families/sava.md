@@ -679,3 +679,15 @@ build/bin/transcribe-cli -m models/sava/sava-F32.gguf samples/sava-speech.wav
   `get_speech_timestamps_from_probs`, with its 512-sample window replaced by
   640, to the reference `sava.speech`, and compare with the C++
   `transcribe_vad_run` segments. Done once; it is not wired into a test.
+
+## Reproducibility
+
+The Mac-built GGUFs are canonical: their sha256 are in `catalog/sava.json`
+(downloads) and the convert manifests. Converting on another platform gives
+identical bytes for every upstream weight and for the metadata. A few
+converter-computed constants can differ in the last f32 bit, because
+float64 / float32 libm `exp` / `log` round differently across platforms:
+`frontend.mel_filterbank` (`inworld.sava.mel.mel_filterbank`) and `ssm.a`
+(`-exp(A_log)`, torch float32 `exp`). On the Ryzen 7 PRO 4750U the effect on
+outputs is about 1e-7. Cross-platform byte reproducibility is not a goal
+(owner decision).

@@ -275,3 +275,14 @@ uv run scripts/catalog/render.py
   `frontend.*` in Norm. Q8_0 (`build/bin/transcribe-quantize ... --quant
   Q8_0`) has 27 Q8_0 and 54 F32 tensors, 10.7 MB. Shipped: F32, F16 and Q8_0;
   test-set results are on the [model page](../../models/smart-turn-v3.2.md#accuracy).
+
+## Reproducibility
+
+The Mac-built GGUFs are canonical: their sha256 are in
+`catalog/smart-turn-v3.2.json` (downloads) and the convert manifests.
+Converting on another platform gives identical bytes for every upstream
+weight and for the metadata. A converter-computed constant can differ in the
+last f32 bit: `frontend.mel_filterbank` (transformers' `mel_filter_bank`),
+because float64 / float32 libm `exp` / `log` round differently across
+platforms. On the Ryzen 7 PRO 4750U the effect on outputs is about 1e-7.
+Cross-platform byte reproducibility is not a goal (owner decision).
