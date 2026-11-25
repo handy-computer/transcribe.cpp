@@ -282,6 +282,32 @@ fn toy_cancel_aborts() {
 }
 
 #[test]
+fn toy_batch_cancel_through_a_later_session_resets_every_stream() {
+    let Some(path) = common::turn_toy_model(
+        "arch_sava.gguf",
+        "toy_batch_cancel_through_a_later_session_resets_every_stream",
+    ) else {
+        return;
+    };
+    let model = Model::load_with(&path, &cpu()).unwrap();
+    let mut a = model.turn_session().unwrap();
+    let mut b = model.turn_session().unwrap();
+    let pcm = noise(1280, 4);
+    assert_eq!(a.stream_feed(&pcm).unwrap().first_frame, 0);
+    assert_eq!(b.stream_feed(&pcm).unwrap().first_frame, 0);
+    // Cancel only the second (not the first) listed session.
+    let token = CancelToken::new();
+    b.set_cancel_token(&token);
+    token.cancel();
+    let e = TurnSession::stream_feed_batch([(&mut a, &pcm[..]), (&mut b, &pcm[..])]).unwrap_err();
+    assert!(matches!(e, Error::Aborted { .. }), "{e:?}");
+    b.clear_cancel_token();
+    // The abort reset both listed streams.
+    assert_eq!(a.stream_feed(&pcm).unwrap().first_frame, 0);
+    assert_eq!(b.stream_feed(&pcm).unwrap().first_frame, 0);
+}
+
+#[test]
 fn real_smart_turn_and_sava() {
     let Some(audio) = common::smoke_audio() else {
         eprintln!("skip real_smart_turn_and_sava: samples/jfk.wav absent");

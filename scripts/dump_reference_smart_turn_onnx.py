@@ -250,7 +250,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     p_int8 = None
     if not args.no_int8:
-        int8_path = st.resolve_onnx(None if Path(args.model).is_file() else args.model,
+        int8_path = st.resolve_onnx(None if Path(args.model).expanduser().is_file() else args.model,
                                     args.revision, st.ONNX_INT8)
         p_int8 = float(session(int8_path, args.torch_threads).run(None, {"input_features": x})[0][0].item())
 

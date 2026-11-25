@@ -1548,8 +1548,8 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     set_tests_properties(transcribe_silero_vad_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
-    # sava on the TURN and VAD roles: upstream's golden clip score and turn
-    # segments, stream == run bit for bit (jfk.wav, dots.wav past the
+    # sava on the TURN and VAD roles: upstream's golden clip score, stream ==
+    # run bit for bit (jfk.wav, dots.wav past the
     # 512-frame window) at 1 and 4 threads, the VAD speech track, no turn in
     # silence / noise, for the F32, F16 and Q8_0 GGUFs. TRANSCRIBE_SAVA_GGUF /
     # _F16_GGUF / _Q8_0_GGUF, else models/sava/sava-{F32,F16,Q8_0}.gguf (RC 77
@@ -1571,13 +1571,16 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 
     # smart_turn on the TURN role: clip scores of committed samples against
     # onnxruntime, decisions, the 8 s crop and a threshold override.
-    # Gated by TRANSCRIBE_SMART_TURN_GGUF (RC 77 skip).
+    # TRANSCRIBE_SMART_TURN_GGUF, else
+    # models/smart-turn-v3.2/smart-turn-v3.2-F32.gguf (RC 77 skip when
+    # neither exists).
     add_executable(transcribe_smart_turn_real_smoke
         smart_turn_real_smoke.cpp)
     target_link_libraries(transcribe_smart_turn_real_smoke
         PRIVATE transcribe transcribe-common-example)
     target_compile_definitions(transcribe_smart_turn_real_smoke PRIVATE
-        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
+        "TRANSCRIBE_SMART_TURN_DEFAULT_GGUF=\"${CMAKE_SOURCE_DIR}/models/smart-turn-v3.2/smart-turn-v3.2-F32.gguf\"")
     transcribe_apply_warnings(transcribe_smart_turn_real_smoke)
     add_test(NAME transcribe_smart_turn_real_smoke
         COMMAND transcribe_smart_turn_real_smoke)

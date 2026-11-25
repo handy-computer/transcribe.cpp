@@ -1,6 +1,7 @@
 # Smart Turn v3.2 (end of turn)
 
-Status: bring-up (TURN role). Stages 1-3 done: intake, oracle, F32 GGUF.
+Status: ported (TURN role). Stages 1-8 done: intake through ship; F32, F16
+and Q8_0 uploaded privately to Hugging Face on 2026-11-25.
 
 Smart Turn answers "has the speaker finished their turn?" for one clip of
 16 kHz audio (architecture pattern `encoder-classifier`). It scores the last
@@ -244,7 +245,7 @@ uv run scripts/catalog/render.py
 
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |---|---|---|---|---|---|
-| Clip score | `transcribe_turn_run` | `validate.py` (`head.prob` + tensors) | within `tests/tolerances/smart_turn.json`; decision equal to `turn.json` on every case | MUST PASS | **PASS**: 16/16 tensors on all 8 cases, max abs dp 3.3e-6 |
+| Clip score | `transcribe_turn_run` | `validate.py` (`head.prob` + tensors) | within `tests/tolerances/smart_turn.json`; decision equal to `turn.json` on every case | MUST PASS | **PASS**: 14/14 gated tensors on all 8 cases (plus 2 debug-only dumps, `enc.pos_emb` and `head.pool_scores`), max abs dp 3.3e-6 |
 | 8 s window | crop / left pad | golden `jfk`, `noise`, `turn-incomplete-en-long` (crop); `ja`, `turn-*` (pad) | as above; audio before the last 8 s does not change p | MUST PASS | **PASS**: golden cases; `smart_turn_real_smoke` (jfk tail == whole), `smart_turn_smoke` (toy: crop and pad identities) |
 | Test-set parity | decision vs onnxruntime | `scripts/turn/eval_cpp.py` (via `tools/transcribe-turn-eval`) | decision agreement and accuracy vs the fp32 baseline above | MUST PASS | **PASS**: 31,527 clips, 100% decision agreement, 93.71% accuracy (= reference), max abs dp 2.4e-5 |
 | Threshold | `transcribe_turn_params::threshold` | unit test | default 0.5 from the GGUF; override honoured | MUST PASS | **PASS**: `smart_turn_real_smoke`, `turn_dispatch_unit` |
@@ -252,6 +253,7 @@ uv run scripts/catalog/render.py
 | Speech track | `has_speech` | - | empty | OUT OF SCOPE — the model has no speech head | verified (`smart_turn_smoke`) |
 | Transcribe / translate / timestamps | ASR | - | UNSUPPORTED_ROLE | OUT OF SCOPE — not an ASR model | verified |
 | Batch (offline) | serial | - | - | OUT OF SCOPE — TURN has no batch API | n/a |
+| Non-CPU backends (Metal, CUDA, Vulkan) | `transcribe_turn_run` on a GPU device | golden cases on the device | p within tolerance of the CPU path | OUT OF SCOPE — the model is small and `AUTO` selects the CPU; a per-backend tolerance and test-set run would bring it in | ACCEPTED GAP — unvalidated: Metal drifts about 1e-3 in p (`jfk` 0.948773 vs CPU 0.948620); decisions held on the golden clips |
 
 ## Notes
 

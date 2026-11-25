@@ -140,7 +140,10 @@ onnxruntime on the M1: 83 ms / 28 ms per window (fp32 ONNX, 1 / 4
 threads), 40 ms / 15 ms (int8 ONNX).
 
 `AUTO` selects the CPU: the model is small, runs once per pause, and the CPU
-path is the validated one.
+path is the validated one. Other backends are not validated: on Metal p
+drifts by about 1e-3 from the CPU (`jfk` 0.948773 vs 0.948620); the
+decisions held on the golden clips, but the test set was scored on the CPU
+only.
 
 **F16 and Q8_0 are not faster than F32 everywhere.** On the M1 (ARM), F16
 runs about 2x slower than F32 on one thread: ggml multiplies F16 weights by

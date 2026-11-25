@@ -298,6 +298,10 @@ struct Stream {
 // Allocate (first call) and zero the stream state.
 transcribe_status stream_reset(Stream & st, const Model & m);
 
+// OK when the stream has its state; otherwise retry the failed reset's
+// allocation (stream_step and the batched step call it first).
+transcribe_status ensure_state(Stream & st, const Model & m);
+
 // Run n_frames whole frames. Writes, per step, the emitted speech
 // probability (lookahead; sigmoid(no_speech_logit) for the stream's first
 // lookahead_frames steps) to speech[i] when non-null, and the horizon-0
@@ -314,9 +318,10 @@ transcribe_status stream_step(SessionCore & core,
 void stream_dump(Stream & st, const Model & m);
 
 // The graph of one batched step (stream_step_batch): one frame for each of a
-// list of streams. Owned by the session listed first in the batch, with its
-// own compute context and scheduler (the session's single-stream graph keeps
-// its own), and reused while the stream list is the same.
+// list of at most 64 streams (turn_step_batch splits larger batches into
+// chunks). Owned by the session listed first in its chunk, with its own
+// compute context and scheduler (the session's single-stream graph keeps its
+// own), and reused while the chunk's stream list is the same.
 struct BatchGraph {
     ggml_context *        ctx   = nullptr;
     ggml_backend_sched_t  sched = nullptr;
@@ -367,7 +372,7 @@ transcribe_status stream_step_batch(BatchGraph &          bg,
 
 struct TurnSession final : public transcribe_turn_session {
     Stream     st;
-    BatchGraph batch;  // used when this session is listed first in a batched step
+    BatchGraph batch;  // used when this session is listed first in a batched step's chunk
 
   protected:
     void on_scratch_released() noexcept override {

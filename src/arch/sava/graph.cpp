@@ -563,6 +563,12 @@ transcribe_status stream_reset(Stream & st, const Model & m) {
         attn.push_back(&hp.turn_attn);
         const size_t n_tensors = 2 + 2 * hp.layer_is_ssm.size() + 2 * attn.size();
 
+        // A previous reset whose buffer allocation failed left its context:
+        // free it before building a new one.
+        if (st.state_ctx != nullptr) {
+            ggml_free(st.state_ctx);
+            st.state_ctx = nullptr;
+        }
         ggml_init_params ip{};
         ip.mem_size  = (n_tensors + 1) * ggml_tensor_overhead();
         ip.no_alloc  = true;
@@ -603,6 +609,12 @@ transcribe_status stream_reset(Stream & st, const Model & m) {
     return TRANSCRIBE_OK;
 }
 
+transcribe_status ensure_state(Stream & st, const Model & m) {
+    // No state buffer: the last stream_reset failed, so no step has run
+    // since and the stream is still at its start. Retry the allocation.
+    return st.state_buf != nullptr ? TRANSCRIBE_OK : stream_reset(st, m);
+}
+
 transcribe_status stream_step(SessionCore & core,
                               Stream &      st,
                               const Model & m,
@@ -612,8 +624,8 @@ transcribe_status stream_step(SessionCore & core,
                               float *       speech) {
     const HParams & hp = m.hparams;
     debug::init();
-    if (st.state_buf == nullptr) {
-        return TRANSCRIBE_ERR_OOM;  // stream_reset failed
+    if (auto rc = ensure_state(st, m); rc != TRANSCRIBE_OK) {
+        return rc;
     }
     for (int64_t f0 = 0; f0 < n_frames; f0 += k_block_frames) {
         if (core.poll_abort()) {
@@ -666,6 +678,10 @@ transcribe_status stream_step(SessionCore & core,
         ggml_backend_tensor_get(g.logit, st.logit.data(), 0, nr * sizeof(float));
         ggml_backend_tensor_get(g.logit_la, st.logit_la.data(), 0, nr * sizeof(float));
         ggml_backend_tensor_get(g.turn, st.turn.data(), 0, st.turn.size() * sizeof(float));
+        // The first lookahead_frames steps have no frame to judge yet: the
+        // model emits no_speech_logit there. The substituted value is written
+        // back into st.logit_la so the trace's head.vad.logit_la matches the
+        // reference dumper's (the model's emitted lookahead logit).
         for (size_t j = 0; j < nr; ++j) {
             const bool  early = p0 + static_cast<int64_t>(j) < hp.lookahead_frames;
             const float la    = early ? hp.no_speech_logit : st.logit_la[j];

@@ -822,7 +822,7 @@ const SESSION_CONTROL = new WeakMap<Session, SessionControl>();
 
 /**
  * One native session handle under the model's compute rules, shared by Session,
- * DiarizeSession, LangIdSession, and VadSession. Each holds it in a private
+ * DiarizeSession, LangIdSession, VadSession, and TurnSession. Each holds it in a private
  * field, so none of this is reachable from user code. `setAbort` is the role's
  * set_abort_callback.
  */
@@ -1847,8 +1847,10 @@ export class TurnSession {
   /**
    * Feed several streams of one model in one compute (much faster than one
    * feed per session): each session ends up as if fed its own chunk alone, and
-   * gets one result, in order. Every session must be open, listed once and of
-   * the same model (InvalidArgument otherwise). Uses the first session's
+   * gets one result, in order. An empty list, a session listed twice or
+   * sessions of different models throw InvalidArgument; a disposed session
+   * (including one disposed while the batch waits for the model lock) throws
+   * TranscribeError. Uses the first session's
    * thread count; `signal` cancels the whole batch, and an abort or processing
    * error resets every listed stream. The chunks are borrowed, not copied.
    */

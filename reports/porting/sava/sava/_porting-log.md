@@ -152,3 +152,14 @@ Surprises worth feeding back into the docs and tooling.
   files' sha256 equal the local canonical files, and `validate.py all` passes
   on the downloaded F32 (8/8 cases); the real-model smoke passes on the
   downloaded files. Public flip deferred.
+- **Per-clip PyTorch reference.** `scripts/turn/run_reference_sava_torch.py`
+  scores the Pipecat test set with upstream's package (inworld-sava 1.0.0,
+  torch CPU fp32; `uv run --project scripts/envs/sava --with pyarrow`, 1037 s
+  on 6 workers) into `reports/turn/sava-REF.smart-turn-data-v3.2-test.jsonl`:
+  93.36% (29,433 / 31,527), AUC 0.97946. `score.py --ref-jsonl` against it:
+  F32 and F16 agree on 31,527 / 31,527 at 0.5 and at 0.9 (max |dp| 1.1e-5 /
+  1.2e-5); Q8_0 on 31,451 at 0.5 and 31,401 at 0.9 (max |dp| 0.17).
+  `ingest_accuracy.py --models sava` added the agreement to the three
+  catalog rows (3 replaced); the model page and HF card now carry the
+  agreement column. This supersedes the "no per-clip reference column" note
+  of the accuracy re-run above.

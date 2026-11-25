@@ -69,8 +69,8 @@ LANGID_MODEL = (
 )
 PNC_MODEL = REPO / "models/canary-180m-flash/canary-180m-flash-Q8_0.gguf"
 ITN_MODEL = REPO / "models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf"
-SMART_TURN_MODEL = REPO / "models/smart-turn-v3.2/smart-turn-v3.2-F32.gguf"
-SAVA_MODEL = REPO / "models/sava/sava-F32.gguf"
+SMART_TURN_MODEL = REPO / "models/smart-turn-v3.2/smart-turn-v3.2-Q8_0.gguf"
+SAVA_MODEL = REPO / "models/sava/sava-Q8_0.gguf"
 
 
 def load_wav(path: Path) -> "array.array":

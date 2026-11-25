@@ -28,7 +28,7 @@
   "onnxruntime differs by the same amount (2.0e-2 on enc.block.3.out). The pooling",
   "and head contract it: head.prob |dp| <= 3.2e-6 on every case.",
   "",
-  "Expect enc.block.2.out, enc.block.3.out and enc.final to need widening.",
+  "Stage 2 predicted (confirmed above) that enc.block.2.out, enc.block.3.out and enc.final would need widening.",
   "Two fp32 implementations of the same weights already differ by more than",
   "the recipe there: the PyTorch twin (bridge.json, torch 2.9.0 CPU) vs the",
   "ONNX reference, max over cases, max_abs / mean_abs:",

@@ -84,17 +84,44 @@ transcribe::Arch make_vad_arch() {
 
 const transcribe::Arch k_vad_arch = make_vad_arch();
 
-const transcribe::TurnOps k_turn_ops = {};
+// TURN ops tables: resolve_roles checks the table fits the model's info
+// (clip: score_clip; streaming: step and reset, no crop limit).
+transcribe::TurnModelInfo g_turn_info;  // what fake_turn_info reports
 
-transcribe::Arch make_vad_turn_arch() {
+const transcribe::TurnModelInfo & fake_turn_info(const transcribe_model *) {
+    return g_turn_info;
+}
+
+transcribe_turn_session * fake_turn_new_session() {
+    return nullptr;
+}
+
+transcribe_status fake_score_clip(transcribe_turn_session *, const float *, int64_t, float *) {
+    return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+}
+
+void fake_turn_reset(transcribe_turn_session *) {}
+
+transcribe_status fake_turn_step(transcribe_turn_session *, const float *, int64_t, float *, float *) {
+    return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+}
+
+const transcribe::TurnOps k_turn_ops        = { fake_turn_info, fake_turn_new_session, fake_score_clip };
+const transcribe::TurnOps k_turn_stream_ops = { fake_turn_info, fake_turn_new_session, nullptr, fake_turn_reset,
+                                                fake_turn_step };
+const transcribe::TurnOps k_turn_empty_ops  = {};
+
+transcribe::Arch make_turn_arch(const char * name, const transcribe::TurnOps * ops) {
     transcribe::Arch a = {};
-    a.name             = "fake_vad_turn";
+    a.name             = name;
     a.vad              = &k_vad_ops;
-    a.turn             = &k_turn_ops;
+    a.turn             = ops;
     return a;
 }
 
-const transcribe::Arch k_vad_turn_arch = make_vad_turn_arch();
+const transcribe::Arch k_vad_turn_arch    = make_turn_arch("fake_vad_turn", &k_turn_ops);
+const transcribe::Arch k_turn_stream_arch = make_turn_arch("fake_turn_stream", &k_turn_stream_ops);
+const transcribe::Arch k_turn_empty_arch  = make_turn_arch("fake_turn_empty", &k_turn_empty_ops);
 
 void test_resolve_roles() {
     constexpr uint32_t ASR = TRANSCRIBE_ROLE_ASR;
@@ -148,6 +175,36 @@ void test_resolve_roles() {
     }
 }
 
+// A TURN ops table must match the model's TurnModelInfo.
+void test_resolve_turn_ops() {
+    struct Case {
+        const transcribe::Arch * arch;
+        int32_t                  frame_samples;
+        int32_t                  max_audio_samples;
+        transcribe_status        want;
+    };
+
+    const Case cases[] = {
+        { &k_vad_turn_arch,    0,   128000, TRANSCRIBE_OK                  }, // clip model with score_clip
+        { &k_vad_turn_arch,    640, 0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // streaming, no step / reset
+        { &k_turn_stream_arch, 640, 0,      TRANSCRIBE_OK                  },
+        { &k_turn_stream_arch, 0,   0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // clip, no score_clip
+        { &k_turn_stream_arch, 640, 16000,  TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // streaming with a crop limit
+        { &k_turn_stream_arch, -1,  0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED },
+        { &k_turn_empty_arch,  0,   0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // no info / new_session
+    };
+    for (const Case & c : cases) {
+        g_turn_info                   = transcribe::TurnModelInfo{};
+        g_turn_info.frame_samples     = c.frame_samples;
+        g_turn_info.max_audio_samples = c.max_audio_samples;
+        transcribe_model model;
+        model.arch  = c.arch;
+        model.roles = TRANSCRIBE_ROLE_TURN;
+        CHECK(transcribe::resolve_roles(&model) == c.want);
+    }
+    g_turn_info = transcribe::TurnModelInfo{};
+}
+
 // ASR entry points refuse a model that does not serve ASR, before
 // touching params or the arch; capabilities leave the caller's struct alone.
 void test_asr_entry_points_check_role() {
@@ -182,6 +239,7 @@ int main() {
     transcribe_log_set(nullptr, nullptr);  // the rejections log at ERROR
 
     test_resolve_roles();
+    test_resolve_turn_ops();
     test_asr_entry_points_check_role();
 
     if (g_failures != 0) {

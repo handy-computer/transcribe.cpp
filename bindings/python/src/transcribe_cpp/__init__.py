@@ -2170,8 +2170,8 @@ class LangIdSession(_SessionBase):
         return _timings_from(tm)
 
 
-def _vad_option(name: str, value, integer: bool):
-    """Check a VAD run option before ctypes would wrap or reject it."""
+def _check_option(name: str, value, integer: bool):
+    """Check a VAD or TURN option before ctypes would wrap or reject it."""
     if integer:
         if (isinstance(value, bool) or not isinstance(value, numbers.Integral)
                 or not -2**31 <= value <= _INT_MAX):
@@ -2263,7 +2263,7 @@ class VadSession(_SessionBase):
                 ("speech_pad_ms", speech_pad_ms, True),
                 ("max_speech_ms", max_speech_ms, True)):
             if value is not None:
-                setattr(params, name, _vad_option(name, value, integer))
+                setattr(params, name, _check_option(name, value, integer))
         with self._model._exclusive(
                 "vad_run", busy="a stream is active on this model; "
                                 "finish or drop it before vad run()"):
@@ -2395,7 +2395,7 @@ class TurnSession(_SessionBase):
         params = _generated.transcribe_turn_params()
         _lib.transcribe_turn_params_init(_byref(params))
         if threshold is not None:
-            params.threshold = _vad_option("threshold", threshold, False)
+            params.threshold = _check_option("threshold", threshold, False)
         with self._model._exclusive("turn_run", busy=_TURN_BUSY.format("run")):
             h = self._h  # captured under the lock; close() defers its free
             _check(_lib.transcribe_turn_run(h, array, n_samples, _byref(params)),
@@ -2430,8 +2430,10 @@ class TurnSession(_SessionBase):
         session ends exactly as if ``session.stream_feed(pcm)`` had been
         called on it, and the result list has one entry per pair, in order.
 
-        Every session must be open, belong to the same model and appear only
-        once (:class:`InvalidArgument` otherwise). The batch takes the
+        Every session must belong to the same model and appear only once
+        (:class:`InvalidArgument` otherwise, as for an empty list), and be
+        open: a closed session, including one closed while the batch waits
+        for the lock, raises :class:`TranscribeError`. The batch takes the
         model's compute lock once, uses the first session's thread count and
         aborts if any listed session is cancelled. Rejected input leaves
         every stream unchanged; an abort or processing error resets every

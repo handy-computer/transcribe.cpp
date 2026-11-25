@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -99,14 +100,17 @@ transcribe_status stream_step(transcribe_turn_session * s, const float * pcm, in
 const transcribe::TurnOps k_stream_ops = { stream_info, stream_new_session, nullptr, stream_reset, stream_step };
 
 // The same model with a batched step: one frame per session per call.
-int g_batch_calls = 0;
+int g_batch_calls     = 0;
+int g_batch_n_threads = -1;  // n_threads of the last batched step
 
 transcribe_status stream_step_batch(transcribe_turn_session * const * sessions,
                                     int                               count,
+                                    int                               n_threads,
                                     const float * const *             pcm,
                                     float *                           turn,
                                     float *                           speech) {
     ++g_batch_calls;
+    g_batch_n_threads = n_threads;
     for (int i = 0; i < count; ++i) {
         if (const auto st = stream_step(sessions[i], pcm[i], 1, turn + i, speech + i); st != TRANSCRIBE_OK) {
             return st;
@@ -118,6 +122,94 @@ transcribe_status stream_step_batch(transcribe_turn_session * const * sessions,
 const transcribe::TurnOps k_stream_batch_ops = { stream_info,  stream_new_session, nullptr,
                                                  stream_reset, stream_step,        stream_step_batch };
 
+// ---- streaming model without a speech track ----
+// turn score of a frame = its second sample; step must get speech == nullptr.
+
+transcribe::TurnModelInfo g_nospeech_info;
+
+const transcribe::TurnModelInfo & nospeech_info(const transcribe_model *) {
+    return g_nospeech_info;
+}
+
+transcribe_status nospeech_step(transcribe_turn_session *, const float * pcm, int64_t n, float * turn, float * speech) {
+    CHECK(speech == nullptr);
+    for (int64_t i = 0; i < n; ++i) {
+        turn[i] = pcm[i * k_frame + 1];
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status nospeech_step_batch(transcribe_turn_session * const * sessions,
+                                      int                               count,
+                                      int,
+                                      const float * const * pcm,
+                                      float *               turn,
+                                      float *               speech) {
+    CHECK(speech == nullptr);
+    for (int i = 0; i < count; ++i) {
+        if (const auto st = nospeech_step(sessions[i], pcm[i], 1, turn + i, nullptr); st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+const transcribe::TurnOps k_nospeech_ops = { nospeech_info, stream_new_session, nullptr, stream_reset, nospeech_step };
+const transcribe::TurnOps k_nospeech_batch_ops = { nospeech_info, stream_new_session, nullptr,
+                                                   stream_reset,  nospeech_step,      nospeech_step_batch };
+
+// ---- models whose ops throw ----
+// The streaming one is the lagged-speech model above; its step throws while
+// g_throw_step is set and its reset throws the next g_throw_reset times.
+// The clip one's score_clip always throws.
+
+bool g_throw_step  = false;
+int  g_throw_reset = 0;
+int  g_reset_calls = 0;
+
+void throwing_reset(transcribe_turn_session * s) {
+    ++g_reset_calls;
+    if (g_throw_reset > 0) {
+        --g_throw_reset;
+        throw std::runtime_error("fake reset failure");
+    }
+    stream_reset(s);
+}
+
+transcribe_status throwing_step(transcribe_turn_session * s,
+                                const float *             pcm,
+                                int64_t                   n,
+                                float *                   turn,
+                                float *                   speech) {
+    if (g_throw_step) {
+        throw std::runtime_error("fake step failure");
+    }
+    return stream_step(s, pcm, n, turn, speech);
+}
+
+transcribe_status throwing_step_batch(transcribe_turn_session * const * sessions,
+                                      int                               count,
+                                      int,
+                                      const float * const * pcm,
+                                      float *               turn,
+                                      float *               speech) {
+    for (int i = 0; i < count; ++i) {
+        if (const auto st = throwing_step(sessions[i], pcm[i], 1, turn + i, speech + i); st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status throwing_score(transcribe_turn_session *, const float *, int64_t, float *) {
+    throw std::runtime_error("fake score failure");
+}
+
+const transcribe::TurnOps k_throw_ops = { stream_info, stream_new_session, nullptr, throwing_reset, throwing_step };
+const transcribe::TurnOps k_throw_batch_ops = { stream_info,    stream_new_session, nullptr,
+                                                throwing_reset, throwing_step,      throwing_step_batch };
+const transcribe::TurnOps k_throw_clip_ops  = { clip_info, new_session, throwing_score, nullptr, nullptr };
+
 transcribe::Arch make_arch(const char * name, const transcribe::TurnOps * ops) {
     transcribe::Arch a{};
     a.name = name;
@@ -125,9 +217,14 @@ transcribe::Arch make_arch(const char * name, const transcribe::TurnOps * ops) {
     return a;
 }
 
-const transcribe::Arch k_clip_arch         = make_arch("fake-turn-clip", &k_clip_ops);
-const transcribe::Arch k_stream_arch       = make_arch("fake-turn-stream", &k_stream_ops);
-const transcribe::Arch k_stream_batch_arch = make_arch("fake-turn-stream-batch", &k_stream_batch_ops);
+const transcribe::Arch k_clip_arch           = make_arch("fake-turn-clip", &k_clip_ops);
+const transcribe::Arch k_stream_arch         = make_arch("fake-turn-stream", &k_stream_ops);
+const transcribe::Arch k_stream_batch_arch   = make_arch("fake-turn-stream-batch", &k_stream_batch_ops);
+const transcribe::Arch k_nospeech_arch       = make_arch("fake-turn-nospeech", &k_nospeech_ops);
+const transcribe::Arch k_nospeech_batch_arch = make_arch("fake-turn-nospeech-batch", &k_nospeech_batch_ops);
+const transcribe::Arch k_throw_arch          = make_arch("fake-turn-throw", &k_throw_ops);
+const transcribe::Arch k_throw_batch_arch    = make_arch("fake-turn-throw-batch", &k_throw_batch_ops);
+const transcribe::Arch k_throw_clip_arch     = make_arch("fake-turn-throw-clip", &k_throw_clip_ops);
 
 void setup_infos() {
     g_clip_info                   = {};
@@ -139,6 +236,10 @@ void setup_infos() {
     g_stream_info.has_speech              = true;
     g_stream_info.speech_lookahead_frames = k_lag;
     g_stream_info.threshold               = 0.9;
+
+    g_nospeech_info               = {};
+    g_nospeech_info.frame_samples = k_frame;
+    g_nospeech_info.threshold     = 0.5;
 }
 
 transcribe_turn_result get_result(transcribe_turn_session * s) {
@@ -287,7 +388,7 @@ void test_stream() {
             next_turn += q.n_probs;
             next_speech += q.n_speech_probs;
             // The speech track trails by the lag until the flush.
-            CHECK(next_speech <= std::max<int64_t>(0, next_turn - k_lag) || chunk == -1);
+            CHECK(next_speech <= std::max<int64_t>(0, next_turn - k_lag));
         };
         for (int off = 0; off < n; off += chunk) {
             CHECK(transcribe_turn_stream_feed(s, pcm.data() + off, std::min(chunk, n - off)) == TRANSCRIBE_OK);
@@ -446,6 +547,194 @@ void test_feed_batch(const transcribe::Arch * arch) {
     }
 }
 
+// feed_batch runs with the caller's sessions[0] thread count, batched or
+// not, and leaves every session's own count as it was.
+int g_step_n_threads_min = 0;
+int g_step_n_threads_max = 0;
+
+transcribe_status threads_step(transcribe_turn_session * s,
+                               const float *             pcm,
+                               int64_t                   n,
+                               float *                   turn,
+                               float *                   speech) {
+    g_step_n_threads_min = std::min(g_step_n_threads_min, s->n_threads);
+    g_step_n_threads_max = std::max(g_step_n_threads_max, s->n_threads);
+    return stream_step(s, pcm, n, turn, speech);
+}
+
+const transcribe::TurnOps k_threads_ops  = { stream_info, stream_new_session, nullptr, stream_reset, threads_step };
+const transcribe::Arch    k_threads_arch = make_arch("fake-turn-threads", &k_threads_ops);
+
+void test_feed_batch_threads(const transcribe::Arch * arch, bool batched) {
+    transcribe_model model;
+    model.arch                    = arch;
+    model.roles                   = TRANSCRIBE_ROLE_TURN;
+    constexpr int             k_n = 3;
+    transcribe_turn_session * s[k_n]{};
+    for (int i = 0; i < k_n; ++i) {
+        transcribe_turn_session_params sp;
+        transcribe_turn_session_params_init(&sp);
+        sp.n_threads = 3 - i;  // 3, 2, 1
+        CHECK(transcribe_turn_session_init(&model, &sp, &s[i]) == TRANSCRIBE_OK);
+    }
+    std::vector<float> pcm(8, 0.25f);
+    const float *      p[k_n]   = { pcm.data(), pcm.data(), pcm.data() };
+    int                len[k_n] = { 0, 8, 8 };  // sessions[0] has no frame
+    g_batch_n_threads           = -1;
+    g_step_n_threads_min        = 1 << 30;
+    g_step_n_threads_max        = -1;
+    CHECK(transcribe_turn_stream_feed_batch(s, p, len, k_n) == TRANSCRIBE_OK);
+    if (batched) {
+        CHECK(g_batch_n_threads == 3);
+    } else {
+        CHECK(g_step_n_threads_min == 3 && g_step_n_threads_max == 3);
+    }
+    for (int i = 0; i < k_n; ++i) {
+        CHECK(s[i]->n_threads == 3 - i);
+        transcribe_turn_session_free(s[i]);
+    }
+}
+
+// A streaming model without a speech track: no speech probabilities from
+// run, feed, feed_batch or flush; the model's step gets speech == nullptr.
+void test_no_speech(const transcribe::Arch * arch) {
+    transcribe_model model;
+    model.arch                    = arch;
+    model.roles                   = TRANSCRIBE_ROLE_TURN;
+    constexpr int             k_n = 2;
+    transcribe_turn_session * s[k_n]{};
+    for (int i = 0; i < k_n; ++i) {
+        CHECK(transcribe_turn_session_init(&model, nullptr, &s[i]) == TRANSCRIBE_OK);
+    }
+    transcribe_turn_info info;
+    transcribe_turn_info_init(&info);
+    CHECK(transcribe_turn_get_info(&model, &info) == TRANSCRIBE_OK);
+    CHECK(!info.has_speech && info.frame_samples == k_frame);
+
+    const std::vector<float> speech = { 0.1f, 0.2f, 0.3f };
+    const std::vector<float> turn   = { 0.01f, 0.02f, 0.03f };
+    const std::vector<float> pcm    = make_stream(speech, turn, 2);  // 10 samples: 2 frames and 2 pending
+
+    CHECK(transcribe_turn_run(s[0], pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
+    transcribe_turn_result r = get_result(s[0]);
+    CHECK(r.n_probs == 3 && r.n_speech_probs == 0 && r.speech_first_frame == 0);
+    CHECK(transcribe_turn_speech_probs(s[0]) == nullptr);
+    CHECK(std::vector<float>(transcribe_turn_probs(s[0]), transcribe_turn_probs(s[0]) + 3) == turn);
+
+    const float * p[k_n]   = { pcm.data(), pcm.data() };
+    int           len[k_n] = { 10, 6 };
+    CHECK(transcribe_turn_stream_feed_batch(s, p, len, k_n) == TRANSCRIBE_OK);
+    r = get_result(s[0]);
+    CHECK(r.n_probs == 2 && r.n_speech_probs == 0 && r.speech_first_frame == 0);
+    r = get_result(s[1]);
+    CHECK(r.n_probs == 1 && r.n_speech_probs == 0);
+    CHECK(transcribe_turn_stream_feed(s[1], pcm.data() + 6, 4) == TRANSCRIBE_OK);
+    r = get_result(s[1]);
+    CHECK(r.n_probs == 1 && r.first_frame == 1 && r.n_speech_probs == 0 && r.speech_first_frame == 0);
+    CHECK(transcribe_turn_stream_flush(s[0]) == TRANSCRIBE_OK);
+    r = get_result(s[0]);
+    CHECK(r.n_probs == 1 && r.first_frame == 2 && r.n_speech_probs == 0);
+    CHECK(transcribe_turn_probs(s[0])[0] == 0.03f);
+    for (int i = 0; i < k_n; ++i) {
+        transcribe_turn_session_free(s[i]);
+    }
+}
+
+size_t history(transcribe_turn_session * s) {
+    return static_cast<StreamSession *>(s)->first_samples.size();
+}
+
+// An exception from an arch op never escapes: the call fails, the result is
+// cleared, the stream is reset, and a reset that itself threw is retried
+// before the next step.
+void test_throwing_ops(const transcribe::Arch * arch) {
+    transcribe_model model;
+    model.arch                    = arch;
+    model.roles                   = TRANSCRIBE_ROLE_TURN;
+    constexpr int             k_n = 2;
+    transcribe_turn_session * s[k_n]{};
+    for (int i = 0; i < k_n; ++i) {
+        CHECK(transcribe_turn_session_init(&model, nullptr, &s[i]) == TRANSCRIBE_OK);
+    }
+    std::vector<float> pcm(12, 0.5f);
+
+    // A throwing step: BACKEND, result cleared, stream reset.
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 8) == TRANSCRIBE_OK);
+    CHECK(get_result(s[0]).n_probs == 2);
+    g_throw_step = true;
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 4) == TRANSCRIBE_ERR_BACKEND);
+    g_throw_step = false;
+    CHECK(get_result(s[0]).n_probs == 0 && history(s[0]) == 0);
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 4) == TRANSCRIBE_OK);
+    CHECK(get_result(s[0]).first_frame == 0 && get_result(s[0]).n_probs == 1);
+
+    // The cleanup's reset throws too: the next feed retries it first.
+    g_throw_step  = true;
+    g_throw_reset = 1;
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 4) == TRANSCRIBE_ERR_BACKEND);
+    g_throw_step     = false;
+    const int resets = g_reset_calls;
+    CHECK(history(s[0]) == 1);  // the failed reset left the fake's state
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 4) == TRANSCRIBE_OK);
+    CHECK(g_reset_calls == resets + 1);
+    CHECK(history(s[0]) == 1 && get_result(s[0]).first_frame == 0);
+
+    // flush and run: the same.
+    g_throw_step = true;
+    CHECK(transcribe_turn_run(s[0], pcm.data(), 8, nullptr) == TRANSCRIBE_ERR_BACKEND);
+    g_throw_step = false;
+    CHECK(get_result(s[0]).n_probs == 0 && history(s[0]) == 0);
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 2) == TRANSCRIBE_OK);
+    g_throw_step = true;
+    CHECK(transcribe_turn_stream_flush(s[0]) == TRANSCRIBE_ERR_BACKEND);
+    g_throw_step = false;
+    CHECK(get_result(s[0]).n_probs == 0 && history(s[0]) == 0);
+
+    // feed_batch: a throwing step resets every listed stream.
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 8) == TRANSCRIBE_OK);
+    CHECK(transcribe_turn_stream_feed(s[1], pcm.data(), 8) == TRANSCRIBE_OK);
+    const float * p[k_n]   = { pcm.data(), pcm.data() };
+    int           len[k_n] = { 4, 4 };
+    g_throw_step           = true;
+    CHECK(transcribe_turn_stream_feed_batch(s, p, len, k_n) == TRANSCRIBE_ERR_BACKEND);
+    g_throw_step = false;
+    for (int i = 0; i < k_n; ++i) {
+        CHECK(get_result(s[i]).n_probs == 0 && history(s[i]) == 0);
+    }
+
+    // feed_batch: an exception while setting up (s[1]'s retried reset
+    // throws) resets every listed stream, s[0] included, though it was
+    // already cleared and set up.
+    CHECK(transcribe_turn_stream_feed(s[0], pcm.data(), 8) == TRANSCRIBE_OK);
+    CHECK(transcribe_turn_stream_feed(s[1], pcm.data(), 8) == TRANSCRIBE_OK);
+    g_throw_step  = true;
+    g_throw_reset = 1;
+    CHECK(transcribe_turn_stream_feed(s[1], pcm.data(), 4) == TRANSCRIBE_ERR_BACKEND);  // s[1] needs a reset
+    g_throw_step  = false;
+    g_throw_reset = 1;
+    CHECK(transcribe_turn_stream_feed_batch(s, p, len, k_n) == TRANSCRIBE_ERR_BACKEND);
+    CHECK(g_throw_reset == 0);
+    for (int i = 0; i < k_n; ++i) {
+        CHECK(get_result(s[i]).n_probs == 0 && history(s[i]) == 0);
+        CHECK(transcribe_turn_stream_feed(s[i], pcm.data(), 4) == TRANSCRIBE_OK);
+        CHECK(get_result(s[i]).first_frame == 0);
+    }
+
+    for (int i = 0; i < k_n; ++i) {
+        transcribe_turn_session_free(s[i]);
+    }
+
+    // A throwing score_clip: BACKEND, result cleared.
+    transcribe_model clip;
+    clip.arch                   = &k_throw_clip_arch;
+    clip.roles                  = TRANSCRIBE_ROLE_TURN;
+    transcribe_turn_session * c = nullptr;
+    CHECK(transcribe_turn_session_init(&clip, nullptr, &c) == TRANSCRIBE_OK);
+    CHECK(transcribe_turn_run(c, pcm.data(), 4, nullptr) == TRANSCRIBE_ERR_BACKEND);
+    CHECK(get_result(c).p == 0.0f && !get_result(c).ended);
+    transcribe_turn_session_free(c);
+}
+
 void test_feed_batch_clip() {
     transcribe_model model;
     model.arch                  = &k_clip_arch;
@@ -495,6 +784,13 @@ int main() {
     test_feed_batch(&k_stream_batch_arch);
     CHECK(g_batch_calls > 0);
     test_feed_batch_clip();
+    test_feed_batch_threads(&k_threads_arch, false);
+    test_feed_batch_threads(&k_stream_batch_arch, true);
+    test_no_speech(&k_nospeech_arch);
+    test_no_speech(&k_nospeech_batch_arch);
+    transcribe_log_set(nullptr, nullptr);  // the thrown exceptions log at ERROR
+    test_throwing_ops(&k_throw_arch);
+    test_throwing_ops(&k_throw_batch_arch);
     test_params();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

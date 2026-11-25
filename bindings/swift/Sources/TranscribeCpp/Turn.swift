@@ -96,8 +96,9 @@ public final class TurnSession {
             var params = transcribe_turn_params()
             transcribe_turn_params_init(&params)
             if let threshold { params.threshold = threshold }
+            let n = try turnCount(pcm.count, "turn run")
             let status = pcm.withUnsafeBufferPointer {
-                transcribe_turn_run(ptr, $0.baseAddress, Int32($0.count), &params)
+                transcribe_turn_run(ptr, $0.baseAddress, n, &params)
             }
             try TranscribeError.check(status, context: "turn_run")
             return try copyResult()
@@ -133,8 +134,9 @@ public final class TurnSession {
         try model.withCompute(
             busyIfStreaming: "a stream is active on this model; finish or drop it before turn streamFeed()"
         ) {
+            let n = try turnCount(pcm.count, "turn streamFeed")
             let status = pcm.withUnsafeBufferPointer {
-                transcribe_turn_stream_feed(ptr, $0.baseAddress, Int32($0.count))
+                transcribe_turn_stream_feed(ptr, $0.baseAddress, n)
             }
             try TranscribeError.check(status, context: "turn_stream_feed")
             return try copyResult()
@@ -147,11 +149,14 @@ public final class TurnSession {
     /// belong to the same model and appear once; an empty list throws
     /// `.invalidArgument`. Uses the first session's thread count and checks
     /// every session's cancellation token. An abort or processing error resets
-    /// every listed stream.
+    /// every listed stream. The audio is copied once into one flat buffer for
+    /// the native call (the inputs' total sample count of extra memory). More
+    /// than `Int32.max` inputs or samples in one input throws `.invalidArgument`.
     public static func streamFeedBatch(_ inputs: [(TurnSession, [Float])]) throws -> [TurnResult] {
         guard let model = inputs.first?.0.model else {
             throw TranscribeError.invalidArgument("turn streamFeedBatch: no sessions")
         }
+        let nInputs = try turnCount(inputs.count, "turn streamFeedBatch sessions")
         var seen = Set<ObjectIdentifier>()
         for (session, _) in inputs {
             guard session.model === model else {
@@ -171,7 +176,7 @@ public final class TurnSession {
         var counts: [Int32] = []
         for (_, pcm) in inputs {
             offsets.append(flat.count)
-            counts.append(Int32(pcm.count))
+            counts.append(try turnCount(pcm.count, "turn streamFeedBatch"))
             flat.append(contentsOf: pcm)
         }
         let sessions: [OpaquePointer?] = inputs.map { $0.0.ptr }
@@ -187,7 +192,7 @@ public final class TurnSession {
                     pcmPtrs.withUnsafeBufferPointer { p in
                         counts.withUnsafeBufferPointer { c in
                             transcribe_turn_stream_feed_batch(
-                                s.baseAddress, p.baseAddress, c.baseAddress, Int32(inputs.count))
+                                s.baseAddress, p.baseAddress, c.baseAddress, nInputs)
                         }
                     }
                 }
@@ -238,4 +243,12 @@ public final class TurnSession {
             p: res.p, ended: res.ended, probs: probs, firstFrame: res.first_frame,
             speechProbs: speech, speechFirstFrame: res.speech_first_frame)
     }
+}
+
+/// `count` as the C `int`, or `.invalidArgument` when it does not fit.
+private func turnCount(_ count: Int, _ what: String) throws -> Int32 {
+    guard let n = Int32(exactly: count) else {
+        throw TranscribeError.invalidArgument("\(what): \(count) exceeds Int32.max")
+    }
+    return n
 }

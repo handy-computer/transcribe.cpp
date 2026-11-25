@@ -56,11 +56,14 @@ struct TurnOps {
         *step)(transcribe_turn_session * session, const float * pcm, int64_t n_frames, float * turn, float * speech);
     // Optional (nullptr = the dispatcher steps the sessions one by one): step
     // one frame, frame_pcm[i][0, frame_samples), for each of count distinct
-    // sessions of this model in one compute, using sessions[0]'s threads.
-    // turn[i] / speech[i] as step writes them for sessions[i]. Must give
-    // exactly the values step would. Poll every session's poll_abort().
+    // sessions of this model in one compute, using n_threads threads (the
+    // dispatcher passes the caller's sessions[0]'s, which need not be listed
+    // here). turn[i] / speech[i] as step writes them for sessions[i]. Must
+    // give exactly the values step would, for any count. Poll every session's
+    // poll_abort().
     transcribe_status (*step_batch)(transcribe_turn_session * const * sessions,
                                     int                               count,
+                                    int                               n_threads,
                                     const float * const *             frame_pcm,
                                     float *                           turn,
                                     float *                           speech);

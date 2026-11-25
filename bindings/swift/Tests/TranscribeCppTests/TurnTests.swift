@@ -214,6 +214,19 @@ final class TurnTests: XCTestCase {
         expectError(try TurnSession.streamFeedBatch([(t, pcm)]), isAborted)
         t.clearCancellationToken()
         XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 0)  // the abort reset the stream
+
+        // Cancelling a later (not the first) listed session aborts the batch
+        // and resets every listed stream.
+        let u = try model.turnSession(threads: 1)
+        XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 2)
+        XCTAssertEqual(try u.streamFeed(pcm).firstFrame, 0)
+        let later = CancellationToken()
+        u.setCancellationToken(later)
+        later.cancel()
+        expectError(try TurnSession.streamFeedBatch([(t, pcm), (u, pcm)]), isAborted)
+        u.clearCancellationToken()
+        XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 0)
+        XCTAssertEqual(try u.streamFeed(pcm).firstFrame, 0)
     }
 
     func testTurnIsBusyWhileAStreamIsActive() throws {

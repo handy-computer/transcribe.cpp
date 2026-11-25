@@ -61,7 +61,10 @@ transcribe_status read_attn(const gguf_context * gguf, const std::string & prefi
 bool attn_ok(const AttnHParams & a) {
     return a.n_heads > 0 && a.n_kv_heads > 0 && a.n_heads % a.n_kv_heads == 0 && a.head_dim > 0 &&
            a.head_dim % 2 == 0 && a.head_dim <= kMaxDim && a.n_heads <= kMaxDim && a.window > 0 &&
-           a.window <= kMaxDim && std::isfinite(a.xsa_alpha);
+           a.window <= kMaxDim && std::isfinite(a.xsa_alpha) &&
+           // The qkv rows, (H + 2 KV) hd, in int64: each factor is bounded
+           // but the product of two is not an int32.
+           (static_cast<int64_t>(a.n_heads) + 2 * static_cast<int64_t>(a.n_kv_heads)) * a.head_dim <= kMaxDim;
 }
 
 }  // namespace
@@ -145,11 +148,19 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     if (hp.mixer_context_frames != 2) {
         return bad("mixer_context_frames must be 2");
     }
-    if (hp.ssm_expand <= 0 || hp.ssm_head_dim <= 0 || hp.ssm_state <= 0 || hp.ssm_state > kMaxDim ||
-        hp.ssm_groups <= 0 || hp.ssm_conv_kernel < 2 || hp.ssm_conv_kernel > 64) {
+    if (hp.ssm_expand <= 0 || hp.ssm_expand > 64 || hp.ssm_head_dim <= 0 || hp.ssm_head_dim > kMaxDim ||
+        hp.ssm_state <= 0 || hp.ssm_state > kMaxDim || hp.ssm_groups <= 0 || hp.ssm_groups > kMaxDim ||
+        hp.ssm_conv_kernel < 2 || hp.ssm_conv_kernel > 64) {
         return bad("mamba sizes");
     }
-    hp.ssm_inner = hp.ssm_expand * hp.hidden;
+    // The derived widths in int64, then range-checked, so a malformed GGUF
+    // cannot overflow int32.
+    const int64_t ssm_inner    = static_cast<int64_t>(hp.ssm_expand) * hp.hidden;
+    const int64_t ssm_conv_dim = ssm_inner + 2 * static_cast<int64_t>(hp.ssm_groups) * hp.ssm_state;
+    if (ssm_inner > kMaxDim || ssm_conv_dim > 4 * static_cast<int64_t>(kMaxDim)) {
+        return bad("mamba inner / conv widths");
+    }
+    hp.ssm_inner = static_cast<int32_t>(ssm_inner);
     if (hp.ssm_inner % hp.ssm_head_dim != 0) {
         return bad("expand * hidden must divide by mamba head_dim");
     }
@@ -157,7 +168,7 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     if (hp.ssm_heads % hp.ssm_groups != 0 || hp.ssm_inner % hp.ssm_groups != 0) {
         return bad("mamba heads must divide by num_groups");
     }
-    hp.ssm_conv_dim = hp.ssm_inner + 2 * hp.ssm_groups * hp.ssm_state;
+    hp.ssm_conv_dim = static_cast<int32_t>(ssm_conv_dim);
     if (!attn_ok(hp.attn) || !attn_ok(hp.vad_attn) || !attn_ok(hp.turn_attn)) {
         return bad("attention sizes");
     }

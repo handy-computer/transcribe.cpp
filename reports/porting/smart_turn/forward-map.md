@@ -36,7 +36,7 @@ implemented and validated, none is open.
 |-------|--------------------|--------------|-------------|--------------------|----------------|
 | attention pooling: softmax over time of Linear(384,256)-Tanh-Linear(256,1) | `SmartTurnV3Model.pool_attention` | [400] | `head.pool_weights` | `mul_mat` + bias, `tanh`, `soft_max` over T | - |
 | pooled sum over time | `torch.sum(weights * h, dim=1)` | [384] | `head.pooled` | `mul_mat(cont(transpose(enc)), weights)` | - |
-| classifier Linear(384,256)-LayerNorm-GELU-Linear(256,64)-GELU-Linear(64,1) | `SmartTurnV3Model.classifier` (Dropout identity) | [1] | `head.logit` | `mul_mat` + bias, `ggml_norm` (eps from GGUF), `gelu_erf` | - |
+| classifier Linear(384,256)-LayerNorm-GELU-Linear(256,64)-GELU-Linear(64,1) | `SmartTurnV3Model.classifier` (Dropout identity) | [1] | `head.logit` | `mul_mat` + bias, `ggml_norm` (eps 1e-5, a C++ constant; the converter asserts every ONNX LayerNorm uses 1e-5), `gelu_erf` | - |
 | sigmoid | `torch.sigmoid` | [1] | `head.prob` | `ggml_sigmoid` | - |
 
 ## Generation / KV Path

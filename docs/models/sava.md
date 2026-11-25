@@ -97,16 +97,19 @@ the clip is called complete when `p > 0.5`, Inworld's benchmark rule.
 The API's default cut-off is 0.9, Inworld's live rule. False positives
 (incomplete clips called complete) and false negatives (the reverse) are
 shares of all clips, as Pipecat publishes them. Inworld publishes 93.35%
-and an AUC of 0.97946 for SAVA (fp32, A100); it publishes no per-clip
-scores, so there is no per-clip agreement column.
+and an AUC of 0.97946 for SAVA (fp32, A100) but no per-clip scores; the
+reference is upstream's PyTorch package (inworld-sava 1.0.0, CPU, fp32)
+run on the same clips (`scripts/turn/run_reference_sava_torch.py`):
+93.36%, AUC 0.97946. F32 and F16 make its decision on all 31,527 clips at
+0.5 and at 0.9; Q8_0 on 31,451 at 0.5.
 <!-- /catalog -->
 
-<!-- catalog:turn -->
-| GGUF | Accuracy (95% CI) | False positives | False negatives |     AUC |
-| --- | ---: | ---: | ---: | ---: |
-| F32  | 93.36% (93.08-93.64) | 3.58% | 3.06% | 0.97946 |
-| F16  | 93.36% (93.08-93.64) | 3.58% | 3.06% | 0.97946 |
-| Q8_0 | 93.36% (93.08-93.63) | 3.60% | 3.03% | 0.97935 |
+<!-- catalog:turn reference="the PyTorch reference (inworld-sava 1.0.0, fp32)" -->
+| GGUF | Accuracy (95% CI) | False positives | False negatives |     AUC | Same decision as the PyTorch reference (inworld-sava 1.0.0, fp32) | Max abs p difference |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| F32  | 93.36% (93.08-93.64) | 3.58% | 3.06% | 0.97946 | 31,527 / 31,527 | 1.1e-05 |
+| F16  | 93.36% (93.08-93.64) | 3.58% | 3.06% | 0.97946 | 31,527 / 31,527 | 1.2e-05 |
+| Q8_0 | 93.36% (93.08-93.63) | 3.60% | 3.03% | 0.97935 | 31,451 / 31,527 | 0.17 |
 
 Measured at transcribe.cpp `8f97ab5b` on 2026-11-24.
 <!-- /catalog -->
@@ -133,9 +136,15 @@ Details:
 - **Q8_0 vs F32:** the same decision on 99.76% of clips at 0.5 (76 flips)
   and 99.60% at 0.9 (126 flips). The clip score differs by 2.8e-3 on average
   (p99 3.5e-2).
+- **F32 vs the PyTorch reference:** the same decision on every clip at 0.5
+  and at 0.9; the clip score differs by at most 1.1e-5 (F16 1.2e-5). Q8_0
+  agrees on 31,451 clips at 0.5 and 31,401 at 0.9 (max 0.17).
 - **Rows:** `reports/turn/sava-{F32,F16,Q8_0}.smart-turn-data-v3.2-test.jsonl`
-  from `scripts/turn/eval_cpp.py`, scored by `scripts/turn/score.py`. The
-  runs' `p_fp32` / `p_int8` columns are Smart Turn's.
+  from `scripts/turn/eval_cpp.py`, scored by `scripts/turn/score.py
+  --ref-jsonl` against `reports/turn/sava-REF.smart-turn-data-v3.2-test.jsonl`
+  from `scripts/turn/run_reference_sava_torch.py` (upstream's PyTorch
+  package on the same clips). The runs' `p_fp32` / `p_int8` columns are
+  Smart Turn's.
 
 On the 8 golden recordings (`tests/golden/sava/`):
 

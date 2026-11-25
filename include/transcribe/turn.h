@@ -42,8 +42,8 @@ struct transcribe_turn_info {
     /* True if the model also returns a speech probability for each frame
      * (transcribe_turn_speech_probs), so you do not need a separate VAD. */
     bool     has_speech;
-    /* The probability at or above which the model's authors consider the
-     * turn over. The default for transcribe_turn_params::threshold. */
+    /* The model's recommended cut-off, from its authors. The default for
+     * transcribe_turn_params::threshold. */
     double   threshold;
 };
 
@@ -206,7 +206,16 @@ TRANSCRIBE_API transcribe_status transcribe_turn_get_result(const struct transcr
 TRANSCRIBE_API const float * transcribe_turn_probs(const struct transcribe_turn_session * session);
 TRANSCRIBE_API const float * transcribe_turn_speech_probs(const struct transcribe_turn_session * session);
 
-/* Get model loading and last-call processing times in milliseconds. */
+/* Get model loading and last-call processing times in milliseconds.
+ * load_ms is the model's load time. The others cover the last run, feed or
+ * flush and are 0 after a failed one; how a model splits its work varies:
+ *   mel_ms     the audio front end, when the model runs it as its own
+ *              stage (Smart Turn: normalisation and log-mel); else 0.
+ *   encode_ms  the model's compute (Smart Turn: encoder and classifier;
+ *              SAVA: every step, its front end included). After
+ *              transcribe_turn_stream_feed_batch, each session reports the
+ *              whole time of the batched computes it took part in.
+ *   decode_ms  0: turn models have no decoder. */
 TRANSCRIBE_API transcribe_status transcribe_turn_get_timings(const struct transcribe_turn_session * session,
                                                              struct transcribe_timings *            out);
 

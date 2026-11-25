@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 dump_reference_sava_author.py - SAVA (Inworld) reference tensors, curves and
-turn segments from upstream's own package (inworld-sava 1.0.0, PyTorch).
+turn segments (turn_segments.json) from upstream's own package (inworld-sava
+1.0.0, PyTorch).
 
     uv run --project scripts/envs/sava \
       scripts/dump_reference_sava_author.py encoder \
@@ -54,10 +55,12 @@ samples, then flushed), as emitted:
     stream.turn           [S, 4]  turn output of step t
 
 stream.json records how each chunking compares with sava.run (bit-exact or
-max abs difference); segments.json holds sava.segment(curves, Policy(), 3)
+max abs difference); turn_segments.json holds sava.segment(curves, Policy(), 3)
 and the live TurnSegmenter run over the stream (Inworld's turn rule, for
 reference: the library returns scores, not turns); turn.json is the clip's p
-and decision, the TURN API's view of the same run.
+and decision, the TURN API's view of the same run. (turn_segments.json is not
+named segments.json: that name is the VAD role's speech segments, which
+validate.py compares.)
 """
 
 from __future__ import annotations
@@ -338,7 +341,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
         "run": {"p": float(curves.turn[-1]), "ended": bool(curves.turn[-1] >= policy.turn_threshold)},
         "source": source,
     }
-    (out_dir / "segments.json").write_text(json.dumps(payload, indent=2) + "\n")
+    (out_dir / "turn_segments.json").write_text(json.dumps(payload, indent=2) + "\n")
     write_turn_json(out_dir, payload)
 
     if args.expected_npz:
@@ -366,7 +369,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="SAVA reference dumper (inworld-sava package).")
     sub = p.add_subparsers(dest="cmd", required=True)
-    ep = sub.add_parser("encoder", help="Run the clip; dump per-step tensors, curves, streams and segments")
+    ep = sub.add_parser("encoder", help="Run the clip; dump per-step tensors, curves, streams and turn segments")
     ep.add_argument("--model", default=HF_REPO, help="HF repo id, a directory holding sava.safetensors, or the file")
     ep.add_argument("--revision", default=None, help=f"HF revision (default {HF_REVISION})")
     ep.add_argument("--audio", required=True, help="16 kHz mono WAV path")

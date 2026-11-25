@@ -130,7 +130,8 @@ enum Fixtures {
     static func toyModelPath(_ name: String) throws -> String {
         let path = repoRoot().appendingPathComponent("tests/fixtures/\(name)").path
         guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("no toy fixture \(name) (build the C++ `fixtures` target)")
+            throw XCTSkip(
+                "no toy fixture \(name) (run `uv run tests/fixtures/make_gguf_fixtures.py`)")
         }
         return path
     }

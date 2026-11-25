@@ -165,7 +165,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary fetches via uvx
+      - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary (uvx) + the fixture generator
         with:
           version: "0.12.19"
       - name: Enable ccache compiler launcher (non-Windows)
@@ -234,6 +234,12 @@ jobs:
         uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
+      # The gitignored toy role GGUFs (silero_vad, smart_turn, sava, ...) the
+      # VAD / TURN / langid tests load from tests/fixtures; without them those
+      # tests skip. Pure Python, no native build; every leg (the toy tier is
+      # model-free, so it runs on the link-posture legs too).
+      - name: Generate toy GGUF fixtures
+        run: uv run --quiet tests/fixtures/make_gguf_fixtures.py
       - name: Safe-crate conformance (no-model tier always; model tier when canary present)
         run: cargo test -p transcribe-cpp ${{ matrix.features }}
       # The 5 canonical examples (requirements §6), run headless under the same

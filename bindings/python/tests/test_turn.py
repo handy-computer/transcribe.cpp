@@ -7,6 +7,7 @@ from __future__ import annotations
 import array
 import ctypes
 import math
+import threading
 
 import pytest
 
@@ -187,6 +188,52 @@ def test_sava_toy_batch_invalid(sava_toy_model_path, vad_toy_model_path):
         # Every rejection left a's stream untouched: 300 samples buffered.
         r = a.stream_feed(pcm[300:640])
         assert (len(r.probs), r.first_frame) == (1, 0)
+
+
+def test_sava_toy_batch_session_closed_while_waiting(sava_toy_model_path):
+    """A non-first session closed while the batch waits for the compute lock:
+    the batch raises TranscribeError once it gets the lock, without calling
+    the library, and the first session's stream is untouched."""
+    pcm = _noise(1000)
+    with t.Model(sava_toy_model_path, backend="cpu") as model:
+        a, b = model.turn_session(), model.turn_session()
+        a.stream_feed(pcm[:300])
+        real = model._compute_lock
+        waiting = threading.Event()
+
+        class _Spy:  # signals the batch thread's blocking acquire
+            def __enter__(self):
+                waiting.set()
+                return real.__enter__()
+
+            def __exit__(self, *exc):
+                return real.__exit__(*exc)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        errors: list = []
+
+        def batch():
+            try:
+                t.TurnSession.stream_feed_batch([(a, pcm), (b, pcm)])
+            except BaseException as e:  # noqa: BLE001 - reported below
+                errors.append(e)
+
+        with real:
+            model._compute_lock = _Spy()
+            th = threading.Thread(target=batch)
+            th.start()
+            assert waiting.wait(10)
+            b.close()  # never waits for the lock
+        th.join(10)
+        model._compute_lock = real
+        assert not th.is_alive()
+        assert len(errors) == 1 and type(errors[0]) is t.TranscribeError, errors
+        assert "session is closed" in str(errors[0])
+        r = a.stream_feed(pcm[300:640])
+        assert (len(r.probs), r.first_frame) == (1, 0)
+        a.close()
 
 
 def test_sava_toy_invalid_input(sava_toy_model_path):

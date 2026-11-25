@@ -7,9 +7,13 @@ The checkpoint carries its configuration as safetensors metadata; this script
 reads it with upstream's own loader (inworld.sava.checkpoint.read), asserts
 the values the C++ graph cannot infer from tensor shapes, and writes the
 tensor layout documented in docs/porting/families/sava.md. Tensors that are
-pure functions of the configuration (the windowed DFT basis, the mel
-filterbank, the RoPE frequencies, A = -exp(A_log)) are computed with
-upstream's own fp32 code so the C++ never re-derives them.
+pure functions of the configuration (the mel filterbank, the RoPE
+frequencies, A = -exp(A_log)) are computed with upstream's own fp32 code so
+the C++ never re-derives them. The exception is the window and DFT: the C++
+builds the Hann window and FFT twiddles itself in fp64 and never reads
+frontend.dft_basis (upstream's fp32 windowed DFT basis). That tensor is
+unused; it is still written so the published GGUFs stay byte-identical
+(dropping it is a future re-export).
 
     uv run --project scripts/envs/sava scripts/convert-sava.py            # F32
     uv run --project scripts/envs/sava scripts/convert-sava.py --outtype bf16
@@ -190,8 +194,9 @@ def convert(cfg, state: dict[str, torch.Tensor], out_path: Path, outtype: str, s
     w.add_float32("stt.sava.no_speech_logit", NO_SPEECH_LOGIT)
     # Decision defaults: turn cut-off (Policy.turn_threshold), speech threshold
     # and the rest of the reference turn policy. The library reads only
-    # stt.sava.threshold; the rest records Inworld's rule for callers who
-    # apply it to the score tracks (examples/turn_live). Thresholds are float64: the
+    # stt.sava.threshold; the stt.sava.policy.* KVs record Inworld's rule for
+    # callers who apply it to the score tracks (examples/turn_live hardcodes
+    # the same constants rather than reading them). Thresholds are float64: the
     # reference compares fp32 probabilities against Python floats, and 0.9
     # rounded to fp32 (0.89999998) would accept p == fl32(0.9).
     w.add_float64("stt.sava.threshold", POLICY["turn_threshold"])

@@ -21,10 +21,13 @@ Nothing numeric or mechanical is read from the YAML; a number that belongs
 on the card belongs in the catalog first. Fetches the upstream model card at
 the pinned commit and renders template.md.j2.
 
-Default output is models/<upstream-slug>/README.md (models/<variant>/ when the
-GGUFs are there) alongside the GGUFs, so
-`hf upload <repo> models/<upstream-slug> .` picks it up in the same call. When
-several records share one upstream repo (gigaam), it is models/<variant>/ instead.
+Default output is README.md in the directory that holds the GGUFs, so one
+`hf upload <repo> <that directory> .` publishes the card with them:
+
+  models/<variant>/       when the variant's GGUFs are there (smart-turn-v3.2)
+                          or several records share one upstream repo (gigaam)
+  models/<upstream-slug>/ otherwise (the upstream repo name, as most
+                          converters name their output directory)
 
 Usage:
     uv run scripts/hf_cards/generate.py scripts/hf_cards/parakeet-tdt-0.6b-v2.yaml
@@ -321,7 +324,7 @@ def main() -> int:
         "-o",
         "--output",
         type=Path,
-        help="Write to this path. Defaults to models/<upstream-slug>/README.md.",
+        help="Write to this path. Defaults to README.md beside the GGUFs (see the module docstring).",
     )
     ap.add_argument(
         "--stdout",

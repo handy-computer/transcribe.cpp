@@ -28,9 +28,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace transcribe::smart_turn {
@@ -97,6 +99,8 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
         return st;
     }
     if (auto st = whisper::read_whisper_frontend_hparams(gguf, w); st != TRANSCRIBE_OK) {
+        // The shared reader logs under "whisper:"; name the family too.
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: Whisper front-end metadata rejected", kTag);
         return st;
     }
 
@@ -304,6 +308,7 @@ ggml_tensor * build_head(ggml_context * ctx, const Model & m, ggml_tensor * enc,
 // Fill s.window with the scored window: the input left zero padded to
 // max_audio_samples (it is already cropped), normalised to zero mean and unit
 // variance over the whole window as HF's zero_mean_unit_var_norm does.
+// Requires 0 < n <= max_audio_samples (score_clip checks).
 void prepare_window(Session & s, const HParams & hp, const float * pcm, int64_t n) {
     const size_t N = static_cast<size_t>(hp.max_audio_samples);
     s.window.assign(N, 0.0f);
@@ -334,6 +339,14 @@ transcribe_status score_clip(transcribe_turn_session * session, const float * pc
     const HParams & hp = m.hparams;
     debug::init();
     const int n_threads = s.n_threads > 0 ? s.n_threads : default_n_threads();
+
+    // The dispatcher crops to max_audio_samples and never passes an empty
+    // clip; prepare_window relies on it.
+    if (n <= 0 || n > hp.max_audio_samples) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: clip of %lld samples outside 1..%d", kTag, static_cast<long long>(n),
+                hp.max_audio_samples);
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
 
     // ---- front end (host) ----
     const int64_t t_mel_start = ggml_time_us();

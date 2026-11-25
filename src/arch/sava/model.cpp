@@ -18,6 +18,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -112,6 +113,7 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     transcribe_device_t        device      = params != nullptr ? params->device : nullptr;
     transcribe_backend_request backend_req = params != nullptr ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     int                        req_raw     = TRANSCRIBE_BACKEND_AUTO;
+    // Read the enum's raw bits: comparing an out-of-range enum value is UB.
     std::memcpy(&req_raw, &backend_req, sizeof(req_raw));
     if (req_raw == TRANSCRIBE_BACKEND_AUTO && device == nullptr) {
         backend_req = TRANSCRIBE_BACKEND_CPU;
@@ -237,11 +239,19 @@ transcribe_turn_session * turn_new_session() {
     return new TurnSession();
 }
 
+// TurnOps::reset / VadOps::reset return nothing: a failed reset (the state
+// buffer could not be allocated) is logged here, and the stream's next step
+// retries the allocation and returns its status (stream_step).
+void reset_logged(Stream & st, const Model & m) {
+    stream_dump(st, m);
+    if (const transcribe_status rc = stream_reset(st, m); rc != TRANSCRIBE_OK) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: stream reset failed (status %d); the next step retries it", kTag,
+                static_cast<int>(rc));
+    }
+}
+
 void turn_reset(transcribe_turn_session * session) {
-    auto &        s = static_cast<TurnSession &>(*session);
-    const Model & m = static_cast<const Model &>(*session->model);
-    stream_dump(s.st, m);
-    stream_reset(s.st, m);
+    reset_logged(static_cast<TurnSession &>(*session).st, static_cast<const Model &>(*session->model));
 }
 
 transcribe_status turn_step(transcribe_turn_session * session,
@@ -253,11 +263,22 @@ transcribe_status turn_step(transcribe_turn_session * session,
     return stream_step(s, s.st, static_cast<const Model &>(*session->model), pcm, n_frames, turn, speech);
 }
 
-// One frame for each of count sessions in one graph, owned by sessions[0].
+// Streams per batched compute. Each stream adds ~130 per-stream nodes (its
+// conv, scan, ring writes and attention) whose tensors the graph allocator
+// tracks as free blocks; past ~120 streams one graph exhausts them
+// (ggml-alloc "out of free blocks"). Larger batches run as chunks of at most
+// this many: every column's values are independent of the column count, so a
+// chunked batch gives the same bits as one graph.
+constexpr int k_max_batch_streams = 64;
+
+// One frame for each of count sessions, in chunks of k_max_batch_streams
+// streams; each chunk's graph is owned (and cached) by the chunk's first
+// session, so a fixed session list reuses every chunk's graph each tick.
 // With TRANSCRIBE_DUMP_DIR set the sessions are stepped one by one instead
 // (the same values), so each stream's validation trace stays complete.
 transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
                                   int                               count,
+                                  int                               n_threads,
                                   const float * const *             frame_pcm,
                                   float *                           turn,
                                   float *                           speech) {
@@ -278,10 +299,26 @@ transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
         auto & s                        = static_cast<TurnSession &>(*sessions[i]);
         streams[static_cast<size_t>(i)] = &s.st;
         cores[static_cast<size_t>(i)]   = &s;
+        // Every stream's checks before the first chunk steps, so a failed
+        // or aborted batch does not leave some chunks one frame ahead.
+        if (auto st = ensure_state(s.st, m); st != TRANSCRIBE_OK) {
+            return st;
+        }
+        if (s.poll_abort()) {
+            return TRANSCRIBE_ERR_ABORTED;
+        }
     }
-    auto & first = static_cast<TurnSession &>(*sessions[0]);
-    return stream_step_batch(first.batch, m, streams.data(), cores.data(), count, first.n_threads, frame_pcm, turn,
-                             speech);
+    for (int c0 = 0; c0 < count; c0 += k_max_batch_streams) {
+        const int    nc    = std::min(k_max_batch_streams, count - c0);
+        auto &       first = static_cast<TurnSession &>(*sessions[c0]);
+        const size_t o     = static_cast<size_t>(c0);
+        if (auto st = stream_step_batch(first.batch, m, streams.data() + o, cores.data() + o, nc, n_threads,
+                                        frame_pcm + o, turn + o, speech != nullptr ? speech + o : nullptr);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
+    return TRANSCRIBE_OK;
 }
 
 const TurnOps k_turn_ops = { turn_info, turn_new_session, nullptr, turn_reset, turn_step, turn_step_batch };
@@ -299,10 +336,7 @@ transcribe_vad_session * vad_new_session() {
 }
 
 void vad_reset(transcribe_vad_session * session) {
-    auto &        s = static_cast<VadSession &>(*session);
-    const Model & m = static_cast<const Model &>(*session->model);
-    stream_dump(s.st, m);
-    stream_reset(s.st, m);
+    reset_logged(static_cast<VadSession &>(*session).st, static_cast<const Model &>(*session->model));
 }
 
 transcribe_status vad_score(transcribe_vad_session * session, const float * pcm, int64_t n_frames, float * probs) {

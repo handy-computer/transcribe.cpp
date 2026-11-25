@@ -62,6 +62,9 @@ FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
     # slower than F32 without native BF16 (Apple M1); not shipped. K tiers
     # not evaluated.
     "sava": ("F16", "Q8_0"),
+    # smart_turn: d_model 384 is not a multiple of 256, so the K tiers fall
+    # back to near-Q8_0 storage (near-duplicates); ship only F16 and Q8_0.
+    "smart_turn": ("F16", "Q8_0"),
 }
 
 

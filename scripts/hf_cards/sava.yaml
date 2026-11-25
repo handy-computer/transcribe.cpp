@@ -28,8 +28,11 @@ wer:
     The API's default cut-off is 0.9, Inworld's live rule. False positives
     (incomplete clips called complete) and false negatives (the reverse) are
     shares of all clips, as Pipecat publishes them. Inworld publishes 93.35%
-    and an AUC of 0.97946 for SAVA (fp32, A100); it publishes no per-clip
-    scores, so there is no per-clip agreement column.
+    and an AUC of 0.97946 for SAVA (fp32, A100) but no per-clip scores; the
+    reference is upstream's PyTorch package (inworld-sava 1.0.0, CPU, fp32)
+    run on the same clips (`scripts/turn/run_reference_sava_torch.py`):
+    93.36%, AUC 0.97946. F32 and F16 make its decision on all 31,527 clips at
+    0.5 and at 0.9; Q8_0 on 31,451 at 0.5.
 usage: |
   Build transcribe.cpp and run on a mono 16 kHz WAV:
 

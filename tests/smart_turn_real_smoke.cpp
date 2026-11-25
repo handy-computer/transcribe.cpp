@@ -2,7 +2,8 @@
 // public TURN API, against onnxruntime on upstream's fp32 ONNX (numbers from
 // scripts/dump_reference_smart_turn_onnx.py, ref/turn.json): the clip score
 // of committed samples to 1e-4, the decision, the 8 s crop, and a threshold
-// override. CPU. Gated by TRANSCRIBE_SMART_TURN_GGUF (RC 77 skip).
+// override. CPU. TRANSCRIBE_SMART_TURN_GGUF, else the default F32 GGUF
+// under models/ (RC 77 skip when neither exists).
 
 #include "transcribe.h"
 #include "transcribe/turn.h"
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -64,11 +66,13 @@ const Case k_cases[] = {
 }  // namespace
 
 int main() {
-    const char * path = std::getenv("TRANSCRIBE_SMART_TURN_GGUF");
-    if (path == nullptr || path[0] == '\0') {
-        std::fprintf(stderr, "skip: TRANSCRIBE_SMART_TURN_GGUF is not set\n");
+    const char *      env  = std::getenv("TRANSCRIBE_SMART_TURN_GGUF");
+    const std::string file = env != nullptr && env[0] != '\0' ? env : TRANSCRIBE_SMART_TURN_DEFAULT_GGUF;
+    if (!std::ifstream(file).good()) {
+        std::fprintf(stderr, "skip: no Smart Turn GGUF at %s (set TRANSCRIBE_SMART_TURN_GGUF)\n", file.c_str());
         return 77;
     }
+    const char *                 path = file.c_str();
     transcribe_model_load_params mp;
     transcribe_model_load_params_init(&mp);
     mp.backend           = TRANSCRIBE_BACKEND_CPU;

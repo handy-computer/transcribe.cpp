@@ -110,9 +110,9 @@ several sessions of one model each hold an active stream and interleave
 their feeds; a binding allows one active stream per model. Starting a stream
 takes the model's stream lease, and ending it (finalize, reset, a feed that
 leaves the stream FAILED, or dropping / closing the stream) releases it.
-While the lease is held, `run`, `run_batch`, a new stream, a diarize run and
-a langid run and a VAD run / feed / flush on any session of that model raise
-`Busy` instead of waiting. A feed
+While the lease is held, `run`, `run_batch`, a new stream, a diarize run,
+a langid run, a VAD run / feed / flush and a TURN run / feed / batched feed /
+flush on any session of that model raise `Busy` instead of waiting. A feed
 rejected before the native call (e.g. NaN input) keeps the lease.
 
 ## Roles and the DIARIZE session
@@ -182,16 +182,23 @@ model's default threshold). `run(pcm, threshold)` returns a copied-out result:
 models, every frame's turn and speech probabilities. Stream feed / flush return
 the turn probabilities of the frames they completed with `first_frame`, and the
 speech probabilities of the frames the model judged with `speech_first_frame`
-(these can trail). Stream reset drops the stream. On a model that cannot stream
+(these can trail). Python, Rust and Swift return the same `TurnResult` type
+from feed / flush as from `run`, with `p = 0` and `ended = false`; TypeScript
+returns a separate `TurnStreamResult` without `p` / `ended`. Stream reset
+drops the stream. On a model that cannot stream
 (Smart Turn) the stream calls raise `NotImplemented`.
 
 The batched feed (`TurnSession.stream_feed_batch` / `streamFeedBatch`) takes
 (session, pcm) pairs and returns one result per session, in order, each equal
 to that session's own feed. It is one compute: it takes the model-wide compute
-lock once, rejects an empty list and sessions that are closed, repeated or of
+lock once, rejects an empty list and sessions that are repeated or of
 different models with `InvalidArgument` before calling the library, and keeps
-every buffer alive until the native call returns. Cancelling any listed
-session aborts the call and resets every listed stream.
+every buffer alive until the native call returns. A closed (Python) or disposed
+(TypeScript) session, including one closed while the batch waits for the lock,
+raises the base `TranscribeError`; Rust and Swift sessions cannot be closed
+while listed. Cancelling any listed session aborts the call and resets every
+listed stream; TypeScript has no per-session cancel and cancels a batch through
+the batch call's own `signal`.
 
 Otherwise TURN calls follow the VAD rules: the compute lock for that call
 only, a turn stream is session state and not a stream lease, `Busy` while an

@@ -273,6 +273,29 @@ modelTest("toy sava: dispose defers the free; disposed sessions refuse", SAVA_TO
   await assert.rejects(() => u.run(noise(640)), TranscribeError);
 });
 
+modelTest("toy sava: a later session disposed while the batch waits", SAVA_TOY_MODEL, async () => {
+  const m = await TranscribeModel.load(SAVA_TOY_MODEL, { backend: "cpu" });
+  const [a, b, holder] = [0, 1, 2].map(() => m.createTurnSession({ nThreads: 1 }));
+  try {
+    const one = noise(640);
+    await a.streamFeed(one.subarray(0, 300));
+    const busy = holder.run(noise(64000)); // holds the model lock
+    const queued = TurnSession.streamFeedBatch([
+      { session: a, pcm: one },
+      { session: b, pcm: one },
+    ]);
+    b.dispose(); // while the batch is queued behind the lock
+    await assert.rejects(queued, (e) => e.constructor === TranscribeError && /disposed/.test(e.message));
+    await busy;
+    // Nothing was fed: a still has its 300 buffered samples.
+    const r = await a.streamFeed(one.subarray(300, 640));
+    assert.deepEqual([r.probs.length, r.firstFrame], [1, 0]);
+  } finally {
+    for (const s of [a, b, holder]) s.dispose();
+    m.dispose();
+  }
+});
+
 modelTest("real smart-turn v3.2: run on jfk", SMART_TURN_MODEL, async () => {
   const m = await TranscribeModel.load(SMART_TURN_MODEL, { backend: "cpu" });
   const t = m.createTurnSession();

@@ -287,7 +287,7 @@ Consequences for a caller copying the rule:
 - The flush steps' turn scores feed the segmenter. A stream's flush does
   not return them (they score padding), so a live caller copying Inworld's
   rule may differ on the last 3 frames.
-- `segments.json` holds both the offline turns and the live `TurnSegmenter`
+- `turn_segments.json` holds both the offline turns and the live `TurnSegmenter`
   run over the dumped stream; they agree on every case.
 
 ## Per-session state (fp32)
@@ -344,7 +344,7 @@ names.
 
 | name | ne | from upstream |
 |---|---|---|
-| `frontend.dft_basis` | [400, 402] | `mel.dft_basis().T`: cos rows 0..200, sin rows 201..401, Hann folded in (F32 always) |
+| `frontend.dft_basis` | [400, 402] | `mel.dft_basis().T`: cos rows 0..200, sin rows 201..401, Hann folded in (F32 always); not read by the C++, kept so the published GGUFs stay byte-identical |
 | `frontend.mel_filterbank` | [201, 128] | `mel.mel_filterbank()` (F32 always) |
 | `rope.freqs` | [32] | `modules.rope_frequencies(64, 1e4)` (F32 always) |
 | `mixer.proj.weight` | [1026, 512] | `mixer.projection` (input `[row_{t-1} \| row_t]`) |
@@ -427,7 +427,7 @@ storage of the source, but bf16 matmuls would not be.
 - Sidecars:
   - `stream.json`: odd chunks, 640-sample pushes and a single push, each
     compared with run;
-  - `segments.json`: turns with frames, samples, `speech_ms`, reason and
+  - `turn_segments.json`: turns with frames, samples, `speech_ms`, reason and
     `kept`; the live-equals-offline flag; the run's `p` and `ended`;
   - `golden.json`: `sava-speech` only, compared with upstream's fixture.
   - `turn.json`: the clip's `p` and decision, and the kept turns in samples
@@ -532,8 +532,12 @@ in one graph (`stream_step_batch` in `graph.cpp`). Columns are sessions.
   reused while the list of streams is the same, keyed by `Stream::uid`, which
   is unique for the process lifetime, so a freed session's graph is never
   reused. A different list rebuilds it, which costs about 0.5 ms at N = 8.
-- **No model-level scratch:** the one-compute-per-model rule is not needed
-  for safety.
+- **No model-level scratch, but one compute per model still holds:** the
+  graphs and scratch are per session, yet every session shares the model's
+  CPU backend, whose `work_data` and `n_threads` are per backend. Two
+  computes on sessions of the same model (single feeds or batches) race on
+  them, so the rule in [roles](../../roles.md) (at most one compute in flight
+  per model) is required for safety.
 - **Debug dumps:** with `TRANSCRIBE_DUMP_DIR` set, the batch steps sessions
   one by one, with the same values, so each stream's validation trace stays
   complete.
@@ -556,6 +560,10 @@ Apple M1, idle machine, ms per 40 ms frame (clip: `jfk.wav`; stream:
 | F32 | 10.1 | 6.3 |
 | F16 | 17.2 | 6.9 |
 | Q8_0 | 8.1 | 4.9 |
+
+When users' frame phases differ (their feeds complete frames on different
+ticks), the list of stepping streams changes between ticks and the batch
+graph is rebuilt; that cost about 7% in a test feeding 320-sample ticks.
 
 Before the contiguous query and the transposed V ring, a streamed frame took
 5.4 ms (F32) and 3.9 ms (Q8_0) at 1 thread.
@@ -591,8 +599,8 @@ F16 and Q8_0.
 | F32 tolerance gate (`validate.py --gguf`) | passes, 32/32 tensors x 8 | - | - |
 | Pipecat AUC (F32 0.97946) | 0.97946 | 0.97935 | 0.97991 on the first 3,000 clips (F32 0.97990) |
 | Pipecat decision flips vs F32, at 0.5 / 0.9 | 0 / 0 of 31,527 | 76 / 126 of 31,527 (at 8f97ab5b; 75 / 124 before the batching commit) | 1 / 3 of 3,000 (F16 0 / 0, Q8_0 9 / 11 on those) |
-| Clip frame, ms, 1 / 4 threads (F32 0.94 / 0.38) | 1.80 / 0.59 | 0.75 / 0.30 | 20.7 / 5.7 |
-| Streamed frame, ms, 1 / 4 threads (F32 5.4 / 3.4) | 8.1 / 3.0 | 3.9 / 1.7 | 82 / 22 |
+| Clip frame, ms, 1 / 4 threads (F32 0.90 / 0.38; from Speed) | 1.81 / 0.59 | 0.70 / 0.28 | 20.7 / 5.7 (before 6b130f91) |
+| Streamed frame, ms, 1 / 4 threads (F32 4.6 / 3.3; from Speed) | 7.2 / 2.9 | 3.0 / 1.5 | 82 / 22 (before 6b130f91) |
 
 The `dots-full` turn changes all sit at frames where a score is within 0.004
 of 0.9 or 0.03 of 0.5 (details in `docs/models/sava.md`; per-case numbers in
@@ -630,8 +638,13 @@ K tiers were not evaluated.
   0.04 s" was not reproduced on this Apple M1. With torch 2.14.1 it measured
   10.5 ms per frame with 1 thread (22 ms with 4 threads) and 0.11 s for
   12 s. That is a different machine; not investigated further.
-- The AUC benchmarks (VAD frame AUC, turn clip AUC) were not checked: they
-  need the benchmark datasets.
+- Turn clip accuracy and AUC on the Pipecat test set: yes. The per-clip
+  PyTorch reference (`scripts/turn/run_reference_sava_torch.py`, inworld-sava
+  1.0.0 CPU fp32) gives 93.36% and AUC 0.97946 (published: 93.35%, 0.97946);
+  F32 and F16 make its decision on all 31,527 clips at 0.5 and 0.9 (max |dp|
+  1.1e-5 / 1.2e-5), Q8_0 on 31,451 at 0.5 and 31,401 at 0.9 (max |dp| 0.17).
+- The VAD frame AUC benchmark was not checked: it needs the benchmark
+  dataset.
 
 ## Commands
 
@@ -646,6 +659,14 @@ uv run --project scripts/envs/sava scripts/convert-sava.py --outtype bf16 --out 
 uv run scripts/preflight.py --family sava --variant sava --gate B
 uv run --project scripts/envs/sava python build/validate/sava/check_sava_gguf.py \
   models/sava/sava-F32.gguf samples/sava-speech.wav build/validate/sava/sava/sava-speech/ref
+
+# Pipecat test set: per-clip PyTorch reference (~17 min on 6 workers), then
+# each GGUF scored against it
+uv run --project scripts/envs/sava --with pyarrow scripts/turn/run_reference_sava_torch.py \
+  --out reports/turn/sava-REF.smart-turn-data-v3.2-test.jsonl
+uv run --project scripts/envs/smart_turn scripts/turn/score.py \
+  reports/turn/sava-F32.smart-turn-data-v3.2-test.jsonl \
+  --ref-jsonl reports/turn/sava-REF.smart-turn-data-v3.2-test.jsonl
 
 # C++
 cmake --build build --target transcribe-cli

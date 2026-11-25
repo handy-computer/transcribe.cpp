@@ -3,8 +3,9 @@
 //   transcribe-turn-eval MODEL.gguf [--threads N] [--backend cpu|auto] < clips.bin
 //
 // stdin: repeated records of int32 n_samples followed by n_samples float32
-// samples (16 kHz mono). stdout: one line per clip, "<p> <ended>", in input
-// order. Errors go to stderr and end the run with a non-zero exit code.
+// samples (16 kHz mono, at most 10 minutes). stdout: one line per clip,
+// "<p> <ended>", in input order. Errors go to stderr and end the run with a
+// non-zero exit code.
 
 #include "transcribe.h"
 #include "transcribe/turn.h"
@@ -14,6 +15,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+// The longest clip accepted: 10 minutes at 16 kHz (a turn clip is seconds
+// long; a larger length is a corrupt stream, not audio to allocate for).
+constexpr int32_t k_max_record_samples = 10 * 60 * 16000;
 
 int main(int argc, char ** argv) {
     if (argc < 2) {
@@ -27,7 +32,14 @@ int main(int argc, char ** argv) {
             n_threads = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
             const char * b = argv[++i];
-            backend        = std::strcmp(b, "cpu") == 0 ? TRANSCRIBE_BACKEND_CPU : TRANSCRIBE_BACKEND_AUTO;
+            if (std::strcmp(b, "cpu") == 0) {
+                backend = TRANSCRIBE_BACKEND_CPU;
+            } else if (std::strcmp(b, "auto") == 0) {
+                backend = TRANSCRIBE_BACKEND_AUTO;
+            } else {
+                std::fprintf(stderr, "unknown --backend %s (cpu or auto)\n", b);
+                return 2;
+            }
         } else {
             std::fprintf(stderr, "unknown argument: %s\n", argv[i]);
             return 2;
@@ -61,8 +73,8 @@ int main(int argc, char ** argv) {
         if (std::fread(&n, sizeof(n), 1, stdin) != 1) {
             break;
         }
-        if (n <= 0) {
-            std::fprintf(stderr, "bad record length %d\n", n);
+        if (n <= 0 || n > k_max_record_samples) {
+            std::fprintf(stderr, "bad record length %d (1 to %d samples)\n", n, k_max_record_samples);
             rc = 1;
             break;
         }
@@ -80,7 +92,12 @@ int main(int argc, char ** argv) {
         }
         transcribe_turn_result r;
         transcribe_turn_result_init(&r);
-        transcribe_turn_get_result(session, &r);
+        st = transcribe_turn_get_result(session, &r);
+        if (st != TRANSCRIBE_OK) {
+            std::fprintf(stderr, "result: %s\n", transcribe_status_string(st));
+            rc = 1;
+            break;
+        }
         std::printf("%.9g %d\n", static_cast<double>(r.p), r.ended ? 1 : 0);
         std::fflush(stdout);
     }

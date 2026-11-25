@@ -209,9 +209,10 @@ for await (const chunk of mic) {
 
 For many users on one model, `TurnSession.streamFeedBatch` feeds every
 session's chunk in one compute (much faster than one feed per user) and returns
-one result per session, in order; each session ends up as if fed alone. The
-sessions must be open, distinct and of the same model (`InvalidArgument`
-otherwise); the batch uses the first session's thread count, and its `signal`
+one result per session, in order; each session ends up as if fed alone. An
+empty list, a repeated session or sessions of different models reject with
+`InvalidArgument`; a disposed session rejects with `TranscribeError`. The batch
+uses the first session's thread count, and its `signal`
 cancels (and resets) every listed stream.
 
 ```ts

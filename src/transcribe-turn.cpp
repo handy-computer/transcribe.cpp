@@ -13,7 +13,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <memory>
+#include <vector>
 
 using transcribe::api_guard_status;
 using transcribe::api_guard_void;
@@ -43,6 +45,13 @@ bool streams(const TurnModelInfo & info) {
 // Speech lag the dispatcher aligns; 0 when the model scores no speech.
 int64_t speech_lag(const TurnModelInfo & info) {
     return info.has_speech ? info.speech_lookahead_frames : 0;
+}
+
+// The first frame a feed or flush can return a speech score for: the
+// stream's next frame minus the lag; 0 (as documented) without a speech
+// track.
+int64_t speech_first_frame(const transcribe_turn_session * s, const TurnModelInfo & info) {
+    return info.has_speech ? std::max<int64_t>(0, s->frames_done - speech_lag(info)) : 0;
 }
 
 void clear_result(transcribe_turn_session * s) {
@@ -80,6 +89,42 @@ struct TurnFailureGuard {
             api_guard_void("transcribe_turn_cleanup", [&] { reset_stream(session, ops); });
         }
     }
+};
+
+// The batch form: a failure anywhere in feed_batch (including an exception)
+// discards every listed session's result and stream state.
+struct TurnBatchFailureGuard {
+    transcribe_turn_session * const * sessions;
+    size_t                            count;
+    const transcribe::TurnOps *       ops;
+    bool                              complete = false;
+
+    ~TurnBatchFailureGuard() noexcept {
+        if (complete) {
+            return;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            transcribe_turn_session * s = sessions[i];
+            clear_result(s);
+            api_guard_void("transcribe_turn_cleanup", [&] { reset_stream(s, ops); });
+        }
+    }
+};
+
+// Run a session with another thread count for one scope (feed_batch's
+// per-session fallback uses the caller's sessions[0] count throughout).
+struct ThreadCountOverride {
+    transcribe_turn_session * session;
+    int                       saved;
+
+    ThreadCountOverride(transcribe_turn_session * s, int n_threads) : session(s), saved(s->n_threads) {
+        s->n_threads = n_threads;
+    }
+
+    ~ThreadCountOverride() { session->n_threads = saved; }
+
+    ThreadCountOverride(const ThreadCountOverride &)             = delete;
+    ThreadCountOverride & operator=(const ThreadCountOverride &) = delete;
 };
 
 // Step n_frames whole frames as the continuation of the stream. Appends every
@@ -310,7 +355,7 @@ static transcribe_status turn_stream_feed_impl(transcribe_turn_session * session
         reset_stream(session, ops);
     }
     session->first_frame        = session->frames_done;
-    session->speech_first_frame = std::max<int64_t>(0, session->frames_done - speech_lag(info));
+    session->speech_first_frame = speech_first_frame(session, info);
     if (n_samples == 0) {
         failure.complete = true;
         return TRANSCRIBE_OK;
@@ -348,16 +393,20 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     const transcribe_model * model = sessions[0]->model;
-    for (int i = 0; i < n; ++i) {
+    const size_t             count = static_cast<size_t>(n);
+    for (size_t i = 0; i < count; ++i) {
         const transcribe_turn_session * s = sessions[i];
         if (s == nullptr || s->model != model || n_samples[i] < 0 || (n_samples[i] > 0 && pcm[i] == nullptr) ||
             (n_samples[i] > 0 && !transcribe::pcm_is_finite(pcm[i], n_samples[i]))) {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
-        for (int j = 0; j < i; ++j) {
-            if (sessions[j] == s) {
-                return TRANSCRIBE_ERR_INVALID_ARG;
-            }
+    }
+    {
+        // Repeated sessions: sort a copy of the pointers.
+        std::vector<const transcribe_turn_session *> sorted(sessions, sessions + count);
+        std::sort(sorted.begin(), sorted.end(), std::less<const transcribe_turn_session *>());
+        if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end()) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
         }
     }
     const transcribe::TurnOps * ops  = turn_ops(model);
@@ -365,13 +414,13 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
     if (!streams(info)) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
-    const size_t  frame = static_cast<size_t>(info.frame_samples);
-    const int64_t lag   = speech_lag(info);
-    const size_t  count = static_cast<size_t>(n);
+    const size_t  frame     = static_cast<size_t>(info.frame_samples);
+    const int64_t lag       = speech_lag(info);
+    const int     n_threads = sessions[0]->n_threads;
 
-    // One guard per session: a failure anywhere resets every listed stream.
-    std::vector<std::unique_ptr<TurnFailureGuard>> guards;
-    guards.reserve(count);
+    // Armed before any session changes: a failure anywhere resets every
+    // listed stream.
+    TurnBatchFailureGuard           failure{ sessions, count, ops };
     std::vector<std::vector<float>> joined(count);
     std::vector<const float *>      src(count);
     std::vector<size_t>             avail(count);
@@ -379,13 +428,12 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
     int64_t                         max_frames = 0;
     for (size_t i = 0; i < count; ++i) {
         transcribe_turn_session * s = sessions[i];
-        guards.emplace_back(new TurnFailureGuard{ s, ops });
         clear_result(s);
         if (s->needs_reset) {
             reset_stream(s, ops);
         }
         s->first_frame        = s->frames_done;
-        s->speech_first_frame = std::max<int64_t>(0, s->frames_done - lag);
+        s->speech_first_frame = speech_first_frame(s, info);
         src[i]                = pcm[i];
         avail[i]              = static_cast<size_t>(n_samples[i]);
         if (!s->pending.empty()) {
@@ -401,8 +449,10 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
     }
 
     if (ops->step_batch == nullptr) {
-        // No batched path: step each session's frames in turn.
+        // No batched path: step each session's frames in turn, with the
+        // caller's sessions[0] thread count as in the batched path.
         for (size_t i = 0; i < count; ++i) {
+            const ThreadCountOverride threads(sessions[i], n_threads);
             if (const auto st = step_frames(sessions[i], ops, info, src[i], n_frames[i], sessions[i]->probs,
                                             sessions[i]->speech_probs);
                 st != TRANSCRIBE_OK) {
@@ -426,8 +476,8 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
             }
             turn.assign(active.size(), 0.0f);
             speech.assign(active.size(), 0.0f);
-            if (const auto st = ops->step_batch(active.data(), static_cast<int>(active.size()), frames.data(),
-                                                turn.data(), info.has_speech ? speech.data() : nullptr);
+            if (const auto st = ops->step_batch(active.data(), static_cast<int>(active.size()), n_threads,
+                                                frames.data(), turn.data(), info.has_speech ? speech.data() : nullptr);
                 st != TRANSCRIBE_OK) {
                 return st;
             }
@@ -446,9 +496,7 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
         std::vector<float> rest(src[i] + used, src[i] + avail[i]);
         sessions[i]->pending.swap(rest);
     }
-    for (auto & g : guards) {
-        g->complete = true;
-    }
+    failure.complete = true;
     return TRANSCRIBE_OK;
 }
 
@@ -470,7 +518,7 @@ static transcribe_status turn_stream_flush_impl(transcribe_turn_session * sessio
         reset_stream(session, ops);
     }
     session->first_frame        = session->frames_done;
-    session->speech_first_frame = std::max<int64_t>(0, session->frames_done - lag);
+    session->speech_first_frame = speech_first_frame(session, info);
     transcribe_status st        = TRANSCRIBE_OK;
     if (!session->pending.empty()) {
         std::vector<float> last(frame, 0.0f);

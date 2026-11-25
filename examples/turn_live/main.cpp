@@ -51,23 +51,38 @@ transcribe_model * load(const char * path) {
     return m;
 }
 
+// Report a failed call; true when st is OK.
+bool ok(transcribe_status st, const char * what) {
+    if (st != TRANSCRIBE_OK) {
+        std::fprintf(stderr, "%s failed: %s\n", what, transcribe_status_string(st));
+        return false;
+    }
+    return true;
+}
+
 // ---- setup A: VAD stream + clip turn model --------------------------------
 
 int run_vad_plus_clip(transcribe_model * vad_model, transcribe_model * turn_model, const std::vector<float> & pcm) {
     transcribe_vad_info vi;
     transcribe_vad_info_init(&vi);
-    transcribe_vad_get_info(vad_model, &vi);
+    if (!ok(transcribe_vad_get_info(vad_model, &vi), "transcribe_vad_get_info")) {
+        return EXIT_FAILURE;
+    }
     transcribe_vad_session *  vad  = nullptr;
     transcribe_turn_session * turn = nullptr;
-    if (transcribe_vad_session_init(vad_model, nullptr, &vad) != TRANSCRIBE_OK ||
-        transcribe_turn_session_init(turn_model, nullptr, &turn) != TRANSCRIBE_OK) {
+    if (!ok(transcribe_vad_session_init(vad_model, nullptr, &vad), "transcribe_vad_session_init")) {
+        return EXIT_FAILURE;
+    }
+    if (!ok(transcribe_turn_session_init(turn_model, nullptr, &turn), "transcribe_turn_session_init")) {
+        transcribe_vad_session_free(vad);
         return EXIT_FAILURE;
     }
     const int64_t pre_speech = k_sr / 2;  // 500 ms
     const int64_t stop       = k_sr / 5;  // 200 ms of silence: ask the turn model
     const int64_t give_up    = 3 * k_sr;  // 3 s of silence: end the turn anyway
+    const int64_t n_pcm      = static_cast<int64_t>(pcm.size());
     bool          open       = false;
-    bool          asked      = false;     // the turn model was asked during this pause
+    bool          asked      = false;  // the turn model was asked during this pause
     int64_t       start = 0, last_speech_end = 0;
 
     auto close = [&](int64_t end, const char * reason, float p) {
@@ -75,15 +90,17 @@ int run_vad_plus_clip(transcribe_model * vad_model, transcribe_model * turn_mode
         open = false;
     };
 
-    for (size_t off = 0; off < pcm.size(); off += k_chunk) {
-        const int n = static_cast<int>(std::min<size_t>(k_chunk, pcm.size() - off));
-        transcribe_vad_stream_feed(vad, pcm.data() + off, n);
+    // The speech probabilities of the last VAD feed or flush.
+    auto consume = [&]() -> bool {
         transcribe_vad_result r;
         transcribe_vad_result_init(&r);
-        transcribe_vad_get_result(vad, &r);
+        if (!ok(transcribe_vad_get_result(vad, &r), "transcribe_vad_get_result")) {
+            return false;
+        }
         const float * p = transcribe_vad_probs(vad);
         for (int i = 0; i < r.n_probs; ++i) {
-            const int64_t frame_end = (r.first_frame + i + 1) * vi.frame_samples;
+            // The flushed last frame is zero padded past the audio.
+            const int64_t frame_end = std::min<int64_t>((r.first_frame + i + 1) * vi.frame_samples, n_pcm);
             if (p[i] >= k_speech_threshold) {
                 if (!open) {
                     open  = true;
@@ -102,10 +119,15 @@ int run_vad_plus_clip(transcribe_model * vad_model, transcribe_model * turn_mode
                 close(frame_end, "silence", 0.0f);
             } else if (silence >= stop && !asked) {
                 asked = true;
-                transcribe_turn_run(turn, pcm.data() + start, static_cast<int>(frame_end - start), nullptr);
+                if (!ok(transcribe_turn_run(turn, pcm.data() + start, static_cast<int>(frame_end - start), nullptr),
+                        "transcribe_turn_run")) {
+                    return false;
+                }
                 transcribe_turn_result tr;
                 transcribe_turn_result_init(&tr);
-                transcribe_turn_get_result(turn, &tr);
+                if (!ok(transcribe_turn_get_result(turn, &tr), "transcribe_turn_get_result")) {
+                    return false;
+                }
                 if (tr.ended) {
                     close(frame_end, "model", tr.p);
                 } else {
@@ -113,13 +135,22 @@ int run_vad_plus_clip(transcribe_model * vad_model, transcribe_model * turn_mode
                 }
             }
         }
+        return true;
+    };
+
+    bool good = true;
+    for (size_t off = 0; good && off < pcm.size(); off += k_chunk) {
+        const int n = static_cast<int>(std::min<size_t>(k_chunk, pcm.size() - off));
+        good = ok(transcribe_vad_stream_feed(vad, pcm.data() + off, n), "transcribe_vad_stream_feed") && consume();
     }
-    if (open) {
-        close(static_cast<int64_t>(pcm.size()), "audio", 0.0f);
+    // The last partial frame and the frames a lagged VAD has not judged yet.
+    good = good && ok(transcribe_vad_stream_flush(vad), "transcribe_vad_stream_flush") && consume();
+    if (good && open) {
+        close(n_pcm, "audio", 0.0f);
     }
     transcribe_turn_session_free(turn);
     transcribe_vad_session_free(vad);
-    return EXIT_SUCCESS;
+    return good ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 // ---- setup B: one turn stream with a speech track -------------------------
@@ -127,13 +158,15 @@ int run_vad_plus_clip(transcribe_model * vad_model, transcribe_model * turn_mode
 int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
     transcribe_turn_info info;
     transcribe_turn_info_init(&info);
-    transcribe_turn_get_info(model, &info);
+    if (!ok(transcribe_turn_get_info(model, &info), "transcribe_turn_get_info")) {
+        return EXIT_FAILURE;
+    }
     if (info.frame_samples == 0 || !info.has_speech) {
         std::fprintf(stderr, "setup B needs a turn model that streams and scores speech; pass --vad too\n");
         return EXIT_FAILURE;
     }
     transcribe_turn_session * s = nullptr;
-    if (transcribe_turn_session_init(model, nullptr, &s) != TRANSCRIBE_OK) {
+    if (!ok(transcribe_turn_session_init(model, nullptr, &s), "transcribe_turn_session_init")) {
         return EXIT_FAILURE;
     }
     // Inworld's reference policy (sava.Policy defaults).
@@ -156,10 +189,12 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
         open = false;
     };
 
-    auto consume = [&](bool flushed) {
+    auto consume = [&](bool flushed) -> bool {
         transcribe_turn_result r;
         transcribe_turn_result_init(&r);
-        transcribe_turn_get_result(s, &r);
+        if (!ok(transcribe_turn_get_result(s, &r), "transcribe_turn_get_result")) {
+            return false;
+        }
         if (lag < 0 && !flushed && r.n_speech_probs > 0) {
             // After a feed that returns speech scores, the speech track ends
             // lag frames before the turn track (turn.h). A flush judges every
@@ -207,20 +242,20 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
             turn_hist.pop_front();
             ++turn_base;
         }
+        return true;
     };
 
-    for (size_t off = 0; off < pcm.size(); off += k_chunk) {
+    bool good = true;
+    for (size_t off = 0; good && off < pcm.size(); off += k_chunk) {
         const int n = static_cast<int>(std::min<size_t>(k_chunk, pcm.size() - off));
-        transcribe_turn_stream_feed(s, pcm.data() + off, n);
-        consume(false);
+        good = ok(transcribe_turn_stream_feed(s, pcm.data() + off, n), "transcribe_turn_stream_feed") && consume(false);
     }
-    transcribe_turn_stream_flush(s);
-    consume(true);
-    if (open) {
+    good = good && ok(transcribe_turn_stream_flush(s), "transcribe_turn_stream_flush") && consume(true);
+    if (good && open) {
         close(last_judged + 1, "audio", 0.0f);
     }
     transcribe_turn_session_free(s);
-    return EXIT_SUCCESS;
+    return good ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 }  // namespace
