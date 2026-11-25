@@ -6,9 +6,8 @@ Upstream: [`inworld/sava`](https://github.com/inworld-ai/sava) at [`1beae7c`](ht
 Streaming end-of-turn and voice activity detection by Inworld: every 40 ms
 it gives the probability that the speaker's turn has ended and, 120 ms
 later, the probability that the frame held speech. Not a transcription
-model: it serves the TURN role (live stream or whole clip, with Inworld's
-turn rule cutting a clip into turns) and the VAD role. Any language. CPU is
-the default backend.
+model: it serves the TURN role (live stream or whole clip) and the VAD
+role. Any language. CPU is the default backend.
 <!-- /catalog -->
 
 API and examples: [turn detection](../turn.md), [voice activity detection](../vad.md).
@@ -22,7 +21,7 @@ Upstream code: [`inworld-ai/sava`](https://github.com/inworld-ai/sava)
 (`inworld-sava` 1.0.0).
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://github.com/inworld-ai/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (torch 2.14.1, CPU, fp32) on inworld/sava@1beae7c reference at transcribe.cpp commit [`8f97ab5b`](https://github.com/handy-computer/transcribe.cpp/tree/8f97ab5b) on 2026-11-24.
+Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://github.com/inworld-ai/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (torch 2.14.1, CPU, fp32) on inworld/sava@1beae7c reference at transcribe.cpp commit [`3465deb3`](https://github.com/handy-computer/transcribe.cpp/tree/3465deb3) on 2026-11-25.
 <!-- /catalog -->
 
 ## How to use it
@@ -146,7 +145,8 @@ On the 8 golden recordings (`tests/golden/sava/`):
   F16 also passes the F32 tolerance gate (`validate.py` with
   `--gguf sava-F16.gguf`).
 - **Q8_0 vs F32:** per-frame scores differ by up to 0.065 (mean 1e-3 to
-  4e-3 on speech clips). The turns are identical on 7 of the 8. On the 5 min
+  4e-3 on speech clips). Inworld's turn rule applied to the scores finds the
+  same turns on 7 of the 8. On the 5 min
   `dots-full` 6 of 59 turns change: Q8_0 finds 57, with turns merged at
   59.4 s and 104.1 s, ends moved at 101.8 s, 145.7 s and 174.4 s, and one
   start moved by a frame. Each change is a score within 0.004 of the 0.9

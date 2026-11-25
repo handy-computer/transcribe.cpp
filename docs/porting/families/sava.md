@@ -665,9 +665,10 @@ build/bin/transcribe-cli -m models/sava/sava-F32.gguf samples/sava-speech.wav
 | Speech track through `transcribe_vad_*` | live / offline | the same smokes | the same speech scores as the TURN speech track, lookahead 3 | MUST PASS | PASS (bit-identical) |
 | `transcribe_vad_run` segments | offline | one-off check (below) | Silero's segmentation applied to `sava.speech` on 40 ms frames | MUST PASS (proposed) | PASS (jfk, sava-speech, dots, dots-full, ja: identical) |
 | Long stream (5 min) | offline | `dots-full` case | within tolerance, same decision | MUST PASS (proposed) | PASS (drift documented) |
-| Horizons 200 / 400 / 800 ms (turn columns 1-3) | - | dumped only | - | OUT OF SCOPE - not in the draft API | SKIP - not exposed by runtime (gated as dump tensors) |
+| Horizons 200 / 400 / 800 ms (turn columns 1-3) | - | dumped only | - | OUT OF SCOPE - not in the API | SKIP - not exposed by runtime (gated as dump tensors) |
 | On-time speech output | - | dumped only | - | OUT OF SCOPE - internal (feeds the turn head) | SKIP - not exposed by runtime (gated as dump tensors) |
-| Metal / Vulkan, quantized GGUFs | - | - | - | OUT OF SCOPE - CPU first; Stage 5 | ACCEPTED GAP - Metal runs, unvalidated; quants in Stage 5 |
+| F16 / Q8_0 GGUFs | offline | Pipecat test set (`scripts/turn/eval_cpp.py`), golden cases | accuracy and AUC vs F32 | MUST PASS | PASS (F16 = F32; Q8_0 93.36%, AUC 0.97935) |
+| Metal / Vulkan | - | - | - | OUT OF SCOPE - CPU first (`AUTO` selects the CPU) | ACCEPTED GAP - Metal runs, unvalidated |
 | Batch (`run_batch`) | - | - | - | OUT OF SCOPE - not an ASR role | SKIP - not exposed by runtime |
 
 ## Notes

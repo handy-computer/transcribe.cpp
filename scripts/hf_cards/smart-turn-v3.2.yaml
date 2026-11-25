@@ -2,8 +2,8 @@
 pin_date: 2026-11-21
 validation:
   reference: onnxruntime 1.23.2 on smart-turn-v3.2-gpu.onnx (CPU, F32)
-  commit: 8f97ab5b
-  date: 2026-11-24
+  commit: 3465deb3
+  date: 2026-11-25
 pipeline_tag: audio-classification
 default_quant: F32
 tags:

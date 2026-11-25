@@ -20,7 +20,7 @@ at `f766f81d3cfdf7737ac64aad813d91bbfd56bf93` (SHA256
 Upstream code: [`pipecat-ai/smart-turn`](https://github.com/pipecat-ai/smart-turn).
 
 <!-- catalog:pin -->
-Licensed BSD-2-Clause. Ported from upstream commit [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81), pinned 2026-11-21. Validated against the onnxruntime 1.23.2 on smart-turn-v3.2-gpu.onnx (CPU, F32) reference at transcribe.cpp commit [`8f97ab5b`](https://github.com/handy-computer/transcribe.cpp/tree/8f97ab5b) on 2026-11-24.
+Licensed BSD-2-Clause. Ported from upstream commit [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81), pinned 2026-11-21. Validated against the onnxruntime 1.23.2 on smart-turn-v3.2-gpu.onnx (CPU, F32) reference at transcribe.cpp commit [`3465deb3`](https://github.com/handy-computer/transcribe.cpp/tree/3465deb3) on 2026-11-25.
 <!-- /catalog -->
 
 ## How to use it

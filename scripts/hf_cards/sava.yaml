@@ -2,8 +2,8 @@
 pin_date: 2026-11-21
 validation:
   reference: inworld-sava 1.0.0 (torch 2.14.1, CPU, fp32) on inworld/sava@1beae7c
-  commit: 8f97ab5b
-  date: 2026-11-24
+  commit: 3465deb3
+  date: 2026-11-25
 pipeline_tag: voice-activity-detection
 default_quant: Q8_0
 tags:
@@ -18,9 +18,8 @@ summary: |
   Streaming end-of-turn and voice activity detection by Inworld: every 40 ms
   it gives the probability that the speaker's turn has ended and, 120 ms
   later, the probability that the frame held speech. Not a transcription
-  model: it serves the TURN role (live stream or whole clip, with Inworld's
-  turn rule cutting a clip into turns) and the VAD role. Any language. CPU is
-  the default backend.
+  model: it serves the TURN role (live stream or whole clip) and the VAD
+  role. Any language. CPU is the default backend.
 wer:
   notes: |
     A clip's score is the turn score of its last 40 ms frame
@@ -42,7 +41,9 @@ usage: |
   From the C API, use the TURN role (`include/transcribe/turn.h`):
   `transcribe_turn_stream_feed` / `transcribe_turn_stream_flush` for live
   audio (per-frame turn and speech scores), or `transcribe_turn_run` on a
-  whole clip (the last frame's `p` and `ended`, per-frame scores, and turns).
+  whole clip (the last frame's `p` and `ended`, and per-frame scores). When
+  a live turn ends is the caller's choice; `examples/turn_live` applies
+  Inworld's rule.
   The VAD role (`include/transcribe/vad.h`) returns the speech track alone.
 
   See [the model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/sava.md)
