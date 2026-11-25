@@ -140,12 +140,12 @@ option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 # everywhere (see the OpenMP CENTRAL POLICY below — OpenMP's process-global pool
 # is a teardown/coexistence liability for an embeddable library, and the native
 # pool is now correct on MSVC and under oversubscription). Opt in with
-# -DTRANSCRIBE_USE_OPENMP=ON. TRANSCRIBE_USE_SYSTEM_BLAS stays ON for the
-# Accelerate/system-BLAS host decoder; official provider wheels pass it OFF so no
-# OpenBLAS/MKL runtime is vendored where it can collide with PyTorch/NumPy.
+# -DTRANSCRIBE_USE_OPENMP=ON. TRANSCRIBE_USE_SYSTEM_BLAS defaults OFF (Apple
+# always uses Accelerate): no significant speedup measured on Linux x86_64
+# (2026-11-25), so it is not worth the runtime dependency.
 option(TRANSCRIBE_BUILD_SHARED    "Build libtranscribe + ggml as shared libraries"  OFF)
 option(TRANSCRIBE_USE_OPENMP      "Use OpenMP for ggml's CPU threadpool"             OFF)
-option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decoder"  ON)
+option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decoder"  OFF)
 
 # Dynamic ggml backends: each backend (CPU, Vulkan, CUDA, ...) becomes a
 # separate loadable module living NEXT TO libtranscribe instead of being

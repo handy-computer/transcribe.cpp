@@ -210,14 +210,9 @@ target_link_libraries(transcribe
 )
 
 # BLAS for the host decoder (cblas_sgemv in decoder.cpp). On Apple we
-# link Accelerate directly; elsewhere we probe for OpenBLAS / MKL /
-# BLIS via find_package(BLAS). When no BLAS is found the decoder falls
-# back to a scalar loop (~14x slower but functionally correct).
-# Apple Accelerate is a system framework (always present, nothing to vendor),
-# so it stays on unconditionally even for wheels. The non-Apple system-BLAS
-# probe is gated on TRANSCRIBE_USE_SYSTEM_BLAS: official provider wheels pass it
-# OFF so wheel-repair tools never vendor OpenBLAS/MKL/BLIS where it would fight
-# another BLAS/OpenMP runtime in the host process.
+# link Accelerate directly; elsewhere system BLAS is opt-in via
+# TRANSCRIBE_USE_SYSTEM_BLAS (default OFF; the fallback is within ~3%,
+# gigaam excepted, measured 2026-11-25).
 if(APPLE)
     target_link_libraries(transcribe PRIVATE "-framework Accelerate")
     target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_BLAS=1)
@@ -282,7 +277,7 @@ elseif(TRANSCRIBE_USE_SYSTEM_BLAS)
         message(STATUS "transcribe: no BLAS found — decoder uses scalar fallback")
     endif()
 else()
-    message(STATUS "transcribe: TRANSCRIBE_USE_SYSTEM_BLAS=OFF — decoder uses scalar fallback (official-wheel posture; no system BLAS vendored)")
+    message(STATUS "transcribe: TRANSCRIBE_USE_SYSTEM_BLAS=OFF — decoder uses scalar fallback (default)")
 endif()
 
 if(PROJECT_VERSION_MAJOR EQUAL 0)

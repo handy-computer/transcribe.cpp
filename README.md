@@ -105,10 +105,10 @@ Metal is enabled automatically on Apple Silicon. For Vulkan (Linux/Windows):
 
 ```bash
 # Ubuntu/Debian
-sudo apt install build-essential cmake libvulkan-dev glslc libopenblas-dev
+sudo apt install build-essential cmake libvulkan-dev glslc
 
 # Fedora
-sudo dnf install vulkan-headers openblas-devel glslc spirv-headers-devel vulkan-loader-devel
+sudo dnf install vulkan-headers glslc spirv-headers-devel vulkan-loader-devel
 
 cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
@@ -138,7 +138,7 @@ Pass a semicolon-separated list for several architectures. ROCm devices report
 as the `rocm` backend kind, are picked up by the default `auto` backend, and can
 be required explicitly with `--backend rocm`.
 
-`libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
+System BLAS is optional and off by default (`-DTRANSCRIBE_USE_SYSTEM_BLAS=ON` with `libopenblas-dev` to enable); it made no significant difference in our measurements.
 
 tinyBLAS (Justine Tunney's `llamafile_sgemm` kernels) is on by default.
 

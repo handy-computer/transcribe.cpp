@@ -225,6 +225,9 @@ fn main() {
         "TRANSCRIBE_USE_OPENMP",
         if feature("OPENMP") { "ON" } else { "OFF" },
     );
+    // No system BLAS dependency by default (Apple still uses Accelerate);
+    // opt in via TRANSCRIBE_CMAKE_ARGS=-DTRANSCRIBE_USE_SYSTEM_BLAS=ON.
+    cfg.define("TRANSCRIBE_USE_SYSTEM_BLAS", "OFF");
     // Windows no longer needs ggml's OpenMP. ggml's native CPU threadpool barrier
     // used to deadlock under MSVC (its spin `relax` compiled to a no-op, starving
     // an un-arrived worker), so OpenMP was the only multi-threaded CPU path there.
