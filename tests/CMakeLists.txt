@@ -146,6 +146,26 @@ add_test(NAME transcribe_backend_probe_order_unit
     COMMAND transcribe_backend_probe_order_unit)
 
 # -----------------------------------------------------------------------------
+# BinaryFile bulk weight reader unit test
+# -----------------------------------------------------------------------------
+#
+# Covers BinaryFile's bounds, seeking, UTF-8 path handling, and guards against
+# MSVC's std::ifstream 4095-byte chunking regression on Windows.
+
+add_executable(transcribe_binary_file_unit
+    binary_file_unit.cpp)
+
+target_link_libraries(transcribe_binary_file_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_binary_file_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_binary_file_unit)
+
+add_test(NAME transcribe_binary_file_unit
+    COMMAND transcribe_binary_file_unit)
+
+# -----------------------------------------------------------------------------
 # Backend init_backends() runtime behavior
 # -----------------------------------------------------------------------------
 #

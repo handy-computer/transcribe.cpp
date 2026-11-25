@@ -24,10 +24,25 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
-#include <ios>
+#include <limits>
 #include <stdexcept>
 #include <vector>
+
+#if defined(_WIN32)
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
+#    include <fcntl.h>
+#    include <sys/types.h>
+#    include <unistd.h>
+
+#    include <cerrno>
+#endif
 
 namespace transcribe::load_common {
 
@@ -709,17 +724,174 @@ transcribe_status load_weights(const std::string &                  path,
     return stream_tensor_data(path, gguf_data, ctx_meta, error_tag, &out);
 }
 
+// ---------------------------------------------------------------------------
+// Bulk binary file reader for weight streaming.
+// ---------------------------------------------------------------------------
+
+#if defined(_WIN32)
+
+bool BinaryFile::open(const std::string & path) {
+    close();
+    const std::filesystem::path p = path_from_utf8(path);
+    HANDLE h = CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    handle_  = h;
+    pos_     = 0;
+    pos_set_ = true;
+    return true;
+}
+
+void BinaryFile::close() noexcept {
+    if (handle_ != nullptr) {
+        CloseHandle(static_cast<HANDLE>(handle_));
+        handle_ = nullptr;
+    }
+    pos_     = 0;
+    pos_set_ = false;
+}
+
+bool BinaryFile::read_at(uint64_t offset, void * dst, size_t nbytes) {
+    if (handle_ == nullptr) {
+        return false;
+    }
+    if (nbytes == 0) {
+        return true;
+    }
+    const uint64_t max_off = static_cast<uint64_t>(std::numeric_limits<LONGLONG>::max());
+    if (dst == nullptr || offset > max_off || static_cast<uint64_t>(nbytes) > max_off - offset) {
+        return false;
+    }
+
+    HANDLE h = static_cast<HANDLE>(handle_);
+    if (!pos_set_ || pos_ != offset) {
+        LARGE_INTEGER li{};
+        li.QuadPart = static_cast<LONGLONG>(offset);
+        if (!SetFilePointerEx(h, li, nullptr, FILE_BEGIN)) {
+            pos_set_ = false;
+            return false;
+        }
+        pos_     = offset;
+        pos_set_ = true;
+    }
+
+    // Cap each ReadFile call below DWORD max (1 GiB).
+    constexpr size_t k_max_io = size_t(1) << 30;
+    auto *           out      = static_cast<uint8_t *>(dst);
+    size_t           done     = 0;
+    while (done < nbytes) {
+        const DWORD want = static_cast<DWORD>(std::min(nbytes - done, k_max_io));
+        DWORD       got  = 0;
+        if (!ReadFile(h, out + done, want, &got, nullptr) || got == 0) {
+            pos_set_ = false;
+            return false;
+        }
+        done += got;
+        pos_ += got;
+    }
+    return true;
+}
+
+#elif defined(__unix__) || defined(__APPLE__)
+
+bool BinaryFile::open(const std::string & path) {
+    close();
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+#    if defined(__linux__)
+    (void) ::posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#    endif
+    fd_ = fd;
+    return true;
+}
+
+void BinaryFile::close() noexcept {
+    if (fd_ >= 0) {
+        (void) ::close(fd_);
+        fd_ = -1;
+    }
+}
+
+bool BinaryFile::read_at(uint64_t offset, void * dst, size_t nbytes) {
+    if (fd_ < 0) {
+        return false;
+    }
+    if (nbytes == 0) {
+        return true;
+    }
+    if (dst == nullptr) {
+        return false;
+    }
+    const uint64_t max_off = static_cast<uint64_t>(std::numeric_limits<off_t>::max());
+    if (offset > max_off || static_cast<uint64_t>(nbytes) > max_off - offset) {
+        return false;
+    }
+
+    // Cap each pread call to 1 GiB (macOS rejects >= 2 GiB with EINVAL).
+    constexpr size_t k_max_io = size_t(1) << 30;
+    auto *           out      = static_cast<uint8_t *>(dst);
+    size_t           done     = 0;
+    while (done < nbytes) {
+        const size_t  want = std::min(nbytes - done, k_max_io);
+        const ssize_t got  = ::pread(fd_, out + done, want, static_cast<off_t>(offset + done));
+        if (got < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (got == 0) {
+            return false;
+        }
+        done += static_cast<size_t>(got);
+    }
+    return true;
+}
+
+#else
+
+bool BinaryFile::open(const std::string & path) {
+    close();
+    fp_ = std::fopen(path.c_str(), "rb");
+    return fp_ != nullptr;
+}
+
+void BinaryFile::close() noexcept {
+    if (fp_ != nullptr) {
+        std::fclose(fp_);
+        fp_ = nullptr;
+    }
+}
+
+bool BinaryFile::read_at(uint64_t offset, void * dst, size_t nbytes) {
+    if (fp_ == nullptr) {
+        return false;
+    }
+    if (nbytes == 0) {
+        return true;
+    }
+    if (dst == nullptr || offset > static_cast<uint64_t>(std::numeric_limits<long>::max())) {
+        return false;
+    }
+    if (std::fseek(fp_, static_cast<long>(offset), SEEK_SET) != 0) {
+        return false;
+    }
+    return std::fread(dst, 1, nbytes, fp_) == nbytes;
+}
+
+#endif
+
 transcribe_status stream_tensor_data(const std::string &   path,
                                      const gguf_context *  gguf_data,
                                      ggml_context *        ctx_meta,
                                      const char *          error_tag,
                                      const WeightStorage * skip) {
-    // std::ifstream rather than going through gguf's loader a third
-    // time: ifstream::seekg takes a streamoff (signed 64-bit on every
-    // platform we target), so multi-GB tensor offsets work without
-    // #ifdef'ing fseeko vs _fseeki64.
-    std::ifstream fin(path_from_utf8(path), std::ios::binary);
-    if (!fin) {
+    BinaryFile file;
+    if (!file.open(path)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to reopen %s for tensor data", error_tag, path.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -731,7 +903,7 @@ transcribe_status stream_tensor_data(const std::string &   path,
     // embedding), on top of ours.
     constexpr size_t k_stage_chunk = size_t(16) << 20;
 
-    const size_t         data_offset = gguf_get_data_offset(gguf_data);
+    const uint64_t       data_offset = static_cast<uint64_t>(gguf_get_data_offset(gguf_data));
     std::vector<uint8_t> staging;
 
     for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta); t != nullptr; t = ggml_get_next_tensor(ctx_meta, t)) {
@@ -743,16 +915,13 @@ transcribe_status stream_tensor_data(const std::string &   path,
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: tensor \"%s\" not in gguf data", error_tag, t->name);
             return TRANSCRIBE_ERR_GGUF;
         }
-        const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
-        const size_t nbytes  = ggml_nbytes(t);
-
-        const std::streamoff abs_offset =
-            static_cast<std::streamoff>(data_offset) + static_cast<std::streamoff>(toffset);
-        fin.seekg(abs_offset);
-        if (!fin) {
+        const uint64_t toffset = static_cast<uint64_t>(gguf_get_tensor_offset(gguf_data, idx));
+        const size_t   nbytes  = ggml_nbytes(t);
+        if (toffset > UINT64_MAX - data_offset) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: seek failed for tensor \"%s\"", error_tag, t->name);
             return TRANSCRIBE_ERR_GGUF;
         }
+        const uint64_t abs_offset = data_offset + toffset;
 
         // Host buffers (the CPU) take the file bytes directly: no staging
         // copy. Everything else (Metal, Vulkan, CUDA, ...) is uploaded in
@@ -760,8 +929,7 @@ transcribe_status stream_tensor_data(const std::string &   path,
         // that accepts partial writes: every default one does (ggml's CPU
         // repack buffers would not, and assert).
         if (t->buffer != nullptr && ggml_backend_buffer_is_host(t->buffer)) {
-            fin.read(static_cast<char *>(t->data), static_cast<std::streamsize>(nbytes));
-            if (!fin) {
+            if (!file.read_at(abs_offset, t->data, nbytes)) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", error_tag, t->name,
                         nbytes);
                 return TRANSCRIBE_ERR_GGUF;
@@ -775,8 +943,7 @@ transcribe_status stream_tensor_data(const std::string &   path,
         }
         for (size_t done = 0; done < nbytes;) {
             const size_t n = std::min(nbytes - done, staging.size());
-            fin.read(reinterpret_cast<char *>(staging.data()), static_cast<std::streamsize>(n));
-            if (!fin) {
+            if (!file.read_at(abs_offset + done, staging.data(), n)) {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", error_tag, t->name,
                         nbytes);
                 return TRANSCRIBE_ERR_GGUF;
@@ -927,36 +1094,24 @@ ReadF32Result read_f32_tensor_checked(gguf_context *       gguf_ctx,
         return ReadF32Result::BadSize;
     }
 
-    // Read from the GGUF data section. Use the same overflow-safe
-    // offset pattern as stream_tensor_data: cast each addend to
-    // std::streamoff individually rather than adding two size_t values
-    // that could wrap on 32-bit builds (not a real platform today, but
-    // consistent).
-    const size_t data_off = gguf_get_data_offset(gguf_ctx);
-    const size_t t_off    = gguf_get_tensor_offset(gguf_ctx, idx);
+    const uint64_t data_off = static_cast<uint64_t>(gguf_get_data_offset(gguf_ctx));
+    const uint64_t t_off    = static_cast<uint64_t>(gguf_get_tensor_offset(gguf_ctx, idx));
+    if (t_off > UINT64_MAX - data_off) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: seek failed for tensor \"%s\"", error_tag, tensor_name);
+        return ReadF32Result::ReadErr;
+    }
 
-    std::ifstream fin(path_from_utf8(gguf_path), std::ios::binary);
-    if (!fin) {
+    BinaryFile file;
+    if (!file.open(gguf_path)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: failed to open %s for tensor \"%s\"", error_tag, gguf_path.c_str(),
                 tensor_name);
         return ReadF32Result::ReadErr;
     }
 
-    const std::streamoff abs_offset = static_cast<std::streamoff>(data_off) + static_cast<std::streamoff>(t_off);
-    fin.seekg(abs_offset);
-    if (!fin) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: seek failed for tensor \"%s\"", error_tag, tensor_name);
-        return ReadF32Result::ReadErr;
-    }
-
     out.resize(n_elems);
-    fin.read(reinterpret_cast<char *>(out.data()), static_cast<std::streamsize>(nbytes));
-
-    if (!fin || static_cast<size_t>(fin.gcount()) != nbytes) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "%s: short read for tensor \"%s\" "
-                "(got %zu of %zu bytes)",
-                error_tag, tensor_name, static_cast<size_t>(fin.gcount()), nbytes);
+    if (!file.read_at(data_off + t_off, out.data(), nbytes)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read for tensor \"%s\" (%zu bytes)", error_tag, tensor_name,
+                nbytes);
         out.clear();
         return ReadF32Result::ReadErr;
     }
