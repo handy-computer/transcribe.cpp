@@ -175,30 +175,32 @@ honour cancellation and deferred frees like the other roles.
 
 A TURN model (`docs/turn.md`) gets `TurnSession` from `model.turn_session()`
 (Python, Rust), `model.turnSession()` (Swift) or `model.createTurnSession()`
-(TypeScript), plus `turn_info` / `turnInfo` (sample rate, longest audio, frame
-size (0 = the model cannot stream), whether it also scores speech, and the
-model's default threshold). `run(pcm, threshold)` returns a copied-out result:
-`p`, `ended` (`p >= threshold`; omitted = the model's) and, for streaming
-models, every frame's turn and speech probabilities. Stream feed / flush return
-the turn probabilities of the frames they completed with `first_frame`, and the
-speech probabilities of the frames the model judged with `speech_first_frame`
-(these can trail). Python, Rust and Swift return the same `TurnResult` type
-from feed / flush as from `run`, with `p = 0` and `ended = false`; TypeScript
-returns a separate `TurnStreamResult` without `p` / `ended`. Stream reset
-drops the stream. On a model that cannot stream
-(Smart Turn) the stream calls raise `NotImplemented`.
+(TypeScript), and `turn_info` / `turnInfo`: sample rate, longest audio, frame
+size (0: the model cannot stream), whether it scores speech, and the default
+threshold. `run(pcm, threshold)` returns a copied-out result: `p`, `ended`
+(`p >= threshold`; omitted = the model's) and, for streaming models, every
+frame's turn and speech probabilities. Stream feed / flush return the turn
+probabilities of the frames they completed (`first_frame`) and the speech
+probabilities of the frames the model judged (`speech_first_frame`; these can
+trail). Python, Rust and Swift return `TurnResult` from feed / flush too, with
+`p = 0` and `ended = false`; TypeScript returns a `TurnStreamResult` without
+them. Stream reset drops the stream. On a model that cannot stream (Smart
+Turn) the stream calls raise `NotImplemented`.
 
 The batched feed (`TurnSession.stream_feed_batch` / `streamFeedBatch`) takes
 (session, pcm) pairs and returns one result per session, in order, each equal
 to that session's own feed. It is one compute: it takes the model-wide compute
-lock once, rejects an empty list and sessions that are repeated or of
-different models with `InvalidArgument` before calling the library, and keeps
-every buffer alive until the native call returns. A closed (Python) or disposed
-(TypeScript) session, including one closed while the batch waits for the lock,
-raises the base `TranscribeError`; Rust and Swift sessions cannot be closed
-while listed. Cancelling any listed session aborts the call and resets every
-listed stream; TypeScript has no per-session cancel and cancels a batch through
-the batch call's own `signal`.
+lock once, rejects an empty list, repeated sessions and sessions of different
+models with `InvalidArgument`, and keeps every buffer alive until the native
+call returns. Repeated sessions are rejected by the library in Python and
+Swift (impossible in Rust, through `&mut`) and by the binding in TypeScript;
+mixed models by the binding before the library call in Python, Swift and
+TypeScript, and by the library in Rust. A closed (Python) or
+disposed (TypeScript) session, including one closed while the batch waits for
+the lock, raises the base `TranscribeError`; Rust and Swift sessions cannot be
+closed while listed. Cancelling any listed session aborts the call and resets
+every listed stream; TypeScript cancels a batch through the call's own
+`signal`.
 
 Otherwise TURN calls follow the VAD rules: the compute lock for that call
 only, a turn stream is session state and not a stream lease, `Busy` while an

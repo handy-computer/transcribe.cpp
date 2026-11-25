@@ -1,7 +1,7 @@
 # Editorial copy only; metadata and measurements come from the catalog.
 pin_date: 2026-11-21
 validation:
-  reference: onnxruntime 1.23.2 on smart-turn-v3.2-gpu.onnx (CPU, F32)
+  reference: onnxruntime 1.23.2 (fp32 ONNX)
   commit: 3465deb3
   date: 2026-11-25
 pipeline_tag: audio-classification

@@ -181,48 +181,32 @@ while an ASR stream on the same model holds the lease.
 
 ### End-of-turn detection (TURN role)
 
-A `"turn"` model says whether the speaker has finished talking. `run` scores
-one clip (the audio since the speaker started) and returns `p` and `ended`
-(`p >= threshold`; `threshold` defaults to `model.turnInfo.threshold`). Audio
-longer than `turnInfo.maxAudioMs` is scored on its end. Every turn model
-(Smart Turn v3.2, SAVA) supports it:
+A `"turn"` model (Smart Turn v3.2, SAVA) says whether the speaker has finished
+talking. `run` scores one clip (the audio since the speaker started) and
+returns `p` and `ended` (`p >= threshold`, default `model.turnInfo.threshold`);
+audio longer than `turnInfo.maxAudioMs` is scored on its end.
 
 ```ts
 using turn = model.createTurnSession();
 const { p, ended } = await turn.run(pcmSinceSpeechStart);
-if (ended) answer();
 ```
 
 Models with `turnInfo.frameSamples > 0` (SAVA) also stream: `streamFeed(chunk)`
-returns the turn probability of each frame the chunk completes (`probs`, from
-`firstFrame`) and, when `turnInfo.hasSpeech`, the speech probability of each
-frame the model judged (`speechProbs`, from `speechFirstFrame`; it may trail
-`firstFrame`). A stream returns probabilities only: your code decides when the
-turn ended. `streamFlush()` and `streamReset()` work as for VAD. On a clip model
-(Smart Turn) the stream calls throw `NotImplementedByModel`.
+returns the turn probabilities of the frames the chunk completes (`probs`, from
+`firstFrame`) and, when `turnInfo.hasSpeech`, the speech probabilities of the
+frames the model judged (`speechProbs`, from `speechFirstFrame`; they may
+trail). `streamFlush()` and `streamReset()` work as for VAD; on a clip model the
+stream calls throw `NotImplementedByModel`. `TurnSession.streamFeedBatch` feeds
+many sessions of one model in one compute, each ending as if fed alone; its
+`signal` cancels (and resets) every listed stream. Like VAD, a turn stream is
+session state, not a stream lease.
 
 ```ts
-for await (const chunk of mic) {
-  const { firstFrame, probs, speechFirstFrame, speechProbs } = await turn.streamFeed(chunk);
-}
-```
-
-For many users on one model, `TurnSession.streamFeedBatch` feeds every
-session's chunk in one compute (much faster than one feed per user) and returns
-one result per session, in order; each session ends up as if fed alone. An
-empty list, a repeated session or sessions of different models reject with
-`InvalidArgument`; a disposed session rejects with `TranscribeError`. The batch
-uses the first session's thread count, and its `signal`
-cancels (and resets) every listed stream.
-
-```ts
-const results = await TurnSession.streamFeedBatch([
+const [a, b] = await TurnSession.streamFeedBatch([
   { session: alice, pcm: aliceChunk },
   { session: bob, pcm: bobChunk },
 ]);
 ```
-
-Like VAD, a turn stream is session state, not a stream lease.
 
 ### Resource management
 

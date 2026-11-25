@@ -62,8 +62,7 @@ bool attn_ok(const AttnHParams & a) {
     return a.n_heads > 0 && a.n_kv_heads > 0 && a.n_heads % a.n_kv_heads == 0 && a.head_dim > 0 &&
            a.head_dim % 2 == 0 && a.head_dim <= kMaxDim && a.n_heads <= kMaxDim && a.window > 0 &&
            a.window <= kMaxDim && std::isfinite(a.xsa_alpha) &&
-           // The qkv rows, (H + 2 KV) hd, in int64: each factor is bounded
-           // but the product of two is not an int32.
+           // qkv rows in int64: the product of two bounded factors may not fit int32
            (static_cast<int64_t>(a.n_heads) + 2 * static_cast<int64_t>(a.n_kv_heads)) * a.head_dim <= kMaxDim;
 }
 
@@ -84,8 +83,8 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     REQ(read_required_f32_kv(gguf, "stt.sava.rms_eps", kTag, hp.rms_eps));
     REQ(read_required_u32_kv(gguf, "stt.sava.mixer_context_frames", kTag, hp.mixer_context_frames));
     std::vector<std::string> layers;
-    if (read_string_array_kv(gguf, "stt.sava.layers", layers) != KvResult::Ok || layers.empty() ||
-        layers.size() > 256) {
+    // At most 64 trunk layers bounds the step graph (see build_graph).
+    if (read_string_array_kv(gguf, "stt.sava.layers", layers) != KvResult::Ok || layers.empty() || layers.size() > 64) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV \"stt.sava.layers\" missing or invalid", kTag);
         return TRANSCRIBE_ERR_GGUF;
     }

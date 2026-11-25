@@ -2,164 +2,98 @@
 
 Surprises worth feeding back into the docs and tooling.
 
+## Reference and conversion
+
 - **No HF config.** The configuration lives in the safetensors metadata
-  (`format=sava`, `config=<json>`). `scripts/intake.py inspect` finds
-  nothing, and HF's safetensors-metadata API reports no dtype, so the intake
-  was written by hand. Gate A warns on dtype and front end (nothing to
-  cross-check against), the same as Silero. Gate B passes.
+  (`format=sava`, `config=<json>`), and HF's safetensors-metadata API reports
+  no dtype, so `scripts/intake.py inspect` finds nothing and the intake was
+  written by hand. Gate A warns on dtype and front end (as for Silero); Gate
+  B passes.
 - **bf16 source, fp32 reference.** Upstream upcasts to fp32 on CPU, so the
-  intake declares `float32` (manual) and the F32 GGUF is exact. BF16 is a
-  lossless storage option.
+  intake declares `float32` (manual) and the F32 GGUF is exact.
 - **Hooks see the real run.** `sava.run` is plain PyTorch, so forward hooks
-  and instance-method wrappers capture the intermediates (attention
-  `forward_chunk`, `mixer.rows`, `_turn_input`, `ssd.chunked_scan`) of the
-  same call. The dumper checks that the captured logits reproduce the curves
-  bit for bit.
-- **Run and stream differ in the reference** (up to 3.1e-6 in probability):
-  chunked SSD and windowed attention offline, recurrence and per-frame turn
-  head in a Session. Upstream's own golden test allows 1e-5 between them.
+  and instance-method wrappers capture the intermediates of the same call;
+  the dumper checks the captured logits reproduce the curves bit for bit.
+- **A one-off NumPy model of the GGUF** (frame by frame, reading only the F32
+  GGUF and its KVs; not kept in the tree) matched the dumps to 2e-6 in
+  probability before any C++ existed, which validated the tensor layout.
+- **Run and stream differ in the reference** (up to 3.1e-6): chunked SSD and
+  windowed attention offline, the recurrence and a per-frame turn head in a
+  Session. Upstream's own golden test allows 1e-5 between them.
 - **RoPE in fp32 with absolute positions.** The reference's outputs depend on
-  stream age: 4e-4 in probability after an hour, 3e-3 after 11 h. The model
-  is shift invariant in exact arithmetic. ggml_rope's iterated theta_scale
-  does not reproduce torch's per-index frequencies, so `rope.freqs` ships in
-  the GGUF.
-- **Quant-policy name collisions.** The parakeet-ultra rule
-  `vad.*.weight -> Conv` would have caught a `vad.` head prefix, hence
-  `head.vad.*`. The Python mirror lacks policy.cpp's `_norm.weight` suffix
-  rule, hence `norm_*` names. ggml_ssm_conv and ggml_ssm_scan need F32 conv
-  kernels and A, so new F32 rules for `*.ssm.{a,d,conv1d.weight}`,
-  `*.speech_embed.weight`, `frontend.dft_basis` and `rope.freqs` were added
-  to policy.cpp, gguf_common.py and the sync test.
-- **Thresholds as float64 KVs.** 0.9 in fp32 is 0.89999998, which would
-  accept a probability the reference rejects.
-- **The turn policy is part of the contract.** It has overlapping segments,
-  dropped (`kept=false`) turns, ends up to 3 frames past the audio, flush-step
-  turn scores, and Python half-to-even rounding for pre-roll. These were sent
-  to the TURN API design.
-- **validate.py** runs the reference for a new family without code changes,
-  through per-case `"stages": ["encoder"]`.
+  stream age (4e-4 after an hour, 3e-3 after 11 h), though the model is shift
+  invariant. `ggml_rope`'s iterated `theta_scale` does not reproduce torch's
+  per-index frequencies, so `rope.freqs` ships in the GGUF.
+- **Quant-policy name collisions.** parakeet-ultra's `vad.*.weight -> Conv`
+  rule would have caught a `vad.` prefix, hence `head.vad.*`; the Python
+  mirror lacks policy.cpp's `_norm.weight` suffix rule, hence `norm_*`.
+  `ggml_ssm_conv` / `ggml_ssm_scan` need F32 kernels and A, hence new F32
+  rules in policy.cpp, gguf_common.py and the sync test.
+- **Thresholds as float64 KVs.** 0.9 in fp32 is 0.89999998, which accepts a
+  probability the reference rejects.
+- **validate.py needed no SAVA code**: per-case `"stages": ["encoder"]` and
+  the TURN role's `turn.json` comparison.
 
-## Stage 4 (C++)
+## C++
 
-- **Stream == run by construction.** Every block of frames runs as one graph
-  of at least 4 columns (ggml's NEON tinyBLAS threshold), and the KV rings
-  are written before attention with a slot order that depends only on the
-  position. A stream is bit-identical to a run for any chunking and thread
-  count, on the real model and the toy fixture.
-- **ggml_ssm_scan's scalar remainder breaks that.** With a d_state that is
-  not a multiple of the SIMD step (the toy's first try used 8), a graph's
-  first token rounds differently from the later ones. The real d_state of
-  128 is fine. The toy fixture now uses 64.
+- **Stream == run by construction.** Every block runs as one graph of at
+  least 4 columns (ggml's NEON tinyBLAS threshold), and the KV rings are
+  written before attention with a slot order that depends only on the
+  position: bit-identical for any chunking and thread count.
+- **`ggml_ssm_scan`'s scalar remainder breaks that.** With a `d_state` that
+  is not a multiple of the SIMD step (the toy's first try used 8), a graph's
+  first token rounds differently. The real 128 is fine; the toy uses 64.
 - **The reference's front end is the main mel error.** Its fp32 DFT GEMM is
-  cancellation-bound near the 1e-10 mel floor. With a ggml fp32 DFT the C++
-  was 1.25e-3 off on jfk. A host fp64 FFT makes the C++ exact to 6e-8, so
-  the remaining fe.mel drift (7.9e-4 max) is the reference's own error.
-  jfk's speech drift fell from 3e-5 to 6.7e-6.
+  cancellation-bound near the 1e-10 floor: a ggml fp32 DFT was 1.25e-3 off on
+  jfk. A host fp64 FFT is exact to 6e-8 and cut jfk's speech drift from 3e-5
+  to 6.7e-6; the remaining `fe.mel` drift is the reference's.
 - **fp64 RoPE (owner decision)** departs from the fp32 reference by its own
-  stream-age drift: 3.9e-5 in speech after 6,000 frames on dots-full. With
-  fp32 angles it would be 1.2e-5.
-- **validate.py needed no SAVA code.** The TURN role path compares the CLI's
-  turn / segment lines with the dumper's turn.json.
-- **Streaming speed.** A 1-frame step pays for a 4-column graph: 5.4 ms per
-  frame with 1 thread, 3.4 ms with 4, on an M1. Offline is 0.94 ms per frame
-  with 1 thread.
+  stream-age drift: 3.9e-5 in speech after 6,000 frames on `dots-full`
+  (fp32 angles: 1.2e-5).
+- **Batching.** Shared matmuls over all sessions' columns, per-session ops in
+  the shapes of a 1-frame step: bit-identical to unbatched. The batch graph
+  lives in the first listed session, keyed by process-unique stream ids (no
+  model-level scratch).
+- **Two bit-exact speedups:** a contiguous attention query (K.Q takes
+  tinyBLAS) and a transposed V ring (drops a per-step copy): a streamed frame
+  went from 5.4 to 4.6 ms (F32) and 3.9 to 3.0 ms (Q8_0) at 1 thread on an
+  M1. The query change moved outputs by up to 1e-5 against older C++ dumps
+  (a different kernel), which invalidated earlier Pipecat rows: re-run the
+  accuracy sweep after any graph change.
 
-## Stage 5 (quants)
+## Quantization and publication
 
-- **Q8_0 needed no policy work beyond Stage 3's rules.** `mixer.proj`'s
-  1026-wide rows fall back to F16. Stream == run stays bit-identical with
-  Q8_0 on M1.
-- **BF16 is not free on CPU.** The storage is lossless, but ggml's BF16
-  matmul on an M1 (no native bf16) is ~40x slower than F32.
-- **The pipecat clip benchmark reproduces Inworld's published SAVA row.**
-  F32 AUC 0.97946 vs 0.97946 published (A100 fp32), and accuracy within 2
-  clips. Q8_0 loses 1.1e-4 AUC.
-- **Q8_0 changes turns only on threshold-margin frames.** On dots-full 6 of
-  59 turns move or merge, each at a score within 0.004 of 0.9 or 0.03 of
-  0.5.
-- **16-bit tiers.**
-  - **F16 is effectively lossless.** bf16 source values fit f16 except
-    1,065 tiny ones, and ggml keeps F16 x F32 matmuls in fp32 activations. It
-    passes the F32 tolerance gate, with 0 Pipecat decision flips. It is
-    slower per clip frame than F32 on M1 NEON (no tiled F16 x F32 kernel).
-  - **BF16 is lossless storage but lossy compute.** ggml rounds the
-    activations to bf16, and the M1 runs it 15-22x slower than F32. Shipped
-    F16, not BF16.
-  - **Measurement noise.** Speed numbers taken while other worktrees ran
-    batch jobs (load 10-36) were off by 2-25x; only idle-machine numbers
-    are recorded.
-
-## Batching and the exact speedups (from the turn-perf prototype)
-
-- **`TurnOps::step_batch` is implemented in `stream_step_batch`.** Shared
-  matmuls run over all sessions' columns; the per-session ops run in the
-  shapes of a 1-frame step, so results are bit-identical to unbatched.
-- **The batch graph lives in the first session of the batch,** keyed by
-  process-unique stream ids. There is no model-level scratch.
-- **Two speedups, both bit-exact:**
-  - a contiguous attention query (variant B), so K.Q also takes tinyBLAS;
-  - the V ring stored transposed, which drops a per-step copy.
-
-  The query change moves the outputs by up to ~1e-5 against the old C++
-  dumps (a different K.Q kernel). `validate.py` stays green.
-- **Speed.** A streamed frame dropped from 5.4 to 4.6 ms (F32) and from 3.9
-  to 3.0 ms (Q8_0) at 1 thread. 8 batched users take 10.1 ms per tick (F32)
-  and 8.1 ms (Q8_0) at 1 thread.
-
-## Stages 6-8 (publication, profile turn-publication-v1)
-
-- **Speed, two targets, CPU only.** `scripts/turn/bench.py` (raw C ABI
-  through the Python binding): `jfk-8s` run, `jfk-40ms` stream frame,
-  `jfk-40ms-x8` 8-user batched tick, each at the default threads and `-1t`.
-  `m1`: Apple M1 standing in for the unreachable M4, engine `8f97ab5b`.
-  `ryzen-4750u`: engine `8415e8e2` (scripts-only difference), Tctl below
-  55 C at each cell's start. The x8 tick feeds the same clip to all 8
-  sessions (the compute does not depend on the audio).
-- **Rig-built GGUFs.** The Ryzen rows were measured on GGUFs converted on the
-  rig, whose sha256 differ from the canonical files (F32 45ca0a80...,
-  F16 55bd69f2..., Q8_0 b44d5ce8...) only by the converter's last-bit
-  constants (rig: F32 907d6da0..., F16 4100d5b4..., Q8_0 e0c78a78...).
-  ingest_perf.py keys a cell by quant, not hash; recorded here.
-- **Accuracy re-run.** The Pipecat rows were produced before 6b130f91 changed
-  the graph (300-clip check at HEAD: F32 max |dp| 6.6e-7, Q8_0 4.6e-3), so
-  all three quants were re-run at `8f97ab5b` and scored by
-  `scripts/turn/score.py` (no per-clip reference column: Inworld publishes
-  aggregates only).
-- **Validation pin.** `validate.py all --family sava` passes at `8f97ab5b`
-  on 2026-11-24.
-- **Metadata audit.** `audit_gguf_metadata.py` flagged the SAVA GGUFs:
-  general.languages is missing, and the streaming flag trips the audit's
-  name heuristic (a false positive). Both are ASR assumptions: the audit now
-  exempts the VAD / TURN architectures (silero_vad, sava, smart_turn) from
-  general.languages and from the slug streaming heuristic; the GGUFs are
-  unchanged and all six turn GGUFs audit clean.
-- **Results at 8f97ab5b.** F32 and F16 93.36% (AUC 0.97946, unchanged from
-  the Stage 5 rows); Q8_0 93.36% (AUC 0.97935; Stage 5 had 93.37%). Q8_0 vs
-  F32: 76 flips at 0.5, 126 at 0.9 (Stage 5: 75 / 124). The sava-F16 header
-  first recorded HEAD `8415e8e2` (a scripts-only commit made during the run;
-  the tool was built at `8f97ab5b`) and was corrected, as for Smart Turn.
-- **API draft 6 (owner review).** Turn segments left the TURN API, and with
-  them `include/transcribe/sava.h` (the `SVTN` extension). The library now
-  returns SAVA's per-frame turn and speech scores and the clip's `p` /
-  `ended`; Inworld's turn rule is the caller's (`examples/turn_live` applies
-  it and still matches `sava.segment` on `dots.wav`). The GGUFs are
-  unchanged: the loader reads only `stt.sava.threshold` and ignores the
-  `stt.sava.policy.*` keys. `validate.py all --family sava` passes (8 cases,
-  p and decision; per-frame tracks as tensors).
+- **F16 is effectively lossless; BF16 is not.** bf16 source values fit f16
+  except 1,065 tiny ones, and ggml keeps F16 x F32 matmul activations in
+  fp32 (0 Pipecat flips, passes the F32 gate). ggml rounds BF16 activations
+  to bf16, and without native bf16 the M1 runs it 15-22x slower than F32.
+  Shipped F16, not BF16.
+- **Q8_0 changes turns only at threshold margins** (`dots-full`: 6 of 59, each
+  within 0.004 of 0.9 or 0.03 of 0.5). `mixer.proj`'s 1026-wide rows fall
+  back to F16.
+- **Measurement noise.** Speed taken while other worktrees ran batch jobs
+  (load 10-36) was off by 2-25x; only idle-machine numbers are recorded.
+- **Rig-built GGUFs.** The Ryzen speed rows ran on GGUFs converted on the rig;
+  their sha256 differ from the canonical files (F32 45ca0a80..., F16
+  55bd69f2..., Q8_0 b44d5ce8...) only by the converter's last-bit constants
+  (rig: 907d6da0..., 4100d5b4..., e0c78a78...). `ingest_perf.py` keys a cell
+  by quant, not hash, so nothing checks this.
+- **Engine SHA.** A scripts-only commit made during a Pipecat run put the
+  wrong HEAD (`8415e8e2`) in the F16 header; corrected to `8f97ab5b`, the
+  commit the tool was built at.
+- **Metadata audit.** `audit_gguf_metadata.py` flagged the missing
+  `general.languages` and tripped its streaming name heuristic: ASR
+  assumptions. The audit now exempts silero_vad, sava and smart_turn.
+- **No per-clip reference from Inworld** (aggregates only), so
+  `scripts/turn/run_reference_sava_torch.py` scores the test set with
+  upstream's package; `score.py --ref-jsonl` gates against it.
+- **API review (draft 6)** removed turn segments and the SAVA extension: the
+  library returns per-frame scores and the clip's `p` / `ended`, and
+  Inworld's rule is the caller's (`examples/turn_live` still matches
+  `sava.segment` on `dots.wav`). The GGUFs keep `stt.sava.policy.*`, unread.
 - **Upload (2026-11-25, owner sign-off on tolerances, capability tables and
-  HF card).** F32, F16, Q8_0 and the rendered README uploaded to the PRIVATE
-  repo `handy-computer/sava-gguf` (commit `e64066c9`). Round trip: the downloaded
-  files' sha256 equal the local canonical files, and `validate.py all` passes
-  on the downloaded F32 (8/8 cases); the real-model smoke passes on the
-  downloaded files. Public flip deferred.
-- **Per-clip PyTorch reference.** `scripts/turn/run_reference_sava_torch.py`
-  scores the Pipecat test set with upstream's package (inworld-sava 1.0.0,
-  torch CPU fp32; `uv run --project scripts/envs/sava --with pyarrow`, 1037 s
-  on 6 workers) into `reports/turn/sava-REF.smart-turn-data-v3.2-test.jsonl`:
-  93.36% (29,433 / 31,527), AUC 0.97946. `score.py --ref-jsonl` against it:
-  F32 and F16 agree on 31,527 / 31,527 at 0.5 and at 0.9 (max |dp| 1.1e-5 /
-  1.2e-5); Q8_0 on 31,451 at 0.5 and 31,401 at 0.9 (max |dp| 0.17).
-  `ingest_accuracy.py --models sava` added the agreement to the three
-  catalog rows (3 replaced); the model page and HF card now carry the
-  agreement column. This supersedes the "no per-clip reference column" note
-  of the accuracy re-run above.
+  HF card):** private `handy-computer/sava-gguf` (`e64066c9`); downloaded
+  sha256 equal the canonical files and `validate.py all` passes on the
+  downloaded F32.
+- **Card re-rendered and re-uploaded after the slimming pass** (upstream
+  links point at the HF revision; reworded validation reference).

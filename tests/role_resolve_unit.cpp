@@ -84,8 +84,6 @@ transcribe::Arch make_vad_arch() {
 
 const transcribe::Arch k_vad_arch = make_vad_arch();
 
-// TURN ops tables: resolve_roles checks the table fits the model's info
-// (clip: score_clip; streaming: step and reset, no crop limit).
 transcribe::TurnModelInfo g_turn_info;  // what fake_turn_info reports
 
 const transcribe::TurnModelInfo & fake_turn_info(const transcribe_model *) {
@@ -175,7 +173,8 @@ void test_resolve_roles() {
     }
 }
 
-// A TURN ops table must match the model's TurnModelInfo.
+// A TURN ops table must fit the model's info (clip: score_clip; streaming:
+// step and reset, no crop limit).
 void test_resolve_turn_ops() {
     struct Case {
         const transcribe::Arch * arch;
@@ -202,7 +201,6 @@ void test_resolve_turn_ops() {
         model.roles = TRANSCRIBE_ROLE_TURN;
         CHECK(transcribe::resolve_roles(&model) == c.want);
     }
-    g_turn_info = transcribe::TurnModelInfo{};
 }
 
 // ASR entry points refuse a model that does not serve ASR, before

@@ -259,11 +259,8 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     bool dec_flash_unused = false;
     flash::apply_env_overrides(m->use_flash, dec_flash_unused);
 
-    TurnModelInfo & ti   = m->turn_info;
-    ti.max_audio_samples = m->hparams.max_audio_samples;
-    ti.frame_samples     = 0;
-    ti.has_speech        = false;
-    ti.threshold         = m->hparams.threshold;
+    m->turn_info.max_audio_samples = m->hparams.max_audio_samples;  // a clip model: no frames, no speech track
+    m->turn_info.threshold         = m->hparams.threshold;
 
     m->roles = TRANSCRIBE_ROLE_TURN;
     set_feature(m.get(), TRANSCRIBE_FEATURE_CANCELLATION, true);
@@ -305,10 +302,9 @@ ggml_tensor * build_head(ggml_context * ctx, const Model & m, ggml_tensor * enc,
     return ggml_sigmoid(ctx, x);
 }
 
-// Fill s.window with the scored window: the input left zero padded to
-// max_audio_samples (it is already cropped), normalised to zero mean and unit
-// variance over the whole window as HF's zero_mean_unit_var_norm does.
-// Requires 0 < n <= max_audio_samples (score_clip checks).
+// s.window = pcm left zero padded to max_audio_samples, then (HF's
+// zero_mean_unit_var_norm) zero mean, unit variance over the whole window.
+// Requires 0 < n <= max_audio_samples.
 void prepare_window(Session & s, const HParams & hp, const float * pcm, int64_t n) {
     const size_t N = static_cast<size_t>(hp.max_audio_samples);
     s.window.assign(N, 0.0f);
@@ -340,8 +336,7 @@ transcribe_status score_clip(transcribe_turn_session * session, const float * pc
     debug::init();
     const int n_threads = s.n_threads > 0 ? s.n_threads : default_n_threads();
 
-    // The dispatcher crops to max_audio_samples and never passes an empty
-    // clip; prepare_window relies on it.
+    // The dispatcher crops; prepare_window relies on it.
     if (n <= 0 || n > hp.max_audio_samples) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: clip of %lld samples outside 1..%d", kTag, static_cast<long long>(n),
                 hp.max_audio_samples);
@@ -462,7 +457,7 @@ transcribe_turn_session * turn_new_session() {
     return new Session();
 }
 
-const TurnOps k_turn_ops = { turn_info, turn_new_session, score_clip, nullptr, nullptr };
+const TurnOps k_turn_ops = { turn_info, turn_new_session, score_clip };
 
 }  // namespace
 

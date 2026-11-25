@@ -1,8 +1,8 @@
 // smart_turn_real_smoke.cpp - the real Smart Turn v3.2 F32 GGUF through the
 // public TURN API, against onnxruntime on upstream's fp32 ONNX (numbers from
 // scripts/dump_reference_smart_turn_onnx.py, ref/turn.json): the clip score
-// of committed samples to 1e-4, the decision, the 8 s crop, and a threshold
-// override. CPU. TRANSCRIBE_SMART_TURN_GGUF, else the default F32 GGUF
+// of committed samples to 1e-4, the decision, a threshold override and the
+// 8 s crop. CPU. TRANSCRIBE_SMART_TURN_GGUF, else the default F32 GGUF
 // under models/ (RC 77 skip when neither exists).
 
 #include "transcribe.h"
@@ -99,24 +99,18 @@ int main() {
                     std::fabs(r.p - c.p_ref), r.ended ? 1 : 0);
         CHECK(std::fabs(r.p - c.p_ref) <= 1e-4);
         CHECK(r.ended == c.ended);
-    }
 
-    // The 8 s crop: jfk's last 128000 samples score the same as the whole clip.
-    std::vector<float> jfk;
-    if (load_sample("jfk.wav", jfk) && jfk.size() > 128000) {
-        const float              whole = run(s, jfk).p;
-        const std::vector<float> tail(jfk.end() - 128000, jfk.end());
-        CHECK(run(s, tail).p == whole);
-    }
-
-    // A threshold override changes the decision, not the score.
-    std::vector<float> unc;
-    if (load_sample("turn-uncertain-en.wav", unc)) {
+        // A threshold override flips the decision, not the score.
         transcribe_turn_params tp;
         transcribe_turn_params_init(&tp);
-        tp.threshold                   = 0.2;
-        const transcribe_turn_result r = run(s, unc, &tp);
-        CHECK(r.ended && std::fabs(r.p - 0.27423417568206787) <= 1e-4);
+        tp.threshold                   = c.ended ? 1.0 : 0.0;
+        const transcribe_turn_result o = run(s, pcm, &tp);
+        CHECK(o.p == r.p && o.ended != r.ended);
+
+        // The 8 s crop: the last 128000 samples score the same as the whole clip.
+        if (pcm.size() > 128000) {
+            CHECK(run(s, std::vector<float>(pcm.end() - 128000, pcm.end())).p == r.p);
+        }
     }
 
     transcribe_turn_session_free(s);

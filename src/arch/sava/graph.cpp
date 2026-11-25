@@ -1,29 +1,35 @@
-// arch/sava/graph.cpp - the step graph over a block of frames, the
-// persistent stream state it reads and writes, and the host-side inputs.
+// arch/sava/graph.cpp - the step graph, the stream state it reads and writes,
+// and its host inputs.
 //
-// Layout: activations are ne [C, n], one column per frame. A block of n_real
-// frames runs as a graph of n = max(n_real, k_min_graph_frames) columns; the
-// padding columns come after the real ones and never feed back into them
-// (everything is causal) or into the state (state writes read the last real
-// column). The padding exists so ggml's CPU matmul always takes the same
-// kernel: with every per-frame value computed by the same kernel in the same
-// reduction order whatever n is, a stream is bit-identical to a whole run.
+// A step graph runs one stream over a block of n_real frames, or one frame of
+// each of a list of streams. Activations are ne [C, n], one column per frame;
+// stream j owns columns [j k, j k + k), the first n_real of them real:
 //
-// State, in a backend buffer of the session (written by the graph):
+//   block  one stream, k = n = max(n_real, k_min_graph_frames); the padding columns
+//          come last and, everything being causal, never feed the real ones
+//   batch  k = n_real = 1, n = max(count, k_min_graph_frames); padding columns
+//          repeat stream 0
+//
+// Weight matmuls, norms and element-wise ops run once over all n columns.
+// Per-stream ops (the mixer row and speech carries, the Mamba-2 conv and
+// scan, the ring writes and attention) run on that stream's state, the
+// attention query padded to k_min_graph_frames columns, and its state writes read its
+// last real column. Every matmul so has at least k_min_graph_frames columns and takes
+// the same CPU kernel in the same reduction order, so every frame gets the
+// same bits whatever the block size or the batch.
+//
+// State, in a backend buffer of the stream:
 //   mixer_tail   the previous frame's mixer row
 //   conv / ssm   per Mamba-2 block: the last K - 1 raw xBC columns and the SSM
-//                state. ggml_ssm_scan snapshots the state after each of the
-//                last K steps, so the state after the last real column is
-//                slot n - n_real.
+//                state (ggml_ssm_scan keeps the state after each of the last
+//                k - n_real + 1 steps; the write takes the last real one)
 //   k/v ring     per attention layer: keys (normed, rotated) and values of
 //                position p at slot p % ring, ring = window + k_block_frames,
-//                so a block's own keys are written before attention without
-//                evicting a key any of its queries still reads. A query
-//                reads the slots whose position is in [p - window + 1, p]
-//                (an additive -inf mask); the slot order, hence the
-//                reduction order, depends on p alone.
-//   prev_speech  sigmoid of the last on-time speech logit (the turn head's
-//                input at the next step)
+//                so a block writes its keys before attending without
+//                evicting one its queries read. A -inf mask keeps positions
+//                [p - window + 1, p]; the slot order, hence the reduction
+//                order, depends on p alone.
+//   prev_speech  sigmoid of the last on-time speech logit
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -48,25 +54,40 @@ namespace {
 
 constexpr const char * kTag = "sava";
 
-// Frames per graph; also the slack of every KV ring past its window.
+// Frames per block graph; also the slack of every KV ring past its window.
 constexpr int k_block_frames     = 64;
-// Smallest graph, in columns: ggml's CPU matmul takes tinyBLAS only from 4
-// columns on NEON (2 on x86) and otherwise another kernel with a different
-// reduction order.
+// ggml's CPU matmul takes tinyBLAS only from 4 columns on NEON (2 on x86),
+// below that another kernel with a different reduction order.
 constexpr int k_min_graph_frames = 4;
-constexpr int k_graph_size       = 8192;
+
+std::atomic<uint64_t> g_stream_uid{ 1 };
 
 ggml_tensor * rms(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, float eps) {
-    x = ggml_rms_norm(ctx, x, eps);
-    return w != nullptr ? ggml_mul(ctx, x, w) : x;
+    return ggml_mul(ctx, ggml_rms_norm(ctx, x, eps), w);
 }
 
-ggml_tensor * dump_point(ggml_tensor * t, const char * name) {
-    ggml_set_name(t, name);
+ggml_tensor * dump_point(ggml_tensor * t) {
     if (debug::enabled()) {
         ggml_set_output(t);
     }
     return t;
+}
+
+// Columns [c, c + w) of t ne [C, n].
+ggml_tensor * cols(ggml_context * ctx, ggml_tensor * t, int64_t c, int64_t w) {
+    return ggml_view_2d(ctx, t, t->ne[0], w, t->nb[1], static_cast<size_t>(c) * t->nb[1]);
+}
+
+// parts concatenated along dim, padded to n with copies of parts[0].
+ggml_tensor * cat_pad(ggml_context * ctx, const std::vector<ggml_tensor *> & parts, int64_t n, int dim) {
+    ggml_tensor * r = parts[0];
+    for (size_t i = 1; i < parts.size(); ++i) {
+        r = ggml_concat(ctx, r, parts[i], dim);
+    }
+    while (r->ne[dim] < n) {
+        r = ggml_concat(ctx, r, parts[0], dim);
+    }
+    return r;
 }
 
 // SwiGLU FFN with its pre-norm and residual.
@@ -79,8 +100,7 @@ ggml_tensor * build_mlp(ggml_context * ctx, ggml_tensor * x, const MlpWeights & 
 
 // Rotate-half RoPE of x ne [hd, heads, n] with cos / sin ne [hd / 2, 1, n].
 ggml_tensor * rope(ggml_context * ctx, ggml_tensor * x, ggml_tensor * cs, ggml_tensor * sn) {
-    const int64_t hd   = x->ne[0];
-    const int64_t half = hd / 2;
+    const int64_t half = x->ne[0] / 2;
     ggml_tensor * x1   = ggml_view_3d(ctx, x, half, x->ne[1], x->ne[2], x->nb[1], x->nb[2], 0);
     ggml_tensor * x2 =
         ggml_view_3d(ctx, x, half, x->ne[1], x->ne[2], x->nb[1], x->nb[2], static_cast<size_t>(half) * sizeof(float));
@@ -102,13 +122,11 @@ ggml_tensor * attend(ggml_context *      ctx,
                      const AttnHParams & a) {
     const int64_t hd = a.head_dim;
     const int64_t KV = a.n_kv_heads;
-    const int64_t nw = k->ne[1];
     const size_t  fs = sizeof(float);
 
     ggml_tensor * kr = ggml_set_rows(ctx, as.k_ring, k, slots);
-    // The V ring is stored transposed, ne [ring, KV hd], so the value product
-    // reads it in place: one-element rows, element (slot, c) gets v[c].
-    ggml_tensor * vt = ggml_reshape_3d(ctx, ggml_cont(ctx, ggml_transpose(ctx, v)), 1, nw, hd * KV);
+    // One-element rows of the transposed V ring: element (slot, c) gets v[c].
+    ggml_tensor * vt = ggml_reshape_3d(ctx, ggml_cont(ctx, ggml_transpose(ctx, v)), 1, k->ne[1], hd * KV);
     ggml_tensor * vr = ggml_set_rows(ctx, ggml_reshape_3d(ctx, as.v_ring, 1, as.ring, hd * KV), vt, slots);
 
     // scores [ring, nq, H]; query head i reads key head i / (H / KV). The
@@ -119,7 +137,7 @@ ggml_tensor * attend(ggml_context *      ctx,
     P               = ggml_soft_max_ext(ctx, P, mask, 1.0f / std::sqrt(static_cast<float>(hd)), 0.0f);
 
     ggml_tensor * V = ggml_reshape_3d(ctx, vr, as.ring, hd, KV);
-    return ggml_cont(ctx, ggml_permute(ctx, ggml_mul_mat(ctx, V, P), 0, 2, 1, 3));  // [hd, H, nq]
+    return ggml_cont(ctx, ggml_permute(ctx, ggml_mul_mat(ctx, V, P), 0, 2, 1, 3));
 }
 
 // Exclusive self attention (remove alpha times each head's projection on its
@@ -143,263 +161,259 @@ ggml_tensor * attn_out(ggml_context *      ctx,
         if (a.xsa_alpha != 1.0f) {
             coef = ggml_scale(ctx, coef, a.xsa_alpha);
         }
-        ggml_tensor * proj = ggml_mul(ctx, ggml_repeat(ctx, v4, O4), coef);
-        O                  = ggml_sub(ctx, O4, proj);
+        O = ggml_sub(ctx, O4, ggml_mul(ctx, ggml_repeat(ctx, v4, O4), coef));
     }
     return ggml_mul_mat(ctx, w.out, ggml_reshape_2d(ctx, O, hd * H, n));
 }
 
-struct Qkv {
-    ggml_tensor * q = nullptr;  // ne [hd, H, n], normed and rotated
-    ggml_tensor * k = nullptr;  // ne [KV hd, n], normed and rotated
-    ggml_tensor * v = nullptr;  // ne [hd, KV, n]
+// Builds a step graph's body (see the file comment) into g.t.
+struct Builder {
+    ggml_context *             ctx;
+    StepGraph &                g;
+    const HParams &            hp;
+    Stream * const *           streams;
+    int                        count;
+    std::vector<ggml_tensor *> writes;  // state writes, expanded after every read
+
+    // t ne [C, n] one frame late per stream: each stream's first column is
+    // its state, which gets its last real column.
+    ggml_tensor * carry(ggml_tensor * t, ggml_tensor * Stream::* state) {
+        std::vector<ggml_tensor *> parts;
+        for (int j = 0; j < count; ++j) {
+            ggml_tensor * s = streams[j]->*state;
+            ggml_tensor * p = ggml_reshape_2d(ctx, s, t->ne[0], 1);
+            if (g.k > 1) {
+                p = ggml_concat(ctx, p, cols(ctx, t, static_cast<int64_t>(j) * g.k, g.k - 1), 1);
+            }
+            parts.push_back(p);
+            writes.push_back(ggml_cpy(ctx, cols(ctx, t, static_cast<int64_t>(j) * g.k + g.n_real - 1, 1), s));
+        }
+        return cat_pad(ctx, parts, g.n, 1);
+    }
+
+    // Mamba-2 sublayer of trunk block i (pre-norm to output projection).
+    ggml_tensor * ssm(size_t i, ggml_tensor * x, const SsmWeights & w) {
+        const int64_t n     = g.n;
+        const int64_t k     = g.k;
+        const int64_t inner = hp.ssm_inner;
+        const int64_t cdim  = hp.ssm_conv_dim;
+        const int64_t heads = hp.ssm_heads;
+        const int64_t hd    = hp.ssm_head_dim;
+        const int64_t N     = hp.ssm_state;
+        const int64_t G     = hp.ssm_groups;
+        const size_t  fs    = sizeof(float);
+
+        ggml_tensor * u     = ggml_mul_mat(ctx, w.in, rms(ctx, x, w.norm, hp.rms_eps));  // [inner + cdim + heads, n]
+        ggml_tensor * z     = ggml_cont(ctx, ggml_view_2d(ctx, u, inner, n, u->nb[1], 0));
+        ggml_tensor * xbc_t = ggml_cont(ctx, ggml_transpose(ctx, ggml_view_2d(ctx, u, cdim, n, u->nb[1], inner * fs)));
+        ggml_tensor * dt    = ggml_view_2d(ctx, u, heads, n, u->nb[1], (inner + cdim) * fs);
+
+        std::vector<ggml_tensor *> ys;
+        for (int j = 0; j < count; ++j) {
+            const SsmState & ss = streams[j]->ssm[i];
+            const int64_t    c0 = static_cast<int64_t>(j) * k;
+            // Causal depthwise conv over [state (K - 1) | columns], time first.
+            ggml_tensor *    sx = ggml_concat(
+                ctx, ss.conv, ggml_view_2d(ctx, xbc_t, k, cdim, xbc_t->nb[1], static_cast<size_t>(c0) * fs), 0);
+            ggml_tensor * c =
+                ggml_silu(ctx, ggml_add(ctx, ggml_ssm_conv(ctx, sx, w.conv_w), w.conv_b));  // [cdim, k, 1]
+            ggml_tensor * xs   = ggml_view_4d(ctx, c, hd, heads, k, 1, hd * fs, c->nb[1], c->nb[1] * k, 0);
+            ggml_tensor * B    = ggml_view_4d(ctx, c, N, G, k, 1, N * fs, c->nb[1], c->nb[1] * k, inner * fs);
+            ggml_tensor * C    = ggml_view_4d(ctx, c, N, G, k, 1, N * fs, c->nb[1], c->nb[1] * k, (inner + G * N) * fs);
+            // dt's softplus is the scan's.
+            ggml_tensor * dtb  = ggml_reshape_3d(ctx, ggml_add(ctx, cols(ctx, dt, c0, k), w.dt_b), heads, k, 1);
+            ggml_tensor * scan = ggml_ssm_scan(ctx, ss.ssm, xs, dtb, w.a, B, C, g.t.ssm_ids, k - g.n_real + 1);
+            ggml_tensor * y3   = ggml_view_3d(ctx, scan, hd, heads, k, hd * fs, inner * fs, 0);
+            ggml_tensor * yd   = ggml_add(ctx, y3, ggml_mul(ctx, xs, ggml_reshape_2d(ctx, w.d, 1, heads)));
+            ys.push_back(ggml_reshape_2d(ctx, yd, inner, k));
+            if (j == 0) {
+                g.t.ssm_y[i] = dump_point(ggml_view_2d(ctx, scan, inner, k, inner * fs, 0));
+            }
+            writes.push_back(
+                ggml_cpy(ctx, ggml_view_2d(ctx, sx, hp.ssm_conv_kernel - 1, cdim, sx->nb[1], g.n_real * fs), ss.conv));
+            const size_t  at    = static_cast<size_t>(inner * k) * fs + (k - g.n_real) * ggml_nbytes(ss.ssm);
+            ggml_tensor * state = ggml_view_4d(ctx, scan, ss.ssm->ne[0], ss.ssm->ne[1], ss.ssm->ne[2], 1, ss.ssm->nb[1],
+                                               ss.ssm->nb[2], ss.ssm->nb[3], at);
+            writes.push_back(ggml_cpy(ctx, state, ss.ssm));
+        }
+        ggml_tensor * yg = ggml_mul(ctx, cat_pad(ctx, ys, n, 1), ggml_silu(ctx, z));
+        yg               = ggml_rms_norm(ctx, ggml_reshape_3d(ctx, yg, inner / G, G, n), hp.rms_eps);
+        yg               = ggml_mul(ctx, ggml_reshape_2d(ctx, yg, inner, n), w.norm_gated);
+        return ggml_mul_mat(ctx, w.out, yg);
+    }
+
+    // Attention sublayer (pre-norm to output projection) of attention layer li.
+    ggml_tensor * attention(size_t li, ggml_tensor * x, const AttnWeights & w, const AttnHParams & a) {
+        const int64_t n   = g.n;
+        const int64_t k   = g.k;
+        const int64_t hd  = a.head_dim;
+        const int64_t H   = a.n_heads;
+        const int64_t KV  = a.n_kv_heads;
+        const float   eps = hp.rms_eps;
+        const size_t  fs  = sizeof(float);
+
+        ggml_tensor * qkv = ggml_mul_mat(ctx, w.qkv, rms(ctx, x, w.norm, eps));  // [(H + 2 KV) hd, n]
+        ggml_tensor * q   = ggml_view_3d(ctx, qkv, hd, H, n, hd * fs, qkv->nb[1], 0);
+        ggml_tensor * kk  = ggml_view_3d(ctx, qkv, hd, KV, n, hd * fs, qkv->nb[1], H * hd * fs);
+        ggml_tensor * v   = ggml_cont(ctx, ggml_view_3d(ctx, qkv, hd, KV, n, hd * fs, qkv->nb[1], (H + KV) * hd * fs));
+        q                 = rope(ctx, rms(ctx, q, w.q_norm, eps), g.t.rope_cos, g.t.rope_sin);
+        kk = ggml_reshape_2d(ctx, rope(ctx, rms(ctx, kk, w.k_norm, eps), g.t.rope_cos, g.t.rope_sin), hd * KV, n);
+        ggml_tensor * v2 = ggml_reshape_2d(ctx, v, hd * KV, n);
+
+        std::vector<ggml_tensor *> outs;
+        for (int j = 0; j < count; ++j) {
+            const int64_t c0 = static_cast<int64_t>(j) * k;
+            ggml_tensor * qj = ggml_view_3d(ctx, q, hd, H, k, q->nb[1], q->nb[2], static_cast<size_t>(c0) * q->nb[2]);
+            if (k < k_min_graph_frames) {
+                qj = ggml_repeat_4d(ctx, qj, hd, H, k_min_graph_frames, 1);
+            }
+            ggml_tensor * O =
+                attend(ctx, streams[j]->attn[li], g.t.slots[li][static_cast<size_t>(j)],
+                       g.t.masks[li][static_cast<size_t>(j)], qj, cols(ctx, kk, c0, k), cols(ctx, v2, c0, k), a);
+            outs.push_back(ggml_view_3d(ctx, O, hd, H, k, O->nb[1], O->nb[2], 0));
+        }
+        return attn_out(ctx, cat_pad(ctx, outs, n, 2), v, w, a);
+    }
 };
 
-Qkv build_qkv(ggml_context *      ctx,
-              ggml_tensor *       x,
-              const AttnWeights & w,
-              const AttnHParams & a,
-              ggml_tensor *       rope_cos,
-              ggml_tensor *       rope_sin,
-              float               eps) {
-    const int64_t n   = x->ne[1];
-    const int64_t hd  = a.head_dim;
-    const int64_t H   = a.n_heads;
-    const int64_t KV  = a.n_kv_heads;
-    const size_t  fs  = sizeof(float);
-    ggml_tensor * qkv = ggml_mul_mat(ctx, w.qkv, rms(ctx, x, w.norm, eps));  // [(H + 2 KV) hd, n]
-    Qkv           r;
-    r.q = ggml_view_3d(ctx, qkv, hd, H, n, hd * fs, qkv->nb[1], 0);
-    r.k = ggml_view_3d(ctx, qkv, hd, KV, n, hd * fs, qkv->nb[1], H * hd * fs);
-    r.v = ggml_cont(ctx, ggml_view_3d(ctx, qkv, hd, KV, n, hd * fs, qkv->nb[1], (H + KV) * hd * fs));
-    r.q = rope(ctx, rms(ctx, r.q, w.q_norm, eps), rope_cos, rope_sin);
-    r.k = ggml_reshape_2d(ctx, rope(ctx, rms(ctx, r.k, w.k_norm, eps), rope_cos, rope_sin), hd * KV, n);
-    return r;
-}
-
-// The attention sublayer (pre-norm to output projection, no residual) of
-// attention layer li over x ne [d, n].
-ggml_tensor * build_attention(ggml_context *       ctx,
-                              const Stream &       st,
-                              const GraphTensors & g,
-                              size_t               li,
-                              ggml_tensor *        x,
-                              const AttnWeights &  w,
-                              const AttnHParams &  a,
-                              float                eps) {
-    const Qkv     t  = build_qkv(ctx, x, w, a, g.rope_cos, g.rope_sin, eps);
-    ggml_tensor * v2 = ggml_reshape_2d(ctx, t.v, static_cast<int64_t>(a.head_dim) * a.n_kv_heads, x->ne[1]);
-    ggml_tensor * O  = attend(ctx, st.attn[li], g.slots[li], g.masks[li], t.q, t.k, v2, a);
-    return attn_out(ctx, O, t.v, w, a);
-}
-
-struct SsmOut {
-    ggml_tensor * out   = nullptr;  // [d, n], before the residual
-    ggml_tensor * y     = nullptr;  // [inner, n], scan output before the D skip
-    ggml_tensor * scan  = nullptr;
-    ggml_tensor * sx    = nullptr;
-    ggml_tensor * x_ssm = nullptr;
-};
-
-SsmOut build_ssm(ggml_context *       ctx,
-                 const SsmState &     ss,
-                 const GraphTensors & g,
-                 ggml_tensor *        x,
-                 const SsmWeights &   w,
-                 const HParams &      hp,
-                 int                  n_pad) {
-    const int64_t n     = x->ne[1];
-    const int64_t inner = hp.ssm_inner;
-    const int64_t cdim  = hp.ssm_conv_dim;
-    const int64_t heads = hp.ssm_heads;
-    const int64_t hd    = hp.ssm_head_dim;
-    const int64_t N     = hp.ssm_state;
-    const int64_t G     = hp.ssm_groups;
-    const size_t  fs    = sizeof(float);
-    SsmOut        r;
-
-    ggml_tensor * u   = ggml_mul_mat(ctx, w.in, rms(ctx, x, w.norm, hp.rms_eps));  // [inner + cdim + heads, n]
-    ggml_tensor * z   = ggml_cont(ctx, ggml_view_2d(ctx, u, inner, n, u->nb[1], 0));
-    ggml_tensor * xbc = ggml_view_2d(ctx, u, cdim, n, u->nb[1], inner * fs);
-    ggml_tensor * dt  = ggml_view_2d(ctx, u, heads, n, u->nb[1], (inner + cdim) * fs);
-
-    // Causal depthwise conv over [state (K - 1) | block], time first.
-    r.sx            = ggml_concat(ctx, ss.conv, ggml_cont(ctx, ggml_transpose(ctx, xbc)), 0);       // [K - 1 + n, cdim]
-    ggml_tensor * c = ggml_silu(ctx, ggml_add(ctx, ggml_ssm_conv(ctx, r.sx, w.conv_w), w.conv_b));  // [cdim, n, 1]
-
-    ggml_tensor * xs  = ggml_view_4d(ctx, c, hd, heads, n, 1, hd * fs, c->nb[1], c->nb[1] * n, 0);
-    ggml_tensor * B   = ggml_view_4d(ctx, c, N, G, n, 1, N * fs, c->nb[1], c->nb[1] * n, inner * fs);
-    ggml_tensor * C   = ggml_view_4d(ctx, c, N, G, n, 1, N * fs, c->nb[1], c->nb[1] * n, (inner + G * N) * fs);
-    ggml_tensor * dtb = ggml_reshape_3d(ctx, ggml_add(ctx, dt, w.dt_b), heads, n, 1);  // softplus is the scan's
-
-    r.scan  = ggml_ssm_scan(ctx, ss.ssm, xs, dtb, w.a, B, C, g.ssm_ids, n_pad + 1);
-    r.y     = ggml_view_2d(ctx, r.scan, inner, n, inner * fs, 0);
-    r.x_ssm = xs;
-
-    ggml_tensor * y3 = ggml_view_3d(ctx, r.scan, hd, heads, n, hd * fs, inner * fs, 0);
-    ggml_tensor * yd = ggml_add(ctx, y3, ggml_mul(ctx, xs, ggml_reshape_2d(ctx, w.d, 1, heads)));
-    ggml_tensor * yg = ggml_mul(ctx, ggml_reshape_2d(ctx, yd, inner, n), ggml_silu(ctx, z));
-    yg               = ggml_rms_norm(ctx, ggml_reshape_3d(ctx, yg, inner / G, G, n), hp.rms_eps);
-    yg               = ggml_mul(ctx, ggml_reshape_2d(ctx, yg, inner, n), w.norm_gated);
-    r.out            = ggml_mul_mat(ctx, w.out, yg);
-    return r;
-}
-
-transcribe_status build_graph(SessionCore & core, Stream & st, const Model & m, int n, int n_real) {
+// The graph of count streams with n_real frames each (count 1 or n_real 1).
+transcribe_status build_graph(StepGraph & g, const Model & m, Stream * const * streams, int count, int n_real) {
     const HParams & hp  = m.hparams;
     const Weights & w   = m.weights;
     const float     eps = hp.rms_eps;
-    const size_t    fs  = sizeof(float);
 
-    if (core.compute_ctx != nullptr) {
-        ggml_free(core.compute_ctx);
-        core.compute_ctx = nullptr;
+    // Tensors (nodes, views, inputs) per layer, trunk and the two head
+    // attentions: measured at most ~20 shared and ~28 per stream (an
+    // attention layer), plus ~100 for the mixer and heads.
+    const size_t n_layers   = w.trunk.size() + 2;
+    const size_t graph_size = 512 + n_layers * (64 + 40 * static_cast<size_t>(count));
+    if (g.ctx != nullptr) {
+        ggml_free(g.ctx);
+        g.ctx = nullptr;
     }
-    st.g          = GraphTensors{};
-    st.graph_n    = 0;
-    st.graph_real = 0;
+    if (g.sched != nullptr && g.sched_size < graph_size) {
+        safe_sched_free(g.sched);
+        g.sched = nullptr;
+    }
+    g.key.clear();
+    g.t         = GraphTensors{};
+    g.n_real    = n_real;
+    g.k         = count == 1 ? std::max(n_real, k_min_graph_frames) : 1;
+    g.n         = count == 1 ? g.k : std::max(count, k_min_graph_frames);
+    const int n = g.n;
 
     ggml_init_params ip{};
-    ip.mem_size      = ggml_graph_overhead_custom(k_graph_size, false) + k_graph_size * ggml_tensor_overhead();
-    ip.no_alloc      = true;
-    core.compute_ctx = ggml_init(ip);
-    if (core.compute_ctx == nullptr) {
+    ip.mem_size = ggml_graph_overhead_custom(graph_size, false) + graph_size * ggml_tensor_overhead();
+    ip.no_alloc = true;
+    g.ctx       = ggml_init(ip);
+    if (g.ctx == nullptr) {
         return TRANSCRIBE_ERR_OOM;
     }
-    ggml_context * ctx = core.compute_ctx;
-    GraphTensors & g   = st.g;
-
-    auto input = [&](ggml_tensor * t, const char * name) {
-        ggml_set_name(t, name);
-        ggml_set_input(t);
-        return t;
+    ggml_context * ctx   = g.ctx;
+    GraphTensors & t     = g.t;
+    auto           input = [](ggml_tensor * x) {
+        ggml_set_input(x);
+        return x;
     };
-    g.mel_in     = input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.mel_width, n), "fe.mel");
-    g.log_energy = input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, n), "fe.log_energy");
-    g.ssm_ids    = input(ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1), "ssm.ids");
-    g.rope_cos   = input(ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hp.attn.head_dim / 2, 1, n), "rope.cos");
-    g.rope_sin   = input(ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hp.attn.head_dim / 2, 1, n), "rope.sin");
-    for (size_t li = 0; li < st.attn.size(); ++li) {
-        g.slots.push_back(input(ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n), "attn.slots"));
-        g.masks.push_back(input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, st.attn[li].ring, n), "attn.mask"));
+    t.mel_in            = input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.mel_width, n));
+    t.log_energy        = input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, n));
+    t.ssm_ids           = input(ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1));
+    t.rope_cos          = input(ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hp.attn.head_dim / 2, 1, n));
+    t.rope_sin          = input(ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hp.attn.head_dim / 2, 1, n));
+    const size_t n_attn = streams[0]->attn.size();
+    t.slots.assign(n_attn, {});
+    t.masks.assign(n_attn, {});
+    for (size_t li = 0; li < n_attn; ++li) {
+        for (int j = 0; j < count; ++j) {
+            const int64_t ring = streams[j]->attn[li].ring;
+            t.slots[li].push_back(input(ggml_new_tensor_1d(ctx, GGML_TYPE_I64, g.k)));
+            t.masks[li].push_back(
+                input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ring, std::max(g.k, k_min_graph_frames))));
+        }
     }
+    Builder b{ ctx, g, hp, streams, count, {} };
 
-    // ---- front end (host, fill_inputs): causal log-mel, hop-major per frame ----
-    ggml_tensor * mel = g.mel_in;
-
-    // ---- mixer: [row_{t-1} | row_t] ----
-    ggml_tensor * row  = ggml_concat(ctx, mel, g.log_energy, 0);  // [row_width, n]
-    ggml_tensor * prev = ggml_concat(ctx, ggml_reshape_2d(ctx, st.mixer_tail, hp.row_width, 1),
-                                     ggml_view_2d(ctx, row, hp.row_width, n - 1, row->nb[1], 0), 1);
-    ggml_tensor * x    = rms(ctx, ggml_mul_mat(ctx, w.mixer_proj, ggml_concat(ctx, prev, row, 0)), w.mixer_norm, eps);
-    g.mel              = mel;
-    g.mixer            = dump_point(x, "mixer.out");
+    // ---- mixer: [row_{t-1} | row_t], row = [mel | log energy] ----
+    ggml_tensor * row = ggml_concat(ctx, t.mel_in, t.log_energy, 0);  // [row_width, n]
+    ggml_tensor * x   = ggml_concat(ctx, b.carry(row, &Stream::mixer_tail), row, 0);
+    x                 = rms(ctx, ggml_mul_mat(ctx, w.mixer_proj, x), w.mixer_norm, eps);
+    t.mixer           = dump_point(x);
 
     // ---- trunk ----
-    std::vector<SsmOut> ssm_outs(w.trunk.size());
-    size_t              li = 0;
+    t.trunk_mix.assign(w.trunk.size(), nullptr);
+    t.trunk_out.assign(w.trunk.size(), nullptr);
+    t.ssm_y.assign(w.trunk.size(), nullptr);
+    size_t li = 0;
     for (size_t i = 0; i < w.trunk.size(); ++i) {
-        const Block & b   = w.trunk[i];
-        ggml_tensor * mix = nullptr;
-        if (b.is_ssm) {
-            ssm_outs[i] = build_ssm(ctx, st.ssm[i], g, x, b.ssm, hp, n - n_real);
-            mix         = ssm_outs[i].out;
-            g.ssm_y.push_back(dump_point(ssm_outs[i].y, "trunk.ssm_y"));
-        } else {
-            mix = build_attention(ctx, st, g, li++, x, b.attn, hp.attn, eps);
-            g.ssm_y.push_back(nullptr);
-        }
-        g.trunk_mix.push_back(dump_point(mix, "trunk.mix"));
-        x = build_mlp(ctx, ggml_add(ctx, x, mix), b.mlp, eps);
-        g.trunk_out.push_back(dump_point(x, "trunk.out"));
+        const Block & blk = w.trunk[i];
+        ggml_tensor * mix = blk.is_ssm ? b.ssm(i, x, blk.ssm) : b.attention(li++, x, blk.attn, hp.attn);
+        t.trunk_mix[i]    = dump_point(mix);
+        x                 = dump_point(build_mlp(ctx, ggml_add(ctx, x, mix), blk.mlp, eps));
+        t.trunk_out[i]    = x;
     }
-    ggml_tensor * hn = dump_point(rms(ctx, x, w.trunk_norm, eps), "trunk.norm");
-    g.trunk_norm     = hn;
+    ggml_tensor * hn = dump_point(rms(ctx, x, w.trunk_norm, eps));
+    t.trunk_norm     = hn;
 
     // ---- VAD head ----
     ggml_tensor * v = ggml_mul_mat(ctx, w.vad_down, rms(ctx, hn, w.vad_norm_in, eps));
-    v               = ggml_add(ctx, v, build_attention(ctx, st, g, li++, v, w.vad_attn, hp.vad_attn, eps));
-    v               = rms(ctx, build_mlp(ctx, v, w.vad_mlp, eps), w.vad_norm_out, eps);
-    g.vad_hidden    = dump_point(v, "head.vad.hidden");
-    g.logit         = ggml_add(ctx, ggml_mul_mat(ctx, w.vad_ro_w, v), w.vad_ro_b);  // [1, n]
-    g.logit_la      = ggml_add(ctx, ggml_mul_mat(ctx, w.vad_la_w, v), w.vad_la_b);  // [1, n]
+    v               = ggml_add(ctx, v, b.attention(li++, v, w.vad_attn, hp.vad_attn));
+    v               = dump_point(rms(ctx, build_mlp(ctx, v, w.vad_mlp, eps), w.vad_norm_out, eps));
+    t.vad_hidden    = v;
+    t.logit         = ggml_add(ctx, ggml_mul_mat(ctx, w.vad_ro_w, v), w.vad_ro_b);  // [1, n]
+    t.logit_la      = ggml_add(ctx, ggml_mul_mat(ctx, w.vad_la_w, v), w.vad_la_b);  // [1, n]
 
     // ---- turn head: speech_in = sigmoid(on-time logit of the step before) ----
-    ggml_tensor * sp = ggml_sigmoid(ctx, g.logit);
-    ggml_tensor * s_in =
-        ggml_concat(ctx, ggml_reshape_2d(ctx, st.prev_speech, 1, 1), ggml_view_2d(ctx, sp, 1, n - 1, sp->nb[1], 0), 1);
-    g.speech_in       = dump_point(s_in, "head.turn.speech_in");
-    ggml_tensor * emb = ggml_mul(
-        ctx, ggml_repeat_4d(ctx, ggml_reshape_2d(ctx, w.turn_emb_w, hp.vad_embed, 1), hp.vad_embed, n, 1, 1), s_in);
-    emb               = dump_point(ggml_add(ctx, emb, w.turn_emb_b), "head.turn.embed");
-    g.turn_emb        = emb;
-    ggml_tensor * tin = dump_point(ggml_concat(ctx, rms(ctx, hn, w.turn_norm_in, eps), emb, 0), "head.turn.input");
-    g.turn_in         = tin;
-    ggml_tensor * t   = ggml_mul_mat(ctx, w.turn_down, tin);
-    t                 = ggml_add(ctx, t, build_attention(ctx, st, g, li++, t, w.turn_attn, hp.turn_attn, eps));
-    t                 = rms(ctx, build_mlp(ctx, t, w.turn_mlp, eps), w.turn_norm_out, eps);
-    g.turn_hidden     = dump_point(t, "head.turn.hidden");
-    g.turn            = ggml_add(ctx, ggml_mul_mat(ctx, w.turn_ro_w, t), w.turn_ro_b);  // [n_horizons, n]
+    t.speech_in = dump_point(b.carry(ggml_sigmoid(ctx, t.logit), &Stream::prev_speech));
+    ggml_tensor * emb =
+        ggml_mul(ctx, ggml_repeat_4d(ctx, ggml_reshape_2d(ctx, w.turn_emb_w, hp.vad_embed, 1), hp.vad_embed, n, 1, 1),
+                 t.speech_in);
+    t.turn_emb       = dump_point(ggml_add(ctx, emb, w.turn_emb_b));
+    t.turn_in        = dump_point(ggml_concat(ctx, rms(ctx, hn, w.turn_norm_in, eps), t.turn_emb, 0));
+    ggml_tensor * tt = ggml_mul_mat(ctx, w.turn_down, t.turn_in);
+    tt               = ggml_add(ctx, tt, b.attention(li++, tt, w.turn_attn, hp.turn_attn));
+    t.turn_hidden    = dump_point(rms(ctx, build_mlp(ctx, tt, w.turn_mlp, eps), w.turn_norm_out, eps));
+    t.turn           = ggml_add(ctx, ggml_mul_mat(ctx, w.turn_ro_w, t.turn_hidden), w.turn_ro_b);  // [n_horizons, n]
 
-    ggml_set_output(g.logit);
-    ggml_set_output(g.logit_la);
-    ggml_set_output(g.turn);
-
-    g.graph = ggml_new_graph_custom(ctx, k_graph_size, false);
-    ggml_build_forward_expand(g.graph, g.turn);
-    ggml_build_forward_expand(g.graph, g.logit_la);
+    ggml_set_output(t.logit);
+    ggml_set_output(t.logit_la);
+    ggml_set_output(t.turn);
+    t.graph = ggml_new_graph_custom(ctx, graph_size, false);
+    ggml_build_forward_expand(t.graph, t.turn);
+    ggml_build_forward_expand(t.graph, t.logit_la);
     if (debug::enabled()) {
-        for (ggml_tensor * d :
-             { g.mixer, g.trunk_norm, g.vad_hidden, g.speech_in, g.turn_in, g.turn_emb, g.turn_hidden }) {
-            ggml_build_forward_expand(g.graph, d);
+        for (ggml_tensor * d : { t.mixer, t.trunk_norm, t.vad_hidden, t.speech_in, t.turn_in, t.turn_emb }) {
+            ggml_build_forward_expand(t.graph, d);
         }
         for (size_t i = 0; i < w.trunk.size(); ++i) {
-            ggml_build_forward_expand(g.graph, g.trunk_mix[i]);
-            ggml_build_forward_expand(g.graph, g.trunk_out[i]);
-            if (g.ssm_y[i] != nullptr) {
-                ggml_build_forward_expand(g.graph, g.ssm_y[i]);
+            ggml_build_forward_expand(t.graph, t.trunk_mix[i]);
+            ggml_build_forward_expand(t.graph, t.trunk_out[i]);
+            if (t.ssm_y[i] != nullptr) {
+                ggml_build_forward_expand(t.graph, t.ssm_y[i]);
             }
         }
     }
-
-    // ---- state writes, after every read of the state they replace ----
-    const int64_t last = n_real - 1;
-    ggml_build_forward_expand(g.graph, ggml_cpy(ctx, ggml_view_1d(ctx, sp, 1, last * sp->nb[1]), st.prev_speech));
-    ggml_build_forward_expand(g.graph,
-                              ggml_cpy(ctx, ggml_view_1d(ctx, row, hp.row_width, last * row->nb[1]), st.mixer_tail));
-    for (size_t i = 0; i < w.trunk.size(); ++i) {
-        if (!w.trunk[i].is_ssm) {
-            continue;
-        }
-        const SsmOut &   so = ssm_outs[i];
-        const SsmState & ss = st.ssm[i];
-        ggml_tensor *    conv_tail =
-            ggml_view_2d(ctx, so.sx, hp.ssm_conv_kernel - 1, hp.ssm_conv_dim, so.sx->nb[1], n_real * fs);
-        ggml_build_forward_expand(g.graph, ggml_cpy(ctx, conv_tail, ss.conv));
-        const size_t  y_bytes     = static_cast<size_t>(ggml_nelements(so.x_ssm)) * fs;
-        const size_t  state_bytes = ggml_nbytes(ss.ssm);
-        ggml_tensor * state =
-            ggml_view_4d(ctx, so.scan, ss.ssm->ne[0], ss.ssm->ne[1], ss.ssm->ne[2], 1, ss.ssm->nb[1], ss.ssm->nb[2],
-                         ss.ssm->nb[3], y_bytes + static_cast<size_t>(n - n_real) * state_bytes);
-        ggml_build_forward_expand(g.graph, ggml_cpy(ctx, state, ss.ssm));
+    for (ggml_tensor * wr : b.writes) {
+        ggml_build_forward_expand(t.graph, wr);
     }
 
-    if (core.sched == nullptr) {
+    if (g.sched == nullptr) {
         auto & backends = const_cast<std::vector<ggml_backend_t> &>(m.plan.scheduler_list);
-        core.sched = ggml_backend_sched_new(backends.data(), nullptr, static_cast<int>(backends.size()), k_graph_size,
-                                            /*parallel=*/false, /*op_offload=*/true);
-        if (core.sched == nullptr) {
+        g.sched = ggml_backend_sched_new(backends.data(), nullptr, static_cast<int>(backends.size()), graph_size,
+                                         /*parallel=*/false, /*op_offload=*/true);
+        if (g.sched == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: scheduler allocation failed", kTag);
             return TRANSCRIBE_ERR_OOM;
         }
+        g.sched_size = graph_size;
     }
-    ggml_backend_sched_reset(core.sched);
-    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(core.sched, g.graph, kTag)) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: graph allocation failed (%d frames)", kTag, n);
+    ggml_backend_sched_reset(g.sched);
+    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(g.sched, t.graph, kTag)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: graph allocation failed (%d columns)", kTag, n);
         return TRANSCRIBE_ERR_OOM;
     }
-    st.graph_n    = n;
-    st.graph_real = n_real;
+    for (int j = 0; j < count; ++j) {
+        g.key.push_back(streams[j]->uid);
+    }
     return TRANSCRIBE_OK;
 }
 
@@ -412,10 +426,6 @@ void append_cols(std::vector<float> & dst, const ggml_tensor * t, int n_real) {
     const size_t off = dst.size();
     dst.resize(off + n);
     ggml_backend_tensor_get(t, dst.data() + off, 0, n * sizeof(float));
-}
-
-float sigmoid(float x) {
-    return 1.0f / (1.0f + std::exp(-x));
 }
 
 // Complex FFT of n real samples x[0], x[stride], ... into (re, im)[0, n),
@@ -530,24 +540,6 @@ void mask_row(int64_t p, int64_t ring, int64_t window, float * row) {
     }
 }
 
-// Host inputs for a block of n_real frames in a graph of n columns.
-void fill_inputs(Stream & st, const Model & m, const float * pcm, int n, int n_real) {
-    const HParams & hp = m.hparams;
-    st.mel.assign(static_cast<size_t>(n) * static_cast<size_t>(hp.mel_width), 0.0f);
-    st.log_energy.assign(static_cast<size_t>(n), 0.0f);
-    for (int f = 0; f < n_real; ++f) {
-        frame_features(st, m, pcm + static_cast<size_t>(f) * static_cast<size_t>(hp.frame_samples),
-                       st.mel.data() + static_cast<size_t>(f) * static_cast<size_t>(hp.mel_width),
-                       &st.log_energy[static_cast<size_t>(f)]);
-    }
-    const size_t half = static_cast<size_t>(hp.attn.head_dim / 2);
-    st.rope.assign(2 * half * static_cast<size_t>(n), 0.0f);
-    for (int j = 0; j < n; ++j) {
-        rope_angles(m, st.pos + j, st.rope.data() + static_cast<size_t>(j) * half,
-                    st.rope.data() + static_cast<size_t>(n + j) * half);
-    }
-}
-
 }  // namespace
 
 transcribe_status stream_reset(Stream & st, const Model & m) {
@@ -563,8 +555,7 @@ transcribe_status stream_reset(Stream & st, const Model & m) {
         attn.push_back(&hp.turn_attn);
         const size_t n_tensors = 2 + 2 * hp.layer_is_ssm.size() + 2 * attn.size();
 
-        // A previous reset whose buffer allocation failed left its context:
-        // free it before building a new one.
+        // A previous reset whose buffer allocation failed left its context.
         if (st.state_ctx != nullptr) {
             ggml_free(st.state_ctx);
             st.state_ctx = nullptr;
@@ -610,9 +601,118 @@ transcribe_status stream_reset(Stream & st, const Model & m) {
 }
 
 transcribe_status ensure_state(Stream & st, const Model & m) {
-    // No state buffer: the last stream_reset failed, so no step has run
-    // since and the stream is still at its start. Retry the allocation.
     return st.state_buf != nullptr ? TRANSCRIBE_OK : stream_reset(st, m);
+}
+
+transcribe_status step(StepGraph &           g,
+                       const Model &         m,
+                       Stream * const *      streams,
+                       SessionCore * const * cores,
+                       int                   count,
+                       int                   n_real,
+                       int                   n_threads,
+                       const float * const * pcm,
+                       float *               turn,
+                       float *               speech) {
+    const HParams & hp    = m.hparams;
+    const int64_t   t0    = ggml_time_us();
+    bool            match = g.n_real == n_real && g.key.size() == static_cast<size_t>(count);
+    for (int j = 0; match && j < count; ++j) {
+        match = g.key[static_cast<size_t>(j)] == streams[j]->uid;
+    }
+    if (!match) {
+        if (auto rc = build_graph(g, m, streams, count, n_real); rc != TRANSCRIBE_OK) {
+            g.release();
+            return rc;
+        }
+    }
+    configure_sched_n_threads(g.sched, n_threads);
+    const GraphTensors & t    = g.t;
+    const size_t         n    = static_cast<size_t>(g.n);
+    const int            k    = g.k;
+    const size_t         mw   = static_cast<size_t>(hp.mel_width);
+    const size_t         half = static_cast<size_t>(hp.attn.head_dim / 2);
+
+    // Host inputs. Stream j's frame f is column j k + f; padding columns
+    // take no audio and stream 0's position.
+    g.mel.assign(n * mw, 0.0f);
+    g.log_energy.assign(n, 0.0f);
+    g.rope.assign(2 * half * n, 0.0f);
+    for (int j = 0; j < count; ++j) {
+        for (int f = 0; f < n_real; ++f) {
+            const size_t c = static_cast<size_t>(j * k + f);
+            frame_features(*streams[j], m, pcm[j] + static_cast<size_t>(f) * static_cast<size_t>(hp.frame_samples),
+                           g.mel.data() + c * mw, &g.log_energy[c]);
+        }
+    }
+    for (size_t c = 0; c < n; ++c) {
+        const bool    real = c < static_cast<size_t>(count * k);
+        const int64_t p =
+            real ? streams[c / static_cast<size_t>(k)]->pos + static_cast<int64_t>(c % k) : streams[0]->pos;
+        rope_angles(m, p, g.rope.data() + c * half, g.rope.data() + (n + c) * half);
+    }
+    ggml_backend_tensor_set(t.mel_in, g.mel.data(), 0, ggml_nbytes(t.mel_in));
+    ggml_backend_tensor_set(t.log_energy, g.log_energy.data(), 0, ggml_nbytes(t.log_energy));
+    const int32_t zero = 0;
+    ggml_backend_tensor_set(t.ssm_ids, &zero, 0, sizeof(zero));
+    ggml_backend_tensor_set(t.rope_cos, g.rope.data(), 0, ggml_nbytes(t.rope_cos));
+    ggml_backend_tensor_set(t.rope_sin, g.rope.data() + half * n, 0, ggml_nbytes(t.rope_sin));
+    // Ring slots of the stream's k positions; the mask rows of the padded
+    // query (past k) repeat its last position.
+    const int rows = std::max(k, k_min_graph_frames);
+    g.slots.resize(static_cast<size_t>(k));
+    for (size_t li = 0; li < t.slots.size(); ++li) {
+        for (int j = 0; j < count; ++j) {
+            const AttnState & as = streams[j]->attn[li];
+            const int64_t     p  = streams[j]->pos;
+            g.mask.resize(static_cast<size_t>(as.ring) * static_cast<size_t>(rows));
+            for (int f = 0; f < k; ++f) {
+                g.slots[static_cast<size_t>(f)] = (p + f) % as.ring;
+            }
+            for (int r = 0; r < rows; ++r) {
+                mask_row(p + std::min(r, k - 1), as.ring, as.window,
+                         g.mask.data() + static_cast<size_t>(r) * static_cast<size_t>(as.ring));
+            }
+            ggml_backend_tensor_set(t.slots[li][static_cast<size_t>(j)], g.slots.data(), 0,
+                                    g.slots.size() * sizeof(int64_t));
+            ggml_backend_tensor_set(t.masks[li][static_cast<size_t>(j)], g.mask.data(), 0,
+                                    g.mask.size() * sizeof(float));
+        }
+    }
+
+    if (const ggml_status gs = ggml_backend_sched_graph_compute(g.sched, t.graph); gs != GGML_STATUS_SUCCESS) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: graph compute failed (%d)", kTag, static_cast<int>(gs));
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    const size_t H = static_cast<size_t>(hp.n_horizons);
+    g.logit.resize(n);
+    g.logit_la.resize(n);
+    g.turn.resize(n * H);
+    ggml_backend_tensor_get(t.logit, g.logit.data(), 0, ggml_nbytes(t.logit));
+    ggml_backend_tensor_get(t.logit_la, g.logit_la.data(), 0, ggml_nbytes(t.logit_la));
+    ggml_backend_tensor_get(t.turn, g.turn.data(), 0, ggml_nbytes(t.turn));
+    const int64_t dt = ggml_time_us() - t0;
+    for (int j = 0; j < count; ++j) {
+        Stream & s = *streams[j];
+        for (int f = 0; f < n_real; ++f) {
+            const size_t c = static_cast<size_t>(j * k + f);
+            const size_t o = static_cast<size_t>(j * n_real + f);
+            // The first lookahead_frames steps have no frame to judge yet: the
+            // model emits no_speech_logit there (kept in g.logit_la for the trace).
+            if (s.pos + f < hp.lookahead_frames) {
+                g.logit_la[c] = hp.no_speech_logit;
+            }
+            if (speech != nullptr) {
+                speech[o] = sigmoid(g.logit_la[c]);
+            }
+            if (turn != nullptr) {
+                turn[o] = sigmoid(g.turn[c * H]);
+            }
+        }
+        s.pos += n_real;
+        cores[j]->t_encode_us += dt;
+    }
+    return TRANSCRIBE_OK;
 }
 
 transcribe_status stream_step(SessionCore & core,
@@ -627,100 +727,47 @@ transcribe_status stream_step(SessionCore & core,
     if (auto rc = ensure_state(st, m); rc != TRANSCRIBE_OK) {
         return rc;
     }
+    Stream *      sp = &st;
+    SessionCore * cp = &core;
     for (int64_t f0 = 0; f0 < n_frames; f0 += k_block_frames) {
         if (core.poll_abort()) {
             return TRANSCRIBE_ERR_ABORTED;
         }
         const int     n_real = static_cast<int>(std::min<int64_t>(k_block_frames, n_frames - f0));
-        const int     n      = std::max(n_real, k_min_graph_frames);
-        const int64_t t0     = ggml_time_us();
-
-        if (st.graph_n != n || st.graph_real != n_real || core.compute_ctx == nullptr || st.g.graph == nullptr) {
-            if (auto rc = build_graph(core, st, m, n, n_real); rc != TRANSCRIBE_OK) {
-                return rc;
-            }
+        const float * p      = pcm + f0 * hp.frame_samples;
+        if (auto rc = step(st.g, m, &sp, &cp, 1, n_real, core.n_threads, &p, turn != nullptr ? turn + f0 : nullptr,
+                           speech != nullptr ? speech + f0 : nullptr);
+            rc != TRANSCRIBE_OK) {
+            return rc;
         }
-        configure_sched_n_threads(core.sched, core.n_threads);
-
-        const int64_t p0 = st.pos;
-        fill_inputs(st, m, pcm + f0 * hp.frame_samples, n, n_real);
-        const GraphTensors & g = st.g;
-        ggml_backend_tensor_set(g.mel_in, st.mel.data(), 0, ggml_nbytes(g.mel_in));
-        ggml_backend_tensor_set(g.log_energy, st.log_energy.data(), 0, ggml_nbytes(g.log_energy));
-        const int32_t zero = 0;
-        ggml_backend_tensor_set(g.ssm_ids, &zero, 0, sizeof(zero));
-        const size_t half_bytes = ggml_nbytes(g.rope_cos);
-        ggml_backend_tensor_set(g.rope_cos, st.rope.data(), 0, half_bytes);
-        ggml_backend_tensor_set(g.rope_sin, st.rope.data() + half_bytes / sizeof(float), 0, half_bytes);
-        for (size_t li = 0; li < st.attn.size(); ++li) {
-            const int64_t ring   = st.attn[li].ring;
-            const int64_t window = st.attn[li].window;
-            st.slots.resize(static_cast<size_t>(n));
-            st.mask.resize(static_cast<size_t>(ring) * static_cast<size_t>(n));
-            for (int j = 0; j < n; ++j) {
-                const int64_t p                  = p0 + j;
-                st.slots[static_cast<size_t>(j)] = p % ring;
-                mask_row(p, ring, window, st.mask.data() + static_cast<size_t>(j) * static_cast<size_t>(ring));
-            }
-            ggml_backend_tensor_set(g.slots[li], st.slots.data(), 0, ggml_nbytes(g.slots[li]));
-            ggml_backend_tensor_set(g.masks[li], st.mask.data(), 0, ggml_nbytes(g.masks[li]));
-        }
-
-        if (const ggml_status gs = ggml_backend_sched_graph_compute(core.sched, g.graph); gs != GGML_STATUS_SUCCESS) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: graph compute failed (%d)", kTag, static_cast<int>(gs));
-            return TRANSCRIBE_ERR_BACKEND;
-        }
-
-        const size_t nr = static_cast<size_t>(n_real);
-        st.logit.resize(nr);
-        st.logit_la.resize(nr);
-        st.turn.resize(nr * static_cast<size_t>(hp.n_horizons));
-        ggml_backend_tensor_get(g.logit, st.logit.data(), 0, nr * sizeof(float));
-        ggml_backend_tensor_get(g.logit_la, st.logit_la.data(), 0, nr * sizeof(float));
-        ggml_backend_tensor_get(g.turn, st.turn.data(), 0, st.turn.size() * sizeof(float));
-        // The first lookahead_frames steps have no frame to judge yet: the
-        // model emits no_speech_logit there. The substituted value is written
-        // back into st.logit_la so the trace's head.vad.logit_la matches the
-        // reference dumper's (the model's emitted lookahead logit).
-        for (size_t j = 0; j < nr; ++j) {
-            const bool  early = p0 + static_cast<int64_t>(j) < hp.lookahead_frames;
-            const float la    = early ? hp.no_speech_logit : st.logit_la[j];
-            st.logit_la[j]    = la;
-            if (speech != nullptr) {
-                speech[f0 + static_cast<int64_t>(j)] = sigmoid(la);
-            }
-            if (turn != nullptr) {
-                turn[f0 + static_cast<int64_t>(j)] = sigmoid(st.turn[j * static_cast<size_t>(hp.n_horizons)]);
-            }
-        }
-
         if (debug::enabled()) {
-            DumpTrace & tr = st.trace;
-            tr.mel.insert(tr.mel.end(), st.mel.begin(), st.mel.begin() + static_cast<ptrdiff_t>(n_real) * hp.mel_width);
-            tr.log_energy.insert(tr.log_energy.end(), st.log_energy.begin(), st.log_energy.begin() + n_real);
-            append_cols(tr.mixer, g.mixer, n_real);
-            tr.trunk_mix.resize(g.trunk_mix.size());
-            tr.trunk_out.resize(g.trunk_out.size());
-            tr.ssm_y.resize(g.ssm_y.size());
-            for (size_t i = 0; i < g.trunk_mix.size(); ++i) {
-                append_cols(tr.trunk_mix[i], g.trunk_mix[i], n_real);
-                append_cols(tr.trunk_out[i], g.trunk_out[i], n_real);
-                append_cols(tr.ssm_y[i], g.ssm_y[i], n_real);
+            const StepGraph &    g  = st.g;
+            const GraphTensors & t  = g.t;
+            DumpTrace &          tr = st.trace;
+            const size_t         H  = static_cast<size_t>(hp.n_horizons);
+            const auto           nr = static_cast<ptrdiff_t>(n_real);
+            tr.mel.insert(tr.mel.end(), g.mel.begin(), g.mel.begin() + nr * hp.mel_width);
+            tr.log_energy.insert(tr.log_energy.end(), g.log_energy.begin(), g.log_energy.begin() + nr);
+            tr.logit.insert(tr.logit.end(), g.logit.begin(), g.logit.begin() + nr);
+            tr.logit_la.insert(tr.logit_la.end(), g.logit_la.begin(), g.logit_la.begin() + nr);
+            tr.turn.insert(tr.turn.end(), g.turn.begin(), g.turn.begin() + nr * static_cast<ptrdiff_t>(H));
+            append_cols(tr.mixer, t.mixer, n_real);
+            tr.trunk_mix.resize(t.trunk_mix.size());
+            tr.trunk_out.resize(t.trunk_out.size());
+            tr.ssm_y.resize(t.ssm_y.size());
+            for (size_t i = 0; i < t.trunk_mix.size(); ++i) {
+                append_cols(tr.trunk_mix[i], t.trunk_mix[i], n_real);
+                append_cols(tr.trunk_out[i], t.trunk_out[i], n_real);
+                append_cols(tr.ssm_y[i], t.ssm_y[i], n_real);
             }
-            append_cols(tr.trunk_norm, g.trunk_norm, n_real);
-            append_cols(tr.vad_hidden, g.vad_hidden, n_real);
-            append_cols(tr.speech_in, g.speech_in, n_real);
-            append_cols(tr.turn_in, g.turn_in, n_real);
-            append_cols(tr.turn_emb, g.turn_emb, n_real);
-            append_cols(tr.turn_hidden, g.turn_hidden, n_real);
-            tr.logit.insert(tr.logit.end(), st.logit.begin(), st.logit.end());
-            tr.logit_la.insert(tr.logit_la.end(), st.logit_la.begin(), st.logit_la.end());
-            tr.turn.insert(tr.turn.end(), st.turn.begin(), st.turn.end());
+            append_cols(tr.trunk_norm, t.trunk_norm, n_real);
+            append_cols(tr.vad_hidden, t.vad_hidden, n_real);
+            append_cols(tr.speech_in, t.speech_in, n_real);
+            append_cols(tr.turn_in, t.turn_in, n_real);
+            append_cols(tr.turn_emb, t.turn_emb, n_real);
+            append_cols(tr.turn_hidden, t.turn_hidden, n_real);
             tr.n_steps += n_real;
         }
-
-        st.pos += n_real;
-        core.t_encode_us += ggml_time_us() - t0;
     }
     return TRANSCRIBE_OK;
 }
@@ -736,7 +783,18 @@ void DumpTrace::clear() {
     n_steps = 0;
 }
 
+void StepGraph::release() noexcept {
+    release_compute_scratch(sched, ctx);
+    sched_size = 0;
+    key.clear();
+    n_real = 0;
+    t      = GraphTensors{};
+}
+
+Stream::Stream() : uid(g_stream_uid.fetch_add(1)) {}
+
 Stream::~Stream() {
+    g.release();
     if (state_buf != nullptr) {
         safe_buffer_free(state_buf);
     }
@@ -744,329 +802,5 @@ Stream::~Stream() {
         ggml_free(state_ctx);
     }
 }
-
-// ===========================================================================
-// Batched steps: one frame of each of count streams in one graph.
-//
-// Columns are streams. The weight matmuls, norms and element-wise ops run once
-// over n = max(count, k_min_graph_frames) columns; padding columns repeat
-// stream 0 and write no state. The per-stream ops run on that stream's own
-// state, each in the shape a 1-frame stream_step uses: the Mamba-2 conv and
-// scan on 1 token, the KV ring write, and attention with the query repeated
-// to k_min_graph_frames columns so K.Q and the value product take the same
-// kernel. Every column therefore gets bit for bit the values stream_step
-// gives its stream.
-// ===========================================================================
-
-namespace {
-
-std::atomic<uint64_t> g_stream_uid{ 1 };
-
-// Concatenate [C, 1]-shaped (or [hd, H, 1]) pieces along dim, padding with
-// copies of the first up to n pieces.
-ggml_tensor * cat_pad(ggml_context * ctx, std::vector<ggml_tensor *> parts, int n, int dim) {
-    while (static_cast<int>(parts.size()) < n) {
-        parts.push_back(parts[0]);
-    }
-    ggml_tensor * r = parts[0];
-    for (size_t i = 1; i < parts.size(); ++i) {
-        r = ggml_concat(ctx, r, parts[i], dim);
-    }
-    return r;
-}
-
-// Column j of a [C, n] tensor, as [C, 1].
-ggml_tensor * column(ggml_context * ctx, ggml_tensor * t, int j) {
-    return ggml_view_2d(ctx, t, t->ne[0], 1, t->nb[1], static_cast<size_t>(j) * t->nb[1]);
-}
-
-ggml_tensor * batch_attention(ggml_context *      ctx,
-                              const BatchGraph &  bg,
-                              Stream * const *    streams,
-                              int                 count,
-                              size_t              li,
-                              ggml_tensor *       x,
-                              const AttnWeights & w,
-                              const AttnHParams & a,
-                              float               eps) {
-    const int64_t n  = x->ne[1];
-    const int64_t hd = a.head_dim;
-    const int64_t H  = a.n_heads;
-    const int64_t KV = a.n_kv_heads;
-    const Qkv     t  = build_qkv(ctx, x, w, a, bg.rope_cos, bg.rope_sin, eps);
-    ggml_tensor * v2 = ggml_reshape_2d(ctx, t.v, hd * KV, n);
-
-    std::vector<ggml_tensor *> outs;
-    for (int j = 0; j < count; ++j) {
-        const size_t  js = static_cast<size_t>(j);
-        ggml_tensor * qj = ggml_view_3d(ctx, t.q, hd, H, 1, t.q->nb[1], t.q->nb[2], js * t.q->nb[2]);
-        qj               = ggml_repeat_4d(ctx, qj, hd, H, k_min_graph_frames, 1);
-        ggml_tensor * O = attend(ctx, streams[j]->attn[li], bg.slots[li][js], bg.masks[li][js], qj, column(ctx, t.k, j),
-                                 column(ctx, v2, j), a);
-        outs.push_back(ggml_view_3d(ctx, O, hd, H, 1, O->nb[1], O->nb[2], 0));
-    }
-    return attn_out(ctx, cat_pad(ctx, outs, static_cast<int>(n), 2), t.v, w, a);
-}
-
-transcribe_status build_batch_graph(BatchGraph & bg, const Model & m, Stream * const * streams, int count) {
-    const HParams & hp  = m.hparams;
-    const Weights & w   = m.weights;
-    const float     eps = hp.rms_eps;
-    const size_t    fs  = sizeof(float);
-    const int       n   = std::max(count, k_min_graph_frames);
-    const int       K   = hp.ssm_conv_kernel;
-
-    bg.release();
-    // About 130 nodes per stream (per-stream conv, scan, ring writes and
-    // attention) on top of the shared ~400.
-    const size_t     graph_size = 1024 + 256 * static_cast<size_t>(count);
-    ggml_init_params ip{};
-    ip.mem_size = ggml_graph_overhead_custom(graph_size, false) + graph_size * ggml_tensor_overhead();
-    ip.no_alloc = true;
-    bg.ctx      = ggml_init(ip);
-    if (bg.ctx == nullptr) {
-        return TRANSCRIBE_ERR_OOM;
-    }
-    ggml_context * ctx   = bg.ctx;
-    auto           input = [](ggml_tensor * t) {
-        ggml_set_input(t);
-        return t;
-    };
-    bg.mel_in           = input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hp.mel_width, n));
-    bg.log_energy       = input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, n));
-    bg.ssm_ids          = input(ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1));
-    bg.rope_cos         = input(ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hp.attn.head_dim / 2, 1, n));
-    bg.rope_sin         = input(ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hp.attn.head_dim / 2, 1, n));
-    const size_t n_attn = streams[0]->attn.size();
-    bg.slots.assign(n_attn, {});
-    bg.masks.assign(n_attn, {});
-    for (size_t li = 0; li < n_attn; ++li) {
-        for (int j = 0; j < count; ++j) {
-            bg.slots[li].push_back(input(ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1)));
-            bg.masks[li].push_back(
-                input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, streams[j]->attn[li].ring, k_min_graph_frames)));
-        }
-    }
-    std::vector<ggml_tensor *> writes;  // state writes, expanded after every read
-
-    // ---- mixer ----
-    ggml_tensor *              row = ggml_concat(ctx, bg.mel_in, bg.log_energy, 0);  // [row_width, n]
-    std::vector<ggml_tensor *> tails;
-    for (int j = 0; j < count; ++j) {
-        tails.push_back(ggml_reshape_2d(ctx, streams[j]->mixer_tail, hp.row_width, 1));
-        writes.push_back(ggml_cpy(ctx, column(ctx, row, j), tails.back()));
-    }
-    ggml_tensor * prev = cat_pad(ctx, tails, n, 1);
-    ggml_tensor * x    = rms(ctx, ggml_mul_mat(ctx, w.mixer_proj, ggml_concat(ctx, prev, row, 0)), w.mixer_norm, eps);
-
-    // ---- trunk ----
-    size_t li = 0;
-    for (size_t i = 0; i < w.trunk.size(); ++i) {
-        const Block & b   = w.trunk[i];
-        ggml_tensor * mix = nullptr;
-        if (b.is_ssm) {
-            const SsmWeights & sw    = b.ssm;
-            const int64_t      inner = hp.ssm_inner;
-            const int64_t      cdim  = hp.ssm_conv_dim;
-            const int64_t      heads = hp.ssm_heads;
-            const int64_t      hd    = hp.ssm_head_dim;
-            const int64_t      N     = hp.ssm_state;
-            const int64_t      G     = hp.ssm_groups;
-            ggml_tensor *      u     = ggml_mul_mat(ctx, sw.in, rms(ctx, x, sw.norm, eps));
-            ggml_tensor *      z     = ggml_cont(ctx, ggml_view_2d(ctx, u, inner, n, u->nb[1], 0));
-            ggml_tensor *      xbc_t =
-                ggml_cont(ctx, ggml_transpose(ctx, ggml_view_2d(ctx, u, cdim, n, u->nb[1], inner * fs)));
-            std::vector<ggml_tensor *> ys;
-            for (int j = 0; j < count; ++j) {
-                const SsmState & ss = streams[j]->ssm[i];
-                const size_t     js = static_cast<size_t>(j);
-                ggml_tensor *    sx =
-                    ggml_concat(ctx, ss.conv, ggml_view_2d(ctx, xbc_t, 1, cdim, xbc_t->nb[1], js * fs), 0);
-                ggml_tensor * c    = ggml_silu(ctx, ggml_add(ctx, ggml_ssm_conv(ctx, sx, sw.conv_w), sw.conv_b));
-                ggml_tensor * xs   = ggml_view_4d(ctx, c, hd, heads, 1, 1, hd * fs, c->nb[1], c->nb[1], 0);
-                ggml_tensor * B    = ggml_view_4d(ctx, c, N, G, 1, 1, N * fs, c->nb[1], c->nb[1], inner * fs);
-                ggml_tensor * C    = ggml_view_4d(ctx, c, N, G, 1, 1, N * fs, c->nb[1], c->nb[1], (inner + G * N) * fs);
-                ggml_tensor * dt   = ggml_view_2d(ctx, u, heads, 1, u->nb[1], (inner + cdim) * fs + js * u->nb[1]);
-                ggml_tensor * dtb  = ggml_reshape_3d(ctx, ggml_add(ctx, dt, sw.dt_b), heads, 1, 1);
-                ggml_tensor * scan = ggml_ssm_scan(ctx, ss.ssm, xs, dtb, sw.a, B, C, bg.ssm_ids, 1);
-                ggml_tensor * y3   = ggml_view_3d(ctx, scan, hd, heads, 1, hd * fs, inner * fs, 0);
-                ggml_tensor * yd   = ggml_add(ctx, y3, ggml_mul(ctx, xs, ggml_reshape_2d(ctx, sw.d, 1, heads)));
-                ys.push_back(ggml_reshape_2d(ctx, yd, inner, 1));
-                writes.push_back(ggml_cpy(ctx, ggml_view_2d(ctx, sx, K - 1, cdim, sx->nb[1], fs), ss.conv));
-                ggml_tensor * state =
-                    ggml_view_4d(ctx, scan, ss.ssm->ne[0], ss.ssm->ne[1], ss.ssm->ne[2], 1, ss.ssm->nb[1],
-                                 ss.ssm->nb[2], ss.ssm->nb[3], static_cast<size_t>(inner) * fs);
-                writes.push_back(ggml_cpy(ctx, state, ss.ssm));
-            }
-            ggml_tensor * yg = ggml_mul(ctx, cat_pad(ctx, ys, n, 1), ggml_silu(ctx, z));
-            yg               = ggml_rms_norm(ctx, ggml_reshape_3d(ctx, yg, inner / G, G, n), eps);
-            yg               = ggml_mul(ctx, ggml_reshape_2d(ctx, yg, inner, n), sw.norm_gated);
-            mix              = ggml_mul_mat(ctx, sw.out, yg);
-        } else {
-            mix = batch_attention(ctx, bg, streams, count, li++, x, b.attn, hp.attn, eps);
-        }
-        x = build_mlp(ctx, ggml_add(ctx, x, mix), b.mlp, eps);
-    }
-    ggml_tensor * hn = rms(ctx, x, w.trunk_norm, eps);
-
-    // ---- VAD head ----
-    ggml_tensor * v = ggml_mul_mat(ctx, w.vad_down, rms(ctx, hn, w.vad_norm_in, eps));
-    v               = ggml_add(ctx, v, batch_attention(ctx, bg, streams, count, li++, v, w.vad_attn, hp.vad_attn, eps));
-    v               = rms(ctx, build_mlp(ctx, v, w.vad_mlp, eps), w.vad_norm_out, eps);
-    bg.logit        = ggml_add(ctx, ggml_mul_mat(ctx, w.vad_ro_w, v), w.vad_ro_b);
-    bg.logit_la     = ggml_add(ctx, ggml_mul_mat(ctx, w.vad_la_w, v), w.vad_la_b);
-
-    // ---- turn head ----
-    ggml_tensor *              sp = ggml_sigmoid(ctx, bg.logit);
-    std::vector<ggml_tensor *> prevs;
-    for (int j = 0; j < count; ++j) {
-        prevs.push_back(ggml_reshape_2d(ctx, streams[j]->prev_speech, 1, 1));
-        writes.push_back(
-            ggml_cpy(ctx, ggml_view_1d(ctx, sp, 1, static_cast<size_t>(j) * sp->nb[1]), streams[j]->prev_speech));
-    }
-    ggml_tensor * s_in = cat_pad(ctx, prevs, n, 1);
-    ggml_tensor * emb  = ggml_mul(
-        ctx, ggml_repeat_4d(ctx, ggml_reshape_2d(ctx, w.turn_emb_w, hp.vad_embed, 1), hp.vad_embed, n, 1, 1), s_in);
-    emb               = ggml_add(ctx, emb, w.turn_emb_b);
-    ggml_tensor * tin = ggml_concat(ctx, rms(ctx, hn, w.turn_norm_in, eps), emb, 0);
-    ggml_tensor * t   = ggml_mul_mat(ctx, w.turn_down, tin);
-    t       = ggml_add(ctx, t, batch_attention(ctx, bg, streams, count, li++, t, w.turn_attn, hp.turn_attn, eps));
-    t       = rms(ctx, build_mlp(ctx, t, w.turn_mlp, eps), w.turn_norm_out, eps);
-    bg.turn = ggml_add(ctx, ggml_mul_mat(ctx, w.turn_ro_w, t), w.turn_ro_b);
-
-    ggml_set_output(bg.logit);
-    ggml_set_output(bg.logit_la);
-    ggml_set_output(bg.turn);
-    bg.graph = ggml_new_graph_custom(ctx, graph_size, false);
-    ggml_build_forward_expand(bg.graph, bg.turn);
-    ggml_build_forward_expand(bg.graph, bg.logit_la);
-    for (ggml_tensor * wr : writes) {
-        ggml_build_forward_expand(bg.graph, wr);
-    }
-
-    auto & backends = const_cast<std::vector<ggml_backend_t> &>(m.plan.scheduler_list);
-    bg.sched        = ggml_backend_sched_new(backends.data(), nullptr, static_cast<int>(backends.size()), graph_size,
-                                             /*parallel=*/false, /*op_offload=*/true);
-    if (bg.sched == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: scheduler allocation failed", kTag);
-        return TRANSCRIBE_ERR_OOM;
-    }
-    if (!TRANSCRIBE_ALLOC_SCHED_GRAPH(bg.sched, bg.graph, kTag)) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: batch graph allocation failed (%d streams)", kTag, count);
-        return TRANSCRIBE_ERR_OOM;
-    }
-    bg.n = n;
-    for (int j = 0; j < count; ++j) {
-        bg.key.push_back(streams[j]->uid);
-    }
-    return TRANSCRIBE_OK;
-}
-
-}  // namespace
-
-void BatchGraph::release() noexcept {
-    release_compute_scratch(sched, ctx);
-    graph = nullptr;
-    key.clear();
-    n = 0;
-    slots.clear();
-    masks.clear();
-}
-
-transcribe_status stream_step_batch(BatchGraph &          bg,
-                                    const Model &         m,
-                                    Stream * const *      streams,
-                                    SessionCore * const * cores,
-                                    int                   count,
-                                    int                   n_threads,
-                                    const float * const * pcm,
-                                    float *               turn,
-                                    float *               speech) {
-    const HParams & hp = m.hparams;
-    for (int j = 0; j < count; ++j) {
-        if (streams[j]->state_buf == nullptr) {
-            return TRANSCRIBE_ERR_OOM;  // stream_reset failed
-        }
-        if (cores[j]->poll_abort()) {
-            return TRANSCRIBE_ERR_ABORTED;
-        }
-    }
-    const int64_t t0    = ggml_time_us();
-    bool          match = bg.graph != nullptr && bg.key.size() == static_cast<size_t>(count);
-    for (int j = 0; match && j < count; ++j) {
-        match = bg.key[static_cast<size_t>(j)] == streams[j]->uid;
-    }
-    if (!match) {
-        if (auto rc = build_batch_graph(bg, m, streams, count); rc != TRANSCRIBE_OK) {
-            bg.release();
-            return rc;
-        }
-    }
-    configure_sched_n_threads(bg.sched, n_threads);
-    const int    n    = bg.n;
-    const size_t half = static_cast<size_t>(hp.attn.head_dim / 2);
-
-    // Host inputs; padding columns repeat stream 0's position, with no audio.
-    bg.mel.assign(static_cast<size_t>(n) * static_cast<size_t>(hp.mel_width), 0.0f);
-    bg.log_energy_h.assign(static_cast<size_t>(n), 0.0f);
-    bg.rope.assign(2 * half * static_cast<size_t>(n), 0.0f);
-    for (int j = 0; j < n; ++j) {
-        const size_t js = static_cast<size_t>(j);
-        if (j < count) {
-            frame_features(*streams[j], m, pcm[j], bg.mel.data() + js * static_cast<size_t>(hp.mel_width),
-                           &bg.log_energy_h[js]);
-        }
-        rope_angles(m, streams[j < count ? j : 0]->pos, bg.rope.data() + js * half,
-                    bg.rope.data() + (static_cast<size_t>(n) + js) * half);
-    }
-    ggml_backend_tensor_set(bg.mel_in, bg.mel.data(), 0, ggml_nbytes(bg.mel_in));
-    ggml_backend_tensor_set(bg.log_energy, bg.log_energy_h.data(), 0, ggml_nbytes(bg.log_energy));
-    const int32_t zero = 0;
-    ggml_backend_tensor_set(bg.ssm_ids, &zero, 0, sizeof(zero));
-    ggml_backend_tensor_set(bg.rope_cos, bg.rope.data(), 0, ggml_nbytes(bg.rope_cos));
-    ggml_backend_tensor_set(bg.rope_sin, bg.rope.data() + half * static_cast<size_t>(n), 0, ggml_nbytes(bg.rope_sin));
-    for (size_t li = 0; li < bg.slots.size(); ++li) {
-        for (int j = 0; j < count; ++j) {
-            const AttnState & as   = streams[j]->attn[li];
-            const int64_t     p    = streams[j]->pos;
-            const int64_t     slot = p % as.ring;
-            bg.mask.resize(static_cast<size_t>(as.ring) * k_min_graph_frames);
-            for (int r = 0; r < k_min_graph_frames; ++r) {
-                mask_row(p, as.ring, as.window, bg.mask.data() + static_cast<size_t>(r) * static_cast<size_t>(as.ring));
-            }
-            ggml_backend_tensor_set(bg.slots[li][static_cast<size_t>(j)], &slot, 0, sizeof(slot));
-            ggml_backend_tensor_set(bg.masks[li][static_cast<size_t>(j)], bg.mask.data(), 0,
-                                    bg.mask.size() * sizeof(float));
-        }
-    }
-
-    if (const ggml_status gs = ggml_backend_sched_graph_compute(bg.sched, bg.graph); gs != GGML_STATUS_SUCCESS) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: batch graph compute failed (%d)", kTag, static_cast<int>(gs));
-        return TRANSCRIBE_ERR_BACKEND;
-    }
-    const size_t nc = static_cast<size_t>(count);
-    bg.logit_h.resize(nc);
-    bg.logit_la_h.resize(nc);
-    bg.turn_h.resize(nc * static_cast<size_t>(hp.n_horizons));
-    ggml_backend_tensor_get(bg.logit, bg.logit_h.data(), 0, nc * sizeof(float));
-    ggml_backend_tensor_get(bg.logit_la, bg.logit_la_h.data(), 0, nc * sizeof(float));
-    ggml_backend_tensor_get(bg.turn, bg.turn_h.data(), 0, bg.turn_h.size() * sizeof(float));
-    const int64_t dt = ggml_time_us() - t0;
-    for (int j = 0; j < count; ++j) {
-        const size_t js    = static_cast<size_t>(j);
-        const bool   early = streams[j]->pos < hp.lookahead_frames;
-        if (speech != nullptr) {
-            speech[j] = sigmoid(early ? hp.no_speech_logit : bg.logit_la_h[js]);
-        }
-        if (turn != nullptr) {
-            turn[j] = sigmoid(bg.turn_h[js * static_cast<size_t>(hp.n_horizons)]);
-        }
-        streams[j]->pos += 1;
-        cores[j]->t_encode_us += dt;
-    }
-    return TRANSCRIBE_OK;
-}
-
-Stream::Stream() : uid(g_stream_uid.fetch_add(1)) {}
 
 }  // namespace transcribe::sava

@@ -2,8 +2,7 @@
 """
 bench.py - this machine's TURN publication speed cells
 (catalog/_benchmark_profiles.json, turn-publication-v1) through the Python
-binding's raw C ABI: tools/transcribe-bench is ASR-only and the binding has
-no turn session wrapper yet.
+binding's raw C ABI (tools/transcribe-bench is ASR-only).
 
   uv run --project scripts/envs/smart_turn scripts/turn/bench.py --variant smart-turn-v3.2 \\
       --library build-shared/src/libtranscribe.dylib
@@ -11,25 +10,19 @@ no turn session wrapper yet.
       --library build-shared/src/libtranscribe.dylib
   uv run scripts/catalog/ingest_perf.py
 
-Cells (the time is the native compute, mel + encode + decode, from
-transcribe_turn_get_timings; wall time is recorded beside it):
+Cells (the time is the native compute from transcribe_turn_get_timings,
+wall time beside it; -1t: one thread, otherwise the library default):
   <clip>-<N>s        transcribe_turn_run on the first N s of samples/<clip>.wav
-  <clip>-<N>ms       one pass of transcribe_turn_stream_feed over the clip in
-                     N ms feeds; the mean time per feed (streaming models)
-  <clip>-<N>ms-x<U>  one pass of transcribe_turn_stream_feed_batch over U
-                     sessions each fed the clip in N ms feeds; the mean time
-                     per tick, which carries U * N ms of audio
-  -1t suffix         one thread; without it the library default (n_threads 0)
+  <clip>-<N>ms       transcribe_turn_stream_feed over the clip in N ms feeds;
+                     mean time per feed (streaming models)
+  <clip>-<N>ms-x<U>  transcribe_turn_stream_feed_batch over U sessions; mean
+                     time per tick (U * N ms of audio)
 
-Before every cell it waits for a quiet machine (1-minute load average below
---max-load and none of the --busy processes running) and, on a target with
-cooldown_tctl_c (ryzen-4750u), for the CPU to cool below it, as
-scripts/bench/run.py does; it records the load averages (and Tctl, where the
-machine reports it) before and after each cell. The same driver serves every
-profile target: it benches the target this machine's CPU maps to (m1 on an
-Apple M1, ryzen-4750u on the Ryzen 7 PRO 4750U host). --library is the
-shared libtranscribe (.dylib on macOS, .so on Linux). Writes one bench-driver report (scripts/bench/
-run.py's shape) to reports/perf/<machine-slug>/<variant>-publication_<variant>_cpu.json.
+Like scripts/bench/run.py it waits for a quiet machine (and, on targets with
+cooldown_tctl_c, a cool CPU) before every cell, benches the profile target
+this machine maps to and writes a bench-driver report to
+reports/perf/<machine-slug>/<slug>-publication_<variant>_<backend>.json (slug: the
+variant slugified, e.g. smart-turn-v3-2).
 """
 
 from __future__ import annotations

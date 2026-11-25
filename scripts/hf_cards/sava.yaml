@@ -1,7 +1,7 @@
 # Editorial copy only; metadata and measurements come from the catalog.
 pin_date: 2026-11-21
 validation:
-  reference: inworld-sava 1.0.0 (torch 2.14.1, CPU, fp32) on inworld/sava@1beae7c
+  reference: inworld-sava 1.0.0 (PyTorch, fp32)
   commit: 3465deb3
   date: 2026-11-25
 pipeline_tag: voice-activity-detection
@@ -23,16 +23,15 @@ summary: |
 wer:
   notes: |
     A clip's score is the turn score of its last 40 ms frame
-    (`transcribe_turn_run`'s `p` on the whole clip, scored as one stream);
-    the clip is called complete when `p > 0.5`, Inworld's benchmark rule.
-    The API's default cut-off is 0.9, Inworld's live rule. False positives
+    (`transcribe_turn_run`'s `p`, the clip scored as one stream); the clip
+    is called complete when `p > 0.5`, Inworld's benchmark rule. The API's
+    default cut-off is 0.9, Inworld's live rule. At 0.9, F32 and F16 make
+    the reference's decision on every clip; Q8_0 on 31,401. False positives
     (incomplete clips called complete) and false negatives (the reverse) are
-    shares of all clips, as Pipecat publishes them. Inworld publishes 93.35%
-    and an AUC of 0.97946 for SAVA (fp32, A100) but no per-clip scores; the
-    reference is upstream's PyTorch package (inworld-sava 1.0.0, CPU, fp32)
-    run on the same clips (`scripts/turn/run_reference_sava_torch.py`):
-    93.36%, AUC 0.97946. F32 and F16 make its decision on all 31,527 clips at
-    0.5 and at 0.9; Q8_0 on 31,451 at 0.5.
+    shares of all clips, as Pipecat publishes them. Inworld publishes 93.35% and an
+    AUC of 0.97946 (fp32, A100) but no per-clip scores; the reference is
+    upstream's PyTorch package (inworld-sava 1.0.0, CPU, fp32) on the same
+    clips: 93.36%, AUC 0.97946.
 usage: |
   Build transcribe.cpp and run on a mono 16 kHz WAV:
 
@@ -46,8 +45,8 @@ usage: |
   audio (per-frame turn and speech scores), or `transcribe_turn_run` on a
   whole clip (the last frame's `p` and `ended`, and per-frame scores). When
   a live turn ends is the caller's choice; `examples/turn_live` applies
-  Inworld's rule.
-  The VAD role (`include/transcribe/vad.h`) returns the speech track alone.
+  Inworld's rule. The VAD role (`include/transcribe/vad.h`) returns the
+  speech track alone.
 
   See [the model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/sava.md)
   and [turn detection](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/turn.md).

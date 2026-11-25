@@ -3,25 +3,19 @@
 convert-sava.py - convert Inworld's SAVA release checkpoint (sava.safetensors,
 bf16) into a GGUF of the sava family (TURN and VAD roles).
 
-The checkpoint carries its configuration as safetensors metadata; this script
-reads it with upstream's own loader (inworld.sava.checkpoint.read), asserts
-the values the C++ graph cannot infer from tensor shapes, and writes the
-tensor layout documented in docs/porting/families/sava.md. Tensors that are
-pure functions of the configuration (the mel filterbank, the RoPE
-frequencies, A = -exp(A_log)) are computed with upstream's own fp32 code so
-the C++ never re-derives them. The exception is the window and DFT: the C++
-builds the Hann window and FFT twiddles itself in fp64 and never reads
-frontend.dft_basis (upstream's fp32 windowed DFT basis). That tensor is
-unused; it is still written so the published GGUFs stay byte-identical
-(dropping it is a future re-export).
+Reads the checkpoint with upstream's own loader (inworld.sava.checkpoint),
+asserts the configuration the C++ graph cannot infer from tensor shapes and
+writes the layout of docs/porting/families/sava.md. Tensors that are
+functions of the configuration (mel filterbank, RoPE frequencies,
+A = -exp(A_log)) come from upstream's fp32 code. frontend.dft_basis is unused
+by the C++ (it builds the window and FFT in fp64); it is kept so the
+published GGUFs stay byte-identical.
 
     uv run --project scripts/envs/sava scripts/convert-sava.py            # F32
     uv run --project scripts/envs/sava scripts/convert-sava.py --outtype bf16
 
-F32 is the reference regime (upstream upcasts the bf16 weights to fp32 on
-CPU); BF16 is the lossless source dtype. Either way the per-tensor dtype comes
-from lib.gguf_common.reference_dtype_for (norms, biases, frontend tables and
-the Mamba-2 scalars / conv kernel stay F32).
+F32 is the reference (upstream runs fp32 on CPU); BF16 is the lossless source
+dtype. Per-tensor dtypes come from lib.gguf_common.reference_dtype_for.
 """
 
 from __future__ import annotations
@@ -37,17 +31,13 @@ from gguf import GGMLQuantizationType, LlamaFileType
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from dump_reference_sava_author import (  # noqa: E402
+    FRAME, HF_REPO, HF_REVISION, SAVA_VERSION, WEIGHTS_SHA256, resolve_weights)
 from lib.gguf_common import (  # noqa: E402
     add_general_identity, encode_for_gguf, gguf_name, gguf_writer, reference_dtype_for)
 
 ARCH = "sava"
 DEFAULT_VARIANT = "sava"
-HF_REPO = "inworld/sava"
-HF_REVISION = "1beae7c1dd0df6b0f92030644fc905eb087dc6a0"
-WEIGHTS_SHA256 = "aa610ee9b5d3d1be96f70581a8a3affe7cf20d06816b4ada1efdd8ab6274be34"
-SAVA_VERSION = "1.0.0"
-
-FRAME_SAMPLES = 640
 NO_SPEECH_LOGIT = -30.0
 # The reference turn rule: inworld.sava.segmenter.Policy defaults, asserted
 # against the installed package below.
@@ -68,24 +58,13 @@ def fail(msg: str) -> None:
     raise SystemExit(2)
 
 
-def resolve_weights(model: str, revision: str) -> Path:
-    p = Path(model).expanduser()
-    if p.is_file():
-        return p.resolve()
-    if p.is_dir() and (p / "sava.safetensors").is_file():
-        return (p / "sava.safetensors").resolve()
-    import huggingface_hub
-
-    return Path(huggingface_hub.hf_hub_download(repo_id=model, filename="sava.safetensors", revision=revision))
-
-
 def assert_config(cfg, sava) -> None:
     """Values the C++ graph hard-codes or derives, checked against the package."""
     from inworld.sava import config, mel, model as model_lib
 
     checks = [
         ("SAMPLE_RATE", config.SAMPLE_RATE, 16000),
-        ("FRAME_SAMPLES", config.FRAME_SAMPLES, FRAME_SAMPLES),
+        ("FRAME_SAMPLES", config.FRAME_SAMPLES, FRAME),
         ("MEL_BINS", config.MEL_BINS, 128),
         ("MEL_FFT", config.MEL_FFT, 400),
         ("MEL_HOP", config.MEL_HOP, 160),
@@ -154,8 +133,8 @@ def convert(cfg, state: dict[str, torch.Tensor], out_path: Path, outtype: str, s
     w.add_uint32("stt.frontend.hop_length", 160)
     w.add_uint32("stt.frontend.num_mels", 128)
     w.add_string("stt.frontend.window", "hann")
-    w.add_uint32("stt.vad.frame_samples", FRAME_SAMPLES)
-    w.add_uint32("stt.sava.frame_samples", FRAME_SAMPLES)
+    w.add_uint32("stt.vad.frame_samples", FRAME)
+    w.add_uint32("stt.sava.frame_samples", FRAME)
     w.add_uint32("stt.sava.context_samples", mel.CONTEXT)
     w.add_float32("stt.sava.mel_floor", mel._LOG_FLOOR)
     w.add_float32("stt.sava.log_energy_floor", cfg.log_energy_floor)
@@ -192,13 +171,10 @@ def convert(cfg, state: dict[str, torch.Tensor], out_path: Path, outtype: str, s
     w.add_uint32("stt.sava.vad_embed_size", cfg.vad_embed_size)
     w.add_uint32("stt.sava.lookahead_frames", cfg.lookahead_frames)
     w.add_float32("stt.sava.no_speech_logit", NO_SPEECH_LOGIT)
-    # Decision defaults: turn cut-off (Policy.turn_threshold), speech threshold
-    # and the rest of the reference turn policy. The library reads only
-    # stt.sava.threshold; the stt.sava.policy.* KVs record Inworld's rule for
-    # callers who apply it to the score tracks (examples/turn_live hardcodes
-    # the same constants rather than reading them). Thresholds are float64: the
-    # reference compares fp32 probabilities against Python floats, and 0.9
-    # rounded to fp32 (0.89999998) would accept p == fl32(0.9).
+    # Inworld's turn policy. The library reads only stt.sava.threshold; the
+    # rest records the rule for callers (examples/turn_live hardcodes the same
+    # values). float64: the reference compares fp32
+    # probabilities with Python floats, and fl32(0.9) < 0.9.
     w.add_float64("stt.sava.threshold", POLICY["turn_threshold"])
     w.add_float64("stt.sava.speech_threshold", POLICY["speech_threshold"])
     for k in ("pre_roll_ms", "min_silence_before_check_ms", "max_silence_ms", "min_speech_ms",

@@ -1,22 +1,8 @@
 """Smart Turn v3.2 (pipecat-ai) source handling shared by the converter and the
-reference dumper.
-
-Upstream publishes Smart Turn only as ONNX files (no PyTorch checkpoint), so
-this module is the single copy of:
-
-  - the pinned source: repo, revision and sha256 of every file we read;
-  - upstream's preprocessing, verbatim from smart-turn's inference.py /
-    audio_utils.py (keep the last 8 s or left-pad with zeros, then
-    WhisperFeatureExtractor(chunk_length=8) with do_normalize=True);
-  - the ONNX -> PyTorch weight map. The exporter stored most Linear weights
-    as anonymous, transposed MatMul initializers (val_17, ...); they are
-    named here by walking the graph (the bias Add that consumes each MatMul,
-    or for the bias-free k_proj, the layer's LayerNorm feeding it);
-  - SmartTurnV3Model, copied from smart-turn's train.py, so the mapped
-    weights can be loaded into the upstream module tree and run as an
-    instrumented twin of the ONNX graph.
-
-See docs/porting/families/smart_turn.md.
+reference scripts. Upstream publishes only ONNX, so this is the single copy of
+the pinned files, upstream's preprocessing (inference.py / audio_utils.py),
+the ONNX -> PyTorch weight map and train.py's SmartTurnV3Model. See
+docs/porting/families/smart_turn.md.
 """
 
 from __future__ import annotations
@@ -36,9 +22,6 @@ SHA256 = {
     ONNX_FP32: "ab8dc64b88713f90b571c15b714bd1330e6c883cad8763dacf65c9376dc539be",
     ONNX_INT8: "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f",
 }
-# github.com/pipecat-ai/smart-turn: inference.py, audio_utils.py, train.py.
-UPSTREAM_CODE = "https://github.com/pipecat-ai/smart-turn"
-UPSTREAM_CODE_COMMIT = "4e12f2b"
 
 SAMPLE_RATE = 16000
 MAX_AUDIO_SECONDS = 8
@@ -49,8 +32,8 @@ N_POSITIONS = 400       # encoder positions (conv2 has stride 2)
 THRESHOLD = 0.5         # inference.py: prediction = 1 if probability > 0.5
 NORMALIZE_EPS = 1e-7    # zero_mean_unit_var_norm: / sqrt(var + 1e-7)
 
-# whisper-tiny encoder geometry (train.py: from_pretrained("openai/whisper-tiny")
-# with config.max_source_positions = 400). Asserted against the ONNX shapes.
+# whisper-tiny encoder (train.py: from_pretrained("openai/whisper-tiny"),
+# max_source_positions = 400) and the head; asserted against the ONNX shapes.
 D_MODEL = 384
 N_LAYERS = 4
 N_HEADS = 6
@@ -60,19 +43,13 @@ CLS_DIMS = (256, 64)
 
 
 def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+        return hashlib.file_digest(f, "sha256").hexdigest()
 
 
 def fetch(filename: str = ONNX_FP32, revision: str = HF_REVISION) -> Path:
-    """Download one pinned file of HF_REPO and verify its sha256.
-
-    Lands in $TRANSCRIBE_MODELS_DIR/smart-turn-v3@<revision>/ when that is
-    set (the hf_source.download_snapshot convention), else the HF cache.
-    """
+    """One file of HF_REPO, sha256-checked at the pinned revision; into
+    $TRANSCRIBE_MODELS_DIR/smart-turn-v3@<revision>/ when that is set."""
     from huggingface_hub import hf_hub_download
 
     local_dir = None
@@ -98,16 +75,13 @@ def resolve_onnx(model: str | None, revision: str = HF_REVISION, filename: str =
     return fetch(filename, revision)
 
 
-# ---------------------------------------------------------------------------
 # Preprocessing (upstream inference.py)
-# ---------------------------------------------------------------------------
 
 
 def truncate_audio_to_last_n_seconds(audio_array, n_seconds=8, sample_rate=16000):
     """Truncate audio to last n seconds or pad with zeros to meet n seconds.
 
-    Verbatim from smart-turn audio_utils.py (and Pipecat's
-    LocalSmartTurnAnalyzerV3._predict_endpoint)."""
+    Verbatim from smart-turn audio_utils.py."""
     max_samples = n_seconds * sample_rate
     if len(audio_array) > max_samples:
         return audio_array[-max_samples:]
@@ -119,64 +93,43 @@ def truncate_audio_to_last_n_seconds(audio_array, n_seconds=8, sample_rate=16000
 
 
 def feature_extractor():
-    """WhisperFeatureExtractor(chunk_length=8) on its numpy front end.
+    """WhisperFeatureExtractor(chunk_length=8) pinned to its numpy front end:
+    transformers picks the torch STFT when torch is importable, but upstream's
+    inference requirements and Pipecat's analyzer run the numpy path."""
+    from transformers import WhisperFeatureExtractor
 
-    transformers picks the torch STFT when torch is importable. Upstream's
-    inference requirements (requirements_inference.txt) and Pipecat's
-    production analyzer (a vendored numpy copy, _whisper_features.py) both
-    run the numpy path, so it is the canonical one; pin it here."""
-    import transformers.models.whisper.feature_extraction_whisper as few
-
-    fe = few.WhisperFeatureExtractor(chunk_length=MAX_AUDIO_SECONDS)
-    fe_call_numpy = fe._np_extract_fbank_features
-
-    def numpy_only(waveform, device="cpu"):
-        return fe_call_numpy(waveform, device)
-
-    fe._torch_extract_fbank_features = numpy_only
+    fe = WhisperFeatureExtractor(chunk_length=MAX_AUDIO_SECONDS)
+    fe._torch_extract_fbank_features = fe._np_extract_fbank_features
     return fe
 
 
 def features(fe, window: np.ndarray) -> np.ndarray:
     """inference.py's feature call on an 8 s window -> [1, 80, 800] float32."""
-    inputs = fe(
-        window,
-        sampling_rate=SAMPLE_RATE,
-        return_tensors="np",
-        padding="max_length",
-        max_length=MAX_AUDIO_SAMPLES,
-        truncation=True,
-        do_normalize=True,
-    )
-    x = inputs.input_features.squeeze(0).astype(np.float32)
-    return np.expand_dims(x, axis=0)
+    inputs = fe(window, sampling_rate=SAMPLE_RATE, return_tensors="np", padding="max_length",
+                max_length=MAX_AUDIO_SAMPLES, truncation=True, do_normalize=True)
+    return inputs.input_features.astype(np.float32)
 
 
 def normalized_window(fe, window: np.ndarray) -> np.ndarray:
-    """The waveform the STFT sees: WhisperFeatureExtractor's own
-    zero_mean_unit_var_norm over the whole 128000-sample window (padding
-    included; the attention mask is all ones)."""
+    """The waveform the STFT sees: zero_mean_unit_var_norm over the whole
+    window, padding included (the attention mask is all ones)."""
     col = np.asarray([np.asarray(window, dtype=np.float32)]).T  # [n, 1], as __call__ builds it
     out = fe.zero_mean_unit_var_norm([col], attention_mask=[np.ones(len(window), np.int32)],
                                      padding_value=fe.padding_value)
     return np.asarray(out[0][:, 0], dtype=np.float32)
 
 
-# ---------------------------------------------------------------------------
 # ONNX -> PyTorch weight map
-# ---------------------------------------------------------------------------
-
-_LAYER_BIAS = re.compile(r"^inner\.(encoder\.layers\.(\d+)\.(self_attn\.(q|v|out)_proj|fc1|fc2))\.bias$")
 
 
-def map_onnx_weights(model_proto) -> tuple[dict[str, np.ndarray], list[str]]:
-    """Return ({torch state_dict name: array in torch layout}, notes).
+def map_onnx_weights(model_proto) -> dict[str, np.ndarray]:
+    """{torch state_dict name: array in torch layout}.
 
     Named initializers (inner.<name>) map 1:1. Each anonymous MatMul weight
     W (x @ W, stored [in, out]) is named by the bias Add consuming its
-    output, or, for k_proj (WhisperAttention has no k bias), by the layer's
-    self_attn_layer_norm feeding it; the torch weight is W.T ([out, in]).
-    Raises when any initializer is left over or a slot is filled twice.
+    output or, for the bias-free k_proj, by the self_attn_layer_norm feeding
+    it; the torch weight is W.T. Fails on a leftover initializer or a slot
+    filled twice.
     """
     from onnx import numpy_helper
 
@@ -188,20 +141,9 @@ def map_onnx_weights(model_proto) -> tuple[dict[str, np.ndarray], list[str]]:
         for i in n.input:
             consumers.setdefault(i, []).append(n)
 
-    out: dict[str, np.ndarray] = {}
-    notes: list[str] = []
-
-    def put(name: str, arr: np.ndarray, src: str) -> None:
-        if name in out:
-            raise SystemExit(f"error: weight map: {name} filled twice (second from {src})")
-        out[name] = np.ascontiguousarray(arr.astype(np.float32))
-        notes.append(f"{src} -> {name} {list(arr.shape)}")
-
-    for name, arr in inits.items():
-        if name.startswith("inner."):
-            put(name[len("inner."):], arr, name)
-
-    used = {n for n in inits if n.startswith("inner.")}
+    out = {k.removeprefix("inner."): np.ascontiguousarray(v.astype(np.float32))
+           for k, v in inits.items() if k.startswith("inner.")}
+    used = {k for k in inits if k.startswith("inner.")}
     for node in g.node:
         if node.op_type != "MatMul" or node.input[1] not in inits:
             continue
@@ -226,7 +168,9 @@ def map_onnx_weights(model_proto) -> tuple[dict[str, np.ndarray], list[str]]:
             target = f"encoder.layers.{m[1]}.self_attn.k_proj.weight"
         else:
             raise SystemExit(f"error: weight map: MatMul {wname} has {len(bias_adds)} bias consumers")
-        put(target, w.T, wname)
+        if target in out:
+            raise SystemExit(f"error: weight map: {target} filled twice (second from {wname})")
+        out[target] = np.ascontiguousarray(w.T.astype(np.float32))
         used.add(wname)
 
     # Every remaining initializer must be a known scalar / shape constant.
@@ -240,8 +184,7 @@ def map_onnx_weights(model_proto) -> tuple[dict[str, np.ndarray], list[str]]:
               and abs(float(v[0]) - (D_MODEL // N_HEADS) ** -0.25) < 1e-7]
     if len(scales) != 1:
         raise SystemExit("error: weight map: attention scale head_dim**-0.25 not found")
-    notes.append(f"attention scale constant {float(scales[0][0])!r} = head_dim**-0.25 on q and k")
-    return out, notes
+    return out
 
 
 def check_geometry(sd: dict[str, np.ndarray]) -> None:
@@ -273,44 +216,12 @@ def check_geometry(sd: dict[str, np.ndarray]) -> None:
         raise SystemExit("error: geometry: unexpected k_proj bias")
 
 
-def sinusoids(length: int, channels: int, max_timescale: float = 10000) -> np.ndarray:
-    """transformers' Whisper sinusoids() (float32 torch math), for the
-    positional-table check."""
-    import torch
-
-    log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
-    inv_timescales = torch.exp(-log_timescale_increment * torch.arange(channels // 2))
-    scaled_time = torch.arange(length).view(-1, 1) * inv_timescales.view(1, -1)
-    return torch.cat([scaled_time.sin(), scaled_time.cos()], dim=1).numpy()
-
-
-# ---------------------------------------------------------------------------
 # PyTorch twin (upstream train.py SmartTurnV3Model)
-# ---------------------------------------------------------------------------
 
 
-def whisper_tiny_config():
-    """openai/whisper-tiny's encoder config (config.json), as train.py loads it."""
-    from transformers import WhisperConfig
-
-    return WhisperConfig(
-        d_model=D_MODEL,
-        encoder_layers=N_LAYERS,
-        encoder_attention_heads=N_HEADS,
-        encoder_ffn_dim=FFN_DIM,
-        num_mel_bins=N_MELS,
-        max_source_positions=1500,  # SmartTurnV3Model.__init__ overrides to 400
-        activation_function="gelu",
-        dropout=0.0,
-        attention_dropout=0.0,
-        activation_dropout=0.0,
-        scale_embedding=False,
-    )
-
-
-def build_twin(sd: dict[str, np.ndarray], attn_implementation: str = "sdpa"):
-    """SmartTurnV3Model (train.py, verbatim forward) with the mapped weights,
-    loaded strictly, in eval mode."""
+def build_twin(sd: dict[str, np.ndarray]):
+    """SmartTurnV3Model (train.py, verbatim) on openai/whisper-tiny's encoder
+    config, with the mapped weights loaded strictly, in eval mode."""
     import torch
     from torch import nn
     from torch.nn.functional import softmax
@@ -359,8 +270,12 @@ def build_twin(sd: dict[str, np.ndarray], attn_implementation: str = "sdpa"):
             return {"logits": probs}
     # ---- end verbatim ----
 
-    config = whisper_tiny_config()
-    config._attn_implementation = attn_implementation
+    config = WhisperConfig(
+        d_model=D_MODEL, encoder_layers=N_LAYERS, encoder_attention_heads=N_HEADS,
+        encoder_ffn_dim=FFN_DIM, num_mel_bins=N_MELS, max_source_positions=1500,
+        activation_function="gelu", dropout=0.0, attention_dropout=0.0, activation_dropout=0.0,
+        scale_embedding=False)
+    config._attn_implementation = "sdpa"
     model = SmartTurnV3Model(config)
     state = {k: torch.from_numpy(v.copy()) for k, v in sd.items()}
     missing, unexpected = model.load_state_dict(state, strict=False)

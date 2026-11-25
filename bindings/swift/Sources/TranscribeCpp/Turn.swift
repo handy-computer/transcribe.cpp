@@ -85,10 +85,9 @@ public final class TurnSession {
 
     deinit { transcribe_turn_session_free(ptr) }
 
-    /// Score one clip (16 kHz mono float32): has the turn ended at its end?
-    /// Pass the audio of the current turn. `threshold` nil (or negative) uses
-    /// the model's `TurnInfo.threshold`; otherwise [0, 1]. Resets any stream
-    /// in progress. Streaming models also return every frame's probabilities.
+    /// Score one clip (16 kHz mono float32, the current turn's audio): has the
+    /// turn ended at its end? `threshold` nil (or negative) uses the model's
+    /// `TurnInfo.threshold`; otherwise [0, 1]. Resets any stream in progress.
     public func run(_ pcm: [Float], threshold: Double? = nil) throws -> TurnResult {
         try model.withCompute(
             busyIfStreaming: "a stream is active on this model; finish or drop it before turn run()"
@@ -127,9 +126,9 @@ public final class TurnSession {
 
     /// Append audio to the session's stream and score every frame it
     /// completes; a partial frame waits for the next call. Throws
-    /// `.notImplemented` when the model cannot stream (`frameSamples == 0`).
-    /// Invalid input leaves the stream and last result intact; an abort or
-    /// processing error resets the stream, so the next feed starts at frame 0.
+    /// `.notImplemented` when `frameSamples == 0`. Invalid input leaves the
+    /// stream and last result intact; an abort or processing error resets the
+    /// stream, so the next feed starts at frame 0.
     public func streamFeed(_ pcm: [Float]) throws -> TurnResult {
         try model.withCompute(
             busyIfStreaming: "a stream is active on this model; finish or drop it before turn streamFeed()"
@@ -143,33 +142,23 @@ public final class TurnSession {
         }
     }
 
-    /// Feed several streams of one model in a single compute: `inputs[i].1`
-    /// goes to `inputs[i].0`, and each session ends exactly as after its own
-    /// `streamFeed`. Returns one result per input, in order. Every session must
-    /// belong to the same model and appear once; an empty list throws
-    /// `.invalidArgument`. Uses the first session's thread count and checks
-    /// every session's cancellation token. An abort or processing error resets
-    /// every listed stream. The audio is copied once into one flat buffer for
-    /// the native call (the inputs' total sample count of extra memory). More
-    /// than `Int32.max` inputs or samples in one input throws `.invalidArgument`.
+    /// Feed several streams of one model in a single compute: each session
+    /// ends exactly as after its own `streamFeed`; one result per input, in
+    /// order. An empty list, a repeated session or sessions of different
+    /// models throw `.invalidArgument`. Uses the first session's thread count
+    /// and checks every session's cancellation token. An abort or processing
+    /// error resets every listed stream. The audio is copied once into one
+    /// flat buffer for the native call.
     public static func streamFeedBatch(_ inputs: [(TurnSession, [Float])]) throws -> [TurnResult] {
         guard let model = inputs.first?.0.model else {
             throw TranscribeError.invalidArgument("turn streamFeedBatch: no sessions")
         }
         let nInputs = try turnCount(inputs.count, "turn streamFeedBatch sessions")
-        var seen = Set<ObjectIdentifier>()
-        for (session, _) in inputs {
-            guard session.model === model else {
-                throw TranscribeError.invalidArgument(
-                    "turn streamFeedBatch: every session must belong to the same model")
-            }
-            guard seen.insert(ObjectIdentifier(session)).inserted else {
-                throw TranscribeError.invalidArgument(
-                    "turn streamFeedBatch: a session appears more than once")
-            }
+        // One model, one compute lock (the library rejects repeats).
+        guard inputs.allSatisfy({ $0.0.model === model }) else {
+            throw TranscribeError.invalidArgument(
+                "turn streamFeedBatch: every session must belong to the same model")
         }
-        // One flat copy of the audio keeps every buffer alive and in place for
-        // the whole native call.
         var flat: [Float] = []
         flat.reserveCapacity(inputs.reduce(0) { $0 + $1.1.count })
         var offsets: [Int] = []

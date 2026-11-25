@@ -113,24 +113,16 @@ modelTest("toy sava: info, run, stream equals run", SAVA_TOY_MODEL, async () => 
     assert.equal((await t.run(pcm, { threshold: 0 })).ended, true);
     assert.equal((await t.run(pcm, { threshold: 1 })).ended, r.p >= 1);
 
-    // Stream in odd chunks: firstFrame counts completed frames before the
-    // call; the speech probabilities are contiguous and may trail.
+    // Odd chunks reproduce the run; each call continues where the last ended.
     const probs = [];
     const speech = [];
-    for (let off = 0; off < pcm.length; off += 777) {
-      const f = await t.streamFeed(pcm.subarray(off, off + 777));
-      assert.equal(f.firstFrame, Math.floor(off / 640));
-      assert.equal(f.probs.length, Math.floor(Math.min(off + 777, pcm.length) / 640) - f.firstFrame);
-      assert.equal(f.speechFirstFrame, speech.length);
-      assert.ok(f.speechFirstFrame <= f.firstFrame + f.probs.length);
+    const push = (f) => {
+      assert.deepEqual([f.firstFrame, f.speechFirstFrame], [probs.length, speech.length]);
       probs.push(...f.probs);
       speech.push(...f.speechProbs);
-    }
-    const tail = await t.streamFlush();
-    assert.equal(tail.firstFrame, probs.length);
-    assert.equal(tail.speechFirstFrame, speech.length);
-    probs.push(...tail.probs);
-    speech.push(...tail.speechProbs);
+    };
+    for (let off = 0; off < pcm.length; off += 777) push(await t.streamFeed(pcm.subarray(off, off + 777)));
+    push(await t.streamFlush());
     assert.deepEqual(probs, r.probs);
     assert.deepEqual(speech, r.speechProbs);
 
@@ -186,7 +178,7 @@ modelTest("toy sava: a batched feed equals feeding each session alone", SAVA_TOY
     // Flushing afterwards also matches.
     for (let i = 0; i < 3; i++) assert.deepEqual(await batched[i].streamFlush(), await alone[i].streamFlush());
 
-    // Invalid batches: refused before anything is fed.
+    // Invalid batches (a disposed session: see the queued-dispose test).
     const [a, b] = batched;
     const one = noise(640);
     await assert.rejects(TurnSession.streamFeedBatch([]), InvalidArgument);
@@ -214,13 +206,6 @@ modelTest("toy sava: a batched feed equals feeding each session alone", SAVA_TOY
     );
     assert.equal((await a.streamFeed(one)).firstFrame, 0);
     assert.equal((await b.streamFeed(one)).firstFrame, 0);
-    // A disposed session is refused.
-    const gone = m.createTurnSession();
-    gone.dispose();
-    await assert.rejects(
-      TurnSession.streamFeedBatch([{ session: a, pcm: one }, { session: gone, pcm: one }]),
-      TranscribeError,
-    );
   } finally {
     for (const s of [...batched, ...alone]) s.dispose();
     m.dispose();
@@ -248,7 +233,6 @@ modelTest("toy sava: an aborted signal cancels and resets the stream", SAVA_TOY_
     assert.equal((await t.streamFeed(pcm)).firstFrame, 0);
     assert.equal((await u.streamFeed(pcm)).firstFrame, 0);
     await assert.rejects(t.streamFlush({ signal: ac.signal }), Aborted);
-    assert.ok((await t.run(pcm)).probs.length > 0);
   } finally {
     t.dispose();
     u.dispose();

@@ -12,19 +12,16 @@ run_reference_smart_turn_onnx.py.
       --out reports/turn/smart-turn-v3.2-F32.smart-turn-data-v3.2-test.jsonl
 
 Rows: the reference row plus "p_cpp" and "ended_cpp". The summary has the
-accuracy with upstream's rule (p > 0.5), the decision agreement with the
-reference fp32 and int8 ONNX, and |p_cpp - p_fp32| statistics. The header
-records the transcribe.cpp commit the tool was built at (engine_sha; the run
-refuses an engine tree with uncommitted changes, so the commit is the code),
-the backend, the thread count and the time. scripts/turn/score.py turns a run
+accuracy at p > 0.5, the decision agreement with the fp32 and int8 ONNX and
+|p_cpp - p_fp32| statistics; the header records the engine commit (an engine
+tree with uncommitted changes is refused). scripts/turn/score.py turns a run
 into the catalog's score.
 """
 from __future__ import annotations
 
 import argparse
-import io
-import json
 import datetime
+import json
 import queue
 import subprocess
 import sys
@@ -36,28 +33,14 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "turn"))
-import run_reference_smart_turn_onnx as ref  # noqa: E402
-
-THRESHOLD = 0.5
-
-
-def decode(flac: bytes) -> np.ndarray:
-    import soundfile as sf
-
-    pcm, sr = sf.read(io.BytesIO(flac), dtype="float32", always_2d=False)
-    if pcm.ndim != 1 or sr != 16000:
-        raise SystemExit("error: clip is not 16 kHz mono")
-    return np.ascontiguousarray(pcm, dtype=np.float32)
-
+from clips import THRESHOLD, accuracy, items, read  # noqa: E402
 
 ENGINE_PATHS = ("src", "include", "ggml", "tools/transcribe-turn-eval", "CMakeLists.txt", "cmake")
 
 
 def engine_sha(built_at: str | None = None) -> str:
-    """The commit the engine sources are at; refuses uncommitted changes to
-    them, since the number would then name a commit that did not run. With
-    built_at (the commit a prebuilt --tool was built at), that commit, once
-    the engine sources are checked to be the same at HEAD."""
+    """The engine commit (HEAD, or built_at for a prebuilt --tool once its
+    engine sources match HEAD); refuses uncommitted engine changes."""
     def git(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", str(REPO_ROOT), *args], capture_output=True, text=True)
 
@@ -73,8 +56,7 @@ def engine_sha(built_at: str | None = None) -> str:
 
 def worker(tool: Path, model: Path, jobs: queue.Queue, results: dict, threads: int, backend: str) -> None:
     proc = subprocess.Popen([str(tool), str(model), "--threads", str(threads), "--backend", backend],
-                            stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     assert proc.stdin and proc.stdout
     while True:
         item = jobs.get()
@@ -90,16 +72,6 @@ def worker(tool: Path, model: Path, jobs: queue.Queue, results: dict, threads: i
     proc.stdin.close()
     if proc.wait() != 0:
         raise SystemExit("error: transcribe-turn-eval exited with an error")
-
-
-def acc(rows: list[dict], key: str) -> dict:
-    tp = sum(1 for r in rows if r["label"] and r[key] > THRESHOLD)
-    tn = sum(1 for r in rows if not r["label"] and r[key] <= THRESHOLD)
-    n = len(rows)
-    fp = sum(1 for r in rows if not r["label"] and r[key] > THRESHOLD)
-    fn = sum(1 for r in rows if r["label"] and r[key] <= THRESHOLD)
-    return {"n": n, "acc_pct": round(100.0 * (tp + tn) / n, 2), "fpr_pct": round(100.0 * fp / n, 2),
-            "fnr_pct": round(100.0 * fn / n, 2)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -130,11 +102,11 @@ def main(argv: list[str] | None = None) -> int:
         t.start()
     t0 = time.time()
     order = []
-    for i, (meta, flac) in enumerate(ref.items(header["shards"])):
+    for i, (meta, flac) in enumerate(items(header["shards"])):
         if args.limit and i >= args.limit:
             break
         order.append(meta["id"])
-        jobs.put((i, decode(flac)))
+        jobs.put((i, read(flac, meta["id"])))
         if (i + 1) % 2000 == 0:
             print(f"  {i + 1} clips, {time.time() - t0:.0f} s", file=sys.stderr)
     for _ in pool:
@@ -153,9 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     flips = [{"id": r["id"], "p_cpp": r["p_cpp"], "p_fp32": r["p_fp32"]} for r in rows
              if (r["p_cpp"] > THRESHOLD) != (r["p_fp32"] > THRESHOLD)]
     summary = {
-        "cpp": acc(rows, "p_cpp"),
-        "ref_fp32": acc(rows, "p_fp32"),
-        "ref_int8": acc(rows, "p_int8"),
+        "cpp": accuracy(rows, "p_cpp"),
+        "ref_fp32": accuracy(rows, "p_fp32"),
+        "ref_int8": accuracy(rows, "p_int8"),
         "decision_agreement_with_fp32_pct": round(100.0 * agree_fp32 / len(rows), 4),
         "decision_agreement_with_int8_pct": round(100.0 * agree_int8 / len(rows), 2),
         "decision_flips_vs_fp32": flips,

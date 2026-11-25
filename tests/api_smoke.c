@@ -823,6 +823,27 @@ static void test_stream_entries_null(void) {
     CHECK(transcribe_stream_get_text(NULL, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
 }
 
+static void test_turn_entries_null(void) {
+    /* NULL session into the TURN entry points: frees and resets are no-ops,
+     * accessors return NULL, the rest INVALID_ARG. */
+    transcribe_turn_session_free(NULL);
+    transcribe_turn_stream_reset(NULL);
+    CHECK(transcribe_turn_probs(NULL) == NULL);
+    CHECK(transcribe_turn_speech_probs(NULL) == NULL);
+    struct transcribe_turn_result r;
+    transcribe_turn_result_init(&r);
+    CHECK(transcribe_turn_get_result(NULL, &r) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_turn_stream_flush(NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+
+    float                            pcm[1] = { 0.0f };
+    const float *                    ptr[1] = { pcm };
+    int                              len[1] = { 1 };
+    struct transcribe_turn_session * s[1]   = { NULL };
+    CHECK(transcribe_turn_stream_feed_batch(NULL, ptr, len, 1) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_turn_stream_feed_batch(s, NULL, len, 1) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_turn_stream_feed_batch(s, ptr, NULL, 1) == TRANSCRIBE_ERR_INVALID_ARG);
+}
+
 /* Input-limits ABI surface (no model needed): the session-limits struct, the
  * get_limits arg validation, and the supplemental truncation flag. The
  * model-dependent behavior (real effective values, INPUT_TOO_LONG / OUTPUT_
@@ -871,6 +892,7 @@ int main(void) {
     test_stream_state_values();
     test_stream_accessors_null();
     test_stream_entries_null();
+    test_turn_entries_null();
     test_session_limits_abi();
 
     if (g_failures > 0) {

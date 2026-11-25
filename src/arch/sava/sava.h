@@ -1,5 +1,5 @@
 // arch/sava/sava.h - Inworld SAVA family (TURN and VAD roles): hparams,
-// weights, the per-session stream state and the session types.
+// weights, stream state, model and session types.
 //
 // INTERNAL to src/arch/sava/.
 //
@@ -16,10 +16,7 @@
 //   turn   [rms(trunk) | embed(sigmoid(speech logit of step t - 1))] ->
 //          down-proj, attention block, RMSNorm, readout
 //
-// Steps run as one ggml graph over a block of frames (graph.cpp). Every
-// per-frame value is computed by the same kernels in the same order
-// whatever the block size, so a stream fed in any chunking is bit-identical
-// to a whole-clip run on the CPU. See docs/porting/families/sava.md.
+// The step graph is graph.cpp's; see docs/porting/families/sava.md.
 
 #pragma once
 
@@ -29,6 +26,7 @@
 #include "transcribe-turn.h"
 #include "transcribe-vad.h"
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -95,10 +93,7 @@ struct HParams {
     int32_t lookahead_frames = 3;
     float   no_speech_logit  = -30.0f;
 
-    // Inworld's recommended turn cut-off. The GGUF also records the rest of
-    // Inworld's reference turn rule (stt.sava.policy.*); the library does
-    // not use it.
-    double threshold = 0.9;
+    double threshold = 0.9;  // Inworld's recommended turn cut-off
 
     // Derived by read_hparams.
     int32_t hops_per_frame = 0;  // frame_samples / hop
@@ -181,13 +176,10 @@ struct Model final : public transcribe_model {
     Weights       weights;
     TurnModelInfo turn_info;
 
-    // RoPE frequencies (rope.freqs, the reference's fp32 table); angles are
-    // (double) position * (double) freq.
-    std::vector<float> rope_freqs;
+    std::vector<float> rope_freqs;  // rope.freqs [head_dim / 2]
 
-    // Host front end (fp64): mel filterbank [n_mels][n_bins]
-    // (frontend.mel_filterbank), periodic Hann window [n_fft] and the FFT's
-    // twiddles exp(-2 pi i k / n_fft), k < n_fft.
+    // Host front end (fp64): mel filterbank [n_mels][n_bins], periodic Hann
+    // window [n_fft] and FFT twiddles exp(-2 pi i k / n_fft), k < n_fft.
     std::vector<double> mel_bank;
     std::vector<double> window;
     std::vector<double> twiddle_re;
@@ -201,8 +193,8 @@ struct Model final : public transcribe_model {
     ~Model() override;
 };
 
-// Per-session stream state that lives in a backend buffer and is read and
-// written by the step graph, plus the host-side context.
+// Per-session stream state: the tensors the step graph reads and writes, in
+// a backend buffer, and the host side.
 struct AttnState {
     ggml_tensor * k_ring = nullptr;  // ne [KV hd, ring]: normed, rotated keys, slot = position % ring
     ggml_tensor * v_ring = nullptr;  // ne [ring, KV hd]: values, transposed (the value product reads it in place)
@@ -215,37 +207,59 @@ struct SsmState {
     ggml_tensor * ssm  = nullptr;  // ne [state, head_dim, heads, 1]
 };
 
-// The step graph of the current (n_graph, n_real) shape; its tensors live in
-// the session's compute_ctx.
 struct GraphTensors {
     ggml_cgraph * graph = nullptr;
 
     // Inputs.
-    ggml_tensor *              mel_in     = nullptr;  // ne [mel_width, n]
-    ggml_tensor *              log_energy = nullptr;  // ne [1, n]
-    ggml_tensor *              ssm_ids    = nullptr;  // I32 [1]
-    ggml_tensor *              rope_cos   = nullptr;  // ne [hd / 2, 1, n]
-    ggml_tensor *              rope_sin   = nullptr;
-    std::vector<ggml_tensor *> slots;                 // per attention layer: I64 [n], ring slot of each column
-    std::vector<ggml_tensor *> masks;                 // per attention layer: ne [ring, n]
+    ggml_tensor *                           mel_in     = nullptr;  // ne [mel_width, n]
+    ggml_tensor *                           log_energy = nullptr;  // ne [1, n]
+    ggml_tensor *                           ssm_ids    = nullptr;  // I32 [1]
+    ggml_tensor *                           rope_cos   = nullptr;  // ne [hd / 2, 1, n]
+    ggml_tensor *                           rope_sin   = nullptr;
+    std::vector<std::vector<ggml_tensor *>> slots;                 // [attention layer][stream]: I64 [k], ring slots
+    std::vector<std::vector<ggml_tensor *>> masks;                 // [attention layer][stream]: ne [ring, max(k, 4)]
 
     // Outputs.
     ggml_tensor * logit    = nullptr;  // ne [1, n]
     ggml_tensor * logit_la = nullptr;  // ne [1, n]
     ggml_tensor * turn     = nullptr;  // ne [n_horizons, n]
 
-    // Debug dump points (TRANSCRIBE_DUMP_DIR only), ne [C, n].
-    ggml_tensor *              mel   = nullptr;
+    // Debug dump points (TRANSCRIBE_DUMP_DIR only), ne [C, n]; ssm_y is the
+    // first stream's, null for attention blocks.
     ggml_tensor *              mixer = nullptr;
-    std::vector<ggml_tensor *> trunk_mix;  // per block
-    std::vector<ggml_tensor *> trunk_out;
-    std::vector<ggml_tensor *> ssm_y;      // per block, null for attention
+    std::vector<ggml_tensor *> trunk_mix, trunk_out, ssm_y;  // per trunk block
     ggml_tensor *              trunk_norm  = nullptr;
     ggml_tensor *              vad_hidden  = nullptr;
     ggml_tensor *              speech_in   = nullptr;
     ggml_tensor *              turn_in     = nullptr;
     ggml_tensor *              turn_emb    = nullptr;
     ggml_tensor *              turn_hidden = nullptr;
+};
+
+// A step graph (graph.cpp): one stream over a block of n_real frames, or one
+// frame of each of a list of streams. Reused while the stream list and
+// n_real are the same.
+struct StepGraph {
+    ggml_context *        ctx        = nullptr;
+    ggml_backend_sched_t  sched      = nullptr;
+    size_t                sched_size = 0;  // the graph size sched was made for
+    std::vector<uint64_t> key;             // Stream::uid of each stream; empty = no graph
+    int                   n      = 0;      // columns
+    int                   k      = 0;      // columns per stream
+    int                   n_real = 0;      // real columns per stream
+    GraphTensors          t;
+
+    // Host inputs and outputs, ne [C, n].
+    std::vector<float>   mel, log_energy, rope, mask, logit, logit_la, turn;
+    std::vector<int64_t> slots;
+
+    void release() noexcept;
+    StepGraph() = default;
+
+    ~StepGraph() { release(); }
+
+    StepGraph(const StepGraph &)             = delete;
+    StepGraph & operator=(const StepGraph &) = delete;
 };
 
 // Debug dump accumulators: every step of the current stream.
@@ -259,7 +273,6 @@ struct DumpTrace {
 };
 
 struct Stream {
-    // Persistent state (state_buf).
     ggml_context *         state_ctx   = nullptr;
     ggml_backend_buffer_t  state_buf   = nullptr;
     ggml_tensor *          mixer_tail  = nullptr;  // ne [row_width]: the previous frame's mixer row
@@ -267,26 +280,19 @@ struct Stream {
     std::vector<SsmState>  ssm;                    // per trunk block (empty for attention)
     std::vector<AttnState> attn;                   // trunk attention blocks, then vad, then turn
 
-    // Host state.
-    std::vector<float> context;  // the last context_samples samples
-    int64_t            pos = 0;  // steps taken (the RoPE position of the next frame)
+    std::vector<float> context;                    // the last context_samples samples
+    int64_t            pos = 0;                    // steps taken (the RoPE position of the next frame)
 
-    // Host scratch.
-    std::vector<float>   mel, log_energy, mask, rope;
-    std::vector<double>  fft_re, fft_im, fft_scratch, fe_win, fe_power;
-    std::vector<float>   fe_buf;
-    std::vector<int64_t> slots;
-    std::vector<float>   logit, logit_la, turn;
+    // Front-end scratch.
+    std::vector<double> fft_re, fft_im, fft_scratch, fe_win, fe_power;
+    std::vector<float>  fe_buf;
 
-    GraphTensors g;
-    int          graph_n    = 0;  // columns of the built graph; 0 = none
-    int          graph_real = 0;  // real (non-padding) columns
-
+    StepGraph g;  // this stream's block graph
     DumpTrace trace;
 
-    // Unique for the process lifetime: keys the batch graphs that read this
-    // stream's state (BatchGraph::key), so a freed stream's graph is never
-    // reused for another stream at the same address.
+    // Unique for the process lifetime: keys the step graphs that read this
+    // stream's state, so a freed stream's graph is never reused for another
+    // stream at the same address.
     const uint64_t uid;
 
     Stream();
@@ -295,11 +301,15 @@ struct Stream {
     Stream & operator=(const Stream &) = delete;
 };
 
+inline float sigmoid(float x) {
+    return 1.0f / (1.0f + std::exp(-x));
+}
+
 // Allocate (first call) and zero the stream state.
 transcribe_status stream_reset(Stream & st, const Model & m);
 
-// OK when the stream has its state; otherwise retry the failed reset's
-// allocation (stream_step and the batched step call it first).
+// OK when the stream has its state; otherwise the last stream_reset failed,
+// so the stream is still at its start: retry the reset.
 transcribe_status ensure_state(Stream & st, const Model & m);
 
 // Run n_frames whole frames. Writes, per step, the emitted speech
@@ -317,68 +327,29 @@ transcribe_status stream_step(SessionCore & core,
 // Write the stream's trace (TRANSCRIBE_DUMP_DIR only), then drop it.
 void stream_dump(Stream & st, const Model & m);
 
-// The graph of one batched step (stream_step_batch): one frame for each of a
-// list of at most 64 streams (turn_step_batch splits larger batches into
-// chunks). Owned by the session listed first in its chunk, with its own
-// compute context and scheduler (the session's single-stream graph keeps its
-// own), and reused while the chunk's stream list is the same.
-struct BatchGraph {
-    ggml_context *        ctx   = nullptr;
-    ggml_backend_sched_t  sched = nullptr;
-    ggml_cgraph *         graph = nullptr;
-    std::vector<uint64_t> key;    // Stream::uid of each column's stream
-    int                   n = 0;  // columns (>= the stream count, padded)
-
-    // Inputs.
-    ggml_tensor *                           mel_in     = nullptr;  // ne [mel_width, n]
-    ggml_tensor *                           log_energy = nullptr;  // ne [1, n]
-    ggml_tensor *                           ssm_ids    = nullptr;  // I32 [1]
-    ggml_tensor *                           rope_cos   = nullptr;  // ne [hd / 2, 1, n]
-    ggml_tensor *                           rope_sin   = nullptr;
-    std::vector<std::vector<ggml_tensor *>> slots;                 // [attention layer][stream]: I64 [1]
-    std::vector<std::vector<ggml_tensor *>> masks;                 // [attention layer][stream]: ne [ring, 4]
-
-    // Outputs.
-    ggml_tensor * logit    = nullptr;  // ne [1, n]
-    ggml_tensor * logit_la = nullptr;  // ne [1, n]
-    ggml_tensor * turn     = nullptr;  // ne [n_horizons, n]
-
-    // Host scratch.
-    std::vector<float> mel, log_energy_h, rope, mask, logit_h, logit_la_h, turn_h;
-
-    void release() noexcept;
-    BatchGraph() = default;
-
-    ~BatchGraph() { release(); }
-
-    BatchGraph(const BatchGraph &)             = delete;
-    BatchGraph & operator=(const BatchGraph &) = delete;
-};
-
-// One frame, pcm[i][0, frame_samples), for each of count distinct streams of
-// m, in one compute with bg's graph and n_threads threads. Writes turn[i] /
-// speech[i] as stream_step does for streams[i], with exactly its values: per
-// column the same kernels in the same reduction order (docs/porting/
-// families/sava.md). Adds the compute time to each core's t_encode_us.
-transcribe_status stream_step_batch(BatchGraph &          bg,
-                                    const Model &         m,
-                                    Stream * const *      streams,
-                                    SessionCore * const * cores,
-                                    int                   count,
-                                    int                   n_threads,
-                                    const float * const * pcm,
-                                    float *               turn,
-                                    float *               speech);
+// n_real frames, pcm[j][0, n_real * frame_samples), of each of count
+// distinct streams with state (count 1 or n_real 1), in one compute with g.
+// Writes stream j's frame f to turn / speech[j n_real + f] as stream_step
+// does, with exactly its values, and adds the compute time to each core's
+// t_encode_us.
+transcribe_status step(StepGraph &           g,
+                       const Model &         m,
+                       Stream * const *      streams,
+                       SessionCore * const * cores,
+                       int                   count,
+                       int                   n_real,
+                       int                   n_threads,
+                       const float * const * pcm,
+                       float *               turn,
+                       float *               speech);
 
 struct TurnSession final : public transcribe_turn_session {
-    Stream     st;
-    BatchGraph batch;  // used when this session is listed first in a batched step's chunk
+    Stream    st;
+    StepGraph batch;  // when this session is listed first in a batched step's chunk
 
   protected:
     void on_scratch_released() noexcept override {
-        st.g          = GraphTensors{};
-        st.graph_n    = 0;
-        st.graph_real = 0;
+        st.g.release();
         batch.release();
     }
 };
@@ -387,11 +358,7 @@ struct VadSession final : public transcribe_vad_session {
     Stream st;
 
   protected:
-    void on_scratch_released() noexcept override {
-        st.g          = GraphTensors{};
-        st.graph_n    = 0;
-        st.graph_real = 0;
-    }
+    void on_scratch_released() noexcept override { st.g.release(); }
 };
 
 extern const Arch arch;

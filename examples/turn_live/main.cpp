@@ -1,7 +1,6 @@
-// transcribe-turn-live - a live turn-taking loop over a WAV, fed in 20 ms
-// chunks as a microphone would deliver it. Prints the events a voice service
-// emits: `speech_start` (stop the TTS) and `turn` (the turn is over: start the
-// LLM), with the turn's span.
+// transcribe-turn-live - a live turn-taking loop over a WAV fed in 20 ms
+// chunks, as from a microphone. Prints the events a voice service acts on:
+// `speech_start` (stop the TTS) and `turn` (start the LLM), with its span.
 //
 //   transcribe-turn-live --vad silero-vad-v6.2-F32.gguf --turn smart-turn-v3.2-F32.gguf in.wav
 //   transcribe-turn-live --turn sava-F32.gguf in.wav
@@ -15,9 +14,7 @@
 // reference rule (sava.segment): a turn opens on the first speech frame,
 // pre_roll_ms earlier; while it is open, each silent frame checks the turn
 // score of the step that judged it, and max_silence_ms closes it anyway.
-// SAVA judges speech a few frames late (the lag), so frame t's speech is
-// paired with the turn score of frame t + lag. The lag is the gap between the
-// ends of the two tracks once speech scores arrive.
+// Frame t's speech pairs with frame t + lag's turn score (turn.h).
 //
 // The library returns scores; these rules are the caller's (docs/turn.md).
 
@@ -196,10 +193,8 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
             return false;
         }
         if (lag < 0 && !flushed && r.n_speech_probs > 0) {
-            // After a feed that returns speech scores, the speech track ends
-            // lag frames before the turn track (turn.h). A flush judges every
-            // remaining frame, so it cannot tell; a stream that short has no
-            // turn scores to pair anyway.
+            // turn.h's formula, from a feed: a flush returns every remaining
+            // frame, so the gap there is not the lag.
             lag = (r.first_frame + r.n_probs) - (r.speech_first_frame + r.n_speech_probs);
         }
         const float * tp = transcribe_turn_probs(s);
@@ -237,7 +232,8 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
                 close(now + 1, "model", turn_p);
             }
         }
-        // Keep the turn scores still to be paired (frames >= the next judged one + lag).
+        // Drop the turn scores before the last judged frame's step (last_judged + lag):
+        // no frame judged later pairs with them.
         while (!turn_hist.empty() && lag >= 0 && turn_base < last_judged + lag) {
             turn_hist.pop_front();
             ++turn_base;

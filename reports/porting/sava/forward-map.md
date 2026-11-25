@@ -48,7 +48,7 @@ frame in the graph (`ne [C, n]`). All gates live in `tests/tolerances/sava.json`
 
 | Capability | Reference behavior | C++ API behavior | Family-doc Capability Validation row |
 |------------|--------------------|------------------|--------------------------------------|
-| whole clip | `sava.run` + `sava.segment` | `transcribe_turn_run`: p, ended, per-frame turn and speech, kept turns | Whole-clip turn scores; Turn segments |
+| whole clip | `sava.run` | `transcribe_turn_run`: p, ended, per-frame turn and speech | Whole-clip turn scores |
 | live stream | `Session.push` / `flush` | `transcribe_turn_stream_feed` / `flush` | Streaming |
 | speech only | lookahead output | `transcribe_vad_*` (lookahead 3, threshold 0.5) | Speech track through `transcribe_vad_*` |
 

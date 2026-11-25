@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -54,6 +53,12 @@ int64_t speech_first_frame(const transcribe_turn_session * s, const TurnModelInf
     return info.has_speech ? std::max<int64_t>(0, s->frames_done - speech_lag(info)) : 0;
 }
 
+// Of the next n_frames steps, how many emit a speech score judging a frame
+// before the stream (dropped).
+int64_t speech_skip(const transcribe_turn_session * s, const TurnModelInfo & info, int64_t n_frames) {
+    return std::min(n_frames, std::max<int64_t>(0, speech_lag(info) - s->frames_done));
+}
+
 void clear_result(transcribe_turn_session * s) {
     s->p     = 0.0f;
     s->ended = false;
@@ -76,30 +81,16 @@ void reset_stream(transcribe_turn_session * s, const transcribe::TurnOps * ops) 
     s->needs_reset = false;
 }
 
-// After validation, every failed call (including an exception) discards its
-// partial result and stream state. Cleanup itself must not escape the ABI.
+// After validation, every failed call (including an exception) discards the
+// partial result and stream state of every session it touched. Cleanup itself
+// must not escape the ABI.
 struct TurnFailureGuard {
-    transcribe_turn_session *   session;
-    const transcribe::TurnOps * ops;
-    bool                        complete = false;
-
-    ~TurnFailureGuard() noexcept {
-        if (!complete) {
-            clear_result(session);
-            api_guard_void("transcribe_turn_cleanup", [&] { reset_stream(session, ops); });
-        }
-    }
-};
-
-// The batch form: a failure anywhere in feed_batch (including an exception)
-// discards every listed session's result and stream state.
-struct TurnBatchFailureGuard {
     transcribe_turn_session * const * sessions;
     size_t                            count;
     const transcribe::TurnOps *       ops;
     bool                              complete = false;
 
-    ~TurnBatchFailureGuard() noexcept {
+    ~TurnFailureGuard() noexcept {
         if (complete) {
             return;
         }
@@ -127,9 +118,9 @@ struct ThreadCountOverride {
     ThreadCountOverride & operator=(const ThreadCountOverride &) = delete;
 };
 
-// Step n_frames whole frames as the continuation of the stream. Appends every
-// step's turn score to turn_out and the speech scores of judged frames (frame
-// index >= 0) to speech_out.
+// Step n_frames whole frames as the continuation of the stream; append the
+// turn scores to turn_out and the speech scores of frames >= 0 to speech_out.
+// On failure the caller's TurnFailureGuard discards both.
 transcribe_status step_frames(transcribe_turn_session *   s,
                               const transcribe::TurnOps * ops,
                               const TurnModelInfo &       info,
@@ -140,23 +131,51 @@ transcribe_status step_frames(transcribe_turn_session *   s,
     if (n_frames <= 0) {
         return TRANSCRIBE_OK;
     }
-    const size_t       n = static_cast<size_t>(n_frames);
-    std::vector<float> turn(n, 0.0f);
-    std::vector<float> speech(info.has_speech ? n : 0, 0.0f);
-    if (const auto st = ops->step(s, pcm, n_frames, turn.data(), info.has_speech ? speech.data() : nullptr);
+    const size_t n           = static_cast<size_t>(n_frames);
+    const size_t turn_base   = turn_out.size();
+    const size_t speech_base = speech_out.size();
+    turn_out.resize(turn_base + n);
+    if (info.has_speech) {
+        speech_out.resize(speech_base + n);
+    }
+    if (const auto st = ops->step(s, pcm, n_frames, turn_out.data() + turn_base,
+                                  info.has_speech ? speech_out.data() + speech_base : nullptr);
         st != TRANSCRIBE_OK) {
         return st;
     }
-    turn_out.insert(turn_out.end(), turn.begin(), turn.end());
-    if (info.has_speech) {
-        const int64_t lag = speech_lag(info);
-        for (int64_t i = 0; i < n_frames; ++i) {
-            if (s->frames_done + i - lag >= 0) {
-                speech_out.push_back(speech[static_cast<size_t>(i)]);
-            }
+    const int64_t skip = speech_skip(s, info, n_frames);
+    speech_out.erase(speech_out.begin() + static_cast<std::ptrdiff_t>(speech_base),
+                     speech_out.begin() + static_cast<std::ptrdiff_t>(speech_base + static_cast<size_t>(skip)));
+    s->frames_done += n_frames;
+    return TRANSCRIBE_OK;
+}
+
+// End the stream: step the tail zero padded to a frame, then lag silent frames
+// so the last frames get their speech scores (the silent steps' own turn
+// scores score padding and are not returned).
+transcribe_status finish_stream(transcribe_turn_session *   s,
+                                const transcribe::TurnOps * ops,
+                                const TurnModelInfo &       info,
+                                const float *               tail,
+                                size_t                      n_tail) {
+    const size_t  frame = static_cast<size_t>(info.frame_samples);
+    const int64_t lag   = speech_lag(info);
+    if (n_tail > 0) {
+        std::vector<float> last(frame, 0.0f);
+        std::copy(tail, tail + n_tail, last.begin());
+        if (const auto st = step_frames(s, ops, info, last.data(), 1, s->probs, s->speech_probs); st != TRANSCRIBE_OK) {
+            return st;
         }
     }
-    s->frames_done += n_frames;
+    if (lag > 0 && s->frames_done > 0) {
+        const std::vector<float> silence(static_cast<size_t>(lag) * frame, 0.0f);
+        std::vector<float>       padding_turn;
+        if (const auto st = step_frames(s, ops, info, silence.data(), lag, padding_turn, s->speech_probs);
+            st != TRANSCRIBE_OK) {
+            return st;
+        }
+    }
+    reset_stream(s, ops);
     return TRANSCRIBE_OK;
 }
 
@@ -277,7 +296,7 @@ static transcribe_status turn_run_impl(transcribe_turn_session *      session,
         return st;
     }
 
-    TurnFailureGuard failure{ session, ops };
+    TurnFailureGuard failure{ &session, 1, ops };
     clear_result(session);
     reset_stream(session, ops);
     transcribe::ScratchReleaseGuard release{ session, true };
@@ -304,36 +323,18 @@ static transcribe_status turn_run_impl(transcribe_turn_session *      session,
     }
 
     // A streaming model: the clip is one stream, fed whole and flushed.
-    const int64_t frame   = info.frame_samples;
-    const int64_t lag     = speech_lag(info);
-    const int64_t n_full  = n / frame;
-    const int64_t n_tail  = n - n_full * frame;
-    const int64_t n_total = n_full + (n_tail > 0 ? 1 : 0);
-
-    std::vector<float> turn_all;
-    std::vector<float> speech;
-    turn_all.reserve(static_cast<size_t>(n_total + lag));
-    speech.reserve(static_cast<size_t>(n_total));
-    transcribe_status st = step_frames(session, ops, info, pcm, n_full, turn_all, speech);
-    if (st == TRANSCRIBE_OK && n_tail > 0) {
-        std::vector<float> last(static_cast<size_t>(frame), 0.0f);
-        std::memcpy(last.data(), pcm + n_full * frame, static_cast<size_t>(n_tail) * sizeof(float));
-        st = step_frames(session, ops, info, last.data(), 1, turn_all, speech);
-    }
-    if (st == TRANSCRIBE_OK && lag > 0) {
-        const std::vector<float> silence(static_cast<size_t>(lag * frame), 0.0f);
-        st = step_frames(session, ops, info, silence.data(), lag, turn_all, speech);
+    const int64_t     n_full = n / info.frame_samples;
+    const int64_t     used   = n_full * info.frame_samples;
+    transcribe_status st     = step_frames(session, ops, info, pcm, n_full, session->probs, session->speech_probs);
+    if (st == TRANSCRIBE_OK) {
+        st = finish_stream(session, ops, info, pcm + used, static_cast<size_t>(n - used));
     }
     if (st != TRANSCRIBE_OK) {
         return st;
     }
-    reset_stream(session, ops);
-
-    session->probs.assign(turn_all.begin(), turn_all.begin() + n_total);
-    session->p            = session->probs.back();
-    session->ended        = static_cast<double>(session->p) >= threshold;
-    session->speech_probs = std::move(speech);
-    failure.complete      = true;
+    session->p       = session->probs.back();
+    session->ended   = static_cast<double>(session->p) >= threshold;
+    failure.complete = true;
     return TRANSCRIBE_OK;
 }
 
@@ -349,7 +350,7 @@ static transcribe_status turn_stream_feed_impl(transcribe_turn_session * session
     }
     const size_t frame = static_cast<size_t>(info.frame_samples);
 
-    TurnFailureGuard failure{ session, ops };
+    TurnFailureGuard failure{ &session, 1, ops };
     clear_result(session);
     if (session->needs_reset) {
         reset_stream(session, ops);
@@ -414,13 +415,12 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
     if (!streams(info)) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
-    const size_t  frame     = static_cast<size_t>(info.frame_samples);
-    const int64_t lag       = speech_lag(info);
-    const int     n_threads = sessions[0]->n_threads;
+    const size_t frame     = static_cast<size_t>(info.frame_samples);
+    const int    n_threads = sessions[0]->n_threads;
 
     // Armed before any session changes: a failure anywhere resets every
     // listed stream.
-    TurnBatchFailureGuard           failure{ sessions, count, ops };
+    TurnFailureGuard                failure{ sessions, count, ops };
     std::vector<std::vector<float>> joined(count);
     std::vector<const float *>      src(count);
     std::vector<size_t>             avail(count);
@@ -475,7 +475,9 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
                 }
             }
             turn.assign(active.size(), 0.0f);
-            speech.assign(active.size(), 0.0f);
+            if (info.has_speech) {
+                speech.assign(active.size(), 0.0f);
+            }
             if (const auto st = ops->step_batch(active.data(), static_cast<int>(active.size()), n_threads,
                                                 frames.data(), turn.data(), info.has_speech ? speech.data() : nullptr);
                 st != TRANSCRIBE_OK) {
@@ -484,7 +486,7 @@ static transcribe_status turn_stream_feed_batch_impl(transcribe_turn_session * c
             for (size_t j = 0; j < active.size(); ++j) {
                 transcribe_turn_session * s = active[j];
                 s->probs.push_back(turn[j]);
-                if (info.has_speech && s->frames_done - lag >= 0) {
+                if (info.has_speech && speech_skip(s, info, 1) == 0) {
                     s->speech_probs.push_back(speech[j]);
                 }
                 s->frames_done += 1;
@@ -509,33 +511,18 @@ static transcribe_status turn_stream_flush_impl(transcribe_turn_session * sessio
     if (!streams(info)) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
-    const size_t  frame = static_cast<size_t>(info.frame_samples);
-    const int64_t lag   = speech_lag(info);
 
-    TurnFailureGuard failure{ session, ops };
+    TurnFailureGuard failure{ &session, 1, ops };
     clear_result(session);
     if (session->needs_reset) {
         reset_stream(session, ops);
     }
     session->first_frame        = session->frames_done;
     session->speech_first_frame = speech_first_frame(session, info);
-    transcribe_status st        = TRANSCRIBE_OK;
-    if (!session->pending.empty()) {
-        std::vector<float> last(frame, 0.0f);
-        std::copy(session->pending.begin(), session->pending.end(), last.begin());
-        st = step_frames(session, ops, info, last.data(), 1, session->probs, session->speech_probs);
-    }
-    if (st == TRANSCRIBE_OK && lag > 0 && session->frames_done > 0) {
-        // Silent steps so the last frames get their speech verdicts; their
-        // own turn scores score padding and are not returned.
-        const std::vector<float> silence(static_cast<size_t>(lag) * frame, 0.0f);
-        std::vector<float>       padding_turn;
-        st = step_frames(session, ops, info, silence.data(), lag, padding_turn, session->speech_probs);
-    }
-    if (st != TRANSCRIBE_OK) {
+    if (const auto st = finish_stream(session, ops, info, session->pending.data(), session->pending.size());
+        st != TRANSCRIBE_OK) {
         return st;
     }
-    reset_stream(session, ops);
     failure.complete = true;
     return TRANSCRIBE_OK;
 }

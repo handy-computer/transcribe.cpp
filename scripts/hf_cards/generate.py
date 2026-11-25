@@ -242,7 +242,6 @@ def build_context(record: dict, spec: dict) -> dict:
     }
     if headline.get("metric"):
         ctx["metric"] = common.metric_label(headline["metric"], record.get("role"))
-    # End-of-turn: the error split and AUC behind the headline accuracy.
     ctx["turn_table"] = "\n".join(common.turn_table(record))
     for key in ("name", "link"):
         if record["license"].get(key):
@@ -369,9 +368,8 @@ def main() -> int:
     upstream_slug = ctx["hf_repo"].rsplit("/", 1)[-1]
     shared = sum(r["upstream_repo"] == record["upstream_repo"] for r in common.load_records().values()) > 1
     model_dir = args.spec.stem if shared else upstream_slug
-    # A converter that names its directory after the variant rather than the
-    # upstream repo (smart-turn-v3.2 from pipecat-ai/smart-turn-v3): the card
-    # goes where the GGUFs are.
+    # The card goes where the GGUFs are (smart-turn-v3.2 is not named after
+    # its upstream repo).
     own = REPO_ROOT / "models" / args.spec.stem
     if any((own / item["filename"]).exists() for item in record.get("downloads", [])):
         model_dir = args.spec.stem

@@ -14,15 +14,12 @@ against (decision parity and accuracy), as reports/wer/*-REF.* is for ASR.
       --out reports/turn/smart-turn-v3.2-REF.smart-turn-data-v3.2-test.jsonl
 
 Rows: {"id","language","dataset","synthetic","label","n_samples","p_fp32",
-"p_int8"}. label is the dataset's endpoint_bool (true = turn complete);
-upstream's decision is p > 0.5. Clips are 16-bit FLAC at 16 kHz, read as
-float32 (int16 / 32768) as soundfile does for the WAV fixtures.
+"p_int8"}; scripts/turn/clips.py reads the clips.
 """
 
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import multiprocessing as mp
 import sys
@@ -34,20 +31,10 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "turn"))
 
+from clips import DATASET, DATASET_REVISION, N_SHARDS, THRESHOLD, accuracy, items, read  # noqa: E402
 from lib import smart_turn_onnx as st  # noqa: E402
-
-DATASET = "pipecat-ai/smart-turn-data-v3.2-test"
-DATASET_REVISION = "dfc179241fee65b0efe81ca37786f41ce26f38ec"
-N_SHARDS = 10
-
-
-def shard_path(i: int) -> Path:
-    from huggingface_hub import hf_hub_download
-
-    return Path(hf_hub_download(DATASET, f"data/train-{i:05d}-of-{N_SHARDS:05d}.parquet",
-                                repo_type="dataset", revision=DATASET_REVISION))
-
 
 _W: dict = {}
 
@@ -69,12 +56,8 @@ def _init(fp32: str, int8: str) -> None:
 
 
 def _score(item: tuple[dict, bytes]) -> dict:
-    import soundfile as sf
-
     meta, flac = item
-    pcm, sr = sf.read(io.BytesIO(flac), dtype="float32", always_2d=False)
-    if pcm.ndim != 1 or sr != st.SAMPLE_RATE:
-        raise SystemExit(f"error: {meta['id']}: not {st.SAMPLE_RATE} Hz mono")
+    pcm = read(flac, meta["id"])
     x = st.features(_W["fe"], st.truncate_audio_to_last_n_seconds(pcm))
     row = dict(meta)
     row["n_samples"] = int(len(pcm))
@@ -83,41 +66,18 @@ def _score(item: tuple[dict, bytes]) -> dict:
     return row
 
 
-def items(shards: list[int]):
-    import pyarrow.parquet as pq
-
-    cols = ["id", "language", "dataset", "synthetic", "endpoint_bool"]
-    for i in shards:
-        pf = pq.ParquetFile(shard_path(i))
-        for batch in pf.iter_batches(batch_size=256, columns=cols + ["audio"]):
-            for r in batch.to_pylist():
-                meta = {"id": r["id"], "language": r["language"], "dataset": r["dataset"],
-                        "synthetic": r["synthetic"], "label": bool(r["endpoint_bool"])}
-                yield meta, r["audio"]["bytes"]
-
-
 def summary(rows: list[dict]) -> dict:
-    def acc(rs, key):
-        if not rs:
-            return None
-        tp = sum(1 for r in rs if r["label"] and r[key] > st.THRESHOLD)
-        tn = sum(1 for r in rs if not r["label"] and r[key] <= st.THRESHOLD)
-        fp = sum(1 for r in rs if not r["label"] and r[key] > st.THRESHOLD)
-        fn = sum(1 for r in rs if r["label"] and r[key] <= st.THRESHOLD)
-        return {"n": len(rs), "acc_pct": round(100.0 * (tp + tn) / len(rs), 2),
-                "fpr_pct": round(100.0 * fp / len(rs), 2), "fnr_pct": round(100.0 * fn / len(rs), 2)}
-
     by_lang = defaultdict(list)
     for r in rows:
         by_lang[r["language"]].append(r)
-    agree = sum(1 for r in rows if (r["p_fp32"] > st.THRESHOLD) == (r["p_int8"] > st.THRESHOLD))
+    agree = sum(1 for r in rows if (r["p_fp32"] > THRESHOLD) == (r["p_int8"] > THRESHOLD))
     dp = np.abs(np.array([r["p_fp32"] - r["p_int8"] for r in rows]))
     return {
-        "fp32": acc(rows, "p_fp32"),
-        "int8": acc(rows, "p_int8"),
+        "fp32": accuracy(rows, "p_fp32"),
+        "int8": accuracy(rows, "p_int8"),
         "int8_vs_fp32_decision_agreement_pct": round(100.0 * agree / len(rows), 2),
         "int8_vs_fp32_p_abs_diff": {"max": float(dp.max()), "mean": float(dp.mean())},
-        "by_language_fp32": {k: acc(v, "p_fp32") for k, v in sorted(by_lang.items())},
+        "by_language_fp32": {k: accuracy(v, "p_fp32") for k, v in sorted(by_lang.items())},
         "note": "FPR / FNR are percentages of all clips, as upstream's benchmark reports them.",
     }
 
@@ -141,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     s = summary(rows)
     header = {"schema": "transcribe-turn-ref-v1", "dataset": DATASET, "dataset_revision": DATASET_REVISION,
               "shards": args.shards, "model_repo": st.HF_REPO, "model_revision": st.HF_REVISION,
-              "fp32": st.ONNX_FP32, "int8": st.ONNX_INT8, "threshold": st.THRESHOLD,
+              "fp32": st.ONNX_FP32, "int8": st.ONNX_INT8, "threshold": THRESHOLD,
               "rule": "p > 0.5 (inference.py)", "summary": s}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w") as f:

@@ -16,8 +16,7 @@
 #include <cstring>
 #include <vector>
 
-// The longest clip accepted: 10 minutes at 16 kHz (a turn clip is seconds
-// long; a larger length is a corrupt stream, not audio to allocate for).
+// Longer records are a corrupt stream, not audio to allocate for.
 constexpr int32_t k_max_record_samples = 10 * 60 * 16000;
 
 int main(int argc, char ** argv) {
@@ -92,12 +91,7 @@ int main(int argc, char ** argv) {
         }
         transcribe_turn_result r;
         transcribe_turn_result_init(&r);
-        st = transcribe_turn_get_result(session, &r);
-        if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr, "result: %s\n", transcribe_status_string(st));
-            rc = 1;
-            break;
-        }
+        transcribe_turn_get_result(session, &r);
         std::printf("%.9g %d\n", static_cast<double>(r.p), r.ended ? 1 : 0);
         std::fflush(stdout);
     }

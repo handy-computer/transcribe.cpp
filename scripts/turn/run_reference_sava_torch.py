@@ -18,7 +18,6 @@ A clip's score is what transcribe_turn_run computes (docs/porting/families/
 sava.md, "For transcribe_turn_run"): inworld.sava.run(model, clip) over the
 whole clip, p = turns[n - 1, 0], the released turn score of the last real
 frame. The decision is p > 0.5, as Inworld's and Pipecat's benchmarks use.
-Clips are 16-bit FLAC at 16 kHz, read as float32 (int16 / 32768).
 
 Rows: {"id","language","dataset","synthetic","label","n_samples","p_ref"}.
 Rows are appended to <out>.partial as they finish (progress: its line count);
@@ -28,7 +27,7 @@ Rows are appended to <out>.partial as they finish (progress: its line count);
 from __future__ import annotations
 
 import argparse
-import io
+import hashlib
 import json
 import multiprocessing as mp
 import sys
@@ -42,21 +41,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "turn"))
 
+from clips import DATASET, DATASET_REVISION, N_SHARDS, THRESHOLD, accuracy, items, read  # noqa: E402
 from dump_reference_sava_author import (  # noqa: E402
-    HF_REPO, HF_REVISION, SAMPLE_RATE, SAVA_VERSION, WEIGHTS_SHA256, resolve_weights)
-
-DATASET = "pipecat-ai/smart-turn-data-v3.2-test"
-DATASET_REVISION = "dfc179241fee65b0efe81ca37786f41ce26f38ec"
-N_SHARDS = 10
-THRESHOLD = 0.5
-
-
-def shard_path(i: int) -> Path:
-    from huggingface_hub import hf_hub_download
-
-    return Path(hf_hub_download(DATASET, f"data/train-{i:05d}-of-{N_SHARDS:05d}.parquet",
-                                repo_type="dataset", revision=DATASET_REVISION))
-
+    HF_REPO, HF_REVISION, SAVA_VERSION, WEIGHTS_SHA256, resolve_weights)
 
 _W: dict = {}
 
@@ -88,51 +75,20 @@ def clip_p(sava, model, audio: np.ndarray) -> float:
 
 
 def _score(item: tuple[dict, bytes]) -> dict:
-    import soundfile as sf
-
     meta, flac = item
-    pcm, sr = sf.read(io.BytesIO(flac), dtype="float32", always_2d=False)
-    if pcm.ndim != 1 or sr != SAMPLE_RATE:
-        raise SystemExit(f"error: {meta['id']}: not {SAMPLE_RATE} Hz mono")
-    audio = np.ascontiguousarray(pcm, dtype=np.float32)
+    audio = read(flac, meta["id"])
     row = dict(meta)
     row["n_samples"] = int(audio.size)
     row["p_ref"] = clip_p(_W["sava"], _W["model"], audio)
     return row
 
 
-def items(shards: list[int], ids: set[str] | None = None, skip: set[str] | None = None):
-    import pyarrow.parquet as pq
-
-    cols = ["id", "language", "dataset", "synthetic", "endpoint_bool"]
-    for i in shards:
-        pf = pq.ParquetFile(shard_path(i))
-        for batch in pf.iter_batches(batch_size=256, columns=cols + ["audio"]):
-            for r in batch.to_pylist():
-                if ids is not None and r["id"] not in ids:
-                    continue
-                if skip and r["id"] in skip:
-                    continue
-                meta = {"id": r["id"], "language": r["language"], "dataset": r["dataset"],
-                        "synthetic": r["synthetic"], "label": bool(r["endpoint_bool"])}
-                yield meta, r["audio"]["bytes"]
-
-
 def summary(rows: list[dict]) -> dict:
-    def acc(rs):
-        if not rs:
-            return None
-        tp = sum(1 for r in rs if r["label"] and r["p_ref"] > THRESHOLD)
-        tn = sum(1 for r in rs if not r["label"] and r["p_ref"] <= THRESHOLD)
-        fp = sum(1 for r in rs if not r["label"] and r["p_ref"] > THRESHOLD)
-        fn = sum(1 for r in rs if r["label"] and r["p_ref"] <= THRESHOLD)
-        return {"n": len(rs), "acc_pct": round(100.0 * (tp + tn) / len(rs), 2),
-                "fpr_pct": round(100.0 * fp / len(rs), 2), "fnr_pct": round(100.0 * fn / len(rs), 2)}
-
     by_lang = defaultdict(list)
     for r in rows:
         by_lang[r["language"]].append(r)
-    return {"ref": acc(rows), "by_language": {k: acc(v) for k, v in sorted(by_lang.items())},
+    return {"ref": accuracy(rows, "p_ref"),
+            "by_language": {k: accuracy(v, "p_ref") for k, v in sorted(by_lang.items())},
             "note": "FPR / FNR are percentages of all clips, as upstream's benchmark reports them."}
 
 
@@ -146,21 +102,17 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     weights = resolve_weights(HF_REPO, HF_REVISION)
-    import hashlib
-
-    h = hashlib.sha256()
-    with weights.open("rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    if h.hexdigest() != WEIGHTS_SHA256:
-        raise SystemExit(f"error: {weights}: sha256 {h.hexdigest()}, expected {WEIGHTS_SHA256}")
+    with open(weights, "rb") as f:
+        sha = hashlib.file_digest(f, "sha256").hexdigest()
+    if sha != WEIGHTS_SHA256:
+        raise SystemExit(f"error: {weights}: sha256 {sha}, expected {WEIGHTS_SHA256}")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     partial = args.out.with_name(args.out.name + ".partial")
     rows: list[dict] = []
     if args.resume and partial.exists():
         rows = [json.loads(line) for line in partial.read_text().splitlines() if line.strip()]
-    done = {r["id"] for r in rows}
+    done = frozenset(r["id"] for r in rows)
     t0 = time.time()
     with partial.open("a" if args.resume else "w") as pf, \
             mp.Pool(args.jobs, initializer=_init, initargs=(str(weights),)) as pool:

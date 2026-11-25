@@ -20,7 +20,7 @@ at `f766f81d3cfdf7737ac64aad813d91bbfd56bf93` (SHA256
 Upstream code: [`pipecat-ai/smart-turn`](https://github.com/pipecat-ai/smart-turn).
 
 <!-- catalog:pin -->
-Licensed BSD-2-Clause. Ported from upstream commit [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81), pinned 2026-11-21. Validated against the onnxruntime 1.23.2 on smart-turn-v3.2-gpu.onnx (CPU, F32) reference at transcribe.cpp commit [`3465deb3`](https://github.com/handy-computer/transcribe.cpp/tree/3465deb3) on 2026-11-25.
+Licensed BSD-2-Clause. Ported from upstream commit [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81), pinned 2026-11-21. Validated against the onnxruntime 1.23.2 (fp32 ONNX) reference at transcribe.cpp commit [`3465deb3`](https://github.com/handy-computer/transcribe.cpp/tree/3465deb3) on 2026-11-25.
 <!-- /catalog -->
 
 ## How to use it
@@ -29,7 +29,8 @@ Pass the audio of the current turn, from where the speaker started, when a
 VAD (for example Silero, with Pipecat's 0.2 s stop) hears a pause. The model
 scores the last 8 s; shorter audio is left padded with zeros. If the speaker
 continues before you act, score the whole turn again with the new audio.
-`p >= threshold` (default 0.5, upstream's cut-off) sets `ended`.
+`p >= threshold` (default 0.5, upstream's cut-off) sets `ended`; upstream uses
+`p > 0.5`, which differs only at exactly 0.5.
 
 ```bash
 build/bin/transcribe-cli -m smart-turn-v3.2-F32.gguf turn.wav
@@ -78,37 +79,31 @@ Pipecat publishes 93.71% for it and 92.63% for its int8 ONNX.
 Measured at transcribe.cpp `8f97ab5b` on 2026-11-24.
 <!-- /catalog -->
 
-Upstream's ONNX files on the same clips (onnxruntime, CPU):
+Upstream's int8 ONNX on the same clips (onnxruntime, CPU): 92.62%, false
+positives 4.76%, false negatives 2.63%. It agrees with the fp32 ONNX on
+96.12% of clips (mean |dp| 0.042, max 0.95), so it loses 1.09 points; Q8_0
+loses 0.03.
 
-| Model | Accuracy | False positives | False negatives |
-| --- | ---: | ---: | ---: |
-| upstream fp32 ONNX | 93.71% | 3.51% | 2.78% |
-| upstream int8 ONNX | 92.62% | 4.76% | 2.63% |
-
-Against the fp32 ONNX, the F32 port's mean probability difference is
-2.9e-7. Against F32, F16 makes the same
-decision as F32 on 99.99% of clips (2 differ, both with F32 p within 3.4e-4
-of the cut-off; mean |dp| 4.6e-5, max 0.0038). Q8_0 makes the same
-decision as F32 on 99.84% of clips (49 differ, all with F32 p within 0.07 of
-the cut-off; mean |dp| 0.0019, 99th percentile 0.034, max 0.13) and loses
-0.03 points of accuracy; upstream's int8 ONNX loses 1.09 points against its
-fp32 ONNX and agrees with it on 96.12% (mean |dp| 0.042, max 0.95). Rows:
-`reports/turn/smart-turn-v3.2-{F32,F16,Q8_0}.smart-turn-data-v3.2-test.jsonl`
-from `scripts/turn/eval_cpp.py`, scored by `scripts/turn/score.py`.
+- **F32 vs the fp32 ONNX:** mean |dp| 2.9e-7.
+- **F16 vs F32:** 2 decisions differ, both with F32 p within 3.4e-4 of the
+  cut-off (mean |dp| 4.6e-5).
+- **Q8_0 vs F32:** 49 decisions differ, all with F32 p within 0.07 of the
+  cut-off (mean |dp| 0.0019, p99 0.034).
+- **Rows:** `reports/turn/smart-turn-v3.2-{F32,F16,Q8_0}.smart-turn-data-v3.2-test.jsonl`
+  (`scripts/turn/eval_cpp.py`), scored by `scripts/turn/score.py`.
 
 F16 and Q8_0 store the encoder's attention and FFN matrices and the head's
-hidden projections (384 to 256, 256 to 64) at that type; the conv stem,
-positional table, front-end buffers, norms, biases and the two one-row
-projections stay F32.
+hidden projections at that type; the conv stem, positional table, front-end
+buffers, norms, biases and the two one-row projections stay F32.
 
 ## Performance
 
-CPU on two machines: an Apple M1 (Mac mini), standing in for the Apple M4
-reference machine, which was unreachable, and an AMD Ryzen 7 PRO 4750U.
-`jfk-8s` is one 8 s window: `transcribe_turn_run` on the first 8 s of
-`samples/jfk.wav` (shorter audio is padded to the same window, so it costs
-the same). `-1t` runs on one thread; without it, the library's default
-thread count (8 threads on both machines: the default is the usable CPUs, capped at 8).
+CPU on two machines: an Apple M1 (Mac mini), standing in for the
+unreachable Apple M4 reference machine, and an AMD Ryzen 7 PRO 4750U.
+`jfk-8s` is one 8 s window, `transcribe_turn_run` on the first 8 s of
+`samples/jfk.wav` (shorter audio is padded to the same window and costs the
+same). `-1t`: one thread; otherwise the library's default (the usable CPUs,
+capped at 8: 8 on both machines).
 
 ### Apple M1 (proxy for the M4)
 
@@ -136,18 +131,15 @@ Compute latency (front end + model), speedup over realtime in parentheses; profi
 AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8415e8e2` on 2026-11-24.
 <!-- /catalog -->
 
-onnxruntime on the M1: 83 ms / 28 ms per window (fp32 ONNX, 1 / 4
-threads), 40 ms / 15 ms (int8 ONNX).
+onnxruntime on the M1: 83 / 28 ms per window (fp32 ONNX, 1 / 4 threads),
+40 / 15 ms (int8 ONNX).
 
-`AUTO` selects the CPU: the model is small, runs once per pause, and the CPU
-path is the validated one. Other backends are not validated: on Metal p
-drifts by about 1e-3 from the CPU (`jfk` 0.948773 vs 0.948620); the
-decisions held on the golden clips, but the test set was scored on the CPU
-only.
+**F16 and Q8_0 are not faster than F32 everywhere.** On ARM, F16 runs about
+2x slower than F32 on one thread (ggml has no tiled kernel for F16 weights x
+fp32 activations there) and Q8_0 is the fastest. On the Ryzen, F16 and Q8_0
+are slower than F32 on one thread and about as fast with the default
+threads.
 
-**F16 and Q8_0 are not faster than F32 everywhere.** On the M1 (ARM), F16
-runs about 2x slower than F32 on one thread: ggml multiplies F16 weights by
-fp32 activations without its fast tiled kernel on ARM. Q8_0 is the fastest
-there. On the Ryzen (x86), F16 and Q8_0 are both slower than F32 on one
-thread and about as fast with the default threads. On ARM prefer F32 or
-Q8_0; on x86, F32 is as fast as either.
+`AUTO` selects the CPU, the validated path: the model is small and runs once
+per pause. Other backends are unvalidated: on Metal p drifts by about 1e-3
+(`jfk` 0.948773 vs 0.948620 on CPU); the decisions held on the golden clips.

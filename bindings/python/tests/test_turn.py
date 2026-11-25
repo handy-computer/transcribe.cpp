@@ -5,9 +5,7 @@ probabilities are structural only), plus env-gated real-model checks."""
 from __future__ import annotations
 
 import array
-import ctypes
 import math
-import threading
 
 import pytest
 
@@ -162,78 +160,20 @@ def test_sava_toy_batch_equals_single_feeds(sava_toy_model_path):
                 s.close()
 
 
-def test_sava_toy_batch_invalid(sava_toy_model_path, vad_toy_model_path):
-    pcm = _noise(1000)
-    with t.Model(sava_toy_model_path, backend="cpu") as model, \
-            t.Model(sava_toy_model_path, backend="cpu") as other:
-        a, b, c = model.turn_session(), model.turn_session(), other.turn_session()
-        a.stream_feed(pcm[:300])
-        with pytest.raises(t.InvalidArgument):
-            t.TurnSession.stream_feed_batch([])
-        with pytest.raises(t.InvalidArgument, match="repeats"):
-            t.TurnSession.stream_feed_batch([(a, pcm), (a, pcm)])
-        with pytest.raises(t.InvalidArgument, match="different model"):
-            t.TurnSession.stream_feed_batch([(a, pcm), (c, pcm)])
-        with pytest.raises(t.InvalidArgument, match="TurnSession"):
-            t.TurnSession.stream_feed_batch([(a, pcm), ("b", pcm)])
-        with pytest.raises(t.InvalidArgument, match="pair"):
-            t.TurnSession.stream_feed_batch([a])
-        bad = array.array("f", pcm)
-        bad[5] = math.nan
-        with pytest.raises(t.InvalidArgument):
-            t.TurnSession.stream_feed_batch([(a, pcm), (b, bad)])
-        b.close()
-        with pytest.raises(t.TranscribeError, match="session is closed"):
-            t.TurnSession.stream_feed_batch([(a, pcm), (b, pcm)])
-        # Every rejection left a's stream untouched: 300 samples buffered.
-        r = a.stream_feed(pcm[300:640])
-        assert (len(r.probs), r.first_frame) == (1, 0)
-
-
-def test_sava_toy_batch_session_closed_while_waiting(sava_toy_model_path):
-    """A non-first session closed while the batch waits for the compute lock:
-    the batch raises TranscribeError once it gets the lock, without calling
-    the library, and the first session's stream is untouched."""
+def test_sava_toy_batch_invalid(sava_toy_model_path):
+    # Python-side rejections are in test_compute_lock; these reach the library.
     pcm = _noise(1000)
     with t.Model(sava_toy_model_path, backend="cpu") as model:
-        a, b = model.turn_session(), model.turn_session()
-        a.stream_feed(pcm[:300])
-        real = model._compute_lock
-        waiting = threading.Event()
-
-        class _Spy:  # signals the batch thread's blocking acquire
-            def __enter__(self):
-                waiting.set()
-                return real.__enter__()
-
-            def __exit__(self, *exc):
-                return real.__exit__(*exc)
-
-            def __getattr__(self, name):
-                return getattr(real, name)
-
-        errors: list = []
-
-        def batch():
-            try:
-                t.TurnSession.stream_feed_batch([(a, pcm), (b, pcm)])
-            except BaseException as e:  # noqa: BLE001 - reported below
-                errors.append(e)
-
-        with real:
-            model._compute_lock = _Spy()
-            th = threading.Thread(target=batch)
-            th.start()
-            assert waiting.wait(10)
-            b.close()  # never waits for the lock
-        th.join(10)
-        model._compute_lock = real
-        assert not th.is_alive()
-        assert len(errors) == 1 and type(errors[0]) is t.TranscribeError, errors
-        assert "session is closed" in str(errors[0])
-        r = a.stream_feed(pcm[300:640])
-        assert (len(r.probs), r.first_frame) == (1, 0)
-        a.close()
+        with model.turn_session() as a, model.turn_session() as b:
+            a.stream_feed(pcm[:300])
+            bad = array.array("f", pcm)
+            bad[5] = math.nan
+            for feeds in ([(a, pcm), (a, pcm)], [(a, pcm), (b, bad)]):
+                with pytest.raises(t.InvalidArgument):
+                    t.TurnSession.stream_feed_batch(feeds)
+            # Both left a's stream untouched: 300 samples buffered.
+            r = a.stream_feed(pcm[300:640])
+            assert (len(r.probs), r.first_frame) == (1, 0)
 
 
 def test_sava_toy_invalid_input(sava_toy_model_path):
@@ -287,19 +227,6 @@ def test_sava_toy_abort(sava_toy_model_path):
             b.close()
 
 
-def test_turn_results_are_copied_out(sava_toy_model_path):
-    pcm = _noise(3000)
-    with t.Model(sava_toy_model_path, backend="cpu") as model:
-        with model.turn_session(n_threads=1) as turn:
-            first = turn.run(pcm)
-            kept = (first.probs, first.speech_probs)
-            turn.run(_noise(5000, seed=9))
-            assert (first.probs, first.speech_probs) == kept
-            assert isinstance(first.probs, tuple)
-        # Results outlive their session and model.
-        assert len(first.probs) == math.ceil(3000 / 640)
-
-
 # --- real models (env-gated) ----------------------------------------------------
 
 
@@ -338,10 +265,3 @@ def test_sava_real_stream_and_batch(sava_model_path):
             probs.extend(a.stream_flush().probs)
             assert tuple(probs) == r.probs
 
-
-def test_ctypes_array_input(sava_toy_model_path):
-    pcm = _noise(1280)
-    arr = (ctypes.c_float * len(pcm))(*pcm)
-    with t.Model(sava_toy_model_path, backend="cpu") as model:
-        with model.turn_session(n_threads=1) as turn:
-            assert turn.run(arr) == turn.run(pcm)

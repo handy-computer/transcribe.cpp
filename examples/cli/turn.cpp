@@ -13,7 +13,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <string>
 #include <vector>
 
 int transcribe_cli::run_turn_file(const cli_args &           args,
@@ -65,19 +64,17 @@ int transcribe_cli::run_turn_file(const cli_args &           args,
         transcribe_turn_result res;
         transcribe_turn_result_init(&res);
         transcribe_turn_get_result(session, &res);
-        std::string lines;
-        char        line[200];
+        char line[200];
         std::snprintf(line, sizeof(line), "turn: p=%.6f ended=%d threshold=%.2f\n", static_cast<double>(res.p),
                       res.ended ? 1 : 0, threshold);
         std::printf("%s", line);
-        lines += line;
         if (info.max_audio_ms > 0 && duration_s * 1000.0 > info.max_audio_ms) {
             std::printf("  scored:     the last %.1f s of %.2f s\n", info.max_audio_ms / 1000.0, duration_s);
         }
         if (info.frame_samples > 0) {
             std::printf("  frames:     %d (%d samples each)\n", res.n_probs, info.frame_samples);
         }
-        output_ok = write_output_file(output, args.output_path, lines.c_str());
+        output_ok = write_output_file(output, args.output_path, line);
     }
 
     transcribe_timings tm;

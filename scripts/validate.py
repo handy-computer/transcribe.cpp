@@ -757,8 +757,8 @@ def cmd_compare(args: argparse.Namespace) -> int:
             else:
                 print(f"\n  Segments: FAIL\n    reference: {ref_segs}\n    c++:       {cpp_segs}")
 
-        # TURN: the gate is the clip score within the manifest's p tolerance
-        # and the same decision (per-frame tracks are tensors above). A
+        # TURN: the gate is the clip score within the manifest's p tolerance,
+        # the same threshold and decision (per-frame tracks are tensors above). A
         # missing artifact on either side is a failure.
         if manifest.get("role") == "turn":
             ref_turn, cpp_turn = ((json.loads(f.read_text()) if f.exists() else None)
@@ -766,7 +766,8 @@ def cmd_compare(args: argparse.Namespace) -> int:
             p_tol = float((manifest.get("turn") or {}).get("p_abs_tolerance", 1e-4))
             ok = ref_turn is not None and cpp_turn is not None
             dp = abs(cpp_turn["p"] - ref_turn["p"]) if ok else float("inf")
-            ok = ok and dp <= p_tol and cpp_turn["ended"] == ref_turn["ended"]
+            ok = (ok and dp <= p_tol and cpp_turn["ended"] == ref_turn["ended"]
+                  and cpp_turn["threshold"] == ref_turn.get("threshold"))
             all_passed = all_passed and ok
             transcript_results.append({"case": case_name, "match": ok, "mode": "turn",
                                        "reference": ref_turn, "cpp": cpp_turn, "p_abs_diff": dp})
@@ -774,8 +775,8 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 print(f"\n  Turn: ok (p {cpp_turn['p']:.6f}, |dp| {dp:.2e} <= {p_tol:.0e}, "
                       f"ended {cpp_turn['ended']})")
             else:
-                print(f"\n  Turn: FAIL\n    reference: {ref_turn and {k: ref_turn.get(k) for k in ('p', 'ended')}}"
-                      f"\n    c++:       {cpp_turn and {k: cpp_turn.get(k) for k in ('p', 'ended')}}")
+                print(f"\n  Turn: FAIL\n    reference: {ref_turn and {k: ref_turn.get(k) for k in ('p', 'ended', 'threshold')}}"
+                      f"\n    c++:       {cpp_turn and {k: cpp_turn.get(k) for k in ('p', 'ended', 'threshold')}}")
 
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists() and args.family != "sortformer":

@@ -20,14 +20,12 @@ the run, <run stem>.score.json with:
   fp_pct, fn_pct  incomplete clips called complete and complete clips called
                   incomplete, in percent of ALL clips (Pipecat's convention)
   auc             ROC AUC of p against the label (ties count half)
-  agreement       with --ref-column: decisions that match a reference score
-                  column of the run on the same clips (eval_cpp.py's p_fp32 is
-                  Smart Turn's upstream fp32 ONNX; it is not a reference for
-                  other models), and the largest |p - p_ref|. With
-                  --ref-jsonl the reference is the p_ref of a separate
-                  reference run joined on clip id (SAVA:
-                  run_reference_sava_torch.py); every clip of the run must be
-                  in it. n_agree_at_0.9 is the same count at 0.9.
+  agreement       decisions that match the reference and the largest
+                  |p - p_ref|: --ref-column names a column of the run
+                  (p_fp32, Smart Turn's fp32 ONNX), --ref-jsonl a reference
+                  run joined on clip id that holds every clip (SAVA:
+                  run_reference_sava_torch.py). n_agree_at_0.9 is the same
+                  count at 0.9.
   extra           not ingested: accuracy at 0.9, the best threshold, and the
                   real / synthetic split
 """
@@ -119,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         die(f"{args.run}: unknown dataset {header.get('dataset')!r}")
     if not header.get("engine_sha"):
         die(f"{args.run}: no engine_sha (a run from before eval_cpp.py recorded its commit)")
-    ref_path = REPO_ROOT / header["ref"] if not Path(header["ref"]).is_absolute() else Path(header["ref"])
+    ref_path = REPO_ROOT / header["ref"]  # absolute stays absolute
     n_ref = sum(1 for line in ref_path.read_text().splitlines()[1:] if line.strip())
     ids = [r["id"] for r in rows]
     if len(set(ids)) != len(ids):

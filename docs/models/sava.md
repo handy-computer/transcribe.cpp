@@ -1,7 +1,7 @@
 # SAVA
 
 <!-- catalog:intro -->
-Upstream: [`inworld/sava`](https://github.com/inworld-ai/sava) at [`1beae7c`](https://github.com/inworld-ai/sava/commit/1beae7c).
+Upstream: [`inworld/sava`](https://huggingface.co/inworld/sava) at [`1beae7c`](https://huggingface.co/inworld/sava/commit/1beae7c).
 
 Streaming end-of-turn and voice activity detection by Inworld: every 40 ms
 it gives the probability that the speaker's turn has ended and, 120 ms
@@ -21,42 +21,30 @@ Upstream code: [`inworld-ai/sava`](https://github.com/inworld-ai/sava)
 (`inworld-sava` 1.0.0).
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://github.com/inworld-ai/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (torch 2.14.1, CPU, fp32) on inworld/sava@1beae7c reference at transcribe.cpp commit [`3465deb3`](https://github.com/handy-computer/transcribe.cpp/tree/3465deb3) on 2026-11-25.
+Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://huggingface.co/inworld/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (PyTorch, fp32) reference at transcribe.cpp commit [`3465deb3`](https://github.com/handy-computer/transcribe.cpp/tree/3465deb3) on 2026-11-25.
 <!-- /catalog -->
 
 ## How to use it
 
-**Live audio.** Feed 16 kHz audio to one TURN stream in chunks of any size.
-Each call returns:
+Live audio: feed a TURN stream chunks of any size; each feed returns the turn
+score of every 640-sample frame it completed and the speech score of every
+frame the model judged (3 frames, 120 ms, behind). When a turn ends is the
+caller's choice: [turn detection](../turn.md#stream-sava) gives Inworld's
+rule, and `examples/turn_live` (`transcribe-turn-live --turn
+sava-Q8_0.gguf in.wav`) runs it.
 
-- the turn score of every 640-sample frame it completed;
-- the speech score of every frame the model has judged. A frame is judged
-  3 frames (120 ms) after its audio.
-
-The caller decides when a turn ends. Inworld's reference rule:
-
-1. A turn opens on the first frame with speech `>= 0.5`, 800 ms earlier.
-2. While it is open, every silent frame checks the turn score of the step
-   that judged it (`>= 0.9` closes the turn).
-3. 1.6 s of silence closes it anyway.
-
-`examples/turn_live` (`transcribe-turn-live --turn sava-Q8_0.gguf in.wav`)
-runs that rule in 20 ms chunks.
-
-**A whole recording.** `transcribe_turn_run` scores the clip as one stream
-and returns:
-
-- `p` and `ended`: the last frame's turn score, and `p >= 0.9`;
-- every frame's turn and speech scores.
+A whole recording: `transcribe_turn_run` scores the clip as one stream and
+returns `p` (the last frame's turn score), `ended` (`p >= threshold`,
+default 0.9) and every frame's turn and speech scores.
 
 ```bash
 build/bin/transcribe-cli -m sava-Q8_0.gguf samples/sava-speech.wav
 # turn: p=0.998900 ended=1 threshold=0.90
 ```
 
-**Speech only.** The VAD role (`transcribe_vad_*`) returns the same speech
-scores (lookahead 3 frames, threshold 0.5). `transcribe_vad_run` cuts them
-into segments with Silero's rule on 40 ms frames.
+Speech only: the VAD role (`transcribe_vad_*`) returns the same speech
+scores; `transcribe_vad_run` cuts them into segments with Silero's rule on
+40 ms frames.
 
 ## Downloads
 
@@ -92,16 +80,15 @@ Accuracy on the full Pipecat Smart Turn v3.2 test split (31,527 clips), a clip c
 
 <!-- catalog:prose field=wer.notes -->
 A clip's score is the turn score of its last 40 ms frame
-(`transcribe_turn_run`'s `p` on the whole clip, scored as one stream);
-the clip is called complete when `p > 0.5`, Inworld's benchmark rule.
-The API's default cut-off is 0.9, Inworld's live rule. False positives
+(`transcribe_turn_run`'s `p`, the clip scored as one stream); the clip
+is called complete when `p > 0.5`, Inworld's benchmark rule. The API's
+default cut-off is 0.9, Inworld's live rule. At 0.9, F32 and F16 make
+the reference's decision on every clip; Q8_0 on 31,401. False positives
 (incomplete clips called complete) and false negatives (the reverse) are
-shares of all clips, as Pipecat publishes them. Inworld publishes 93.35%
-and an AUC of 0.97946 for SAVA (fp32, A100) but no per-clip scores; the
-reference is upstream's PyTorch package (inworld-sava 1.0.0, CPU, fp32)
-run on the same clips (`scripts/turn/run_reference_sava_torch.py`):
-93.36%, AUC 0.97946. F32 and F16 make its decision on all 31,527 clips at
-0.5 and at 0.9; Q8_0 on 31,451 at 0.5.
+shares of all clips, as Pipecat publishes them. Inworld publishes 93.35% and an
+AUC of 0.97946 (fp32, A100) but no per-clip scores; the reference is
+upstream's PyTorch package (inworld-sava 1.0.0, CPU, fp32) on the same
+clips: 93.36%, AUC 0.97946.
 <!-- /catalog -->
 
 <!-- catalog:turn reference="the PyTorch reference (inworld-sava 1.0.0, fp32)" -->
@@ -122,59 +109,44 @@ At the API's cut-off (0.9) and at the best threshold:
 | F16  | 88.29% | 93.51% (0.45) |
 | Q8_0 | 88.23% | 93.48% (0.45) |
 
-Inworld's published figures on the same set: SAVA (fp32, A100) 93.35% at
-0.5, AUC 0.97946, best 93.51% (0.45); Smart Turn v3.2 93.71%, AUC 0.98250,
-best 93.81% (0.36).
+Inworld publishes, on the same set, a best of 93.51% (0.45) for SAVA, and
+93.71% (AUC 0.98250, best 93.81% at 0.36) for Smart Turn v3.2.
 
-Details:
-
-- **F32 vs Inworld's published SAVA:** the AUC matches to 1e-7. On real
-  recordings accuracy is 95.84% (Inworld: 95.86%); on synthetic ones 92.79%
-  (Inworld: 92.78%).
-- **F16 vs F32:** the same decision on every clip at 0.5 and at 0.9. The
-  clip score differs by at most 4.2e-6.
-- **Q8_0 vs F32:** the same decision on 99.76% of clips at 0.5 (76 flips)
-  and 99.60% at 0.9 (126 flips). The clip score differs by 2.8e-3 on average
-  (p99 3.5e-2).
-- **F32 vs the PyTorch reference:** the same decision on every clip at 0.5
-  and at 0.9; the clip score differs by at most 1.1e-5 (F16 1.2e-5). Q8_0
-  agrees on 31,451 clips at 0.5 and 31,401 at 0.9 (max 0.17).
+- **F32 vs Inworld's published SAVA:** the AUC matches to 1e-7; real
+  recordings 95.84% (Inworld: 95.86%), synthetic ones 92.79% (92.78%).
+- **At 0.9:** F32 and F16 make the PyTorch reference's decision on every
+  clip; Q8_0 on 31,401.
+- **F16 vs F32:** the same decision on every clip at 0.5 and 0.9; p within
+  4.2e-6.
+- **Q8_0 vs F32:** 76 flips at 0.5 and 126 at 0.9 (99.76% / 99.60% agree);
+  p differs by 2.8e-3 on average (p99 3.5e-2).
 - **Rows:** `reports/turn/sava-{F32,F16,Q8_0}.smart-turn-data-v3.2-test.jsonl`
-  from `scripts/turn/eval_cpp.py`, scored by `scripts/turn/score.py
+  (`scripts/turn/eval_cpp.py`), scored by `scripts/turn/score.py
   --ref-jsonl` against `reports/turn/sava-REF.smart-turn-data-v3.2-test.jsonl`
-  from `scripts/turn/run_reference_sava_torch.py` (upstream's PyTorch
-  package on the same clips). The runs' `p_fp32` / `p_int8` columns are
-  Smart Turn's.
+  (`scripts/turn/run_reference_sava_torch.py`). Their `p_fp32` / `p_int8`
+  columns are Smart Turn's.
 
-On the 8 golden recordings (`tests/golden/sava/`):
-
-- **F32 vs the reference:** within 4e-5 in probability, with the same
-  decisions.
-- **F16 vs F32:** within 1.5e-6 per frame, with the same decisions on all 8.
-  F16 also passes the F32 tolerance gate (`validate.py` with
-  `--gguf sava-F16.gguf`).
-- **Q8_0 vs F32:** per-frame scores differ by up to 0.065 (mean 1e-3 to
-  4e-3 on speech clips). Inworld's turn rule applied to the scores finds the
-  same turns on 7 of the 8. On the 5 min
-  `dots-full` 6 of 59 turns change: Q8_0 finds 57, with turns merged at
-  59.4 s and 104.1 s, ends moved at 101.8 s, 145.7 s and 174.4 s, and one
-  start moved by a frame. Each change is a score within 0.004 of the 0.9
-  cut-off, or a speech score within 0.03 of 0.5.
+On the 8 golden recordings (`tests/golden/sava/`), F32 is within 4e-5 of the
+reference and F16 within 1.5e-6 of F32 (it passes the F32 tolerance gate),
+both with the same decisions. Q8_0 differs by up to 0.065 per frame (mean
+1e-3 to 4e-3 on speech). Inworld's turn rule on its scores finds the same
+turns on 7 of the 8; on the 5 min `dots-full` 6 of 59 change (2 merges, 3
+moved ends, 1 start moved by a frame), each at a score within 0.004 of 0.9
+or a speech score within 0.03 of 0.5.
 
 ## Performance
 
-The catalog's cells, CPU, on two machines: an Apple M1 (Mac mini), standing
-in for the Apple M4 reference machine, which was unreachable, and an AMD
-Ryzen 7 PRO 4750U:
+CPU on two machines: an Apple M1 (Mac mini), standing in for the
+unreachable Apple M4 reference machine, and an AMD Ryzen 7 PRO 4750U.
 
 - `jfk-8s`: `transcribe_turn_run` on the first 8 s of `samples/jfk.wav`
   (200 frames).
-- `jfk-40ms`: one streamed frame, the mean time of a 640-sample
-  `transcribe_turn_stream_feed` over the whole clip.
+- `jfk-40ms`: one streamed frame, the mean of 640-sample
+  `transcribe_turn_stream_feed` calls over the clip.
 - `jfk-40ms-x8`: one `transcribe_turn_stream_feed_batch` tick for 8 users
-  (a 640-sample frame each, so 0.32 s of audio per tick).
-- `-1t` runs on one thread; without it, the library's default thread count
-  (8 threads on both machines: the default is the usable CPUs, capped at 8).
+  (a 640-sample frame each, 0.32 s of audio).
+- `-1t`: one thread; otherwise the library's default (the usable CPUs,
+  capped at 8: 8 on both machines).
 
 ### Apple M1 (proxy for the M4)
 
@@ -210,59 +182,26 @@ Compute latency (front end + model), speedup over realtime in parentheses; profi
 AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR): transcribe.cpp `8415e8e2` on 2026-11-24.
 <!-- /catalog -->
 
-### Per frame, 4 threads (M1)
+The batched feed reads the weights once for all users: fed one by one, 8
+users take about 37 ms per tick (F32, M1, 1 thread). Each user's scores are
+bit-identical to feeding that session alone. On a shared machine prefer 1
+thread per compute: with other jobs running, multi-threaded steps can be far
+slower.
 
-The M1, idle machine, with 4 threads and per frame. Milliseconds of
-compute per 40 ms frame:
+**F16 and Q8_0 are not faster than F32 everywhere.** On ARM, F16 runs
+1.6-2.0x slower than F32 on one thread (ggml has no tiled kernel for F16
+weights x fp32 activations there). On the Ryzen, F16 and Q8_0 are about 10%
+slower for a whole clip on one thread, while F16 is faster for a streamed
+frame. Q8_0 is the fastest streamed frame on both: the pick for live
+streams; F16 is half of F32's size with F32's results.
 
-| File | Whole clip (`jfk.wav`), 1 thread | Whole clip, 4 threads | Stream (640-sample feeds), 1 thread | Stream, 4 threads |
-| --- | ---: | ---: | ---: | ---: |
-| F32 | 0.90 | 0.38 | 4.6 | 3.3 |
-| F16 | 1.81 | 0.59 | 7.2 | 2.9 |
-| Q8_0 | 0.70 | 0.28 | 3.0 | 1.5 |
-
-Several live users on one model: `transcribe_turn_stream_feed_batch` steps
-one frame of every user in one compute, reading the weights once. Times are
-per tick, one 640-sample frame for each of 8 users:
-
-| File | 8 users, batched, 1 thread | 8 users, batched, 4 threads | 8 users fed one by one, 1 thread |
-| --- | ---: | ---: | ---: |
-| F32 | 10.1 ms (1.27 per user) | 6.3 ms (0.79 per user) | about 37 ms |
-| F16 | 17.2 ms (2.15 per user) | 6.9 ms (0.86 per user) | about 58 ms |
-| Q8_0 | 8.1 ms (1.01 per user) | 4.9 ms (0.61 per user) | about 24 ms |
-
-At 1 thread, one core serves about 30 users in real time with F32 and about
-40 with Q8_0. Each user's scores are bit-identical to feeding that session
-alone.
-
-On a shared machine, prefer 1 thread per compute. With other jobs running,
-multi-threaded steps can be far slower than single-threaded ones.
-
-**F16 and Q8_0 are not faster than F32 everywhere.** On the M1 (ARM), F16
-runs 1.6-2.0x slower than F32 on one thread: ggml multiplies F16 weights by
-fp32 activations without its fast tiled kernel on ARM. On the Ryzen (x86),
-F16 and Q8_0 are both about 10% slower than F32 for a whole clip on one
-thread, while for a streamed frame F16 is faster than F32 and Q8_0 the
-fastest. Q8_0 is the fastest streamed frame on both machines. Choose a file
-by need:
-
-- **Q8_0:** the smallest, and the fastest for live streams.
-- **F16:** half the size of F32 with F32's results.
-- **F32:** the reference.
-
-A whole clip runs in blocks of up to 64 frames. A streamed frame runs a
-4-frame graph: the padding makes a stream bit-identical to a whole-clip run
-for any chunking, at the cost of computing 4 columns for 1. This holds for
-F32, F16 and Q8_0, batched or not. For comparison, upstream's PyTorch (1
-thread) takes 0.37 ms per clip frame and 10.5 ms per streamed frame on the
-same machine.
+A streamed frame runs a 4-frame graph, which makes a stream bit-identical to
+a whole-clip run for any chunking, batched or not. Upstream's PyTorch (1
+thread, M1) takes 0.37 ms per clip frame and 10.5 ms per streamed frame.
 
 `AUTO` selects the CPU, the validated path.
 
-A BF16 file (`convert-sava.py --outtype bf16`) is not published:
-
-- Its storage is lossless, but ggml rounds a BF16 matmul's activations to
-  bf16. It moves 5 of the 59 `dots-full` turns and flips 1 of 3,000 Pipecat
-  clips at 0.5 (3 at 0.9).
-- Without native BF16 it is 15-22x slower than F32: 20.7 / 5.7 ms per clip
-  frame and 82 / 22 ms per streamed frame (1 / 4 threads, M1).
+A BF16 file (`convert-sava.py --outtype bf16`) is not published: its storage
+is lossless, but ggml rounds a BF16 matmul's activations to bf16 (5 of the
+59 `dots-full` turns move; 1 of 3,000 Pipecat clips flips at 0.5, 3 at
+0.9), and without native BF16 it is 15-22x slower than F32.

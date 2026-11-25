@@ -1,8 +1,8 @@
 // transcribe-turn.h - internal TURN role surface: the session base and the
 // per-arch ops table.
 //
-// Clip models (frame_samples == 0) score one already cropped clip. Streaming
-// models step whole frames and carry their own state; the role dispatcher
+// Clip models (frame_samples == 0) score one cropped clip. Streaming models
+// step whole frames and carry their own state; the dispatcher
 // (transcribe-turn.cpp) validates input, buffers partial frames, aligns the
 // lagged speech track and flushes.
 
@@ -25,9 +25,8 @@ struct TurnModelInfo {
     double  threshold               = 0.5;  // the model's recommended cut-off
 };
 
-// Validate params (NULL = defaults) against a TURN model and return the
-// threshold to use (negative = the model's). INVALID_ARG on a non-finite or
-// out-of-range value; BAD_STRUCT_SIZE on a short struct.
+// Validate params (NULL = defaults) and resolve the threshold (negative = the
+// model's). INVALID_ARG on NaN or > 1; BAD_STRUCT_SIZE on a short struct.
 transcribe_status resolve_turn_threshold(const transcribe_model *       model,
                                          const transcribe_turn_params * params,
                                          double &                       out);
@@ -36,31 +35,26 @@ struct TurnOps {
     const TurnModelInfo & (*info)(const transcribe_model * model);
     transcribe_turn_session * (*new_session)();
 
-    // Clip models (info.frame_samples == 0), else nullptr. Score validated,
-    // already cropped PCM (n_samples > 0): write the turn probability.
+    // Clip models only. Score validated, cropped PCM (n_samples > 0) into *p.
     // Poll session->poll_abort() and return TRANSCRIBE_ERR_ABORTED when it
     // fires. Set session->t_mel_us / t_encode_us / t_decode_us.
     transcribe_status (*score_clip)(transcribe_turn_session * session, const float * pcm, int64_t n_samples, float * p);
 
-    // Streaming models (info.frame_samples > 0), else nullptr.
-    // reset: return the model state to the start of a stream. Also called
-    // once on a new session.
+    // Streaming models only. reset: return the model state to the start of a
+    // stream; also called once on a new session.
     void (*reset)(transcribe_turn_session * session);
     // step: run n_frames whole frames, pcm[0, n_frames * frame_samples), as
-    // the continuation of the stream. For each step write the on-time turn
-    // score to turn[i] and, when has_speech, the speech score the model
-    // emits at that step to speech[i] (it judges frame step -
-    // speech_lookahead_frames; the dispatcher drops the ones before frame 0).
-    // speech is nullptr when has_speech is false. Abort and timings as above.
+    // the continuation of the stream. Write each step's turn score to turn[i]
+    // and, when has_speech (else speech is nullptr), the speech score it
+    // emits to speech[i], judging frame step - speech_lookahead_frames (the
+    // dispatcher drops those before frame 0). Abort and timings as above.
     transcribe_status (
         *step)(transcribe_turn_session * session, const float * pcm, int64_t n_frames, float * turn, float * speech);
-    // Optional (nullptr = the dispatcher steps the sessions one by one): step
-    // one frame, frame_pcm[i][0, frame_samples), for each of count distinct
-    // sessions of this model in one compute, using n_threads threads (the
-    // dispatcher passes the caller's sessions[0]'s, which need not be listed
-    // here). turn[i] / speech[i] as step writes them for sessions[i]. Must
-    // give exactly the values step would, for any count. Poll every session's
-    // poll_abort().
+    // Optional (nullptr = step the sessions one by one): step one frame,
+    // frame_pcm[i][0, frame_samples), for each of count distinct sessions in
+    // one compute with n_threads threads; turn[i] / speech[i] as step writes
+    // them for sessions[i], with exactly step's values for any count. Poll
+    // every session's poll_abort().
     transcribe_status (*step_batch)(transcribe_turn_session * const * sessions,
                                     int                               count,
                                     int                               n_threads,

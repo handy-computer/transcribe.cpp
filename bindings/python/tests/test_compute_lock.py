@@ -780,11 +780,24 @@ def test_turn_batch_rejects_before_native(fake, monkeypatch):
     monkeypatch.setattr(t._lib, "transcribe_turn_stream_feed_batch",
                         lambda *args: calls.append(args) or 0)
     batch = t.TurnSession.stream_feed_batch
-    for feeds in ([], [(a, PCM), (a, PCM)], [(a, PCM), (other, PCM)],
+    for feeds in ([], [(a, PCM), (other, PCM)],
                   [(a, PCM), (object(), PCM)], [a], [(a, PCM), (b, [0.0] * 0, 1)]):
         with pytest.raises(t.InvalidArgument):
             batch(feeds)
-    b.close()
-    with pytest.raises(t.TranscribeError, match="session is closed"):
-        batch([(a, PCM), (b, PCM)])
     assert calls == [] and not m._compute_lock.locked()
+
+
+def test_turn_batch_session_closed_while_queued(fake, monkeypatch):
+    m = fake.model()
+    a, b = (fake.session(m, cls=t.TurnSession) for _ in range(2))
+    calls: list = []
+    monkeypatch.setattr(t._lib, "transcribe_turn_stream_feed_batch",
+                        lambda *args: calls.append(args) or 0)
+    with m._compute_lock:
+        spy = _LockSpy(m)
+        th, box = _in_thread(t.TurnSession.stream_feed_batch, [(a, PCM), (b, PCM)])
+        assert spy.waiting.wait(TIMEOUT)
+        b.close()  # never waits for the lock
+    _join(th, "queued batch")
+    assert type(box.get("error")) is t.TranscribeError, box
+    assert "session is closed" in str(box["error"]) and calls == []

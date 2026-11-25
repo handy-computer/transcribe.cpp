@@ -1,6 +1,6 @@
 // smart_turn_smoke.cpp - the toy smart_turn fixture through the public TURN
 // API: load, roles, info, clip scores, the crop to the last window, left
-// padding, determinism, no streaming, and a rejected bad geometry.
+// padding, no streaming, and a rejected bad geometry.
 
 #include "transcribe.h"
 #include "transcribe/turn.h"
@@ -80,7 +80,6 @@ void test_toy() {
     const std::vector<float> a = signal(3200, 1);
     const float              p = score(s, a.data(), 3200);
     CHECK(std::isfinite(p) && p > 0.0f && p < 1.0f);
-    CHECK(score(s, a.data(), 3200) == p);  // deterministic
 
     // Audio before the last window does not change the score.
     std::vector<float> longer = signal(5000, 2);

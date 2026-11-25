@@ -54,11 +54,9 @@ IDENTITY_CORE = {"general.name", "general.size_label", "general.author",
 # Slug tokens that imply the model is a streaming variant.
 STREAMING_HINTS = ("streaming", "unified", "nemotron", "realtime")
 
-# VAD / TURN architectures: no transcription language list (the catalog
-# schema exempts their roles from `languages`; SAVA and Silero are
-# language-agnostic), and their streaming flag is not an ASR slug property,
-# so the slug heuristic does not apply. scripts/catalog/sync_capabilities.py
-# --check still holds the flag to the catalog record.
+# VAD / TURN architectures: no language list required, and the slug
+# streaming heuristic does not apply (sync_capabilities.py --check still
+# holds the flag to the catalog).
 NON_ASR_STREAM_ARCHES = {"silero_vad", "sava", "smart_turn"}
 
 

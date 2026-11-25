@@ -2325,16 +2325,11 @@ class TurnSession(_SessionBase):
     """An end-of-turn detection context on a model with the TURN role.
     Compute locking and ``Busy`` rules: see ``Model``.
 
-    ``run()`` scores one clip: has the turn ended at the end of this audio?
-    Every turn model supports it. ``stream_feed()`` / ``stream_flush()`` /
-    ``stream_reset()`` drive this session's own frame-by-frame stream, on
-    models with ``TurnInfo.frame_samples > 0`` (others raise
-    :class:`NotImplementedByModel`). Like a VAD stream it is native
-    per-session state, not an ASR stream: it does not take the model's stream
-    lease. Each run/feed/flush is one bounded compute call, so it is locked
-    and raises ``Busy`` under an ASR stream lease like a VAD run.
-    :meth:`stream_feed_batch` feeds several sessions of one model in one
-    compute call."""
+    ``run()`` scores one clip: has the turn ended at its end?
+    ``stream_feed()`` / ``stream_flush()`` / ``stream_reset()`` drive this
+    session's own frame stream on models with ``TurnInfo.frame_samples > 0``
+    (others raise :class:`NotImplementedByModel`); like a VAD stream it does
+    not take the model's stream lease."""
 
     _free_fn = "transcribe_turn_session_free"
 
@@ -2355,8 +2350,7 @@ class TurnSession(_SessionBase):
     @staticmethod
     def _copy_result(h) -> TurnResult:
         """Copy the last call's result out. Caller holds the compute lock:
-        the probability buffers are session-owned and replaced by the next
-        call."""
+        the buffers are session-owned and replaced by the next call."""
         res = _TurnResult()
         _lib.transcribe_turn_result_init(_byref(res))
         _check(_lib.transcribe_turn_get_result(h, _byref(res)),
@@ -2379,13 +2373,11 @@ class TurnSession(_SessionBase):
             speech_first_frame=res.speech_first_frame)
 
     def run(self, pcm: PCMLike, *, threshold: float | None = None) -> TurnResult:
-        """Score one clip (16 kHz mono float32 PCM, the audio of the current
-        turn from where the speaker started) from a fresh state. Ends any
-        stream in progress on this session. Input longer than
-        ``TurnInfo.max_audio_ms`` is scored on its last ``max_audio_ms``.
-
-        ``threshold`` is the cut-off for ``ended``; None or negative uses the
-        model's ``TurnInfo.threshold``, otherwise it must be in [0, 1].
+        """Score one clip (16 kHz mono float32 PCM of the current turn, from
+        where the speaker started) from a fresh state; ends any stream in
+        progress. Input longer than ``TurnInfo.max_audio_ms`` is scored on its
+        tail. ``threshold`` (cut-off for ``ended``): None or negative is the
+        model's ``TurnInfo.threshold``, otherwise in [0, 1].
 
         Raises :class:`InvalidArgument` for an out-of-range threshold,
         :class:`Aborted` after :meth:`cancel`, and :class:`Busy` if a stream
@@ -2403,13 +2395,11 @@ class TurnSession(_SessionBase):
             return self._copy_result(h)
 
     def stream_feed(self, pcm: PCMLike) -> TurnResult:
-        """Append audio (possibly empty) to this session's stream and return
-        the turn probability of every frame it completed and the speech
-        probability of every frame the model judged (possibly none); a
-        partial frame waits for the next feed. ``first_frame`` /
-        ``speech_first_frame`` are the stream positions of the first of each;
-        after :meth:`stream_reset`, :meth:`stream_flush` or :meth:`run` the
-        next feed starts at frame 0. Rejected input leaves the stream
+        """Append audio (possibly empty) to the stream and return the turn
+        probabilities of the frames it completed and the speech probabilities
+        of the frames the model judged; a partial frame waits for the next
+        feed. After :meth:`stream_reset`, :meth:`stream_flush` or :meth:`run`
+        the next feed starts at frame 0. Rejected input leaves the stream
         unchanged; an abort or processing error resets it. Raises
         :class:`NotImplementedByModel` on a model that cannot stream, else
         like :meth:`run`."""
@@ -2425,51 +2415,37 @@ class TurnSession(_SessionBase):
     def stream_feed_batch(
             feeds: "Sequence[tuple[TurnSession, PCMLike]]") -> list[TurnResult]:
         """Feed several streams of ONE model in one compute call, much faster
-        than one :meth:`stream_feed` per session when many users talk to one
-        model. ``feeds`` is a non-empty list of ``(session, pcm)`` pairs; each
-        session ends exactly as if ``session.stream_feed(pcm)`` had been
-        called on it, and the result list has one entry per pair, in order.
-
-        Every session must belong to the same model and appear only once
-        (:class:`InvalidArgument` otherwise, as for an empty list), and be
-        open: a closed session, including one closed while the batch waits
-        for the lock, raises :class:`TranscribeError`. The batch takes the
-        model's compute lock once, uses the first session's thread count and
-        aborts if any listed session is cancelled. Rejected input leaves
-        every stream unchanged; an abort or processing error resets every
-        listed stream. Raises :class:`NotImplementedByModel` on a model that
-        cannot stream, and :class:`Busy` if an ASR stream is active on the
-        model."""
+        than one :meth:`stream_feed` per session. ``feeds`` is a non-empty
+        list of ``(session, pcm)`` pairs, each session of the same model and
+        listed once (:class:`InvalidArgument` otherwise); each ends as after
+        ``session.stream_feed(pcm)``, and the results are in ``feeds`` order.
+        Uses the first session's thread count and aborts if any listed
+        session is cancelled. Rejected input leaves every stream unchanged;
+        an abort or processing error resets every listed stream. A closed
+        session (also one closed while the batch waits for the lock) raises
+        :class:`TranscribeError`; otherwise raises like :meth:`stream_feed`."""
         feeds = list(feeds)
         if not feeds:
             raise InvalidArgument("stream_feed_batch needs at least one (session, pcm) pair")
         sessions: list[TurnSession] = []
         arrays = []  # the c_float arrays stay referenced here until the call returns
-        seen: set = set()
         for i, pair in enumerate(feeds):
             try:
                 session, pcm = pair
             except (TypeError, ValueError):
-                raise InvalidArgument(
-                    f"feeds[{i}] must be a (TurnSession, pcm) pair") from None
+                session = None
             if not isinstance(session, TurnSession):
-                raise InvalidArgument(
-                    f"feeds[{i}] session must be a TurnSession; got {type(session).__name__}")
-            if id(session) in seen:
-                raise InvalidArgument(f"feeds[{i}] repeats a session")
-            seen.add(id(session))
+                raise InvalidArgument(f"feeds[{i}] must be a (TurnSession, pcm) pair")
+            # One model, one compute lock (the library rejects repeats).
             if session._model is not feeds[0][0]._model:
                 raise InvalidArgument(f"feeds[{i}] session belongs to a different model")
             sessions.append(session)
             arrays.append(_pcm_to_carray(pcm, allow_empty=True))
-        n = len(sessions)
-        if n > _INT_MAX:
-            raise InvalidArgument(f"stream_feed_batch takes at most {_INT_MAX} sessions")
         for session in sessions:  # before the lock wait, as in stream_feed()
             session._cancel.clear()
-        model = sessions[0]._model
-        with model._exclusive("turn_feed_batch",
-                              busy=_TURN_BUSY.format("stream_feed_batch")):
+        n = len(sessions)
+        with sessions[0]._model._exclusive("turn_feed_batch",
+                                           busy=_TURN_BUSY.format("stream_feed_batch")):
             handles = [s._h for s in sessions]  # raises if any is closed
             c_sessions = (ctypes.c_void_p * n)(*(h.value for h in handles))
             c_pcm = (ctypes.POINTER(ctypes.c_float) * n)(
@@ -2481,9 +2457,9 @@ class TurnSession(_SessionBase):
 
     def stream_flush(self) -> TurnResult:
         """End the stream: score the buffered partial frame zero padded (one
-        turn probability, or none when nothing was buffered) and return the
-        speech probabilities of every frame not yet judged. The next feed
-        starts a new stream at frame 0. Raises like :meth:`stream_feed`."""
+        turn probability, or none) and return the speech probabilities of
+        every frame not yet judged. The next feed starts at frame 0. Raises
+        like :meth:`stream_feed`."""
         self._cancel.clear()
         with self._model._exclusive("turn_flush", busy=_TURN_BUSY.format("stream_flush")):
             h = self._h
@@ -2498,8 +2474,8 @@ class TurnSession(_SessionBase):
 
     @property
     def timings(self) -> Timings:
-        """Load time plus the last call's encode / decode time. Not locked,
-        like ``Session.limits``."""
+        """Load time plus the last call's mel (Smart Turn's log-mel; else 0)
+        and encode time. Not locked, like ``Session.limits``."""
         tm = _Timings()
         _lib.transcribe_timings_init(_byref(tm))
         _check(_lib.transcribe_turn_get_timings(self._h, _byref(tm)),

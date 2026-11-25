@@ -248,21 +248,22 @@ impl TurnSession {
             })?
     }
 
-    /// Feed several streams of one model in one compute: each `(session, pcm)`
-    /// pair ends up exactly as after `session.stream_feed(pcm)`, and the result
-    /// at index `i` is that session's. Much faster than one feed per session
-    /// when many users share a model. Uses the first session's thread count and
-    /// checks every session's cancel token. Takes the model's compute lock once.
-    ///
-    /// Errors with [`Error::InvalidArgument`](crate::Error) for an empty batch or
-    /// sessions of different models (before any native call; every stream
-    /// unchanged), and as [`stream_feed`](Self::stream_feed) otherwise; an
-    /// abort or processing error resets every listed stream.
+    /// Feed several streams of one model in one compute, much faster than one
+    /// feed per session: each `(session, pcm)` ends up as after
+    /// `session.stream_feed(pcm)`, and result `i` is that session's. Uses the
+    /// first session's thread count and checks every session's cancel token.
+    /// [`Error::InvalidArgument`](crate::Error) for an empty batch, or from the
+    /// library for sessions of different models (every stream unchanged);
+    /// otherwise errors as
+    /// [`stream_feed`](Self::stream_feed), an abort or processing error
+    /// resetting every listed stream.
     pub fn stream_feed_batch<'s, 'p, I>(batch: I) -> Result<Vec<TurnResult>>
     where
         I: IntoIterator<Item = (&'s mut TurnSession, &'p [f32])>,
     {
-        // `&mut` borrows make the sessions distinct by construction.
+        // `&mut` borrows make the sessions distinct and unused elsewhere; the
+        // library rejects mixed models before touching any, so the first
+        // session's model lock suffices.
         let batch: Vec<(&'s mut TurnSession, &'p [f32])> = batch.into_iter().collect();
         let Some((first, _)) = batch.first() else {
             return Err(Error::InvalidArgument(
@@ -270,11 +271,6 @@ impl TurnSession {
             ));
         };
         let model = Arc::clone(&first.model);
-        if batch.iter().any(|(s, _)| !Arc::ptr_eq(&s.model, &model)) {
-            return Err(Error::InvalidArgument(
-                "turn stream_feed_batch: sessions belong to different models".into(),
-            ));
-        }
         let n = clamp_len(batch.len())?;
         let ptrs: Vec<*mut sys::transcribe_turn_session> =
             batch.iter().map(|(s, _)| s.ptr).collect();
@@ -284,8 +280,6 @@ impl TurnSession {
             .map(|(_, p)| clamp_len(p.len()))
             .collect::<Result<Vec<i32>>>()?;
 
-        // `batch` (and so every PCM slice) and the pointer arrays outlive the
-        // native call; results are copied out under the same lock.
         model.with_compute(Some(BUSY_FEED_BATCH), |_| -> Result<Vec<TurnResult>> {
             check(
                 unsafe {

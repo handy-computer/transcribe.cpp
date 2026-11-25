@@ -139,34 +139,24 @@ with model.vad_session() as vad:
 ### End-of-turn detection
 
 Models whose `model.roles` include `Role.TURN` (Smart Turn v3.2, SAVA) score
-whether the speaker has finished talking through a turn session.
-`model.turn_info` gives `sample_rate`, `max_audio_ms`, `frame_samples` (0 for
-a clip-only model), `has_speech` and the model's default `threshold`. `run()`
+whether the speaker has finished talking through a turn session. `run()`
 scores one clip and returns a `TurnResult` with `p` and `ended`
-(`p >= threshold`; pass `threshold=` to override the model's). On a streaming
-model (`frame_samples > 0`, e.g. SAVA) `stream_feed()` returns a turn
-probability per completed frame (`probs`, from `first_frame`) and a speech
-probability per judged frame (`speech_probs`, from `speech_first_frame`;
-these may trail), `stream_flush()` ends the stream and `stream_reset()`
-drops it; a clip-only model raises `NotImplementedByModel`. The stream only
-returns probabilities: your code decides when to answer.
+(`p >= threshold`; `threshold=` overrides `model.turn_info.threshold`). On a
+streaming model (`model.turn_info.frame_samples > 0`, e.g. SAVA)
+`stream_feed()` returns a turn probability per completed frame (`probs`, from
+`first_frame`) and a speech probability per judged frame (`speech_probs`, from
+`speech_first_frame`; these may trail); `stream_flush()` and `stream_reset()`
+work as for VAD. A clip-only model raises `NotImplementedByModel`.
 `TurnSession.stream_feed_batch([(session, pcm), ...])` feeds many sessions of
-one model in one compute call and returns one result per session, each the
-same as its own `stream_feed()`. Like the VAD stream, a turn stream does not
-take the ASR stream lease; locking, `Busy`, `cancel()` and `close()` work as
-on `Session`.
+one model in one compute call, each ending as after its own `stream_feed()`.
+Like the VAD stream, a turn stream does not take the ASR stream lease.
 
 ```python
 with model.turn_session() as turn:
-    r = turn.run(turn_pcm)          # the audio since the user started talking
-    if r.ended:
+    if turn.run(turn_pcm).ended:  # the audio since the user started talking
         answer()
 
-# Streaming model, many users at once:
-results = transcribe_cpp.TurnSession.stream_feed_batch(
-    [(session, chunk) for session, chunk in zip(sessions, chunks)])
-for r in results:
-    print(r.first_frame, r.probs, r.speech_first_frame, r.speech_probs)
+results = transcribe_cpp.TurnSession.stream_feed_batch(list(zip(sessions, chunks)))
 ```
 
 ## Backends

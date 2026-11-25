@@ -204,14 +204,8 @@ fn toy_sava_batch_equals_separate_feeds() {
         assert_eq!(tracks[i].speech, off.speech_probs);
     }
 
-    // Sessions of different models are rejected before the native call.
-    let other = Model::load_with(&path, &cpu()).unwrap();
-    let mut foreign = other.turn_session().unwrap();
-    let pcm = noise(640, 1);
-    let e = TurnSession::stream_feed_batch([(&mut batched[0], &pcm[..]), (&mut foreign, &pcm[..])])
-        .unwrap_err();
-    assert!(matches!(e, Error::InvalidArgument(_)), "{e:?}");
     // Invalid input (NaN) leaves every stream unchanged.
+    let pcm = noise(640, 1);
     batched[0].stream_feed(&pcm).unwrap();
     let mut nan = pcm.clone();
     nan[3] = f32::NAN;
@@ -220,6 +214,14 @@ fn toy_sava_batch_equals_separate_feeds() {
         .unwrap_err();
     assert!(matches!(e, Error::InvalidArgument(_)), "{e:?}");
     assert_eq!(batched[0].stream_feed(&pcm).unwrap().first_frame, 1);
+    // So do sessions of different models (the library rejects them).
+    let other = Model::load_with(&path, &cpu()).unwrap();
+    let mut foreign = other.turn_session().unwrap();
+    let e = TurnSession::stream_feed_batch([(&mut batched[0], &pcm[..]), (&mut foreign, &pcm[..])])
+        .unwrap_err();
+    assert!(matches!(e, Error::InvalidArgument(_)), "{e:?}");
+    assert_eq!(batched[0].stream_feed(&pcm).unwrap().first_frame, 2);
+    assert_eq!(foreign.stream_feed(&pcm).unwrap().first_frame, 0);
 }
 
 #[test]
@@ -259,50 +261,26 @@ fn toy_invalid_input_and_roles() {
 }
 
 #[test]
-fn toy_cancel_aborts() {
-    let Some(path) = common::turn_toy_model("arch_sava.gguf", "toy_cancel_aborts") else {
-        return;
-    };
-    let model = Model::load_with(&path, &cpu()).unwrap();
-    let mut turn = model.turn_session().unwrap();
-    let token = CancelToken::new();
-    turn.set_cancel_token(&token);
-    token.cancel();
-    let pcm = noise(3200, 2);
-    let e = turn.run(&pcm, &TurnOptions::default()).unwrap_err();
-    assert!(matches!(e, Error::Aborted { .. }), "{e:?}");
-    let e = turn.stream_feed(&pcm).unwrap_err();
-    assert!(matches!(e, Error::Aborted { .. }), "{e:?}");
-    // An abort resets the stream.
-    token.reset();
-    assert_eq!(turn.stream_feed(&pcm).unwrap().first_frame, 0);
-    turn.clear_cancel_token();
-    token.cancel();
-    assert_eq!(turn.stream_feed(&pcm).unwrap().first_frame, 5);
-}
-
-#[test]
-fn toy_batch_cancel_through_a_later_session_resets_every_stream() {
-    let Some(path) = common::turn_toy_model(
-        "arch_sava.gguf",
-        "toy_batch_cancel_through_a_later_session_resets_every_stream",
-    ) else {
+fn toy_cancel_aborts_and_resets() {
+    let Some(path) = common::turn_toy_model("arch_sava.gguf", "toy_cancel_aborts_and_resets")
+    else {
         return;
     };
     let model = Model::load_with(&path, &cpu()).unwrap();
     let mut a = model.turn_session().unwrap();
     let mut b = model.turn_session().unwrap();
     let pcm = noise(1280, 4);
-    assert_eq!(a.stream_feed(&pcm).unwrap().first_frame, 0);
-    assert_eq!(b.stream_feed(&pcm).unwrap().first_frame, 0);
-    // Cancel only the second (not the first) listed session.
     let token = CancelToken::new();
     b.set_cancel_token(&token);
     token.cancel();
+    let e = b.run(&pcm, &TurnOptions::default()).unwrap_err();
+    assert!(matches!(e, Error::Aborted { .. }), "{e:?}");
+    // A batch checks every session's token (here only the second's), and
+    // the abort resets every listed stream.
+    assert_eq!(a.stream_feed(&pcm).unwrap().first_frame, 0);
     let e = TurnSession::stream_feed_batch([(&mut a, &pcm[..]), (&mut b, &pcm[..])]).unwrap_err();
     assert!(matches!(e, Error::Aborted { .. }), "{e:?}");
     b.clear_cancel_token();
-    // The abort reset both listed streams.
     assert_eq!(a.stream_feed(&pcm).unwrap().first_frame, 0);
     assert_eq!(b.stream_feed(&pcm).unwrap().first_frame, 0);
 }

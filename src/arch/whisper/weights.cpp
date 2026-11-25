@@ -84,150 +84,6 @@ transcribe_status read_optional_f32_kv(const gguf_context * gguf,
 
 }  // namespace
 
-transcribe_status read_whisper_frontend_hparams(const gguf_context * gguf, WhisperHParams & hp) {
-    if (gguf == nullptr) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-
-    // Frontend.
-    if (auto st = read_required_string_kv(gguf, "stt.frontend.type", kFamilyTag, hp.fe_type); st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", kFamilyTag, hp.fe_num_mels);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", kFamilyTag, hp.fe_sample_rate);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.n_fft", kFamilyTag, hp.fe_n_fft); st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.win_length", kFamilyTag, hp.fe_win_length);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_required_u32_kv(gguf, "stt.frontend.hop_length", kFamilyTag, hp.fe_hop_length);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", kFamilyTag, hp.fe_window); st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_required_string_kv(gguf, "stt.frontend.normalize", kFamilyTag, hp.fe_normalize);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.dither", kFamilyTag, 0.0f, hp.fe_dither);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.pre_emphasis", kFamilyTag, 0.0f, hp.fe_pre_emphasis);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_min", kFamilyTag, 0.0f, hp.fe_f_min);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_max", kFamilyTag, 8000.0f, hp.fe_f_max);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_string_kv(gguf, "stt.frontend.pad_mode", kFamilyTag, "reflect", hp.fe_pad_mode);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_bool_kv(gguf, "stt.frontend.center", kFamilyTag, true, hp.fe_center);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_string_kv(gguf, "stt.frontend.mel_norm", kFamilyTag, "slaney", hp.fe_mel_norm);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.chunk_length", kFamilyTag, hp.fe_chunk_length);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.n_samples", kFamilyTag, hp.fe_n_samples);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.nb_max_frames", kFamilyTag, hp.fe_nb_max_frames);
-        st != TRANSCRIBE_OK) {
-        return st;
-    }
-
-    if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 || hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 ||
-        hp.fe_hop_length <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: frontend dimensions must be positive");
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.fe_win_length != hp.fe_n_fft) {
-        // Whisper uses a full-length periodic Hann window (win=n_fft=400).
-        // A mismatch would require a windowed-shorter-than-FFT code path
-        // that we don't implement.
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: frontend win_length (%d) != n_fft (%d); "
-                "only full-length window is supported",
-                hp.fe_win_length, hp.fe_n_fft);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.fe_type != "mel") {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: unsupported frontend type \"%s\" (only \"mel\")",
-                hp.fe_type.c_str());
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.fe_window != "hann" && hp.fe_window != "hann_periodic") {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend window \"%s\" "
-                "(only \"hann\"/\"hann_periodic\" is supported)",
-                hp.fe_window.c_str());
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.fe_normalize != "whisper_logmel") {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend normalize \"%s\" "
-                "(only \"whisper_logmel\" is supported)",
-                hp.fe_normalize.c_str());
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.fe_mel_norm != "slaney") {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend mel_norm \"%s\" "
-                "(only \"slaney\" is supported)",
-                hp.fe_mel_norm.c_str());
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.fe_pad_mode != "reflect") {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: unsupported frontend pad_mode \"%s\" "
-                "(only \"reflect\" is supported)",
-                hp.fe_pad_mode.c_str());
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (!hp.fe_center) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: non-centered STFT is not supported");
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.fe_dither != 0.0f) {
-        // HF WhisperFeatureExtractor defaults dither=0.0 and the C++ mel
-        // frontend never applies dither (transcribe-mel.cpp's contract).
-        // A non-zero value in the GGUF would be silently dropped, so
-        // reject it at load time rather than producing a silently-wrong
-        // spectrogram.
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "whisper: stt.frontend.dither=%g is not supported "
-                "(frontend is deterministic; expected 0.0)",
-                hp.fe_dither);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-
-    return TRANSCRIBE_OK;
-}
-
 transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams & hp) {
     if (gguf == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -440,6 +296,149 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams
                 hp.fe_num_mels, hp.enc_num_mel_bins);
         return TRANSCRIBE_ERR_GGUF;
     }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status read_whisper_frontend_hparams(const gguf_context * gguf, WhisperHParams & hp) {
+    if (gguf == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.type", kFamilyTag, hp.fe_type); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", kFamilyTag, hp.fe_num_mels);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", kFamilyTag, hp.fe_sample_rate);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.n_fft", kFamilyTag, hp.fe_n_fft); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.win_length", kFamilyTag, hp.fe_win_length);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.hop_length", kFamilyTag, hp.fe_hop_length);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", kFamilyTag, hp.fe_window); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.normalize", kFamilyTag, hp.fe_normalize);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.dither", kFamilyTag, 0.0f, hp.fe_dither);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.pre_emphasis", kFamilyTag, 0.0f, hp.fe_pre_emphasis);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_min", kFamilyTag, 0.0f, hp.fe_f_min);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_f32_kv(gguf, "stt.frontend.f_max", kFamilyTag, 8000.0f, hp.fe_f_max);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_string_kv(gguf, "stt.frontend.pad_mode", kFamilyTag, "reflect", hp.fe_pad_mode);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_bool_kv(gguf, "stt.frontend.center", kFamilyTag, true, hp.fe_center);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_string_kv(gguf, "stt.frontend.mel_norm", kFamilyTag, "slaney", hp.fe_mel_norm);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.chunk_length", kFamilyTag, hp.fe_chunk_length);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.n_samples", kFamilyTag, hp.fe_n_samples);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_optional_u32_kv(gguf, "stt.frontend.nb_max_frames", kFamilyTag, hp.fe_nb_max_frames);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+
+    if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 || hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 ||
+        hp.fe_hop_length <= 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: frontend dimensions must be positive");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_win_length != hp.fe_n_fft) {
+        // Whisper uses a full-length periodic Hann window (win=n_fft=400).
+        // A mismatch would require a windowed-shorter-than-FFT code path
+        // that we don't implement.
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "whisper: frontend win_length (%d) != n_fft (%d); "
+                "only full-length window is supported",
+                hp.fe_win_length, hp.fe_n_fft);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_type != "mel") {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: unsupported frontend type \"%s\" (only \"mel\")",
+                hp.fe_type.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_window != "hann" && hp.fe_window != "hann_periodic") {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "whisper: unsupported frontend window \"%s\" "
+                "(only \"hann\"/\"hann_periodic\" is supported)",
+                hp.fe_window.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_normalize != "whisper_logmel") {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "whisper: unsupported frontend normalize \"%s\" "
+                "(only \"whisper_logmel\" is supported)",
+                hp.fe_normalize.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_mel_norm != "slaney") {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "whisper: unsupported frontend mel_norm \"%s\" "
+                "(only \"slaney\" is supported)",
+                hp.fe_mel_norm.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_pad_mode != "reflect") {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "whisper: unsupported frontend pad_mode \"%s\" "
+                "(only \"reflect\" is supported)",
+                hp.fe_pad_mode.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (!hp.fe_center) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: non-centered STFT is not supported");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_dither != 0.0f) {
+        // HF WhisperFeatureExtractor defaults dither=0.0 and the C++ mel
+        // frontend never applies dither (transcribe-mel.cpp's contract).
+        // A non-zero value in the GGUF would be silently dropped, so
+        // reject it at load time rather than producing a silently-wrong
+        // spectrogram.
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "whisper: stt.frontend.dither=%g is not supported "
+                "(frontend is deterministic; expected 0.0)",
+                hp.fe_dither);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
     return TRANSCRIBE_OK;
 }
 

@@ -416,7 +416,8 @@ add_test(NAME transcribe_run_dispatch_unit
 
 # -----------------------------------------------------------------------------
 # Dispatcher units against fake arches: roles, host thread pool, non-finite
-# input, throwing stream hooks, DIARIZE and LANGID roles, VAD segmentation
+# input, throwing stream hooks, DIARIZE, LANGID, VAD (segmentation,
+# lookahead) and TURN roles
 # -----------------------------------------------------------------------------
 
 foreach(_t role_resolve run_on_threads nonfinite_input stream_hook_throw diarize_dispatch langid_dispatch vad_segments vad_lookahead turn_dispatch)
@@ -872,31 +873,19 @@ if(TRANSCRIBE_UV)
 endif()
 
 # -----------------------------------------------------------------------------
-# sava (TURN + VAD roles) fixture smoke: stream == run bit for bit
+# smart_turn (TURN role) and sava (TURN + VAD roles) fixture smokes
 # -----------------------------------------------------------------------------
 
 if(TRANSCRIBE_UV)
-    add_executable(transcribe_sava_smoke sava_smoke.cpp)
-    target_link_libraries(transcribe_sava_smoke PRIVATE transcribe)
-    target_compile_definitions(transcribe_sava_smoke PRIVATE
-        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
-    transcribe_apply_warnings(transcribe_sava_smoke)
-    add_dependencies(transcribe_sava_smoke fixtures)
-    add_test(NAME transcribe_sava_smoke COMMAND transcribe_sava_smoke)
-endif()
-
-# -----------------------------------------------------------------------------
-# smart_turn (TURN role) fixture smoke
-# -----------------------------------------------------------------------------
-
-if(TRANSCRIBE_UV)
-    add_executable(transcribe_smart_turn_smoke smart_turn_smoke.cpp)
-    target_link_libraries(transcribe_smart_turn_smoke PRIVATE transcribe)
-    target_compile_definitions(transcribe_smart_turn_smoke PRIVATE
-        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
-    transcribe_apply_warnings(transcribe_smart_turn_smoke)
-    add_dependencies(transcribe_smart_turn_smoke fixtures)
-    add_test(NAME transcribe_smart_turn_smoke COMMAND transcribe_smart_turn_smoke)
+    foreach(_t smart_turn sava)
+        add_executable(transcribe_${_t}_smoke ${_t}_smoke.cpp)
+        target_link_libraries(transcribe_${_t}_smoke PRIVATE transcribe)
+        target_compile_definitions(transcribe_${_t}_smoke PRIVATE
+            "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+        transcribe_apply_warnings(transcribe_${_t}_smoke)
+        add_dependencies(transcribe_${_t}_smoke fixtures)
+        add_test(NAME transcribe_${_t}_smoke COMMAND transcribe_${_t}_smoke)
+    endforeach()
 endif()
 
 # -----------------------------------------------------------------------------
@@ -1548,12 +1537,10 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     set_tests_properties(transcribe_silero_vad_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
-    # sava on the TURN and VAD roles: upstream's golden clip score, stream ==
-    # run bit for bit (jfk.wav, dots.wav past the
-    # 512-frame window) at 1 and 4 threads, the VAD speech track, no turn in
-    # silence / noise, for the F32, F16 and Q8_0 GGUFs. TRANSCRIBE_SAVA_GGUF /
-    # _F16_GGUF / _Q8_0_GGUF, else models/sava/sava-{F32,F16,Q8_0}.gguf (RC 77
-    # skip when none exists).
+    # sava on the TURN and VAD roles: the golden clip score, stream == run
+    # bit for bit, the VAD speech track, feed_batch, for the F32, F16 and
+    # Q8_0 GGUFs. Gated by TRANSCRIBE_SAVA_GGUF / _F16_GGUF / _Q8_0_GGUF,
+    # else models/sava/ (RC 77 skip).
     add_executable(transcribe_sava_real_smoke
         sava_real_smoke.cpp)
     target_link_libraries(transcribe_sava_real_smoke
@@ -1569,11 +1556,9 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     set_tests_properties(transcribe_sava_real_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
-    # smart_turn on the TURN role: clip scores of committed samples against
-    # onnxruntime, decisions, the 8 s crop and a threshold override.
-    # TRANSCRIBE_SMART_TURN_GGUF, else
-    # models/smart-turn-v3.2/smart-turn-v3.2-F32.gguf (RC 77 skip when
-    # neither exists).
+    # smart_turn on the TURN role: clip scores against onnxruntime, decisions,
+    # threshold override and the 8 s crop. Gated by TRANSCRIBE_SMART_TURN_GGUF,
+    # else models/smart-turn-v3.2/ (RC 77 skip).
     add_executable(transcribe_smart_turn_real_smoke
         smart_turn_real_smoke.cpp)
     target_link_libraries(transcribe_smart_turn_real_smoke

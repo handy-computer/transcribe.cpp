@@ -1,10 +1,7 @@
 // arch/sava/model.cpp - SAVA family handler (TURN and VAD roles): load, the
-// turn and VAD ops tables, and the validation dumps.
-//
-// Both roles step the same stream (graph.cpp). A TURN session reports the
-// horizon-0 turn probability and the emitted speech probability of every
-// step; a VAD session reports the speech probability only. Each session owns
-// its own stream state.
+// TURN and VAD ops tables, and the validation dumps. Both roles step the same
+// stream (graph.cpp): TURN reports the horizon-0 turn and the speech
+// probability of every step, VAD the speech probability only.
 
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -68,8 +65,6 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Host front end: the mel filterbank as stored ([n_mels][n_bins]), the
-    // periodic Hann window and the FFT twiddles, all fp64.
     const HParams &    hp = m->hparams;
     std::vector<float> bank;
     if (load_common::read_f32_tensor_checked(loader.gguf(), loader.path(), "frontend.mel_filterbank",
@@ -108,12 +103,11 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     }
 
     // AUTO resolves to the CPU backend: the CPU path is the one validated
-    // against the reference and the one where a stream is bit-identical to a
-    // whole run. A specific backend or device is still honored.
+    // against the reference and bit-identical across chunkings. A specific
+    // backend or device is still honored.
     transcribe_device_t        device      = params != nullptr ? params->device : nullptr;
     transcribe_backend_request backend_req = params != nullptr ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     int                        req_raw     = TRANSCRIBE_BACKEND_AUTO;
-    // Read the enum's raw bits: comparing an out-of-range enum value is UB.
     std::memcpy(&req_raw, &backend_req, sizeof(req_raw));
     if (req_raw == TRANSCRIBE_BACKEND_AUTO && device == nullptr) {
         backend_req = TRANSCRIBE_BACKEND_CPU;
@@ -147,10 +141,6 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
 // ---------------------------------------------------------------------------
 // Validation dumps
 // ---------------------------------------------------------------------------
-
-float sigmoid(float x) {
-    return 1.0f / (1.0f + std::exp(-x));
-}
 
 void dump(const char * name, const std::vector<float> & v, std::initializer_list<long long> shape, const char * stage) {
     std::vector<long long> s(shape);
@@ -263,19 +253,20 @@ transcribe_status turn_step(transcribe_turn_session * session,
     return stream_step(s, s.st, static_cast<const Model &>(*session->model), pcm, n_frames, turn, speech);
 }
 
-// Streams per batched compute. Each stream adds ~130 per-stream nodes (its
-// conv, scan, ring writes and attention) whose tensors the graph allocator
-// tracks as free blocks; past ~120 streams one graph exhausts them
-// (ggml-alloc "out of free blocks"). Larger batches run as chunks of at most
-// this many: every column's values are independent of the column count, so a
-// chunked batch gives the same bits as one graph.
-constexpr int k_max_batch_streams = 64;
+// Streams per batched compute: 64, fewer past 6 layers (trunk and the two
+// head attentions). ggml-alloc's free blocks run out at about 120 streams of
+// 6 layers (the real model) and 1000 stream-layers of the toy fixture.
+// Every column's values are independent of the column count, so chunks give
+// the same bits as one graph.
+int max_batch_streams(const Model & m) {
+    const int n_layers = static_cast<int>(m.hparams.layer_is_ssm.size()) + 2;
+    return std::clamp(384 / n_layers, 1, 64);
+}
 
-// One frame for each of count sessions, in chunks of k_max_batch_streams
-// streams; each chunk's graph is owned (and cached) by the chunk's first
-// session, so a fixed session list reuses every chunk's graph each tick.
-// With TRANSCRIBE_DUMP_DIR set the sessions are stepped one by one instead
-// (the same values), so each stream's validation trace stays complete.
+// One frame for each of count sessions, in chunks of max_batch_streams;
+// each chunk's graph is cached by its first session. With TRANSCRIBE_DUMP_DIR
+// set the sessions step one by one (the same values, the batch's thread
+// count) so each stream's trace stays complete.
 transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
                                   int                               count,
                                   int                               n_threads,
@@ -285,9 +276,13 @@ transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
     const Model & m = static_cast<const Model &>(*sessions[0]->model);
     if (debug::init() && debug::enabled()) {
         for (int i = 0; i < count; ++i) {
-            auto & s = static_cast<TurnSession &>(*sessions[i]);
-            if (auto st = stream_step(s, s.st, m, frame_pcm[i], 1, turn + i, speech != nullptr ? speech + i : nullptr);
-                st != TRANSCRIBE_OK) {
+            auto &    s     = static_cast<TurnSession &>(*sessions[i]);
+            const int saved = s.n_threads;
+            s.n_threads     = n_threads;
+            const auto st =
+                stream_step(s, s.st, m, frame_pcm[i], 1, turn + i, speech != nullptr ? speech + i : nullptr);
+            s.n_threads = saved;
+            if (st != TRANSCRIBE_OK) {
                 return st;
             }
         }
@@ -299,8 +294,8 @@ transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
         auto & s                        = static_cast<TurnSession &>(*sessions[i]);
         streams[static_cast<size_t>(i)] = &s.st;
         cores[static_cast<size_t>(i)]   = &s;
-        // Every stream's checks before the first chunk steps, so a failed
-        // or aborted batch does not leave some chunks one frame ahead.
+        // Every check before the first chunk steps, so a failed or aborted
+        // batch leaves no chunk one frame ahead.
         if (auto st = ensure_state(s.st, m); st != TRANSCRIBE_OK) {
             return st;
         }
@@ -308,12 +303,13 @@ transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
             return TRANSCRIBE_ERR_ABORTED;
         }
     }
-    for (int c0 = 0; c0 < count; c0 += k_max_batch_streams) {
-        const int    nc    = std::min(k_max_batch_streams, count - c0);
+    const int chunk = max_batch_streams(m);
+    for (int c0 = 0; c0 < count; c0 += chunk) {
+        const int    nc    = std::min(chunk, count - c0);
         auto &       first = static_cast<TurnSession &>(*sessions[c0]);
         const size_t o     = static_cast<size_t>(c0);
-        if (auto st = stream_step_batch(first.batch, m, streams.data() + o, cores.data() + o, nc, n_threads,
-                                        frame_pcm + o, turn + o, speech != nullptr ? speech + o : nullptr);
+        if (auto st = step(first.batch, m, streams.data() + o, cores.data() + o, nc, 1, n_threads, frame_pcm + o,
+                           turn + o, speech != nullptr ? speech + o : nullptr);
             st != TRANSCRIBE_OK) {
             return st;
         }

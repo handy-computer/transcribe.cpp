@@ -397,13 +397,13 @@ static transcribe_status vad_run_impl(transcribe_vad_session *      session,
     if (session == nullptr || pcm == nullptr || n_samples <= 0 || !transcribe::pcm_is_finite(pcm, n_samples)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    const transcribe::VadOps * ops   = vad_ops(session->model);
-    const int64_t              frame = ops->frame_samples(session->model);
-    const int64_t              lag   = vad_lookahead(ops, session->model);
-    VadSegmentParams           sp;
+    VadSegmentParams sp;
     if (const auto st = transcribe::resolve_vad_params(params, sp); st != TRANSCRIBE_OK) {
         return st;
     }
+    const transcribe::VadOps * ops   = vad_ops(session->model);
+    const int64_t              frame = ops->frame_samples(session->model);
+    const int64_t              lag   = vad_lookahead(ops, session->model);
 
     VadFailureGuard failure{ session, ops };
     clear_result(session);

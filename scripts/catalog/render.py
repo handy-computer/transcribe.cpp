@@ -358,9 +358,14 @@ def block_agreement(record: dict, attrs: dict[str, str]) -> list[str]:
     if not any(cells[2] != "-" for cells in body):
         raise RenderError("no headline row carries an agreement")
     table = common.render_table(
-        ["GGUF", f"{common.metric_label(common.headline(record)['metric'], record.get('role'))} (95% CI)",
+        ["GGUF", f"{common.metric_label(common.headline(record)['metric'])} (95% CI)",
          f"Top-1 agreement with {reference}", "Max abs logit difference"],
         ["l", "r", "r", "r"], body)
+    return with_builds(table, rows)
+
+
+def with_builds(table: list[str], rows: dict) -> list[str]:
+    """The table, then which transcribe.cpp builds measured its rows."""
     builds = sorted({(row["engine_sha"], row.get("measured_on") or "")
                      for row in rows.values() if row.get("engine_sha")})
     line = "Measured at " + "; ".join(
@@ -369,18 +374,11 @@ def block_agreement(record: dict, attrs: dict[str, str]) -> list[str]:
 
 
 def block_turn(record: dict, attrs: dict[str, str]) -> list[str]:
-    """TURN: per shipped GGUF, the headline accuracy with its interval, false
-    positives and negatives, AUC and (where measured) the decision agreement
-    with the reference, then which build measured it."""
+    """TURN: common.turn_table, then which build measured it."""
     table = common.turn_table(record, attrs.get("reference") or "the reference")
     if not table:
         raise RenderError("no headline row carries a turn object")
-    rows = common.headline_rows(record)
-    builds = sorted({(row["engine_sha"], row.get("measured_on") or "")
-                     for row in rows.values() if row.get("engine_sha")})
-    line = "Measured at " + "; ".join(
-        f"transcribe.cpp `{sha}`" + (f" on {date}" if date else "") for sha, date in builds) + "."
-    return table + ["", line] if builds else table
+    return with_builds(table, common.headline_rows(record))
 
 
 def block_family(records: dict[str, dict], attrs: dict[str, str]) -> list[str]:

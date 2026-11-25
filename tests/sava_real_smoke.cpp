@@ -1,18 +1,12 @@
-// sava_real_smoke.cpp - the real SAVA GGUF through the public TURN and VAD
-// APIs on the CPU:
-//   - sava-speech.wav (upstream's golden clip): the clip score of
-//     inworld.sava.run (inworld-sava 1.0.0);
-//   - streams in ragged chunkings and at 1 and 4 threads are bit-identical to
-//     a run, on jfk.wav and on dots.wav (884 frames, past the 512-frame
-//     attention window);
-//   - the VAD role returns the TURN session's speech track;
-//   - transcribe_turn_stream_feed_batch over 4 users in ragged chunks equals
-//     each user's run, bit for bit;
-//   - digital silence and low noise hold no turn.
-// Models: TRANSCRIBE_SAVA_GGUF, TRANSCRIBE_SAVA_F16_GGUF and
-// TRANSCRIBE_SAVA_Q8_0_GGUF (else models/sava/sava-{F32,F16,Q8_0}.gguf), each
-// tested when it exists; RC 77 skip when none does. The golden-clip checks
-// hold for F16 and Q8_0 too (p within 1e-4).
+// sava_real_smoke.cpp - the real SAVA GGUFs through the public TURN and VAD
+// APIs on the CPU: upstream's golden clip score (sava-speech.wav, inworld-sava
+// 1.0.0, within 1e-4 for F32, F16 and Q8_0); streams in ragged chunkings and
+// at 1 and 4 threads bit-identical to a run on jfk.wav and dots.wav (884
+// frames, past the 512-frame attention window); the VAD role as the speech
+// track; transcribe_turn_stream_feed_batch over 4 users bit-identical to each
+// run; no turn in silence or low noise. TRANSCRIBE_SAVA_GGUF / _F16_GGUF /
+// _Q8_0_GGUF, else models/sava/sava-{F32,F16,Q8_0}.gguf; RC 77 skip when none
+// exists.
 
 #include "transcribe.h"
 #include "transcribe/turn.h"
@@ -53,8 +47,8 @@ bool load_sample(const char * name, std::vector<float> & pcm) {
 struct Track {
     std::vector<float> turn;
     std::vector<float> speech;
-    float              p     = 0.0f;
-    bool               ended = false;
+
+    bool operator==(const Track & o) const { return turn == o.turn && speech == o.speech; }
 };
 
 transcribe_turn_session * turn_session(transcribe_model * m, int n_threads) {
@@ -66,47 +60,50 @@ transcribe_turn_session * turn_session(transcribe_model * m, int n_threads) {
     return s;
 }
 
-Track run(transcribe_turn_session * s, const std::vector<float> & pcm) {
+Track run(transcribe_turn_session * s, const std::vector<float> & pcm, transcribe_turn_result * out = nullptr) {
     Track t;
     CHECK(transcribe_turn_run(s, pcm.data(), static_cast<int>(pcm.size()), nullptr) == TRANSCRIBE_OK);
     transcribe_turn_result r;
     transcribe_turn_result_init(&r);
     CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK);
-    t.p     = r.p;
-    t.ended = r.ended;
     if (const float * p = transcribe_turn_probs(s)) {
         t.turn.assign(p, p + r.n_probs);
     }
     if (const float * p = transcribe_turn_speech_probs(s)) {
         t.speech.assign(p, p + r.n_speech_probs);
     }
+    if (out != nullptr) {
+        *out = r;
+    }
     return t;
 }
 
-Track stream(transcribe_turn_session * s, const std::vector<float> & pcm, const std::vector<int> & sizes) {
-    Track                  t;
+// Appends a feed / flush result, checking it continues the tracks.
+void collect(transcribe_turn_session * s, Track & t) {
     transcribe_turn_result r;
     transcribe_turn_result_init(&r);
-    auto collect = [&]() {
-        CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK);
-        CHECK(r.first_frame == static_cast<int64_t>(t.turn.size()));
-        CHECK(r.speech_first_frame == static_cast<int64_t>(t.speech.size()));
-        if (const float * p = transcribe_turn_probs(s)) {
-            t.turn.insert(t.turn.end(), p, p + r.n_probs);
-        }
-        if (const float * p = transcribe_turn_speech_probs(s)) {
-            t.speech.insert(t.speech.end(), p, p + r.n_speech_probs);
-        }
-    };
+    CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK);
+    CHECK(r.first_frame == static_cast<int64_t>(t.turn.size()));
+    CHECK(r.speech_first_frame == static_cast<int64_t>(t.speech.size()));
+    if (const float * p = transcribe_turn_probs(s)) {
+        t.turn.insert(t.turn.end(), p, p + r.n_probs);
+    }
+    if (const float * p = transcribe_turn_speech_probs(s)) {
+        t.speech.insert(t.speech.end(), p, p + r.n_speech_probs);
+    }
+}
+
+Track stream(transcribe_turn_session * s, const std::vector<float> & pcm, const std::vector<int> & sizes) {
+    Track  t;
     size_t k = 0;
     for (size_t off = 0; off < pcm.size(); ++k) {
         const size_t n = std::min(static_cast<size_t>(sizes[k % sizes.size()]), pcm.size() - off);
         CHECK(transcribe_turn_stream_feed(s, pcm.data() + off, static_cast<int>(n)) == TRANSCRIBE_OK);
-        collect();
+        collect(s, t);
         off += n;
     }
     CHECK(transcribe_turn_stream_flush(s) == TRANSCRIBE_OK);
-    collect();
+    collect(s, t);
     return t;
 }
 
@@ -116,11 +113,12 @@ void test_reference(transcribe_model * m) {
         return;
     }
     transcribe_turn_session * s = turn_session(m, 1);
-    const Track               t = run(s, pcm);
-    // inworld.sava.run: turn[-1] = 0.9989076852798462 (fp32 reference;
-    // validate.py holds the per-frame tolerances).
+    transcribe_turn_result    r;
+    const Track               t = run(s, pcm, &r);
+    // inworld.sava.run: turn[-1] = 0.9989076852798462 (validate.py holds the
+    // per-frame tolerances).
     CHECK(t.turn.size() == 574 && t.speech.size() == 574);
-    CHECK(std::fabs(t.p - 0.9989077f) < 1e-4f && t.ended);
+    CHECK(std::fabs(r.p - 0.9989077f) < 1e-4f && r.ended);
     transcribe_turn_session_free(s);
 }
 
@@ -133,15 +131,11 @@ void test_parity(transcribe_model * m, const char * name, const std::vector<std:
     transcribe_turn_session * s1  = turn_session(m, 1);
     const Track               ref = run(s1, pcm);
     for (const std::vector<int> & sizes : chunkings) {
-        const Track t = stream(s1, pcm, sizes);
-        CHECK(t.turn == ref.turn);
-        CHECK(t.speech == ref.speech);
+        CHECK(stream(s1, pcm, sizes) == ref);
     }
     transcribe_turn_session * s4 = turn_session(m, 4);
-    const Track               r4 = run(s4, pcm);
-    CHECK(r4.turn == ref.turn && r4.speech == ref.speech);
-    const Track t4 = stream(s4, pcm, chunkings.front());
-    CHECK(t4.turn == ref.turn && t4.speech == ref.speech);
+    CHECK(run(s4, pcm) == ref);
+    CHECK(stream(s4, pcm, chunkings.front()) == ref);
     transcribe_turn_session_free(s4);
     transcribe_turn_session_free(s1);
 
@@ -166,8 +160,9 @@ void test_quiet(transcribe_model * m, const char * name) {
         return;
     }
     transcribe_turn_session * s = turn_session(m, 1);
-    const Track               t = run(s, pcm);
-    CHECK(!t.ended);
+    transcribe_turn_result    r;
+    const Track               t = run(s, pcm, &r);
+    CHECK(!r.ended);
     for (const float p : t.speech) {
         CHECK(p < 0.5f);
     }
@@ -182,75 +177,55 @@ int ragged(int u, int k) {
 }
 
 // transcribe_turn_stream_feed_batch over 4 users with different audio and
-// lengths, ragged chunks and a rotating first session, equals each user's
-// run, bit for bit (stream == run holds per session).
+// lengths, ragged chunks and a rotating first session equals each user's run,
+// bit for bit.
 void test_batch(transcribe_model * m) {
+    constexpr size_t                k_n     = 4;
     const char *                    names[] = { "jfk.wav", "dots.wav", "sava-speech.wav", "noise.wav" };
     const size_t                    limit[] = { 176000, 16000 * 15, 16000 * 12, 16000 * 8 };
-    std::vector<std::vector<float>> pcm;
+    std::vector<std::vector<float>> pcm(k_n);
     std::vector<Track>              want;
-    transcribe_turn_session *       ref = turn_session(m, 1);
-    for (size_t u = 0; u < 4; ++u) {
-        std::vector<float> x;
-        if (!load_sample(names[u], x)) {
-            transcribe_turn_session_free(ref);
+    transcribe_turn_session *       s[k_n];
+    for (size_t u = 0; u < k_n; ++u) {
+        if (!load_sample(names[u], pcm[u])) {
             return;
         }
-        x.resize(std::min(x.size(), limit[u]));
-        pcm.push_back(x);
-        want.push_back(run(ref, x));
     }
-    transcribe_turn_session_free(ref);
-
-    std::vector<transcribe_turn_session *> s;
-    for (size_t u = 0; u < 4; ++u) {
-        s.push_back(turn_session(m, u == 0 ? 4 : 1));
+    for (size_t u = 0; u < k_n; ++u) {
+        s[u] = turn_session(m, u == 0 ? 4 : 1);
+        pcm[u].resize(std::min(pcm[u].size(), limit[u]));
+        want.push_back(run(s[u], pcm[u]));
     }
-    std::vector<Track>  got(4);
-    std::vector<size_t> off(4, 0);
-    auto                collect = [&](size_t i) {
-        transcribe_turn_result r;
-        transcribe_turn_result_init(&r);
-        CHECK(transcribe_turn_get_result(s[i], &r) == TRANSCRIBE_OK);
-        CHECK(r.first_frame == static_cast<int64_t>(got[i].turn.size()));
-        if (const float * p = transcribe_turn_probs(s[i])) {
-            got[i].turn.insert(got[i].turn.end(), p, p + r.n_probs);
-        }
-        if (const float * p = transcribe_turn_speech_probs(s[i])) {
-            got[i].speech.insert(got[i].speech.end(), p, p + r.n_speech_probs);
-        }
-    };
+    std::vector<Track> got(k_n);
+    size_t             off[k_n] = {};
     for (int k = 0;; ++k) {
         bool any = false;
-        for (size_t i = 0; i < 4; ++i) {
+        for (size_t i = 0; i < k_n; ++i) {
             any = any || off[i] < pcm[i].size();
         }
         if (!any) {
             break;
         }
-        transcribe_turn_session * list[4];
-        const float *             ptr[4];
-        int                       len[4];
-        size_t                    who[4];
-        for (size_t j = 0; j < 4; ++j) {
-            const size_t i = (j + static_cast<size_t>(k / 5)) % 4;
+        transcribe_turn_session * list[k_n];
+        const float *             ptr[k_n];
+        int                       len[k_n];
+        for (size_t j = 0; j < k_n; ++j) {
+            const size_t i = (j + static_cast<size_t>(k / 5)) % k_n;
             const size_t c = std::min(static_cast<size_t>(ragged(static_cast<int>(i), k)), pcm[i].size() - off[i]);
-            who[j]         = i;
             list[j]        = s[i];
             ptr[j]         = c > 0 ? pcm[i].data() + off[i] : nullptr;
             len[j]         = static_cast<int>(c);
             off[i] += c;
         }
-        CHECK(transcribe_turn_stream_feed_batch(list, ptr, len, 4) == TRANSCRIBE_OK);
-        for (size_t j = 0; j < 4; ++j) {
-            collect(who[j]);
+        CHECK(transcribe_turn_stream_feed_batch(list, ptr, len, k_n) == TRANSCRIBE_OK);
+        for (size_t i = 0; i < k_n; ++i) {
+            collect(s[i], got[i]);
         }
     }
-    for (size_t i = 0; i < 4; ++i) {
+    for (size_t i = 0; i < k_n; ++i) {
         CHECK(transcribe_turn_stream_flush(s[i]) == TRANSCRIBE_OK);
-        collect(i);
-        CHECK(got[i].turn == want[i].turn);
-        CHECK(got[i].speech == want[i].speech);
+        collect(s[i], got[i]);
+        CHECK(got[i] == want[i]);
         transcribe_turn_session_free(s[i]);
     }
 }

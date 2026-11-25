@@ -3,40 +3,12 @@
 convert-smart_turn.py - convert Smart Turn v3.2 (pipecat-ai) into the F32
 reference GGUF of the smart_turn family (TURN role).
 
-Source: upstream publishes the model only as ONNX. The reference dtype is the
-fp32 export, smart-turn-v3.2-gpu.onnx, from pipecat-ai/smart-turn-v3 at the
-pinned revision (sha256-checked); smart-turn-v3.2-cpu.onnx is upstream's own
-int8 quantization and is not converted. Weights are read through the graph
-walk in scripts/lib/smart_turn_onnx.py, which names the anonymous, transposed
-MatMul initializers and is validated by rebuilding train.py's
-SmartTurnV3Model from them (see docs/porting/families/smart_turn.md).
-
-Architecture (train.py SmartTurnV3Model): the whisper-tiny encoder with
-max_source_positions = 400 (8 s, 800 mel frames), then
-    attention pooling  w = softmax_t(Linear(384,256) - Tanh - Linear(256,1))
-                       pooled = sum_t w[t] * h[t]
-    classifier         Linear(384,256) - LayerNorm(256) - GELU - Dropout -
-                       Linear(256,64) - GELU - Linear(64,1)
-    sigmoid            P(turn complete)
-
-Layout: the encoder and front end use convert-whisper.py's tensor names,
-layouts and KVs (stt.frontend.*, encoder hparams under
-stt.smart_turn.encoder.* instead of stt.whisper.encoder.*), so the whisper
-encoder loader reads them unchanged. Linear weights are [out, in] (ggml ne
-[in, out]), Conv1d [out, in, k]; whisper's k projection has no bias, and
-neither has this export's.
-
-    frontend.mel_filterbank   [80, 201]   WhisperFeatureExtractor(chunk_length=8).mel_filters.T
-    frontend.window           [400]       periodic Hann
-    enc.conv.{0,1}.weight/bias, enc.pos_emb.weight [400, 384],
-    enc.blocks.{i}.{norm_attn, attn.q, attn.k (no bias), attn.v, attn.out,
-                    norm_ffn, ffn.fc1, ffn.fc2}.*, enc.final_norm.*
-    head.pool.0.weight/bias   [256, 384] / [256]
-    head.pool.2.weight/bias   [1, 256] / [1]
-    head.cls.0.weight/bias    [256, 384] / [256]
-    head.cls.1.weight/bias    [256]           LayerNorm (eps 1e-5)
-    head.cls.4.weight/bias    [64, 256] / [64]
-    head.cls.6.weight/bias    [1, 64] / [1]
+Upstream publishes only ONNX; the reference is the fp32 export
+(smart-turn-v3.2-gpu.onnx, pinned and sha256-checked). Weights are named by
+the graph walk in scripts/lib/smart_turn_onnx.py. The encoder and front end
+use convert-whisper.py's tensor names, layouts and KVs (encoder hparams under
+stt.smart_turn.encoder.*), so the whisper encoder loader reads them
+unchanged. Tensor layout: docs/porting/families/smart_turn.md.
 
     uv run --project scripts/envs/smart_turn scripts/convert-smart_turn.py
     uv run --project scripts/envs/smart_turn scripts/convert-smart_turn.py \\
@@ -123,10 +95,11 @@ def fail(msg: str) -> None:
 
 
 def check_graph(model) -> None:
-    """Assert the graph-level facts the C++ hard-codes and the weights cannot
-    show: LayerNorm eps 1e-5 everywhere, exact (erf) GELU, conv strides /
-    padding, 6 heads of 64, and the single output being a sigmoid."""
+    """Graph facts the C++ hard-codes and the weights cannot show: LayerNorm
+    eps 1e-5, exact (erf) GELU, conv strides / padding, 6 heads of 64, and a
+    single sigmoid output."""
     import onnx
+    from onnx import numpy_helper
 
     g = model.graph
     attrs = lambda n: {a.name: onnx.helper.get_attribute_value(a) for a in n.attribute}  # noqa: E731
@@ -144,7 +117,6 @@ def check_graph(model) -> None:
     want = [{"strides": [1], "pads": [1, 1]}, {"strides": [2], "pads": [1, 1]}]
     if [{k: c[k] for k in ("strides", "pads")} for c in convs] != want:
         fail(f"conv attributes {convs}")
-    from onnx import numpy_helper
     consts = {t.name: numpy_helper.to_array(t) for t in g.initializer}
     reshape_dims = {int(v[0]) for v in consts.values() if v.dtype == np.int64 and v.shape == (1,)}
     if not {st.N_HEADS, st.D_MODEL // st.N_HEADS, st.N_POSITIONS} <= reshape_dims:
@@ -166,7 +138,7 @@ def convert(onnx_path: Path, out_path: Path) -> None:
         fail(f"{onnx_path} sha256 {sha} != pinned {st.SHA256[st.ONNX_FP32]} ({st.ONNX_FP32})")
     model = onnx.load(str(onnx_path))
     check_graph(model)
-    sd, notes = st.map_onnx_weights(model)
+    sd = st.map_onnx_weights(model)
     st.check_geometry(sd)
 
     fe = st.feature_extractor()
@@ -245,17 +217,13 @@ def convert(onnx_path: Path, out_path: Path) -> None:
     writer.add_uint32("stt.frontend.n_samples", st.MAX_AUDIO_SAMPLES)
     writer.add_uint32("stt.frontend.nb_max_frames", st.N_FRAMES)
 
-    written: list[tuple[str, tuple, str]] = []
-
     def add(dst: str, arr: np.ndarray) -> None:
         a = np.ascontiguousarray(arr.astype(np.float32))
         encoded, raw_dtype = encode_for_gguf(a, reference_dtype_for(dst, REF_TYPE))
         writer.add_tensor(dst, encoded, raw_dtype=raw_dtype)
-        written.append((dst, a.shape, raw_dtype.name))
 
     add("frontend.mel_filterbank", mel_fb)
     add("frontend.window", hann)
-    consumed: set[str] = set()
     table = list(ENCODER_TOP)
     for i in range(st.N_LAYERS):
         table += [(f"encoder.layers.{i}.{s}", f"enc.blocks.{i}.{d}") for s, d in ENCODER_BLOCK]
@@ -264,8 +232,7 @@ def convert(onnx_path: Path, out_path: Path) -> None:
         if src not in sd:
             fail(f"mapped weights lack {src}")
         add(dst, sd[src])
-        consumed.add(src)
-    left = sorted(set(sd) - consumed)
+    left = sorted(set(sd) - {src for src, _ in table})
     if left:
         fail(f"weights not written: {left}")
 
@@ -273,9 +240,7 @@ def convert(onnx_path: Path, out_path: Path) -> None:
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()
     writer.close()
-    for name, shape, dtype in written:
-        print(f"  {name:<34} {str(list(shape)):<14} {dtype}")
-    print(f"Wrote {out_path} ({len(written)} tensors, {out_path.stat().st_size:,} bytes)")
+    print(f"Wrote {out_path} ({len(table) + 2} tensors, {out_path.stat().st_size:,} bytes)")
 
 
 def main(argv: list[str] | None = None) -> int:

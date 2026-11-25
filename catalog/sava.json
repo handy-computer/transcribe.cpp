@@ -79,6 +79,5 @@
     {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk-8s","sample_duration_s":8.0,"total_ms":109.1,"xrt_compute":73.34,"wall_ms":109.5,"xrt_wall":73.09,"load_ms":0.6,"mel_ms":0.0,"encode_ms":109.1,"decode_ms":0.0,"engine_sha":"8415e8e2","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null},
     {"machine":"ryzen-4750u","backend":"cpu","quant":"Q8_0","sample":"jfk-8s-1t","sample_duration_s":8.0,"total_ms":248.0,"xrt_compute":32.26,"wall_ms":248.4,"xrt_wall":32.21,"load_ms":0.6,"mel_ms":0.0,"encode_ms":248.0,"decode_ms":0.0,"engine_sha":"8415e8e2","publication_profile":"turn-publication-v1","measured_on":"2026-11-24","thermal_gated":null}
   ],
-  "role": "turn",
-  "upstream_url": "https://github.com/inworld-ai/sava"
+  "role": "turn"
 }

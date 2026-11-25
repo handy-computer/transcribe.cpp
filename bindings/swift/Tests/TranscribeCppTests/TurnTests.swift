@@ -22,14 +22,14 @@ final class TurnTests: XCTestCase {
         try Model(path: try Fixtures.toyModelPath("arch_sava.gguf"), options: ModelOptions(backend: .cpu))
     }
 
+    /// Expect a `TranscribeError` of case `kind` (e.g. "invalidArgument").
     private func expectError(
-        _ call: @autoclosure () throws -> Any, file: StaticString = #filePath, line: UInt = #line,
-        _ match: (TranscribeError) -> Bool
+        _ call: @autoclosure () throws -> Any, _ kind: String,
+        file: StaticString = #filePath, line: UInt = #line
     ) {
         XCTAssertThrowsError(try call(), file: file, line: line) { error in
-            guard let e = error as? TranscribeError, match(e) else {
-                return XCTFail("unexpected error \(error)", file: file, line: line)
-            }
+            let label = Mirror(reflecting: error).children.first?.label
+            XCTAssertTrue(error is TranscribeError && label == kind, "\(error)", file: file, line: line)
         }
     }
 
@@ -79,19 +79,10 @@ final class TurnTests: XCTestCase {
         XCTAssertEqual(try t.run(pcm, threshold: -1), r)
 
         // A clip model does not stream.
-        expectError(try t.streamFeed(Array(pcm[0..<640]))) {
-            if case .notImplemented = $0 { return true } else { return false }
-        }
-        expectError(try t.streamFlush()) {
-            if case .notImplemented = $0 { return true } else { return false }
-        }
-        expectError(try TurnSession.streamFeedBatch([(t, Array(pcm[0..<640]))])) {
-            if case .notImplemented = $0 { return true } else { return false }
-        }
-        // Not a VAD model.
-        expectError(try model.vadInfo) {
-            if case .unsupportedRole = $0 { return true } else { return false }
-        }
+        expectError(try t.streamFeed(Array(pcm[0..<640])), "notImplemented")
+        expectError(try t.streamFlush(), "notImplemented")
+        expectError(try TurnSession.streamFeedBatch([(t, Array(pcm[0..<640]))]), "notImplemented")
+        expectError(try model.vadInfo, "unsupportedRole")
     }
 
     func testSavaRunAndStream() throws {
@@ -165,65 +156,44 @@ final class TurnTests: XCTestCase {
         let model = try sava()
         let t = try model.turnSession(threads: 1)
         let pcm = Self.noise(1280)
-        func isInvalid(_ e: TranscribeError) -> Bool {
-            if case .invalidArgument = e { return true } else { return false }
-        }
-        expectError(try t.run([]), isInvalid)
-        expectError(try t.run([0, .nan, 0]), isInvalid)
-        expectError(try t.run(pcm, threshold: 1.5), isInvalid)
-        expectError(try t.streamFeed([0, .infinity]), isInvalid)
+        expectError(try t.run([]), "invalidArgument")
+        expectError(try t.run([0, .nan, 0]), "invalidArgument")
+        expectError(try t.run(pcm, threshold: 1.5), "invalidArgument")
 
         // Invalid input leaves the stream where it was.
         XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 0)
-        expectError(try t.streamFeed([.nan]), isInvalid)
+        expectError(try t.streamFeed([0, .infinity]), "invalidArgument")
         XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 2)
 
         let other = try model.turnSession(threads: 1)
-        let otherModel = try sava()
-        let foreign = try otherModel.turnSession(threads: 1)
-        expectError(try TurnSession.streamFeedBatch([]), isInvalid)
-        expectError(try TurnSession.streamFeedBatch([(t, pcm), (t, pcm)]), isInvalid)
-        expectError(try TurnSession.streamFeedBatch([(t, pcm), (foreign, pcm)]), isInvalid)
-        expectError(try TurnSession.streamFeedBatch([(t, pcm), (other, [.nan])]), isInvalid)
+        let foreign = try sava().turnSession(threads: 1)
+        for inputs in [[], [(t, pcm), (t, pcm)], [(t, pcm), (foreign, pcm)], [(t, pcm), (other, [.nan])]] {
+            expectError(try TurnSession.streamFeedBatch(inputs), "invalidArgument")
+        }
         // ...and every stream unchanged by a rejected batch.
         XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 4)
         XCTAssertEqual(try other.streamFeed(pcm).firstFrame, 0)
 
         // A model without the TURN role.
         let vadOnly = try Model(path: try Fixtures.vadToyModelPath(), options: ModelOptions(backend: .cpu))
-        expectError(try vadOnly.turnInfo) {
-            if case .unsupportedRole = $0 { return true } else { return false }
-        }
-        expectError(try vadOnly.turnSession()) {
-            if case .unsupportedRole = $0 { return true } else { return false }
-        }
+        expectError(try vadOnly.turnInfo, "unsupportedRole")
+        expectError(try vadOnly.turnSession(), "unsupportedRole")
     }
 
     func testCancellation() throws {
         let model = try sava()
         let t = try model.turnSession(threads: 1)
+        let u = try model.turnSession(threads: 1)
         let pcm = Self.noise(1280)
         let token = CancellationToken()
-        t.setCancellationToken(token)
+        u.setCancellationToken(token)
         token.cancel()
-        func isAborted(_ e: TranscribeError) -> Bool {
-            if case .aborted = e { return true } else { return false }
-        }
-        expectError(try t.run(pcm), isAborted)
-        expectError(try t.streamFeed(pcm), isAborted)
-        expectError(try TurnSession.streamFeedBatch([(t, pcm)]), isAborted)
-        t.clearCancellationToken()
-        XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 0)  // the abort reset the stream
-
+        expectError(try u.run(pcm), "aborted")
+        expectError(try u.streamFeed(pcm), "aborted")
         // Cancelling a later (not the first) listed session aborts the batch
         // and resets every listed stream.
-        let u = try model.turnSession(threads: 1)
-        XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 2)
-        XCTAssertEqual(try u.streamFeed(pcm).firstFrame, 0)
-        let later = CancellationToken()
-        u.setCancellationToken(later)
-        later.cancel()
-        expectError(try TurnSession.streamFeedBatch([(t, pcm), (u, pcm)]), isAborted)
+        XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 0)
+        expectError(try TurnSession.streamFeedBatch([(t, pcm), (u, pcm)]), "aborted")
         u.clearCancellationToken()
         XCTAssertEqual(try t.streamFeed(pcm).firstFrame, 0)
         XCTAssertEqual(try u.streamFeed(pcm).firstFrame, 0)

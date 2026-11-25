@@ -101,6 +101,8 @@ Inworld's rule:
 2. While it is open, each silent frame looks at its paired turn probability:
    `>= 0.9` ends the turn.
 3. 1.6 s of silence ends it anyway.
+4. A turn with less than 400 ms of speech and less than 200 ms of confident
+   (`>= 0.9`) speech is dropped.
 
 `examples/turn_live` runs this rule (and Silero + Smart Turn, Pipecat's
 setup) on a WAV fed in 20 ms pieces:

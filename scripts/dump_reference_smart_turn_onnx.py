@@ -9,17 +9,15 @@ and a rebuilt PyTorch twin (instrumented cross-check).
       --audio samples/jfk.wav \
       --out build/validate/smart_turn/smart-turn-v3.2/jfk/ref
 
-One clip, one forward pass, as smart-turn's inference.py runs it: keep the
-last 8 s (or left-pad with zeros to 8 s), WhisperFeatureExtractor(chunk_length=8,
-numpy front end, do_normalize=True), then the ONNX session with inference.py's
-options. Writes (batch dimension dropped):
+One forward pass, as smart-turn's inference.py runs it: keep the last 8 s
+(or left-pad with zeros), WhisperFeatureExtractor(chunk_length=8, numpy,
+do_normalize=True), then the ONNX session with inference.py's options.
+Writes (batch dimension dropped, activations time-major):
 
     fe.window         [128000]    8 s window after zero-mean / unit-variance
-    enc.mel.in        [800, 80]   log-mel input_features, time-major (the
-                                  whisper family's dump layout; ONNX input is
-                                  its transpose [80, 800])
-    enc.conv1.out     [800, 384]  GELU(conv1), time-major
-    enc.conv2.out     [400, 384]  GELU(conv2), time-major
+    enc.mel.in        [800, 80]   log-mel input_features (ONNX input transposed)
+    enc.conv1.out     [800, 384]  GELU(conv1)
+    enc.conv2.out     [400, 384]  GELU(conv2)
     enc.pos_emb       [400, 384]  positional table (a weight)
     enc.embed.out     [400, 384]  conv2 + pos_emb
     enc.block.{0..3}.out [400, 384]
@@ -28,18 +26,13 @@ options. Writes (batch dimension dropped):
     head.pool_weights [400]       softmax over positions
     head.pooled       [384]       sum_t weights[t] * enc.final[t]
     head.logit        [1]         classifier output before the sigmoid
-    head.prob         [1]         sigmoid: P(turn complete), canonical session
+    head.prob         [1]         P(turn complete) of the unmodified session
 
-fe.window and enc.mel.in come from the front end (transformers), enc.pos_emb
-is the ONNX initializer, everything else from onnxruntime. head.prob is the
-unmodified session
-(the canonical number); the intermediates come from a second session whose
-graph also exposes them as outputs, and its probability must match the
-canonical one to 1e-6 (fusions differ). The same tensors from the PyTorch twin
-(scripts/lib/smart_turn_onnx.py: train.py's SmartTurnV3Model with the ONNX
-weights mapped in) go to <out>/torch/, and the per-tensor twin-vs-ONNX
-differences to <out>/bridge.json. turn.json holds p, the upstream decision
-(p > 0.5) and, for later comparison, the p of upstream's int8 ONNX.
+The intermediates come from a second session that exposes them as graph
+outputs; its p must match the canonical one to 1e-6. The PyTorch twin
+(train.py's SmartTurnV3Model with the ONNX weights mapped in) writes the same
+tensors to <out>/torch/ and its differences to <out>/bridge.json. turn.json
+holds p, the decision (p > 0.5) and the p of upstream's int8 ONNX.
 """
 
 from __future__ import annotations
@@ -57,12 +50,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from lib import smart_turn_onnx as st  # noqa: E402
 from lib.ref_dump import write_tensor  # noqa: E402
 
-# Twin vs ONNX bound on head.prob; observed ~5e-7 (fp32 reduction order).
-BRIDGE_P_MAX = 1e-5
-# Exposing intermediates as graph outputs stops some onnxruntime fusions, so
-# the instrumented session's p may differ from the canonical one in the last
-# bits (observed ~6e-8).
-INSTRUMENTED_P_MAX = 1e-6
+BRIDGE_P_MAX = 1e-5        # twin vs ONNX p; observed ~5e-7
+INSTRUMENTED_P_MAX = 1e-6  # exposed outputs stop some fusions; observed ~6e-8
 
 
 def session(path: Path, threads: int, onnx_model=None):
@@ -242,7 +231,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
                if t.name == "inner.encoder.embed_positions.weight")
 
     # PyTorch twin.
-    sd, _ = st.map_onnx_weights(model)
+    sd = st.map_onnx_weights(model)
     st.check_geometry(sd)
     twin = st.build_twin(sd)
     tw, p_twin = twin_forward(twin, torch.from_numpy(x))

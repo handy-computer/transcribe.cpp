@@ -1,7 +1,5 @@
-# transcribe-turn-eval: scores many clips with one loaded TURN model through
-# the public ABI. Reads clips from stdin (int32 n_samples, then n_samples
-# float32 PCM, repeated) and prints one `p ended` line per clip. The Python
-# driver (scripts/turn/eval_cpp.py) feeds it a dataset.
+# transcribe-turn-eval: scores clips from stdin with one TURN model (see
+# main.cpp); scripts/turn/eval_cpp.py feeds it a dataset.
 
 add_executable(transcribe-turn-eval
     main.cpp

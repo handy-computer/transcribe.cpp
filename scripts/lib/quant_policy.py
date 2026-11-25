@@ -53,17 +53,10 @@ FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
     # widens it to F16, see src/arch/ecapa_tdnn/model.cpp); the K tiers would
     # save a few MB at most. Ship only the near-reference tiers.
     "ecapa_tdnn": ("F16", "Q8_0"),
-    # sava (TURN + VAD): F32 is the reference. F16 holds the bf16 source
-    # weights exactly except 1,065 tiny ones (|err| <= 3e-8), and ggml keeps
-    # F16 x F32 matmuls in fp32 activations, so it matches F32 to 4e-6 with
-    # no decision changes on the Pipecat set; it halves the size. Q8_0 is the
-    # small, fast tier. BF16 (convert-sava.py --outtype bf16) is lossless
-    # storage, but ggml rounds activations to bf16 and its CPU path is 15-22x
-    # slower than F32 without native BF16 (Apple M1); not shipped. K tiers
-    # not evaluated.
+    # sava: near-reference tiers only; see docs/porting/families/sava.md.
     "sava": ("F16", "Q8_0"),
     # smart_turn: d_model 384 is not a multiple of 256, so the K tiers fall
-    # back to near-Q8_0 storage (near-duplicates); ship only F16 and Q8_0.
+    # back to near-Q8_0 storage.
     "smart_turn": ("F16", "Q8_0"),
 }
 

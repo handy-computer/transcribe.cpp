@@ -1737,8 +1737,6 @@ export class VadSession {
 
 // ---- TurnSession -----------------------------------------------------------
 
-// Copy `count` session-owned floats out; a missing buffer for a nonzero count
-// is a library bug, not an empty result.
 function readProbs(n: Native, count: number, get: () => any, what: string): number[] {
   if (count <= 0) return [];
   const ptr = get();
@@ -1746,8 +1744,7 @@ function readProbs(n: Native, count: number, get: () => any, what: string): numb
   return Array.from(n.koffi.decode(ptr, "float", count) as ArrayLike<number>);
 }
 
-// Copy the last call's result out of the session; call inside exclusive(),
-// since the next compute replaces it.
+// Call inside exclusive(): the next compute replaces the session's result.
 function readTurnResult(n: Native, h: any): TurnResult {
   const F = n.F;
   const res: any = {};
@@ -1800,10 +1797,9 @@ export class TurnSession {
   }
 
   /**
-   * Score one clip: has the turn ended at the end of this audio? Pass the audio
-   * since the speaker started. Starts fresh (drops any stream in progress);
-   * audio longer than maxAudioMs is scored on its end. Streaming models also
-   * return every frame's probabilities. The input PCM is borrowed, not copied
+   * Score one clip (the audio since the speaker started): has the turn ended at
+   * its end? Starts fresh (drops any stream in progress); audio longer than
+   * maxAudioMs is scored on its end. The input PCM is borrowed, not copied
    * (see Session.run).
    */
   async run(pcm: PcmLike, opts: TurnOptions = {}): Promise<TurnResult> {
@@ -1823,12 +1819,12 @@ export class TurnSession {
   }
 
   /**
-   * Append audio to the stream; returns the turn probability of every frame it
-   * completes and the speech probability of every frame the model judged (a
-   * partial frame waits for the next feed). The chunk is borrowed, not copied
-   * (see Stream.feed); an empty chunk scores nothing. NotImplementedByModel on
-   * a model that cannot stream (turnInfo.frameSamples is 0). An abort or
-   * processing error resets the stream; invalid input leaves it unchanged.
+   * Append audio to the stream; returns the turn probabilities of the frames
+   * it completes and the speech probabilities of the frames the model judged
+   * (a partial frame waits for the next feed). The chunk is borrowed, not
+   * copied (see Stream.feed). NotImplementedByModel if turnInfo.frameSamples
+   * is 0. An abort or processing error resets the stream; invalid input leaves
+   * it unchanged.
    */
   async streamFeed(pcm: PcmLike, opts: TurnFeedOptions = {}): Promise<TurnStreamResult> {
     const n = this.#n;
@@ -1846,13 +1842,12 @@ export class TurnSession {
 
   /**
    * Feed several streams of one model in one compute (much faster than one
-   * feed per session): each session ends up as if fed its own chunk alone, and
-   * gets one result, in order. An empty list, a session listed twice or
-   * sessions of different models throw InvalidArgument; a disposed session
-   * (including one disposed while the batch waits for the model lock) throws
-   * TranscribeError. Uses the first session's
-   * thread count; `signal` cancels the whole batch, and an abort or processing
-   * error resets every listed stream. The chunks are borrowed, not copied.
+   * feed per session): each session ends up as if fed its chunk alone; results
+   * are in order. InvalidArgument for an empty list, a repeated session or
+   * sessions of different models; TranscribeError for a disposed session (also
+   * one disposed while the batch waits for the lock). Uses the first session's
+   * thread count; `signal` cancels the batch, and an abort or processing error
+   * resets every listed stream. The chunks are borrowed, not copied.
    */
   static async streamFeedBatch(
     items: readonly TurnBatchItem[],
@@ -1869,7 +1864,6 @@ export class TurnSession {
         throw new InvalidArgument("streamFeedBatch: a session is listed more than once");
       if (sessions.length > 0 && s.#model !== sessions[0]!.#model)
         throw new InvalidArgument("streamFeedBatch: sessions belong to different models");
-      void s.#core.handle; // throws on a disposed session
       sessions.push(s);
     }
     const arrays = items.map((item) => asFloat32(item.pcm));
@@ -1877,10 +1871,8 @@ export class TurnSession {
     const first = sessions[0]!;
     const n = first.#n;
 
-    // One compute on the model: the shared model lock is taken once, through
-    // the first session; the others are checked again under it (one may have
-    // been disposed while this call was queued). Handles stay valid until the
-    // call returns: a dispose meanwhile defers its free behind this lock.
+    // The model lock, taken once through the first session; the others are
+    // checked under it. A dispose meanwhile defers its free behind this lock.
     return first.#core.exclusive("feed the turn streams", async (call) => {
       if (sessions.some((s) => s.#core.disposed))
         throw new TranscribeError("session has been disposed");
@@ -1901,8 +1893,8 @@ export class TurnSession {
 
   /**
    * End the stream: score the buffered partial frame (zero padded) and the
-   * speech of every frame not yet judged, then reset, so the next feed starts
-   * at frame 0. A processing error also resets it.
+   * speech of every frame not yet judged, then reset (the next feed's
+   * firstFrame is 0). A processing error also resets it.
    */
   async streamFlush(opts: TurnFeedOptions = {}): Promise<TurnStreamResult> {
     const n = this.#n;

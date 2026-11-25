@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-dump_reference_sava_author.py - SAVA (Inworld) reference tensors, curves and
-turn segments (turn_segments.json) from upstream's own package (inworld-sava
-1.0.0, PyTorch).
+dump_reference_sava_author.py - SAVA (Inworld) reference tensors and curves
+from upstream's own package (inworld-sava 1.0.0, PyTorch).
 
     uv run --project scripts/envs/sava \
       scripts/dump_reference_sava_author.py encoder \
@@ -10,11 +9,10 @@ turn segments (turn_segments.json) from upstream's own package (inworld-sava
       --out build/validate/sava/sava/sava-speech/ref
 
 The reference is `sava.run(model, audio)`: one causal forward over the clip
-zero padded to whole 640-sample frames plus `lookahead_frames` (3) frames of
-silence, which is exactly a Session pushed the whole clip and flushed.
-Forward hooks capture the intermediates of that same call, so they are the
-reference's own values. With n = ceil(samples / 640) frames, the forward runs
-S = n + 3 steps; every per-step tensor is stacked over all S steps, time-major:
+zero padded to whole 640-sample frames plus 3 lookahead frames of silence
+(a Session pushed the whole clip and flushed). Forward hooks capture that
+call's intermediates. With n = ceil(samples / 640) frames the forward runs
+S = n + 3 steps; per-step tensors are stacked over all S steps, time-major:
 
     fe.mel                [S, 512]   log-mel, 4 hops x 128 bins (hop-major)
     fe.log_energy         [S]        ln(max(rms(frame), 1e-5))
@@ -54,13 +52,8 @@ samples, then flushed), as emitted:
     stream.speech         [S]     speech output of step t (judges frame t - 3)
     stream.turn           [S, 4]  turn output of step t
 
-stream.json records how each chunking compares with sava.run (bit-exact or
-max abs difference); turn_segments.json holds sava.segment(curves, Policy(), 3)
-and the live TurnSegmenter run over the stream (Inworld's turn rule, for
-reference: the library returns scores, not turns); turn.json is the clip's p
-and decision, the TURN API's view of the same run. (turn_segments.json is not
-named segments.json: that name is the VAD role's speech segments, which
-validate.py compares.)
+stream.json compares each chunking with sava.run. turn.json is the clip's p
+and decision at Policy().turn_threshold, the TURN API's view of the same run.
 """
 
 from __future__ import annotations
@@ -211,27 +204,10 @@ def compare(a: np.ndarray, b: np.ndarray) -> dict:
             "max_abs": float(np.abs(a.astype(np.float64) - b).max()) if a.size else 0.0}
 
 
-def turn_dict(turn, n_samples: int) -> dict:
-    return {"start": turn.start, "end": turn.end,
-            "start_sample": turn.start * FRAME, "end_sample": min(turn.end * FRAME, n_samples),
-            "speech_ms": turn.speech_ms, "reason": turn.reason, "kept": turn.kept}
-
-
-def write_turn_json(out_dir: Path, seg: dict) -> None:
-    """turn.json, what validate.py compares with the CLI's TURN output: the
-    clip's p and decision."""
-    turn = {
-        "p": seg["run"]["p"],
-        "ended": seg["run"]["ended"],
-        "threshold": seg["policy"]["turn_threshold"],
-    }
-    (out_dir / "turn.json").write_text(json.dumps(turn, indent=2) + "\n")
-
-
 def cmd_encoder(args: argparse.Namespace) -> int:
     import soundfile as sf
     from inworld import sava
-    from inworld.sava import checkpoint, config, registry
+    from inworld.sava import checkpoint, registry
 
     if args.torch_threads > 0:
         torch.set_num_threads(args.torch_threads)
@@ -273,7 +249,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     curves, t = capture_run(sava, model, audio)
     for name, arr in t.items():
-        if name != "trunk.3.ssm_state" and not name.endswith("ssm_state") and arr.shape[0] != steps:
+        if not name.endswith("ssm_state") and arr.shape[0] != steps:
             raise SystemExit(f"error: {name} has {arr.shape[0]} steps, expected {steps}")
     # The captured logits are sava.run's own: re-derive its curves from them.
     sig = lambda x: torch.sigmoid(torch.from_numpy(x)).numpy()  # noqa: E731
@@ -315,34 +291,17 @@ def cmd_encoder(args: argparse.Namespace) -> int:
             "flush_frames": [len(outs[-1]), int(outs[-1].first)],
         }
         if dumped is None:
-            dumped = (label, outs, sp, tu)
-    label, outs, sp, tu = dumped
+            dumped = (label, sp, tu)
+    label, sp, tu = dumped
     write_tensor("stream.speech", sp, stage="stream", source={**source, "chunking": label}, out_dir=out_dir)
     write_tensor("stream.turn", tu, stage="stream", source={**source, "chunking": label}, out_dir=out_dir)
     (out_dir / "stream.json").write_text(json.dumps({**stream_report, "source": source}, indent=2) + "\n")
 
-    # Turn segments: offline (sava.segment on the curves) and live
-    # (TurnSegmenter fed the dumped stream's pushes).
-    policy = sava.Policy()
-    turns = sava.segment(curves, policy, lag)
-    live = sava.TurnSegmenter(policy, lag)
-    live_turns = []
-    for o in outs:
-        live_turns += live.feed(o)
-    live_turns += live.finish()
-    payload = {
-        "n_samples": int(audio.size),
-        "n_frames": n,
-        "frame_samples": FRAME,
-        "policy": {k: getattr(policy, k) for k in policy.__dataclass_fields__},
-        "lag": lag,
-        "turns": [turn_dict(x, audio.size) for x in turns],
-        "live_turns_equal": [turn_dict(x, audio.size) for x in live_turns] == [turn_dict(x, audio.size) for x in turns],
-        "run": {"p": float(curves.turn[-1]), "ended": bool(curves.turn[-1] >= policy.turn_threshold)},
-        "source": source,
-    }
-    (out_dir / "turn_segments.json").write_text(json.dumps(payload, indent=2) + "\n")
-    write_turn_json(out_dir, payload)
+    # What validate.py compares with the CLI's TURN line.
+    threshold = sava.Policy().turn_threshold
+    p = float(curves.turn[-1])
+    (out_dir / "turn.json").write_text(json.dumps(
+        {"p": p, "ended": p >= threshold, "threshold": threshold}, indent=2) + "\n")
 
     if args.expected_npz:
         # Upstream's golden fixture: logits of model(clip) (no lag padding).
@@ -359,7 +318,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
         (out_dir / "golden.json").write_text(json.dumps(golden, indent=2) + "\n")
         print("golden:", json.dumps(golden))
 
-    print(f"frames: {n}  steps: {steps}  turns: {len(turns)}  "
+    print(f"frames: {n}  steps: {steps}  "
           + "  ".join(f"{k}: {v['speech']['bit_exact']}/{v['turn']['bit_exact']} "
                       f"({max(v['speech']['max_abs'], v['turn']['max_abs']):.2e})"
                       for k, v in stream_report.items() if isinstance(v, dict) and "speech" in v))
@@ -369,7 +328,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="SAVA reference dumper (inworld-sava package).")
     sub = p.add_subparsers(dest="cmd", required=True)
-    ep = sub.add_parser("encoder", help="Run the clip; dump per-step tensors, curves, streams and turn segments")
+    ep = sub.add_parser("encoder", help="Run the clip; dump per-step tensors, curves and streams")
     ep.add_argument("--model", default=HF_REPO, help="HF repo id, a directory holding sava.safetensors, or the file")
     ep.add_argument("--revision", default=None, help=f"HF revision (default {HF_REVISION})")
     ep.add_argument("--audio", required=True, help="16 kHz mono WAV path")
