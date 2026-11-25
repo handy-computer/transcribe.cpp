@@ -80,8 +80,7 @@ int transcribe_cli::run_vad_file(const cli_args &           args,
             lines += line;
         }
         std::printf("  frames:     %d (%d samples each)\n", res.n_probs, info.frame_samples);
-        std::printf("  speech:     %.2f s of %.2f s (threshold %.2f)\n", speech_s, duration_s,
-                    vp.threshold >= 0.0 ? vp.threshold : info.threshold);
+        std::printf("  speech:     %.2f s of %.2f s (threshold %.2f)\n", speech_s, duration_s, vp.threshold);
         output_ok = write_output_file(output, args.output_path, lines.c_str());
     }
 

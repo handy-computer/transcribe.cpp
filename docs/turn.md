@@ -17,7 +17,7 @@ Nothing is released until both models work and the owner locks the API.
 | 3 | Whole recordings: the library makes decisions (copying upstream rules exactly), as `transcribe_vad_run` does for Silero. Live audio: scores only; the caller decides (option C1). |
 | 4 | Each model's recommended cut-off is the default; callers can override it. Results give the score and a yes/no. |
 | 5 | Out of scope: turn models that read text, and two-channel models. Text context would come later as a new `transcribe_turn_params` field. |
-| 6 | VAD's default threshold comes from the model (Silero keeps 0.5). |
+| 6 | ~~VAD's default threshold comes from the model~~ Withdrawn in review (draft 5): `vad.h` gains no fields; only the feed / flush wording changes. |
 | 7 | Smart Turn: v3.2 only. SAVA ships if it passes our own tests. |
 | 8 | Bindings (Rust, TypeScript) are done after the API is locked. |
 | 9 | onnx / onnxruntime are allowed in `scripts/envs/` (reference tooling only). |
@@ -39,8 +39,8 @@ Nothing is released until both models work and the owner locks the API.
 - SAVA's recommended cut-off is 0.9 (Inworld's policy), also for a whole clip.
   Inworld's clip benchmark reports accuracy at 0.5; the AUC is threshold-free.
 - `ended` is `p >= threshold`, like VAD. Pipecat uses `p > 0.5`.
-- Turn segmentation exposes Inworld's whole policy, like `transcribe_vad_params`
-  exposes Silero's.
+- Turn segmentation: Inworld's rule is tuned through SAVA's family extension
+  (`include/transcribe/sava.h`), not core params (draft 5).
 
 ## How it fits together
 
@@ -49,7 +49,7 @@ Nothing is released until both models work and the owner locks the API.
 | roles | TURN | VAD, TURN |
 | `transcribe_turn_run` (a clip) | score of the last 8 s; `p`, `ended` | runs the clip from a fresh state; `p`, `ended` of the last frame; per-frame scores; turns found in the clip |
 | `transcribe_turn_stream_*` | NOT_IMPLEMENTED (`frame_samples` 0) | per-frame turn scores, and speech scores from the same pass |
-| `transcribe_vad_*` | UNSUPPORTED_ROLE | speech scores only (`lookahead_frames` 3, `frame_samples` 640) |
+| `transcribe_vad_*` | UNSUPPORTED_ROLE | speech scores only (3 frames of lookahead, `frame_samples` 640) |
 | cut-off (`threshold` default) | 0.5 | 0.9 |
 
 Typical live use:
@@ -105,41 +105,22 @@ Changes to it are recorded in the change log below.
     TRANSCRIBE_EXT_SLOT_TURN_RUN = 3,            /* transcribe_ext_slot: transcribe_turn_params::family */
 ```
 
-`include/transcribe/vad.h`:
-
-```c
-struct transcribe_vad_info {
-    uint64_t struct_size;
-    int32_t  sample_rate;
-    int32_t  frame_samples;    /* Silero 512, SAVA 640 */
-    /* NEW. Frames a score lags its audio: frame t is judged once frame
-     * t + lookahead_frames has been fed. Silero 0, SAVA 3. */
-    int32_t  lookahead_frames;
-    /* NEW. The model's recommended speech threshold: the default of
-     * transcribe_vad_params::threshold. Silero 0.5. */
-    double   threshold;
-};
-
-struct transcribe_vad_params {
-    ...
-    /* CHANGED. Default: -1, which uses transcribe_vad_info::threshold
-     * (Silero: 0.5, as before). Any negative value uses the model's. */
-    double   threshold;
-    ...
-};
-```
-
-Wording changes in `vad.h` and `docs/vad.md` (behaviour for Silero unchanged):
+`include/transcribe/vad.h`: no new fields and no ABI change (draft 5). Only
+the wording changes (behaviour for Silero unchanged):
 
 - feed "returns a probability for each completed frame" becomes "for each
-  frame the model has judged; with lookahead, frame t is judged once frame
-  t + lookahead_frames is complete".
+  frame the model has judged"; a model with lookahead judges a frame a fixed
+  number of frames after it is complete.
 - flush "returns one probability, or none" becomes "returns the probabilities
   of every frame not yet judged".
 - `first_frame` keeps its meaning: the first returned (judged) frame.
-- `transcribe_vad_params_init` sets `threshold` to -1 instead of 0.5. A
-  caller that reads the field after init sees -1; the effective value for
-  Silero is still 0.5.
+
+`include/transcribe/sava.h` (new, draft 5): the SAVA family extension
+`transcribe_sava_turn_ext` (kind `SVTN`, slot `TURN_RUN`) carries Inworld's
+turn-segment rule (speech and confident-speech thresholds, pre-roll, pause
+before the check, maximum pause, minimum speech); negative keeps the model's
+default. The core `transcribe_turn_params` is `{struct_size, threshold,
+family}`.
 
 Docs: `docs/roles.md` gets a TURN row; `docs/extension-kinds.md` gets the
 `TURN_RUN` slot; `docs/models/smart-turn-v3.2.md`, `docs/models/sava.md`.
@@ -184,3 +165,4 @@ Docs: `docs/roles.md` gets a TURN row; `docs/extension-kinds.md` gets the
 - Draft 2: open questions settled (0.9, `>=`, full policy); header moved to `include/transcribe/turn.h`.
 - Draft 3: VAD `threshold` / `lookahead_frames` implemented; segment details from the SAVA intake recorded.
 - Draft 4: `transcribe_turn_stream_feed_batch` added (owner decision); `docs/roles.md` notes that a batched call is one compute.
+- Draft 5 (owner API review): `vad.h` drops `lookahead_frames` and `threshold` and keeps the 0.5 default; SAVA's segment knobs move from `transcribe_turn_params` to `transcribe_sava_turn_ext` (`include/transcribe/sava.h`), leaving core params `{struct_size, threshold, family}`.

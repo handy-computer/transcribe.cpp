@@ -1,8 +1,7 @@
 // vad_lookahead_unit.cpp - VAD role dispatcher (transcribe-vad.cpp) with a
 // fake lookahead model: frames are judged lookahead_frames late; feed returns
 // judged frames only, flush and run step silent frames so every frame is
-// judged; first_frame counts judged frames; the default threshold is the
-// model's.
+// judged; first_frame counts judged frames.
 
 #include "transcribe-arch.h"
 #include "transcribe-model.h"
@@ -61,12 +60,7 @@ int32_t fake_lookahead(const transcribe_model *) {
     return k_lag;
 }
 
-double fake_threshold(const transcribe_model *) {
-    return 0.25;
-}
-
-const transcribe::VadOps k_ops = { fake_frame_samples, fake_new_session, fake_reset,
-                                   fake_score,         fake_lookahead,   fake_threshold };
+const transcribe::VadOps k_ops = { fake_frame_samples, fake_new_session, fake_reset, fake_score, fake_lookahead };
 
 transcribe::Arch make_arch() {
     transcribe::Arch a{};
@@ -92,7 +86,7 @@ void test_lookahead() {
     transcribe_vad_info info;
     transcribe_vad_info_init(&info);
     CHECK(transcribe_vad_get_info(&model, &info) == TRANSCRIBE_OK);
-    CHECK(info.frame_samples == k_frame && info.lookahead_frames == k_lag && info.threshold == 0.25);
+    CHECK(info.frame_samples == k_frame);
 
     transcribe_vad_session * s = nullptr;
     CHECK(transcribe_vad_session_init(&model, nullptr, &s) == TRANSCRIBE_OK);
@@ -139,10 +133,11 @@ void test_lookahead() {
     CHECK(transcribe_vad_stream_flush(s) == TRANSCRIBE_OK);
     CHECK(get_result(s).n_probs == 0);
 
-    // The default threshold is the model's: 0.25 -> frames 1.. (p >= 0.25 from 0.3).
+    // Segments use the judged frames: threshold 0.25 -> speech from frame 2 (p 0.3).
     transcribe_vad_params vp;
     transcribe_vad_params_init(&vp);
-    CHECK(vp.threshold == -1.0);
+    CHECK(vp.threshold == 0.5);
+    vp.threshold      = 0.25;
     vp.min_speech_ms  = 0;
     vp.speech_pad_ms  = 0;
     vp.min_silence_ms = 0;

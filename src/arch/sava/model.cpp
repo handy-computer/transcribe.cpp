@@ -10,12 +10,14 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "sava.h"
+#include "transcribe-abi.h"
 #include "transcribe-arch.h"
 #include "transcribe-backend.h"
 #include "transcribe-debug.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
+#include "transcribe/sava.h"
 
 #include <cmath>
 #include <cstddef>
@@ -283,7 +285,44 @@ transcribe_status turn_step_batch(transcribe_turn_session * const * sessions,
                              speech);
 }
 
-const TurnOps k_turn_ops = { turn_info, turn_new_session, nullptr, turn_reset, turn_step, turn_step_batch };
+// The TURN_RUN extension: Inworld's segment rule, field by field; negative
+// keeps the model's default.
+transcribe_status turn_apply_run_ext(const transcribe_model *, const transcribe_ext * ext, TurnPolicy & policy) {
+    constexpr uint64_t k_min = TRANSCRIBE_FIELD_END(transcribe_sava_turn_ext, min_confident_speech_ms);
+    if (const auto st = transcribe_ext_check(ext, TRANSCRIBE_EXT_KIND_SAVA_TURN, k_min); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const auto & e    = *reinterpret_cast<const transcribe_sava_turn_ext *>(ext);
+    TurnPolicy   r    = policy;
+    bool         ok   = true;
+    auto         prob = [&ok](double v, double & dst) {
+        if (std::isnan(v) || v > 1.0) {
+            ok = false;
+        } else if (v >= 0.0) {
+            dst = v;
+        }
+    };
+    auto ms = [](int32_t v, int32_t & dst) {
+        if (v >= 0) {
+            dst = v;
+        }
+    };
+    prob(e.speech_threshold, r.speech_threshold);
+    prob(e.confident_speech_threshold, r.confident_speech_threshold);
+    ms(e.pre_roll_ms, r.pre_roll_ms);
+    ms(e.min_silence_before_check_ms, r.min_silence_before_check_ms);
+    ms(e.max_silence_ms, r.max_silence_ms);
+    ms(e.min_speech_ms, r.min_speech_ms);
+    ms(e.min_confident_speech_ms, r.min_confident_speech_ms);
+    if (!ok) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    policy = r;
+    return TRANSCRIBE_OK;
+}
+
+const TurnOps k_turn_ops = { turn_info, turn_new_session, nullptr,           turn_reset,
+                             turn_step, turn_step_batch,  turn_apply_run_ext };
 
 // ---------------------------------------------------------------------------
 // VAD ops
@@ -313,13 +352,7 @@ int32_t vad_lookahead_frames(const transcribe_model * model) {
     return static_cast<const Model *>(model)->hparams.lookahead_frames;
 }
 
-double vad_threshold(const transcribe_model * model) {
-    return static_cast<const Model *>(model)->hparams.policy.speech_threshold;
-}
-
-const VadOps k_vad_ops = {
-    vad_frame_samples, vad_new_session, vad_reset, vad_score, vad_lookahead_frames, vad_threshold
-};
+const VadOps k_vad_ops = { vad_frame_samples, vad_new_session, vad_reset, vad_score, vad_lookahead_frames };
 
 }  // namespace
 
@@ -335,6 +368,10 @@ Model::~Model() {
     plan.primary = nullptr;
 }
 
+static bool accepts_ext_kind(const transcribe_model *, transcribe_ext_slot slot, uint32_t kind) {
+    return slot == TRANSCRIBE_EXT_SLOT_TURN_RUN && kind == TRANSCRIBE_EXT_KIND_SAVA_TURN;
+}
+
 const Arch arch = {
     /* .name             = */ "sava",
     /* .load             = */ load,
@@ -346,7 +383,7 @@ const Arch arch = {
     /* .stream_feed      = */ nullptr,
     /* .stream_finalize  = */ nullptr,
     /* .stream_reset     = */ nullptr,
-    /* .accepts_ext_kind = */ nullptr,
+    /* .accepts_ext_kind = */ accepts_ext_kind,
     /* .run_validate     = */ nullptr,
     /* .diarize          = */ nullptr,
     /* .langid           = */ nullptr,
@@ -355,3 +392,19 @@ const Arch arch = {
 };
 
 }  // namespace transcribe::sava
+
+extern "C" void transcribe_sava_turn_ext_init(struct transcribe_sava_turn_ext * p) {
+    if (p == nullptr) {
+        return;
+    }
+    std::memset(p, 0, sizeof(*p));
+    p->ext.size                    = sizeof(*p);
+    p->ext.kind                    = TRANSCRIBE_EXT_KIND_SAVA_TURN;
+    p->speech_threshold            = -1.0;
+    p->confident_speech_threshold  = -1.0;
+    p->pre_roll_ms                 = -1;
+    p->min_silence_before_check_ms = -1;
+    p->max_silence_ms              = -1;
+    p->min_speech_ms               = -1;
+    p->min_confident_speech_ms     = -1;
+}

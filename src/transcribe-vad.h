@@ -36,10 +36,7 @@ struct VadSegmentParams {
 
 // Validate params (NULL = defaults) and resolve them. INVALID_ARG on a
 // non-finite or out-of-range field; BAD_STRUCT_SIZE on a short struct.
-// A negative threshold resolves to model_threshold.
-transcribe_status resolve_vad_params(const transcribe_vad_params * params,
-                                     double                        model_threshold,
-                                     VadSegmentParams &            out);
+transcribe_status resolve_vad_params(const transcribe_vad_params * params, VadSegmentParams & out);
 
 // Silero's get_speech_timestamps_from_probs, ported verbatim: probs[i]
 // scores samples [i * frame_samples, (i + 1) * frame_samples) of a clip of
@@ -65,10 +62,8 @@ struct VadOps {
     // that step, judging frame (step - L); the dispatcher drops the ones
     // before frame 0 and steps L silent frames at the end of a stream.
     transcribe_status (*score)(transcribe_vad_session * session, const float * pcm, int64_t n_frames, float * probs);
-    // Frames a probability lags its audio (Silero 0).
+    // Frames a probability lags its audio (Silero 0); nullptr = 0.
     int32_t (*lookahead_frames)(const transcribe_model * model);
-    // The model's recommended speech threshold (Silero 0.5).
-    double (*threshold)(const transcribe_model * model);
 };
 
 }  // namespace transcribe

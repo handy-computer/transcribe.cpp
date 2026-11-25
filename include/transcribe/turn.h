@@ -53,26 +53,17 @@ struct transcribe_turn_session_params {
     int32_t  n_threads; /* 0 = library default */
 };
 
-/* Settings for transcribe_turn_run. A negative value means the model's own
- * default (its upstream reference value). transcribe_turn_params_init sets
- * every field to that. */
+/* Settings for transcribe_turn_run. Call transcribe_turn_params_init to set
+ * the defaults. */
 struct transcribe_turn_params {
-    uint64_t struct_size;
-    /* p >= threshold sets transcribe_turn_result::ended, and closes a
-     * segment. Range 0 to 1. */
-    double   threshold;
-
-    /* Turn segments: used only by models with has_speech; ignored by the
-     * others. Defaults are the model's reference rule (SAVA: Inworld's). */
-    double  speech_threshold;            /* a frame with speech p >= this is speech (SAVA 0.5) */
-    int32_t pre_roll_ms;                 /* a turn starts this long before its first speech (SAVA 800) */
-    int32_t min_silence_before_check_ms; /* pause before the turn score may close a turn (SAVA 0) */
-    int32_t max_silence_ms;              /* a pause this long closes the turn anyway (SAVA 1600) */
-    int32_t min_speech_ms;               /* keep a turn with this much speech... (SAVA 400) */
-    int32_t min_confident_speech_ms;     /* ...or this much confident speech (SAVA 200) */
-    double  confident_speech_threshold;  /* speech p >= this is confident (SAVA 0.9) */
-
-    /* Typed family extension on TRANSCRIBE_EXT_SLOT_TURN_RUN, or NULL. */
+    uint64_t                      struct_size;
+    /* p >= threshold sets transcribe_turn_result::ended (and closes a turn
+     * segment). Default: -1, which uses the model's
+     * transcribe_turn_info::threshold. Any negative value uses the model's;
+     * otherwise 0 to 1. */
+    double                        threshold;
+    /* Typed family extension on TRANSCRIBE_EXT_SLOT_TURN_RUN, or NULL; for
+     * example the model's turn-segment rule (include/transcribe/sava.h). */
     const struct transcribe_ext * family;
 };
 

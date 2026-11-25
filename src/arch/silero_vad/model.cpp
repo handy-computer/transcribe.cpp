@@ -222,17 +222,7 @@ transcribe_status vad_score(transcribe_vad_session * session, const float * pcm,
     return TRANSCRIBE_OK;
 }
 
-int32_t vad_lookahead_frames(const transcribe_model *) {
-    return 0;
-}
-
-double vad_threshold(const transcribe_model *) {
-    return 0.5;  // get_speech_timestamps' default
-}
-
-const VadOps k_vad_ops = {
-    vad_frame_samples, vad_new_session, vad_reset, vad_score, vad_lookahead_frames, vad_threshold
-};
+const VadOps k_vad_ops = { vad_frame_samples, vad_new_session, vad_reset, vad_score, nullptr };
 
 }  // namespace
 

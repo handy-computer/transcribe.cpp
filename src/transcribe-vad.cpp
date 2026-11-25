@@ -47,10 +47,6 @@ int64_t vad_lookahead(const transcribe::VadOps * ops, const transcribe_model * m
     return ops->lookahead_frames != nullptr ? ops->lookahead_frames(model) : 0;
 }
 
-double vad_model_threshold(const transcribe::VadOps * ops, const transcribe_model * model) {
-    return ops->threshold != nullptr ? ops->threshold(model) : 0.5;
-}
-
 // Step n_frames whole frames as the continuation of the stream and append the
 // probabilities of the frames they judge (frame index >= 0) to out.
 transcribe_status step_frames(transcribe_vad_session *   s,
@@ -116,9 +112,7 @@ struct VadFailureGuard {
 
 }  // namespace
 
-transcribe_status transcribe::resolve_vad_params(const transcribe_vad_params * params,
-                                                 double                        model_threshold,
-                                                 VadSegmentParams &            out) {
+transcribe_status transcribe::resolve_vad_params(const transcribe_vad_params * params, VadSegmentParams & out) {
     transcribe_vad_params defaults;
     transcribe_vad_params_init(&defaults);
     if (params == nullptr) {
@@ -127,12 +121,9 @@ transcribe_status transcribe::resolve_vad_params(const transcribe_vad_params * p
     if (const auto st = check_input_struct_size(params->struct_size, k_min_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
-    if (!std::isfinite(params->threshold)) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    const double thr = params->threshold < 0.0 ? model_threshold : params->threshold;
+    const double thr = params->threshold;
     const double neg = params->neg_threshold;
-    if (!std::isfinite(neg) || thr > 1.0 || neg > thr) {
+    if (!std::isfinite(thr) || !std::isfinite(neg) || thr < 0.0 || thr > 1.0 || neg > thr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (params->min_speech_ms < 0 || params->min_silence_ms < 0 || params->speech_pad_ms < 0 ||
@@ -329,7 +320,7 @@ extern "C" void transcribe_vad_session_params_init(struct transcribe_vad_session
 extern "C" void transcribe_vad_params_init(struct transcribe_vad_params * p) {
     transcribe::init_sized(p);
     if (p != nullptr) {
-        p->threshold      = -1.0;
+        p->threshold      = 0.5;
         p->neg_threshold  = -1.0;
         p->min_speech_ms  = 250;
         p->min_silence_ms = 100;
@@ -358,11 +349,9 @@ static transcribe_status vad_get_info_impl(const transcribe_model * model, trans
         return TRANSCRIBE_ERR_UNSUPPORTED_ROLE;
     }
     transcribe_vad_info staged{};
-    staged.struct_size      = out->struct_size;
-    staged.sample_rate      = 16000;
-    staged.frame_samples    = ops->frame_samples(model);
-    staged.lookahead_frames = static_cast<int32_t>(vad_lookahead(ops, model));
-    staged.threshold        = vad_model_threshold(ops, model);
+    staged.struct_size   = out->struct_size;
+    staged.sample_rate   = 16000;
+    staged.frame_samples = ops->frame_samples(model);
     copy_out_prefix(out, &staged, out->struct_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }
@@ -412,8 +401,7 @@ static transcribe_status vad_run_impl(transcribe_vad_session *      session,
     const int64_t              frame = ops->frame_samples(session->model);
     const int64_t              lag   = vad_lookahead(ops, session->model);
     VadSegmentParams           sp;
-    if (const auto st = transcribe::resolve_vad_params(params, vad_model_threshold(ops, session->model), sp);
-        st != TRANSCRIBE_OK) {
+    if (const auto st = transcribe::resolve_vad_params(params, sp); st != TRANSCRIBE_OK) {
         return st;
     }
 

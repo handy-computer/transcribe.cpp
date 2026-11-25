@@ -44,11 +44,13 @@ struct TurnSegmentEntry {
     int32_t end_reason   = TRANSCRIBE_TURN_END_MODEL;
 };
 
-// Validate params (NULL = defaults) and resolve negative fields to the
-// model's defaults. INVALID_ARG on a non-finite or out-of-range field;
-// BAD_STRUCT_SIZE on a short struct.
-transcribe_status resolve_turn_params(const transcribe_turn_params * params,
-                                      const TurnModelInfo &          info,
+// Validate params (NULL = defaults) against a TURN model: the threshold
+// (negative = the model's), and a family extension, which the model's
+// apply_run_ext validates and folds into the policy. Starts from the model's
+// defaults. INVALID_ARG on a non-finite or out-of-range value or an
+// extension the model does not accept; BAD_STRUCT_SIZE on a short struct.
+transcribe_status resolve_turn_params(const transcribe_model *       model,
+                                      const transcribe_turn_params * params,
                                       TurnPolicy &                   out);
 
 // Inworld SAVA's reference TurnSegmenter (inworld.sava.segmenter, fed the way
@@ -98,6 +100,10 @@ struct TurnOps {
                                     const float * const *             frame_pcm,
                                     float *                           turn,
                                     float *                           speech);
+    // Optional (nullptr = no extension accepted on TURN_RUN): validate a
+    // family extension that transcribe_model_accepts_ext_kind accepted, and
+    // apply it to policy. Must not touch anything else.
+    transcribe_status (*apply_run_ext)(const transcribe_model * model, const transcribe_ext * ext, TurnPolicy & policy);
 };
 
 }  // namespace transcribe

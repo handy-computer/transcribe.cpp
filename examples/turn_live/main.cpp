@@ -36,9 +36,11 @@
 
 namespace {
 
-constexpr int    k_sr    = 16000;
-constexpr int    k_chunk = 320;  // 20 ms
-constexpr double k_s     = 1.0 / k_sr;
+constexpr int    k_sr               = 16000;
+constexpr int    k_chunk            = 320;  // 20 ms
+constexpr double k_s                = 1.0 / k_sr;
+// VAD speech threshold for setup A (transcribe_vad_params' default).
+constexpr float  k_speech_threshold = 0.5f;
 
 transcribe_model * load(const char * path) {
     transcribe_model * m = nullptr;
@@ -81,7 +83,7 @@ int run_vad_plus_clip(transcribe_model * vad_model, transcribe_model * turn_mode
         const float * p = transcribe_vad_probs(vad);
         for (int i = 0; i < r.n_probs; ++i) {
             const int64_t frame_end = (r.first_frame + i + 1) * vi.frame_samples;
-            if (p[i] >= vi.threshold) {
+            if (p[i] >= k_speech_threshold) {
                 if (!open) {
                     open  = true;
                     start = std::max<int64_t>(0, (r.first_frame + i) * vi.frame_samples - pre_speech);

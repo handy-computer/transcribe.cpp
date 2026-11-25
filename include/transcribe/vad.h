@@ -5,9 +5,9 @@
  * Audio must be 16 kHz mono floats.
  *
  * The model checks short blocks of audio ("frames") and returns a speech
- * probability for each: 0 means no speech; 1 means speech. A model with
- * lookahead (transcribe_vad_info::lookahead_frames > 0) judges a frame only
- * after hearing the frames that follow it.
+ * probability for each: 0 means no speech; 1 means speech. A model may
+ * judge a frame only after hearing the frames that follow it (lookahead);
+ * first_frame always says which frames a call returns.
  *
  * transcribe_vad_run finds speech segments in a whole clip.
  * transcribe_vad_stream_feed returns probabilities for incoming audio.
@@ -32,12 +32,6 @@ struct transcribe_vad_info {
     uint64_t struct_size;   /* struct size in bytes; set by the init function */
     int32_t  sample_rate;   /* required audio sample rate: 16000 Hz */
     int32_t  frame_samples; /* samples per frame (Silero: 512 samples = 32 ms) */
-    /* Frames a probability lags its audio: frame t is judged once frame
-     * t + lookahead_frames is complete. Silero: 0. */
-    int32_t  lookahead_frames;
-    /* The model's recommended speech threshold: the default of
-     * transcribe_vad_params::threshold. Silero: 0.5. */
-    double   threshold;
 };
 
 struct transcribe_vad_session_params {
@@ -50,8 +44,7 @@ struct transcribe_vad_session_params {
 struct transcribe_vad_params {
     uint64_t struct_size; /* struct size in bytes; set by the init function */
     /* Probability at or above which audio is classified as speech.
-     * Default: -1, which uses the model's transcribe_vad_info::threshold
-     * (Silero: 0.5). Any negative value uses the model's; otherwise 0 to 1. */
+     * Default: 0.5. Range: 0 to 1. */
     double   threshold;
     /* Probability below which ongoing speech is treated as silence.
      * Default: -1, which uses max(threshold - 0.15, 0.01).
@@ -142,8 +135,9 @@ TRANSCRIBE_API transcribe_status transcribe_vad_run(struct transcribe_vad_sessio
  * Process incoming audio. Keep incomplete frames for the next call.
  * Input must be 16 kHz mono floats with no NaN or infinite values.
  * Returns a probability for each frame the model judged during this call
- * through transcribe_vad_probs: each completed frame, or with lookahead,
- * each frame lookahead_frames before a completed frame.
+ * through transcribe_vad_probs: each completed frame, or with a model that
+ * looks ahead, the frames it can now judge (a fixed number of frames
+ * behind the last completed one).
  * n_samples may be 0; pcm may be NULL in that case.
  *
  * The stream continues until stream_reset, stream_flush or run.

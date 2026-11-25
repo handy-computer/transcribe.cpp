@@ -129,8 +129,8 @@ int64_t round_half_even(double x) {
 
 }  // namespace
 
-transcribe_status transcribe::resolve_turn_params(const transcribe_turn_params * params,
-                                                  const TurnModelInfo &          info,
+transcribe_status transcribe::resolve_turn_params(const transcribe_model *       model,
+                                                  const transcribe_turn_params * params,
                                                   TurnPolicy &                   out) {
     transcribe_turn_params defaults;
     transcribe_turn_params_init(&defaults);
@@ -140,28 +140,29 @@ transcribe_status transcribe::resolve_turn_params(const transcribe_turn_params *
     if (const auto st = check_input_struct_size(params->struct_size, k_min_params_size); st != TRANSCRIBE_OK) {
         return st;
     }
-    const TurnPolicy & d = info.defaults;
-    TurnPolicy         r;
-    bool               ok   = true;
-    auto               prob = [&ok](double v, double def) {
-        if (std::isnan(v) || v > 1.0) {
-            ok = false;
-        }
-        return v < 0.0 ? def : v;
-    };
-    auto ms = [](int32_t v, int32_t def) {
-        return v < 0 ? def : v;
-    };
-    r.threshold                   = prob(params->threshold, d.threshold);
-    r.speech_threshold            = prob(params->speech_threshold, d.speech_threshold);
-    r.confident_speech_threshold  = prob(params->confident_speech_threshold, d.confident_speech_threshold);
-    r.pre_roll_ms                 = ms(params->pre_roll_ms, d.pre_roll_ms);
-    r.min_silence_before_check_ms = ms(params->min_silence_before_check_ms, d.min_silence_before_check_ms);
-    r.max_silence_ms              = ms(params->max_silence_ms, d.max_silence_ms);
-    r.min_speech_ms               = ms(params->min_speech_ms, d.min_speech_ms);
-    r.min_confident_speech_ms     = ms(params->min_confident_speech_ms, d.min_confident_speech_ms);
-    if (!ok) {
+    const transcribe::TurnOps * ops = turn_ops(model);
+    if (ops == nullptr) {
+        return TRANSCRIBE_ERR_UNSUPPORTED_ROLE;
+    }
+    TurnPolicy   r   = ops->info(model).defaults;
+    const double thr = params->threshold;
+    if (std::isnan(thr) || thr > 1.0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (thr >= 0.0) {
+        r.threshold = thr;
+    }
+    if (params->family != nullptr) {
+        if (params->family->size < sizeof(struct transcribe_ext)) {
+            return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+        }
+        if (ops->apply_run_ext == nullptr ||
+            !transcribe_model_accepts_ext_kind(model, TRANSCRIBE_EXT_SLOT_TURN_RUN, params->family->kind)) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (const auto st = ops->apply_run_ext(model, params->family, r); st != TRANSCRIBE_OK) {
+            return st;
+        }
     }
     out = r;
     return TRANSCRIBE_OK;
@@ -249,15 +250,8 @@ extern "C" void transcribe_turn_session_params_init(struct transcribe_turn_sessi
 extern "C" void transcribe_turn_params_init(struct transcribe_turn_params * p) {
     transcribe::init_sized(p);
     if (p != nullptr) {
-        p->threshold                   = -1.0;
-        p->speech_threshold            = -1.0;
-        p->pre_roll_ms                 = -1;
-        p->min_silence_before_check_ms = -1;
-        p->max_silence_ms              = -1;
-        p->min_speech_ms               = -1;
-        p->min_confident_speech_ms     = -1;
-        p->confident_speech_threshold  = -1.0;
-        p->family                      = nullptr;
+        p->threshold = -1.0;
+        p->family    = nullptr;
     }
 }
 
@@ -339,16 +333,8 @@ static transcribe_status turn_run_impl(transcribe_turn_session *      session,
     const transcribe::TurnOps * ops  = turn_ops(session->model);
     const TurnModelInfo &       info = ops->info(session->model);
     TurnPolicy                  policy;
-    if (const auto st = transcribe::resolve_turn_params(params, info, policy); st != TRANSCRIBE_OK) {
+    if (const auto st = transcribe::resolve_turn_params(session->model, params, policy); st != TRANSCRIBE_OK) {
         return st;
-    }
-    if (params != nullptr && params->family != nullptr) {
-        if (params->family->size < sizeof(struct transcribe_ext)) {
-            return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
-        }
-        if (!transcribe_model_accepts_ext_kind(session->model, TRANSCRIBE_EXT_SLOT_TURN_RUN, params->family->kind)) {
-            return TRANSCRIBE_ERR_INVALID_ARG;
-        }
     }
 
     TurnFailureGuard failure{ session, ops };

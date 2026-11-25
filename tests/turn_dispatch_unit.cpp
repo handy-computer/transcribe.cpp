@@ -521,23 +521,27 @@ void test_segments() {
 }
 
 void test_params() {
-    transcribe::TurnModelInfo info;
-    info.defaults.threshold   = 0.9;
-    info.defaults.pre_roll_ms = 800;
+    // resolve_turn_params on the fake clip model (threshold default 0.5).
+    transcribe_model model;
+    model.arch  = &k_clip_arch;
+    model.roles = TRANSCRIBE_ROLE_TURN;
     transcribe::TurnPolicy out;
-    CHECK(transcribe::resolve_turn_params(nullptr, info, out) == TRANSCRIBE_OK);
-    CHECK(out.threshold == 0.9 && out.pre_roll_ms == 800);
+    CHECK(transcribe::resolve_turn_params(&model, nullptr, out) == TRANSCRIBE_OK);
+    CHECK(out.threshold == 0.5);
     transcribe_turn_params p;
     transcribe_turn_params_init(&p);
-    p.threshold   = 0.0;
-    p.pre_roll_ms = 0;
-    CHECK(transcribe::resolve_turn_params(&p, info, out) == TRANSCRIBE_OK);
-    CHECK(out.threshold == 0.0 && out.pre_roll_ms == 0);
-    p.speech_threshold = std::numeric_limits<double>::quiet_NaN();
-    CHECK(transcribe::resolve_turn_params(&p, info, out) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(p.threshold == -1.0 && p.family == nullptr);
+    p.threshold = 0.0;
+    CHECK(transcribe::resolve_turn_params(&model, &p, out) == TRANSCRIBE_OK);
+    CHECK(out.threshold == 0.0);
+    p.threshold = std::numeric_limits<double>::quiet_NaN();
+    CHECK(transcribe::resolve_turn_params(&model, &p, out) == TRANSCRIBE_ERR_INVALID_ARG);
     transcribe_turn_params_init(&p);
-    p.struct_size = 16;
-    CHECK(transcribe::resolve_turn_params(&p, info, out) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    p.struct_size = 8;
+    CHECK(transcribe::resolve_turn_params(&model, &p, out) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    // A model without the TURN role.
+    model.roles = TRANSCRIBE_ROLE_VAD;
+    CHECK(transcribe::resolve_turn_params(&model, nullptr, out) == TRANSCRIBE_ERR_UNSUPPORTED_ROLE);
 }
 
 }  // namespace
