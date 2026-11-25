@@ -388,7 +388,7 @@ export interface VadSessionOptions {
 export interface VadOptions {
   /** Cancel the run cooperatively. */
   signal?: AbortSignal;
-  /** A frame with p >= threshold is speech. Negative or omitted (the default) = the model's recommended threshold (Silero 0.5). */
+  /** A frame with p >= threshold is speech (default 0.5). */
   threshold?: number;
   /** Inside speech, p < negThreshold is silence; negative (default) = max(threshold - 0.15, 0.01). */
   negThreshold?: number;

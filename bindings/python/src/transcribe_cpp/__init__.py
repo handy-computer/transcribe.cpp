@@ -2189,8 +2189,7 @@ class VadSession(_SessionBase):
         stream in progress on this session.
 
         Options left at None keep the native defaults (Silero's
-        get_speech_timestamps): ``threshold`` None or negative means the model's
-        recommended threshold (Silero 0.5); ``neg_threshold`` None or
+        get_speech_timestamps): ``threshold`` 0.5; ``neg_threshold`` None or
         negative means max(threshold - 0.15, 0.01), otherwise it must be in
         [0, threshold]; ``min_speech_ms`` 250, ``min_silence_ms`` 100,
         ``speech_pad_ms`` 30, ``max_speech_ms`` 0 (no limit).

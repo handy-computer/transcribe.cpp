@@ -12,8 +12,7 @@ public struct VadInfo: Sendable, Equatable {
 /// Probabilities -> speech segments (`VadSession.run` only). The defaults are
 /// those of `transcribe_vad_params_init` (Silero's `get_speech_timestamps`).
 public struct VadOptions: Sendable {
-    /// A frame with `p >= threshold` is speech. Negative (the default, -1)
-    /// means the model's recommended threshold (Silero 0.5); otherwise [0, 1].
+    /// A frame with `p >= threshold` is speech. [0, 1].
     public var threshold: Double
     /// Inside speech, `p < negThreshold` is silence. Negative means
     /// `max(threshold - 0.15, 0.01)`; otherwise [0, threshold].
@@ -28,7 +27,7 @@ public struct VadOptions: Sendable {
     public var maxSpeechMs: Int32
 
     public init(
-        threshold: Double = -1, negThreshold: Double = -1, minSpeechMs: Int32 = 250,
+        threshold: Double = 0.5, negThreshold: Double = -1, minSpeechMs: Int32 = 250,
         minSilenceMs: Int32 = 100, speechPadMs: Int32 = 30, maxSpeechMs: Int32 = 0
     ) {
         self.threshold = threshold
