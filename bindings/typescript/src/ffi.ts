@@ -322,6 +322,60 @@ export function bindLibrary(libraryPath: string): Bound {
       iop(T.transcribe_timings),
     ]),
 
+    // turn role
+    turnInfoInit: lib.func("transcribe_turn_info_init", "void", [outp(T.transcribe_turn_info)]),
+    turnGetInfo: lib.func("transcribe_turn_get_info", "int", [
+      "void *",
+      iop(T.transcribe_turn_info),
+    ]),
+    turnSessionParamsInit: lib.func("transcribe_turn_session_params_init", "void", [
+      outp(T.transcribe_turn_session_params),
+    ]),
+    turnSessionInit: lib.func("transcribe_turn_session_init", "int", [
+      "void *",
+      inp(T.transcribe_turn_session_params),
+      handleOut,
+    ]),
+    turnSessionFree: lib.func("transcribe_turn_session_free", "void", ["void *"]),
+    turnSetAbortCallback: lib.func("transcribe_turn_set_abort_callback", "void", [
+      "void *",
+      "void *",
+      "void *",
+    ]),
+    turnParamsInit: lib.func("transcribe_turn_params_init", "void", [
+      outp(T.transcribe_turn_params),
+    ]),
+    turnRun: lib.func("transcribe_turn_run", "int", [
+      "void *",
+      inp("float"),
+      "int",
+      inp(T.transcribe_turn_params),
+    ]),
+    turnStreamFeed: lib.func("transcribe_turn_stream_feed", "int", ["void *", inp("float"), "int"]),
+    // sessions[] / pcm[] / n_samples[]: marshalled in for the call's duration.
+    turnStreamFeedBatch: lib.func("transcribe_turn_stream_feed_batch", "int", [
+      "void **",
+      "float **",
+      "int *",
+      "int",
+    ]),
+    turnStreamFlush: lib.func("transcribe_turn_stream_flush", "int", ["void *"]),
+    turnStreamReset: lib.func("transcribe_turn_stream_reset", "void", ["void *"]),
+    turnResultInit: lib.func("transcribe_turn_result_init", "void", [
+      outp(T.transcribe_turn_result),
+    ]),
+    turnGetResult: lib.func("transcribe_turn_get_result", "int", [
+      "void *",
+      iop(T.transcribe_turn_result),
+    ]),
+    // Session-owned; decoded (copied) before the compute lock is released.
+    turnProbs: lib.func("transcribe_turn_probs", "void *", ["void *"]),
+    turnSpeechProbs: lib.func("transcribe_turn_speech_probs", "void *", ["void *"]),
+    turnGetTimings: lib.func("transcribe_turn_get_timings", "int", [
+      "void *",
+      iop(T.transcribe_timings),
+    ]),
+
     // batch (offline)
     runBatch: lib.func("transcribe_run_batch", "int", [
       "void *",

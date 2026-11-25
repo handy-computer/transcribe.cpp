@@ -10,8 +10,9 @@ use transcribe_cpp::{
     ParakeetBufferedStreamOptions, ParakeetStreamOptions, Pnc, Role, Roles, RunExtension,
     RunOptions, Segment, SessionLimits, SessionOptions, SortformerDiarizeOptions, SortformerPreset,
     SpeakerSegment, StreamExtension, StreamOptions, StreamState, StreamText, StreamUpdate, Task,
-    TimestampKind, Timings, Token, Transcript, VadInfo, VadOptions, VadResult, VadSegment,
-    VadSessionOptions, VoxtralRealtimeStreamOptions, WhisperRunOptions, Word,
+    TimestampKind, Timings, Token, Transcript, TurnInfo, TurnOptions, TurnResult,
+    TurnSessionOptions, VadInfo, VadOptions, VadResult, VadSegment, VadSessionOptions,
+    VoxtralRealtimeStreamOptions, WhisperRunOptions, Word,
 };
 
 fn assert_serde<T: serde::Serialize + serde::de::DeserializeOwned>() {}
@@ -39,10 +40,13 @@ fn plain_data_types_are_serializable() {
     assert_serde::<LangIdOptions>();
     assert_serde::<VadSessionOptions>();
     assert_serde::<VadOptions>();
+    assert_serde::<TurnSessionOptions>();
+    assert_serde::<TurnOptions>();
     // Results.
     assert_serde::<DiarizeInfo>();
     assert_serde::<LangIdInfo>();
     assert_serde::<VadInfo>();
+    assert_serde::<TurnInfo>();
     assert_serde::<Transcript>();
     assert_serde::<Segment>();
     assert_serde::<SpeakerSegment>();
@@ -57,6 +61,7 @@ fn plain_data_types_are_serializable() {
     assert_serde::<LangIdCandidate>();
     assert_serde::<VadResult>();
     assert_serde::<VadSegment>();
+    assert_serde::<TurnResult>();
     // Enums.
     assert_serde::<Task>();
     assert_serde::<TimestampKind>();
@@ -164,6 +169,11 @@ fn missing_fields_take_defaults() {
         }
     );
     assert_eq!((vad.neg_threshold, vad.min_speech_ms), (-1.0, 250));
+
+    // `TurnOptions::default()` is hand-written: an omitted threshold is -1.
+    let turn: TurnOptions = serde_json::from_str("{}").unwrap();
+    assert_eq!(turn, TurnOptions::default());
+    assert_eq!(turn.threshold, -1.0);
 }
 
 mod errors {

@@ -69,6 +69,8 @@ LANGID_MODEL = (
 )
 PNC_MODEL = REPO / "models/canary-180m-flash/canary-180m-flash-Q8_0.gguf"
 ITN_MODEL = REPO / "models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf"
+SMART_TURN_MODEL = REPO / "models/smart-turn-v3.2/smart-turn-v3.2-F32.gguf"
+SAVA_MODEL = REPO / "models/sava/sava-F32.gguf"
 
 
 def load_wav(path: Path) -> "array.array":
@@ -209,6 +211,34 @@ def vad_toy_model_path(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("vad") / "silero_vad_toy.gguf"
     path.write_bytes(_gguf_fixtures()._silero_vad_gguf())
     return path
+
+
+@pytest.fixture(scope="session")
+def smart_turn_toy_model_path(tmp_path_factory) -> Path:
+    """The toy smart_turn GGUF (TURN clip model: 0.2 s window, no stream)."""
+    path = tmp_path_factory.mktemp("turn") / "smart_turn_toy.gguf"
+    path.write_bytes(_gguf_fixtures()._smart_turn_gguf())
+    return path
+
+
+@pytest.fixture(scope="session")
+def sava_toy_model_path(tmp_path_factory) -> Path:
+    """The toy sava GGUF (VAD + TURN, streams 640-sample frames)."""
+    path = tmp_path_factory.mktemp("sava") / "sava_toy.gguf"
+    path.write_bytes(_gguf_fixtures()._sava_gguf())
+    return path
+
+
+@pytest.fixture(scope="session")
+def smart_turn_model_path() -> Path:
+    """Smart Turn v3.2 (serves only the TURN role, clip only)."""
+    return _family_model("TRANSCRIBE_SMOKE_SMART_TURN_MODEL", SMART_TURN_MODEL)
+
+
+@pytest.fixture(scope="session")
+def sava_model_path() -> Path:
+    """SAVA (VAD + TURN, streaming)."""
+    return _family_model("TRANSCRIBE_SMOKE_SAVA_MODEL", SAVA_MODEL)
 
 
 @pytest.fixture(scope="session")

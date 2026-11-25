@@ -88,6 +88,9 @@ __all__ = [
     "VadInfo",
     "VadResult",
     "VadSegment",
+    "TurnSession",
+    "TurnInfo",
+    "TurnResult",
     "Role",
     "Result",
     "Segment",
@@ -205,6 +208,7 @@ _LangIdCandidate = _generated.transcribe_langid_candidate
 _LangIdResult = _generated.transcribe_langid_result
 _VadResult = _generated.transcribe_vad_result
 _VadSegment = _generated.transcribe_vad_segment
+_TurnResult = _generated.transcribe_turn_result
 _Word = _generated.transcribe_word
 _Token = _generated.transcribe_token
 _StreamParams = _generated.transcribe_stream_params
@@ -578,12 +582,14 @@ class Capabilities:
 class Role(enum.Enum):
     """What a model serves (``Model.roles``): ASR is ``Model.session()``,
     DIARIZE is ``Model.diarize_session()``, LANGID is
-    ``Model.langid_session()``, VAD is ``Model.vad_session()``."""
+    ``Model.langid_session()``, VAD is ``Model.vad_session()``, TURN is
+    ``Model.turn_session()``."""
 
     ASR = _generated.TRANSCRIBE_ROLE_ASR
     DIARIZE = _generated.TRANSCRIBE_ROLE_DIARIZE
     LANGID = _generated.TRANSCRIBE_ROLE_LANGID
     VAD = _generated.TRANSCRIBE_ROLE_VAD
+    TURN = _generated.TRANSCRIBE_ROLE_TURN
 
 
 @dataclass(frozen=True)
@@ -653,6 +659,36 @@ class VadResult:
     probs: tuple[float, ...]
     first_frame: int
     segments: tuple[VadSegment, ...]
+
+
+@dataclass(frozen=True)
+class TurnInfo:
+    sample_rate: int
+    max_audio_ms: int   # run() scores the last max_audio_ms of longer input; 0 = no limit
+    frame_samples: int  # samples per streamed frame; 0 = clip only (no stream)
+    has_speech: bool    # the model also scores speech per frame
+    threshold: float    # the model's default cut-off for ``ended``
+
+
+@dataclass(frozen=True)
+class TurnResult:
+    """The last run, feed or flush. After ``run()``: ``p`` is the probability
+    that the turn has ended at the end of the clip and ``ended`` is
+    ``p >= threshold``; after a feed or flush they are 0.0 and False.
+
+    ``probs[i]`` is the turn probability at the end of frame
+    ``first_frame + i`` (streaming models only; ``run()`` fills every frame of
+    the clip). ``speech_probs[i]`` is the speech probability of frame
+    ``speech_first_frame + i`` (``has_speech`` models only); during a stream
+    it may trail the turn probabilities. Frame ``f`` starts at sample
+    ``f * frame_samples``; both counters are 0 after ``run()``."""
+
+    p: float
+    ended: bool
+    probs: tuple[float, ...]
+    first_frame: int
+    speech_probs: tuple[float, ...]
+    speech_first_frame: int
 
 
 @dataclass(frozen=True)
@@ -1037,18 +1073,19 @@ class Model:
     The native library allows one compute call in flight across ALL sessions
     of a model, so ``Session.run()`` / ``run_batch()`` / ``stream()``,
     ``Stream.feed()`` / ``finalize()`` / ``reset()``, ``DiarizeSession.run()``,
-    ``LangIdSession.run()`` and ``VadSession.run()`` / ``stream_feed()`` /
-    ``stream_flush()`` / ``stream_reset()`` hold a model-wide lock for the
+    ``LangIdSession.run()``, ``VadSession.run()`` / ``stream_feed()`` /
+    ``stream_flush()`` / ``stream_reset()`` and the same ``TurnSession`` calls
+    plus ``TurnSession.stream_feed_batch()`` hold a model-wide lock for the
     native call and its copy-out. Calls from other threads wait; a
     ``cancel()`` on a queued call is kept, and it aborts at its first poll
     after acquiring the lock. Load one Model per worker for parallelism. An
     active stream holds the model's stream lease from ``stream()`` until it is
     finalized, reset, fails, is garbage-collected or its session/model is
     closed. Meanwhile ``run()``, ``run_batch()``, ``stream()``, diarize and
-    langid ``run()`` and VAD ``run()`` / ``stream_feed()`` /
+    langid ``run()`` and VAD / turn ``run()`` / ``stream_feed()`` /
     ``stream_flush()`` on any session raise :class:`Busy` once they hold the
-    lock; the stream's own calls proceed. A VAD stream is session state, not
-    a lease.
+    lock; the stream's own calls proceed. A VAD or turn stream is session
+    state, not a lease.
     ``close()`` and GC never wait for the lock: the handle is closed at once
     and the native free runs right after any in-flight call.
 
@@ -1370,6 +1407,23 @@ class Model:
         """Raises :class:`UnsupportedRole` without the VAD role."""
         return VadSession(self, n_threads=n_threads)
 
+    @property
+    def turn_info(self) -> TurnInfo:
+        """Raises :class:`UnsupportedRole` without the TURN role."""
+        info = _generated.transcribe_turn_info()
+        _lib.transcribe_turn_info_init(_byref(info))
+        _check(_lib.transcribe_turn_get_info(self._h, _byref(info)),
+               "reading turn info")
+        return TurnInfo(sample_rate=info.sample_rate,
+                        max_audio_ms=info.max_audio_ms,
+                        frame_samples=info.frame_samples,
+                        has_speech=bool(info.has_speech),
+                        threshold=info.threshold)
+
+    def turn_session(self, *, n_threads: int = 0) -> "TurnSession":
+        """Raises :class:`UnsupportedRole` without the TURN role."""
+        return TurnSession(self, n_threads=n_threads)
+
     def close(self) -> None:
         """Free the model. Any session still open on it is closed first —
         the C contract forbids freeing a model before its sessions, so this
@@ -1410,8 +1464,8 @@ _S = TypeVar("_S", bound="_SessionBase")
 
 class _SessionBase:
     """Handle, cancellation and close plumbing shared by Session,
-    DiarizeSession, LangIdSession and VadSession. Subclasses name their
-    native free in ``_free_fn``."""
+    DiarizeSession, LangIdSession, VadSession and TurnSession. Subclasses
+    name their native free in ``_free_fn``."""
 
     _free_fn = ""
 
@@ -1463,8 +1517,9 @@ class _SessionBase:
         """Request cancellation of an in-flight call from another thread: it
         aborts at the next chunk/decode boundary and raises ``Aborted`` (with
         ``partial_result`` where available). The flag is cleared when the next
-        run / run_batch / stream / diarize or langid run / VAD run, stream_feed
-        or stream_flush starts, before it waits for the lock, so a cancel()
+        run / run_batch / stream / diarize or langid run / VAD or turn run,
+        stream_feed or stream_flush (or a turn stream_feed_batch listing this
+        session) starts, before it waits for the lock, so a cancel()
         while queued still aborts it. Lock-free."""
         self._cancel.set()
 
@@ -2260,6 +2315,193 @@ class VadSession(_SessionBase):
         _lib.transcribe_timings_init(_byref(tm))
         _check(_lib.transcribe_vad_get_timings(self._h, _byref(tm)),
                "transcribe_vad_get_timings")
+        return _timings_from(tm)
+
+
+_TURN_BUSY = "a stream is active on this model; finish or drop it before turn {}()"
+
+
+class TurnSession(_SessionBase):
+    """An end-of-turn detection context on a model with the TURN role.
+    Compute locking and ``Busy`` rules: see ``Model``.
+
+    ``run()`` scores one clip: has the turn ended at the end of this audio?
+    Every turn model supports it. ``stream_feed()`` / ``stream_flush()`` /
+    ``stream_reset()`` drive this session's own frame-by-frame stream, on
+    models with ``TurnInfo.frame_samples > 0`` (others raise
+    :class:`NotImplementedByModel`). Like a VAD stream it is native
+    per-session state, not an ASR stream: it does not take the model's stream
+    lease. Each run/feed/flush is one bounded compute call, so it is locked
+    and raises ``Busy`` under an ASR stream lease like a VAD run.
+    :meth:`stream_feed_batch` feeds several sessions of one model in one
+    compute call."""
+
+    _free_fn = "transcribe_turn_session_free"
+
+    def __init__(self, model: Model, *, n_threads: int = 0):
+        self._model = model  # keep the model alive for the session's lifetime
+        params = _generated.transcribe_turn_session_params()
+        _lib.transcribe_turn_session_params_init(_byref(params))
+        params.n_threads = n_threads
+
+        handle = ctypes.c_void_p()
+        _check(_lib.transcribe_turn_session_init(model._h, _byref(params), _byref(handle)),
+               "opening turn session")
+        if not handle.value:
+            raise TranscribeError("turn session init returned a null handle")
+        self._handle = handle
+        self._arm_abort(_lib.transcribe_turn_set_abort_callback)
+
+    @staticmethod
+    def _copy_result(h) -> TurnResult:
+        """Copy the last call's result out. Caller holds the compute lock:
+        the probability buffers are session-owned and replaced by the next
+        call."""
+        res = _TurnResult()
+        _lib.transcribe_turn_result_init(_byref(res))
+        _check(_lib.transcribe_turn_get_result(h, _byref(res)),
+               "transcribe_turn_get_result")
+
+        def floats(n: int, getter, what: str) -> tuple[float, ...]:
+            if n <= 0:
+                return ()
+            ptr = getter(h)
+            if not ptr:
+                raise TranscribeError(f"turn result has {what} but no buffer")
+            return tuple(ptr[:n])
+
+        return TurnResult(
+            p=res.p, ended=bool(res.ended),
+            probs=floats(res.n_probs, _lib.transcribe_turn_probs, "probabilities"),
+            first_frame=res.first_frame,
+            speech_probs=floats(res.n_speech_probs, _lib.transcribe_turn_speech_probs,
+                                "speech probabilities"),
+            speech_first_frame=res.speech_first_frame)
+
+    def run(self, pcm: PCMLike, *, threshold: float | None = None) -> TurnResult:
+        """Score one clip (16 kHz mono float32 PCM, the audio of the current
+        turn from where the speaker started) from a fresh state. Ends any
+        stream in progress on this session. Input longer than
+        ``TurnInfo.max_audio_ms`` is scored on its last ``max_audio_ms``.
+
+        ``threshold`` is the cut-off for ``ended``; None or negative uses the
+        model's ``TurnInfo.threshold``, otherwise it must be in [0, 1].
+
+        Raises :class:`InvalidArgument` for an out-of-range threshold,
+        :class:`Aborted` after :meth:`cancel`, and :class:`Busy` if a stream
+        is active on this model."""
+        self._cancel.clear()  # before the lock wait, as in Session.run()
+        array, n_samples = _pcm_to_carray(pcm)
+        params = _generated.transcribe_turn_params()
+        _lib.transcribe_turn_params_init(_byref(params))
+        if threshold is not None:
+            params.threshold = _vad_option("threshold", threshold, False)
+        with self._model._exclusive("turn_run", busy=_TURN_BUSY.format("run")):
+            h = self._h  # captured under the lock; close() defers its free
+            _check(_lib.transcribe_turn_run(h, array, n_samples, _byref(params)),
+                   "transcribe_turn_run")
+            return self._copy_result(h)
+
+    def stream_feed(self, pcm: PCMLike) -> TurnResult:
+        """Append audio (possibly empty) to this session's stream and return
+        the turn probability of every frame it completed and the speech
+        probability of every frame the model judged (possibly none); a
+        partial frame waits for the next feed. ``first_frame`` /
+        ``speech_first_frame`` are the stream positions of the first of each;
+        after :meth:`stream_reset`, :meth:`stream_flush` or :meth:`run` the
+        next feed starts at frame 0. Rejected input leaves the stream
+        unchanged; an abort or processing error resets it. Raises
+        :class:`NotImplementedByModel` on a model that cannot stream, else
+        like :meth:`run`."""
+        self._cancel.clear()
+        array, n_samples = _pcm_to_carray(pcm, allow_empty=True)
+        with self._model._exclusive("turn_feed", busy=_TURN_BUSY.format("stream_feed")):
+            h = self._h
+            _check(_lib.transcribe_turn_stream_feed(h, array, n_samples),
+                   "transcribe_turn_stream_feed")
+            return self._copy_result(h)
+
+    @staticmethod
+    def stream_feed_batch(
+            feeds: "Sequence[tuple[TurnSession, PCMLike]]") -> list[TurnResult]:
+        """Feed several streams of ONE model in one compute call, much faster
+        than one :meth:`stream_feed` per session when many users talk to one
+        model. ``feeds`` is a non-empty list of ``(session, pcm)`` pairs; each
+        session ends exactly as if ``session.stream_feed(pcm)`` had been
+        called on it, and the result list has one entry per pair, in order.
+
+        Every session must be open, belong to the same model and appear only
+        once (:class:`InvalidArgument` otherwise). The batch takes the
+        model's compute lock once, uses the first session's thread count and
+        aborts if any listed session is cancelled. Rejected input leaves
+        every stream unchanged; an abort or processing error resets every
+        listed stream. Raises :class:`NotImplementedByModel` on a model that
+        cannot stream, and :class:`Busy` if an ASR stream is active on the
+        model."""
+        feeds = list(feeds)
+        if not feeds:
+            raise InvalidArgument("stream_feed_batch needs at least one (session, pcm) pair")
+        sessions: list[TurnSession] = []
+        arrays = []  # the c_float arrays stay referenced here until the call returns
+        seen: set = set()
+        for i, pair in enumerate(feeds):
+            try:
+                session, pcm = pair
+            except (TypeError, ValueError):
+                raise InvalidArgument(
+                    f"feeds[{i}] must be a (TurnSession, pcm) pair") from None
+            if not isinstance(session, TurnSession):
+                raise InvalidArgument(
+                    f"feeds[{i}] session must be a TurnSession; got {type(session).__name__}")
+            if id(session) in seen:
+                raise InvalidArgument(f"feeds[{i}] repeats a session")
+            seen.add(id(session))
+            if session._model is not feeds[0][0]._model:
+                raise InvalidArgument(f"feeds[{i}] session belongs to a different model")
+            sessions.append(session)
+            arrays.append(_pcm_to_carray(pcm, allow_empty=True))
+        n = len(sessions)
+        if n > _INT_MAX:
+            raise InvalidArgument(f"stream_feed_batch takes at most {_INT_MAX} sessions")
+        for session in sessions:  # before the lock wait, as in stream_feed()
+            session._cancel.clear()
+        model = sessions[0]._model
+        with model._exclusive("turn_feed_batch",
+                              busy=_TURN_BUSY.format("stream_feed_batch")):
+            handles = [s._h for s in sessions]  # raises if any is closed
+            c_sessions = (ctypes.c_void_p * n)(*(h.value for h in handles))
+            c_pcm = (ctypes.POINTER(ctypes.c_float) * n)(
+                *(ctypes.cast(a, ctypes.POINTER(ctypes.c_float)) for a, _ in arrays))
+            c_n = (ctypes.c_int * n)(*(k for _, k in arrays))
+            _check(_lib.transcribe_turn_stream_feed_batch(c_sessions, c_pcm, c_n, n),
+                   "transcribe_turn_stream_feed_batch")
+            return [TurnSession._copy_result(h) for h in handles]
+
+    def stream_flush(self) -> TurnResult:
+        """End the stream: score the buffered partial frame zero padded (one
+        turn probability, or none when nothing was buffered) and return the
+        speech probabilities of every frame not yet judged. The next feed
+        starts a new stream at frame 0. Raises like :meth:`stream_feed`."""
+        self._cancel.clear()
+        with self._model._exclusive("turn_flush", busy=_TURN_BUSY.format("stream_flush")):
+            h = self._h
+            _check(_lib.transcribe_turn_stream_flush(h), "transcribe_turn_stream_flush")
+            return self._copy_result(h)
+
+    def stream_reset(self) -> None:
+        """Drop the stream without scoring; keeps the last result. Never
+        raises ``Busy``."""
+        with self._model._exclusive("turn_reset"):
+            _lib.transcribe_turn_stream_reset(self._h)
+
+    @property
+    def timings(self) -> Timings:
+        """Load time plus the last call's encode / decode time. Not locked,
+        like ``Session.limits``."""
+        tm = _Timings()
+        _lib.transcribe_timings_init(_byref(tm))
+        _check(_lib.transcribe_turn_get_timings(self._h, _byref(tm)),
+               "transcribe_turn_get_timings")
         return _timings_from(tm)
 
 

@@ -103,7 +103,7 @@ Runnable examples live in
 
 ## Diarization
 
-A model's `roles` say what it serves (`.asr`, `.diarize`, `.langId`, `.vad`). Diarization models
+A model's `roles` say what it serves (`.asr`, `.diarize`, `.langId`, `.vad`, `.turn`). Diarization models
 such as Sortformer (DIARIZE only) return speaker turns from a `DiarizeSession`:
 
 ```swift
@@ -150,6 +150,34 @@ for chunk in micChunks {
     // r.probs[i] scores stream frame r.firstFrame + i
 }
 try vad.streamFlush()
+```
+
+## End-of-turn detection
+
+Turn models (`.turn`) say whether the speaker has finished talking. Every turn
+model scores a clip with `TurnSession.run`: `p` is the probability that the turn
+has ended at the end of the audio and `ended` is `p >= threshold` (`nil` uses
+`turnInfo.threshold`, the model's cut-off). Streaming models
+(`turnInfo.frameSamples > 0`, e.g. SAVA) also take `streamFeed` /
+`streamFlush`, which return a turn probability per completed frame from
+`firstFrame` and, when `turnInfo.hasSpeech`, speech probabilities from
+`speechFirstFrame` (they may trail the turn ones). Clip-only models (Smart
+Turn) throw `.notImplemented` from the stream calls.
+
+```swift
+let model = try Model(path: "smart-turn-v3.2-Q8_0.gguf")
+let turn = try model.turnSession()
+if try turn.run(turnPcm).ended { /* answer */ }
+
+let sava = try Model(path: "sava-Q8_0.gguf")
+let t = try sava.turnSession()
+for chunk in micChunks {
+    let r = try t.streamFeed(chunk)
+    // r.probs[i] scores frame r.firstFrame + i; r.speechProbs[i] frame r.speechFirstFrame + i
+}
+
+// Many users on one model: one compute, one result per session.
+let results = try TurnSession.streamFeedBatch([(userA, chunkA), (userB, chunkB)])
 ```
 
 ## Backends
@@ -202,8 +230,8 @@ token.cancel()
 The active `run`, `runBatch`, or stream feed throws `TranscribeError.aborted`
 with any partial transcript preserved. Async `run`/`runBatch` also bridge Swift
 task cancellation when no custom token is installed. Role sessions
-(`DiarizeSession`, `LangIdSession`, `VadSession`, including a VAD stream feed)
-take a token the same way.
+(`DiarizeSession`, `LangIdSession`, `VadSession`, `TurnSession`, including a
+VAD or turn stream feed) take a token the same way.
 
 ## C, Objective-C, and C++
 

@@ -118,7 +118,7 @@ rejected before the native call (e.g. NaN input) keeps the lease.
 ## Roles and the DIARIZE session
 
 Each binding exposes the role mask as `Model.roles` (Python `frozenset[Role]`,
-TypeScript `readonly ('asr' | 'diarize' | 'langid' | 'vad')[]`, Rust `Roles`, Swift
+TypeScript `readonly ('asr' | 'diarize' | 'langid' | 'vad' | 'turn')[]`, Rust `Roles`, Swift
 `Roles` option set). Status 20 surfaces as `UnsupportedRole`
 (`.unsupportedRole` in Swift), including from capabilities on a model without
 ASR. Status 21 surfaces as `InputTooShort` (`.inputTooShort` in Swift).
@@ -170,6 +170,33 @@ Every VAD call takes the model-wide compute lock for that call only. A VAD
 stream is session state, not a stream lease, so ASR work on the same model may
 run between two feeds. Results are copied out under the lock, and VAD calls
 honour cancellation and deferred frees like the other roles.
+
+## The TURN session
+
+A TURN model (`docs/turn.md`) gets `TurnSession` from `model.turn_session()`
+(Python, Rust), `model.turnSession()` (Swift) or `model.createTurnSession()`
+(TypeScript), plus `turn_info` / `turnInfo` (sample rate, longest audio, frame
+size (0 = the model cannot stream), whether it also scores speech, and the
+model's default threshold). `run(pcm, threshold)` returns a copied-out result:
+`p`, `ended` (`p >= threshold`; omitted = the model's) and, for streaming
+models, every frame's turn and speech probabilities. Stream feed / flush return
+the turn probabilities of the frames they completed with `first_frame`, and the
+speech probabilities of the frames the model judged with `speech_first_frame`
+(these can trail). Stream reset drops the stream. On a model that cannot stream
+(Smart Turn) the stream calls raise `NotImplemented`.
+
+The batched feed (`TurnSession.stream_feed_batch` / `streamFeedBatch`) takes
+(session, pcm) pairs and returns one result per session, in order, each equal
+to that session's own feed. It is one compute: it takes the model-wide compute
+lock once, rejects an empty list and sessions that are closed, repeated or of
+different models with `InvalidArgument` before calling the library, and keeps
+every buffer alive until the native call returns. Cancelling any listed
+session aborts the call and resets every listed stream.
+
+Otherwise TURN calls follow the VAD rules: the compute lock for that call
+only, a turn stream is session state and not a stream lease, `Busy` while an
+ASR stream holds the lease, results copied out under the lock, and deferred
+frees.
 
 ## Raw text
 

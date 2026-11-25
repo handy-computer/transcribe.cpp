@@ -119,7 +119,7 @@ model.accepts({ kind: "whisper" }); // does this model take that extension?
 ### Diarization (DIARIZE role)
 
 `model.roles` lists what a model serves (`"asr"`, `"diarize"`, `"langid"`,
-`"vad"`; Sortformer is diarize-only). Calls for a role the model lacks throw
+`"vad"`, `"turn"`; Sortformer is diarize-only). Calls for a role the model lacks throw
 `UnsupportedRole`.
 
 ```ts
@@ -179,9 +179,53 @@ const tail = await vad.streamFlush();
 A VAD stream is session state, not a stream lease: VAD calls raise `Busy` only
 while an ASR stream on the same model holds the lease.
 
+### End-of-turn detection (TURN role)
+
+A `"turn"` model says whether the speaker has finished talking. `run` scores
+one clip (the audio since the speaker started) and returns `p` and `ended`
+(`p >= threshold`; `threshold` defaults to `model.turnInfo.threshold`). Audio
+longer than `turnInfo.maxAudioMs` is scored on its end. Every turn model
+(Smart Turn v3.2, SAVA) supports it:
+
+```ts
+using turn = model.createTurnSession();
+const { p, ended } = await turn.run(pcmSinceSpeechStart);
+if (ended) answer();
+```
+
+Models with `turnInfo.frameSamples > 0` (SAVA) also stream: `streamFeed(chunk)`
+returns the turn probability of each frame the chunk completes (`probs`, from
+`firstFrame`) and, when `turnInfo.hasSpeech`, the speech probability of each
+frame the model judged (`speechProbs`, from `speechFirstFrame`; it may trail
+`firstFrame`). A stream returns probabilities only: your code decides when the
+turn ended. `streamFlush()` and `streamReset()` work as for VAD. On a clip model
+(Smart Turn) the stream calls throw `NotImplementedByModel`.
+
+```ts
+for await (const chunk of mic) {
+  const { firstFrame, probs, speechFirstFrame, speechProbs } = await turn.streamFeed(chunk);
+}
+```
+
+For many users on one model, `TurnSession.streamFeedBatch` feeds every
+session's chunk in one compute (much faster than one feed per user) and returns
+one result per session, in order; each session ends up as if fed alone. The
+sessions must be open, distinct and of the same model (`InvalidArgument`
+otherwise); the batch uses the first session's thread count, and its `signal`
+cancels (and resets) every listed stream.
+
+```ts
+const results = await TurnSession.streamFeedBatch([
+  { session: alice, pcm: aliceChunk },
+  { session: bob, pcm: bobChunk },
+]);
+```
+
+Like VAD, a turn stream is session state, not a stream lease.
+
 ### Resource management
 
-`TranscribeModel`, `Session`, `DiarizeSession`, `LangIdSession`, `VadSession`, and `Stream` all implement
+`TranscribeModel`, `Session`, `DiarizeSession`, `LangIdSession`, `VadSession`, `TurnSession`, and `Stream` all implement
 `Symbol.dispose`, so `using` works (TypeScript 5.2+ / Node 22+):
 
 ```ts

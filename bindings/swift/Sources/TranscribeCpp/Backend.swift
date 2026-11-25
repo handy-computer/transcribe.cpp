@@ -123,6 +123,10 @@ public enum AbiStruct: Sendable {
     case vadParams
     case vadResult
     case vadSegment
+    case turnInfo
+    case turnSessionParams
+    case turnParams
+    case turnResult
 
     var cValue: transcribe_abi_struct {
         switch self {
@@ -153,6 +157,10 @@ public enum AbiStruct: Sendable {
         case .vadParams: return TRANSCRIBE_ABI_VAD_PARAMS
         case .vadResult: return TRANSCRIBE_ABI_VAD_RESULT
         case .vadSegment: return TRANSCRIBE_ABI_VAD_SEGMENT
+        case .turnInfo: return TRANSCRIBE_ABI_TURN_INFO
+        case .turnSessionParams: return TRANSCRIBE_ABI_TURN_SESSION_PARAMS
+        case .turnParams: return TRANSCRIBE_ABI_TURN_PARAMS
+        case .turnResult: return TRANSCRIBE_ABI_TURN_RESULT
         }
     }
 }

@@ -2,7 +2,7 @@ import CTranscribe
 import os
 
 /// A thread-safe cancellation flag. Install it on a `Session`, `DiarizeSession`,
-/// `LangIdSession` or `VadSession` with `setCancellationToken`; the native abort
+/// `LangIdSession`, `VadSession` or `TurnSession` with `setCancellationToken`; the native abort
 /// callback (polled between decode steps / chunks) reads it, so `cancel()` may
 /// be called from any thread to abort an in-flight run/stream. The run then throws
 /// `.aborted` (a `Session` run with the partial transcript preserved).
@@ -65,6 +65,22 @@ extension VadSession {
     /// Remove any installed cancellation token.
     public func clearCancellationToken() {
         transcribe_vad_set_abort_callback(ptr, nil, nil)
+        cancelToken = nil
+    }
+}
+
+extension TurnSession {
+    /// Install a cancellation token; a cancelled run, feed, batch feed or flush
+    /// throws `.aborted`.
+    public func setCancellationToken(_ token: CancellationToken) {
+        cancelToken = token
+        let context = Unmanaged.passUnretained(token).toOpaque()
+        transcribe_turn_set_abort_callback(ptr, abortTrampoline, context)
+    }
+
+    /// Remove any installed cancellation token.
+    public func clearCancellationToken() {
+        transcribe_turn_set_abort_callback(ptr, nil, nil)
         cancelToken = nil
     }
 }

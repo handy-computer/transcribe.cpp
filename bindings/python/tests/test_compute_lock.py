@@ -59,6 +59,8 @@ def fake(monkeypatch):
                         lambda h: frees.append(("langid", h.value)))
     monkeypatch.setattr(t._lib, "transcribe_vad_session_free",
                         lambda h: frees.append(("vad", h.value)))
+    monkeypatch.setattr(t._lib, "transcribe_turn_session_free",
+                        lambda h: frees.append(("turn", h.value)))
     resets: list = []  # session handles transcribe_stream_reset was given
     monkeypatch.setattr(t._lib, "transcribe_stream_reset",
                         lambda h: resets.append(h.value))
@@ -189,6 +191,7 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     d = fake.session(m, cls=t.DiarizeSession)
     lid = fake.session(m, cls=t.LangIdSession)
     vad = fake.session(m, cls=t.VadSession)
+    turn, turn2 = (fake.session(m, cls=t.TurnSession) for _ in range(2))
     seen: list = []
 
     def holds(name, ret=0):
@@ -205,7 +208,10 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
                  "transcribe_diarize_n_segments", "transcribe_langid_run",
                  "transcribe_langid_get_result", "transcribe_vad_run",
                  "transcribe_vad_stream_feed", "transcribe_vad_stream_flush",
-                 "transcribe_vad_stream_reset", "transcribe_vad_get_segment"):
+                 "transcribe_vad_stream_reset", "transcribe_vad_get_segment",
+                 "transcribe_turn_run", "transcribe_turn_stream_feed",
+                 "transcribe_turn_stream_feed_batch", "transcribe_turn_stream_flush",
+                 "transcribe_turn_stream_reset"):
         monkeypatch.setattr(t._lib, name, holds(name))
     vad_probs = (ctypes.c_float * 2)(0.25, 0.75)
 
@@ -217,6 +223,15 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     monkeypatch.setattr(t._lib, "transcribe_vad_get_result", vad_result)
     monkeypatch.setattr(t._lib, "transcribe_vad_probs",
                         holds("transcribe_vad_probs", ret=vad_probs))
+
+    def turn_result(h, out):
+        holds("transcribe_turn_get_result")()
+        out._obj.n_probs, out._obj.n_speech_probs = 2, 2
+        return 0
+
+    monkeypatch.setattr(t._lib, "transcribe_turn_get_result", turn_result)
+    for name in ("transcribe_turn_probs", "transcribe_turn_speech_probs"):
+        monkeypatch.setattr(t._lib, name, holds(name, ret=vad_probs))
     monkeypatch.setattr(t._lib, "transcribe_batch_n_results",
                         holds("transcribe_batch_n_results", ret=1))
     real_materialize = t.Session._materialize
@@ -239,6 +254,12 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
     assert vad.stream_feed(PCM).probs == (0.25, 0.75)
     assert vad.stream_flush().probs == (0.25, 0.75)
     vad.stream_reset()
+    assert turn.run(PCM).probs == (0.25, 0.75)
+    assert turn.stream_feed(PCM).speech_probs == (0.25, 0.75)
+    assert turn.stream_flush().probs == (0.25, 0.75)
+    assert [r.probs for r in t.TurnSession.stream_feed_batch(
+        [(turn, PCM), (turn2, PCM)])] == [(0.25, 0.75)] * 2
+    turn.stream_reset()
 
     names = [n for n, _ in seen]
     for site in ("transcribe_run", "transcribe_run_batch",
@@ -250,7 +271,11 @@ def test_every_compute_site_holds_the_lock(fake, monkeypatch):
                  "transcribe_vad_run", "transcribe_vad_stream_feed",
                  "transcribe_vad_stream_flush", "transcribe_vad_stream_reset",
                  "transcribe_vad_get_result", "transcribe_vad_probs",
-                 "transcribe_vad_get_segment", "copy-out"):
+                 "transcribe_vad_get_segment", "transcribe_turn_run",
+                 "transcribe_turn_stream_feed", "transcribe_turn_stream_feed_batch",
+                 "transcribe_turn_stream_flush", "transcribe_turn_stream_reset",
+                 "transcribe_turn_get_result", "transcribe_turn_probs",
+                 "transcribe_turn_speech_probs", "copy-out"):
         assert site in names, f"{site} never reached"
     assert all(ok for _, ok in seen), [n for n, ok in seen if not ok]
     assert not m._compute_lock.locked()
@@ -669,3 +694,97 @@ def test_vad_busy_while_stream_active(fake, native, monkeypatch):
     vad.stream_feed(PCM)
     vad.stream_flush()
     assert calls == ["stream_reset", "run", "stream_feed", "stream_flush"]
+
+
+# --- TurnSession ----------------------------------------------------------------
+
+
+def test_turn_busy_while_stream_active(fake, native, monkeypatch):
+    m = fake.model()
+    s = fake.session(m)
+    turn, turn2 = (fake.session(m, cls=t.TurnSession) for _ in range(2))
+    calls: list = []
+    for name in ("run", "stream_feed", "stream_feed_batch", "stream_flush",
+                 "stream_reset"):
+        monkeypatch.setattr(t._lib, f"transcribe_turn_{name}",
+                            lambda *a, name=name: calls.append(name) or 0)
+    monkeypatch.setattr(t._lib, "transcribe_turn_get_result", lambda h, out: 0)
+    batch = t.TurnSession.stream_feed_batch
+    stream = s.stream()
+    for call, name, args in ((turn.run, "run", (PCM,)),
+                             (turn.stream_feed, "stream_feed", (PCM,)),
+                             (turn.stream_flush, "stream_flush", ()),
+                             (batch, "stream_feed_batch", ([(turn, PCM), (turn2, PCM)],))):
+        with pytest.raises(t.Busy) as ei:
+            call(*args)
+        assert str(ei.value) == ("a stream is active on this model; finish or "
+                                 f"drop it before turn {name}()")
+    assert calls == [] and not m._compute_lock.locked()
+    turn.stream_reset()  # never Busy
+    assert calls == ["stream_reset"]
+    stream.finalize()
+    turn.run(PCM)
+    turn.stream_feed(PCM)
+    turn.stream_flush()
+    batch([(turn, PCM), (turn2, PCM)])
+    assert calls == ["stream_reset", "run", "stream_feed", "stream_flush",
+                     "stream_feed_batch"]
+
+
+def test_turn_batch_is_one_locked_call(fake, monkeypatch):
+    # One native call for every session, under the lock, with every session
+    # handle and a live PCM buffer per entry; every cancel flag is cleared
+    # before the lock wait, and a cancel while queued is kept.
+    m = fake.model()
+    a, b = (fake.session(m, cls=t.TurnSession) for _ in range(2))
+    gate = _Gate()
+    seen: list = []
+
+    def batch(sessions, pcm, n_samples, n):
+        seen.append(([sessions[i] for i in range(n)],
+                     [pcm[i][0] for i in range(n)],
+                     [n_samples[i] for i in range(n)],
+                     m._compute_lock.locked(), a._cancel.is_set(),
+                     b._cancel.is_set()))
+        return 0
+
+    monkeypatch.setattr(t._lib, "transcribe_turn_stream_feed_batch", batch)
+    monkeypatch.setattr(t._lib, "transcribe_turn_get_result", lambda h, out: 0)
+    monkeypatch.setattr(t._lib, "transcribe_turn_run", gate)
+    a.cancel()
+    b.cancel()
+    try:
+        first, _ = _in_thread(a.run, PCM)
+        assert gate.entered.wait(TIMEOUT)
+        spy = _LockSpy(m)
+        queued, box = _in_thread(t.TurnSession.stream_feed_batch,
+                                 [(a, [0.5] * 3), (b, [])])
+        assert spy.waiting.wait(TIMEOUT)
+        b.cancel()
+    finally:
+        gate.release.set()
+    _join(first, "turn run")
+    _join(queued, "queued batch")
+    assert len(box["value"]) == 2, box
+    handles, firsts, counts, locked, a_flag, b_flag = seen[0]
+    assert handles == [a._handle.value, b._handle.value]
+    assert firsts[0] == 0.5 and counts == [3, 0]
+    assert locked and not a_flag and b_flag
+
+
+def test_turn_batch_rejects_before_native(fake, monkeypatch):
+    m, m2 = fake.model(), fake.model()
+    a, b = (fake.session(m, cls=t.TurnSession) for _ in range(2))
+    other = fake.session(m2, cls=t.TurnSession)
+    calls: list = []
+    monkeypatch.setattr(t._lib, "transcribe_turn_stream_feed_batch",
+                        lambda *args: calls.append(args) or 0)
+    batch = t.TurnSession.stream_feed_batch
+    for feeds in ([], [(a, PCM), (a, PCM)], [(a, PCM), (other, PCM)],
+                  [(a, PCM), (object(), PCM)], [a], [(a, PCM), (b, [0.0] * 0, 1)]):
+        with pytest.raises(t.InvalidArgument):
+            batch(feeds)
+    b.close()
+    with pytest.raises(t.TranscribeError, match="session is closed"):
+        batch([(a, PCM), (b, PCM)])
+    assert calls == [] and not m._compute_lock.locked()

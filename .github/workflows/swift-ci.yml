@@ -89,6 +89,10 @@ jobs:
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
+      # The toy role fixtures (silero_vad, smart_turn, sava, ...) the VAD and
+      # TURN tests load from tests/fixtures; pure Python, no native build.
+      - name: Generate toy GGUF fixtures
+        run: uv run --quiet tests/fixtures/make_gguf_fixtures.py
       # The xcframework ships a DYNAMIC CTranscribe.framework (so app consumers
       # need no -ObjC and Xcode auto-embeds it). Command-line `swift test` /
       # `swift run`, unlike Xcode, don't reliably stage that framework into the
