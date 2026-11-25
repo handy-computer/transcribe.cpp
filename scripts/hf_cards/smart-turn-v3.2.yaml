@@ -2,7 +2,7 @@
 pin_date: 2026-11-21
 validation:
   reference: onnxruntime 1.23.2 (fp32 ONNX)
-  commit: 3465deb3
+  commit: f9d9e48e
   date: 2026-11-25
 pipeline_tag: audio-classification
 default_quant: F32

@@ -2,7 +2,7 @@
 pin_date: 2026-11-21
 validation:
   reference: inworld-sava 1.0.0 (PyTorch, fp32)
-  commit: 3465deb3
+  commit: f9d9e48e
   date: 2026-11-25
 pipeline_tag: voice-activity-detection
 default_quant: Q8_0

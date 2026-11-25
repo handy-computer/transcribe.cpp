@@ -21,7 +21,7 @@ Upstream code: [`inworld-ai/sava`](https://github.com/inworld-ai/sava)
 (`inworld-sava` 1.0.0).
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://huggingface.co/inworld/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (PyTorch, fp32) reference at transcribe.cpp commit [`3465deb3`](https://github.com/handy-computer/transcribe.cpp/tree/3465deb3) on 2026-11-25.
+Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://huggingface.co/inworld/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (PyTorch, fp32) reference at transcribe.cpp commit [`f9d9e48e`](https://github.com/handy-computer/transcribe.cpp/tree/f9d9e48e) on 2026-11-25.
 <!-- /catalog -->
 
 ## How to use it
