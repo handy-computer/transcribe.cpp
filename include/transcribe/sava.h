@@ -36,13 +36,13 @@ extern "C" {
  */
 struct transcribe_sava_turn_ext {
     struct transcribe_ext ext;
-    double                speech_threshold;           /* speech p >= this is speech, 0 to 1 (0.5) */
-    double                confident_speech_threshold; /* speech p >= this is confident, 0 to 1 (0.9) */
-    int32_t               pre_roll_ms;                /* (800) */
+    double                speech_threshold;            /* speech p >= this is speech, 0 to 1 (0.5) */
+    double                confident_speech_threshold;  /* speech p >= this is confident, 0 to 1 (0.9) */
+    int32_t               pre_roll_ms;                 /* (800) */
     int32_t               min_silence_before_check_ms; /* (0) */
-    int32_t               max_silence_ms;             /* (1600) */
-    int32_t               min_speech_ms;              /* (400) */
-    int32_t               min_confident_speech_ms;    /* (200) */
+    int32_t               max_silence_ms;              /* (1600) */
+    int32_t               min_speech_ms;               /* (400) */
+    int32_t               min_confident_speech_ms;     /* (200) */
 };
 
 /* Fills ext.size/kind and sets every field to -1 (the model's defaults). */
