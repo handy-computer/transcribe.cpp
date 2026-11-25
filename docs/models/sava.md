@@ -165,7 +165,7 @@ Ryzen 7 PRO 4750U:
 - `jfk-40ms-x8`: one `transcribe_turn_stream_feed_batch` tick for 8 users
   (a 640-sample frame each, so 0.32 s of audio per tick).
 - `-1t` runs on one thread; without it, the library's default thread count
-  (all 8 cores of the M1, 16 hardware threads of the Ryzen).
+  (8 threads on both machines: the default is the usable CPUs, capped at 8).
 
 ### Apple M1 (proxy for the M4)
 

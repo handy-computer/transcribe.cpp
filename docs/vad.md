@@ -55,7 +55,7 @@ with the reference's defaults:
 ## Streaming
 
 `transcribe_vad_stream_feed` takes audio in pieces of any size and returns the
-probabilities of the frames each call completes; `first_frame` is the stream
+probabilities of the frames each call judges; `first_frame` is the stream
 position of the first one. `transcribe_vad_stream_flush` scores the buffered
 remainder zero padded and ends the stream; `transcribe_vad_stream_reset` ends
 it without scoring.

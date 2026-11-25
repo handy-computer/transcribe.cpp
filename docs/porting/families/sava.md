@@ -242,10 +242,10 @@ out     = attn.out @ concat(o_h)
 
 ## Reference turn policy (`segmenter.py`, `Policy()` defaults)
 
-The library does not apply this rule (draft 6 of `docs/turn.md` removed turn
-segments from the API); callers apply it to the stream's score tracks, as
-`examples/turn_live` does. It is recorded here because it defines how the
-scores are meant to be used. Until draft 6, `transcribe_turn_run` returned
+The library does not apply this rule: the API review removed turn segments,
+so callers apply it to the stream's score tracks, as `examples/turn_live`
+does (`docs/turn.md`). It is recorded here because it defines how the scores
+are meant to be used. Before the removal, `transcribe_turn_run` returned
 these turns and matched `sava.segment` on all 8 cases.
 
 `sava.segment(curves, policy, 3)` replays the stream. Frame `j`'s speech
@@ -660,7 +660,7 @@ build/bin/transcribe-cli -m models/sava/sava-F32.gguf samples/sava-speech.wav
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |---|---|---|---|---|---|
 | Whole-clip turn scores (`transcribe_turn_run`) | offline | `validate.py all` | `sava.turn[:,0]`, `sava.speech` and `p` within `tests/tolerances/sava.json` | MUST PASS | PASS (8 cases; p within 2.7e-6) |
-| Turn segments | - | - | - | OUT OF SCOPE - removed from the API (docs/turn.md draft 6) | SKIP - passed before removal (all 8 cases, 59 turns on `dots-full`) |
+| Turn segments | - | - | - | OUT OF SCOPE - removed from the API in review | SKIP - passed before removal (all 8 cases, 59 turns on `dots-full`) |
 | Streaming (`transcribe_turn_stream_*`) | live | `transcribe_sava_smoke`, `transcribe_sava_real_smoke` | any chunking bit-identical to run on CPU; within tolerance of `stream.*` | MUST PASS | PASS (1 sample to whole clip, 1 and 4 threads, jfk and dots) |
 | Speech track through `transcribe_vad_*` | live / offline | the same smokes | the same speech scores as the TURN speech track, lookahead 3 | MUST PASS | PASS (bit-identical) |
 | `transcribe_vad_run` segments | offline | one-off check (below) | Silero's segmentation applied to `sava.speech` on 40 ms frames | MUST PASS (proposed) | PASS (jfk, sava-speech, dots, dots-full, ja: identical) |

@@ -6,7 +6,8 @@ pipecat-ai/smart-turn-data-v3.2-test (profile turn-publication-v1).
   uv run --project scripts/envs/smart_turn scripts/turn/score.py \\
       reports/turn/smart-turn-v3.2-F32.smart-turn-data-v3.2-test.jsonl --ref-column p_fp32
   uv run --project scripts/envs/smart_turn scripts/turn/score.py \\
-      reports/turn/sava-F32.smart-turn-data-v3.2-test.jsonl
+      reports/turn/sava-F32.smart-turn-data-v3.2-test.jsonl \
+      --ref-jsonl reports/turn/sava-REF.smart-turn-data-v3.2-test.jsonl
   uv run scripts/catalog/ingest_accuracy.py --models smart-turn-v3.2,sava
 
 A clip's score is the run's p_cpp (transcribe_turn_run's p over the whole
@@ -22,7 +23,11 @@ the run, <run stem>.score.json with:
   agreement       with --ref-column: decisions that match a reference score
                   column of the run on the same clips (eval_cpp.py's p_fp32 is
                   Smart Turn's upstream fp32 ONNX; it is not a reference for
-                  other models), and the largest |p - p_ref|
+                  other models), and the largest |p - p_ref|. With
+                  --ref-jsonl the reference is the p_ref of a separate
+                  reference run joined on clip id (SAVA:
+                  run_reference_sava_torch.py); every clip of the run must be
+                  in it. n_agree_at_0.9 is the same count at 0.9.
   extra           not ingested: accuracy at 0.9, the best threshold, and the
                   real / synthetic split
 """
@@ -98,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument("--ref-column", default=None,
                     help="a per-clip reference score column of the run (p_fp32: Smart Turn's fp32 ONNX)")
+    ap.add_argument("--ref-jsonl", type=Path, default=None,
+                    help="a reference run (rows with id and p_ref, e.g. run_reference_sava_torch.py's) "
+                         "joined on clip id")
     ap.add_argument("--ref-name", default=None, help="what the reference column is (default: from the run)")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
@@ -150,14 +158,41 @@ def main(argv: list[str] | None = None) -> int:
         "auc": round(auc(p, label), 5),
         "bootstrap": {"n": N_BOOT, "seed": BOOT_SEED},
     }
+    if args.ref_column and args.ref_jsonl:
+        die("--ref-column and --ref-jsonl are exclusive")
+    ref = ref_source = None
     if args.ref_column:
         ref = np.array([r[args.ref_column] for r in rows], dtype=np.float64)
+        ref_source = {"ref_column": args.ref_column, "ref": args.ref_name or header["ref"]}
+    elif args.ref_jsonl:
+        ref_lines = args.ref_jsonl.read_text().splitlines()
+        ref_header = json.loads(ref_lines[0])
+        if ref_header.get("dataset") != header["dataset"]:
+            die(f"{args.ref_jsonl}: dataset {ref_header.get('dataset')!r}, not {header['dataset']!r}")
+        by_id = {}
+        for line in ref_lines[1:]:
+            if line.strip():
+                r = json.loads(line)
+                by_id[r["id"]] = r
+        missing = [i for i in ids if i not in by_id]
+        if missing:
+            die(f"{args.ref_jsonl}: {len(missing)} clips of the run missing (first {missing[0]})")
+        for r in rows:
+            if bool(by_id[r["id"]]["label"]) != bool(r["label"]):
+                die(f"{r['id']}: label differs between the run and the reference")
+        ref = np.array([by_id[i]["p_ref"] for i in ids], dtype=np.float64)
+        ref_source = {"ref_jsonl": rel(args.ref_jsonl),
+                      "ref": args.ref_name or " ".join(
+                          str(x) for x in (ref_header.get("framework"),
+                                           f"{ref_header.get('model_repo')}@{ref_header.get('model_revision')}",
+                                           ref_header.get("precision")) if x)}
+    if ref is not None:
         score["agreement"] = {
-            "ref_column": args.ref_column,
-            "ref": args.ref_name or header["ref"],
+            **ref_source,
             "n_agree": int(((p > args.threshold) == (ref > args.threshold)).sum()),
             "n": int(p.size),
             "max_abs_p_delta": float(np.abs(p - ref).max()),
+            "n_agree_at_0.9": int(((p > 0.9) == (ref > 0.9)).sum()),
         }
     grid = np.round(np.arange(0.01, 1.0, 0.01), 2)
     accs = [100.0 * float(((p > t) == label).mean()) for t in grid]

@@ -82,9 +82,16 @@ struct transcribe_turn_result {
     int64_t  first_frame;
     /* Number of per-frame speech probabilities from the last call
      * (transcribe_turn_speech_probs), and the index of their first frame.
-     * A model may judge speech a few frames late, so during a stream these
-     * can trail the turn probabilities. After run, every frame of the clip
-     * has both. Always 0 when has_speech is false. */
+     * Always 0 when has_speech is false.
+     *
+     * A model may judge speech a fixed number of frames late (its
+     * lookahead; SAVA: 3 frames). During a stream the speech probabilities
+     * then trail the turn probabilities by that many frames: after a feed
+     * that returns speech probabilities, the lookahead is
+     * (first_frame + n_probs) - (speech_first_frame + n_speech_probs).
+     * The speech probability of frame t arrives with the turn probability
+     * of frame t + lookahead. Flush returns the speech probabilities still
+     * missing. After run, every frame of the clip has both. */
     int32_t  n_speech_probs;
     int64_t  speech_first_frame;
 };

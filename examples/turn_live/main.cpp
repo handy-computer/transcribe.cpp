@@ -160,10 +160,12 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
         transcribe_turn_result r;
         transcribe_turn_result_init(&r);
         transcribe_turn_get_result(s, &r);
-        if (lag < 0 && r.n_speech_probs > 0) {
-            // During a feed the speech track ends lag frames before the turn
-            // track. (A flush judges every frame, so it cannot tell.)
-            lag = flushed ? 0 : (r.first_frame + r.n_probs) - (r.speech_first_frame + r.n_speech_probs);
+        if (lag < 0 && !flushed && r.n_speech_probs > 0) {
+            // After a feed that returns speech scores, the speech track ends
+            // lag frames before the turn track (turn.h). A flush judges every
+            // remaining frame, so it cannot tell; a stream that short has no
+            // turn scores to pair anyway.
+            lag = (r.first_frame + r.n_probs) - (r.speech_first_frame + r.n_speech_probs);
         }
         const float * tp = transcribe_turn_probs(s);
         for (int i = 0; i < r.n_probs; ++i) {
@@ -171,9 +173,9 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
         }
         const float * sp = transcribe_turn_speech_probs(s);
         for (int i = 0; i < r.n_speech_probs; ++i) {
-            const int64_t t         = r.speech_first_frame + i;  // the frame judged
-            const int64_t now       = t + lag;                   // the step that judged it
-            const bool    have_turn = now - turn_base < static_cast<int64_t>(turn_hist.size());
+            const int64_t t         = r.speech_first_frame + i;       // the frame judged
+            const int64_t now       = t + std::max<int64_t>(lag, 0);  // the step that judged it
+            const bool    have_turn = lag >= 0 && now - turn_base < static_cast<int64_t>(turn_hist.size());
             const float   turn_p    = have_turn ? turn_hist[static_cast<size_t>(now - turn_base)] : 0.0f;
             last_judged             = t;
             const bool is_speech    = sp[i] >= speech_threshold;

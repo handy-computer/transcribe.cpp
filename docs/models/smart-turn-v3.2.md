@@ -108,7 +108,7 @@ reference machine, which was unreachable, and an AMD Ryzen 7 PRO 4750U.
 `jfk-8s` is one 8 s window: `transcribe_turn_run` on the first 8 s of
 `samples/jfk.wav` (shorter audio is padded to the same window, so it costs
 the same). `-1t` runs on one thread; without it, the library's default
-thread count (all 8 cores of the M1, 16 hardware threads of the Ryzen).
+thread count (8 threads on both machines: the default is the usable CPUs, capped at 8).
 
 ### Apple M1 (proxy for the M4)
 
