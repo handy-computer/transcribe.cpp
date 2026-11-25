@@ -191,9 +191,9 @@ TRANSCRIBE_API transcribe_status transcribe_turn_stream_flush(struct transcribe_
  * listed result. The call is one compute on the model (docs/roles.md).
  */
 TRANSCRIBE_API transcribe_status transcribe_turn_stream_feed_batch(struct transcribe_turn_session * const * sessions,
-                                                                   const float * const *                   pcm,
-                                                                   const int *                             n_samples,
-                                                                   int                                     n);
+                                                                   const float * const *                    pcm,
+                                                                   const int *                              n_samples,
+                                                                   int                                      n);
 
 /* Discard the stream without processing it; keep the last result. NULL does
  * nothing. */

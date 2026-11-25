@@ -9,9 +9,9 @@
 #include "transcribe.h"
 #include "transcribe/turn.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <algorithm>
 #include <cstdlib>
 #include <limits>
 #include <vector>
@@ -101,8 +101,11 @@ const transcribe::TurnOps k_stream_ops = { stream_info, stream_new_session, null
 // The same model with a batched step: one frame per session per call.
 int g_batch_calls = 0;
 
-transcribe_status stream_step_batch(transcribe_turn_session * const * sessions, int count, const float * const * pcm,
-                                    float * turn, float * speech) {
+transcribe_status stream_step_batch(transcribe_turn_session * const * sessions,
+                                    int                               count,
+                                    const float * const *             pcm,
+                                    float *                           turn,
+                                    float *                           speech) {
     ++g_batch_calls;
     for (int i = 0; i < count; ++i) {
         if (const auto st = stream_step(sessions[i], pcm[i], 1, turn + i, speech + i); st != TRANSCRIBE_OK) {
@@ -122,8 +125,8 @@ transcribe::Arch make_arch(const char * name, const transcribe::TurnOps * ops) {
     return a;
 }
 
-const transcribe::Arch k_clip_arch   = make_arch("fake-turn-clip", &k_clip_ops);
-const transcribe::Arch k_stream_arch = make_arch("fake-turn-stream", &k_stream_ops);
+const transcribe::Arch k_clip_arch         = make_arch("fake-turn-clip", &k_clip_ops);
+const transcribe::Arch k_stream_arch       = make_arch("fake-turn-stream", &k_stream_ops);
 const transcribe::Arch k_stream_batch_arch = make_arch("fake-turn-stream-batch", &k_stream_batch_ops);
 
 void setup_infos() {
@@ -355,7 +358,6 @@ void test_stream() {
     transcribe_turn_session_free(s);
 }
 
-
 struct Tracks {
     std::vector<float> turn, speech;
     int64_t            next_turn = 0, next_speech = 0;
@@ -368,7 +370,8 @@ void collect(transcribe_turn_session * s, Tracks & t) {
         t.turn.insert(t.turn.end(), transcribe_turn_probs(s), transcribe_turn_probs(s) + r.n_probs);
     }
     if (r.n_speech_probs > 0) {
-        t.speech.insert(t.speech.end(), transcribe_turn_speech_probs(s), transcribe_turn_speech_probs(s) + r.n_speech_probs);
+        t.speech.insert(t.speech.end(), transcribe_turn_speech_probs(s),
+                        transcribe_turn_speech_probs(s) + r.n_speech_probs);
     }
     t.next_turn += r.n_probs;
     t.next_speech += r.n_speech_probs;
@@ -378,8 +381,8 @@ void collect(transcribe_turn_session * s, Tracks & t) {
 // a batched step; validation before any change; failures reset every stream.
 void test_feed_batch(const transcribe::Arch * arch) {
     transcribe_model model;
-    model.arch  = arch;
-    model.roles = TRANSCRIBE_ROLE_TURN;
+    model.arch                    = arch;
+    model.roles                   = TRANSCRIBE_ROLE_TURN;
     constexpr int             k_n = 3;
     transcribe_turn_session * batch[k_n]{};
     transcribe_turn_session * alone[k_n]{};
@@ -423,9 +426,9 @@ void test_feed_batch(const transcribe::Arch * arch) {
 
     // Invalid input changes nothing.
     CHECK(transcribe_turn_stream_feed(batch[0], pcm[0].data(), 4) == TRANSCRIBE_OK);
-    const float * p2[2]   = { pcm[0].data(), pcm[1].data() };
-    int           len2[2] = { 4, 4 };
-    transcribe_turn_session * dup[2] = { batch[0], batch[0] };
+    const float *             p2[2]   = { pcm[0].data(), pcm[1].data() };
+    int                       len2[2] = { 4, 4 };
+    transcribe_turn_session * dup[2]  = { batch[0], batch[0] };
     CHECK(transcribe_turn_stream_feed_batch(dup, p2, len2, 2) == TRANSCRIBE_ERR_INVALID_ARG);
     transcribe_turn_session * none[2] = { batch[0], nullptr };
     CHECK(transcribe_turn_stream_feed_batch(none, p2, len2, 2) == TRANSCRIBE_ERR_INVALID_ARG);
@@ -434,8 +437,8 @@ void test_feed_batch(const transcribe::Arch * arch) {
     const float *      p3[2] = { pcm[0].data(), bad.data() };
     CHECK(transcribe_turn_stream_feed_batch(batch, p3, len2, 2) == TRANSCRIBE_ERR_INVALID_ARG);
     transcribe_model other;
-    other.arch                       = arch;
-    other.roles                      = TRANSCRIBE_ROLE_TURN;
+    other.arch                        = arch;
+    other.roles                       = TRANSCRIBE_ROLE_TURN;
     transcribe_turn_session * foreign = nullptr;
     CHECK(transcribe_turn_session_init(&other, nullptr, &foreign) == TRANSCRIBE_OK);
     transcribe_turn_session * mixed[2] = { batch[0], foreign };
@@ -461,8 +464,8 @@ void test_feed_batch(const transcribe::Arch * arch) {
 
 void test_feed_batch_clip() {
     transcribe_model model;
-    model.arch  = &k_clip_arch;
-    model.roles = TRANSCRIBE_ROLE_TURN;
+    model.arch                  = &k_clip_arch;
+    model.roles                 = TRANSCRIBE_ROLE_TURN;
     transcribe_turn_session * s = nullptr;
     CHECK(transcribe_turn_session_init(&model, nullptr, &s) == TRANSCRIBE_OK);
     std::vector<float> pcm(8, 0.0f);

@@ -720,9 +720,9 @@ extern "C" transcribe_status transcribe_turn_stream_feed(struct transcribe_turn_
 }
 
 extern "C" transcribe_status transcribe_turn_stream_feed_batch(struct transcribe_turn_session * const * sessions,
-                                                               const float * const *                   pcm,
-                                                               const int *                             n_samples,
-                                                               int                                     n) {
+                                                               const float * const *                    pcm,
+                                                               const int *                              n_samples,
+                                                               int                                      n) {
     return api_guard_status("transcribe_turn_stream_feed_batch",
                             [&] { return turn_stream_feed_batch_impl(sessions, pcm, n_samples, n); });
 }
