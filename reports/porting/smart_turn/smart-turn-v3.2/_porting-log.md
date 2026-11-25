@@ -76,3 +76,9 @@ Surprises worth feeding back into the docs and tooling.
   names a prebuilt tool's commit, after checking the engine sources match.
 - **Results at 8f97ab5b.** F32 93.71% (AUC 0.98252, 31,527/31,527 decisions
   equal to the fp32 ONNX), F16 93.70% (31,525), Q8_0 93.68% (31,478).
+- **Upload (2026-11-25, owner sign-off on tolerances, capability tables and
+  HF card).** F32, F16, Q8_0 and the rendered README uploaded to the PRIVATE
+  repo `handy-computer/smart-turn-v3.2-gguf` (commit `74045442`). Round trip: the downloaded
+  files' sha256 equal the local canonical files, and `validate.py all` passes
+  on the downloaded F32 (8/8 cases); the real-model smoke passes on the
+  downloaded files. Public flip deferred.

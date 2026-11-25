@@ -146,3 +146,9 @@ Surprises worth feeding back into the docs and tooling.
   unchanged: the loader reads only `stt.sava.threshold` and ignores the
   `stt.sava.policy.*` keys. `validate.py all --family sava` passes (8 cases,
   p and decision; per-frame tracks as tensors).
+- **Upload (2026-11-25, owner sign-off on tolerances, capability tables and
+  HF card).** F32, F16, Q8_0 and the rendered README uploaded to the PRIVATE
+  repo `handy-computer/sava-gguf` (commit `e64066c9`). Round trip: the downloaded
+  files' sha256 equal the local canonical files, and `validate.py all` passes
+  on the downloaded F32 (8/8 cases); the real-model smoke passes on the
+  downloaded files. Public flip deferred.
