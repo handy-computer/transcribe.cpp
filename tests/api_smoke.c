@@ -154,8 +154,6 @@ static void test_abi_metadata(void) {
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_TURN_PARAMS) == _Alignof(struct transcribe_turn_params));
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_TURN_RESULT) == sizeof(struct transcribe_turn_result));
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_TURN_RESULT) == _Alignof(struct transcribe_turn_result));
-    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_TURN_SEGMENT) == sizeof(struct transcribe_turn_segment));
-    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_TURN_SEGMENT) == _Alignof(struct transcribe_turn_segment));
     CHECK(transcribe_abi_struct_size((transcribe_abi_struct) 9999) == 0);
     CHECK(transcribe_abi_struct_align((transcribe_abi_struct) 9999) == 0);
 

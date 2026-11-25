@@ -1,7 +1,7 @@
 // turn_dispatch_unit.cpp - TURN role dispatcher (transcribe-turn.cpp) against
 // two fake archs: a clip model (crop, threshold, NOT_IMPLEMENTED stream) and
 // a streaming model with a lagged speech track (alignment, chunking, flush,
-// run == feed + flush, segments), plus params validation and abort.
+// run == feed + flush), plus params validation and abort.
 
 #include "transcribe-arch.h"
 #include "transcribe-model.h"
@@ -130,22 +130,15 @@ const transcribe::Arch k_stream_arch       = make_arch("fake-turn-stream", &k_st
 const transcribe::Arch k_stream_batch_arch = make_arch("fake-turn-stream-batch", &k_stream_batch_ops);
 
 void setup_infos() {
-    g_clip_info                    = {};
-    g_clip_info.max_audio_samples  = 100;
-    g_clip_info.defaults.threshold = 0.5;
+    g_clip_info                   = {};
+    g_clip_info.max_audio_samples = 100;
+    g_clip_info.threshold         = 0.5;
 
-    g_stream_info                                      = {};
-    g_stream_info.frame_samples                        = k_frame;
-    g_stream_info.has_speech                           = true;
-    g_stream_info.speech_lookahead_frames              = k_lag;
-    g_stream_info.defaults.threshold                   = 0.9;
-    g_stream_info.defaults.speech_threshold            = 0.5;
-    g_stream_info.defaults.pre_roll_ms                 = 0;
-    g_stream_info.defaults.min_silence_before_check_ms = 0;
-    g_stream_info.defaults.max_silence_ms              = 1000000;
-    g_stream_info.defaults.min_speech_ms               = 0;
-    g_stream_info.defaults.min_confident_speech_ms     = 0;
-    g_stream_info.defaults.confident_speech_threshold  = 0.9;
+    g_stream_info                         = {};
+    g_stream_info.frame_samples           = k_frame;
+    g_stream_info.has_speech              = true;
+    g_stream_info.speech_lookahead_frames = k_lag;
+    g_stream_info.threshold               = 0.9;
 }
 
 transcribe_turn_result get_result(transcribe_turn_session * s) {
@@ -169,12 +162,11 @@ void test_roles_and_info() {
     model.roles = TRANSCRIBE_ROLE_TURN;
     CHECK(transcribe_turn_get_info(&model, &info) == TRANSCRIBE_OK);
     CHECK(info.sample_rate == 16000 && info.max_audio_ms == 6 && info.frame_samples == 0);
-    CHECK(!info.has_speech && info.speech_lookahead_frames == 0 && info.threshold == 0.5);
+    CHECK(!info.has_speech && info.threshold == 0.5);
 
     model.arch = &k_stream_arch;
     CHECK(transcribe_turn_get_info(&model, &info) == TRANSCRIBE_OK);
-    CHECK(info.max_audio_ms == 0 && info.frame_samples == k_frame && info.has_speech &&
-          info.speech_lookahead_frames == k_lag && info.threshold == 0.9);
+    CHECK(info.max_audio_ms == 0 && info.frame_samples == k_frame && info.has_speech && info.threshold == 0.9);
 
     // A short output struct is BAD_STRUCT_SIZE.
     info.struct_size = 8;
@@ -197,7 +189,7 @@ void test_clip() {
     CHECK(transcribe_turn_run(s, pcm.data(), 250, nullptr) == TRANSCRIBE_OK);
     CHECK(g_clip_last_n == 100 && g_clip_last_first == 0.15f);
     transcribe_turn_result r = get_result(s);
-    CHECK(r.p == 0.7f && r.ended && r.n_probs == 0 && r.n_speech_probs == 0 && r.n_segments == 0);
+    CHECK(r.p == 0.7f && r.ended && r.n_probs == 0 && r.n_speech_probs == 0);
     CHECK(transcribe_turn_probs(s) == nullptr && transcribe_turn_speech_probs(s) == nullptr);
 
     // Shorter input is passed whole.
@@ -208,7 +200,7 @@ void test_clip() {
     // Threshold override; equality counts as ended.
     transcribe_turn_params p;
     transcribe_turn_params_init(&p);
-    CHECK(p.threshold < 0 && p.family == nullptr);
+    CHECK(p.threshold < 0);
     p.threshold = 0.009f;
     CHECK(transcribe_turn_run(s, pcm.data(), 10, &p) == TRANSCRIBE_OK);
     CHECK(get_result(s).ended);
@@ -225,14 +217,6 @@ void test_clip() {
     CHECK(transcribe_turn_run(s, nullptr, 10, nullptr) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(get_result(s).ended);
     pcm[3] = 0.0f;
-
-    // A family extension this model does not accept.
-    struct transcribe_ext ext = { sizeof(struct transcribe_ext), 0x58585858u };
-    transcribe_turn_params_init(&p);
-    p.family = &ext;
-    CHECK(transcribe_turn_run(s, pcm.data(), 10, &p) == TRANSCRIBE_ERR_INVALID_ARG);
-    ext.size = 4;
-    CHECK(transcribe_turn_run(s, pcm.data(), 10, &p) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
 
     // A clip model does not stream.
     CHECK(transcribe_turn_stream_feed(s, pcm.data(), 10) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
@@ -292,7 +276,7 @@ void test_stream() {
             transcribe_turn_result q = get_result(s);
             CHECK(q.first_frame == next_turn);
             CHECK(q.speech_first_frame == next_speech);
-            CHECK(q.p == 0.0f && !q.ended && q.n_segments == 0);
+            CHECK(q.p == 0.0f && !q.ended);
             if (q.n_probs > 0) {
                 got_turn.insert(got_turn.end(), transcribe_turn_probs(s), transcribe_turn_probs(s) + q.n_probs);
             }
@@ -475,73 +459,28 @@ void test_feed_batch_clip() {
     transcribe_turn_session_free(s);
 }
 
-// Turn segmentation, worked by hand from inworld.sava.segmenter.
-// 16 kHz, 640-sample (40 ms) frames, lag 3.
-void test_segments() {
-    transcribe::TurnPolicy p;
-    p.threshold                   = 0.9;
-    p.speech_threshold            = 0.5;
-    p.pre_roll_ms                 = 80;   // 2 frames
-    p.min_silence_before_check_ms = 0;
-    p.max_silence_ms              = 200;  // 5 frames
-    p.min_speech_ms               = 120;  // 3 frames
-    p.min_confident_speech_ms     = 80;
-    p.confident_speech_threshold  = 0.95;
-
-    // frames:        0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15   16   17   18   19
-    std::vector<float> speech = { 0, 0, 0, .9f, .9f, .9f, .9f, 0, 0, 0, .6f, 0, 0, 0, 0, 0, 0, 0, .96f, .96f };
-    const int64_t      n      = static_cast<int64_t>(speech.size());
-    std::vector<float> turn(static_cast<size_t>(n + 3), 0.0f);
-    turn[10] = 0.95f;  // judged frame 7 (first pause frame) reads step 10: closes at step 10 -> end frame 11
-
-    std::vector<transcribe::TurnSegmentEntry> out;
-    transcribe::turn_frames_to_segments(speech.data(), turn.data(), n, n * 640 - 100, 640, 3, p, out);
-    // Turn 1: opens at frame 3, start 1; closes by the model at end frame 11.
-    // Turn 2: frame 10 only (40 ms speech, not confident) -> dropped; it
-    //         closes by silence after 5 pause frames.
-    // Turn 3: opens at 18, start 16; 80 ms of confident speech keeps it; open
-    //         at the end -> closes at frame 20, clipped to the input.
-    CHECK(out.size() == 2);
-    if (out.size() == 2) {
-        CHECK(out[0].start_sample == 1 * 640 && out[0].end_sample == 11 * 640 &&
-              out[0].end_reason == TRANSCRIBE_TURN_END_MODEL);
-        CHECK(out[1].start_sample == 16 * 640 && out[1].end_sample == n * 640 - 100 &&
-              out[1].end_reason == TRANSCRIBE_TURN_END_AUDIO);
-    }
-
-    // Keep turn 2: start 8; its 5th pause frame is judged 15 (step 18), so it
-    // closes by silence at end frame 19.
-    p.min_speech_ms = 40;
-    transcribe::turn_frames_to_segments(speech.data(), turn.data(), n, n * 640, 640, 3, p, out);
-    CHECK(out.size() == 3);
-    if (out.size() == 3) {
-        CHECK(out[1].start_sample == 8 * 640 && out[1].end_sample == 19 * 640 &&
-              out[1].end_reason == TRANSCRIBE_TURN_END_SILENCE);
-    }
-}
-
 void test_params() {
-    // resolve_turn_params on the fake clip model (threshold default 0.5).
+    // resolve_turn_threshold on the fake clip model (threshold default 0.5).
     transcribe_model model;
     model.arch  = &k_clip_arch;
     model.roles = TRANSCRIBE_ROLE_TURN;
-    transcribe::TurnPolicy out;
-    CHECK(transcribe::resolve_turn_params(&model, nullptr, out) == TRANSCRIBE_OK);
-    CHECK(out.threshold == 0.5);
+    double out  = -1.0;
+    CHECK(transcribe::resolve_turn_threshold(&model, nullptr, out) == TRANSCRIBE_OK);
+    CHECK(out == 0.5);
     transcribe_turn_params p;
     transcribe_turn_params_init(&p);
-    CHECK(p.threshold == -1.0 && p.family == nullptr);
+    CHECK(p.threshold == -1.0);
     p.threshold = 0.0;
-    CHECK(transcribe::resolve_turn_params(&model, &p, out) == TRANSCRIBE_OK);
-    CHECK(out.threshold == 0.0);
+    CHECK(transcribe::resolve_turn_threshold(&model, &p, out) == TRANSCRIBE_OK);
+    CHECK(out == 0.0);
     p.threshold = std::numeric_limits<double>::quiet_NaN();
-    CHECK(transcribe::resolve_turn_params(&model, &p, out) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe::resolve_turn_threshold(&model, &p, out) == TRANSCRIBE_ERR_INVALID_ARG);
     transcribe_turn_params_init(&p);
     p.struct_size = 8;
-    CHECK(transcribe::resolve_turn_params(&model, &p, out) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(transcribe::resolve_turn_threshold(&model, &p, out) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     // A model without the TURN role.
     model.roles = TRANSCRIBE_ROLE_VAD;
-    CHECK(transcribe::resolve_turn_params(&model, nullptr, out) == TRANSCRIBE_ERR_UNSUPPORTED_ROLE);
+    CHECK(transcribe::resolve_turn_threshold(&model, nullptr, out) == TRANSCRIBE_ERR_UNSUPPORTED_ROLE);
 }
 
 }  // namespace
@@ -556,7 +495,6 @@ int main() {
     test_feed_batch(&k_stream_batch_arch);
     CHECK(g_batch_calls > 0);
     test_feed_batch_clip();
-    test_segments();
     test_params();
     if (g_failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);

@@ -18,7 +18,6 @@
 #include "transcribe/langid.h"
 #include "transcribe/moonshine_streaming.h"
 #include "transcribe/parakeet.h"
-#include "transcribe/sava.h"
 #include "transcribe/sortformer.h"
 #include "transcribe/turn.h"
 #include "transcribe/vad.h"

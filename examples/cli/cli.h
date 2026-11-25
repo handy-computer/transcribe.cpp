@@ -157,8 +157,7 @@ int run_vad_file(const cli_args &           args,
                  double                     duration_s,
                  std::ofstream *            output);
 
-// With -o, writes the turn line (and the turn segment lines, for models that
-// also score speech).
+// With -o, writes the turn line.
 int run_turn_file(const cli_args &           args,
                   transcribe_model *         model,
                   const std::vector<float> & pcm,

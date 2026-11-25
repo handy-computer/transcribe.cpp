@@ -1,65 +1,33 @@
-# End-of-turn detection: API design (DRAFT, not locked)
+# End-of-turn detection
 
-Status: **draft**. The owner locks the API; until then this file is the single
-source of truth for every session working on turn detection. Only the design
-session edits the API below; other sessions propose changes to it (see
-[Change log](#change-log)).
+Status: **draft 6, not locked.** The owner locks the API. Until then this file
+records the design, every decision and the change log.
 
-Branch: `turn-detection`. Models: Smart Turn v3.2 (Pipecat) and SAVA (Inworld).
-Nothing is released until both models work and the owner locks the API.
+A voice assistant has to know when the user has finished talking, so it can
+answer. Waiting for a pause is not enough: people pause in the middle of a
+sentence. A turn model listens to how the speaker sounds and gives a
+probability that the turn is over.
 
-## Decisions (owner, settled)
+API: `include/transcribe/turn.h` (role `TRANSCRIBE_ROLE_TURN`). Models:
+Smart Turn v3.2 (Pipecat) and SAVA (Inworld). Branch: `turn-detection`.
 
-| # | Decision |
-|---|---|
-| 1 | A new role, `TRANSCRIBE_ROLE_TURN`, in a new header `include/transcribe/turn.h`. SAVA's per-frame turn scores come out of a TURN stream, not the VAD stream. |
-| 2 | VAD docs allow a model to judge a frame late (lookahead). Silero is unchanged. |
-| 3 | Whole recordings: the library makes decisions (copying upstream rules exactly), as `transcribe_vad_run` does for Silero. Live audio: scores only; the caller decides (option C1). |
-| 4 | Each model's recommended cut-off is the default; callers can override it. Results give the score and a yes/no. |
-| 5 | Out of scope: turn models that read text, and two-channel models. Text context would come later as a new `transcribe_turn_params` field. |
-| 6 | ~~VAD's default threshold comes from the model~~ Withdrawn in review (draft 5): `vad.h` gains no fields; only the feed / flush wording changes. |
-| 7 | Smart Turn: v3.2 only. SAVA ships if it passes our own tests. |
-| 8 | Bindings (Rust, TypeScript) are done after the API is locked. |
-| 9 | onnx / onnxruntime are allowed in `scripts/envs/` (reference tooling only). |
-
-## Settled details
-
-- Several live users on one streaming model: `transcribe_turn_stream_feed_batch`
-  feeds many sessions in one compute; each session ends exactly as after its
-  own feed (owner decision, from `tc-turn-perf/reports/perf/turn-batching.md`:
-  for 8 SAVA users a batched 40 ms tick takes ~15 ms on one core, while
-  serial feeds miss the 40 ms budget). No batch call for clip models: batching
-  8 Smart Turn clips saves only 4-7% of CPU.
-- SAVA keeps stream == run bit for bit (the 4-column padding stays; no ggml
-  patch). Ship F32, F16 and Q8_0 for both models.
-- No ggml patches for speed are carried (owner decision). The measured ones
-  (any-column sgemm, ARM F16 x F32 sgemm) stay in `tc-turn-perf/reports/perf/patches/`
-  for reference; F16 is documented as slower than F32 on ARM CPUs.
-
-- SAVA's recommended cut-off is 0.9 (Inworld's policy), also for a whole clip.
-  Inworld's clip benchmark reports accuracy at 0.5; the AUC is threshold-free.
-- `ended` is `p >= threshold`, like VAD. Pipecat uses `p > 0.5`.
-- Turn segmentation: Inworld's rule is tuned through SAVA's family extension
-  (`include/transcribe/sava.h`), not core params (draft 5).
-
-## How it fits together
+## The two models
 
 | | Smart Turn v3.2 | SAVA |
 |---|---|---|
-| roles | TURN | VAD, TURN |
-| `transcribe_turn_run` (a clip) | score of the last 8 s; `p`, `ended` | runs the clip from a fresh state; `p`, `ended` of the last frame; per-frame scores; turns found in the clip |
-| `transcribe_turn_stream_*` | NOT_IMPLEMENTED (`frame_samples` 0) | per-frame turn scores, and speech scores from the same pass |
-| `transcribe_vad_*` | UNSUPPORTED_ROLE | speech scores only (3 frames of lookahead, `frame_samples` 640) |
-| cut-off (`threshold` default) | 0.5 | 0.9 |
+| Roles | TURN | VAD and TURN |
+| How it listens | one clip at a time | a live stream, 40 ms frames |
+| `transcribe_turn_run` | scores the last 8 s of the clip | runs the whole clip; `p` is the last frame's score; also every frame's turn and speech scores |
+| `transcribe_turn_stream_*` | NOT_IMPLEMENTED (`frame_samples` is 0) | a turn score per frame, and a speech score per frame from the same pass |
+| `transcribe_vad_*` | UNSUPPORTED_ROLE | speech scores only |
+| Default cut-off (`threshold`) | 0.5 | 0.9 |
 
-Typical live use:
+## How to use it
 
-- Silero + Smart Turn: VAD stream to hear speech and pauses; on each pause,
-  `transcribe_turn_run` on the current turn's audio; `ended` says whether to answer.
-- SAVA: one TURN stream; the caller applies its own rule to the speech and turn
-  tracks (Inworld's reference rule is in this doc and in the CLI).
+### Clip model (Silero VAD + Smart Turn)
 
-## Usage (clip)
+Run a VAD stream to hear when the user speaks and pauses. At each pause, score
+the audio of the current turn:
 
 ```c
 #include "transcribe/turn.h"
@@ -69,100 +37,94 @@ transcribe_model_load_file("smart-turn-v3.2-F32.gguf", NULL, &m);
 struct transcribe_turn_session * t = NULL;
 transcribe_turn_session_init(m, NULL, &t);
 
-/* On each pause the VAD hears: the current turn's audio, 16 kHz mono f32. */
+/* At a pause: the audio since the user started talking, 16 kHz mono. */
 transcribe_turn_run(t, turn_pcm, n_samples, NULL);
 struct transcribe_turn_result r;
 transcribe_turn_result_init(&r);
 transcribe_turn_get_result(t, &r);
-if (r.ended) { /* answer */ }               /* r.p: the probability */
+if (r.ended) { /* answer */ }   /* r.p is the probability */
 
 transcribe_turn_session_free(t);
 transcribe_model_free(m);
 ```
 
-## Status and testing
+### Streaming model (SAVA alone)
 
-| Area | Tests | State |
-|---|---|---|
-| Role plumbing | `tests/turn_dispatch_unit.cpp`: fake clip and streaming archs (crop, threshold, NOT_IMPLEMENTED stream, chunk-size independence, speech-track alignment, flush, reset, abort, invalid input, segmenter worked by hand); `role_resolve_unit`, `api_smoke` (ABI ids) | done |
-| VAD lookahead | `tests/vad_lookahead_unit.cpp`: fake lookahead model (judged frames, flush, run, model threshold); Silero output unchanged on `samples/fleurs-en.wav` | done |
-| Smart Turn | `validate.py all --family smart_turn` (16 tensors x 8 cases, `p` within 1e-4, decision); `smart_turn_smoke` (toy fixture); `smart_turn_real_smoke`; the full Pipecat test set through `scripts/turn/eval_cpp.py`: 31,527 clips, decisions identical to the fp32 ONNX, max abs dp 2.4e-5 | done (F32) |
-| SAVA | `validate.py all --family sava` (32 tensors x 8 cases incl. a 306 s stream; `p`, decision and turn segments identical to `sava.segment`); `sava_smoke` (stream == run bit for bit, any chunking); `sava_real_smoke` | done (F32) |
-| Service-shaped loop | `examples/turn_live` (`transcribe-turn-live`): 20 ms chunks, `speech_start` / `turn` events; Silero + Smart Turn (Pipecat's rule) and SAVA alone (Inworld's rule on the stream tracks). With SAVA the live events equal `transcribe_turn_run`'s segments on `samples/dots.wav` | done |
-| Bindings | Rust, TypeScript, Python, Swift | after the API is locked |
+Feed audio as it arrives (`transcribe_turn_stream_feed`). Each call returns a
+turn score for every new frame and a speech score for every frame the model
+has judged. SAVA judges speech 3 frames (120 ms) late, so the speech scores
+trail the turn scores; `first_frame` and `speech_first_frame` say which frames
+each call returns. Your code decides when the turn is over, for example
+Inworld's rule: a turn opens at the first speech frame; while it is open, a
+silent frame ends it if its turn score reaches the cut-off, or if the pause has
+lasted 1.6 s. `examples/turn_live` shows both setups with 20 ms chunks.
 
-## Header
+For many users on one model, `transcribe_turn_stream_feed_batch` processes
+every user's audio in one call, much faster than one feed per user.
 
-The header is `include/transcribe/turn.h` on this branch; it is the draft.
-Changes to it are recorded in the change log below.
+## Decisions (owner)
 
-## Draft changes to existing headers
+| # | Decision |
+|---|---|
+| 1 | A new role, `TRANSCRIBE_ROLE_TURN`, in a new header `include/transcribe/turn.h`. SAVA's turn scores come from a TURN stream, not the VAD stream. |
+| 2 | VAD docs allow a model to judge a frame late (lookahead). Silero is unchanged. `vad.h` gets no new fields, only reworded comments. |
+| 3 | For a clip, the library gives the score and a yes/no (`p`, `ended`). For live audio it gives scores only; the caller decides. The library does not cut recordings into turns (draft 6). |
+| 4 | Each model's recommended cut-off is the default; callers can override it. |
+| 5 | Out of scope: turn models that read text, and two-channel models. |
+| 6 | Smart Turn: v3.2 only. SAVA ships because it passes our tests. |
+| 7 | Bindings (Rust, Python, TypeScript, Swift) come after the API is locked. |
+| 8 | onnx / onnxruntime are allowed in `scripts/envs/` (reference tooling only). |
+| 9 | Keep the API small: model-specific settings stay out of the core until a second model needs them. |
 
-`include/transcribe.h` (append-only enums):
+## Settled details
 
-```c
-    TRANSCRIBE_ROLE_TURN = 1u << 4,              /* transcribe_role */
-    TRANSCRIBE_EXT_SLOT_TURN_RUN = 3,            /* transcribe_ext_slot: transcribe_turn_params::family */
-```
+- `ended` is `p >= threshold`, like VAD. (Pipecat uses `p > 0.5`.)
+- SAVA's cut-off is 0.9 (Inworld's), also for a clip. Inworld's clip benchmark
+  reports accuracy at 0.5; the AUC does not depend on the cut-off.
+- `transcribe_turn_stream_feed_batch`: each session ends exactly as after its
+  own feed. For 8 SAVA users a batched 40 ms tick takes ~15 ms on one core;
+  separate feeds miss the 40 ms budget. No batch call for clip models:
+  batching 8 Smart Turn clips saves only 4-7% of CPU.
+- SAVA: a stream and a run of the same audio give the same scores, bit for
+  bit, on the CPU. No ggml patches for speed. F32, F16 and Q8_0 ship for both
+  models; F16 is slower than F32 on ARM CPUs.
+- The SAVA GGUF still records Inworld's whole turn rule (`stt.sava.policy.*`);
+  the library reads only the cut-off.
 
-`include/transcribe/vad.h`: no new fields and no ABI change (draft 5). Only
-the wording changes (behaviour for Silero unchanged):
+## Tests
 
-- feed "returns a probability for each completed frame" becomes "for each
-  frame the model has judged"; a model with lookahead judges a frame a fixed
-  number of frames after it is complete.
-- flush "returns one probability, or none" becomes "returns the probabilities
-  of every frame not yet judged".
-- `first_frame` keeps its meaning: the first returned (judged) frame.
+| Area | Tests |
+|---|---|
+| Role plumbing | `tests/turn_dispatch_unit.cpp`: fake clip and streaming models (cropping, threshold, NOT_IMPLEMENTED stream, any chunk size, speech-track alignment, flush, reset, abort, invalid input, batch); `role_resolve_unit`; `api_smoke` (ABI ids) |
+| VAD lookahead | `tests/vad_lookahead_unit.cpp`; Silero output unchanged on `samples/fleurs-en.wav` |
+| Smart Turn | `validate.py all --family smart_turn` (16 tensors x 8 cases, `p` within 1e-4, same decision); `smart_turn_smoke`; `smart_turn_real_smoke`; the Pipecat test set (31,527 clips) through `scripts/turn/eval_cpp.py`: decisions identical to the fp32 ONNX |
+| SAVA | `validate.py all --family sava` (32 tensors x 8 cases incl. a 306 s stream, among them the per-frame turn and speech scores; `p` within 1e-4, same decision); `sava_smoke` (stream == run bit for bit, any chunking, batch); `sava_real_smoke` |
+| Live loop | `examples/turn_live`: Silero + Smart Turn (Pipecat's rule) and SAVA alone (Inworld's rule on the stream) |
+| Bindings | after the API is locked |
 
-`include/transcribe/sava.h` (new, draft 5): the SAVA family extension
-`transcribe_sava_turn_ext` (kind `SVTN`, slot `TURN_RUN`) carries Inworld's
-turn-segment rule (speech and confident-speech thresholds, pre-roll, pause
-before the check, maximum pause, minimum speech); negative keeps the model's
-default. The core `transcribe_turn_params` is `{struct_size, threshold,
-family}`.
+## Changes to existing headers
 
-Docs: `docs/roles.md` gets a TURN row; `docs/extension-kinds.md` gets the
-`TURN_RUN` slot; `docs/models/smart-turn-v3.2.md`, `docs/models/sava.md`.
-
-## Segment details (from Inworld's reference)
-
-- Turn segments reproduce `sava.segment` exactly, so they can **overlap**: a
-  turn closed by the model or by silence ends `lag + 1` frames after the frame
-  judged silent, and the next turn starts `pre_roll_ms` before its first
-  speech with no clamp to the previous end. They are ordered by start.
-- Turns the reference reports as dropped (too little speech) are not returned,
-  as VAD drops short segments.
-- The last `lag` frames of a run are judged with the turn scores of the flush's
-  silent steps, as in the reference. A stream's flush does not return those
-  scores (the turn track covers audio frames only), so a caller's own live rule
-  sees a turn still open at the end of a stream and closes it itself.
-- Stream and run share one code path in C++ and agree bit for bit on CPU. The
-  reference's stream and run differ by up to about 2e-6 (chunked scan vs
-  recurrence), so parity with the reference is a tolerance, not equality.
-
-## Semantics to pin down in tests
-
-- Smart Turn `run`: left zero-pad to 8 s, or keep the last 8 s; waveform
-  normalised over the whole 8 s window including the padding; Whisper 80-bin
-  log-mel, 800 frames; `p` matches onnxruntime on the fp32 ONNX.
-- Audio before the last 8 s does not change Smart Turn's `p`.
-- SAVA `run` equals feed of the whole clip plus flush, from a fresh state;
-  `p` is the last real frame's turn score; the turn scores of flush's silent
-  padding steps are not returned.
-- SAVA streams are independent of how the audio is chunked, and equal `run`
-  on CPU.
-- SAVA speech track: `speech_first_frame + n_speech_probs` never exceeds
-  `first_frame + n_probs - speech_lookahead_frames` before flush.
-- SAVA segments reproduce Inworld's `sava.segment` frame for frame, mapped to
-  samples (`frame * 640`, end clipped to the input).
-- SAVA through `transcribe_vad_*`: the same speech scores as the TURN speech
-  track; `vad_run` segments use Silero's algorithm on 40 ms frames.
+- `include/transcribe.h`: `TRANSCRIBE_ROLE_TURN = 1u << 4` and the ABI ids
+  `TRANSCRIBE_ABI_TURN_*` (append-only enums).
+- `include/transcribe/vad.h`: comments only. Feed returns "a probability for
+  each frame the model judged"; flush returns "every frame not yet judged".
+  `first_frame` is the first returned frame, as before.
+- Docs: `docs/roles.md` (TURN row), `docs/models/smart-turn-v3.2.md`,
+  `docs/models/sava.md`.
 
 ## Change log
 
-- Draft 1: initial draft from owner decisions 1-9.
-- Draft 2: open questions settled (0.9, `>=`, full policy); header moved to `include/transcribe/turn.h`.
-- Draft 3: VAD `threshold` / `lookahead_frames` implemented; segment details from the SAVA intake recorded.
-- Draft 4: `transcribe_turn_stream_feed_batch` added (owner decision); `docs/roles.md` notes that a batched call is one compute.
-- Draft 5 (owner API review): `vad.h` drops `lookahead_frames` and `threshold` and keeps the 0.5 default; SAVA's segment knobs move from `transcribe_turn_params` to `transcribe_sava_turn_ext` (`include/transcribe/sava.h`), leaving core params `{struct_size, threshold, family}`.
+- Draft 1: initial draft from owner decisions.
+- Draft 2: cut-off 0.9 for SAVA, `>=`; header moved to `include/transcribe/turn.h`.
+- Draft 3: VAD `threshold` / `lookahead_frames` added; SAVA turn segments recorded.
+- Draft 4: `transcribe_turn_stream_feed_batch` added.
+- Draft 5 (owner review): `vad.h` drops `lookahead_frames` and `threshold`;
+  SAVA's segment settings move to a SAVA extension (`include/transcribe/sava.h`);
+  core params `{struct_size, threshold, family}`.
+- Draft 6 (owner review): turn segments removed (the segment struct, the
+  end-reason enum, `transcribe_turn_get_segment`, `n_segments`), and with them
+  `include/transcribe/sava.h`, the `SVTN` kind, `TRANSCRIBE_EXT_SLOT_TURN_RUN`
+  and `transcribe_turn_params::family`. `transcribe_turn_info` drops
+  `speech_lookahead_frames` (`speech_first_frame` gives it). `max_audio_ms`
+  and `sample_rate` stay, as in `langid.h`. Header comments rewritten in the
+  style of `vad.h`.

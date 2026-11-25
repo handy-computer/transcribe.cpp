@@ -55,8 +55,9 @@ samples, then flushed), as emitted:
 
 stream.json records how each chunking compares with sava.run (bit-exact or
 max abs difference); segments.json holds sava.segment(curves, Policy(), 3)
-and the live TurnSegmenter run over the stream; turn.json is the clip's p,
-decision and kept turns in samples, the TURN API's view of the same run.
+and the live TurnSegmenter run over the stream (Inworld's turn rule, for
+reference: the library returns scores, not turns); turn.json is the clip's p
+and decision, the TURN API's view of the same run.
 """
 
 from __future__ import annotations
@@ -213,20 +214,13 @@ def turn_dict(turn, n_samples: int) -> dict:
             "speech_ms": turn.speech_ms, "reason": turn.reason, "kept": turn.kept}
 
 
-# sava.segment's reasons under the TURN API's names (transcribe_turn_end).
-REASONS = {"turn": "model", "silence": "silence", "end": "audio"}
-
-
 def write_turn_json(out_dir: Path, seg: dict) -> None:
     """turn.json, what validate.py compares with the CLI's TURN output: the
-    clip's p and decision, and the kept turns in samples (dropped turns are
-    not reported by the API)."""
+    clip's p and decision."""
     turn = {
         "p": seg["run"]["p"],
         "ended": seg["run"]["ended"],
         "threshold": seg["policy"]["turn_threshold"],
-        "segments": [{"start": t["start_sample"], "end": t["end_sample"], "reason": REASONS[t["reason"]]}
-                     for t in seg["turns"] if t["kept"]],
     }
     (out_dir / "turn.json").write_text(json.dumps(turn, indent=2) + "\n")
 

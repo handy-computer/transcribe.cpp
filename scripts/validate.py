@@ -344,14 +344,11 @@ def parse_cli_segments(output: str) -> list[dict[str, int]]:
 
 
 def parse_cli_turn(output: str) -> dict[str, Any] | None:
-    """The TURN CLI's `turn: p=<p> ended=<0|1> threshold=<t>` line and its
-    `segment: <i> start=<sample> end=<sample> ... end=<reason>` lines."""
+    """The TURN CLI's `turn: p=<p> ended=<0|1> threshold=<t>` line."""
     m = re.search(r"^turn: p=(\S+) ended=([01]) threshold=(\S+)", output, re.M)
     if m is None:
         return None
-    segments = [{"start": int(s[1]), "end": int(s[2]), "reason": s[3]}
-                for s in re.finditer(r"^\s*segment: \d+ start=(\d+) end=(\d+) .* end=(\w+)$", output, re.M)]
-    return {"p": float(m[1]), "ended": m[2] == "1", "threshold": float(m[3]), "segments": segments}
+    return {"p": float(m[1]), "ended": m[2] == "1", "threshold": float(m[3])}
 
 
 def write_cpp_transcript(
@@ -613,9 +610,8 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             print(f"  wrote {out_dir / 'segments.json'}", file=sys.stderr)
             continue
         if manifest.get("role") == "turn":
-            # A turn model: its behavioural artifacts are the clip score, the
-            # decision and (for models that also score speech) the turn
-            # segments, compared against the reference's turn.json.
+            # A turn model: its behavioural artifacts are the clip score and
+            # the decision, compared against the reference's turn.json.
             turn = parse_cli_turn(result.stdout or "")
             if turn is None:
                 raise SystemExit(f"error: cpp dump [{args.family}/{case_name}] did not emit a turn line")
@@ -761,9 +757,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
             else:
                 print(f"\n  Segments: FAIL\n    reference: {ref_segs}\n    c++:       {cpp_segs}")
 
-        # TURN: the gate is the clip score within the manifest's p tolerance,
-        # the same decision, and identical turn segments when the reference
-        # has them. A missing artifact on either side is a failure.
+        # TURN: the gate is the clip score within the manifest's p tolerance
+        # and the same decision (per-frame tracks are tensors above). A
+        # missing artifact on either side is a failure.
         if manifest.get("role") == "turn":
             ref_turn, cpp_turn = ((json.loads(f.read_text()) if f.exists() else None)
                                   for f in (ref_dir / "turn.json", cpp_dir / "turn.json"))
@@ -771,9 +767,6 @@ def cmd_compare(args: argparse.Namespace) -> int:
             ok = ref_turn is not None and cpp_turn is not None
             dp = abs(cpp_turn["p"] - ref_turn["p"]) if ok else float("inf")
             ok = ok and dp <= p_tol and cpp_turn["ended"] == ref_turn["ended"]
-            if ok and "segments" in ref_turn:
-                ok = [(s["start"], s["end"], s["reason"]) for s in ref_turn["segments"]] == \
-                     [(s["start"], s["end"], s["reason"]) for s in cpp_turn["segments"]]
             all_passed = all_passed and ok
             transcript_results.append({"case": case_name, "match": ok, "mode": "turn",
                                        "reference": ref_turn, "cpp": cpp_turn, "p_abs_diff": dp})

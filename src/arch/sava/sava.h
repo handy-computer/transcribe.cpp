@@ -95,8 +95,10 @@ struct HParams {
     int32_t lookahead_frames = 3;
     float   no_speech_logit  = -30.0f;
 
-    // Decision defaults (the reference turn policy).
-    TurnPolicy policy;
+    // Inworld's recommended turn cut-off. The GGUF also records the rest of
+    // Inworld's reference turn rule (stt.sava.policy.*); the library does
+    // not use it.
+    double threshold = 0.9;
 
     // Derived by read_hparams.
     int32_t hops_per_frame = 0;  // frame_samples / hop

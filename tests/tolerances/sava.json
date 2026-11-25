@@ -52,9 +52,9 @@
     "    exact recurrence. Largest on digital silence (constant input).",
     "",
     "Gates beyond tensors (validate.py, all 8 cases): the clip score p within 1e-4",
-    "(observed <= 2.7e-6), the same decision, and turn segments identical to",
-    "sava.segment, including all 59 on dots-full (a pause-frame turn score there is",
-    "2.9e-6 from 0.9; the C++ stays on the reference's side). Products observed:",
+    "(observed <= 2.7e-6) and the same decision. Before the API dropped turn",
+    "segments (draft 6) they were also identical to sava.segment, all 59 on",
+    "dots-full (a pause-frame turn score there is 2.9e-6 from 0.9). Products observed:",
     "sava.speech 3.9e-5, sava.turn 2.6e-5 (dots-full); <= 6.7e-6 on the short cases."
   ],
   "fe.log_energy": {

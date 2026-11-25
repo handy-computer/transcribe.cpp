@@ -50,7 +50,7 @@ float score(transcribe_turn_session * s, const float * pcm, int n) {
     transcribe_turn_result r;
     transcribe_turn_result_init(&r);
     CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK);
-    CHECK(r.n_probs == 0 && r.n_speech_probs == 0 && r.n_segments == 0);
+    CHECK(r.n_probs == 0 && r.n_speech_probs == 0);
     CHECK(r.ended == (r.p >= 0.5f));
     return r.p;
 }
@@ -67,7 +67,7 @@ void test_toy() {
     transcribe_turn_info_init(&info);
     CHECK(transcribe_turn_get_info(m, &info) == TRANSCRIBE_OK);
     CHECK(info.sample_rate == 16000 && info.max_audio_ms == 200 && info.frame_samples == 0);
-    CHECK(!info.has_speech && info.speech_lookahead_frames == 0 && info.threshold == 0.5);
+    CHECK(!info.has_speech && info.threshold == 0.5);
 
     // Not a VAD model.
     transcribe_vad_info vinfo;

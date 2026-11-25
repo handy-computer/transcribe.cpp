@@ -15,8 +15,9 @@
 // reference rule (sava.segment): a turn opens on the first speech frame,
 // pre_roll_ms earlier; while it is open, each silent frame checks the turn
 // score of the step that judged it, and max_silence_ms closes it anyway.
-// The speech track lags the turn track by speech_lookahead_frames, so frame
-// t's speech is paired with the turn score of frame t + lag.
+// SAVA judges speech a few frames late (the lag), so frame t's speech is
+// paired with the turn score of frame t + lag. The lag is the gap between the
+// ends of the two tracks once speech scores arrive.
 //
 // The library returns scores; these rules are the caller's (docs/turn.md).
 
@@ -140,7 +141,7 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
     const int64_t frame_ms = std::lround(1000.0 * info.frame_samples / k_sr);
     const int64_t pre_roll = std::lround(800.0 / frame_ms), max_silence_ms = 1600;
     const int64_t min_speech_ms = 400, min_confident_ms = 200;
-    const int64_t lag = info.speech_lookahead_frames;
+    int64_t       lag = -1;       // learned from the first feed that returns speech scores
 
     std::deque<float> turn_hist;  // turn scores by frame, from turn_base
     int64_t           turn_base = 0;
@@ -155,10 +156,15 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
         open = false;
     };
 
-    auto consume = [&] {
+    auto consume = [&](bool flushed) {
         transcribe_turn_result r;
         transcribe_turn_result_init(&r);
         transcribe_turn_get_result(s, &r);
+        if (lag < 0 && r.n_speech_probs > 0) {
+            // During a feed the speech track ends lag frames before the turn
+            // track. (A flush judges every frame, so it cannot tell.)
+            lag = flushed ? 0 : (r.first_frame + r.n_probs) - (r.speech_first_frame + r.n_speech_probs);
+        }
         const float * tp = transcribe_turn_probs(s);
         for (int i = 0; i < r.n_probs; ++i) {
             turn_hist.push_back(tp[i]);
@@ -195,7 +201,7 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
             }
         }
         // Keep the turn scores still to be paired (frames >= the next judged one + lag).
-        while (!turn_hist.empty() && turn_base < last_judged + lag) {
+        while (!turn_hist.empty() && lag >= 0 && turn_base < last_judged + lag) {
             turn_hist.pop_front();
             ++turn_base;
         }
@@ -204,10 +210,10 @@ int run_turn_stream(transcribe_model * model, const std::vector<float> & pcm) {
     for (size_t off = 0; off < pcm.size(); off += k_chunk) {
         const int n = static_cast<int>(std::min<size_t>(k_chunk, pcm.size() - off));
         transcribe_turn_stream_feed(s, pcm.data() + off, n);
-        consume();
+        consume(false);
     }
     transcribe_turn_stream_flush(s);
-    consume();
+    consume(true);
     if (open) {
         close(last_judged + 1, "audio", 0.0f);
     }

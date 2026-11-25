@@ -4,9 +4,7 @@
 // The file is scored as one clip ("has the turn ended at the end of this
 // audio?"). Output lines are stable (scripts parse them):
 //   turn: p=<probability> ended=<0|1> threshold=<cut-off>
-//   segment: <i> start=<sample> end=<sample> t0=<s> t1=<s> end=<model|silence|audio>
-// Segment lines appear only for models that also score speech. -o writes
-// these lines.
+// -o writes this line.
 
 #include "transcribe/turn.h"
 
@@ -17,23 +15,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-
-namespace {
-
-const char * end_reason_name(int32_t r) {
-    switch (r) {
-        case TRANSCRIBE_TURN_END_MODEL:
-            return "model";
-        case TRANSCRIBE_TURN_END_SILENCE:
-            return "silence";
-        case TRANSCRIBE_TURN_END_AUDIO:
-            return "audio";
-        default:
-            return "unknown";
-    }
-}
-
-}  // namespace
 
 int transcribe_cli::run_turn_file(const cli_args &           args,
                                   transcribe_model *         model,
@@ -93,20 +74,7 @@ int transcribe_cli::run_turn_file(const cli_args &           args,
         if (info.max_audio_ms > 0 && duration_s * 1000.0 > info.max_audio_ms) {
             std::printf("  scored:     the last %.1f s of %.2f s\n", info.max_audio_ms / 1000.0, duration_s);
         }
-        if (info.has_speech) {
-            std::printf("turn segments: %d\n", res.n_segments);
-            for (int i = 0; i < res.n_segments; ++i) {
-                transcribe_turn_segment seg;
-                transcribe_turn_segment_init(&seg);
-                transcribe_turn_get_segment(session, i, &seg);
-                const double t0 = static_cast<double>(seg.start_sample) / info.sample_rate;
-                const double t1 = static_cast<double>(seg.end_sample) / info.sample_rate;
-                std::snprintf(line, sizeof(line), "segment: %d start=%lld end=%lld t0=%.3f t1=%.3f end=%s\n", i,
-                              static_cast<long long>(seg.start_sample), static_cast<long long>(seg.end_sample), t0, t1,
-                              end_reason_name(seg.end_reason));
-                std::printf("  %s", line);
-                lines += line;
-            }
+        if (info.frame_samples > 0) {
             std::printf("  frames:     %d (%d samples each)\n", res.n_probs, info.frame_samples);
         }
         output_ok = write_output_file(output, args.output_path, lines.c_str());

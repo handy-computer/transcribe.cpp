@@ -255,11 +255,11 @@ transcribe_status load(Loader & loader, const transcribe_model_load_params * par
     bool dec_flash_unused = false;
     flash::apply_env_overrides(m->use_flash, dec_flash_unused);
 
-    TurnModelInfo & ti    = m->turn_info;
-    ti.max_audio_samples  = m->hparams.max_audio_samples;
-    ti.frame_samples      = 0;
-    ti.has_speech         = false;
-    ti.defaults.threshold = m->hparams.threshold;
+    TurnModelInfo & ti   = m->turn_info;
+    ti.max_audio_samples = m->hparams.max_audio_samples;
+    ti.frame_samples     = 0;
+    ti.has_speech        = false;
+    ti.threshold         = m->hparams.threshold;
 
     m->roles = TRANSCRIBE_ROLE_TURN;
     set_feature(m.get(), TRANSCRIBE_FEATURE_CANCELLATION, true);

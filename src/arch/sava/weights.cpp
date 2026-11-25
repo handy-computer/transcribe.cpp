@@ -120,15 +120,7 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     REQ(read_required_u32_kv(gguf, "stt.sava.lookahead_frames", kTag, hp.lookahead_frames));
     REQ(read_required_f32_kv(gguf, "stt.sava.no_speech_logit", kTag, hp.no_speech_logit));
 
-    TurnPolicy & p = hp.policy;
-    REQ(read_required_f64(gguf, "stt.sava.threshold", p.threshold));
-    REQ(read_required_f64(gguf, "stt.sava.speech_threshold", p.speech_threshold));
-    REQ(read_required_u32_kv(gguf, "stt.sava.policy.pre_roll_ms", kTag, p.pre_roll_ms));
-    REQ(read_required_u32_kv(gguf, "stt.sava.policy.min_silence_before_check_ms", kTag, p.min_silence_before_check_ms));
-    REQ(read_required_u32_kv(gguf, "stt.sava.policy.max_silence_ms", kTag, p.max_silence_ms));
-    REQ(read_required_u32_kv(gguf, "stt.sava.policy.min_speech_ms", kTag, p.min_speech_ms));
-    REQ(read_required_u32_kv(gguf, "stt.sava.policy.min_confident_speech_ms", kTag, p.min_confident_speech_ms));
-    REQ(read_required_f64(gguf, "stt.sava.policy.confident_speech_threshold", p.confident_speech_threshold));
+    REQ(read_required_f64(gguf, "stt.sava.threshold", hp.threshold));
 
     auto bad = [](const char * what) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: invalid hparams: %s", kTag, what);
@@ -182,14 +174,8 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     if (hp.lookahead_frames < 0 || hp.lookahead_frames > 64) {
         return bad("lookahead_frames");
     }
-    const TurnPolicy & p2      = hp.policy;
-    auto               prob_ok = [](double v) {
-        return v >= 0.0 && v <= 1.0;
-    };
-    if (!prob_ok(p2.threshold) || !prob_ok(p2.speech_threshold) || !prob_ok(p2.confident_speech_threshold) ||
-        p2.pre_roll_ms < 0 || p2.min_silence_before_check_ms < 0 || p2.max_silence_ms < 0 || p2.min_speech_ms < 0 ||
-        p2.min_confident_speech_ms < 0) {
-        return bad("policy defaults");
+    if (!(hp.threshold >= 0.0 && hp.threshold <= 1.0)) {
+        return bad("stt.sava.threshold must be 0 to 1");
     }
 
     hp.hops_per_frame = hp.frame_samples / hp.hop;

@@ -1,7 +1,7 @@
 // sava_real_smoke.cpp - the real SAVA GGUF through the public TURN and VAD
 // APIs on the CPU:
-//   - sava-speech.wav (upstream's golden clip): the clip score and turn
-//     segments of inworld.sava.run / sava.segment (inworld-sava 1.0.0);
+//   - sava-speech.wav (upstream's golden clip): the clip score of
+//     inworld.sava.run (inworld-sava 1.0.0);
 //   - streams in ragged chunkings and at 1 and 4 threads are bit-identical to
 //     a run, on jfk.wav and on dots.wav (884 frames, past the 512-frame
 //     attention window);
@@ -12,7 +12,7 @@
 // Models: TRANSCRIBE_SAVA_GGUF, TRANSCRIBE_SAVA_F16_GGUF and
 // TRANSCRIBE_SAVA_Q8_0_GGUF (else models/sava/sava-{F32,F16,Q8_0}.gguf), each
 // tested when it exists; RC 77 skip when none does. The golden-clip checks
-// hold for F16 and Q8_0 too (p within 1e-4, the same two turns).
+// hold for F16 and Q8_0 too (p within 1e-4).
 
 #include "transcribe.h"
 #include "transcribe/turn.h"
@@ -51,11 +51,10 @@ bool load_sample(const char * name, std::vector<float> & pcm) {
 }
 
 struct Track {
-    std::vector<float>   turn;
-    std::vector<float>   speech;
-    std::vector<int64_t> segments;  // start, end, reason triples
-    float                p     = 0.0f;
-    bool                 ended = false;
+    std::vector<float> turn;
+    std::vector<float> speech;
+    float              p     = 0.0f;
+    bool               ended = false;
 };
 
 transcribe_turn_session * turn_session(transcribe_model * m, int n_threads) {
@@ -80,12 +79,6 @@ Track run(transcribe_turn_session * s, const std::vector<float> & pcm) {
     }
     if (const float * p = transcribe_turn_speech_probs(s)) {
         t.speech.assign(p, p + r.n_speech_probs);
-    }
-    for (int i = 0; i < r.n_segments; ++i) {
-        transcribe_turn_segment seg;
-        transcribe_turn_segment_init(&seg);
-        CHECK(transcribe_turn_get_segment(s, i, &seg) == TRANSCRIBE_OK);
-        t.segments.insert(t.segments.end(), { seg.start_sample, seg.end_sample, seg.end_reason });
     }
     return t;
 }
@@ -128,11 +121,6 @@ void test_reference(transcribe_model * m) {
     // validate.py holds the per-frame tolerances).
     CHECK(t.turn.size() == 574 && t.speech.size() == 574);
     CHECK(std::fabs(t.p - 0.9989077f) < 1e-4f && t.ended);
-    // sava.segment(curves, Policy(), 3): frames 134..319 (turn) and
-    // 308..393 (silence), in samples.
-    const std::vector<int64_t> want = { 85760,  204160, TRANSCRIBE_TURN_END_MODEL,
-                                        197120, 251520, TRANSCRIBE_TURN_END_SILENCE };
-    CHECK(t.segments == want);
     transcribe_turn_session_free(s);
 }
 
@@ -151,7 +139,7 @@ void test_parity(transcribe_model * m, const char * name, const std::vector<std:
     }
     transcribe_turn_session * s4 = turn_session(m, 4);
     const Track               r4 = run(s4, pcm);
-    CHECK(r4.turn == ref.turn && r4.speech == ref.speech && r4.segments == ref.segments);
+    CHECK(r4.turn == ref.turn && r4.speech == ref.speech);
     const Track t4 = stream(s4, pcm, chunkings.front());
     CHECK(t4.turn == ref.turn && t4.speech == ref.speech);
     transcribe_turn_session_free(s4);
@@ -179,7 +167,7 @@ void test_quiet(transcribe_model * m, const char * name) {
     }
     transcribe_turn_session * s = turn_session(m, 1);
     const Track               t = run(s, pcm);
-    CHECK(t.segments.empty() && !t.ended);
+    CHECK(!t.ended);
     for (const float p : t.speech) {
         CHECK(p < 0.5f);
     }

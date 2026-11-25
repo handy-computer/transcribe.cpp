@@ -7,7 +7,6 @@
 // clip.
 
 #include "transcribe.h"
-#include "transcribe/sava.h"
 #include "transcribe/turn.h"
 #include "transcribe/vad.h"
 
@@ -102,7 +101,7 @@ Track stream_track(transcribe_turn_session * s, const std::vector<float> & pcm, 
         CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK);
         CHECK(r.first_frame == static_cast<int64_t>(t.turn.size()));
         CHECK(r.speech_first_frame == static_cast<int64_t>(t.speech.size()));
-        CHECK(r.n_segments == 0 && !r.ended);
+        CHECK(r.p == 0.0f && !r.ended);
         const float * p  = transcribe_turn_probs(s);
         const float * sp = transcribe_turn_speech_probs(s);
         if (p != nullptr) {
@@ -281,7 +280,7 @@ void test_model() {
     transcribe_turn_info_init(&ti);
     CHECK(transcribe_turn_get_info(m, &ti) == TRANSCRIBE_OK);
     CHECK(ti.sample_rate == 16000 && ti.frame_samples == k_frame && ti.max_audio_ms == 0);
-    CHECK(ti.has_speech && ti.speech_lookahead_frames == k_lag && ti.threshold == 0.9);
+    CHECK(ti.has_speech && ti.threshold == 0.9);
     transcribe_vad_info vi;
     transcribe_vad_info_init(&vi);
     CHECK(transcribe_vad_get_info(m, &vi) == TRANSCRIBE_OK);
@@ -300,58 +299,20 @@ void test_model() {
         CHECK(std::isfinite(run.speech[i]) && run.speech[i] >= 0.0f && run.speech[i] <= 1.0f);
     }
 
-    // The TURN_RUN extension (Inworld's segment rule).
-    {
-        CHECK(transcribe_model_accepts_ext_kind(m, TRANSCRIBE_EXT_SLOT_TURN_RUN, TRANSCRIBE_EXT_KIND_SAVA_TURN));
-        CHECK(!transcribe_model_accepts_ext_kind(m, TRANSCRIBE_EXT_SLOT_RUN, TRANSCRIBE_EXT_KIND_SAVA_TURN));
-        auto segments = [&](const transcribe_turn_params * tp, transcribe_status want) {
-            CHECK(transcribe_turn_run(s, pcm.data(), static_cast<int>(pcm.size()), tp) == want);
-            std::vector<int64_t>   out;
-            transcribe_turn_result r;
-            transcribe_turn_result_init(&r);
-            transcribe_turn_get_result(s, &r);
-            for (int i = 0; i < r.n_segments; ++i) {
-                transcribe_turn_segment seg;
-                transcribe_turn_segment_init(&seg);
-                transcribe_turn_get_segment(s, i, &seg);
-                out.push_back(seg.start_sample);
-                out.push_back(seg.end_sample);
-            }
-            return out;
-        };
-        const std::vector<int64_t> base = segments(nullptr, TRANSCRIBE_OK);
-        transcribe_sava_turn_ext   ext;
-        transcribe_sava_turn_ext_init(&ext);
-        CHECK(ext.pre_roll_ms == -1 && ext.speech_threshold == -1.0);
-        transcribe_turn_params tp;
-        transcribe_turn_params_init(&tp);
-        tp.family = &ext.ext;
-        CHECK(segments(&tp, TRANSCRIBE_OK) == base);  // all defaults
-        ext.speech_threshold = 1.0;                   // nothing is ever confident enough to open a turn
-        ext.min_speech_ms    = 0;
-        segments(&tp, TRANSCRIBE_OK);
-        transcribe_turn_result r;
-        transcribe_turn_result_init(&r);
-        transcribe_turn_get_result(s, &r);
-        CHECK(r.n_probs == static_cast<int32_t>(n_frames));
-        ext.speech_threshold = 1.5;  // out of range: rejected before the result is touched
-        CHECK(transcribe_turn_run(s, pcm.data(), static_cast<int>(pcm.size()), &tp) == TRANSCRIBE_ERR_INVALID_ARG);
-        ext.speech_threshold = -1.0;
-        ext.ext.kind         = 0x58585858u;  // a kind SAVA does not accept
-        CHECK(transcribe_turn_run(s, pcm.data(), static_cast<int>(pcm.size()), &tp) == TRANSCRIBE_ERR_INVALID_ARG);
-        transcribe_sava_turn_ext_init(&ext);
-        ext.ext.size = 4;
-        CHECK(transcribe_turn_run(s, pcm.data(), static_cast<int>(pcm.size()), &tp) == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
-    }
+    // p is the last frame's turn score; a threshold override sets ended.
     transcribe_turn_result r;
     transcribe_turn_result_init(&r);
-    CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK);
-    for (int i = 0; i < r.n_segments; ++i) {
-        transcribe_turn_segment seg;
-        transcribe_turn_segment_init(&seg);
-        CHECK(transcribe_turn_get_segment(s, i, &seg) == TRANSCRIBE_OK);
-        CHECK(seg.start_sample >= 0 && seg.start_sample < seg.end_sample &&
-              seg.end_sample <= static_cast<int64_t>(pcm.size()));
+    {
+        CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK);
+        CHECK(r.p == run.turn.back() && r.ended == (r.p >= 0.9f));
+        transcribe_turn_params tp;
+        transcribe_turn_params_init(&tp);
+        tp.threshold = 0.0;
+        CHECK(transcribe_turn_run(s, pcm.data(), static_cast<int>(pcm.size()), &tp) == TRANSCRIBE_OK);
+        CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK && r.ended);
+        tp.threshold = 1.5;  // out of range: rejected before the result is touched
+        CHECK(transcribe_turn_run(s, pcm.data(), static_cast<int>(pcm.size()), &tp) == TRANSCRIBE_ERR_INVALID_ARG);
+        CHECK(transcribe_turn_get_result(s, &r) == TRANSCRIBE_OK && r.ended);
     }
 
     // A second run from a fresh state gives the same result.

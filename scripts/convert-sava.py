@@ -189,7 +189,9 @@ def convert(cfg, state: dict[str, torch.Tensor], out_path: Path, outtype: str, s
     w.add_uint32("stt.sava.lookahead_frames", cfg.lookahead_frames)
     w.add_float32("stt.sava.no_speech_logit", NO_SPEECH_LOGIT)
     # Decision defaults: turn cut-off (Policy.turn_threshold), speech threshold
-    # and the rest of the reference turn policy. Thresholds are float64: the
+    # and the rest of the reference turn policy. The library reads only
+    # stt.sava.threshold; the rest records Inworld's rule for callers who
+    # apply it to the score tracks (examples/turn_live). Thresholds are float64: the
     # reference compares fp32 probabilities against Python floats, and 0.9
     # rounded to fp32 (0.89999998) would accept p == fl32(0.9).
     w.add_float64("stt.sava.threshold", POLICY["turn_threshold"])

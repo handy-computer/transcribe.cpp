@@ -48,14 +48,11 @@ runs that rule in 20 ms chunks.
 and returns:
 
 - `p` and `ended`: the last frame's turn score, and `p >= 0.9`;
-- every frame's turn and speech scores;
-- the turns Inworld's rule finds (`sava.segment`, dropped turns left out).
+- every frame's turn and speech scores.
 
 ```bash
 build/bin/transcribe-cli -m sava-Q8_0.gguf samples/sava-speech.wav
 # turn: p=0.998900 ended=1 threshold=0.90
-#   segment: 0 start=85760 end=204160 t0=5.360 t1=12.760 end=model
-#   segment: 1 start=197120 end=251520 t0=12.320 t1=15.720 end=silence
 ```
 
 **Speech only.** The VAD role (`transcribe_vad_*`) returns the same speech
@@ -143,9 +140,9 @@ Details:
 
 On the 8 golden recordings (`tests/golden/sava/`):
 
-- **F32 vs the reference:** within 4e-5 in probability, with the same turns
-  as `sava.segment`.
-- **F16 vs F32:** within 1.5e-6 per frame, with the same turns on all 8.
+- **F32 vs the reference:** within 4e-5 in probability, with the same
+  decisions.
+- **F16 vs F32:** within 1.5e-6 per frame, with the same decisions on all 8.
   F16 also passes the F32 tolerance gate (`validate.py` with
   `--gguf sava-F16.gguf`).
 - **Q8_0 vs F32:** per-frame scores differ by up to 0.065 (mean 1e-3 to

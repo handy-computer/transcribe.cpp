@@ -249,7 +249,7 @@ uv run scripts/catalog/render.py
 | Test-set parity | decision vs onnxruntime | `scripts/turn/eval_cpp.py` (via `tools/transcribe-turn-eval`) | decision agreement and accuracy vs the fp32 baseline above | MUST PASS | **PASS**: 31,527 clips, 100% decision agreement, 93.71% accuracy (= reference), max abs dp 2.4e-5 |
 | Threshold | `transcribe_turn_params::threshold` | unit test | default 0.5 from the GGUF; override honoured | MUST PASS | **PASS**: `smart_turn_real_smoke`, `turn_dispatch_unit` |
 | Streaming | `transcribe_turn_stream_*` | - | NOT_IMPLEMENTED (`frame_samples` 0) | OUT OF SCOPE — the model scores clips | verified (`smart_turn_smoke`) |
-| Speech track / segments | `has_speech` | - | empty | OUT OF SCOPE — the model has no speech head | verified (`smart_turn_smoke`) |
+| Speech track | `has_speech` | - | empty | OUT OF SCOPE — the model has no speech head | verified (`smart_turn_smoke`) |
 | Transcribe / translate / timestamps | ASR | - | UNSUPPORTED_ROLE | OUT OF SCOPE — not an ASR model | verified |
 | Batch (offline) | serial | - | - | OUT OF SCOPE — TURN has no batch API | n/a |
 
@@ -260,7 +260,7 @@ uv run scripts/catalog/render.py
   of the Whisper loader, behaviour unchanged) and the Whisper log-mel. The
   waveform normalisation is computed in double on the host. Manual attention by
   default (`TRANSCRIBE_FLASH_ATTN` overrides). `validate.py` compares the TURN
-  role's `turn.json` (p within the manifest tolerance, decision, segments).
+  role's `turn.json` (p within the manifest tolerance, decision).
 - Tolerances finalized: see `tests/tolerances/smart_turn.json` `_comment`
   (widened entries and the massive-activation mechanism).
 - Speed: the catalog's cells (profile `turn-publication-v1`) were measured on

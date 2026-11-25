@@ -1,10 +1,10 @@
-// transcribe-turn.h - internal TURN role surface: the session base, the
-// per-arch ops table, and the shared turn segmenter.
+// transcribe-turn.h - internal TURN role surface: the session base and the
+// per-arch ops table.
 //
 // Clip models (frame_samples == 0) score one already cropped clip. Streaming
 // models step whole frames and carry their own state; the role dispatcher
 // (transcribe-turn.cpp) validates input, buffers partial frames, aligns the
-// lagged speech track, flushes, and cuts a whole run into turns.
+// lagged speech track and flushes.
 
 #pragma once
 
@@ -16,57 +16,21 @@
 
 namespace transcribe {
 
-// transcribe_turn_params after defaulting and validation. Also the model's
-// defaults (TurnModelInfo::defaults).
-struct TurnPolicy {
-    double  threshold                   = 0.5;
-    double  speech_threshold            = 0.5;
-    int32_t pre_roll_ms                 = 0;
-    int32_t min_silence_before_check_ms = 0;
-    int32_t max_silence_ms              = 0;
-    int32_t min_speech_ms               = 0;
-    int32_t min_confident_speech_ms     = 0;
-    double  confident_speech_threshold  = 0.9;
-};
-
 // A model's static turn facts, read from its GGUF at load.
 struct TurnModelInfo {
-    int32_t    max_audio_samples       = 0;  // run crops to the last this many; 0 = no limit
-    int32_t    frame_samples           = 0;  // 0 = clip model, no stream
-    bool       has_speech              = false;
-    int32_t    speech_lookahead_frames = 0;
-    TurnPolicy defaults;  // threshold always; the segmenter fields when has_speech
+    int32_t max_audio_samples       = 0;    // run crops to the last this many; 0 = no limit
+    int32_t frame_samples           = 0;    // 0 = clip model, no stream
+    bool    has_speech              = false;
+    int32_t speech_lookahead_frames = 0;    // frames the speech scores lag the turn scores
+    double  threshold               = 0.5;  // the model's recommended cut-off
 };
 
-struct TurnSegmentEntry {
-    int64_t start_sample = 0;
-    int64_t end_sample   = 0;
-    int32_t end_reason   = TRANSCRIBE_TURN_END_MODEL;
-};
-
-// Validate params (NULL = defaults) against a TURN model: the threshold
-// (negative = the model's), and a family extension, which the model's
-// apply_run_ext validates and folds into the policy. Starts from the model's
-// defaults. INVALID_ARG on a non-finite or out-of-range value or an
-// extension the model does not accept; BAD_STRUCT_SIZE on a short struct.
-transcribe_status resolve_turn_params(const transcribe_model *       model,
-                                      const transcribe_turn_params * params,
-                                      TurnPolicy &                   out);
-
-// Inworld SAVA's reference TurnSegmenter (inworld.sava.segmenter, fed the way
-// sava.segment feeds it), ported verbatim. speech[t] judges frame t of a
-// clip of n_samples samples; turn_at_step[s] is the turn score the stream
-// emitted at step s, for s in [0, n_frames + lag) (the last lag steps are
-// the flush's silent steps). Kept turns only, in samples, ends clipped to
-// n_samples. Replaces out.
-void turn_frames_to_segments(const float *                   speech,
-                             const float *                   turn_at_step,
-                             int64_t                         n_frames,
-                             int64_t                         n_samples,
-                             int32_t                         frame_samples,
-                             int32_t                         lag,
-                             const TurnPolicy &              policy,
-                             std::vector<TurnSegmentEntry> & out);
+// Validate params (NULL = defaults) against a TURN model and return the
+// threshold to use (negative = the model's). INVALID_ARG on a non-finite or
+// out-of-range value; BAD_STRUCT_SIZE on a short struct.
+transcribe_status resolve_turn_threshold(const transcribe_model *       model,
+                                         const transcribe_turn_params * params,
+                                         double &                       out);
 
 struct TurnOps {
     const TurnModelInfo & (*info)(const transcribe_model * model);
@@ -100,10 +64,6 @@ struct TurnOps {
                                     const float * const *             frame_pcm,
                                     float *                           turn,
                                     float *                           speech);
-    // Optional (nullptr = no extension accepted on TURN_RUN): validate a
-    // family extension that transcribe_model_accepts_ext_kind accepted, and
-    // apply it to policy. Must not touch anything else.
-    transcribe_status (*apply_run_ext)(const transcribe_model * model, const transcribe_ext * ext, TurnPolicy & policy);
 };
 
 }  // namespace transcribe
@@ -115,11 +75,10 @@ struct transcribe_turn_session : transcribe::SessionCore {
     bool               needs_reset = false;  // retry a reset that threw before stepping again
 
     // Last call's result; empty / zero otherwise.
-    float                                     p     = 0.0f;
-    bool                                      ended = false;
-    std::vector<float>                        probs;
-    int64_t                                   first_frame = 0;
-    std::vector<float>                        speech_probs;
-    int64_t                                   speech_first_frame = 0;
-    std::vector<transcribe::TurnSegmentEntry> segments;
+    float              p     = 0.0f;
+    bool               ended = false;
+    std::vector<float> probs;
+    int64_t            first_frame = 0;
+    std::vector<float> speech_probs;
+    int64_t            speech_first_frame = 0;
 };

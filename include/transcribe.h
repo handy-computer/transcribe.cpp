@@ -411,7 +411,6 @@ typedef enum {
     TRANSCRIBE_ABI_TURN_SESSION_PARAMS    = 30,
     TRANSCRIBE_ABI_TURN_PARAMS            = 31,
     TRANSCRIBE_ABI_TURN_RESULT            = 32,
-    TRANSCRIBE_ABI_TURN_SEGMENT           = 33,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.
@@ -701,8 +700,6 @@ typedef enum {
     TRANSCRIBE_EXT_SLOT_STREAM      = 1,
     /* transcribe_diarize_params::family (include/transcribe/diarize.h) */
     TRANSCRIBE_EXT_SLOT_DIARIZE_RUN = 2,
-    /* transcribe_turn_params::family (include/transcribe/turn.h) */
-    TRANSCRIBE_EXT_SLOT_TURN_RUN    = 3,
 } transcribe_ext_slot;
 
 /*

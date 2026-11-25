@@ -1,17 +1,19 @@
 /*
- * include/transcribe/turn.h - TURN role: has the speaker finished their turn?
+ * End-of-turn detection: has the speaker finished talking?
  *
- * Includes transcribe.h; safe to include in C or C++ TUs. For models with
- * TRANSCRIBE_ROLE_TURN. Input is 16 kHz mono float32 PCM.
+ * Requires a model that supports TRANSCRIBE_ROLE_TURN. Works in C and C++.
+ * Audio must be 16 kHz mono floats.
  *
- * transcribe_turn_run scores one clip: "has the turn ended at the end of this
- * audio?". Every TURN model supports it. Pass the current turn's audio (from
- * where the speaker started); the model pads or crops it itself.
+ * A voice assistant uses this to decide when to answer. A pause alone is a
+ * poor signal: people pause in the middle of a sentence. A turn model
+ * listens to how the speaker sounds and returns a probability that they
+ * are done: 0 means they will keep talking; 1 means their turn is over.
  *
- * transcribe_turn_stream_feed scores live audio frame by frame. Only models
- * with transcribe_turn_info::frame_samples > 0 stream; the others return
- * TRANSCRIBE_ERR_NOT_IMPLEMENTED. A stream returns scores only; deciding when
- * a live turn ends is the caller's.
+ * transcribe_turn_run scores one clip: has the turn ended at the end of
+ * this audio? Every turn model supports it.
+ * transcribe_turn_stream_feed scores incoming audio frame by frame. Only
+ * some models support it (transcribe_turn_info::frame_samples > 0). A
+ * stream only returns probabilities; your code decides when to answer.
  *
  * Usage: docs/turn.md. Threading and object lifetimes: docs/roles.md.
  */
@@ -27,119 +29,106 @@ extern "C" {
 
 struct transcribe_turn_session;
 
-/* Static facts about a turn model. */
+/* What a turn model needs and supports. */
 struct transcribe_turn_info {
-    uint64_t struct_size;
-    int32_t  sample_rate; /* input PCM rate (16000) */
-    /* transcribe_turn_run scores the LAST max_audio_ms of longer input
-     * (no error). 0 = no limit. Smart Turn: 8000. */
+    uint64_t struct_size; /* struct size in bytes; set by the init function */
+    int32_t  sample_rate; /* required audio sample rate: 16000 Hz */
+    /* The longest audio transcribe_turn_run looks at. Longer audio is
+     * scored on its last max_audio_ms. 0 means no limit. */
     int32_t  max_audio_ms;
-    /* Samples per stream frame; 0 = the model cannot stream. SAVA: 640. */
+    /* Samples per frame for streaming. 0 means the model cannot stream:
+     * use transcribe_turn_run. */
     int32_t  frame_samples;
-    /* The model also scores speech: the speech track and turn segments
-     * exist. False: those are always empty. */
+    /* True if the model also returns a speech probability for each frame
+     * (transcribe_turn_speech_probs), so you do not need a separate VAD. */
     bool     has_speech;
-    /* Frames the speech track lags the audio: the speech score of frame t
-     * is available once frame t + speech_lookahead_frames has been fed.
-     * 0 when has_speech is false. SAVA: 3. */
-    int32_t  speech_lookahead_frames;
-    /* The model's recommended cut-off: the default of
-     * transcribe_turn_params::threshold. */
+    /* The probability at or above which the model's authors consider the
+     * turn over. The default for transcribe_turn_params::threshold. */
     double   threshold;
 };
 
 struct transcribe_turn_session_params {
-    uint64_t struct_size;
-    int32_t  n_threads; /* 0 = library default */
+    uint64_t struct_size; /* struct size in bytes; set by the init function */
+    int32_t  n_threads;   /* number of processing threads; 0 uses the default */
 };
 
 /* Settings for transcribe_turn_run. Call transcribe_turn_params_init to set
  * the defaults. */
 struct transcribe_turn_params {
-    uint64_t                      struct_size;
-    /* p >= threshold sets transcribe_turn_result::ended (and closes a turn
-     * segment). Default: -1, which uses the model's
+    uint64_t struct_size; /* struct size in bytes; set by the init function */
+    /* Probability at or above which the turn counts as ended
+     * (transcribe_turn_result::ended). Default: -1, which uses the model's
      * transcribe_turn_info::threshold. Any negative value uses the model's;
-     * otherwise 0 to 1. */
-    double                        threshold;
-    /* Typed family extension on TRANSCRIBE_EXT_SLOT_TURN_RUN, or NULL; for
-     * example the model's turn-segment rule (include/transcribe/sava.h). */
-    const struct transcribe_ext * family;
+     * otherwise use 0 to 1. */
+    double   threshold;
 };
 
 /* Summary of the last run, feed or flush. */
 struct transcribe_turn_result {
-    uint64_t struct_size;
-    /* Run only (0 / false after feed or flush): the score that the turn has
-     * ended at the end of the clip, and p >= threshold. */
+    uint64_t struct_size; /* struct size in bytes; set by the init function */
+    /* After run: the probability that the turn has ended at the end of the
+     * clip, and whether p is at or above the threshold. 0 and false after
+     * feed or flush. */
     float    p;
     bool     ended;
-    /* Per-frame turn scores (transcribe_turn_probs): score i says the turn
-     * has ended by the end of frame first_frame + i. Frame t covers samples
-     * [t * frame_samples, (t + 1) * frame_samples). 0 for models that
-     * cannot stream. After run, first_frame is 0 and every frame of the clip
-     * is scored. */
+    /* Number of per-frame turn probabilities from the last call
+     * (transcribe_turn_probs). Probability i says whether the turn has
+     * ended at the end of frame first_frame + i. Always 0 for models that
+     * cannot stream. */
     int32_t  n_probs;
+    /* Index of the first returned frame, counting from 0. Always 0 after
+     * run. For feed or flush, counts frames processed before this call.
+     * A frame starts at sample: frame index * frame_samples. */
     int64_t  first_frame;
-    /* Per-frame speech scores (transcribe_turn_speech_probs): score i is the
-     * speech probability of frame speech_first_frame + i. Only frames the
-     * model has judged are returned, so this track trails the turn track by
-     * speech_lookahead_frames. 0 when has_speech is false. */
+    /* Number of per-frame speech probabilities from the last call
+     * (transcribe_turn_speech_probs), and the index of their first frame.
+     * A model may judge speech a few frames late, so during a stream these
+     * can trail the turn probabilities. After run, every frame of the clip
+     * has both. Always 0 when has_speech is false. */
     int32_t  n_speech_probs;
     int64_t  speech_first_frame;
-    /* Turns found by the last run (transcribe_turn_get_segment); has_speech
-     * models only. Always 0 after feed or flush. */
-    int32_t  n_segments;
 };
 
-/* Why a turn segment ended. Append-only. */
-typedef enum {
-    TRANSCRIBE_TURN_END_MODEL   = 0, /* the turn score reached threshold */
-    TRANSCRIBE_TURN_END_SILENCE = 1, /* the pause reached max_silence_ms */
-    TRANSCRIBE_TURN_END_AUDIO   = 2, /* the audio ended with the turn open */
-} transcribe_turn_end;
-
-/* A turn in the input audio. Start is included; end is not. */
-struct transcribe_turn_segment {
-    uint64_t struct_size;
-    int64_t  start_sample;
-    int64_t  end_sample;
-    int32_t  end_reason; /* transcribe_turn_end */
-};
-
+/* Call each struct's init function before using it. */
 TRANSCRIBE_API void transcribe_turn_info_init(struct transcribe_turn_info * out);
 TRANSCRIBE_API void transcribe_turn_session_params_init(struct transcribe_turn_session_params * params);
+/* Clear the struct and set the default settings documented above. */
 TRANSCRIBE_API void transcribe_turn_params_init(struct transcribe_turn_params * params);
 TRANSCRIBE_API void transcribe_turn_result_init(struct transcribe_turn_result * out);
-TRANSCRIBE_API void transcribe_turn_segment_init(struct transcribe_turn_segment * out);
 
-/* UNSUPPORTED_ROLE when the model does not serve TRANSCRIBE_ROLE_TURN. */
+/* Get what the model needs and supports.
+ * Returns UNSUPPORTED_ROLE if the model cannot detect turn ends. */
 TRANSCRIBE_API transcribe_status transcribe_turn_get_info(const struct transcribe_model * model,
                                                           struct transcribe_turn_info *   out);
 
-/* params may be NULL for defaults. UNSUPPORTED_ROLE when the model does not
- * serve TRANSCRIBE_ROLE_TURN. On failure *out_session is NULL. */
+/* Create a session for processing audio. NULL params uses defaults.
+ * Returns UNSUPPORTED_ROLE if the model cannot detect turn ends.
+ * On failure, *out_session is NULL. */
 TRANSCRIBE_API transcribe_status transcribe_turn_session_init(struct transcribe_model *                     model,
                                                               const struct transcribe_turn_session_params * params,
                                                               struct transcribe_turn_session ** out_session);
 
-/* NULL is a no-op. */
+/* Free the session. NULL does nothing. */
 TRANSCRIBE_API void transcribe_turn_session_free(struct transcribe_turn_session * session);
 
-/* Polled during run, feed and flush; returning true stops the call with
- * TRANSCRIBE_ERR_ABORTED. */
+/* Check this callback during run, feed or flush. Return true to stop
+ * processing with TRANSCRIBE_ERR_ABORTED. */
 TRANSCRIBE_API void transcribe_turn_set_abort_callback(struct transcribe_turn_session * session,
                                                        transcribe_abort_callback        cb,
                                                        void *                           user_data);
 
 /*
- * Score one clip from a fresh state: does the speaker's turn end at the end
- * of this audio? Every sample finite; n_samples > 0. params may be NULL for
- * defaults. Input longer than max_audio_ms is scored on its last
- * max_audio_ms. Discards any live stream and replaces the last result.
- * Malformed input (NULL pointers, n_samples <= 0, NaN / Inf, out-of-range
- * settings, a bad extension) returns an error before the stream or the last
- * result is touched.
+ * Score one clip: has the speaker's turn ended at the end of this audio?
+ * Pass the audio of the current turn, from where the speaker started.
+ * Input must be 16 kHz mono floats with no NaN or infinite values.
+ * NULL params uses defaults. n_samples must be greater than 0.
+ *
+ * Starts fresh, discards any live stream and replaces the last result.
+ * Audio longer than max_audio_ms is scored on its last max_audio_ms.
+ * Models that can stream also return a probability for every frame.
+ *
+ * Invalid input (NULL session or pcm, invalid n_samples, NaN, infinity
+ * or out-of-range settings) leaves the stream and last result unchanged.
  */
 TRANSCRIBE_API transcribe_status transcribe_turn_run(struct transcribe_turn_session *      session,
                                                      const float *                         pcm,
@@ -147,68 +136,70 @@ TRANSCRIBE_API transcribe_status transcribe_turn_run(struct transcribe_turn_sess
                                                      const struct transcribe_turn_params * params);
 
 /*
- * Process live audio; keep an incomplete frame for the next call. Returns the
- * scores of the frames this call completes (and the speech scores of the
- * frames it lets the model judge). n_samples may be 0; pcm may be NULL then.
- * NOT_IMPLEMENTED when the model cannot stream. Invalid input leaves the
- * stream and last result unchanged; an abort or processing error resets the
- * stream and clears the result.
+ * Process incoming audio. Keep incomplete frames for the next call.
+ * Input must be 16 kHz mono floats with no NaN or infinite values.
+ * Returns a turn probability for each frame completed during this call
+ * (transcribe_turn_probs), and a speech probability for each frame the
+ * model judged (transcribe_turn_speech_probs).
+ * n_samples may be 0; pcm may be NULL in that case.
+ * Returns NOT_IMPLEMENTED if the model cannot stream.
+ *
+ * The stream continues until stream_reset, stream_flush or run.
+ * Invalid input (NULL session, NULL pcm with n_samples > 0, negative
+ * n_samples, NaN or infinity) leaves the stream and last result unchanged.
+ * An abort or processing error resets the stream and clears the result.
  */
 TRANSCRIBE_API transcribe_status transcribe_turn_stream_feed(struct transcribe_turn_session * session,
                                                              const float *                    pcm,
                                                              int                              n_samples);
 
-/* End the stream: pad the last partial frame with zeros, then let the model
- * judge every remaining frame. Returns the turn score of the padded frame
- * (if there was leftover audio) and every remaining speech score. The next
- * feed starts a new stream at frame 0. */
-TRANSCRIBE_API transcribe_status transcribe_turn_stream_flush(struct transcribe_turn_session * session);
-
 /*
- * Feed n live streams at once: sessions[i] gets pcm[i][0, n_samples[i]), as
- * if transcribe_turn_stream_feed(sessions[i], pcm[i], n_samples[i]) had been
- * called for each, in one compute. Each session's stream, result and result
- * pointers end exactly as after its own feed (bit for bit on the CPU),
- * whatever the other sessions are. Read each result from its session.
+ * Feed several streams in one call. Use this when many users talk to one
+ * model at the same time: the model processes all of them together, which
+ * is much faster than one feed per user.
  *
- * For a service with several live users on one streaming model: a step reads
- * the weights once for all of them. The sessions must be distinct and belong
- * to the same model; n >= 1; n_samples[i] may be 0 (pcm[i] may then be NULL).
- * Uses sessions[0]'s thread count. Every listed session's abort callback is
- * polled. NOT_IMPLEMENTED when the model cannot stream. Invalid input (NULL
- * arrays or sessions, a repeated session, sessions of different models, a
- * bad length, NaN or infinity) leaves every stream and result unchanged. An
- * abort or processing error resets every listed stream and clears every
- * listed result. The call is one compute on the model (docs/roles.md).
+ * sessions[i] gets the n_samples[i] samples at pcm[i]. Every session ends
+ * up exactly as if transcribe_turn_stream_feed(sessions[i], pcm[i],
+ * n_samples[i]) had been called on it; read each result from its own
+ * session. n_samples[i] may be 0; pcm[i] may be NULL in that case.
+ * Uses the thread count of sessions[0] and checks every session's abort
+ * callback. Returns NOT_IMPLEMENTED if the model cannot stream.
+ *
+ * Every session must belong to the same model and appear only once. n must
+ * be at least 1. Invalid input (NULL arrays or sessions, a repeated
+ * session, sessions of different models, a negative length, NaN or
+ * infinity) leaves every stream and result unchanged. An abort or
+ * processing error resets every listed stream and clears every result.
  */
 TRANSCRIBE_API transcribe_status transcribe_turn_stream_feed_batch(struct transcribe_turn_session * const * sessions,
                                                                    const float * const *                    pcm,
                                                                    const int *                              n_samples,
                                                                    int                                      n);
 
-/* Discard the stream without processing it; keep the last result. NULL does
- * nothing. */
+/* Process leftover audio, filling the last frame with zeros, then end the
+ * stream. Returns the turn probability of that last frame (if audio was
+ * left over) and the speech probabilities of every frame not yet judged.
+ * The next feed starts a new stream at frame 0. */
+TRANSCRIBE_API transcribe_status transcribe_turn_stream_flush(struct transcribe_turn_session * session);
+
+/* Discard the stream and leftover audio without processing them.
+ * Reset the model state and frame count. Keep the last result.
+ * NULL does nothing. */
 TRANSCRIBE_API void transcribe_turn_stream_reset(struct transcribe_turn_session * session);
 
-/* The last run's, feed's or flush's summary. Empty before any processing and
- * after an abort or processing error. */
+/* Get the summary of the last run, feed or flush.
+ * Empty before any processing, and after an abort or processing error.
+ * Invalid input leaves the previous result unchanged. */
 TRANSCRIBE_API transcribe_status transcribe_turn_get_result(const struct transcribe_turn_session * session,
                                                             struct transcribe_turn_result *        out);
 
-/* The last call's per-frame scores, or NULL if there are none. Valid until
- * the next run, feed, flush or session free. Do not free. */
+/* Get the last call's n_probs turn probabilities or n_speech_probs speech
+ * probabilities, or NULL if there are none. Do not free these pointers.
+ * They are valid until the next run, feed, flush or session free. */
 TRANSCRIBE_API const float * transcribe_turn_probs(const struct transcribe_turn_session * session);
 TRANSCRIBE_API const float * transcribe_turn_speech_probs(const struct transcribe_turn_session * session);
 
-/* Turn segment i of the last run, ordered by start. Segments follow the
- * model's reference rule exactly and may overlap (a turn's pre-roll can reach
- * back into the previous one). An out-of-range index
- * returns OK with a cleared output. */
-TRANSCRIBE_API transcribe_status transcribe_turn_get_segment(const struct transcribe_turn_session * session,
-                                                             int                                    i,
-                                                             struct transcribe_turn_segment *       out);
-
-/* load_ms plus the last call's stage times. */
+/* Get model loading and last-call processing times in milliseconds. */
 TRANSCRIBE_API transcribe_status transcribe_turn_get_timings(const struct transcribe_turn_session * session,
                                                              struct transcribe_timings *            out);
 

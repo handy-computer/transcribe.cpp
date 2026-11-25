@@ -7,8 +7,8 @@ SAVA reads 16 kHz mono audio in 640-sample (40 ms) frames. For every frame it
 gives a speech probability and an end-of-turn probability. It serves the TURN
 role (`docs/turn.md`) and the VAD role with lookahead. The architecture pattern
 is `encoder-classifier`: a causal streaming encoder with two per-frame heads.
-There is no WER. Acceptance is per-frame probability parity and exact
-turn-segment parity with the reference.
+There is no WER. Acceptance is per-frame probability parity with the
+reference and the same clip decisions.
 
 ## Identity
 
@@ -242,6 +242,12 @@ out     = attn.out @ concat(o_h)
 
 ## Reference turn policy (`segmenter.py`, `Policy()` defaults)
 
+The library does not apply this rule (draft 6 of `docs/turn.md` removed turn
+segments from the API); callers apply it to the stream's score tracks, as
+`examples/turn_live` does. It is recorded here because it defines how the
+scores are meant to be used. Until draft 6, `transcribe_turn_run` returned
+these turns and matched `sava.segment` on all 8 cases.
+
 `sava.segment(curves, policy, 3)` replays the stream. Frame `j`'s speech
 verdict comes out at step `now = j + 3`, and the turn score used with it is
 the one from step `now`, column 0. For the last 3 frames that is a
@@ -271,18 +277,16 @@ the one from step `now`, column 0. For the last 3 frames that is a
 6. A closed turn is `kept` if `speech_ms >= 400` or `confident_ms >= 200`.
    `segment()` returns dropped turns too, with `kept=false`.
 
-Consequences for the API:
+Consequences for a caller copying the rule:
 
 - Segments can overlap: `end = now + 1` is up to 3 frames past the judged
   frame, and the next turn's pre-roll is not clamped. Measured: 33 of 59
   turns overlap on `dots-full`, 6 of 7 on `dots`, 1 of 2 on `sava-speech`.
 - `end` can run up to 3 frames past the audio. Map it to samples as
   `min(end * 640, n_samples)`.
-- The flush steps' turn scores feed the segmenter. Decision (owner): `run`
-  uses them internally for segments; a stream's flush does not return them,
-  so a live caller copying Inworld's rule differs on the last 3 frames
-  (docs/turn.md).
-- Decision (owner): dropped turns (`kept=false`) are not returned.
+- The flush steps' turn scores feed the segmenter. A stream's flush does
+  not return them (they score padding), so a live caller copying Inworld's
+  rule may differ on the last 3 frames.
 - `segments.json` holds both the offline turns and the live `TurnSegmenter`
   run over the dumped stream; they agree on every case.
 
@@ -656,11 +660,11 @@ build/bin/transcribe-cli -m models/sava/sava-F32.gguf samples/sava-speech.wav
 | Capability | Mode | Command / test | Expected observable | Target | Status |
 |---|---|---|---|---|---|
 | Whole-clip turn scores (`transcribe_turn_run`) | offline | `validate.py all` | `sava.turn[:,0]`, `sava.speech` and `p` within `tests/tolerances/sava.json` | MUST PASS | PASS (8 cases; p within 2.7e-6) |
-| Turn segments | offline | `validate.py all` (`turn.json`) | the same turns as `sava.segment` (frames to samples, end clipped) | MUST PASS | PASS (all 8 cases, including the 59 turns of `dots-full`) |
+| Turn segments | - | - | - | OUT OF SCOPE - removed from the API (docs/turn.md draft 6) | SKIP - passed before removal (all 8 cases, 59 turns on `dots-full`) |
 | Streaming (`transcribe_turn_stream_*`) | live | `transcribe_sava_smoke`, `transcribe_sava_real_smoke` | any chunking bit-identical to run on CPU; within tolerance of `stream.*` | MUST PASS | PASS (1 sample to whole clip, 1 and 4 threads, jfk and dots) |
 | Speech track through `transcribe_vad_*` | live / offline | the same smokes | the same speech scores as the TURN speech track, lookahead 3 | MUST PASS | PASS (bit-identical) |
 | `transcribe_vad_run` segments | offline | one-off check (below) | Silero's segmentation applied to `sava.speech` on 40 ms frames | MUST PASS (proposed) | PASS (jfk, sava-speech, dots, dots-full, ja: identical) |
-| Long stream (5 min) | offline | `dots-full` case | within tolerance; segment parity, or a documented threshold-margin exception | MUST PASS (proposed) | PASS (segments identical; drift documented) |
+| Long stream (5 min) | offline | `dots-full` case | within tolerance, same decision | MUST PASS (proposed) | PASS (drift documented) |
 | Horizons 200 / 400 / 800 ms (turn columns 1-3) | - | dumped only | - | OUT OF SCOPE - not in the draft API | SKIP - not exposed by runtime (gated as dump tensors) |
 | On-time speech output | - | dumped only | - | OUT OF SCOPE - internal (feeds the turn head) | SKIP - not exposed by runtime (gated as dump tensors) |
 | Metal / Vulkan, quantized GGUFs | - | - | - | OUT OF SCOPE - CPU first; Stage 5 | ACCEPTED GAP - Metal runs, unvalidated; quants in Stage 5 |
@@ -670,8 +674,8 @@ build/bin/transcribe-cli -m models/sava/sava-F32.gguf samples/sava-speech.wav
 
 - `scripts/validate.py` needs no SAVA-specific code:
   - per-case `"stages": ["encoder"]` runs the dumper;
-  - `"role": "turn"` compares the CLI's `turn:` / `segment:` lines with the
-    dumper's `turn.json`;
+  - `"role": "turn"` compares the CLI's `turn:` line (p and decision) with
+    the dumper's `turn.json`;
   - the C++ dumps the reference's tensor names when `TRANSCRIBE_DUMP_DIR` is
     set, written when a stream ends.
 - `head.vad.logit_la` holds -30 at steps 0..2 on both sides.

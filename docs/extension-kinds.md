@@ -34,8 +34,6 @@ entry-point family whose `family` field the typed extension is pointed at:
   validated by `transcribe_stream_begin`.
 - `TRANSCRIBE_EXT_SLOT_DIARIZE_RUN` — `transcribe_diarize_params::family`,
   validated by `transcribe_diarize_run`.
-- `TRANSCRIBE_EXT_SLOT_TURN_RUN` — `transcribe_turn_params::family`,
-  validated by `transcribe_turn_run`.
 
 Mismatched-slot extensions are rejected with `TRANSCRIBE_ERR_INVALID_ARG`
 at the entry point. A future slot (e.g. `_SESSION`, `_MODEL_LOAD`,
@@ -53,7 +51,6 @@ parameter; existing kinds keep their slot for life.
 | `0x54535256`   | `VRST` | `STREAM` | `TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM`   | voxtral_realtime | `include/transcribe/voxtral_realtime.h` |
 | `0x54534653`   | `SFST` | `RUN`    | retired in 0.4 (was `TRANSCRIBE_EXT_KIND_SORTFORMER_STREAM`); never reuse | sortformer | - |
 | `0x52444653`   | `SFDR` | `DIARIZE_RUN` | `TRANSCRIBE_EXT_KIND_SORTFORMER_DIARIZE`   | sortformer   | `include/transcribe/sortformer.h` |
-| `0x4E545653`   | `SVTN` | `TURN_RUN` | `TRANSCRIBE_EXT_KIND_SAVA_TURN`               | sava         | `include/transcribe/sava.h`     |
 
 Empty rows reserved for future allocations:
 
