@@ -49,7 +49,9 @@ pub struct VadSessionOptions {
     serde(default)
 )]
 pub struct VadOptions {
-    /// A frame with `p >= threshold` is speech (default 0.5). `[0, 1]`.
+    /// A frame with `p >= threshold` is speech. Negative (the default, -1)
+    /// means the model's recommended threshold (Silero 0.5);
+    /// otherwise `[0, 1]`.
     pub threshold: f64,
     /// Inside speech, a frame with `p < neg_threshold` is silence. Negative
     /// (the default, -1) means `max(threshold - 0.15, 0.01)`; otherwise
@@ -69,7 +71,7 @@ pub struct VadOptions {
 impl Default for VadOptions {
     fn default() -> Self {
         VadOptions {
-            threshold: 0.5,
+            threshold: -1.0,
             neg_threshold: -1.0,
             min_speech_ms: 250,
             min_silence_ms: 100,
