@@ -174,6 +174,10 @@ struct MoonshineStreamingSession final : public transcribe_session {
     // longest common prefix that's safe to mark committed across feeds.
     // Reset at stream_begin; updated after every successful partial decode.
     std::deque<std::vector<int32_t>> stream_token_id_history;
+    // Token ids of the committed prefix. Every later stream decode is forced
+    // to start with them, so the transcript always extends what was already
+    // committed (committed text is append-only). Reset at stream_begin.
+    std::vector<int32_t>             stream_committed_ids;
     // Geometry, resolved at stream_begin (constant per stream).
     int32_t                          stream_L_total_frames        = 0;
     int32_t                          stream_R_total_frames        = 0;
