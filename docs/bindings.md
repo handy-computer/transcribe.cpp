@@ -110,15 +110,15 @@ several sessions of one model each hold an active stream and interleave
 their feeds; a binding allows one active stream per model. Starting a stream
 takes the model's stream lease, and ending it (finalize, reset, a feed that
 leaves the stream FAILED, or dropping / closing the stream) releases it.
-While the lease is held, `run`, `run_batch`, a new stream, a diarize run and
-a langid run and a VAD run / feed / flush on any session of that model raise
-`Busy` instead of waiting. A feed
+While the lease is held, `run`, `run_batch`, a new stream, a diarize run,
+a langid run, a VAD run / feed / flush and a TURN run / feed / batched feed /
+flush on any session of that model raise `Busy` instead of waiting. A feed
 rejected before the native call (e.g. NaN input) keeps the lease.
 
 ## Roles and the DIARIZE session
 
 Each binding exposes the role mask as `Model.roles` (Python `frozenset[Role]`,
-TypeScript `readonly ('asr' | 'diarize' | 'langid' | 'vad')[]`, Rust `Roles`, Swift
+TypeScript `readonly ('asr' | 'diarize' | 'langid' | 'vad' | 'turn')[]`, Rust `Roles`, Swift
 `Roles` option set). Status 20 surfaces as `UnsupportedRole`
 (`.unsupportedRole` in Swift), including from capabilities on a model without
 ASR. Status 21 surfaces as `InputTooShort` (`.inputTooShort` in Swift).
@@ -170,6 +170,42 @@ Every VAD call takes the model-wide compute lock for that call only. A VAD
 stream is session state, not a stream lease, so ASR work on the same model may
 run between two feeds. Results are copied out under the lock, and VAD calls
 honour cancellation and deferred frees like the other roles.
+
+## The TURN session
+
+A TURN model (`docs/turn.md`) gets `TurnSession` from `model.turn_session()`
+(Python, Rust), `model.turnSession()` (Swift) or `model.createTurnSession()`
+(TypeScript), and `turn_info` / `turnInfo`: sample rate, longest audio, frame
+size (0: the model cannot stream), whether it scores speech, and the default
+threshold. `run(pcm, threshold)` returns a copied-out result: `p`, `ended`
+(`p >= threshold`; omitted = the model's) and, for streaming models, every
+frame's turn and speech probabilities. Stream feed / flush return the turn
+probabilities of the frames they completed (`first_frame`) and the speech
+probabilities of the frames the model judged (`speech_first_frame`; these can
+trail). Python, Rust and Swift return `TurnResult` from feed / flush too, with
+`p = 0` and `ended = false`; TypeScript returns a `TurnStreamResult` without
+them. Stream reset drops the stream. On a model that cannot stream (Smart
+Turn) the stream calls raise `NotImplemented`.
+
+The batched feed (`TurnSession.stream_feed_batch` / `streamFeedBatch`) takes
+(session, pcm) pairs and returns one result per session, in order, each equal
+to that session's own feed. It is one compute: it takes the model-wide compute
+lock once, rejects an empty list, repeated sessions and sessions of different
+models with `InvalidArgument`, and keeps every buffer alive until the native
+call returns. Repeated sessions are rejected by the library in Python and
+Swift (impossible in Rust, through `&mut`) and by the binding in TypeScript;
+mixed models by the binding before the library call in Python, Swift and
+TypeScript, and by the library in Rust. A closed (Python) or
+disposed (TypeScript) session, including one closed while the batch waits for
+the lock, raises the base `TranscribeError`; Rust and Swift sessions cannot be
+closed while listed. Cancelling any listed session aborts the call and resets
+every listed stream; TypeScript cancels a batch through the call's own
+`signal`.
+
+Otherwise TURN calls follow the VAD rules: the compute lock for that call
+only, a turn stream is session state and not a stream lease, `Busy` while an
+ASR stream holds the lease, results copied out under the lock, and deferred
+frees.
 
 ## Raw text
 

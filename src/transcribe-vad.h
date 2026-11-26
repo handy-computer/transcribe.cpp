@@ -58,7 +58,12 @@ struct VadOps {
     // continuation of the current stream; write one probability per frame.
     // Poll session->poll_abort() and return TRANSCRIBE_ERR_ABORTED when it
     // fires. Add to session->t_encode_us / t_decode_us.
+    // With lookahead_frames L > 0, probs[i] is the value the model emits at
+    // that step, judging frame (step - L); the dispatcher drops the ones
+    // before frame 0 and steps L silent frames at the end of a stream.
     transcribe_status (*score)(transcribe_vad_session * session, const float * pcm, int64_t n_frames, float * probs);
+    // Frames a probability lags its audio (Silero 0); nullptr = 0.
+    int32_t (*lookahead_frames)(const transcribe_model * model);
 };
 
 }  // namespace transcribe
@@ -66,7 +71,7 @@ struct VadOps {
 struct transcribe_vad_session : transcribe::SessionCore {
     // Stream state owned by the dispatcher.
     std::vector<float> pending;              // buffered partial frame, < frame_samples
-    int64_t            frames_done = 0;      // frames scored since the stream began
+    int64_t            frames_done = 0;      // frames stepped since the stream began
     bool               needs_reset = false;  // retry a reset that threw before scoring again
 
     // Last call's result; empty / zero otherwise.

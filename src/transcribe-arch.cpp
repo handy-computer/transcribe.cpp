@@ -8,6 +8,7 @@
 
 #include "transcribe-log.h"
 #include "transcribe-model.h"
+#include "transcribe-turn.h"
 
 #include <cstring>
 
@@ -98,6 +99,14 @@ namespace silero_vad {
 extern const Arch arch;
 }
 
+namespace smart_turn {
+extern const Arch arch;
+}
+
+namespace sava {
+extern const Arch arch;
+}
+
 const Arch * find_arch(const char * name) {
     if (name == nullptr) {
         return nullptr;
@@ -108,7 +117,7 @@ const Arch * find_arch(const char * name) {
         &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch,    &moonshine::arch,    &moonshine_streaming::arch,
         &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,     &granite::arch,      &granite_nar::arch,
         &medasr::arch,           &moss::arch,        &sortformer::arch, &granite5_ctc::arch, &ecapa_tdnn::arch,
-        &silero_vad::arch,
+        &silero_vad::arch,       &smart_turn::arch,  &sava::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 
@@ -124,6 +133,38 @@ const Arch * find_arch(const char * name) {
     return nullptr;
 }
 
+namespace {
+
+// Why a TURN ops table does not fit the model it loaded, or nullptr. The
+// dispatcher calls score_clip for a clip model (frame_samples == 0) and
+// step / reset for a streaming one, unchecked.
+const char * turn_ops_mismatch(const TurnOps & ops, const transcribe_model * model) {
+    if (ops.info == nullptr || ops.new_session == nullptr) {
+        return "sets the TURN role with a turn ops table missing info / new_session";
+    }
+    const TurnModelInfo & info = ops.info(model);
+    if (info.frame_samples < 0 || info.max_audio_samples < 0 || info.speech_lookahead_frames < 0) {
+        return "reports negative turn sizes";
+    }
+    if (info.frame_samples == 0) {
+        if (ops.score_clip == nullptr) {
+            return "is a clip TURN model without score_clip";
+        }
+        return nullptr;
+    }
+    if (ops.step == nullptr || ops.reset == nullptr) {
+        return "is a streaming TURN model without step / reset";
+    }
+    // A streaming model has no context limit: run would crop the clip while
+    // a stream of the same audio is not cropped, and the two would disagree.
+    if (info.max_audio_samples > 0) {
+        return "is a streaming TURN model with max_audio_samples > 0";
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 transcribe_status resolve_roles(transcribe_model * model) {
     if (model == nullptr || model->arch == nullptr) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
@@ -134,12 +175,14 @@ transcribe_status resolve_roles(transcribe_model * model) {
     const bool   has_diarize = arch.diarize != nullptr;
     const bool   has_langid  = arch.langid != nullptr;
     const bool   has_vad     = arch.vad != nullptr;
+    const bool   has_turn    = arch.turn != nullptr;
 
     if (model->roles == 0 && has_asr) {
         model->roles = TRANSCRIBE_ROLE_ASR;
     }
 
-    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_LANGID | TRANSCRIBE_ROLE_VAD;
+    const uint32_t known = TRANSCRIBE_ROLE_ASR | TRANSCRIBE_ROLE_DIARIZE | TRANSCRIBE_ROLE_LANGID |
+                           TRANSCRIBE_ROLE_VAD | TRANSCRIBE_ROLE_TURN;
     const char *   why   = nullptr;
     if (model->roles == 0) {
         why = "serves no role";
@@ -153,6 +196,10 @@ transcribe_status resolve_roles(transcribe_model * model) {
         why = "sets the LANGID role without a langid ops table";
     } else if ((model->roles & TRANSCRIBE_ROLE_VAD) != 0 && !has_vad) {
         why = "sets the VAD role without a vad ops table";
+    } else if ((model->roles & TRANSCRIBE_ROLE_TURN) != 0 && !has_turn) {
+        why = "sets the TURN role without a turn ops table";
+    } else if ((model->roles & TRANSCRIBE_ROLE_TURN) != 0) {
+        why = turn_ops_mismatch(*arch.turn, model);
     }
     if (why != nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "transcribe_model_load_file: arch '%s' %s (roles 0x%x)", name, why,

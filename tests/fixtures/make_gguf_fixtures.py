@@ -129,6 +129,7 @@ GGUF_TYPE_FLOAT32 = 6
 GGUF_TYPE_BOOL    = 7
 GGUF_TYPE_STRING  = 8
 GGUF_TYPE_ARRAY   = 9
+GGUF_TYPE_FLOAT64 = 12
 
 # ggml_type enum values used for tensor data. Pinned here so we are not
 # at the mercy of upstream renumbering — a mismatch would surface as a
@@ -191,6 +192,14 @@ def _pack_kv_float32(key: str, value: float) -> bytes:
         _pack_string(key)
         + struct.pack("<i", GGUF_TYPE_FLOAT32)
         + struct.pack("<f", value)
+    )
+
+
+def _pack_kv_float64(key: str, value: float) -> bytes:
+    return (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_FLOAT64)
+        + struct.pack("<d", value)
     )
 
 
@@ -1648,6 +1657,246 @@ def _silero_vad_misaligned_gguf() -> bytes:
     raise RuntimeError("no padding gives a 16-mod-32 data offset")
 
 
+class _ToyWeights:
+    """Seeded F32 tensors: uniform(+-1/sqrt(fan_in)) weights, norm gains near 1."""
+
+    def __init__(self, seed: int) -> None:
+        self.rng = _random.Random(seed)
+        self.tensors: list[Tensor] = []
+
+    def add(self, name: str, ne: list[int], values: list[float]) -> None:
+        self.tensors.append(Tensor(name, ne, GGML_TYPE_F32, _f32_bytes(values)))
+
+    def uniform(self, name: str, ne: list[int], fan_in: int, lo: float | None = None) -> None:
+        bound = 1.0 / fan_in ** 0.5
+        self.add(name, ne, [self.rng.uniform(-bound if lo is None else lo, bound) for _ in range(math.prod(ne))])
+
+    def ones(self, name: str, n: int) -> None:
+        self.add(name, [n], [1.0 + self.rng.uniform(-0.1, 0.1) for _ in range(n)])
+
+
+# ---------------------------------------------------------------------------
+# Toy smart_turn (TURN) model
+# ---------------------------------------------------------------------------
+#
+# The contract scripts/convert-smart_turn.py writes, at toy size: 8 mel bins,
+# d_model 8, 2 layers, a 3200-sample window = 20 mel frames = 10 positions.
+
+ST_MELS, ST_D, ST_HEADS, ST_FFN, ST_LAYERS, ST_POS = 8, 8, 2, 16, 2, 10
+ST_MAX_SAMPLES = 2 * ST_POS * 160
+
+
+def _smart_turn_gguf(max_audio_samples: int = ST_MAX_SAMPLES) -> bytes:
+    w = _ToyWeights(7)
+    n_freq = 400 // 2 + 1
+    w.uniform("frontend.mel_filterbank", [n_freq, ST_MELS], 1, lo=0.0)
+    w.add("frontend.window", [400], [0.5 - 0.5 * math.cos(2 * math.pi * n / 400) for n in range(400)])
+    d = ST_D
+    w.uniform("enc.conv.0.weight", [3, ST_MELS, d], 3 * ST_MELS)
+    w.uniform("enc.conv.0.bias", [d], 3 * ST_MELS)
+    w.uniform("enc.conv.1.weight", [3, d, d], 3 * d)
+    w.uniform("enc.conv.1.bias", [d], 3 * d)
+    w.uniform("enc.pos_emb.weight", [d, ST_POS], 1)
+    w.ones("enc.final_norm.weight", d)
+    w.uniform("enc.final_norm.bias", [d], d)
+    for i in range(ST_LAYERS):
+        b = f"enc.blocks.{i}."
+        w.ones(b + "norm_attn.weight", d)
+        w.uniform(b + "norm_attn.bias", [d], d)
+        for proj in ("q", "k", "v", "out"):
+            w.uniform(b + f"attn.{proj}.weight", [d, d], d)
+            if proj != "k":
+                w.uniform(b + f"attn.{proj}.bias", [d], d)
+        w.ones(b + "norm_ffn.weight", d)
+        w.uniform(b + "norm_ffn.bias", [d], d)
+        w.uniform(b + "ffn.fc1.weight", [d, ST_FFN], d)
+        w.uniform(b + "ffn.fc1.bias", [ST_FFN], d)
+        w.uniform(b + "ffn.fc2.weight", [ST_FFN, d], ST_FFN)
+        w.uniform(b + "ffn.fc2.bias", [d], ST_FFN)
+    w.uniform("head.pool.0.weight", [d, 4], d)
+    w.uniform("head.pool.0.bias", [4], d)
+    w.uniform("head.pool.2.weight", [4, 1], 4)
+    w.uniform("head.pool.2.bias", [1], 4)
+    w.uniform("head.cls.0.weight", [d, 6], d)
+    w.uniform("head.cls.0.bias", [6], d)
+    w.ones("head.cls.1.weight", 6)
+    w.uniform("head.cls.1.bias", [6], 6)
+    w.uniform("head.cls.4.weight", [6, 3], 6)
+    w.uniform("head.cls.4.bias", [3], 6)
+    w.uniform("head.cls.6.weight", [3, 1], 3)
+    w.uniform("head.cls.6.bias", [1], 3)
+    return _build_full_gguf(
+        GGUF_MAGIC,
+        [
+            _pack_kv_string("general.architecture", "smart_turn"),
+            _pack_kv_string("stt.variant", "smart-turn-toy"),
+            _pack_kv_uint32("stt.smart_turn.encoder.n_layers", ST_LAYERS),
+            _pack_kv_uint32("stt.smart_turn.encoder.d_model", d),
+            _pack_kv_uint32("stt.smart_turn.encoder.n_heads", ST_HEADS),
+            _pack_kv_uint32("stt.smart_turn.encoder.ffn_dim", ST_FFN),
+            _pack_kv_uint32("stt.smart_turn.encoder.num_mel_bins", ST_MELS),
+            _pack_kv_uint32("stt.smart_turn.encoder.max_source_positions", ST_POS),
+            _pack_kv_string("stt.smart_turn.encoder.activation", "gelu"),
+            _pack_kv_uint32("stt.smart_turn.max_audio_samples", max_audio_samples),
+            _pack_kv_float32("stt.smart_turn.threshold", 0.5),
+            _pack_kv_bool("stt.smart_turn.waveform_normalize", True),
+            _pack_kv_float32("stt.smart_turn.waveform_normalize_eps", 1e-7),
+            _pack_kv_string("stt.frontend.type", "mel"),
+            _pack_kv_uint32("stt.frontend.num_mels", ST_MELS),
+            _pack_kv_uint32("stt.frontend.sample_rate", 16000),
+            _pack_kv_uint32("stt.frontend.n_fft", 400),
+            _pack_kv_uint32("stt.frontend.win_length", 400),
+            _pack_kv_uint32("stt.frontend.hop_length", 160),
+            _pack_kv_string("stt.frontend.window", "hann_periodic"),
+            _pack_kv_string("stt.frontend.normalize", "whisper_logmel"),
+        ],
+        w.tensors,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Toy sava (TURN + VAD) model
+# ---------------------------------------------------------------------------
+#
+# The contract scripts/convert-sava.py writes, at toy size: hidden 16, trunk
+# [mamba, attention, mamba, attention], 8-frame trunk and 6-frame head
+# attention windows (short clips wrap every KV ring), lookahead 2, the real
+# 640-sample frame. d_state is 64: ggml_ssm_scan's CPU kernel rounds a
+# remainder past its SIMD step (up to 64) differently for a graph's first
+# token, which would break stream == run (the real 128 is a multiple).
+# It omits stt.sava.speech_threshold and stt.sava.policy.*: the converter
+# writes them, the runtime ignores them.
+
+SAVA_MELS, SAVA_D, SAVA_FFN = 8, 16, 32
+SAVA_LAYERS = ["mamba", "attention", "mamba", "attention"]
+SAVA_SSM = {"expand": 2, "head_dim": 8, "state": 64, "groups": 1, "conv": 4}
+SAVA_ATTN = {"heads": 4, "kv": 2, "hd": 8, "window": 8}
+SAVA_BRANCH = {"hidden": 16, "ffn": 24, "heads": 2, "kv": 1, "hd": 8, "window": 6}
+SAVA_EMBED, SAVA_HORIZONS, SAVA_LOOKAHEAD = 4, [0, 5], 2
+
+
+def _sava_gguf() -> bytes:
+    w = _ToyWeights(11)
+    n_fft, n_bins = 400, 201
+    basis = []
+    for half in (0, 1):
+        for k in range(n_bins):
+            for n in range(n_fft):
+                win = 0.5 - 0.5 * math.cos(2 * math.pi * n / n_fft)
+                a = -2 * math.pi * k * n / n_fft
+                basis.append(win * (math.cos(a) if half == 0 else math.sin(a)))
+    w.add("frontend.dft_basis", [n_fft, 2 * n_bins], basis)
+    w.uniform("frontend.mel_filterbank", [n_bins, SAVA_MELS], 1, lo=0.0)
+    hd = SAVA_ATTN["hd"]
+    w.add("rope.freqs", [hd // 2], [10000.0 ** (-i / (hd // 2)) for i in range(hd // 2)])
+
+    d, row = SAVA_D, 4 * SAVA_MELS + 1
+    w.uniform("mixer.proj.weight", [2 * row, d], 2 * row)
+    w.ones("mixer.norm_out.weight", d)
+
+    def attn_block(p: str, width: int, heads: int, kv: int, hdim: int) -> None:
+        w.ones(p + ".norm_attn.weight", width)
+        w.uniform(p + ".attn.qkv.weight", [width, (heads + 2 * kv) * hdim], width)
+        w.ones(p + ".attn.q_norm.weight", hdim)
+        w.ones(p + ".attn.k_norm.weight", hdim)
+        w.uniform(p + ".attn.out.weight", [heads * hdim, width], heads * hdim)
+
+    def mlp(p: str, width: int, ffn: int) -> None:
+        w.ones(p + ".norm_mlp.weight", width)
+        w.uniform(p + ".mlp.gate.weight", [width, ffn], width)
+        w.uniform(p + ".mlp.up.weight", [width, ffn], width)
+        w.uniform(p + ".mlp.down.weight", [ffn, width], ffn)
+
+    inner = SAVA_SSM["expand"] * d
+    heads = inner // SAVA_SSM["head_dim"]
+    conv_dim = inner + 2 * SAVA_SSM["groups"] * SAVA_SSM["state"]
+    for i, kind in enumerate(SAVA_LAYERS):
+        p = f"trunk.{i}"
+        if kind == "mamba":
+            w.ones(p + ".norm_mix.weight", d)
+            w.uniform(p + ".ssm.in.weight", [d, inner + conv_dim + heads], d)
+            w.uniform(p + ".ssm.conv1d.weight", [SAVA_SSM["conv"], conv_dim], SAVA_SSM["conv"])
+            w.uniform(p + ".ssm.conv1d.bias", [conv_dim], SAVA_SSM["conv"])
+            dts = [math.exp(w.rng.uniform(math.log(1e-3), math.log(1e-1))) for _ in range(heads)]
+            w.add(p + ".ssm.dt.bias", [heads], [t + math.log(-math.expm1(-t)) for t in dts])
+            w.add(p + ".ssm.a", [1, heads], [-w.rng.uniform(1.0, 16.0) for _ in range(heads)])
+            w.ones(p + ".ssm.d", heads)
+            w.ones(p + ".ssm.norm_gated.weight", inner)
+            w.uniform(p + ".ssm.out.weight", [inner, d], inner)
+        else:
+            attn_block(p, d, SAVA_ATTN["heads"], SAVA_ATTN["kv"], hd)
+        mlp(p, d, SAVA_FFN)
+    w.ones("trunk.norm_out.weight", d)
+
+    b = SAVA_BRANCH
+    w.ones("head.vad.norm_in.weight", d)
+    w.uniform("head.vad.down.weight", [d, b["hidden"]], d)
+    attn_block("head.vad.blk", b["hidden"], b["heads"], b["kv"], b["hd"])
+    mlp("head.vad.blk", b["hidden"], b["ffn"])
+    w.ones("head.vad.norm_out.weight", b["hidden"])
+    w.uniform("head.vad.readout.weight", [b["hidden"], 1], 1)
+    w.uniform("head.vad.readout.bias", [1], 1)
+    w.uniform("head.vad.readout_la.weight", [b["hidden"], 1], 1)
+    w.uniform("head.vad.readout_la.bias", [1], 1)
+    w.ones("head.turn.norm_in.weight", d)
+    w.uniform("head.turn.speech_embed.weight", [SAVA_EMBED], 1)
+    w.uniform("head.turn.speech_embed.bias", [SAVA_EMBED], 1)
+    w.uniform("head.turn.down.weight", [d + SAVA_EMBED, b["hidden"]], d + SAVA_EMBED)
+    attn_block("head.turn.blk", b["hidden"], b["heads"], b["kv"], b["hd"])
+    mlp("head.turn.blk", b["hidden"], b["ffn"])
+    w.ones("head.turn.norm_out.weight", b["hidden"])
+    w.uniform("head.turn.readout.weight", [b["hidden"], len(SAVA_HORIZONS)], 1)
+    w.uniform("head.turn.readout.bias", [len(SAVA_HORIZONS)], 1)
+
+    def attn_kv(prefix: str, heads: int, kv: int, hdim: int, window: int) -> list[bytes]:
+        return [
+            _pack_kv_uint32(prefix + ".num_heads", heads),
+            _pack_kv_uint32(prefix + ".num_kv_heads", kv),
+            _pack_kv_uint32(prefix + ".head_dim", hdim),
+            _pack_kv_uint32(prefix + ".sliding_window", window),
+            _pack_kv_float32(prefix + ".rope_theta", 10000.0),
+            _pack_kv_bool(prefix + ".xsa", True),
+            _pack_kv_float32(prefix + ".xsa_alpha", 1.0),
+        ]
+
+    kvs = [
+        _pack_kv_string("general.architecture", "sava"),
+        _pack_kv_string("stt.variant", "sava-toy"),
+        _pack_kv_uint32("stt.frontend.sample_rate", 16000),
+        _pack_kv_uint32("stt.frontend.n_fft", n_fft),
+        _pack_kv_uint32("stt.frontend.win_length", n_fft),
+        _pack_kv_uint32("stt.frontend.hop_length", 160),
+        _pack_kv_uint32("stt.frontend.num_mels", SAVA_MELS),
+        _pack_kv_uint32("stt.sava.frame_samples", 640),
+        _pack_kv_uint32("stt.sava.context_samples", 240),
+        _pack_kv_float32("stt.sava.mel_floor", 1e-10),
+        _pack_kv_float32("stt.sava.log_energy_floor", 1e-5),
+        _pack_kv_uint32("stt.sava.hidden_size", d),
+        _pack_kv_uint32("stt.sava.ffn_size", SAVA_FFN),
+        _pack_kv_float32("stt.sava.rms_eps", 1e-6),
+        _pack_kv_array_string("stt.sava.layers", SAVA_LAYERS),
+        _pack_kv_uint32("stt.sava.mixer_context_frames", 2),
+        _pack_kv_uint32("stt.sava.mamba.expand", SAVA_SSM["expand"]),
+        _pack_kv_uint32("stt.sava.mamba.head_dim", SAVA_SSM["head_dim"]),
+        _pack_kv_uint32("stt.sava.mamba.state_size", SAVA_SSM["state"]),
+        _pack_kv_uint32("stt.sava.mamba.num_groups", SAVA_SSM["groups"]),
+        _pack_kv_uint32("stt.sava.mamba.conv_kernel", SAVA_SSM["conv"]),
+        *attn_kv("stt.sava.attention", SAVA_ATTN["heads"], SAVA_ATTN["kv"], hd, SAVA_ATTN["window"]),
+        _pack_kv_uint32("stt.sava.vad_branch.hidden_size", b["hidden"]),
+        _pack_kv_uint32("stt.sava.vad_branch.ffn_size", b["ffn"]),
+        *attn_kv("stt.sava.vad_branch.attention", b["heads"], b["kv"], b["hd"], b["window"]),
+        _pack_kv_uint32("stt.sava.turn_branch.hidden_size", b["hidden"]),
+        _pack_kv_uint32("stt.sava.turn_branch.ffn_size", b["ffn"]),
+        *attn_kv("stt.sava.turn_branch.attention", b["heads"], b["kv"], b["hd"], b["window"]),
+        _pack_kv_array_int32("stt.sava.turn_horizons", SAVA_HORIZONS),
+        _pack_kv_uint32("stt.sava.vad_embed_size", SAVA_EMBED),
+        _pack_kv_uint32("stt.sava.lookahead_frames", SAVA_LOOKAHEAD),
+        _pack_kv_float32("stt.sava.no_speech_logit", -30.0),
+        _pack_kv_float64("stt.sava.threshold", 0.9),
+    ]
+    return _build_full_gguf(GGUF_MAGIC, kvs, w.tensors)
+
+
 def _write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -2083,6 +2332,11 @@ def emit_fixtures(out_dir: Path) -> None:
     _write(out_dir / "arch_silero_vad.gguf", _silero_vad_gguf())
     # The same model with its tensors misaligned for memory mapping.
     _write(out_dir / "arch_silero_vad_misaligned.gguf", _silero_vad_misaligned_gguf())
+    # smart_turn (TURN), and one whose window is not 2 * max_source_positions
+    # mel frames (load error).
+    _write(out_dir / "arch_smart_turn.gguf", _smart_turn_gguf())
+    _write(out_dir / "arch_smart_turn_bad_window.gguf", _smart_turn_gguf(max_audio_samples=3000))
+    _write(out_dir / "arch_sava.gguf", _sava_gguf())
 
 
 def main(argv: list[str]) -> int:

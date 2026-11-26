@@ -16,6 +16,7 @@ add_library(transcribe
     transcribe-diarize.cpp
     transcribe-langid.cpp
     transcribe-vad.cpp
+    transcribe-turn.cpp
     transcribe-loader.cpp
     transcribe-arch.cpp
     transcribe-meta.cpp
@@ -78,6 +79,10 @@ add_library(transcribe
     arch/silero_vad/encoder.cpp
     arch/silero_vad/model.cpp
     arch/silero_vad/weights.cpp
+    arch/smart_turn/model.cpp
+    arch/sava/graph.cpp
+    arch/sava/model.cpp
+    arch/sava/weights.cpp
     arch/voxtral/model.cpp
     arch/voxtral/capabilities.cpp
     arch/voxtral/weights.cpp

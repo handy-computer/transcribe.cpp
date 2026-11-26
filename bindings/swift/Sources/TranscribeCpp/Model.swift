@@ -3,7 +3,7 @@ import Foundation
 
 /// The kinds of work a model serves (`transcribe_model_roles`). ASR is
 /// `Session`; DIARIZE is `DiarizeSession`; LANGID is `LangIdSession`; VAD is
-/// `VadSession`.
+/// `VadSession`; TURN is `TurnSession`.
 public struct Roles: OptionSet, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }
@@ -11,6 +11,7 @@ public struct Roles: OptionSet, Sendable {
     public static let diarize = Roles(rawValue: TRANSCRIBE_ROLE_DIARIZE.rawValue)
     public static let langId = Roles(rawValue: TRANSCRIBE_ROLE_LANGID.rawValue)
     public static let vad = Roles(rawValue: TRANSCRIBE_ROLE_VAD.rawValue)
+    public static let turn = Roles(rawValue: TRANSCRIBE_ROLE_TURN.rawValue)
 }
 
 /// A loaded model. Safe to share across threads (`@unchecked Sendable`): the C
@@ -28,7 +29,7 @@ public final class Model: @unchecked Sendable {
     /// The C contract allows at most one in-flight run/stream across ALL
     /// sessions of a model, and an active stream spans begin..finalize/reset/
     /// drop — so `run`/`runBatch`/another `stream`/a diarize or langid `run`/a
-    /// VAD `run`/`streamFeed`/`streamFlush` are refused with `.busy` while it
+    /// VAD or TURN `run`/`streamFeed`/`streamFlush` (and a turn batch feed) are refused with `.busy` while it
     /// is held, rather than racing into the documented UB (corrupted decodes on
     /// CPU, command-buffer failures on Metal). Always accessed under `runLock`.
     var streamActive = false

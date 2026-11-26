@@ -2,7 +2,8 @@
   "default": "asr-publication-v2",
   "roles": {
     "langid": "langid-publication-v1",
-    "vad": "vad-publication-v1"
+    "vad": "vad-publication-v1",
+    "turn": "turn-publication-v1"
   },
   "profiles": {
     "asr-publication-v2": {
@@ -177,6 +178,55 @@
               "cpu"
             ],
             "max_model_gib": 5
+          }
+        ]
+      }
+    },
+    "turn-publication-v1": {
+      "role": "turn",
+      "description": "The benchmark set published for end-of-turn (TURN role) models. Accuracy: Pipecat's test set pipecat-ai/smart-turn-data-v3.2-test (all 31,527 clips, 23 languages) scored by scripts/turn/eval_cpp.py (tools/transcribe-turn-eval, C++ on CPU, every shipped quant) and scripts/turn/score.py: a clip's score is transcribe_turn_run's p over the whole clip, and a clip is called complete when p > threshold (Pipecat's and Inworld's benchmark rule; not the API's default cut-off). The row's acc_pct is the accuracy at that threshold with a bootstrap 95% interval; its turn object adds the false positives and false negatives as shares of all clips (the convention of Pipecat's published figures, so acc_pct + fp_pct + fn_pct = 100), the count of complete clips and the ROC AUC. Speed: scripts/turn/bench.py through the Python binding's raw C ABI, CPU. <clip>-8s: transcribe_turn_run on the first 8 s of samples/<clip>.wav (Smart Turn's whole window). Streaming models only: <clip>-40ms is one pass of transcribe_turn_stream_feed over the clip in 640-sample (40 ms) feeds, a cell being the mean time per feed; <clip>-40ms-x8 is one pass of transcribe_turn_stream_feed_batch over 8 sessions each fed the clip, a cell being the mean time per tick (one 40 ms frame for each of the 8 users, so sample_duration_s is 0.32 s of audio). A -1t suffix runs the cell on one thread; without it, the library's default thread count (n_threads 0). CPU only on every target: the TURN models resolve AUTO to the CPU, the validated path. The m1 target is an Apple M1 standing in for the M4 reference machine, which was unreachable; ryzen-4750u is the x86 reference host, gated on Tctl like the other profiles.",
+      "accuracy": [
+        {
+          "dataset": "smart-turn-data-v3.2",
+          "split": "test",
+          "languages": "pooled",
+          "metric": "accuracy",
+          "quants": "all-downloads",
+          "batch_size": 1,
+          "timestamps": "none",
+          "backend": "cpu",
+          "threshold": 0.5
+        }
+      ],
+      "speed": {
+        "quants": "all-downloads",
+        "samples": [
+          "jfk-8s",
+          "jfk-8s-1t"
+        ],
+        "streaming_samples": [
+          "jfk-40ms",
+          "jfk-40ms-1t",
+          "jfk-40ms-x8",
+          "jfk-40ms-x8-1t"
+        ],
+        "iterations": 20,
+        "warmup": 3,
+        "targets": [
+          {
+            "machine": "m1",
+            "display": "Apple M1 (proxy for the Apple M4 reference machine, which was unreachable)",
+            "backends": [
+              "cpu"
+            ]
+          },
+          {
+            "machine": "ryzen-4750u",
+            "display": "AMD Ryzen 7 PRO 4750U (Radeon RADV RENOIR)",
+            "backends": [
+              "cpu"
+            ],
+            "cooldown_tctl_c": 55.0
           }
         ]
       }

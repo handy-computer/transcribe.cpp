@@ -43,6 +43,35 @@ const transcribe::VadOps * vad_ops(const transcribe_model * model) {
     return model != nullptr && (model->roles & TRANSCRIBE_ROLE_VAD) != 0 ? model->arch->vad : nullptr;
 }
 
+int64_t vad_lookahead(const transcribe::VadOps * ops, const transcribe_model * model) {
+    return ops->lookahead_frames != nullptr ? ops->lookahead_frames(model) : 0;
+}
+
+// Step n_frames whole frames as the continuation of the stream and append the
+// probabilities of the frames they judge (frame index >= 0) to out.
+transcribe_status step_frames(transcribe_vad_session *   s,
+                              const transcribe::VadOps * ops,
+                              const float *              pcm,
+                              int64_t                    n_frames,
+                              std::vector<float> &       out) {
+    if (n_frames <= 0) {
+        return TRANSCRIBE_OK;
+    }
+    const int64_t lag  = vad_lookahead(ops, s->model);
+    const size_t  base = out.size();
+    out.resize(base + static_cast<size_t>(n_frames));
+    if (const auto st = ops->score(s, pcm, n_frames, out.data() + base); st != TRANSCRIBE_OK) {
+        out.resize(base);
+        return st;
+    }
+    // Drop the values that would judge frames before the stream.
+    const int64_t skip = std::min(n_frames, std::max<int64_t>(0, lag - s->frames_done));
+    out.erase(out.begin() + static_cast<std::ptrdiff_t>(base),
+              out.begin() + static_cast<std::ptrdiff_t>(base + static_cast<size_t>(skip)));
+    s->frames_done += n_frames;
+    return TRANSCRIBE_OK;
+}
+
 // Python's // on ints (floor, not truncation).
 int64_t floor_div(int64_t a, int64_t b) {
     const int64_t q = a / b;
@@ -374,6 +403,7 @@ static transcribe_status vad_run_impl(transcribe_vad_session *      session,
     }
     const transcribe::VadOps * ops   = vad_ops(session->model);
     const int64_t              frame = ops->frame_samples(session->model);
+    const int64_t              lag   = vad_lookahead(ops, session->model);
 
     VadFailureGuard failure{ session, ops };
     clear_result(session);
@@ -384,17 +414,19 @@ static transcribe_status vad_run_impl(transcribe_vad_session *      session,
     const int64_t n_full  = n / frame;
     const int64_t n_tail  = n - n_full * frame;
     const int64_t n_total = n_full + (n_tail > 0 ? 1 : 0);
-    session->probs.resize(static_cast<size_t>(n_total));
+    session->probs.reserve(static_cast<size_t>(n_total));
 
-    transcribe_status st = TRANSCRIBE_OK;
-    if (n_full > 0) {
-        st = ops->score(session, pcm, n_full, session->probs.data());
-    }
+    transcribe_status st = step_frames(session, ops, pcm, n_full, session->probs);
     if (st == TRANSCRIBE_OK && n_tail > 0) {
         // get_speech_timestamps zero pads the last frame.
         std::vector<float> last(static_cast<size_t>(frame), 0.0f);
         std::memcpy(last.data(), pcm + n_full * frame, static_cast<size_t>(n_tail) * sizeof(float));
-        st = ops->score(session, last.data(), 1, session->probs.data() + n_full);
+        st = step_frames(session, ops, last.data(), 1, session->probs);
+    }
+    if (st == TRANSCRIBE_OK && lag > 0) {
+        // Silent steps so the last frames are judged.
+        const std::vector<float> silence(static_cast<size_t>(lag * frame), 0.0f);
+        st = step_frames(session, ops, silence.data(), lag, session->probs);
     }
     if (st != TRANSCRIBE_OK) {
         return st;
@@ -419,7 +451,7 @@ static transcribe_status vad_stream_feed_impl(transcribe_vad_session * session, 
     if (session->needs_reset) {
         reset_stream(session, ops);
     }
-    session->first_frame = session->frames_done;
+    session->first_frame = std::max<int64_t>(0, session->frames_done - vad_lookahead(ops, session->model));
     if (n_samples == 0) {
         failure.complete = true;
         return TRANSCRIBE_OK;
@@ -437,16 +469,12 @@ static transcribe_status vad_stream_feed_impl(transcribe_vad_session * session, 
         avail = joined.size();
     }
     const size_t n_frames = avail / frame;
-    if (n_frames > 0) {
-        session->probs.resize(n_frames);
-        const transcribe_status st = ops->score(session, src, static_cast<int64_t>(n_frames), session->probs.data());
-        if (st != TRANSCRIBE_OK) {
-            return st;
-        }
+    if (const auto st = step_frames(session, ops, src, static_cast<int64_t>(n_frames), session->probs);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
     std::vector<float> rest(src + n_frames * frame, src + avail);
     session->pending.swap(rest);
-    session->frames_done += static_cast<int64_t>(n_frames);
     failure.complete = true;
     return TRANSCRIBE_OK;
 }
@@ -463,13 +491,18 @@ static transcribe_status vad_stream_flush_impl(transcribe_vad_session * session)
     if (session->needs_reset) {
         reset_stream(session, ops);
     }
-    session->first_frame = session->frames_done;
+    const int64_t lag    = vad_lookahead(ops, session->model);
+    session->first_frame = std::max<int64_t>(0, session->frames_done - lag);
     transcribe_status st = TRANSCRIBE_OK;
     if (!session->pending.empty()) {
         std::vector<float> last(frame, 0.0f);
         std::copy(session->pending.begin(), session->pending.end(), last.begin());
-        session->probs.resize(1);
-        st = ops->score(session, last.data(), 1, session->probs.data());
+        st = step_frames(session, ops, last.data(), 1, session->probs);
+    }
+    if (st == TRANSCRIBE_OK && lag > 0 && session->frames_done > 0) {
+        // Silent steps so the last frames are judged.
+        const std::vector<float> silence(static_cast<size_t>(lag) * frame, 0.0f);
+        st = step_frames(session, ops, silence.data(), lag, session->probs);
     }
     if (st != TRANSCRIBE_OK) {
         return st;

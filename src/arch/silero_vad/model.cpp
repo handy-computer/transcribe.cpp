@@ -222,7 +222,7 @@ transcribe_status vad_score(transcribe_vad_session * session, const float * pcm,
     return TRANSCRIBE_OK;
 }
 
-const VadOps k_vad_ops = { vad_frame_samples, vad_new_session, vad_reset, vad_score };
+const VadOps k_vad_ops = { vad_frame_samples, vad_new_session, vad_reset, vad_score, nullptr };
 
 }  // namespace
 

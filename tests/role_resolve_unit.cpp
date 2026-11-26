@@ -4,6 +4,7 @@
 #include "transcribe-diarize.h"
 #include "transcribe-langid.h"
 #include "transcribe-model.h"
+#include "transcribe-turn.h"
 #include "transcribe-vad.h"
 #include "transcribe.h"
 
@@ -83,11 +84,49 @@ transcribe::Arch make_vad_arch() {
 
 const transcribe::Arch k_vad_arch = make_vad_arch();
 
+transcribe::TurnModelInfo g_turn_info;  // what fake_turn_info reports
+
+const transcribe::TurnModelInfo & fake_turn_info(const transcribe_model *) {
+    return g_turn_info;
+}
+
+transcribe_turn_session * fake_turn_new_session() {
+    return nullptr;
+}
+
+transcribe_status fake_score_clip(transcribe_turn_session *, const float *, int64_t, float *) {
+    return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+}
+
+void fake_turn_reset(transcribe_turn_session *) {}
+
+transcribe_status fake_turn_step(transcribe_turn_session *, const float *, int64_t, float *, float *) {
+    return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+}
+
+const transcribe::TurnOps k_turn_ops        = { fake_turn_info, fake_turn_new_session, fake_score_clip };
+const transcribe::TurnOps k_turn_stream_ops = { fake_turn_info, fake_turn_new_session, nullptr, fake_turn_reset,
+                                                fake_turn_step };
+const transcribe::TurnOps k_turn_empty_ops  = {};
+
+transcribe::Arch make_turn_arch(const char * name, const transcribe::TurnOps * ops) {
+    transcribe::Arch a = {};
+    a.name             = name;
+    a.vad              = &k_vad_ops;
+    a.turn             = ops;
+    return a;
+}
+
+const transcribe::Arch k_vad_turn_arch    = make_turn_arch("fake_vad_turn", &k_turn_ops);
+const transcribe::Arch k_turn_stream_arch = make_turn_arch("fake_turn_stream", &k_turn_stream_ops);
+const transcribe::Arch k_turn_empty_arch  = make_turn_arch("fake_turn_empty", &k_turn_empty_ops);
+
 void test_resolve_roles() {
     constexpr uint32_t ASR = TRANSCRIBE_ROLE_ASR;
     constexpr uint32_t DIA = TRANSCRIBE_ROLE_DIARIZE;
     constexpr uint32_t LID = TRANSCRIBE_ROLE_LANGID;
     constexpr uint32_t VAD = TRANSCRIBE_ROLE_VAD;
+    constexpr uint32_t TRN = TRANSCRIBE_ROLE_TURN;
 
     struct Case {
         const transcribe::Arch * arch;
@@ -97,27 +136,30 @@ void test_resolve_roles() {
     };
 
     const Case cases[] = {
-        { &k_asr_arch,      0,                TRANSCRIBE_OK,                  ASR }, // defaults to ASR
-        { &k_asr_arch,      ASR,              TRANSCRIBE_OK,                  ASR },
-        { &k_diarize_arch,  DIA,              TRANSCRIBE_OK,                  DIA },
-        { &k_diarize_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no default for non-ASR roles
-        { &k_no_role_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_half_asr_arch, 0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_half_asr_arch, ASR,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      DIA,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_diarize_arch,  ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   LID,              TRANSCRIBE_OK,                  LID },
-        { &k_langid_arch,   0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      LID,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no langid ops table
-        { &k_diarize_arch,  DIA | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   ASR | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_vad_arch,      VAD,              TRANSCRIBE_OK,                  VAD },
-        { &k_vad_arch,      0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_langid_arch,   VAD,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // no vad ops table
-        { &k_vad_arch,      ASR | VAD,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
-        { &k_asr_arch,      ASR | (1u << 31), TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   }, // unknown bit
-        { nullptr,          0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0   },
+        { &k_asr_arch,      0,                TRANSCRIBE_OK,                  ASR       }, // defaults to ASR
+        { &k_asr_arch,      ASR,              TRANSCRIBE_OK,                  ASR       },
+        { &k_diarize_arch,  DIA,              TRANSCRIBE_OK,                  DIA       },
+        { &k_diarize_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no default for non-ASR roles
+        { &k_no_role_arch,  0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_half_asr_arch, 0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_half_asr_arch, ASR,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_asr_arch,      DIA,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_asr_arch,      ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_diarize_arch,  ASR | DIA,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_langid_arch,   LID,              TRANSCRIBE_OK,                  LID       },
+        { &k_langid_arch,   0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_asr_arch,      LID,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no langid ops table
+        { &k_diarize_arch,  DIA | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_langid_arch,   ASR | LID,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_vad_arch,      VAD,              TRANSCRIBE_OK,                  VAD       },
+        { &k_vad_arch,      0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_langid_arch,   VAD,              TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no vad ops table
+        { &k_vad_arch,      ASR | VAD,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
+        { &k_vad_turn_arch, VAD | TRN,        TRANSCRIBE_OK,                  VAD | TRN },
+        { &k_vad_turn_arch, TRN,              TRANSCRIBE_OK,                  TRN       },
+        { &k_vad_arch,      VAD | TRN,        TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // no turn ops table
+        { &k_asr_arch,      ASR | (1u << 31), TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         }, // unknown bit
+        { nullptr,          0,                TRANSCRIBE_ERR_NOT_IMPLEMENTED, 0         },
     };
     for (const Case & c : cases) {
         transcribe_model model;
@@ -128,6 +170,36 @@ void test_resolve_roles() {
         if (st == TRANSCRIBE_OK) {
             CHECK(model.roles == c.roles_out);
         }
+    }
+}
+
+// A TURN ops table must fit the model's info (clip: score_clip; streaming:
+// step and reset, no crop limit).
+void test_resolve_turn_ops() {
+    struct Case {
+        const transcribe::Arch * arch;
+        int32_t                  frame_samples;
+        int32_t                  max_audio_samples;
+        transcribe_status        want;
+    };
+
+    const Case cases[] = {
+        { &k_vad_turn_arch,    0,   128000, TRANSCRIBE_OK                  }, // clip model with score_clip
+        { &k_vad_turn_arch,    640, 0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // streaming, no step / reset
+        { &k_turn_stream_arch, 640, 0,      TRANSCRIBE_OK                  },
+        { &k_turn_stream_arch, 0,   0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // clip, no score_clip
+        { &k_turn_stream_arch, 640, 16000,  TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // streaming with a crop limit
+        { &k_turn_stream_arch, -1,  0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED },
+        { &k_turn_empty_arch,  0,   0,      TRANSCRIBE_ERR_NOT_IMPLEMENTED }, // no info / new_session
+    };
+    for (const Case & c : cases) {
+        g_turn_info                   = transcribe::TurnModelInfo{};
+        g_turn_info.frame_samples     = c.frame_samples;
+        g_turn_info.max_audio_samples = c.max_audio_samples;
+        transcribe_model model;
+        model.arch  = c.arch;
+        model.roles = TRANSCRIBE_ROLE_TURN;
+        CHECK(transcribe::resolve_roles(&model) == c.want);
     }
 }
 
@@ -165,6 +237,7 @@ int main() {
     transcribe_log_set(nullptr, nullptr);  // the rejections log at ERROR
 
     test_resolve_roles();
+    test_resolve_turn_ops();
     test_asr_entry_points_check_role();
 
     if (g_failures != 0) {

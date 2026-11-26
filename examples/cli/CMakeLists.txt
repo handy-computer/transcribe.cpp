@@ -10,6 +10,7 @@ add_executable(transcribe-cli
     diarize.cpp
     langid.cpp
     vad.cpp
+    turn.cpp
 )
 
 target_link_libraries(transcribe-cli

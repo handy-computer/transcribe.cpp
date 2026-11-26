@@ -1,0 +1,54 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "smart_turn",
+  "variant": "smart-turn-v3.2",
+  "role": "turn",
+  "source_model": {
+    "hf_repo": "pipecat-ai/smart-turn-v3",
+    "hf_revision": "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
+    "file": "smart-turn-v3.2-gpu.onnx",
+    "sha256": "ab8dc64b88713f90b571c15b714bd1330e6c883cad8763dacf65c9376dc539be"
+  },
+  "reference": {
+    "kind": "smart-turn-onnx",
+    "source": "https://github.com/pipecat-ai/smart-turn",
+    "revision": "4e12f2b",
+    "entrypoint": "scripts/dump_reference_smart_turn_onnx.py",
+    "dump_args": []
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "weights_header",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "fft_size": 400,
+    "win_length": 400,
+    "hop_length": 160,
+    "window": "hann_periodic",
+    "pad_mode": "reflect",
+    "center": true,
+    "mel_norm": "slaney",
+    "normalization": "whisper_logmel",
+    "max_audio_samples": 128000,
+    "audio_window": "last 8 s, left zero padded",
+    "waveform_normalize": "zero mean / unit variance over the whole 8 s window, eps 1e-7",
+    "n_frames": 800
+  },
+  "tokenizer_summary": {"type": "other", "vocab_size": 0, "special_tokens": {}},
+  "turn": {
+    "threshold": 0.5,
+    "rule": "p > 0.5 (inference.py)",
+    "max_audio_ms": 8000
+  },
+  "tolerance_file": "tests/tolerances/smart_turn.json",
+  "cases": [
+    {"audio": "jfk", "language": null, "expected_ended": true},
+    {"audio": "ja", "language": null},
+    {"audio": "noise", "language": null},
+    {"audio": "silence", "language": null},
+    {"audio": "turn-complete-en", "language": null, "expected_ended": true},
+    {"audio": "turn-incomplete-en", "language": null, "expected_ended": false},
+    {"audio": "turn-incomplete-en-long", "language": null, "expected_ended": false},
+    {"audio": "turn-uncertain-en", "language": null, "expected_ended": false}
+  ]
+}

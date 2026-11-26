@@ -1,0 +1,145 @@
+{
+ "_comment": [
+  "Smart Turn v3.2 per-tensor tolerances for compare_tensors.py.",
+  "",
+  "Reference: onnxruntime 1.23.2 on upstream's fp32 smart-turn-v3.2-gpu.onnx",
+  "(pipecat-ai/smart-turn-v3 @ f766f81d, sha256 ab8dc64b...), CPU, 1 thread,",
+  "session options of smart-turn inference.py; front end transformers 4.48.2",
+  "WhisperFeatureExtractor(chunk_length=8), numpy path, do_normalize=True.",
+  "Intermediates come from the same graph with the dump points exposed as",
+  "outputs (its p is within 6e-8 of the canonical session).",
+  "Cases: all 8 in tests/golden/smart_turn/smart-turn-v3.2.manifest.json.",
+  "",
+  "Recipe, max over the 8 cases:",
+  "  provisional max_abs = max(1e-4 * p99_abs, 1e-6), mean_abs = max(1e-5 * rms, 1e-6)",
+  "  finalized = max(1.5 x observed, provisional, 1e-6)",
+  "observed = `validate.py all --family smart_turn` (CPU, F32 GGUF, C++ front end,",
+  "manual attention, library-default threads), recorded per entry in _observed.",
+  "",
+  "Widened vs provisional: enc.block.2.out, enc.block.3.out, enc.final (max_abs only)",
+  "and head.pool_weights (1.5 x 3.6e-6 vs 3.6e-6). Mechanism: Whisper's massive",
+  "activations. From block 2 on a few channels (375, then 128, 17, 161) reach |x|",
+  "up to 160, and fp32 reduction order in attention / FFN (ggml CPU vs onnxruntime",
+  "MLAS) lands there: <= 1.3e-4 relative to max|x| in block 3 (<= 3.8e-4 on",
+  "enc.final, after the LayerNorm divides by a small variance). The PyTorch twin",
+  "(torch 2.9.0 CPU) vs onnxruntime differs by the same amount (2.0e-2 on",
+  "enc.block.3.out). The pooling and head contract it: head.prob |dp| <= 3.2e-6.",
+  "",
+  "head.prob is the gate, with decision parity (p > threshold) against",
+  "ref/turn.json. Debug-only dumps without an entry here (MISSING is not a",
+  "failure for them): enc.pos_emb (a weight) and head.pool_scores (pre-softmax",
+  "pooling scores)."
+ ],
+ "fe.window": {
+  "max_abs": 0.000479,
+  "mean_abs": 1e-05,
+  "_observed": {
+   "max_abs": 9.54e-07,
+   "mean_abs": 2.92e-08
+  }
+ },
+ "enc.mel.in": {
+  "max_abs": 0.000161,
+  "mean_abs": 1.5e-05,
+  "_observed": {
+   "max_abs": 2.44e-05,
+   "mean_abs": 1.16e-07
+  }
+ },
+ "enc.conv1.out": {
+  "max_abs": 0.000294,
+  "mean_abs": 3.97e-06,
+  "_observed": {
+   "max_abs": 7.63e-06,
+   "mean_abs": 1.11e-07
+  }
+ },
+ "enc.conv2.out": {
+  "max_abs": 0.000221,
+  "mean_abs": 4.25e-06,
+  "_observed": {
+   "max_abs": 6.26e-06,
+   "mean_abs": 8.43e-08
+  }
+ },
+ "enc.embed.out": {
+  "max_abs": 0.0003,
+  "mean_abs": 8.73e-06,
+  "_observed": {
+   "max_abs": 6.26e-06,
+   "mean_abs": 8.44e-08
+  }
+ },
+ "enc.block.0.out": {
+  "max_abs": 0.000141,
+  "mean_abs": 5.65e-06,
+  "_observed": {
+   "max_abs": 2.43e-05,
+   "mean_abs": 7.03e-07
+  }
+ },
+ "enc.block.1.out": {
+  "max_abs": 0.000174,
+  "mean_abs": 6.99e-06,
+  "_observed": {
+   "max_abs": 6.01e-05,
+   "mean_abs": 1.5e-06
+  }
+ },
+ "enc.block.2.out": {
+  "max_abs": 0.00805,
+  "mean_abs": 1e-05,
+  "_observed": {
+   "max_abs": 0.00536,
+   "mean_abs": 3e-06
+  }
+ },
+ "enc.block.3.out": {
+  "max_abs": 0.0294,
+  "mean_abs": 2.68e-05,
+  "_observed": {
+   "max_abs": 0.0196,
+   "mean_abs": 1.06e-05
+  }
+ },
+ "enc.final": {
+  "max_abs": 0.00989,
+  "mean_abs": 1.64e-05,
+  "_observed": {
+   "max_abs": 0.00659,
+   "mean_abs": 7.54e-06
+  }
+ },
+ "head.pool_weights": {
+  "max_abs": 5.42e-06,
+  "mean_abs": 1e-06,
+  "_observed": {
+   "max_abs": 3.61e-06,
+   "mean_abs": 2.17e-08
+  }
+ },
+ "head.pooled": {
+  "max_abs": 0.000303,
+  "mean_abs": 1.24e-05,
+  "_observed": {
+   "max_abs": 3.67e-05,
+   "mean_abs": 3.09e-06
+  }
+ },
+ "head.logit": {
+  "max_abs": 0.000518,
+  "mean_abs": 5.18e-05,
+  "_observed": {
+   "max_abs": 1.63e-05,
+   "mean_abs": 1.63e-05
+  }
+ },
+ "head.prob": {
+  "max_abs": 9.91e-05,
+  "mean_abs": 9.91e-06,
+  "_observed": {
+   "max_abs": 3.31e-06,
+   "mean_abs": 3.31e-06
+  }
+ }
+}

@@ -28,6 +28,7 @@ use crate::error::{check, Error, Result};
 use crate::langid::{LangIdInfo, LangIdSession, LangIdSessionOptions};
 use crate::result::owned_str;
 use crate::session::Session;
+use crate::turn::{TurnInfo, TurnSession, TurnSessionOptions};
 use crate::types::{Backend, ExtSlot, Feature, Roles, TimestampKind};
 use crate::vad::{VadInfo, VadSession, VadSessionOptions};
 use crate::version;
@@ -286,6 +287,35 @@ impl Model {
         Ok(VadInfo {
             sample_rate: raw.sample_rate,
             frame_samples: raw.frame_samples,
+        })
+    }
+
+    /// Open an end-of-turn session with default options. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Turn`](crate::Role).
+    pub fn turn_session(&self) -> Result<TurnSession> {
+        self.turn_session_with(&TurnSessionOptions::default())
+    }
+
+    /// Open an end-of-turn session with explicit options.
+    pub fn turn_session_with(&self, options: &TurnSessionOptions) -> Result<TurnSession> {
+        TurnSession::new(self, options)
+    }
+
+    /// Static facts about an end-of-turn model. Errors with
+    /// [`Error::UnsupportedRole`] unless the model serves [`Role::Turn`](crate::Role).
+    pub fn turn_info(&self) -> Result<TurnInfo> {
+        let mut raw: sys::transcribe_turn_info = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_turn_info_init(&mut raw) };
+        check(
+            unsafe { sys::transcribe_turn_get_info(self.inner.ptr, &mut raw) },
+            "turn info",
+        )?;
+        Ok(TurnInfo {
+            sample_rate: raw.sample_rate,
+            max_audio_ms: raw.max_audio_ms,
+            frame_samples: raw.frame_samples,
+            has_speech: raw.has_speech,
+            threshold: raw.threshold,
         })
     }
 

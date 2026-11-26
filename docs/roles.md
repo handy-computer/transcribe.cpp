@@ -11,6 +11,7 @@ A loaded model serves one or more **roles**, the kinds of work it can do.
 | `TRANSCRIBE_ROLE_DIARIZE` | `include/transcribe/diarize.h` | `transcribe_diarize_session` | who spoke when |
 | `TRANSCRIBE_ROLE_LANGID` | `include/transcribe/langid.h` | `transcribe_langid_session` | which language (`docs/langid.md`) |
 | `TRANSCRIBE_ROLE_VAD` | `include/transcribe/vad.h` | `transcribe_vad_session` | where there is speech (`docs/vad.md`) |
+| `TRANSCRIBE_ROLE_TURN` | `include/transcribe/turn.h` | `transcribe_turn_session` | whether the speaker has finished their turn (`docs/turn.md`) |
 
 Every role follows the same rules:
 
@@ -18,7 +19,9 @@ Every role follows the same rules:
 - **Sessions.** Each role has its own session type created from a model.
   A session is used by one thread at a time; the model outlives its
   sessions; at most one compute is in flight per model across all sessions
-  of all roles. Different models compute in parallel.
+  of all roles. Different models compute in parallel. A batched call
+  (`transcribe_turn_stream_feed_batch`) is one compute that uses every
+  session it lists.
 - **Input.** 16 kHz mono float32 PCM; NaN / Inf is `INVALID_ARG`.
 - **Results** are copied out and replaced by the next run; malformed input
   is rejected before the previous result is touched.

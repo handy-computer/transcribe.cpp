@@ -88,6 +88,10 @@ struct WhisperHParams {
 
 transcribe_status read_whisper_hparams(const gguf_context * gguf, WhisperHParams & hp);
 
+// The stt.frontend.* half of read_whisper_hparams, with its validation.
+// Shared with families that reuse Whisper's front end (smart_turn).
+transcribe_status read_whisper_frontend_hparams(const gguf_context * gguf, WhisperHParams & hp);
+
 // Shared mel frontend buffers. preprocessor_config.json ships the
 // exact slaney filterbank and Hann window the model was trained with;
 // the converter stores them verbatim so C++ does not need to
@@ -180,6 +184,12 @@ struct WhisperWeights {
 };
 
 transcribe_status build_whisper_weights(ggml_context * ctx_meta, const WhisperHParams & hp, WhisperWeights & weights);
+
+// The frontend + encoder half of build_whisper_weights (frontend.*, enc.*).
+// Shared with families that reuse Whisper's encoder (smart_turn).
+transcribe_status build_whisper_encoder_weights(ggml_context *         ctx_meta,
+                                                const WhisperHParams & hp,
+                                                WhisperWeights &       weights);
 
 // Build a MelConfig from `hp`, install the caller-provided
 // `filterbank` + `window` buffers (either may be empty — MelFrontend

@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "f99ad4169374b8f3"
+PUBLIC_HEADER_HASH = "4393f89c866cc70d"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -67,6 +67,10 @@ TRANSCRIBE_ABI_VAD_SESSION_PARAMS = 25
 TRANSCRIBE_ABI_VAD_PARAMS = 26
 TRANSCRIBE_ABI_VAD_RESULT = 27
 TRANSCRIBE_ABI_VAD_SEGMENT = 28
+TRANSCRIBE_ABI_TURN_INFO = 29
+TRANSCRIBE_ABI_TURN_SESSION_PARAMS = 30
+TRANSCRIBE_ABI_TURN_PARAMS = 31
+TRANSCRIBE_ABI_TURN_RESULT = 32
 TRANSCRIBE_LOG_LEVEL_NONE = 0
 TRANSCRIBE_LOG_LEVEL_INFO = 1
 TRANSCRIBE_LOG_LEVEL_WARN = 2
@@ -111,6 +115,7 @@ TRANSCRIBE_ROLE_ASR = 1
 TRANSCRIBE_ROLE_DIARIZE = 2
 TRANSCRIBE_ROLE_LANGID = 4
 TRANSCRIBE_ROLE_VAD = 8
+TRANSCRIBE_ROLE_TURN = 16
 TRANSCRIBE_FEATURE_INITIAL_PROMPT = 0
 TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK = 1
 TRANSCRIBE_FEATURE_LONG_FORM = 2
@@ -208,6 +213,14 @@ class transcribe_parakeet_buffered_stream_ext(_c.Structure):
     pass
 class transcribe_sortformer_diarize_ext(_c.Structure):
     pass
+class transcribe_turn_info(_c.Structure):
+    pass
+class transcribe_turn_session_params(_c.Structure):
+    pass
+class transcribe_turn_params(_c.Structure):
+    pass
+class transcribe_turn_result(_c.Structure):
+    pass
 class transcribe_vad_info(_c.Structure):
     pass
 class transcribe_vad_session_params(_c.Structure):
@@ -253,6 +266,10 @@ transcribe_moonshine_streaming_stream_ext._fields_ = [("ext", transcribe_ext), (
 transcribe_parakeet_stream_ext._fields_ = [("ext", transcribe_ext), ("att_context_right", _c.c_int32)]
 transcribe_parakeet_buffered_stream_ext._fields_ = [("ext", transcribe_ext), ("left_ms", _c.c_int32), ("chunk_ms", _c.c_int32), ("right_ms", _c.c_int32)]
 transcribe_sortformer_diarize_ext._fields_ = [("ext", transcribe_ext), ("preset", _c.c_int)]
+transcribe_turn_info._fields_ = [("struct_size", _c.c_uint64), ("sample_rate", _c.c_int32), ("max_audio_ms", _c.c_int32), ("frame_samples", _c.c_int32), ("has_speech", _c.c_bool), ("threshold", _c.c_double)]
+transcribe_turn_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int32)]
+transcribe_turn_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double)]
+transcribe_turn_result._fields_ = [("struct_size", _c.c_uint64), ("p", _c.c_float), ("ended", _c.c_bool), ("n_probs", _c.c_int32), ("first_frame", _c.c_int64), ("n_speech_probs", _c.c_int32), ("speech_first_frame", _c.c_int64)]
 transcribe_vad_info._fields_ = [("struct_size", _c.c_uint64), ("sample_rate", _c.c_int32), ("frame_samples", _c.c_int32)]
 transcribe_vad_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int32)]
 transcribe_vad_params._fields_ = [("struct_size", _c.c_uint64), ("threshold", _c.c_double), ("neg_threshold", _c.c_double), ("min_speech_ms", _c.c_int32), ("min_silence_ms", _c.c_int32), ("speech_pad_ms", _c.c_int32), ("max_speech_ms", _c.c_int32)]
@@ -289,6 +306,10 @@ ABI_STRUCT_IDS = {
     'transcribe_langid_params': 21,
     'transcribe_langid_result': 22,
     'transcribe_langid_candidate': 23,
+    'transcribe_turn_info': 29,
+    'transcribe_turn_session_params': 30,
+    'transcribe_turn_params': 31,
+    'transcribe_turn_result': 32,
     'transcribe_vad_info': 24,
     'transcribe_vad_session_params': 25,
     'transcribe_vad_params': 26,
@@ -326,6 +347,10 @@ STRUCT_LAYOUT = {
     'transcribe_parakeet_stream_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'att_context_right': 16}},
     'transcribe_parakeet_buffered_stream_ext': {'size': 32, 'align': 8, 'offsets': {'ext': 0, 'left_ms': 16, 'chunk_ms': 20, 'right_ms': 24}},
     'transcribe_sortformer_diarize_ext': {'size': 24, 'align': 8, 'offsets': {'ext': 0, 'preset': 16}},
+    'transcribe_turn_info': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'sample_rate': 8, 'max_audio_ms': 12, 'frame_samples': 16, 'has_speech': 20, 'threshold': 24}},
+    'transcribe_turn_session_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8}},
+    'transcribe_turn_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8}},
+    'transcribe_turn_result': {'size': 48, 'align': 8, 'offsets': {'struct_size': 0, 'p': 8, 'ended': 12, 'n_probs': 16, 'first_frame': 24, 'n_speech_probs': 32, 'speech_first_frame': 40}},
     'transcribe_vad_info': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'sample_rate': 8, 'frame_samples': 12}},
     'transcribe_vad_session_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8}},
     'transcribe_vad_params': {'size': 40, 'align': 8, 'offsets': {'struct_size': 0, 'threshold': 8, 'neg_threshold': 16, 'min_speech_ms': 24, 'min_silence_ms': 28, 'speech_pad_ms': 32, 'max_speech_ms': 36}},
@@ -583,6 +608,40 @@ def configure(lib):
     lib.transcribe_token_init.argtypes = [_c.POINTER(transcribe_token)]
     lib.transcribe_tokenize.restype = _c.c_int
     lib.transcribe_tokenize.argtypes = [_c.c_void_p, _c.c_char_p, _c.POINTER(_c.c_int32), _c.c_size_t]
+    lib.transcribe_turn_get_info.restype = _c.c_int
+    lib.transcribe_turn_get_info.argtypes = [_c.c_void_p, _c.POINTER(transcribe_turn_info)]
+    lib.transcribe_turn_get_result.restype = _c.c_int
+    lib.transcribe_turn_get_result.argtypes = [_c.c_void_p, _c.POINTER(transcribe_turn_result)]
+    lib.transcribe_turn_get_timings.restype = _c.c_int
+    lib.transcribe_turn_get_timings.argtypes = [_c.c_void_p, _c.POINTER(transcribe_timings)]
+    lib.transcribe_turn_info_init.restype = None
+    lib.transcribe_turn_info_init.argtypes = [_c.POINTER(transcribe_turn_info)]
+    lib.transcribe_turn_params_init.restype = None
+    lib.transcribe_turn_params_init.argtypes = [_c.POINTER(transcribe_turn_params)]
+    lib.transcribe_turn_probs.restype = _c.POINTER(_c.c_float)
+    lib.transcribe_turn_probs.argtypes = [_c.c_void_p]
+    lib.transcribe_turn_result_init.restype = None
+    lib.transcribe_turn_result_init.argtypes = [_c.POINTER(transcribe_turn_result)]
+    lib.transcribe_turn_run.restype = _c.c_int
+    lib.transcribe_turn_run.argtypes = [_c.c_void_p, _c.POINTER(_c.c_float), _c.c_int, _c.POINTER(transcribe_turn_params)]
+    lib.transcribe_turn_session_free.restype = None
+    lib.transcribe_turn_session_free.argtypes = [_c.c_void_p]
+    lib.transcribe_turn_session_init.restype = _c.c_int
+    lib.transcribe_turn_session_init.argtypes = [_c.c_void_p, _c.POINTER(transcribe_turn_session_params), _c.POINTER(_c.c_void_p)]
+    lib.transcribe_turn_session_params_init.restype = None
+    lib.transcribe_turn_session_params_init.argtypes = [_c.POINTER(transcribe_turn_session_params)]
+    lib.transcribe_turn_set_abort_callback.restype = None
+    lib.transcribe_turn_set_abort_callback.argtypes = [_c.c_void_p, _c.CFUNCTYPE(_c.c_bool, _c.c_void_p), _c.c_void_p]
+    lib.transcribe_turn_speech_probs.restype = _c.POINTER(_c.c_float)
+    lib.transcribe_turn_speech_probs.argtypes = [_c.c_void_p]
+    lib.transcribe_turn_stream_feed.restype = _c.c_int
+    lib.transcribe_turn_stream_feed.argtypes = [_c.c_void_p, _c.POINTER(_c.c_float), _c.c_int]
+    lib.transcribe_turn_stream_feed_batch.restype = _c.c_int
+    lib.transcribe_turn_stream_feed_batch.argtypes = [_c.POINTER(_c.c_void_p), _c.POINTER(_c.POINTER(_c.c_float)), _c.POINTER(_c.c_int), _c.c_int]
+    lib.transcribe_turn_stream_flush.restype = _c.c_int
+    lib.transcribe_turn_stream_flush.argtypes = [_c.c_void_p]
+    lib.transcribe_turn_stream_reset.restype = None
+    lib.transcribe_turn_stream_reset.argtypes = [_c.c_void_p]
     lib.transcribe_vad_get_info.restype = _c.c_int
     lib.transcribe_vad_get_info.argtypes = [_c.c_void_p, _c.POINTER(transcribe_vad_info)]
     lib.transcribe_vad_get_result.restype = _c.c_int

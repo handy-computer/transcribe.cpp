@@ -1,0 +1,116 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "sava",
+  "variant": "sava",
+  "role": "turn",
+  "roles": [
+    "turn",
+    "vad"
+  ],
+  "source_model": {
+    "hf_repo": "inworld/sava",
+    "hf_revision": "1beae7c1dd0df6b0f92030644fc905eb087dc6a0",
+    "file": "sava.safetensors",
+    "sha256": "aa610ee9b5d3d1be96f70581a8a3affe7cf20d06816b4ada1efdd8ab6274be34",
+    "package": "inworld-sava==1.0.0"
+  },
+  "reference": {
+    "kind": "sava-author",
+    "source": "https://github.com/inworld-ai/sava",
+    "revision": "v1.0.0 (b4221a54458ea60df8c777911d0567418994cacc)",
+    "entrypoint": "scripts/dump_reference_sava_author.py",
+    "dump_args": []
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "frame_samples": 640,
+    "lookahead_frames": 3,
+    "context_samples": 240,
+    "fft_size": 400,
+    "hop_length": 160,
+    "n_mels": 128,
+    "window": "hann_periodic",
+    "mel_filterbank_norm": "slaney",
+    "log": "log10(max(power_mel, 1e-10)); (x + 4) / 4",
+    "log_energy": "ln(max(rms(frame), 1e-5))",
+    "pad_mode": "zero_left_240"
+  },
+  "tokenizer_summary": {
+    "type": "other",
+    "vocab_size": 0,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": [],
+    "streaming": true
+  },
+  "tolerance_file": "tests/tolerances/sava.json",
+  "cases": [
+    {
+      "audio": "sava-speech",
+      "language": null,
+      "_note": "upstream golden fixture (tests/fixtures/speech.wav); 574 frames, wraps the 512-frame attention window",
+      "stages": [
+        "encoder"
+      ]
+    },
+    {
+      "audio": "jfk",
+      "language": null,
+      "stages": [
+        "encoder"
+      ]
+    },
+    {
+      "audio": "jobs-silence",
+      "language": null,
+      "stages": [
+        "encoder"
+      ]
+    },
+    {
+      "audio": "ja",
+      "language": null,
+      "stages": [
+        "encoder"
+      ]
+    },
+    {
+      "audio": "dots",
+      "language": null,
+      "_note": "884 frames, 7 turns",
+      "stages": [
+        "encoder"
+      ]
+    },
+    {
+      "audio": "silence",
+      "language": null,
+      "_note": "digital zeros, 8.01 s; hits the mel and log-energy floors; partial last frame",
+      "stages": [
+        "encoder"
+      ]
+    },
+    {
+      "audio": "noise",
+      "language": null,
+      "stages": [
+        "encoder"
+      ]
+    },
+    {
+      "audio": "dots-full",
+      "language": null,
+      "_note": "306 s, 7648 frames: long-stream drift, 59 turns",
+      "stages": [
+        "encoder"
+      ]
+    }
+  ],
+  "turn": {
+    "p_abs_tolerance": 0.0001,
+    "_comment": "clip score p (CLI %.6f) vs inworld.sava.run turn[-1]; observed <= 2.7e-6 over the 8 cases"
+  }
+}

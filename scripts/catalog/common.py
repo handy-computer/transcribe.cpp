@@ -103,6 +103,7 @@ def dataset_spec(row: dict) -> str:
 DATASET_LABELS = {
     ("librispeech", "test-clean"): "LibriSpeech test-clean",
     ("ami", "ihm-test"): "AMI IHM test",
+    ("smart-turn-data-v3.2", "test"): "Pipecat Smart Turn v3.2 test",
 }
 
 
@@ -114,10 +115,12 @@ def dataset_label(dataset: str, split: str, language: str) -> str:
     return DATASET_LABELS.get((dataset, split), f"{dataset} {split}")
 
 
-def metric_label(metric: str) -> str:
-    """A metric as a column header prints it: WER / CER / DER / CPWER, or
-    "Top-1 accuracy" for language ID."""
-    return "Top-1 accuracy" if metric == "accuracy" else metric.upper()
+def metric_label(metric: str, role: str | None = None) -> str:
+    """A metric as a column header prints it: WER / CER / DER / CPWER,
+    "Top-1 accuracy" for language ID, "Accuracy" for end-of-turn (TURN)."""
+    if metric == "accuracy":
+        return "Accuracy" if role == "turn" else "Top-1 accuracy"
+    return metric.upper()
 
 
 def headline(record: dict) -> dict | None:
@@ -163,25 +166,31 @@ def headline_recipe(record: dict) -> str:
     measured = [row for row in rows if row.get("engine_sha")] or rows
     sample = measured[0]
     n_utts = max(row["n_utts"] for row in rows)
-    unit = "meetings" if target["metric"] in ("der", "cpwer") else "utterances"
-    # Language ID scores a pooled, cropped subset (the row's notes say which),
-    # and has no batch size or timestamps.
-    lid = target["metric"] == "accuracy"
+    turn = record.get("role") == "turn"
+    unit = "clips" if turn else "meetings" if target["metric"] in ("der", "cpwer") else "utterances"
+    # Language ID scores a pooled, cropped subset (the row's notes say which);
+    # TURN scores whole clips at a threshold. Neither has a batch size or
+    # timestamps.
+    lid = target["metric"] == "accuracy" and not turn
     scope = "" if lid else "the full "
-    parts = [f"{metric_label(target['metric'])} on {scope}{headline_label(record)} "
+    parts = [f"{metric_label(target['metric'], record.get('role'))} on {scope}{headline_label(record)} "
              f"{'' if lid else 'split '}({n_utts:,} {unit})"]
+    thresholds = sorted({row["turn"]["threshold"] for row in rows if row.get("turn")})
+    if thresholds:
+        parts.append("a clip called complete when p > " + " or ".join(f"{t:g}" for t in thresholds))
+    scored = lid or turn
     batch_sizes = sorted({row["batch_size"] for row in rows
-                          if row.get("batch_size") is not None and not lid})
+                          if row.get("batch_size") is not None and not scored})
     if len(batch_sizes) == 1:
         parts.append(f"batch size {batch_sizes[0]}")
     elif batch_sizes:
         parts.append("batch sizes " + " and ".join(str(size) for size in batch_sizes))
-    if sample.get("timestamps") and not lid:
+    if sample.get("timestamps") and not scored:
         parts.append(f"timestamps {sample['timestamps']}")
     if sample.get("language_hint"):
         parts.append(f"language hint `{sample['language_hint']}`")
     if sample.get("backend"):
-        parts.append(f"{'scored' if lid else 'decoded'} on {sample['backend']}")
+        parts.append(f"{'scored' if scored else 'decoded'} on {sample['backend']}")
     text = ", ".join(parts) + "."
     shas = sorted({(row["engine_sha"], row.get("measured_on") or "")
                    for row in rows if row.get("engine_sha")})
@@ -205,6 +214,33 @@ def fmt_err(row: dict | None, dp: int = 2) -> str:
     if row is None:
         return "-"
     return f"{row_pct(row):.{dp}f}%"
+
+
+def turn_table(record: dict, reference: str = "the reference") -> list[str]:
+    """TURN: per shipped GGUF, the headline accuracy with its interval, false
+    positives and negatives (shares of all clips), AUC and, where measured,
+    the decision agreement with the reference."""
+    rows = headline_rows(record)
+    present = [(item["quant"], rows[item["quant"]]) for item in record.get("downloads", [])
+               if item["quant"] in rows and rows[item["quant"]].get("turn")]
+    if not present:
+        return []
+    agree = any(row.get("agreement") for _, row in present)
+    header = ["GGUF", "Accuracy (95% CI)", "False positives", "False negatives", "AUC"]
+    if agree:
+        header += [f"Same decision as {reference}", "Max abs p difference"]
+    body = []
+    for quant, row in present:
+        turn, lo_hi = row["turn"], row["ci95"]
+        cells = [quant, fmt_err(row) + ("" if lo_hi[0] is None else f" ({lo_hi[0]:.2f}-{lo_hi[1]:.2f})"),
+                 f"{turn['fp_pct']:.2f}%", f"{turn['fn_pct']:.2f}%", f"{turn['auc']:.5f}"]
+        if agree:
+            a = row.get("agreement") or {}
+            delta = a.get("max_abs_p_delta")
+            cells += [f"{a['n_agree']:,} / {a['n']:,}" if a else "-",
+                      "-" if delta is None else f"{delta:.2g}"]
+        body.append(cells)
+    return render_table(header, ["l"] + ["r"] * (len(header) - 1), body)
 
 
 # --------------------------------------------------------------------------
@@ -268,6 +304,8 @@ def capabilities_summary(record: dict) -> str:
         out.append(f"language ID ({len(record.get('languages', []))} languages)")
     if record.get("role") == "vad":
         out.append("voice activity detection")
+    if record.get("role") == "turn":
+        out.append("end-of-turn detection")
     for name, label in (("translate", "translate"), ("streaming", "streaming"),
                         ("diarize", "diarize")):
         if caps.get(name, {}).get("supported"):

@@ -6,6 +6,8 @@ into speech segments. API: `include/transcribe/vad.h`. The shipped model is
 [Silero VAD v6.2](models/silero-vad-v6.2.md): 512-sample (32 ms) frames.
 `transcribe_model_load_file` also accepts whisper.cpp's
 `ggml-silero-v5.1.2.bin` and `ggml-silero-v6.2.0.bin`.
+[SAVA](models/sava.md), a turn model ([turn.md](turn.md)), also serves this
+role: 640-sample (40 ms) frames, 3 frames of lookahead.
 
 ## Offline
 
@@ -55,11 +57,16 @@ with the reference's defaults:
 ## Streaming
 
 `transcribe_vad_stream_feed` takes audio in pieces of any size and returns the
-probabilities of the frames each call completes; `first_frame` is the stream
+probabilities of the frames each call judges; `first_frame` is the stream
 position of the first one. `transcribe_vad_stream_flush` scores the buffered
 remainder zero padded and ends the stream; `transcribe_vad_stream_reset` ends
-it without scoring. On CPU, stream probabilities are bit-identical to an
-offline run over the same audio.
+it without scoring.
+
+A model with lookahead (SAVA: 3 frames, 120 ms) judges a frame only after
+hearing the frames that follow it, so feed returns probabilities that many
+frames behind the audio, and flush steps that many frames of silence so every
+frame is judged. Silero has no lookahead. On CPU, stream probabilities are
+bit-identical to an offline run over the same audio.
 
 ```c
 for (;;) {

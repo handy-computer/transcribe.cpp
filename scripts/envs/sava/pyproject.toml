@@ -1,0 +1,32 @@
+[project]
+name = "transcribe-sava-env"
+version = "0.1.0"
+description = "Python env for SAVA (Inworld) reference dumps and conversion (upstream inworld-sava package)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Exact pin. The reference is upstream's own package: PyPI inworld-sava
+    # 1.0.0 == https://github.com/inworld-ai/sava tag v1.0.0 (commit
+    # b4221a54458ea60df8c777911d0567418994cacc). Its registry pins the
+    # weights: HF inworld/sava@1beae7c1dd0df6b0f92030644fc905eb087dc6a0,
+    # sava.safetensors sha256 aa610ee9...4be34.
+    "inworld-sava==1.0.0",
+    # CPU torch, fp32, one thread: the parity regime. Upstream develops on
+    # torch 2.14; tests/tolerances/sava.json is measured against THIS version.
+    "torch==2.14.1",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "safetensors>=0.4",
+    "huggingface-hub>=0.24",
+    "gguf>=0.10",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]

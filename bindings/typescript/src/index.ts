@@ -71,6 +71,12 @@ import type {
   Transcript,
   TranscribeOptions,
   TranscriptionResult,
+  TurnFeedOptions,
+  TurnInfo,
+  TurnOptions,
+  TurnResult,
+  TurnSessionOptions,
+  TurnStreamResult,
   VadFeedOptions,
   VadInfo,
   VadOptions,
@@ -148,6 +154,7 @@ const ROLES: Record<Role, number> = {
   diarize: g.TRANSCRIBE_ROLE_DIARIZE,
   langid: g.TRANSCRIBE_ROLE_LANGID,
   vad: g.TRANSCRIBE_ROLE_VAD,
+  turn: g.TRANSCRIBE_ROLE_TURN,
 };
 
 // ---- helpers ---------------------------------------------------------------
@@ -815,7 +822,7 @@ const SESSION_CONTROL = new WeakMap<Session, SessionControl>();
 
 /**
  * One native session handle under the model's compute rules, shared by Session,
- * DiarizeSession, LangIdSession, and VadSession. Each holds it in a private
+ * DiarizeSession, LangIdSession, VadSession, and TurnSession. Each holds it in a private
  * field, so none of this is reachable from user code. `setAbort` is the role's
  * set_abort_callback.
  */
@@ -841,6 +848,17 @@ class SessionCore {
 
   get disposed(): boolean {
     return this.#disposed;
+  }
+
+  /**
+   * Mark this session as used by a compute another session's call runs (a
+   * batched feed); returns the undo. Call it under the model lock.
+   */
+  holdInFlight(kind: string): () => void {
+    this.#inFlight = kind;
+    return () => {
+      if (this.#inFlight === kind) this.#inFlight = null;
+    };
   }
 
   /** Reads touch the session; forbidden while a worker call is in flight. */
@@ -1717,13 +1735,213 @@ export class VadSession {
   }
 }
 
+// ---- TurnSession -----------------------------------------------------------
+
+function readProbs(n: Native, count: number, get: () => any, what: string): number[] {
+  if (count <= 0) return [];
+  const ptr = get();
+  if (!ptr) throw new TranscribeError(`turn result has ${what} but no buffer`);
+  return Array.from(n.koffi.decode(ptr, "float", count) as ArrayLike<number>);
+}
+
+// Call inside exclusive(): the next compute replaces the session's result.
+function readTurnResult(n: Native, h: any): TurnResult {
+  const F = n.F;
+  const res: any = {};
+  F.turnResultInit(res);
+  check(n, F.turnGetResult(h, res), "transcribe_turn_get_result");
+  return {
+    p: res.p,
+    ended: res.ended,
+    probs: readProbs(n, res.n_probs, () => F.turnProbs(h), "probabilities"),
+    firstFrame: num(res.first_frame),
+    speechProbs: readProbs(n, res.n_speech_probs, () => F.turnSpeechProbs(h), "speech probabilities"),
+    speechFirstFrame: num(res.speech_first_frame),
+  };
+}
+
+function readTurnStreamResult(n: Native, h: any): TurnStreamResult {
+  const { probs, firstFrame, speechProbs, speechFirstFrame } = readTurnResult(n, h);
+  return { probs, firstFrame, speechProbs, speechFirstFrame };
+}
+
+/** One entry of {@link TurnSession.streamFeedBatch}: this session gets this chunk. */
+export interface TurnBatchItem {
+  session: TurnSession;
+  pcm: PcmLike;
+}
+
+/**
+ * A TURN-role session: has the speaker finished their turn? Same compute rules
+ * as VadSession: a turn stream is session state and does not take the stream
+ * lease.
+ */
+export class TurnSession {
+  #n: Native;
+  #core: SessionCore;
+  #model: TranscribeModel; // keep the model alive while this session lives
+  #untrack: (self: TurnSession) => void;
+
+  /** @internal */
+  constructor(
+    n: Native,
+    model: TranscribeModel,
+    handle: any,
+    lock: Mutex,
+    untrack: (self: TurnSession) => void,
+  ) {
+    this.#n = n;
+    this.#model = model;
+    this.#core = new SessionCore(n, handle, lock, n.F.turnSetAbortCallback);
+    this.#untrack = untrack;
+  }
+
+  /**
+   * Score one clip (the audio since the speaker started): has the turn ended at
+   * its end? Starts fresh (drops any stream in progress); audio longer than
+   * maxAudioMs is scored on its end. The input PCM is borrowed, not copied
+   * (see Session.run).
+   */
+  async run(pcm: PcmLike, opts: TurnOptions = {}): Promise<TurnResult> {
+    const n = this.#n;
+    const F = n.F;
+    const h = this.#core.handle;
+    const samples = toFloat32(pcm);
+    const p: any = {};
+    F.turnParamsInit(p);
+    if (opts.threshold !== undefined) p.threshold = opts.threshold;
+
+    return this.#core.exclusive("run turn detection", async (call) => {
+      const status = await call("run()", opts.signal, F.turnRun, h, samples, samples.length, p);
+      check(n, status, "transcribe_turn_run");
+      return readTurnResult(n, h);
+    });
+  }
+
+  /**
+   * Append audio to the stream; returns the turn probabilities of the frames
+   * it completes and the speech probabilities of the frames the model judged
+   * (a partial frame waits for the next feed). The chunk is borrowed, not
+   * copied (see Stream.feed). NotImplementedByModel if turnInfo.frameSamples
+   * is 0. An abort or processing error resets the stream; invalid input leaves
+   * it unchanged.
+   */
+  async streamFeed(pcm: PcmLike, opts: TurnFeedOptions = {}): Promise<TurnStreamResult> {
+    const n = this.#n;
+    const h = this.#core.handle;
+    const samples = asFloat32(pcm);
+    return this.#core.exclusive("feed the turn stream", async (call) => {
+      const status = await call(
+        "streamFeed()", opts.signal, n.F.turnStreamFeed, h,
+        samples.length > 0 ? samples : null, samples.length,
+      );
+      check(n, status, "transcribe_turn_stream_feed");
+      return readTurnStreamResult(n, h);
+    });
+  }
+
+  /**
+   * Feed several streams of one model in one compute (much faster than one
+   * feed per session): each session ends up as if fed its chunk alone; results
+   * are in order. InvalidArgument for an empty list, a repeated session or
+   * sessions of different models; TranscribeError for a disposed session (also
+   * one disposed while the batch waits for the lock). Uses the first session's
+   * thread count; `signal` cancels the batch, and an abort or processing error
+   * resets every listed stream. The chunks are borrowed, not copied.
+   */
+  static async streamFeedBatch(
+    items: readonly TurnBatchItem[],
+    opts: TurnFeedOptions = {},
+  ): Promise<TurnStreamResult[]> {
+    if (!Array.isArray(items) || items.length === 0)
+      throw new InvalidArgument("streamFeedBatch requires at least one session");
+    const sessions: TurnSession[] = [];
+    for (const item of items) {
+      const s = item?.session;
+      if (!(s instanceof TurnSession))
+        throw new InvalidArgument("streamFeedBatch: every item needs a TurnSession");
+      if (sessions.includes(s))
+        throw new InvalidArgument("streamFeedBatch: a session is listed more than once");
+      if (sessions.length > 0 && s.#model !== sessions[0]!.#model)
+        throw new InvalidArgument("streamFeedBatch: sessions belong to different models");
+      sessions.push(s);
+    }
+    const arrays = items.map((item) => asFloat32(item.pcm));
+    const counts = Int32Array.from(arrays, (a) => a.length);
+    const first = sessions[0]!;
+    const n = first.#n;
+
+    // The model lock, taken once through the first session; the others are
+    // checked under it. A dispose meanwhile defers its free behind this lock.
+    return first.#core.exclusive("feed the turn streams", async (call) => {
+      if (sessions.some((s) => s.#core.disposed))
+        throw new TranscribeError("session has been disposed");
+      const handles = sessions.map((s) => s.#core.handle);
+      const releases = sessions.slice(1).map((s) => s.#core.holdInFlight("streamFeedBatch()"));
+      try {
+        const status = await call(
+          "streamFeedBatch()", opts.signal, n.F.turnStreamFeedBatch,
+          handles, arrays.map((a) => (a.length > 0 ? a : null)), counts, sessions.length,
+        );
+        check(n, status, "transcribe_turn_stream_feed_batch");
+        return handles.map((h) => readTurnStreamResult(n, h));
+      } finally {
+        for (const release of releases) release();
+      }
+    });
+  }
+
+  /**
+   * End the stream: score the buffered partial frame (zero padded) and the
+   * speech of every frame not yet judged, then reset (the next feed's
+   * firstFrame is 0). A processing error also resets it.
+   */
+  async streamFlush(opts: TurnFeedOptions = {}): Promise<TurnStreamResult> {
+    const n = this.#n;
+    const h = this.#core.handle;
+    return this.#core.exclusive("flush the turn stream", async (call) => {
+      const status = await call("streamFlush()", opts.signal, n.F.turnStreamFlush, h);
+      check(n, status, "transcribe_turn_stream_flush");
+      return readTurnStreamResult(n, h);
+    });
+  }
+
+  /**
+   * Drop the stream without scoring (the next feed starts at frame 0); queued
+   * behind any in-flight call.
+   */
+  async streamReset(): Promise<void> {
+    const h = this.#core.handle;
+    return this.#core.exclusive(null, async () => {
+      this.#n.F.turnStreamReset(h);
+    });
+  }
+
+  /** load_ms plus the last call's encode / decode time. */
+  get timings(): Timings {
+    this.#core.assertNotComputing("session timings");
+    const h = this.#core.handle;
+    return readTimings(this.#n, (o) => this.#n.F.turnGetTimings(h, o));
+  }
+
+  dispose(): void {
+    if (this.#core.disposed) return;
+    this.#untrack(this);
+    this.#core.dispose(this.#n.F.turnSessionFree);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+}
+
 // ---- Model -----------------------------------------------------------------
 
 export class TranscribeModel {
   #n: Native;
   #h: any;
   #disposed = false;
-  #sessions = new Set<Session | DiarizeSession | LangIdSession | VadSession>();
+  #sessions = new Set<Session | DiarizeSession | LangIdSession | VadSession | TurnSession>();
   #lock = new Mutex(); // serializes compute across all sessions of this model
 
   private constructor(n: Native, handle: any) {
@@ -1906,6 +2124,38 @@ export class TranscribeModel {
     if (!out[0])
       throw new TranscribeError("vad session init returned a null handle");
     const session = new VadSession(n, this, out[0], this.#lock, (s) =>
+      this.#sessions.delete(s),
+    );
+    this.#sessions.add(session);
+    return session;
+  }
+
+  /** Static facts of a "turn" model; UnsupportedRole otherwise. */
+  get turnInfo(): TurnInfo {
+    const n = this.#n;
+    const info: any = {};
+    n.F.turnInfoInit(info);
+    check(n, n.F.turnGetInfo(this.handle, info), "reading turn info");
+    return {
+      sampleRate: info.sample_rate,
+      maxAudioMs: info.max_audio_ms,
+      frameSamples: info.frame_samples,
+      hasSpeech: info.has_speech,
+      threshold: info.threshold,
+    };
+  }
+
+  /** Open a TURN-role session; UnsupportedRole on a model without "turn". */
+  createTurnSession(opts: TurnSessionOptions = {}): TurnSession {
+    const n = this.#n;
+    const p: any = {};
+    n.F.turnSessionParamsInit(p);
+    if (opts.nThreads !== undefined) p.n_threads = opts.nThreads;
+    const out: any[] = [null];
+    check(n, n.F.turnSessionInit(this.handle, p, out), "opening turn session");
+    if (!out[0])
+      throw new TranscribeError("turn session init returned a null handle");
+    const session = new TurnSession(n, this, out[0], this.#lock, (s) =>
       this.#sessions.delete(s),
     );
     this.#sessions.add(session);

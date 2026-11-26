@@ -152,6 +152,23 @@ Bucket classify_tensor(const std::string & name, int64_t ne0) {
     if (name == "frontend.cmvn.shift" || name == "frontend.cmvn.scale") {
         return Bucket::Norm;
     }
+    // SAVA: the frontend DFT basis and the RoPE frequency table (exact fp32
+    // copies of the reference's), the Mamba-2 per-head scalars (ssm.a =
+    // -exp(A_log), ssm.d skip) and depthwise conv kernel, which
+    // ggml_ssm_scan / ggml_ssm_conv read as F32 only, and the 64-wide
+    // speech-probability embedding vector.
+    if (name == "frontend.dft_basis" || name == "rope.freqs" || ends_with(name, ".ssm.a") ||
+        ends_with(name, ".ssm.d") || ends_with(name, ".ssm.conv1d.weight") || ends_with(name, ".speech_embed.weight")) {
+        return Bucket::Norm;
+    }
+    // Smart Turn: the classifier head's LayerNorm scale (classifier.1 in
+    // the reference, so no "norm" in the name; its bias is caught by ".bias"
+    // above), read with GET_F32, and the two single-output projections that
+    // produce the pooling score and the logit (head.pool.2 [1, 256],
+    // head.cls.6 [1, 64]): one-row vectors, too small to gain from a quant.
+    if (name == "head.cls.1.weight" || name == "head.pool.2.weight" || name == "head.cls.6.weight") {
+        return Bucket::Norm;
+    }
     // SenseVoice: encoder prefix-token embedding (16 × d_input = 16×560)
     // looked up via ggml_get_rows for the [lid, event, emo, textnorm]
     // prepend. Loader requires F32; the table is ~35 KB total so

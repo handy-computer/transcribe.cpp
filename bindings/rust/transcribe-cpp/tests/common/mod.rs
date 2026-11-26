@@ -172,6 +172,35 @@ pub fn vad_toy_model(test: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+/// A toy TURN GGUF the C++ build generates under tests/fixtures/
+/// (`arch_smart_turn.gguf`: clip model, 3200-sample window; `arch_sava.gguf`:
+/// streaming, 640-sample frames, speech track), or `None` (with a skip note)
+/// before the C++ test fixtures have been built.
+pub fn turn_toy_model(file: &str, test: &str) -> Option<PathBuf> {
+    ensure_backends();
+    let path = repo_root().join("tests/fixtures").join(file);
+    if !path.is_file() {
+        eprintln!(
+            "skip {test}: {} absent (build the C++ `fixtures` target)",
+            path.display()
+        );
+        return None;
+    }
+    Some(path)
+}
+
+/// Real TURN canaries (local-only): Smart Turn v3.2 and SAVA.
+pub fn smoke_smart_turn_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_SMART_TURN_MODEL",
+        "models/smart-turn-v3.2/smart-turn-v3.2-Q8_0.gguf",
+    )
+}
+
+pub fn smoke_sava_model() -> Option<PathBuf> {
+    family_model("TRANSCRIBE_SMOKE_SAVA_MODEL", "models/sava/sava-Q8_0.gguf")
+}
+
 /// Both fixtures together; prints a skip note and returns `None` if either is
 /// missing (so the caller can `return` early — the Rust equivalent of skip).
 pub fn smoke_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {

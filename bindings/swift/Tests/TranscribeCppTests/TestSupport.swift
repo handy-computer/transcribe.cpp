@@ -125,6 +125,32 @@ enum Fixtures {
         return path
     }
 
+    /// A toy GGUF under tests/fixtures/ (`arch_smart_turn.gguf`, `arch_sava.gguf`),
+    /// or `XCTSkip` before the C++ test fixtures have been built.
+    static func toyModelPath(_ name: String) throws -> String {
+        let path = repoRoot().appendingPathComponent("tests/fixtures/\(name)").path
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip(
+                "no toy fixture \(name) (run `uv run tests/fixtures/make_gguf_fixtures.py`)")
+        }
+        return path
+    }
+
+    /// Smart Turn v3.2 (TURN, clip only), or `XCTSkip` when absent.
+    static func smartTurnModelPath() throws -> String {
+        guard let model = familyModel(
+            "TRANSCRIBE_SMOKE_SMART_TURN_MODEL", "models/smart-turn-v3.2/smart-turn-v3.2-Q8_0.gguf")
+        else { throw XCTSkip("no Smart Turn model (set TRANSCRIBE_SMOKE_SMART_TURN_MODEL)") }
+        return model
+    }
+
+    /// SAVA (VAD + TURN, streaming), or `XCTSkip` when absent.
+    static func savaModelPath() throws -> String {
+        guard let model = familyModel("TRANSCRIBE_SMOKE_SAVA_MODEL", "models/sava/sava-Q8_0.gguf")
+        else { throw XCTSkip("no SAVA model (set TRANSCRIBE_SMOKE_SAVA_MODEL)") }
+        return model
+    }
+
     /// The model path + decoded PCM, or `XCTSkip` when either is absent.
     static func modelAndAudio() throws -> (model: String, pcm: [Float]) {
         guard let model = modelPath() else {

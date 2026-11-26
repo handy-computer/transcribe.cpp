@@ -32,6 +32,9 @@ MACHINE_ALIASES = {
     "apple-m4-max": "m4-max",
     "amd-ryzen-7-pro-4750u-with-radeon-graphics": "ryzen-4750u",
     "amd-ryzen-7-4750u-pro": "ryzen-4750u",
+    # A base M1 Mac mini: the proxy the TURN models were benched on while the
+    # M4 reference machine was unreachable (turn-publication-v1).
+    "apple-m1": "m1",
 }
 
 
@@ -194,8 +197,8 @@ def expected_accuracy(record: dict, profile: dict) -> list[dict]:
                     "backend": suite.get("backend"),
                     # Language ID's crop: which slice of a run.py sweep the
                     # published number is, and which languages its pooled
-                    # mean is over.
-                    **{key: suite[key] for key in ("crop_s", "pooled_languages")
+                    # mean is over. TURN's decision threshold.
+                    **{key: suite[key] for key in ("crop_s", "pooled_languages", "threshold")
                        if key in suite},
                 })
     return cells
@@ -211,11 +214,15 @@ def speed_samples(record: dict, profile: dict) -> list[str]:
     one hand-written override per such variant.
     """
     spec = profile["speed"]
-    samples = spec.get("samples", [])
+    samples = list(spec.get("samples", []))
     rule = spec.get("single_language_samples")
     languages = record.get("languages") or []
     if rule and len(languages) == 1 and languages[0] != "en":
-        return [part.format(lang=languages[0]) for part in rule["pattern"]]
+        samples = [part.format(lang=languages[0]) for part in rule["pattern"]]
+    # Cells that only a streaming model can run (a TURN stream frame): the
+    # others have no such call, so the cell is not theirs to fill.
+    if record.get("capabilities", {}).get("streaming", {}).get("supported"):
+        samples += [s for s in spec.get("streaming_samples", []) if s not in samples]
     return samples
 
 
@@ -223,6 +230,7 @@ def all_speed_samples(profile: dict, records: dict[str, dict]) -> list[str]:
     """Every clip the profile can ask for, across all known variants. The bench
     driver needs this union up front to build its candidate matrix."""
     samples = set(profile["speed"].get("samples", []))
+    samples.update(profile["speed"].get("streaming_samples", []))
     for record in records.values():
         samples.update(speed_samples(record, profile))
     return sorted(samples)

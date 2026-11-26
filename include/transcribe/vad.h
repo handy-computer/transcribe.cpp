@@ -5,7 +5,9 @@
  * Audio must be 16 kHz mono floats.
  *
  * The model checks short blocks of audio ("frames") and returns a speech
- * probability for each: 0 means no speech; 1 means speech.
+ * probability for each: 0 means no speech; 1 means speech. A model may
+ * judge a frame only after hearing the frames that follow it (lookahead);
+ * first_frame always says which frames a call returns.
  *
  * transcribe_vad_run finds speech segments in a whole clip.
  * transcribe_vad_stream_feed returns probabilities for incoming audio.
@@ -29,7 +31,7 @@ struct transcribe_vad_session;
 struct transcribe_vad_info {
     uint64_t struct_size;   /* struct size in bytes; set by the init function */
     int32_t  sample_rate;   /* required audio sample rate: 16000 Hz */
-    int32_t  frame_samples; /* samples per frame (512 samples = 32 ms) */
+    int32_t  frame_samples; /* samples per frame (Silero: 512 samples = 32 ms) */
 };
 
 struct transcribe_vad_session_params {
@@ -68,7 +70,7 @@ struct transcribe_vad_result {
     /* Number of probabilities from the last call (transcribe_vad_probs). */
     int32_t  n_probs;
     /* Index of the first returned frame, counting from 0. Always 0 after
-     * run. For feed or flush, counts frames processed before this call.
+     * run. For feed or flush, counts frames judged before this call.
      * A frame starts at sample: frame index * frame_samples. */
     int64_t  first_frame;
     /* Number of speech segments (transcribe_vad_get_segment).
@@ -132,7 +134,10 @@ TRANSCRIBE_API transcribe_status transcribe_vad_run(struct transcribe_vad_sessio
 /*
  * Process incoming audio. Keep incomplete frames for the next call.
  * Input must be 16 kHz mono floats with no NaN or infinite values.
- * Returns a probability for each completed frame through transcribe_vad_probs.
+ * Returns a probability for each frame the model judged during this call
+ * through transcribe_vad_probs: each completed frame, or with a model that
+ * looks ahead, the frames it can now judge (a fixed number of frames
+ * behind the last completed one).
  * n_samples may be 0; pcm may be NULL in that case.
  *
  * The stream continues until stream_reset, stream_flush or run.
@@ -145,7 +150,8 @@ TRANSCRIBE_API transcribe_status transcribe_vad_stream_feed(struct transcribe_va
                                                             int                             n_samples);
 
 /* Process leftover audio, filling the last frame with zeros, then end
- * the stream. Returns one probability, or none if no audio was left over.
+ * the stream. Returns the probabilities of every frame not yet judged
+ * (with no lookahead: one, or none if no audio was left over).
  * The next feed starts a new stream at frame 0. */
 TRANSCRIBE_API transcribe_status transcribe_vad_stream_flush(struct transcribe_vad_session * session);
 

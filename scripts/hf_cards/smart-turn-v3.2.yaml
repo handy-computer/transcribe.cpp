@@ -1,0 +1,41 @@
+# Editorial copy only; metadata and measurements come from the catalog.
+pin_date: 2026-11-21
+validation:
+  reference: onnxruntime 1.23.2 (fp32 ONNX)
+  commit: 1dd8ab19
+  date: 2026-11-26
+pipeline_tag: audio-classification
+default_quant: F32
+tags:
+  - gguf
+  - transcribe.cpp
+  - turn-detection
+  - end-of-turn
+  - smart-turn
+summary: |
+  End-of-turn detection by Pipecat: has the speaker finished their turn,
+  or only paused? When your VAD hears a pause, give it the turn's audio (it
+  looks at the last 8 s) and it returns the probability that the turn is
+  over. Not a transcription model. 23 languages. CPU is the default
+  backend.
+wer:
+  notes: |
+    A clip counts as complete when its probability is above 0.5, Pipecat's
+    rule. False positives: incomplete clips called complete; false
+    negatives: the reverse. The reference is Pipecat's fp32 ONNX model on
+    the same clips (Pipecat publishes 93.71% for it, 92.63% for its int8
+    ONNX).
+usage: |
+  Build transcribe.cpp and run on a mono 16 kHz WAV of one turn:
+
+  ```bash
+  cmake -B build && cmake --build build --target transcribe-cli
+  build/bin/transcribe-cli -m smart-turn-v3.2-F32.gguf turn.wav
+  # turn: p=0.990633 ended=1 threshold=0.50
+  ```
+
+  From C, call `transcribe_turn_run` (`include/transcribe/turn.h`) on the
+  current turn's audio; it returns `p` and `ended`.
+
+  See [the model page](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/smart-turn-v3.2.md)
+  and [turn detection](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/turn.md).

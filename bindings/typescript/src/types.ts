@@ -300,9 +300,9 @@ export type FamilyExtension =
 
 /**
  * What a model serves: "asr" (transcription), "diarize" (speaker turns),
- * "langid" (language), "vad" (voice activity).
+ * "langid" (language), "vad" (voice activity), "turn" (end of turn).
  */
-export type Role = "asr" | "diarize" | "langid" | "vad";
+export type Role = "asr" | "diarize" | "langid" | "vad" | "turn";
 
 export interface DiarizeInfo {
   /** Input PCM rate. */
@@ -420,4 +420,55 @@ export interface VadResult {
   firstFrame: number;
   /** Speech segments; run only, empty after a feed or flush. */
   segments: VadSegment[];
+}
+
+export interface TurnInfo {
+  /** Input PCM rate (16000). */
+  sampleRate: number;
+  /** The longest audio run looks at; longer audio is scored on its end. 0 = no limit. */
+  maxAudioMs: number;
+  /** Samples per streamed frame; 0 = the model cannot stream (use run). */
+  frameSamples: number;
+  /** Whether the model also returns per-frame speech probabilities. */
+  hasSpeech: boolean;
+  /** The model's default cut-off: the turn has ended when p >= threshold. */
+  threshold: number;
+}
+
+export interface TurnSessionOptions {
+  /** CPU threads; 0 = library default. */
+  nThreads?: number;
+}
+
+/** Options for TurnSession.run. */
+export interface TurnOptions {
+  /** Cancel the run cooperatively. */
+  signal?: AbortSignal;
+  /** Cut-off for `ended`, 0 to 1; omitted (or negative) = the model's TurnInfo.threshold. */
+  threshold?: number;
+}
+
+export interface TurnFeedOptions {
+  /** Cancel the feed / flush cooperatively (a batch feed: every session's stream resets). */
+  signal?: AbortSignal;
+}
+
+/** Per-frame probabilities from a stream feed or flush (copied). */
+export interface TurnStreamResult {
+  /** Turn-end probability of each frame this call completed. */
+  probs: number[];
+  /** Stream frame index of probs[0] (0 after run). */
+  firstFrame: number;
+  /** Speech probability of each frame the model judged in this call; empty without hasSpeech. */
+  speechProbs: number[];
+  /** Stream frame index of speechProbs[0]; may trail firstFrame (speech is judged late). */
+  speechFirstFrame: number;
+}
+
+/** A scored clip (copied). Streaming models also return every frame's probabilities. */
+export interface TurnResult extends TurnStreamResult {
+  /** Probability that the turn has ended at the end of the clip. */
+  p: number;
+  /** Whether p is at or above the threshold. */
+  ended: boolean;
 }

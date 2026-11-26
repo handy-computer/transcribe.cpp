@@ -55,6 +55,15 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Silero VAD v6.2 | `silero-vad-v6.2` | streaming, voice activity detection | [docs/models/silero-vad-v6.2.md](docs/models/silero-vad-v6.2.md) |
 <!-- /catalog -->
 
+**End-of-turn detection models** (no transcription; scored on Pipecat's Smart Turn test set; see [`docs/turn.md`](docs/turn.md)):
+
+<!-- catalog:family-index role=turn -->
+| Family | Variants | Available capabilities | Docs |
+| --- | --- | --- | --- |
+| SAVA | `sava` | end-of-turn detection, streaming | [docs/models/sava.md](docs/models/sava.md) |
+| Smart Turn v3.2 | `smart-turn-v3.2` | end-of-turn detection | [docs/models/smart-turn-v3.2.md](docs/models/smart-turn-v3.2.md) |
+<!-- /catalog -->
+
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
 ## Model catalog

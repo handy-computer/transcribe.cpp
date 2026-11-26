@@ -1,0 +1,175 @@
+{
+  "_comment": [
+    "SAVA (Inworld) per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Regime, identical for every number below:",
+    "  model     models/sava/sava-F32.gguf (ALL_F32; the bf16 release weights, exact)",
+    "  runtime   build/bin/transcribe-cli --backend cpu --threads 1 (transcribe_turn_run:",
+    "            the clip plus 3 silent flush steps; per-step tensors are [n_frames + 3, ...])",
+    "  reference inworld-sava 1.0.0 (git v1.0.0 b4221a5), weights inworld/sava@1beae7c1,",
+    "            torch 2.14.1, fp32, CPU, 1 thread, inworld.sava.run",
+    "  host      macOS / arm64 (Apple M1), ggml CPU backend",
+    "  cases     all 8 in tests/golden/sava/sava.manifest.json (speech, silence, noise, ja,",
+    "            884 frames, 306 s / 7651 steps)",
+    "",
+    "Recipe, per tensor, over all 8 cases:",
+    "  finalized = max(1.5 * observed, provisional, 1e-6)",
+    "with provisional = 1e-4 * p99_abs (max) / 1e-5 * rms (mean) from the reference dumps.",
+    "The C++ front end runs in fp64 on the host, the rest in fp32 ggml; RoPE angles are",
+    "fp64 from the absolute step index (the reference uses fp32 angles).",
+    "",
+    "WIDENED vs provisional (max_abs unless noted):",
+    "  fe.mel               max  observed 7.887e-04 (dots-full) -> 0.001183 (provisional 0.00015)",
+    "  head.turn.hidden     max  observed 6.857e-04 (dots-full) -> 0.001029 (provisional 0.0003921)",
+    "  head.turn.input      max  observed 3.811e-04 (dots-full) -> 0.0005717 (provisional 0.0002687)",
+    "  head.vad.hidden      max  observed 5.609e-04 (dots-full) -> 0.0008413 (provisional 0.0003867)",
+    "  trunk.1.ssm_state    max  observed 3.785e-05 (dots-full) -> 5.677e-05 (provisional 1.608e-05)",
+    "  trunk.1.ssm_y        max  observed 2.213e-04 (jfk) -> 0.0003319 (provisional 0.0003142)",
+    "  trunk.2.mix          mean observed 7.452e-05 (silence) -> 0.0001118 (provisional 7.819e-05)",
+    "  trunk.2.out          mean observed 2.188e-04 (silence) -> 0.0003282 (provisional 0.0002916)",
+    "  trunk.2.ssm_state    max  observed 1.364e-04 (silence) -> 0.0002046 (provisional 5.233e-05)",
+    "  trunk.2.ssm_y        max  observed 2.403e-03 (dots-full) -> 0.003605 (provisional 0.001985)",
+    "  trunk.3.out          max  observed 2.627e-02 (dots-full) -> 0.0394 (provisional 0.02072)",
+    "  trunk.norm           max  observed 3.811e-04 (dots-full) -> 0.0005716 (provisional 0.0002734)",
+    "Mechanisms:",
+    "  fe.mel: the reference's own error. Its DFT is an fp32 GEMM, so bins near the 1e-10",
+    "    mel floor are cancellation-bound; the C++ matches an fp64 NumPy derivation to 6e-8.",
+    "  dots-full (positions up to 7650): the reference's fp32 RoPE angles lose precision",
+    "    with stream age (docs/porting/families/sava.md); drift grows with position",
+    "    (sava.speech 4e-6 in the first 1000 frames, 3.9e-5 after 6000). trunk.3.out",
+    "    (|x| up to 718) adds fp32 accumulation order in the 2048-term FFN down projection.",
+    "  trunk.{1,2}.ssm_state / ssm_y: the reference's offline path is the chunked SSD",
+    "    algorithm; ggml_ssm_scan is the exact recurrence. Largest on digital silence.",
+    "",
+    "Gates beyond tensors (validate.py, all 8 cases): the clip score p within 1e-4",
+    "(observed <= 2.7e-6) and the same decision."
+  ],
+  "fe.log_energy": {
+    "max_abs": 0.001151,
+    "mean_abs": 0.0001151
+  },
+  "fe.mel": {
+    "max_abs": 0.001183,
+    "mean_abs": 1.5e-05
+  },
+  "head.turn.embed": {
+    "max_abs": 5.385e-05,
+    "mean_abs": 4.376e-06
+  },
+  "head.turn.hidden": {
+    "max_abs": 0.001029,
+    "mean_abs": 1e-05
+  },
+  "head.turn.input": {
+    "max_abs": 0.0005717,
+    "mean_abs": 9.54e-06
+  },
+  "head.turn.logits": {
+    "max_abs": 0.001128,
+    "mean_abs": 0.0001022
+  },
+  "head.turn.speech_in": {
+    "max_abs": 0.0001,
+    "mean_abs": 9.571e-06
+  },
+  "head.vad.hidden": {
+    "max_abs": 0.0008413,
+    "mean_abs": 1e-05
+  },
+  "head.vad.logit": {
+    "max_abs": 0.001376,
+    "mean_abs": 0.0001229
+  },
+  "head.vad.logit_la": {
+    "max_abs": 0.003,
+    "mean_abs": 0.0001347
+  },
+  "mixer.out": {
+    "max_abs": 0.0002677,
+    "mean_abs": 1e-05
+  },
+  "sava.flush_turns": {
+    "max_abs": 9.978e-05,
+    "mean_abs": 9.904e-06
+  },
+  "sava.speech": {
+    "max_abs": 0.0001,
+    "mean_abs": 9.636e-06
+  },
+  "sava.speech_on_time": {
+    "max_abs": 0.0001,
+    "mean_abs": 9.595e-06
+  },
+  "sava.turn": {
+    "max_abs": 9.993e-05,
+    "mean_abs": 5.738e-06
+  },
+  "stream.speech": {
+    "max_abs": 0.0001,
+    "mean_abs": 9.558e-06
+  },
+  "stream.turn": {
+    "max_abs": 9.993e-05,
+    "mean_abs": 5.767e-06
+  },
+  "trunk.0.mix": {
+    "max_abs": 0.001275,
+    "mean_abs": 5.45e-05
+  },
+  "trunk.0.out": {
+    "max_abs": 0.004163,
+    "mean_abs": 0.0001666
+  },
+  "trunk.0.ssm_state": {
+    "max_abs": 2.823e-05,
+    "mean_abs": 1e-06
+  },
+  "trunk.0.ssm_y": {
+    "max_abs": 0.0006296,
+    "mean_abs": 2.54e-05
+  },
+  "trunk.1.mix": {
+    "max_abs": 0.002334,
+    "mean_abs": 8.535e-05
+  },
+  "trunk.1.out": {
+    "max_abs": 0.005974,
+    "mean_abs": 0.0002304
+  },
+  "trunk.1.ssm_state": {
+    "max_abs": 5.677e-05,
+    "mean_abs": 1e-06
+  },
+  "trunk.1.ssm_y": {
+    "max_abs": 0.0003319,
+    "mean_abs": 9.926e-06
+  },
+  "trunk.2.mix": {
+    "max_abs": 0.001999,
+    "mean_abs": 0.0001118
+  },
+  "trunk.2.out": {
+    "max_abs": 0.007815,
+    "mean_abs": 0.0003282
+  },
+  "trunk.2.ssm_state": {
+    "max_abs": 0.0002046,
+    "mean_abs": 1.508e-06
+  },
+  "trunk.2.ssm_y": {
+    "max_abs": 0.003605,
+    "mean_abs": 6.296e-05
+  },
+  "trunk.3.mix": {
+    "max_abs": 0.003617,
+    "mean_abs": 0.0001411
+  },
+  "trunk.3.out": {
+    "max_abs": 0.0394,
+    "mean_abs": 0.0007309
+  },
+  "trunk.norm": {
+    "max_abs": 0.0005716,
+    "mean_abs": 1e-05
+  }
+}

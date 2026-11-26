@@ -1,7 +1,7 @@
 // cli.h - shared declarations for the transcribe-cli example.
 //
 // main.cpp parses arguments, owns process setup (log sink, output file), and
-// routes each model to its role's driver (asr.cpp, diarize.cpp, langid.cpp, vad.cpp). Shared
+// routes each model to its role's driver (asr.cpp, diarize.cpp, langid.cpp, vad.cpp, turn.cpp). Shared
 // helpers live in namespace transcribe_cli next to the WAV loader in
 // examples/common.
 
@@ -114,6 +114,10 @@ struct cli_args {
     // VAD role. --vad-threshold overrides transcribe_vad_params::threshold
     // (< 0 = the library default).
     double vad_threshold = -1.0;
+
+    // TURN role. --turn-threshold overrides transcribe_turn_params::threshold
+    // (< 0 = the model's recommended cut-off).
+    double turn_threshold = -1.0;
 };
 
 // -o/--output: write `text` (newline-terminated) to `output` if non-null.
@@ -152,5 +156,12 @@ int run_vad_file(const cli_args &           args,
                  const std::vector<float> & pcm,
                  double                     duration_s,
                  std::ofstream *            output);
+
+// With -o, writes the turn line.
+int run_turn_file(const cli_args &           args,
+                  transcribe_model *         model,
+                  const std::vector<float> & pcm,
+                  double                     duration_s,
+                  std::ofstream *            output);
 
 }  // namespace transcribe_cli

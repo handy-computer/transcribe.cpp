@@ -27,13 +27,14 @@
 //! - [`Session`] is `Send` but not `Sync`; its mutating calls take `&mut self`,
 //!   so the type system enforces one-call-at-a-time.
 //! - **0.x concurrency:** the C library permits at most one in-flight compute
-//!   across all sessions of a model, [`DiarizeSession`]s, [`LangIdSession`]s
-//!   and [`VadSession`]s included. This crate enforces that with a per-model
-//!   mutex (held only for the native compute call), so concurrent calls from
-//!   many sessions queue rather than race. An active ASR stream holds the
-//!   model's stream lease; other runs, including VAD `run` / `stream_feed` /
-//!   `stream_flush`, return [`Error::Busy`] meanwhile. A VAD stream does not
-//!   take the lease. For real parallelism, use one [`Model`] per worker today.
+//!   across all sessions of a model, [`DiarizeSession`]s, [`LangIdSession`]s,
+//!   [`VadSession`]s and [`TurnSession`]s included. This crate enforces that
+//!   with a per-model mutex (held only for the native compute call), so
+//!   concurrent calls from many sessions queue rather than race. An active ASR
+//!   stream holds the model's stream lease; other runs, including VAD and TURN
+//!   `run` / `stream_feed` / `stream_flush`, return [`Error::Busy`] meanwhile.
+//!   VAD and TURN streams do not take the lease. For real parallelism, use one
+//!   [`Model`] per worker today.
 //!
 //! # ABI verification
 //!
@@ -59,6 +60,7 @@ mod model;
 mod result;
 mod session;
 mod streaming;
+mod turn;
 mod types;
 mod vad;
 mod version;
@@ -83,6 +85,7 @@ pub use model::{Capabilities, Model, ModelOptions, SessionLimits, SessionOptions
 pub use result::{Segment, SpeakerSegment, Timings, Token, Transcript, Word};
 pub use session::{RunOptions, Session, Stream};
 pub use streaming::{StreamOptions, StreamText, StreamUpdate};
+pub use turn::{TurnInfo, TurnOptions, TurnResult, TurnSession, TurnSessionOptions};
 pub use types::{
     AbiStruct, Backend, CommitPolicy, Diarize, ExtSlot, Feature, Itn, KvType, Pnc, Role, Roles,
     StreamState, Task, TimestampKind,

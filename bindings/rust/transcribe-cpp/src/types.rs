@@ -334,6 +334,10 @@ pub enum AbiStruct {
     VadParams,
     VadResult,
     VadSegment,
+    TurnInfo,
+    TurnSessionParams,
+    TurnParams,
+    TurnResult,
 }
 
 impl AbiStruct {
@@ -369,6 +373,10 @@ impl AbiStruct {
             AbiStruct::VadParams => A::TRANSCRIBE_ABI_VAD_PARAMS,
             AbiStruct::VadResult => A::TRANSCRIBE_ABI_VAD_RESULT,
             AbiStruct::VadSegment => A::TRANSCRIBE_ABI_VAD_SEGMENT,
+            AbiStruct::TurnInfo => A::TRANSCRIBE_ABI_TURN_INFO,
+            AbiStruct::TurnSessionParams => A::TRANSCRIBE_ABI_TURN_SESSION_PARAMS,
+            AbiStruct::TurnParams => A::TRANSCRIBE_ABI_TURN_PARAMS,
+            AbiStruct::TurnResult => A::TRANSCRIBE_ABI_TURN_RESULT,
         }
     }
 }
@@ -410,6 +418,8 @@ pub enum Role {
     LangId,
     /// Voice activity detection: [`VadSession`](crate::VadSession).
     Vad,
+    /// End-of-turn detection: [`TurnSession`](crate::TurnSession).
+    Turn,
 }
 
 /// The set of [`Role`]s a model serves ([`Model::roles`](crate::Model::roles)).
@@ -425,6 +435,7 @@ impl Roles {
             Role::Diarize => sys::transcribe_role::TRANSCRIBE_ROLE_DIARIZE,
             Role::LangId => sys::transcribe_role::TRANSCRIBE_ROLE_LANGID,
             Role::Vad => sys::transcribe_role::TRANSCRIBE_ROLE_VAD,
+            Role::Turn => sys::transcribe_role::TRANSCRIBE_ROLE_TURN,
         };
         self.0 & bit.0 != 0
     }

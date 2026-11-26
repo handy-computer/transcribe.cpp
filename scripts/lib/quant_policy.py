@@ -53,6 +53,11 @@ FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
     # widens it to F16, see src/arch/ecapa_tdnn/model.cpp); the K tiers would
     # save a few MB at most. Ship only the near-reference tiers.
     "ecapa_tdnn": ("F16", "Q8_0"),
+    # sava: near-reference tiers only; see docs/porting/families/sava.md.
+    "sava": ("F16", "Q8_0"),
+    # smart_turn: d_model 384 is not a multiple of 256, so the K tiers fall
+    # back to near-Q8_0 storage.
+    "smart_turn": ("F16", "Q8_0"),
 }
 
 

@@ -136,6 +136,35 @@ vad.stream_flush()?;
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
+### End-of-turn detection
+
+A model whose `roles()` contain `Role::Turn` (Smart Turn v3.2, SAVA) opens a
+`TurnSession`. `run` scores a clip (the audio of the current turn): `p` is the
+probability that the speaker has finished, `ended` is `p >= threshold`
+(`TurnOptions::threshold`, default -1 = the model's `turn_info()?.threshold`).
+Models that can stream (`turn_info()?.frame_samples > 0`, e.g. SAVA) also
+accept `stream_feed` / `stream_flush`, which return per-frame turn
+probabilities from `first_frame` and, when `has_speech`, speech probabilities
+from `speech_first_frame`; a clip model returns `Error::NotImplemented`.
+`TurnSession::stream_feed_batch` feeds many sessions of one model in one
+compute.
+
+```rust
+use transcribe_cpp::{Model, TurnOptions, TurnSession};
+let model = Model::load("sava-F32.gguf")?;
+let mut turn = model.turn_session()?;
+let r = turn.run(&pcm, &TurnOptions::default())?;
+println!("p = {} ended = {}", r.p, r.ended);
+for chunk in pcm.chunks(320) {
+    let r = turn.stream_feed(chunk)?;
+    println!("frames {}.. {:?}", r.first_frame, r.probs);
+}
+// Many users on one model: one compute per tick.
+let (mut a, mut b) = (model.turn_session()?, model.turn_session()?);
+let results = TurnSession::stream_feed_batch([(&mut a, &pcm[..320]), (&mut b, &pcm[..320])])?;
+# Ok::<(), transcribe_cpp::Error>(())
+```
+
 Runnable examples:
 
 ```sh

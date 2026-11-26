@@ -136,6 +136,29 @@ with model.vad_session() as vad:
     probs.extend(vad.stream_flush().probs)
 ```
 
+### End-of-turn detection
+
+Models whose `model.roles` include `Role.TURN` (Smart Turn v3.2, SAVA) score
+whether the speaker has finished talking through a turn session. `run()`
+scores one clip and returns a `TurnResult` with `p` and `ended`
+(`p >= threshold`; `threshold=` overrides `model.turn_info.threshold`). On a
+streaming model (`model.turn_info.frame_samples > 0`, e.g. SAVA)
+`stream_feed()` returns a turn probability per completed frame (`probs`, from
+`first_frame`) and a speech probability per judged frame (`speech_probs`, from
+`speech_first_frame`; these may trail); `stream_flush()` and `stream_reset()`
+work as for VAD. A clip-only model raises `NotImplementedByModel`.
+`TurnSession.stream_feed_batch([(session, pcm), ...])` feeds many sessions of
+one model in one compute call, each ending as after its own `stream_feed()`.
+Like the VAD stream, a turn stream does not take the ASR stream lease.
+
+```python
+with model.turn_session() as turn:
+    if turn.run(turn_pcm).ended:  # the audio since the user started talking
+        answer()
+
+results = transcribe_cpp.TurnSession.stream_feed_batch(list(zip(sessions, chunks)))
+```
+
 ## Backends
 
 `Model(backend=...)` applies a backend policy (`"auto"` uses the best

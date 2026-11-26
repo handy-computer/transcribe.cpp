@@ -48,6 +48,10 @@ fn abi_struct_sizes_are_live() {
         AbiStruct::VadParams,
         AbiStruct::VadResult,
         AbiStruct::VadSegment,
+        AbiStruct::TurnInfo,
+        AbiStruct::TurnSessionParams,
+        AbiStruct::TurnParams,
+        AbiStruct::TurnResult,
     ] {
         assert!(abi_struct_size(which) > 0, "{which:?} reported size 0");
     }
@@ -154,5 +158,6 @@ fn handles_are_send_sync() {
     assert_send::<transcribe_cpp::DiarizeSession>();
     assert_send::<transcribe_cpp::LangIdSession>();
     assert_send::<transcribe_cpp::VadSession>();
+    assert_send::<transcribe_cpp::TurnSession>();
     // Sessions are intentionally NOT Sync (single-threaded use).
 }
