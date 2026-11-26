@@ -66,6 +66,27 @@ int edit_distance(const std::string & a, const std::string & b) {
     return prev[b.size()];
 }
 
+// Lowercase ASCII and keep only letters, digits and single spaces, so the
+// cased and punctuated multilingual checkpoint and the lowercase -nc one are
+// held to the same reference.
+std::string normalize_text(const std::string & in) {
+    std::string out;
+    for (char c : in) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u >= 'A' && u <= 'Z') {
+            out.push_back(static_cast<char>(u - 'A' + 'a'));
+        } else if ((u >= 'a' && u <= 'z') || (u >= '0' && u <= '9') || u >= 0x80) {
+            out.push_back(c);
+        } else if (u == ' ' && !out.empty() && out.back() != ' ') {
+            out.push_back(' ');
+        }
+    }
+    while (!out.empty() && out.back() == ' ') {
+        out.pop_back();
+    }
+    return out;
+}
+
 const char * const kReference =
     "and so my fellow americans ask not what your country can do for you ask what you can do for your country";
 
@@ -134,7 +155,7 @@ int main() {
     }
 
     const std::string actual   = transcribe_full_text(session);
-    const int         distance = edit_distance(actual, kReference);
+    const int         distance = edit_distance(normalize_text(actual), kReference);
     std::fprintf(stderr, "granite5_ctc_e2e_smoke: text=\"%s\" edit_distance=%d\n", actual.c_str(), distance);
     CHECK(!actual.empty());
     CHECK(distance <= 2);

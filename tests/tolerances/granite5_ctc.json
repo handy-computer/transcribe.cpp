@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "granite5_ctc (Granite Speech 5.0 TurboCTC) tolerances. Stage 4 finalized.",
+    "granite5_ctc (Granite Speech 5.0 TurboCTC) tolerances. Stage 4 finalized; re-finalized for the 91dcb06 re-pin (see the last block).",
     "",
     "Correctness regime (every number below was measured in exactly this one):",
     "  GGUF:          granite-speech-5.0-470m-turboctc-BF16.gguf, the reference",
@@ -91,7 +91,37 @@
     "(2.2M values) and 28x on dots (7.2M values), which is the order-statistic",
     "behaviour expected of a max over 3.2x more samples at equal mean. mean_abs",
     "remains the entry with teeth at a 1.52x margin (8.26e-03 budget vs 5.44e-03",
-    "observed); a mask/index/off-by-one bug moves the mean, not just the tail."
+    "observed); a mask/index/off-by-one bug moves the mean, not just the tail.",
+    "",
+    "Re-pin to the multilingual weights (ibm-granite rev 91dcb06; weights replaced",
+    "upstream at 121ff64, 2026-10-21). Everything above was measured on the",
+    "English-only 18ca3c1 weights. Same graph, same tensor names and shapes, new",
+    "values, so every budget was re-checked against fresh dumps of the new",
+    "checkpoint (manifest now dumps all 16 blocks, like -nc):",
+    "  1. F32 control. An F32-tier GGUF of 91dcb06 matches the F32 oracle at",
+    "     1e-5..1e-6 relative on every tensor of both cases (enc.ctc_logits",
+    "     6.9e-04 max / 1.2e-05 mean; worst relative is enc.block.12.out",
+    "     8.2e-03 at |value| 344). The graph is exact on the new weights.",
+    "  2. BF16 drift moved. Blocks 10-13 carry a massive-activation channel",
+    "     (channel 4, |value| up to 344 vs p99 6-9), the same pattern the -nc",
+    "     sibling has at channel 570, and BF16 drift peaks there (block 12",
+    "     max_abs 3.13 on dots). On dots one blank frame (74) then picks up",
+    "     0.51 at enc.out ch 699 inside block 15 (0.067 after block 14) and",
+    "     1.87 max on enc.ctc_logits; that row's logit error is mostly a",
+    "     uniform shift (mean -1.10, std 0.40) with the blank logit moving +0.53,",
+    "     i.e. the frame becomes MORE confidently blank. F32 drift on that frame",
+    "     is 5.2e-04.",
+    "  3. Output unaffected: argmax agreement 137/137 (jfk) and 441/441 (dots),",
+    "     transcripts identical to the reference on both cases. Minimum top-2",
+    "     logit gap is 0.234 (jfk) / 0.233 (dots); BF16 drift at those frames is",
+    "     0.013.",
+    "  Rule: entries that still passed keep their old budget; entries that",
+    "  failed are re-finalized to 1.5 x observed (max over both cases); the ten",
+    "  newly dumped blocks (3-6, 9-14) get 1.5 x observed. Widened: enc.block.2",
+    "  post_conv/post_ff2, enc.block.7.out, enc.block.15.out / enc.out,",
+    "  enc.ctc.mid_injection, enc.ctc.mid_logits, enc.ctc_logits. mean_abs",
+    "  remains the entry with teeth on enc.ctc_logits (0.0167 vs observed",
+    "  0.0111); its max_abs (2.81) is a single-frame order statistic."
   ],
   "enc.block.0.out": {
     "max_abs": 0.128,
@@ -133,8 +163,28 @@
     "max_abs": 0.344,
     "mean_abs": 0.0199
   },
+  "enc.block.10.out": {
+    "max_abs": 1.14,
+    "mean_abs": 0.00528
+  },
+  "enc.block.11.out": {
+    "max_abs": 3.96,
+    "mean_abs": 0.00516
+  },
+  "enc.block.12.out": {
+    "max_abs": 4.69,
+    "mean_abs": 0.00464
+  },
+  "enc.block.13.out": {
+    "max_abs": 3.95,
+    "mean_abs": 0.00439
+  },
+  "enc.block.14.out": {
+    "max_abs": 4.83,
+    "mean_abs": 0.00362
+  },
   "enc.block.15.out": {
-    "max_abs": 0.035,
+    "max_abs": 0.764,
     "mean_abs": 0.00218
   },
   "enc.block.2.out": {
@@ -146,7 +196,7 @@
     "mean_abs": 0.0129
   },
   "enc.block.2.post_conv": {
-    "max_abs": 0.167,
+    "max_abs": 0.489,
     "mean_abs": 0.0153
   },
   "enc.block.2.post_ff1": {
@@ -154,35 +204,55 @@
     "mean_abs": 0.0123
   },
   "enc.block.2.post_ff2": {
-    "max_abs": 0.18,
+    "max_abs": 0.517,
     "mean_abs": 0.0174
   },
+  "enc.block.3.out": {
+    "max_abs": 0.339,
+    "mean_abs": 0.00604
+  },
+  "enc.block.4.out": {
+    "max_abs": 0.187,
+    "mean_abs": 0.00441
+  },
+  "enc.block.5.out": {
+    "max_abs": 0.302,
+    "mean_abs": 0.00312
+  },
+  "enc.block.6.out": {
+    "max_abs": 0.375,
+    "mean_abs": 0.00286
+  },
   "enc.block.7.out": {
-    "max_abs": 0.0218,
-    "mean_abs": 0.00155
+    "max_abs": 0.0621,
+    "mean_abs": 0.00285
   },
   "enc.block.8.out": {
     "max_abs": 0.148,
     "mean_abs": 0.00807
   },
+  "enc.block.9.out": {
+    "max_abs": 0.206,
+    "mean_abs": 0.00489
+  },
   "enc.ctc.mid_injection": {
-    "max_abs": 0.00275,
+    "max_abs": 0.00686,
     "mean_abs": 9.03e-05
   },
   "enc.ctc.mid_logits": {
-    "max_abs": 0.103,
-    "mean_abs": 0.00622
+    "max_abs": 0.213,
+    "mean_abs": 0.0116
   },
   "enc.ctc_logits": {
-    "max_abs": 0.227,
-    "mean_abs": 0.00826
+    "max_abs": 2.81,
+    "mean_abs": 0.0167
   },
   "enc.input_linear.out": {
     "max_abs": 0.0207,
     "mean_abs": 0.00165
   },
   "enc.out": {
-    "max_abs": 0.035,
+    "max_abs": 0.764,
     "mean_abs": 0.00218
   },
   "mel.in": {

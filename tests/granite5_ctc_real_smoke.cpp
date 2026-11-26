@@ -22,8 +22,9 @@
 //      one variant the converter produces.
 //   3. backend is non-empty after load.
 //   4. native_sample_rate == 16000, supports_translate == false,
-//      lang_detect == false, 1 language ["en"] (family invariants: this
-//      is a monolingual English CTC encoder).
+//      lang_detect == false; languages ["en"] on -nc and
+//      [en, fr, de, es, pt, it, ja] on the multilingual Apache variant
+//      (general.languages, read from the model card at convert time).
 //   5. The hparams the loader read match the 470M variant:
 //        enc_n_layers=16, enc_hidden=1024, enc_n_heads=8,
 //        enc_head_dim=128, enc_intermediate=4096, enc_input_dim=320,
@@ -188,9 +189,13 @@ int main() {
         CHECK(caps->native_sample_rate == 16000);
         CHECK(caps->supports_translate == false);
         CHECK(caps->supports_language_detect == false);
-        CHECK_EQ_INT(caps->n_languages, 1);
-        if (caps->n_languages == 1 && caps->languages != nullptr) {
-            CHECK_STR_EQ(caps->languages[0], "en");
+        static const char * const k_langs_ml[] = { "en", "fr", "de", "es", "pt", "it", "ja" };
+        const int                 n_expected   = is_nc ? 1 : 7;
+        CHECK_EQ_INT(caps->n_languages, n_expected);
+        if (caps->n_languages == n_expected && caps->languages != nullptr) {
+            for (int i = 0; i < n_expected; ++i) {
+                CHECK_STR_EQ(caps->languages[i], k_langs_ml[i]);
+            }
         }
     }
 
@@ -258,11 +263,13 @@ int main() {
 
     // --- 9: tokenizer decode contract ---------------------------------
     //
-    // The two variants ship different tokenizer FAMILIES behind identical
-    // configs: byte-level BPE (Apache) vs SentencePiece-derived BPE with byte
-    // fallback (-nc). The -nc side has two decode paths that the byte-level
-    // side cannot reach at all, and both were signed MUST PASS at Stage 1:
-    // byte-fallback reassembly, and the 254 reserved <|tokN|> placeholders.
+    // Both variants now ship SentencePiece-derived BPE with byte fallback
+    // (the English-only Apache revision 18ca3c1 was byte-level BPE), but with
+    // different vocabularies. -nc: 254 reserved <|tokN|> placeholders,
+    // special=false, decoded literally. Multilingual Apache: ids 1..254 are
+    // special (<|nospeech|>, <|endoftext|>, <|spltokenN|>, ...), typed
+    // CONTROL, and dropped by build_result like the reference's
+    // skip_special_tokens=True.
     //
     // Expected strings below are the reference ParakeetTokenizer's own output,
     // captured at Stage 2 in
@@ -301,7 +308,19 @@ int main() {
                 // decode legitimately keeps it here.
                 CHECK_STR_EQ(decode({ 515, 1773, 2977, 5384 }), " the quick brown fox");
             } else {
-                CHECK_STR_EQ(decode({ 406, 1731, 2855, 5723 }), "the quick brown fox");
+                // Cased and punctuated pieces; U+2581 becomes a leading space
+                // that the reference strips and collapse_whitespace drops.
+                CHECK_STR_EQ(decode({ 13384, 4195, 3231, 2491, 2834, 971, 952 }), " The quick brown fox.");
+                CHECK_STR_EQ(decode({ 15723, 2966, 977, 16099, 3137, 1067 }), " Ça va? Très bien!");
+                CHECK_STR_EQ(decode({ 931, 12927, 10952, 12886, 1005 }), " 日本語です。");
+                // Byte fallback: <0xNN> ids are 255 + byte value.
+                CHECK_STR_EQ(decode({ 2427, 1445, 2079, 931, 255 + 0xF0, 255 + 0x9F, 255 + 0x98, 255 + 0x80 }),
+                             " naïve 😀");
+                // Special added tokens are CONTROL; blank/unk <unk> is not.
+                CHECK(tok->is_control(1));    // <|nospeech|>
+                CHECK(tok->is_control(254));  // <|spltoken33|>
+                CHECK(!tok->is_control(0));
+                CHECK(!tok->is_control(13384));
             }
         }
     }

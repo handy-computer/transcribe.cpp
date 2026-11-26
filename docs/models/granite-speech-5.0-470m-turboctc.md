@@ -1,55 +1,62 @@
 # Granite Speech 5.0 470M TurboCTC
 
 <!-- catalog:intro -->
-Upstream: [`ibm-granite/granite-speech-5.0-470m-turboctc`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) at [`18ca3c1`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc/commit/18ca3c1).
+Upstream: [`ibm-granite/granite-speech-5.0-470m-turboctc`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc) at [`91dcb06`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc/commit/91dcb06).
 
-Offline English speech-to-text. A Granite Conformer encoder with a self-conditioned CTC
-head. Takes a 16 kHz mono WAV and produces a transcript. Not a streaming model. English
-only.
+Offline multilingual speech-to-text for English, French, German, Spanish, Portuguese,
+Italian and Japanese, with punctuation and capitalization. A Granite Conformer encoder
+with a self-conditioned CTC head. Takes a 16 kHz mono WAV and produces a transcript. Not
+a streaming model, and it does not translate or identify the language.
 <!-- /catalog -->
 
 ## What it's for
 
-Offline English speech-to-text. Takes a 16 kHz mono WAV and produces a
-transcript. Not a streaming model. English only, and it does not translate.
+Offline speech-to-text in English, French, German, Spanish, Portuguese,
+Italian and Japanese. Takes a 16 kHz mono WAV and produces a cased,
+punctuated transcript. Not a streaming model, and it does not translate.
+There is no language input or language-ID output: one shared CTC vocabulary
+covers all seven languages, so `--language` is accepted for those codes but
+does not change the output.
+
+This page describes the multilingual release IBM published on 2026-10-21
+under the same repository name. The earlier English-only, lowercase weights
+(upstream `18ca3c1`) were replaced in place and are no longer what this
+variant ships.
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`18ca3c1`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc/commit/18ca3c1), pinned 2026-09-12. Validated against the transformers reference at transcribe.cpp commit [`b9427cf`](https://github.com/handy-computer/transcribe.cpp/tree/b9427cf) on 2026-09-12.
+Licensed Apache-2.0. Ported from upstream commit [`91dcb06`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc/commit/91dcb06), pinned 2026-11-21. Validated against the transformers reference at transcribe.cpp commit [`04d8ec60`](https://github.com/handy-computer/transcribe.cpp/tree/04d8ec60) on 2026-11-21.
 <!-- /catalog -->
 
 There is also a non-commercial sibling,
-[`granite-speech-5.0-470m-turboctc-nc`](granite-speech-5.0-470m-turboctc-nc.md),
-trained on more data and slightly more accurate. It is CC-BY-NC-SA-4.0, so use
-this one for anything commercial.
+[`granite-speech-5.0-470m-turboctc-nc`](granite-speech-5.0-470m-turboctc-nc.md).
+It is still the English-only, lowercase model and is CC-BY-NC-SA-4.0, so use
+this one for anything commercial or non-English.
 
 ## Download
 
 <!-- catalog:downloads -->
 | Quantization | Download |   Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16         | [granite-speech-5.0-470m-turboctc-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-BF16.gguf) | 948 MB | 1.34% |
-| F16          | [granite-speech-5.0-470m-turboctc-F16.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-F16.gguf) | 948 MB | 1.33% |
-| Q8_0         | [granite-speech-5.0-470m-turboctc-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q8_0.gguf) | 506 MB | 1.33% |
-| Q6_K         | [granite-speech-5.0-470m-turboctc-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q6_K.gguf) | 392 MB | 1.33% |
-| Q5_K_M       | [granite-speech-5.0-470m-turboctc-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q5_K_M.gguf) | 336 MB | 1.34% |
-| Q4_K_M       | [granite-speech-5.0-470m-turboctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q4_K_M.gguf) | 279 MB | 1.35% |
+| BF16         | [granite-speech-5.0-470m-turboctc-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-BF16.gguf) | 948 MB | - |
+| F16          | [granite-speech-5.0-470m-turboctc-F16.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-F16.gguf) | 948 MB | - |
+| Q8_0         | [granite-speech-5.0-470m-turboctc-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q8_0.gguf) | 506 MB | - |
+| Q6_K         | [granite-speech-5.0-470m-turboctc-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q6_K.gguf) | 392 MB | - |
+| Q5_K_M       | [granite-speech-5.0-470m-turboctc-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q5_K_M.gguf) | 336 MB | - |
+| Q4_K_M       | [granite-speech-5.0-470m-turboctc-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-5.0-470m-turboctc-gguf/resolve/main/granite-speech-5.0-470m-turboctc-Q4_K_M.gguf) | 279 MB | - |
 <!-- /catalog -->
 
 <!-- catalog:recipe -->
-WER on the full LibriSpeech test-clean split (2,620 utterances), batch size 8, timestamps none, language hint `en`, decoded on cuda. Measured at transcribe.cpp `9daf396`.
+Pending: not yet measured on the multilingual weights (upstream `91dcb06`).
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
-Greedy CTC decoding, no external LM. Measured reference baseline (transformers
-5.17.0, F32, CPU): 1.33%, 95% CI [1.20, 1.47].
+Greedy CTC decoding, no external LM. The model emits cased, punctuated text;
+WER is scored after Whisper English normalization. Measured reference baseline
+(transformers 5.17.0, F32, MPS): 1.30%, 95% CI [1.17, 1.44].
 <!-- /catalog -->
 
 <!-- catalog:accuracy -->
-**FLEURS test**
-
-| Language | Metric |  Q8_0 |
-| --- | --- | ---: |
-| en       | WER    | 4.61% |
+Pending: not yet measured on the multilingual weights (upstream `91dcb06`).
 <!-- /catalog -->
 
 ## Quick Start
@@ -101,22 +108,24 @@ supported and gives identical output, but buys almost nothing here.
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against Hugging Face transformers
-on `samples/jfk.wav` and `samples/dots.wav`. All 35 checkpointed tensors fall
-within family tolerance, and the final transcript matches the reference
-verbatim.
+on `samples/jfk.wav` and `samples/dots.wav`, with all 16 encoder blocks dumped.
+Every checkpointed tensor falls within family tolerance, and the final
+transcript matches the reference verbatim.
 
 | Field | Value |
 | --- | --- |
-| Reference | transformers 5.17.0, `ibm-granite/granite-speech-5.0-470m-turboctc` |
+| Reference | transformers 5.17.0, `ibm-granite/granite-speech-5.0-470m-turboctc` at `91dcb06` |
 | Dump script | `scripts/dump_reference_granite5_ctc_transformers.py` |
 | Manifest | `tests/golden/granite5_ctc/granite-speech-5.0-470m-turboctc.manifest.json` |
 | Tolerances | `tests/tolerances/granite5_ctc.json` |
 | Command | `uv run scripts/validate.py all --family granite5_ctc --variant granite-speech-5.0-470m-turboctc` |
 
-Drift is BF16 matmul accumulation compounding over 16 blocks, and stays small
-relative to tensor magnitude. It does not reach the output: zero argmax
-differences against the reference on either sample, and 2619 of 2620
-LibriSpeech test-clean hypotheses byte-identical to the reference run.
+Drift is BF16 activation rounding in the matmuls compounding over 16 blocks.
+It is largest in blocks 10-13, where one channel carries activations up to
+~340 against a typical 6-9. It does not reach the output: zero argmax
+differences against the reference on either sample. An F32 GGUF of the same
+checkpoint matches the reference to about 1e-5 relative, so the graph itself
+is exact.
 
 ## Reproduction
 
@@ -125,6 +134,7 @@ LibriSpeech test-clean hypotheses byte-identical to the reference run.
 ```bash
 uv run --project scripts/envs/granite5_ctc \
   scripts/convert-granite5_ctc.py ibm-granite/granite-speech-5.0-470m-turboctc \
+  --revision 91dcb0605daf65f88dbb04fef015c423241d941d \
   --repo-id ibm-granite/granite-speech-5.0-470m-turboctc
 ```
 

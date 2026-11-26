@@ -3,7 +3,9 @@
 Reference: `transformers==5.17.0`
 `models/granite_speech5/{modeling,feature_extraction}_granite_speech5.py`
 (generated from `modular_granite_speech5.py`) @ HF revision
-`18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0`
+`18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0`; re-checked at
+`91dcb0605daf65f88dbb04fef015c423241d941d` (multilingual weights, same graph,
+shapes and frontend; only the tokenizer and language list changed)
 Closest in-tree analog: `src/arch/granite/` (same Granite Conformer block and the
 shared `src/granite_conformer/shaw_attn.h`); CTC head + greedy collapse from
 `src/arch/parakeet/`.
@@ -69,7 +71,7 @@ required (the Stage-4 mid-generation rule is scoped to KV-cache decoders).
 
 | Capability | Reference behavior | C++ API behavior | Family-doc Capability Validation row |
 |---|---|---|---|
-| Transcribe (explicit lang hint) | English-only; no language conditioning anywhere in the graph | `--language en` accepted and ignored | Transcribe (explicit lang hint) |
+| Transcribe (explicit lang hint) | no language conditioning anywhere in the graph (multilingual at `91dcb06`, English-only before) | `--language` accepted for codes in `general.languages` and ignored; other codes rejected | Transcribe (explicit lang hint) |
 | Transcribe (auto/no hint) | identical forward | identical output to the hinted run | Transcribe (auto/no hint) |
 | Batch (offline) | `processor(list_of_clips)` builds a padded batch + `attention_mask`; the mask halves after each subsampling block and masks pad key columns | `run_batch()` with per-utterance frame counts | Batch (offline) |
 | Word timestamps | not advertised; CTC emission peaks are not word durations | unsupported | Word timestamps |

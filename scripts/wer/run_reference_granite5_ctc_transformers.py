@@ -18,7 +18,7 @@ Usage:
     uv run --project scripts/envs/granite5_ctc \\
       scripts/wer/run_reference_granite5_ctc_transformers.py \\
         --model ibm-granite/granite-speech-5.0-470m-turboctc \\
-        --revision 18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0 \\
+        --revision 91dcb0605daf65f88dbb04fef015c423241d941d \\
         --manifest samples/wer/test-clean.manifest.jsonl \\
         --device mps \\
         --out reports/wer/granite-speech-5.0-470m-turboctc-REF.test-clean.jsonl
@@ -57,7 +57,7 @@ def main() -> int:
                         "path; keep at 1 for the reference baseline so a mask "
                         "bug cannot perturb the gate.")
     p.add_argument("--language", default=None,
-                   help="Ignored (granite5_ctc is monolingual English).")
+                   help="Ignored: granite5_ctc has no language conditioning.")
     p.add_argument("--limit", type=int, default=0)
     args = p.parse_args()
 
