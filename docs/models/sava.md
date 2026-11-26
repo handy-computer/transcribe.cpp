@@ -3,11 +3,10 @@
 <!-- catalog:intro -->
 Upstream: [`inworld/sava`](https://huggingface.co/inworld/sava) at [`1beae7c`](https://huggingface.co/inworld/sava/commit/1beae7c).
 
-Streaming end-of-turn and voice activity detection by Inworld: every 40 ms
-it gives the probability that the speaker's turn has ended and, 120 ms
-later, the probability that the frame held speech. Not a transcription
-model: it serves the TURN role (live stream or whole clip) and the VAD
-role. Any language. CPU is the default backend.
+End-of-turn and speech detection by Inworld, for live audio. Every 40 ms
+it gives the probability that the speaker has finished their turn, and
+whether the audio is speech. Not a transcription model. Any language. CPU
+is the default backend.
 <!-- /catalog -->
 
 API and examples: [turn detection](../turn.md), [voice activity detection](../vad.md).
@@ -21,7 +20,7 @@ Upstream code: [`inworld-ai/sava`](https://github.com/inworld-ai/sava)
 (`inworld-sava` 1.0.0).
 
 <!-- catalog:pin -->
-Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://huggingface.co/inworld/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (PyTorch, fp32) reference at transcribe.cpp commit [`f9d9e48e`](https://github.com/handy-computer/transcribe.cpp/tree/f9d9e48e) on 2026-11-25.
+Licensed Apache-2.0. Ported from upstream commit [`1beae7c`](https://huggingface.co/inworld/sava/commit/1beae7c), pinned 2026-11-21. Validated against the inworld-sava 1.0.0 (PyTorch, fp32) reference at transcribe.cpp commit [`1dd8ab19`](https://github.com/handy-computer/transcribe.cpp/tree/1dd8ab19) on 2026-11-26.
 <!-- /catalog -->
 
 ## How to use it
@@ -79,16 +78,11 @@ Accuracy on the full Pipecat Smart Turn v3.2 test split (31,527 clips), a clip c
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
-A clip's score is the turn score of its last 40 ms frame
-(`transcribe_turn_run`'s `p`, the clip scored as one stream); the clip
-is called complete when `p > 0.5`, Inworld's benchmark rule. The API's
-default cut-off is 0.9, Inworld's live rule. At 0.9, F32 and F16 make
-the reference's decision on every clip; Q8_0 on 31,401. False positives
-(incomplete clips called complete) and false negatives (the reverse) are
-shares of all clips, as Pipecat publishes them. Inworld publishes 93.35% and an
-AUC of 0.97946 (fp32, A100) but no per-clip scores; the reference is
-upstream's PyTorch package (inworld-sava 1.0.0, CPU, fp32) on the same
-clips: 93.36%, AUC 0.97946.
+A clip counts as complete when its last frame's turn probability is
+above 0.5, the rule of Inworld's benchmark (the API's default cut-off is
+0.9). False positives: incomplete clips called complete; false negatives:
+the reverse. The reference is Inworld's own PyTorch model on the same
+clips (93.36%, AUC 0.97946; Inworld publishes 93.35% and 0.97946).
 <!-- /catalog -->
 
 <!-- catalog:turn reference="the PyTorch reference (inworld-sava 1.0.0, fp32)" -->

@@ -3,10 +3,10 @@
 <!-- catalog:intro -->
 Upstream: [`pipecat-ai/smart-turn-v3`](https://huggingface.co/pipecat-ai/smart-turn-v3) at [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81).
 
-End-of-turn detection by Pipecat (Daily): has the speaker finished their
-turn, or only paused? Not a transcription model: the TURN role scores the
-current turn's audio (the last 8 s) with one probability that the turn is
-complete. Run it when a VAD hears a pause. 23 languages. CPU is the default
+End-of-turn detection by Pipecat: has the speaker finished their turn,
+or only paused? When your VAD hears a pause, give it the turn's audio (it
+looks at the last 8 s) and it returns the probability that the turn is
+over. Not a transcription model. 23 languages. CPU is the default
 backend.
 <!-- /catalog -->
 
@@ -20,7 +20,7 @@ at `f766f81d3cfdf7737ac64aad813d91bbfd56bf93` (SHA256
 Upstream code: [`pipecat-ai/smart-turn`](https://github.com/pipecat-ai/smart-turn).
 
 <!-- catalog:pin -->
-Licensed BSD-2-Clause. Ported from upstream commit [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81), pinned 2026-11-21. Validated against the onnxruntime 1.23.2 (fp32 ONNX) reference at transcribe.cpp commit [`f9d9e48e`](https://github.com/handy-computer/transcribe.cpp/tree/f9d9e48e) on 2026-11-25.
+Licensed BSD-2-Clause. Ported from upstream commit [`f766f81`](https://huggingface.co/pipecat-ai/smart-turn-v3/commit/f766f81), pinned 2026-11-21. Validated against the onnxruntime 1.23.2 (fp32 ONNX) reference at transcribe.cpp commit [`1dd8ab19`](https://github.com/handy-computer/transcribe.cpp/tree/1dd8ab19) on 2026-11-26.
 <!-- /catalog -->
 
 ## How to use it
@@ -60,13 +60,11 @@ Accuracy on the full Pipecat Smart Turn v3.2 test split (31,527 clips), a clip c
 <!-- /catalog -->
 
 <!-- catalog:prose field=wer.notes -->
-A clip's score is `transcribe_turn_run`'s `p` on the whole clip (the
-model sees its last 8 s); the clip is called complete when `p > 0.5`,
-upstream's benchmark rule. False positives (incomplete clips called
-complete) and false negatives (the reverse) are shares of all clips, as
-Pipecat publishes them. The reference is upstream's fp32 ONNX
-(`smart-turn-v3.2-gpu.onnx`) under onnxruntime on the same clips.
-Pipecat publishes 93.71% for it and 92.63% for its int8 ONNX.
+A clip counts as complete when its probability is above 0.5, Pipecat's
+rule. False positives: incomplete clips called complete; false
+negatives: the reverse. The reference is Pipecat's fp32 ONNX model on
+the same clips (Pipecat publishes 93.71% for it, 92.63% for its int8
+ONNX).
 <!-- /catalog -->
 
 <!-- catalog:turn reference="the fp32 ONNX" -->
