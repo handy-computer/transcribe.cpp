@@ -8,12 +8,11 @@
 //!
 //! The enums live in another crate, so the conversions are trait impls here
 //! (inherent methods cannot be added to a foreign type). A `#[non_exhaustive]`
-//! enum ([`Task`], [`Feature`], [`ExtSlot`]) needs a `_` arm in a match outside
-//! its crate, so the compiler no longer proves every variant is mapped; the
-//! exact `=` pin on transcribe-cpp-types plus the round-trip tests below are
-//! what keep them total. Their conversion returns `None` for an unmapped
-//! variant, and callers turn that into an error (or `false`) rather than hand
-//! C an out-of-range enum.
+//! enum ([`Task`], [`Feature`], [`ExtSlot`]) could only be matched here with a
+//! `_` arm the compiler cannot check, so instead each carries its C value in an
+//! exhaustive (hidden) `c_value()` in transcribe-cpp-types: a new variant does
+//! not compile without one, and the tests below check every value against the
+//! header.
 
 use transcribe_cpp_sys as sys;
 use transcribe_cpp_types::{
@@ -33,15 +32,9 @@ pub(crate) trait FromRaw<R> {
 }
 
 impl ToRaw for Task {
-    type Raw = Option<sys::transcribe_task>;
+    type Raw = sys::transcribe_task;
     fn to_raw(self) -> Self::Raw {
-        use sys::transcribe_task as T;
-        Some(match self {
-            Task::Transcribe => T::TRANSCRIBE_TASK_TRANSCRIBE,
-            Task::Translate => T::TRANSCRIBE_TASK_TRANSLATE,
-            Task::Instruct => T::TRANSCRIBE_TASK_INSTRUCT,
-            _ => return None,
-        })
+        sys::transcribe_task(self.c_value())
     }
 }
 
@@ -138,23 +131,9 @@ impl ToRaw for Backend {
 }
 
 impl ToRaw for Feature {
-    type Raw = Option<sys::transcribe_feature>;
+    type Raw = sys::transcribe_feature;
     fn to_raw(self) -> Self::Raw {
-        use sys::transcribe_feature as F;
-        Some(match self {
-            Feature::InitialPrompt => F::TRANSCRIBE_FEATURE_INITIAL_PROMPT,
-            Feature::TemperatureFallback => F::TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK,
-            Feature::LongForm => F::TRANSCRIBE_FEATURE_LONG_FORM,
-            Feature::Cancellation => F::TRANSCRIBE_FEATURE_CANCELLATION,
-            Feature::Pnc => F::TRANSCRIBE_FEATURE_PNC,
-            Feature::Itn => F::TRANSCRIBE_FEATURE_ITN,
-            Feature::Diarization => F::TRANSCRIBE_FEATURE_DIARIZATION,
-            Feature::Vocabulary => F::TRANSCRIBE_FEATURE_VOCABULARY,
-            Feature::ContextPrompt => F::TRANSCRIBE_FEATURE_CONTEXT_PROMPT,
-            Feature::Instruct => F::TRANSCRIBE_FEATURE_INSTRUCT,
-            Feature::TranscriptPrefix => F::TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX,
-            _ => return None,
-        })
+        sys::transcribe_feature(self.c_value())
     }
 }
 
@@ -183,15 +162,9 @@ impl FromRaw<sys::transcribe_stream_state> for StreamState {
 }
 
 impl ToRaw for ExtSlot {
-    type Raw = Option<sys::transcribe_ext_slot>;
+    type Raw = sys::transcribe_ext_slot;
     fn to_raw(self) -> Self::Raw {
-        use sys::transcribe_ext_slot as E;
-        Some(match self {
-            ExtSlot::Run => E::TRANSCRIBE_EXT_SLOT_RUN,
-            ExtSlot::Stream => E::TRANSCRIBE_EXT_SLOT_STREAM,
-            ExtSlot::DiarizeRun => E::TRANSCRIBE_EXT_SLOT_DIARIZE_RUN,
-            _ => return None,
-        })
+        sys::transcribe_ext_slot(self.c_value())
     }
 }
 
@@ -277,27 +250,22 @@ impl AbiStruct {
 
 #[cfg(test)]
 mod tests {
-    //! The `#[non_exhaustive]` enums' conversions have a `_` arm the compiler
-    //! cannot check (see the module docs), so each variant is pinned here to its
-    //! C value, both ways. A variant added to transcribe-cpp-types needs a row
-    //! here and an arm in its `to_raw`, in the same change (the exact `=` pin
-    //! keeps the two crates in lockstep).
+    //! The `#[non_exhaustive]` enums take their C value from transcribe-cpp-types
+    //! (`c_value()`, see the module docs); each variant is checked here against
+    //! the header's constant, both ways. A variant added there needs a row here.
     use super::*;
     use transcribe_cpp_types::{BackendMask, Role, Roles};
 
     /// Every listed variant maps to its C value and back, and the C values are
     /// exactly `0..n` (no two variants share one, none is skipped).
-    fn round_trip<V, R>(
-        rows: &[(V, R)],
-        to_raw: impl Fn(V) -> Option<R>,
-        raw_u32: impl Fn(R) -> u32,
-    ) where
+    fn round_trip<V, R>(rows: &[(V, R)], to_raw: impl Fn(V) -> R, raw_u32: impl Fn(R) -> u32)
+    where
         V: Copy + PartialEq + std::fmt::Debug,
         R: Copy + PartialEq + std::fmt::Debug,
     {
         let back = |raw: R| rows.iter().find(|(_, r)| *r == raw).map(|(v, _)| *v);
         for &(variant, raw) in rows {
-            assert_eq!(to_raw(variant), Some(raw), "{variant:?} -> C");
+            assert_eq!(to_raw(variant), raw, "{variant:?} -> C");
             assert_eq!(back(raw), Some(variant), "C {raw:?} -> back");
         }
         let mut values: Vec<u32> = rows.iter().map(|(_, r)| raw_u32(*r)).collect();

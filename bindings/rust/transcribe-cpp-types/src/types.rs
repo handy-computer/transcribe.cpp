@@ -22,6 +22,20 @@ pub enum Task {
     Instruct,
 }
 
+impl Task {
+    /// The C enum value (`transcribe_task`), for transcribe-cpp's conversion. Not public
+    /// API: an exhaustive match here makes a new variant fail to compile until
+    /// it has a value, and transcribe-cpp tests every value against the header.
+    #[doc(hidden)]
+    pub const fn c_value(self) -> u32 {
+        match self {
+            Task::Transcribe => 0,
+            Task::Translate => 1,
+            Task::Instruct => 2,
+        }
+    }
+}
+
 /// Requested (or returned) timestamp granularity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -141,6 +155,28 @@ pub enum Feature {
     TranscriptPrefix,
 }
 
+impl Feature {
+    /// The C enum value (`transcribe_feature`), for transcribe-cpp's conversion. Not public
+    /// API: an exhaustive match here makes a new variant fail to compile until
+    /// it has a value, and transcribe-cpp tests every value against the header.
+    #[doc(hidden)]
+    pub const fn c_value(self) -> u32 {
+        match self {
+            Feature::InitialPrompt => 0,
+            Feature::TemperatureFallback => 1,
+            Feature::LongForm => 2,
+            Feature::Cancellation => 3,
+            Feature::Pnc => 4,
+            Feature::Itn => 5,
+            Feature::Diarization => 6,
+            Feature::Vocabulary => 7,
+            Feature::ContextPrompt => 8,
+            Feature::Instruct => 9,
+            Feature::TranscriptPrefix => 10,
+        }
+    }
+}
+
 /// When the UI-facing committed text grows during a stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -175,6 +211,20 @@ pub enum ExtSlot {
     Stream,
     /// `transcribe_diarize_params::family`.
     DiarizeRun,
+}
+
+impl ExtSlot {
+    /// The C enum value (`transcribe_ext_slot`), for transcribe-cpp's conversion. Not public
+    /// API: an exhaustive match here makes a new variant fail to compile until
+    /// it has a value, and transcribe-cpp tests every value against the header.
+    #[doc(hidden)]
+    pub const fn c_value(self) -> u32 {
+        match self {
+            ExtSlot::Run => 0,
+            ExtSlot::Stream => 1,
+            ExtSlot::DiarizeRun => 2,
+        }
+    }
 }
 
 /// A kind of work a model can do (`transcribe_role`).

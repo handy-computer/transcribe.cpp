@@ -386,12 +386,7 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
     let mut params: sys::transcribe_run_params = unsafe { std::mem::zeroed() };
     unsafe { sys::transcribe_run_params_init(&mut params) };
 
-    params.task = o.task.to_raw().ok_or_else(|| {
-        Error::InvalidArgument(format!(
-            "task {:?} is not supported by this transcribe-cpp build",
-            o.task
-        ))
-    })?;
+    params.task = o.task.to_raw();
     params.timestamps = o.timestamps.to_raw();
     params.pnc = o.pnc.to_raw();
     params.itn = o.itn.to_raw();

@@ -356,17 +356,12 @@ impl Model {
 
     /// Probe a yes/no feature.
     pub fn supports(&self, feature: Feature) -> bool {
-        // `None`: a feature this build has no C value for, so it can't have it.
-        feature
-            .to_raw()
-            .is_some_and(|f| unsafe { sys::transcribe_model_supports(self.inner.ptr, f) })
+        unsafe { sys::transcribe_model_supports(self.inner.ptr, feature.to_raw()) }
     }
 
     /// Whether this model accepts the given family-extension `kind` in `slot`.
     pub fn accepts_ext(&self, slot: ExtSlot, kind: u32) -> bool {
-        slot.to_raw().is_some_and(|slot| unsafe {
-            sys::transcribe_model_accepts_ext_kind(self.inner.ptr, slot, kind)
-        })
+        unsafe { sys::transcribe_model_accepts_ext_kind(self.inner.ptr, slot.to_raw(), kind) }
     }
 
     /// The `general.architecture` string, e.g. "parakeet".
