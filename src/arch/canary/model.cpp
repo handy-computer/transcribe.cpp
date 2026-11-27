@@ -784,7 +784,7 @@ transcribe_status run(transcribe_session *          session,
     int           mel_n_mels   = 0;
     int           mel_n_frames = 0;
     if (const transcribe_status mst =
-            cm->mel->compute(pcm, static_cast<size_t>(n_samples), cc->mel_buf, mel_n_mels, mel_n_frames);
+            cm->mel->compute(pcm, static_cast<size_t>(n_samples), cc->mel_buf, mel_n_mels, mel_n_frames, cc->n_threads);
         mst != TRANSCRIBE_OK) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: MelFrontend::compute failed (%s)",
                 transcribe_status_string(mst));

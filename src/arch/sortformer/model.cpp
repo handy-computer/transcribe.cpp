@@ -965,7 +965,7 @@ static transcribe_status diarize_pcm(SortformerSession *          pc,
     }
     int mel_n_mels = 0, mel_n_frames = 0;
     if (const transcribe_status mst =
-            pm->mel->compute(pcm, static_cast<size_t>(n_samples), pc->mel_buf, mel_n_mels, mel_n_frames);
+            pm->mel->compute(pcm, static_cast<size_t>(n_samples), pc->mel_buf, mel_n_mels, mel_n_frames, pc->n_threads);
         mst != TRANSCRIBE_OK) {
         return mst;
     }

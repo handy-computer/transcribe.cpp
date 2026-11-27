@@ -37,13 +37,14 @@ struct GigaamMelFrontend {
     int n_frames_for(size_t n_samples) const;
 
     // Compute log-mel. Output is row-major [n_mels, n_frames].
-    // n_threads controls frame FFT parallelism; <= 0 uses the affinity-aware
+    // n_threads controls frame FFT parallelism and has no default, so every
+    // caller passes its session's budget; <= 0 uses the affinity-aware
     // project default.
     transcribe_status compute(const float *        pcm,
                               size_t               n_samples,
                               std::vector<float> & out_mel,
                               int &                out_n_frames,
-                              int                  n_threads = 0) const;
+                              int                  n_threads) const;
 };
 
 }  // namespace transcribe::gigaam

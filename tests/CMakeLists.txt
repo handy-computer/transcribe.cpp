@@ -751,6 +751,31 @@ if(TRANSCRIBE_UV)
         SKIP_RETURN_CODE 77)
 
     # -------------------------------------------------------------------------
+    # Session n_threads bounds the threads a run starts
+    # -------------------------------------------------------------------------
+    #
+    # Counts pthread_create calls during transcribe_run and
+    # transcribe_run_batch on the minimal parakeet fixture: a session with
+    # n_threads = 1 starts none in the mel front-end. Linux only
+    # (pthread_create interposition); skips with 77 elsewhere.
+    add_executable(transcribe_session_threads_unit
+        session_threads_unit.cpp)
+
+    target_link_libraries(transcribe_session_threads_unit PRIVATE transcribe ${CMAKE_DL_LIBS})
+
+    target_compile_definitions(transcribe_session_threads_unit PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_session_threads_unit)
+
+    add_dependencies(transcribe_session_threads_unit fixtures)
+
+    add_test(NAME transcribe_session_threads_unit
+        COMMAND transcribe_session_threads_unit)
+    set_tests_properties(transcribe_session_threads_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # -------------------------------------------------------------------------
     # Parakeet streaming extension sentinel-reject regression
     # -------------------------------------------------------------------------
     #
