@@ -21,6 +21,7 @@
 #include "transcribe-log.h"
 #include "transcribe-meta.h"
 #include "transcribe-prompting.h"
+#include "transcribe-repetition-guard.h"
 #include "weights.h"
 #include "whisper.h"
 
@@ -1726,6 +1727,10 @@ transcribe_status whisper_run(transcribe_session *          session,
     // temperature was hot (>= 0.5). Init to the user knob; flipped at chunk end.
     bool do_condition_on_prev_tokens = wp->condition_on_prev_tokens;
 
+    std::string last_emitted_text;
+    int64_t     last_emitted_t1_ms       = -1;
+    int         consecutive_repeat_count = 0;
+
     int seek = 0;
     while (seek < total_mel_frames) {
         if (cc->poll_abort()) {
@@ -2306,6 +2311,13 @@ transcribe_status whisper_run(transcribe_session *          session,
                 }
                 consume_generated_token(next_id);
 
+                if (!generated_text_ids.empty() &&
+                    transcribe::stop_on_repetition(generated_text_ids, "whisper step")) {
+                    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                            "whisper run: stopped repeating generation loop at step %d", step);
+                    break;
+                }
+
                 if (n_past + 1 > static_cast<int>(n_ctx_decoder)) {
                     break;
                 }
@@ -2539,11 +2551,53 @@ transcribe_status whisper_run(transcribe_session *          session,
         // pairs" branch, full-chunk advance, no per-chunk segment emission.
         WhisperSegmentResult seg_res = whisper_retrieve_segment(generated_ids, cm->tok, time_offset_ms, seek_num_frames,
                                                                 want_segment_timestamps, timestamp_begin, vocab_size);
+        bool has_hallucination_in_chunk = false;
+        std::vector<transcribe_session::SegmentEntry> clean_segments;
+        clean_segments.reserve(seg_res.segments.size());
+
         for (auto & seg : seg_res.segments) {
+            if (seg.text.empty()) {
+                continue;
+            }
+            bool is_hallucinated_repeat = false;
+            const bool is_consecutive_time = (last_emitted_t1_ms < 0 || (seg.t0_ms - last_emitted_t1_ms <= 15000));
+            if (!last_emitted_text.empty() && is_consecutive_time &&
+                (seg.text == last_emitted_text ||
+                 (seg.text.size() >= 12 && last_emitted_text.size() >= 12 &&
+                  (seg.text.find(last_emitted_text) != std::string::npos ||
+                   last_emitted_text.find(seg.text) != std::string::npos)))) {
+                consecutive_repeat_count++;
+                if (consecutive_repeat_count >= 2 || (seg.text.size() >= 6 && consecutive_repeat_count >= 1)) {
+                    is_hallucinated_repeat = true;
+                }
+            } else {
+                consecutive_repeat_count = 0;
+                last_emitted_text = seg.text;
+                last_emitted_t1_ms = seg.t1_ms;
+            }
+
+            if (is_hallucinated_repeat) {
+                has_hallucination_in_chunk = true;
+                log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                        "whisper run: suppressed repetitive hallucination [%.2fs - %.2fs]: %s",
+                        seg.t0_ms / 1000.0, seg.t1_ms / 1000.0, seg.text.c_str());
+                continue;
+            }
+            clean_segments.push_back(std::move(seg));
+        }
+
+        for (auto & seg : clean_segments) {
             cc->segments.push_back(std::move(seg));
         }
         int                                 segment_offset_frames = seg_res.segment_offset_frames;
         std::vector<std::vector<int32_t>> & prev_chunk_segments   = seg_res.prev_chunk_segments;
+
+        if (has_hallucination_in_chunk) {
+            prev_chunk_segments.clear();
+            prev_history_segments.clear();
+            do_condition_on_prev_tokens = false;
+            segment_offset_frames       = seek_num_frames;
+        }
 
         // Update prev-context history from the _retrieve_segment slices, not
         // accepted_generated_ids directly: the closed-pair branch discards the
@@ -2553,8 +2607,10 @@ transcribe_status whisper_run(transcribe_session *          session,
                                          prev_chunk_segments.end());
         }
 
-        all_text_ids.insert(all_text_ids.end(), generated_text_ids.begin(), generated_text_ids.end());
-        all_raw_ids.insert(all_raw_ids.end(), generated_ids.begin(), generated_ids.end());
+        if (!has_hallucination_in_chunk) {
+            all_text_ids.insert(all_text_ids.end(), generated_text_ids.begin(), generated_text_ids.end());
+            all_raw_ids.insert(all_raw_ids.end(), generated_ids.begin(), generated_ids.end());
+        }
 
         // Seek advance. HF (generation_whisper.py, 5.6.1) runs ONE seek loop
         // for every input length — there is no separate short-form decode
