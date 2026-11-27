@@ -1,6 +1,6 @@
 [package]
 name = "transcribe-cpp"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 # As transcribe-cpp-sys (its generated FFI needs 1.82). transcribe-cpp-types
 # alone builds on 1.74.
@@ -48,14 +48,14 @@ serde = ["dep:serde", "transcribe-cpp-types/serde"]
 # `transcribe-cpp --no-default-features`, silently re-enabling Metal. The backend
 # features below forward explicitly, so the default (`metal`) still reaches sys
 # via `metal = ["transcribe-cpp-sys/metal"]`.
-transcribe-cpp-sys = { version = "0.5.0", path = "../../..", default-features = false }
+transcribe-cpp-sys = { version = "0.5.1", path = "../../..", default-features = false }
 # The plain-data types (options, results, errors), re-exported at this crate's
 # root. Pinned EXACTLY: the family-extension enums are #[non_exhaustive], so
 # their conversions to the C structs here need a `_` arm the compiler cannot
 # check, and only lockstep versions guarantee every variant has a mapping
 # (Task / Feature / ExtSlot carry their C value in the types crate instead).
 # scripts/release/prepare.py keeps the pin in step with the release version.
-transcribe-cpp-types = { version = "=0.5.0", path = "../transcribe-cpp-types" }
+transcribe-cpp-types = { version = "=0.5.1", path = "../transcribe-cpp-types" }
 thiserror = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }

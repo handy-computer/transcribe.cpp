@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "hound",
  "log",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp-sys"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cmake",
  "serde_json",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "transcribe-cpp-types"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "postcard",
  "serde",

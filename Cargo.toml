@@ -11,7 +11,7 @@
 
 [package]
 name = "transcribe-cpp-sys"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 # 1.82: the generated FFI uses `unsafe extern` blocks (1.82) and `offset_of!`
 # (1.77). 1.74 was declared through 0.5.0 but never built.
