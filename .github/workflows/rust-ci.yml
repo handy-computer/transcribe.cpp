@@ -60,6 +60,7 @@ on:
       - "CMakePresets.json"
       - "tests/cmake/ep-prefix-parent/**"
       - "scripts/ci/rust_package_audit.py"
+      - "scripts/ci/rust_semver_check.sh"
       - "bindings/python/_generate/check_version_sync.py"
       - ".github/workflows/rust-ci.yml"
   pull_request:
@@ -106,7 +107,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build + test (no features)
         run: cargo test -p transcribe-cpp-types --locked
-      - name: Build + test (serde; the 0.5.0 wire-format goldens)
+      - name: Build + test (serde)
         run: cargo test -p transcribe-cpp-types --features serde --locked
       - name: Dependency tree holds nothing native
         shell: bash
@@ -306,6 +307,18 @@ jobs:
         # `serde` on so the cfg_attr derives and tests/serde.rs are linted too.
         if: matrix.label == 'linux-static'
         run: cargo clippy --workspace --all-targets --features transcribe-cpp/serde -- -D warnings
+      - name: Install cargo-semver-checks
+        if: matrix.label == 'linux-static'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - name: API vs the latest release (informational)
+        # Reports, never blocks: a PR may break the API on purpose (pre-1.0
+        # minors do), and only the release knows whether it is a minor bump.
+        # publish.yml runs the same script blocking, after prepare.py.
+        if: matrix.label == 'linux-static'
+        continue-on-error: true
+        run: scripts/ci/rust_semver_check.sh
       - name: ccache stats
         if: runner.os == 'Linux'
         run: ccache -s | head -8

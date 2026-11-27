@@ -210,6 +210,11 @@ jobs:
         run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-types
       - name: Dry-run transcribe-cpp-sys (full verify build, as cargo would publish it)
         run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-sys
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - name: API vs the latest release (blocking; a break needs a minor bump)
+        run: scripts/ci/rust_semver_check.sh
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
@@ -330,6 +335,11 @@ jobs:
         run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-types
       - name: Dry-run transcribe-cpp-sys (full verify build, as cargo would publish it)
         run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-sys
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - name: API vs the latest release (blocking; a break needs a minor bump)
+        run: scripts/ci/rust_semver_check.sh
       # The safe crate cannot be dry-run-verified pre-publish: it depends on
       # transcribe-cpp-sys = "0.0.x" and transcribe-cpp-types = "=0.0.x", and
       # the registry has neither version until they actually publish

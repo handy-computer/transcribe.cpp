@@ -1,1 +1,0 @@
-{"initial_prompt":"Glossary: ggml, GGUF.","condition_on_prev_tokens":false,"temperature":0.25,"temperature_inc":0.125,"compression_ratio_thold":2.375,"logprob_thold":-1.0,"no_speech_thold":0.625,"max_prev_context_tokens":224,"seed":7,"max_initial_timestamp":1.5}
