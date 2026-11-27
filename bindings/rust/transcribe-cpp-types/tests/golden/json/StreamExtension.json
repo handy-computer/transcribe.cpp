@@ -1,0 +1,1 @@
+[{"ParakeetStream":{"att_context_right":13}},{"ParakeetBuffered":{"left_ms":10000,"chunk_ms":2000,"right_ms":1500}},{"MoonshineStreaming":{"min_decode_interval_ms":240}},{"VoxtralRealtime":{"num_delay_tokens":6,"min_decode_interval_ms":480}}]

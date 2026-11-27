@@ -55,8 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let token = CancelToken::new();
         session.set_cancel_token(&token);
 
-        let long: Vec<f32> = std::iter::repeat(pcm.iter().copied())
-            .take(12)
+        let long: Vec<f32> = std::iter::repeat_n(pcm.iter().copied(), 12)
             .flatten()
             .collect();
 

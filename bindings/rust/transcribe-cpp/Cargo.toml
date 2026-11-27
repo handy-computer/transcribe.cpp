@@ -2,7 +2,9 @@
 name = "transcribe-cpp"
 version = "0.5.0"
 edition = "2021"
-rust-version = "1.74"
+# As transcribe-cpp-sys (its generated FFI needs 1.82). transcribe-cpp-types
+# alone builds on 1.74.
+rust-version = "1.82"
 description = "Rust bindings for transcribe.cpp, a C/C++ speech-to-text library built on ggml"
 license = "MIT"
 readme = "README.md"
@@ -36,8 +38,9 @@ shared = ["transcribe-cpp-sys/shared"]
 dynamic-backends = ["shared", "transcribe-cpp-sys/dynamic-backends"]
 # Serialize/Deserialize on the plain-data option and result types (not handles),
 # Serialize on Error, and Serialize/Deserialize on its ErrorReport snapshot. No
-# native-build impact.
-serde = ["dep:serde"]
+# native-build impact. The plain-data types live in transcribe-cpp-types, so
+# this forwards there; `dep:serde` is for Error's own Serialize impl.
+serde = ["dep:serde", "transcribe-cpp-types/serde"]
 
 [dependencies]
 # default-features = false so the safe crate's own features are the ONLY control
@@ -46,6 +49,12 @@ serde = ["dep:serde"]
 # features below forward explicitly, so the default (`metal`) still reaches sys
 # via `metal = ["transcribe-cpp-sys/metal"]`.
 transcribe-cpp-sys = { version = "0.5.0", path = "../../..", default-features = false }
+# The plain-data types (options, results, errors), re-exported at this crate's
+# root. Pinned EXACTLY: several are #[non_exhaustive], so the conversions to the
+# C structs here need a `_` arm the compiler cannot check, and only lockstep
+# versions guarantee every variant has a mapping. scripts/release/prepare.py
+# keeps the pin in step with the release version.
+transcribe-cpp-types = { version = "=0.5.0", path = "../transcribe-cpp-types" }
 thiserror = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }

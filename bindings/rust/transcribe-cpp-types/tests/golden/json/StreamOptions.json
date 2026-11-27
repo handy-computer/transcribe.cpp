@@ -1,0 +1,1 @@
+{"commit_policy":"StablePrefix","stable_prefix_agreement_n":4,"family":{"ParakeetBuffered":{"left_ms":10000,"chunk_ms":2000,"right_ms":1500}}}

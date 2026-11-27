@@ -10,95 +10,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{Timings, TurnOptions, TurnResult, TurnSessionOptions};
 
 use crate::cancel::{abort_trampoline, CancelToken};
 use crate::error::{check, Error, Result};
 use crate::model::{Model, ModelInner};
-use crate::result::Timings;
 use crate::session::clamp_len;
-
-/// Static facts about an end-of-turn model ([`Model::turn_info`]).
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TurnInfo {
-    /// Input PCM rate (16000).
-    pub sample_rate: i32,
-    /// The longest audio [`TurnSession::run`] looks at; longer audio is scored
-    /// on its last `max_audio_ms`. 0 = no limit.
-    pub max_audio_ms: i32,
-    /// Samples per frame for streaming; 0 = the model cannot stream (the
-    /// `stream_*` calls return [`Error::NotImplemented`](crate::Error)).
-    pub frame_samples: i32,
-    /// Whether the model also returns a speech probability per frame
-    /// ([`TurnResult::speech_probs`]).
-    pub has_speech: bool,
-    /// The model's recommended cut-off: the default for
-    /// [`TurnOptions::threshold`].
-    pub threshold: f64,
-}
-
-/// Options for creating a turn session.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct TurnSessionOptions {
-    /// CPU threads for ops that run on CPU; 0 = library default.
-    pub n_threads: i32,
-}
-
-/// Settings for [`TurnSession::run`].
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct TurnOptions {
-    /// Probability at or above which the turn counts as ended
-    /// ([`TurnResult::ended`]). Negative (the default, -1) uses the model's
-    /// [`TurnInfo::threshold`]; otherwise `[0, 1]`.
-    pub threshold: f64,
-}
-
-impl Default for TurnOptions {
-    fn default() -> Self {
-        TurnOptions { threshold: -1.0 }
-    }
-}
-
-/// The result of one [`TurnSession::run`], [`TurnSession::stream_feed`],
-/// [`TurnSession::stream_feed_batch`] or [`TurnSession::stream_flush`].
-#[derive(Debug, Clone, Default, PartialEq)]
-#[non_exhaustive]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct TurnResult {
-    /// After a run: the probability that the turn has ended at the end of the
-    /// clip. 0 after a feed or flush.
-    pub p: f32,
-    /// After a run: `p >= threshold`. False after a feed or flush.
-    pub ended: bool,
-    /// Per-frame turn probabilities from the call: `probs[i]` says whether the
-    /// turn has ended at the end of frame `first_frame + i`. Always empty for
-    /// models that cannot stream.
-    pub probs: Vec<f32>,
-    /// Stream position of `probs[0]`, in frames: 0 after a run; for a feed or
-    /// flush, the frames the stream had processed before the call.
-    pub first_frame: i64,
-    /// Per-frame speech probabilities from the call (empty unless
-    /// [`TurnInfo::has_speech`]). During a stream they can trail the turn
-    /// probabilities; after a run every frame has both.
-    pub speech_probs: Vec<f32>,
-    /// Stream position of `speech_probs[0]`, in frames.
-    pub speech_first_frame: i64,
-}
+use crate::types::FromRaw;
 
 /// An end-of-turn session.
 pub struct TurnSession {
@@ -150,17 +68,17 @@ fn copy_result(ptr: *mut sys::transcribe_turn_session) -> Result<TurnResult> {
         unsafe { sys::transcribe_turn_get_result(ptr, &mut res) },
         "turn result",
     )?;
-    Ok(TurnResult {
-        p: res.p,
-        ended: res.ended,
-        probs: copy_probs(unsafe { sys::transcribe_turn_probs(ptr) }, res.n_probs),
-        first_frame: res.first_frame,
-        speech_probs: copy_probs(
-            unsafe { sys::transcribe_turn_speech_probs(ptr) },
-            res.n_speech_probs,
-        ),
-        speech_first_frame: res.speech_first_frame,
-    })
+    let mut result = TurnResult::default();
+    result.p = res.p;
+    result.ended = res.ended;
+    result.probs = copy_probs(unsafe { sys::transcribe_turn_probs(ptr) }, res.n_probs);
+    result.first_frame = res.first_frame;
+    result.speech_probs = copy_probs(
+        unsafe { sys::transcribe_turn_speech_probs(ptr) },
+        res.n_speech_probs,
+    );
+    result.speech_first_frame = res.speech_first_frame;
+    Ok(result)
 }
 
 impl TurnSession {
@@ -204,7 +122,7 @@ impl TurnSession {
     /// Score one clip of 16 kHz mono float32 PCM (the audio of the current
     /// turn, from where the speaker started): has the turn ended at its end?
     /// Starts fresh and discards any stream in progress. Audio longer than
-    /// [`TurnInfo::max_audio_ms`] is scored on its tail. Models that can stream
+    /// [`TurnInfo::max_audio_ms`](crate::TurnInfo::max_audio_ms) is scored on its tail. Models that can stream
     /// also return every frame's turn (and speech) probability.
     /// [`Error::InvalidArgument`](crate::Error) (empty or non-finite input, a
     /// threshold above 1) leaves the stream and last result unchanged.
@@ -232,7 +150,7 @@ impl TurnSession {
     /// judged; a partial frame waits for the next call. On CPU the stream's
     /// probabilities equal a [`run`](Self::run) over the same audio.
     /// [`Error::NotImplemented`](crate::Error) if the model cannot stream
-    /// ([`TurnInfo::frame_samples`] is 0). [`Error::InvalidArgument`](crate::Error)
+    /// ([`TurnInfo::frame_samples`](crate::TurnInfo::frame_samples) is 0). [`Error::InvalidArgument`](crate::Error)
     /// (e.g. NaN input) leaves the stream intact; an abort or processing error
     /// resets it to frame 0.
     pub fn stream_feed(&mut self, pcm: &[f32]) -> Result<TurnResult> {

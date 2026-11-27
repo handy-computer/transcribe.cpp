@@ -289,6 +289,22 @@ fn main() {
 }
 ```
 
+## The types without the engine (`transcribe-cpp-types`)
+
+The plain-data types (options, results, enums, `ErrorKind` / `ErrorReport`,
+family extensions, the VAD / LangID / diarization / turn results) live in
+[`transcribe-cpp-types`](https://crates.io/crates/transcribe-cpp-types), a
+pure-Rust crate with no native dependency and no build script. This crate
+re-exports every one of them at its usual path (`transcribe_cpp::RunOptions`
+is `transcribe_cpp_types::RunOptions`), and its `serde` feature turns on
+`transcribe-cpp-types/serde`.
+
+A program that only needs to name those types, such as a supervisor that
+talks to transcribe.cpp worker processes over IPC, can depend on
+`transcribe-cpp-types` alone and keep `transcribe-cpp-sys`, CMake and ggml out
+of its build. Use the same version as the workers' `transcribe-cpp`; the crates
+are released in lockstep.
+
 ## Threading
 
 - `Model` is `Send + Sync` and cheap to clone (`Arc`-backed); the native model

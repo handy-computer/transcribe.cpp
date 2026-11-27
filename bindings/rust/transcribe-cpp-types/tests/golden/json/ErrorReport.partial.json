@@ -1,0 +1,1 @@
+{"kind":"aborted","message":"operation aborted: run: aborted (status 13)","status":13,"partial":{"text":"Hello","raw_text":"Hello","language":null,"timestamp_kind":"Segment","segments":[],"speaker_segments":[],"words":[],"tokens":[],"timings":{"load_ms":0.0,"mel_ms":0.0,"encode_ms":0.0,"decode_ms":0.0}}}

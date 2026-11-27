@@ -1,0 +1,1 @@
+{"native_sample_rate":16000,"languages":["en","de"],"translate_target_languages":["en"],"max_timestamp_kind":"Word","supports_language_detect":true,"supports_translate":true,"supports_streaming":false,"supports_spec_decode":true,"max_audio_ms":30000}

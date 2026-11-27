@@ -14,72 +14,18 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{
+    RunOptions, Segment, SessionLimits, SessionOptions, SpeakerSegment, StreamOptions, StreamState,
+    StreamText, StreamUpdate, TimestampKind, Timings, Token, Transcript, Word,
+};
 
 use crate::cancel::{abort_trampoline, CancelToken};
 use crate::error::{check, error_for_status, Error, Result};
-use crate::family::{RunExtRaw, RunExtension};
-use crate::model::{Model, ModelInner, SessionLimits, SessionOptions};
-use crate::result::{
-    owned_opt_str, owned_str, Segment, SpeakerSegment, Timings, Token, Transcript, Word,
-};
-use crate::streaming::{build_stream_params, StreamOptions, StreamText, StreamUpdate};
-use crate::types::{Diarize, Itn, Pnc, StreamState, Task, TimestampKind};
-
-/// Per-run parameters.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct RunOptions {
-    pub task: Task,
-    pub timestamps: TimestampKind,
-    pub pnc: Pnc,
-    pub itn: Itn,
-    pub diarize: Diarize,
-    /// Source language hint (ISO code), or `None` to autodetect.
-    pub language: Option<String>,
-    /// Target language for translation, or `None`.
-    pub target_language: Option<String>,
-    /// Keep special vocab tags (e.g. `<|...|>`) in the returned text.
-    pub keep_special_tags: bool,
-    /// Speculative-decode draft length. `-1` = family default, `0` = disabled.
-    pub spec_k_drafts: i32,
-    /// Optional family-specific run extension (e.g. whisper decode knobs).
-    pub family: Option<RunExtension>,
-    /// Custom terms in priority order, formatted per family
-    /// (`Feature::Vocabulary`; ignored with a warning elsewhere).
-    pub vocabulary: Vec<String>,
-    /// Context text under `Task::Transcribe`/`Translate`
-    /// (`Feature::ContextPrompt`); the required instruction under
-    /// `Task::Instruct`.
-    pub prompt: Option<String>,
-    /// Transcript text the model continues from (`Feature::TranscriptPrefix`;
-    /// an error elsewhere, and in batch and streaming runs). `text` holds only
-    /// the continuation; `raw_text` leads with the prefix.
-    pub prefix: Option<String>,
-}
-
-impl Default for RunOptions {
-    fn default() -> Self {
-        RunOptions {
-            task: Task::Transcribe,
-            timestamps: TimestampKind::Auto,
-            pnc: Pnc::Default,
-            itn: Itn::Default,
-            diarize: Diarize::Default,
-            language: None,
-            target_language: None,
-            keep_special_tags: false,
-            spec_k_drafts: -1,
-            family: None,
-            vocabulary: Vec::new(),
-            prompt: None,
-            prefix: None,
-        }
-    }
-}
+use crate::family::{Materialize, RunExtRaw};
+use crate::model::{Model, ModelInner};
+use crate::result::{owned_opt_str, owned_str};
+use crate::streaming::build_stream_params;
+use crate::types::{FromRaw, ToRaw};
 
 /// A transcription session.
 pub struct Session {
@@ -273,7 +219,7 @@ impl Session {
     /// idle.
     pub fn stream(&mut self, run: &RunOptions, stream: &StreamOptions) -> Result<Stream<'_>> {
         let (run_params, _lang, _target, _family, _prompting) = build_run_params(run)?;
-        let (stream_params, _stream_family) = build_stream_params(stream);
+        let (stream_params, _stream_family) = build_stream_params(stream)?;
         // Claim the model's compute lease for the whole stream lifetime: a
         // stream spans begin..drop, so per-call locking alone would let a
         // second stream (or a run) on another session race it.
@@ -440,7 +386,12 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
     let mut params: sys::transcribe_run_params = unsafe { std::mem::zeroed() };
     unsafe { sys::transcribe_run_params_init(&mut params) };
 
-    params.task = o.task.to_raw();
+    params.task = o.task.to_raw().ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "task {:?} is not supported by this transcribe-cpp build",
+            o.task
+        ))
+    })?;
     params.timestamps = o.timestamps.to_raw();
     params.pnc = o.pnc.to_raw();
     params.itn = o.itn.to_raw();
@@ -456,7 +407,7 @@ fn build_run_params(o: &RunOptions) -> Result<RunParamsBundle> {
     let family = o
         .family
         .as_ref()
-        .map(RunExtension::materialize)
+        .map(Materialize::materialize)
         .transpose()?;
     params.family = family.as_ref().map_or(std::ptr::null(), |f| f.ext_ptr());
 

@@ -94,6 +94,48 @@ jobs:
       - name: Crate package audit (contents + 10 MB size cap)
         run: uv run --no-project python scripts/ci/rust_package_audit.py
 
+  rust-types:
+    # transcribe-cpp-types on its own: the pure-Rust plain-data crate a program
+    # depends on to name transcribe.cpp's types WITHOUT the engine. Its whole
+    # point is what it does not pull in, so this job has no C++ toolchain setup
+    # and no CMake, and asserts the dependency tree never grows
+    # transcribe-cpp-sys (or anything else beyond serde and its derive).
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build + test (no features)
+        run: cargo test -p transcribe-cpp-types --locked
+      - name: Build + test (serde; the 0.5.0 wire-format goldens)
+        run: cargo test -p transcribe-cpp-types --features serde --locked
+      - name: Dependency tree holds nothing native
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Normal + build edges only (dev-dependencies are test tooling). The
+          # allowlist is serde and its derive's proc-macro stack; anything else,
+          # transcribe-cpp-sys above all, fails.
+          allowed='^(transcribe-cpp-types|serde|serde_core|serde_derive|proc-macro2|quote|syn|unicode-ident)$'
+          for features in "" "--features serde"; do
+            echo "=== cargo tree -p transcribe-cpp-types -e normal,build $features"
+            cargo tree -p transcribe-cpp-types -e normal,build $features --locked
+            names=$(cargo tree -p transcribe-cpp-types -e normal,build $features --locked \
+              --prefix none --format '{p}' | awk '{print $1}' | sort -u)
+            if echo "$names" | grep -qx 'transcribe-cpp-sys'; then
+              echo "::error::transcribe-cpp-types depends on transcribe-cpp-sys ($features)"; exit 1
+            fi
+            unexpected=$(echo "$names" | grep -Ev "$allowed" || true)
+            if [ -n "$unexpected" ]; then
+              echo "::error::unexpected dependencies of transcribe-cpp-types ($features): $unexpected"; exit 1
+            fi
+          done
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p transcribe-cpp-types --all-targets --features serde --locked -- -D warnings
+      - name: MSRV (rust-version 1.74)
+        run: |
+          rustup toolchain install 1.74 --profile minimal
+          cargo +1.74 build -p transcribe-cpp-types --features serde --locked
+
   rust-build:
     name: rust-build (${{ matrix.label }})
     strategy:

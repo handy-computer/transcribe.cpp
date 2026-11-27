@@ -8,95 +8,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{
+    LangIdCandidate, LangIdOptions, LangIdResult, LangIdSessionOptions, Timings,
+};
 
 use crate::cancel::{abort_trampoline, CancelToken};
 use crate::error::{check, Error, Result};
 use crate::model::{Model, ModelInner};
-use crate::result::{owned_str, Timings};
+use crate::result::owned_str;
 use crate::session::clamp_len;
-
-/// Static facts about a language ID model ([`Model::langid_info`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct LangIdInfo {
-    /// Input PCM rate (16000).
-    pub sample_rate: i32,
-    /// Label indices are `[0, n_labels)`.
-    pub n_labels: i32,
-    /// Shorter scored audio is [`Error::InputTooShort`].
-    pub min_audio_ms: i32,
-    /// Longer input is scored on its first `max_audio_ms` (30000).
-    pub max_audio_ms: i32,
-}
-
-/// Options for creating a language ID session.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct LangIdSessionOptions {
-    /// CPU threads for ops that run on CPU; 0 = library default.
-    pub n_threads: i32,
-}
-
-/// Per-run language ID parameters.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct LangIdOptions {
-    /// Restrict the decision to these codes or aliases. `None` means every
-    /// label; `Some` of an empty list is [`Error::InvalidArgument`]. An
-    /// unknown code is [`Error::Unsupported`].
-    pub allowed: Option<Vec<String>>,
-}
-
-/// One ranked label. `code` is the model's own label (`"en"`, `"iw"`).
-#[derive(Debug, Clone, Default, PartialEq)]
-#[non_exhaustive]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct LangIdCandidate {
-    /// Label index.
-    pub index: i32,
-    pub code: String,
-    pub name: String,
-    /// Softmax renormalized over the allowed set.
-    pub p: f32,
-    pub logit: f32,
-}
-
-/// The result of one [`LangIdSession::run`].
-#[derive(Debug, Clone, Default, PartialEq)]
-#[non_exhaustive]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct LangIdResult {
-    /// Every allowed label (duplicates once; all labels when unrestricted),
-    /// ranked by `p`, descending; ties keep label order.
-    pub candidates: Vec<LangIdCandidate>,
-    /// Unrestricted probability inside the allowed set (1.0 when
-    /// unrestricted); a low value means the speech is probably outside it.
-    pub allowed_mass: f32,
-}
-
-impl LangIdResult {
-    /// The top candidate's code, if any.
-    pub fn code(&self) -> Option<&str> {
-        self.candidates.first().map(|c| c.code.as_str())
-    }
-}
+use crate::types::FromRaw;
 
 /// A language ID session.
 pub struct LangIdSession {
@@ -161,7 +82,7 @@ impl LangIdSession {
     }
 
     /// Identify the language of one clip of 16 kHz mono float32 PCM. Input
-    /// longer than [`LangIdInfo::max_audio_ms`] is scored on its first `max_audio_ms`.
+    /// longer than [`LangIdInfo::max_audio_ms`](crate::LangIdInfo::max_audio_ms) is scored on its first `max_audio_ms`.
     pub fn run(&mut self, pcm: &[f32], options: &LangIdOptions) -> Result<LangIdResult> {
         let n = clamp_len(pcm.len())?;
         // The CStrings and the pointer array stay alive until the end of this
@@ -213,19 +134,19 @@ impl LangIdSession {
                             unsafe { std::mem::zeroed() };
                         unsafe { sys::transcribe_langid_candidate_init(&mut raw) };
                         let _ = unsafe { sys::transcribe_langid_get_candidate(ptr, i, &mut raw) };
-                        LangIdCandidate {
-                            index: raw.index,
-                            code: owned_str(raw.code),
-                            name: owned_str(raw.name),
-                            p: raw.p,
-                            logit: raw.logit,
-                        }
+                        let mut candidate = LangIdCandidate::default();
+                        candidate.index = raw.index;
+                        candidate.code = owned_str(raw.code);
+                        candidate.name = owned_str(raw.name);
+                        candidate.p = raw.p;
+                        candidate.logit = raw.logit;
+                        candidate
                     })
                     .collect();
-                Ok(LangIdResult {
-                    candidates,
-                    allowed_mass: res.allowed_mass,
-                })
+                let mut result = LangIdResult::default();
+                result.candidates = candidates;
+                result.allowed_mass = res.allowed_mass;
+                Ok(result)
             },
         )?
     }

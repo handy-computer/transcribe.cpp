@@ -6,48 +6,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{DiarizeOptions, DiarizeSessionOptions, SpeakerSegment, Timings};
 
 use crate::cancel::{abort_trampoline, CancelToken};
 use crate::error::{check, Result};
-use crate::family::DiarizeExtension;
+use crate::family::Materialize;
 use crate::model::{Model, ModelInner};
-use crate::result::{SpeakerSegment, Timings};
 use crate::session::clamp_len;
-
-/// Static facts about a diarization model ([`Model::diarize_info`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DiarizeInfo {
-    /// Input PCM rate (16000).
-    pub sample_rate: i32,
-    /// `speaker_id` is in `[1, max_speakers]`.
-    pub max_speakers: i32,
-}
-
-/// Options for creating a diarization session.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct DiarizeSessionOptions {
-    /// CPU threads for ops that run on CPU; 0 = library default.
-    pub n_threads: i32,
-}
-
-/// Per-run diarization parameters.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct DiarizeOptions {
-    /// Optional family-specific extension (e.g. the Sortformer preset).
-    pub family: Option<DiarizeExtension>,
-}
+use crate::types::FromRaw;
 
 /// A diarization session.
 pub struct DiarizeSession {
@@ -116,7 +82,11 @@ impl DiarizeSession {
     /// segments of different speakers may overlap.
     pub fn run(&mut self, pcm: &[f32], options: &DiarizeOptions) -> Result<Vec<SpeakerSegment>> {
         let n = clamp_len(pcm.len())?;
-        let family = options.family.as_ref().map(DiarizeExtension::materialize);
+        let family = options
+            .family
+            .as_ref()
+            .map(Materialize::materialize)
+            .transpose()?;
         let mut params: sys::transcribe_diarize_params = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_diarize_params_init(&mut params) };
         params.family = family.as_ref().map_or(std::ptr::null(), |f| f.ext_ptr());

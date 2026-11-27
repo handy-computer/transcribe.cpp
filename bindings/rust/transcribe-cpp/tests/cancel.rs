@@ -37,8 +37,7 @@ fn cross_thread_cancel_of_in_flight_run() {
         return;
     }
     // Tile the clip enough to be reliably mid-flight when we cancel.
-    let long: Vec<f32> = std::iter::repeat(pcm.iter().copied())
-        .take(4)
+    let long: Vec<f32> = std::iter::repeat_n(pcm.iter().copied(), 4)
         .flatten()
         .collect();
 

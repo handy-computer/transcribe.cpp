@@ -10,9 +10,9 @@ against the *loaded* library at runtime; this script is the static, build-time
 counterpart so a forgotten bump fails CI before anything is published.
 
 This covers every §1b spot in ``notes/releasing.md`` — including the ones that
-used to be §1c blind spots: the ``transcribe-cpp-sys`` dependency *pin*, both
-``Cargo.lock`` entries, both ``package-lock.json`` spots, and Swift
-``compiledVersion``. (Lockfile *internal* consistency — a stale lock silently
+used to be §1c blind spots: the ``transcribe-cpp-sys`` and (exact)
+``transcribe-cpp-types`` dependency *pins*, the three ``Cargo.lock`` entries,
+both ``package-lock.json`` spots, and Swift ``compiledVersion``. (Lockfile *internal* consistency — a stale lock silently
 rewritten by an unlocked command — is still the job of the locked-command
 checks, ``cargo metadata --locked`` / ``npm ci``, run in release-preflight.)
 
@@ -39,6 +39,7 @@ PYPROJECT = REPO / "bindings" / "python" / "pyproject.toml"
 INIT = REPO / "bindings" / "python" / "src" / "transcribe_cpp" / "__init__.py"
 TS_PACKAGE_JSON = REPO / "bindings" / "typescript" / "package.json"
 RUST_SAFE_CARGO = REPO / "bindings" / "rust" / "transcribe-cpp" / "Cargo.toml"
+RUST_TYPES_CARGO = REPO / "bindings" / "rust" / "transcribe-cpp-types" / "Cargo.toml"
 CARGO_LOCK = REPO / "Cargo.lock"
 PACKAGE_LOCK = REPO / "bindings" / "typescript" / "package-lock.json"
 SWIFT_SOURCE = REPO / "bindings" / "swift" / "Sources" / "TranscribeCpp" / "TranscribeCpp.swift"
@@ -55,9 +56,11 @@ BINDING_MANIFESTS = [
     # The Rust crates are real (0.0.1), so they're version-locked. The sys
     # crate's manifest is the repo-root Cargo.toml (it carries the whole C++
     # tree); the safe wrapper is the sibling member at
-    # bindings/rust/transcribe-cpp/.
+    # bindings/rust/transcribe-cpp/, and its pure-Rust plain-data types crate
+    # at bindings/rust/transcribe-cpp-types/ (released in lockstep).
     ("Cargo.toml", "cargo", True),
     ("bindings/rust/transcribe-cpp/Cargo.toml", "cargo", True),
+    ("bindings/rust/transcribe-cpp-types/Cargo.toml", "cargo", True),
     ("bindings/typescript/package.json", "npm", True),
 ]
 
@@ -143,13 +146,28 @@ def cargo_sys_pin(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def cargo_types_pin(text: str) -> str | None:
+    # The safe crate's dependency pin on the types crate. It must be EXACT
+    # (`=X.Y.Z`): transcribe-cpp's conversions of the types crate's
+    # #[non_exhaustive] enums are only complete for the lockstep version. A
+    # non-exact pin is reported as unlocatable (None), a hard error.
+    #   transcribe-cpp-types = { version = "=X.Y.Z", path = "../transcribe-cpp-types" }
+    m = re.search(
+        r'transcribe-cpp-types\s*=\s*\{[^}]*?\bversion\s*=\s*"([^"]+)"', text
+    )
+    if not m:
+        return None
+    pin = m.group(1)
+    return pin[1:] if pin.startswith("=") and not pin.startswith("==") else None
+
+
 def cargo_lock_versions(text: str) -> "dict[str, str | None]":
-    # The two workspace crates pinned in Cargo.lock. cargo writes name then
+    # The three workspace crates pinned in Cargo.lock. cargo writes name then
     # version on consecutive lines within each [[package]] block; the closing
     # quote in the name match keeps "transcribe-cpp" from also matching
-    # "transcribe-cpp-sys".
+    # "transcribe-cpp-sys" / "transcribe-cpp-types".
     out: dict[str, str | None] = {}
-    for name in ("transcribe-cpp", "transcribe-cpp-sys"):
+    for name in ("transcribe-cpp", "transcribe-cpp-sys", "transcribe-cpp-types"):
         m = re.search(rf'name = "{re.escape(name)}"\nversion = "([^"]+)"', text)
         out[f"Cargo.lock ({name})"] = m.group(1) if m else None
     return out
@@ -192,6 +210,9 @@ def main() -> int:
     # P0 #2 slice B). Each file must exist; a missing one is a hard error below.
     sources["Cargo.toml (sys dep pin)"] = (
         cargo_sys_pin(RUST_SAFE_CARGO.read_text()) if RUST_SAFE_CARGO.exists() else None
+    )
+    sources["Cargo.toml (types dep pin, exact)"] = (
+        cargo_types_pin(RUST_SAFE_CARGO.read_text()) if RUST_SAFE_CARGO.exists() else None
     )
     if CARGO_LOCK.exists():
         sources.update(cargo_lock_versions(CARGO_LOCK.read_text()))

@@ -1,0 +1,1 @@
+{"threshold":0.625,"neg_threshold":0.375,"min_speech_ms":200,"min_silence_ms":80,"speech_pad_ms":20,"max_speech_ms":15000}

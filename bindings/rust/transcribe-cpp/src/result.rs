@@ -1,156 +1,18 @@
-//! Owned result types.
+//! Materializing the owned result types (from `transcribe-cpp-types`).
 //!
-//! Every result is fully materialized into these types — all text is copied at
+//! Every result is fully materialized into owned types — all text is copied at
 //! the FFI boundary (`CStr -> String`), so no borrowed session pointer ever
 //! escapes to user code (the "copy at the FFI boundary" rule). Holding a
-//! [`Transcript`] across the next `run`/`stream` call is therefore always safe.
+//! [`Transcript`](crate::Transcript) across the next `run`/`stream` call is
+//! therefore always safe.
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{Segment, SpeakerSegment, Timings, Token, Word};
 
-use crate::types::TimestampKind;
-
-/// A fully-materialized transcription result.
-#[derive(Debug, Clone, Default, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct Transcript {
-    /// The full transcript text.
-    pub text: String,
-    /// The model's decoded output before family post-processing (diarization
-    /// markers, timestamp/special tokens, tag filtering, whitespace trims).
-    /// Equal to `text` modulo whitespace for families that emit clean text.
-    pub raw_text: String,
-    /// The model-detected language (ISO code), if it predicted one. `None`
-    /// when a language hint was given, the model lacks LID, or none applies.
-    pub language: Option<String>,
-    /// The finest timestamp granularity actually populated below.
-    pub timestamp_kind: TimestampKind,
-    /// Transcript segments. Speaker-attributed models may return untimed rows
-    /// even when timestamps are disabled.
-    pub segments: Vec<Segment>,
-    /// Diarized speaker turns (empty unless diarization was enabled and found).
-    pub speaker_segments: Vec<SpeakerSegment>,
-    /// Word rows (empty unless word-or-finer timestamps were produced).
-    pub words: Vec<Word>,
-    /// Token rows (empty unless token timestamps were produced).
-    pub tokens: Vec<Token>,
-    /// Stage timings for the run.
-    pub timings: Timings,
-}
-
-/// One segment row. Times are milliseconds relative to the original audio.
-#[derive(Debug, Clone, Default, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct Segment {
-    pub t0_ms: i64,
-    pub t1_ms: i64,
-    pub first_word: i32,
-    pub n_words: i32,
-    pub first_token: i32,
-    pub n_tokens: i32,
-    pub text: String,
-    /// 1-based speaker id; zero means no attribution.
-    pub speaker_id: i32,
-}
-
-/// One diarized speaker turn. Zero times mean the model attributed text but
-/// did not provide turn timing; `p` is NaN when unavailable.
-#[derive(Debug, Clone, Default, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct SpeakerSegment {
-    pub t0_ms: i64,
-    pub t1_ms: i64,
-    pub speaker_id: i32,
-    #[cfg_attr(
-        feature = "serde",
-        serde(default = "nan", deserialize_with = "nan_from_null")
-    )]
-    pub p: f32,
-}
-
-/// One word row.
-#[derive(Debug, Clone, Default, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct Word {
-    pub t0_ms: i64,
-    pub t1_ms: i64,
-    pub seg_index: i32,
-    pub first_token: i32,
-    pub n_tokens: i32,
-    pub text: String,
-}
-
-/// One token row. `p` is a per-token confidence hint (NaN when the family
-/// produces none); its exact meaning is family-specific.
-#[derive(Debug, Clone, Default, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct Token {
-    pub id: i32,
-    #[cfg_attr(
-        feature = "serde",
-        serde(default = "nan", deserialize_with = "nan_from_null")
-    )]
-    pub p: f32,
-    pub t0_ms: i64,
-    pub t1_ms: i64,
-    pub seg_index: i32,
-    pub word_index: i32,
-    pub text: String,
-}
-
-/// Per-run stage timings, in milliseconds. Zero means "unknown / not measured".
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct Timings {
-    pub load_ms: f32,
-    pub mel_ms: f32,
-    pub encode_ms: f32,
-    pub decode_ms: f32,
-}
-
-/// A missing confidence means "none reported" (NaN), not 0.0.
-#[cfg(feature = "serde")]
-fn nan() -> f32 {
-    f32::NAN
-}
-
-/// JSON writes NaN as `null`; read it back as NaN. Binary formats carry the
-/// raw `f32`.
-#[cfg(feature = "serde")]
-fn nan_from_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
-    use serde::Deserialize;
-    if d.is_human_readable() {
-        Ok(Option::<f32>::deserialize(d)?.unwrap_or(f32::NAN))
-    } else {
-        f32::deserialize(d)
-    }
-}
+use crate::types::FromRaw;
 
 /// Copy a borrowed C string into an owned `String` (empty for NULL).
 pub(crate) fn owned_str(ptr: *const c_char) -> String {
@@ -177,8 +39,8 @@ pub(crate) fn owned_opt_str(ptr: *const c_char) -> Option<String> {
     }
 }
 
-impl Segment {
-    pub(crate) fn from_raw(raw: &sys::transcribe_segment) -> Self {
+impl FromRaw<&sys::transcribe_segment> for Segment {
+    fn from_raw(raw: &sys::transcribe_segment) -> Self {
         Segment {
             t0_ms: raw.t0_ms,
             t1_ms: raw.t1_ms,
@@ -192,8 +54,8 @@ impl Segment {
     }
 }
 
-impl SpeakerSegment {
-    pub(crate) fn from_raw(raw: &sys::transcribe_speaker_segment) -> Self {
+impl FromRaw<&sys::transcribe_speaker_segment> for SpeakerSegment {
+    fn from_raw(raw: &sys::transcribe_speaker_segment) -> Self {
         SpeakerSegment {
             t0_ms: raw.t0_ms,
             t1_ms: raw.t1_ms,
@@ -203,8 +65,8 @@ impl SpeakerSegment {
     }
 }
 
-impl Word {
-    pub(crate) fn from_raw(raw: &sys::transcribe_word) -> Self {
+impl FromRaw<&sys::transcribe_word> for Word {
+    fn from_raw(raw: &sys::transcribe_word) -> Self {
         Word {
             t0_ms: raw.t0_ms,
             t1_ms: raw.t1_ms,
@@ -216,8 +78,8 @@ impl Word {
     }
 }
 
-impl Token {
-    pub(crate) fn from_raw(raw: &sys::transcribe_token) -> Self {
+impl FromRaw<&sys::transcribe_token> for Token {
+    fn from_raw(raw: &sys::transcribe_token) -> Self {
         Token {
             id: raw.id,
             p: raw.p,
@@ -230,8 +92,8 @@ impl Token {
     }
 }
 
-impl Timings {
-    pub(crate) fn from_raw(raw: &sys::transcribe_timings) -> Self {
+impl FromRaw<&sys::transcribe_timings> for Timings {
+    fn from_raw(raw: &sys::transcribe_timings) -> Self {
         Timings {
             load_ms: raw.load_ms,
             mel_ms: raw.mel_ms,

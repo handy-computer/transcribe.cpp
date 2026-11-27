@@ -21,16 +21,21 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{
+    Backend, Capabilities, DiarizeInfo, DiarizeSessionOptions, ExtSlot, Feature, LangIdInfo,
+    LangIdSessionOptions, Roles, SessionOptions, TimestampKind, TurnInfo, TurnSessionOptions,
+    VadInfo, VadSessionOptions,
+};
 
 use crate::backend::Device;
-use crate::diarize::{DiarizeInfo, DiarizeSession, DiarizeSessionOptions};
+use crate::diarize::DiarizeSession;
 use crate::error::{check, Error, Result};
-use crate::langid::{LangIdInfo, LangIdSession, LangIdSessionOptions};
+use crate::langid::LangIdSession;
 use crate::result::owned_str;
 use crate::session::Session;
-use crate::turn::{TurnInfo, TurnSession, TurnSessionOptions};
-use crate::types::{Backend, ExtSlot, Feature, Roles, TimestampKind};
-use crate::vad::{VadInfo, VadSession, VadSessionOptions};
+use crate::turn::TurnSession;
+use crate::types::{FromRaw, ToRaw};
+use crate::vad::VadSession;
 use crate::version;
 
 /// Options for loading a model.
@@ -59,25 +64,6 @@ impl Default for ModelOptions {
             no_mmap: false,
         }
     }
-}
-
-/// Immutable, model-level capabilities read from GGUF metadata.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Capabilities {
-    pub native_sample_rate: i32,
-    /// Supported language codes (empty if the model is language-agnostic).
-    pub languages: Vec<String>,
-    /// Supported translation target language codes (empty if not advertised).
-    pub translate_target_languages: Vec<String>,
-    /// The finest timestamp granularity the model can produce.
-    pub max_timestamp_kind: TimestampKind,
-    pub supports_language_detect: bool,
-    pub supports_translate: bool,
-    pub supports_streaming: bool,
-    pub supports_spec_decode: bool,
-    /// Longest accepted audio in ms (0 = no practical limit).
-    pub max_audio_ms: i64,
 }
 
 /// The native model handle plus the per-model compute lock, shared via `Arc`.
@@ -208,10 +194,10 @@ impl Model {
             unsafe { sys::transcribe_diarize_get_info(self.inner.ptr, &mut raw) },
             "diarize info",
         )?;
-        Ok(DiarizeInfo {
-            sample_rate: raw.sample_rate,
-            max_speakers: raw.max_speakers,
-        })
+        let mut info = DiarizeInfo::default();
+        info.sample_rate = raw.sample_rate;
+        info.max_speakers = raw.max_speakers;
+        Ok(info)
     }
 
     /// Open a language ID session with default options. Errors with
@@ -234,12 +220,12 @@ impl Model {
             unsafe { sys::transcribe_langid_get_info(self.inner.ptr, &mut raw) },
             "langid info",
         )?;
-        Ok(LangIdInfo {
-            sample_rate: raw.sample_rate,
-            n_labels: raw.n_labels,
-            min_audio_ms: raw.min_audio_ms,
-            max_audio_ms: raw.max_audio_ms,
-        })
+        let mut info = LangIdInfo::default();
+        info.sample_rate = raw.sample_rate;
+        info.n_labels = raw.n_labels;
+        info.min_audio_ms = raw.min_audio_ms;
+        info.max_audio_ms = raw.max_audio_ms;
+        Ok(info)
     }
 
     /// `(code, name)` per label index. Errors with [`Error::UnsupportedRole`]
@@ -284,10 +270,10 @@ impl Model {
             unsafe { sys::transcribe_vad_get_info(self.inner.ptr, &mut raw) },
             "vad info",
         )?;
-        Ok(VadInfo {
-            sample_rate: raw.sample_rate,
-            frame_samples: raw.frame_samples,
-        })
+        let mut info = VadInfo::default();
+        info.sample_rate = raw.sample_rate;
+        info.frame_samples = raw.frame_samples;
+        Ok(info)
     }
 
     /// Open an end-of-turn session with default options. Errors with
@@ -310,18 +296,18 @@ impl Model {
             unsafe { sys::transcribe_turn_get_info(self.inner.ptr, &mut raw) },
             "turn info",
         )?;
-        Ok(TurnInfo {
-            sample_rate: raw.sample_rate,
-            max_audio_ms: raw.max_audio_ms,
-            frame_samples: raw.frame_samples,
-            has_speech: raw.has_speech,
-            threshold: raw.threshold,
-        })
+        let mut info = TurnInfo::default();
+        info.sample_rate = raw.sample_rate;
+        info.max_audio_ms = raw.max_audio_ms;
+        info.frame_samples = raw.frame_samples;
+        info.has_speech = raw.has_speech;
+        info.threshold = raw.threshold;
+        Ok(info)
     }
 
     /// The roles (kinds of work) this model serves.
     pub fn roles(&self) -> Roles {
-        Roles(unsafe { sys::transcribe_model_roles(self.inner.ptr) })
+        Roles::from_bits(unsafe { sys::transcribe_model_roles(self.inner.ptr) })
     }
 
     /// The model's immutable ASR capabilities. Errors with
@@ -370,12 +356,17 @@ impl Model {
 
     /// Probe a yes/no feature.
     pub fn supports(&self, feature: Feature) -> bool {
-        unsafe { sys::transcribe_model_supports(self.inner.ptr, feature.to_raw()) }
+        // `None`: a feature this build has no C value for, so it can't have it.
+        feature
+            .to_raw()
+            .is_some_and(|f| unsafe { sys::transcribe_model_supports(self.inner.ptr, f) })
     }
 
     /// Whether this model accepts the given family-extension `kind` in `slot`.
     pub fn accepts_ext(&self, slot: ExtSlot, kind: u32) -> bool {
-        unsafe { sys::transcribe_model_accepts_ext_kind(self.inner.ptr, slot.to_raw(), kind) }
+        slot.to_raw().is_some_and(|slot| unsafe {
+            sys::transcribe_model_accepts_ext_kind(self.inner.ptr, slot, kind)
+        })
     }
 
     /// The `general.architecture` string, e.g. "parakeet".
@@ -461,44 +452,6 @@ fn check_model_load(status: sys::transcribe_status, context: &str) -> Result<()>
         }
     }
     check(status, context)
-}
-
-/// Options for creating a session.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(default)
-)]
-pub struct SessionOptions {
-    /// CPU threads for ops that run on CPU; 0 = library default.
-    pub n_threads: i32,
-    /// K/V activation precision.
-    pub kv_type: crate::types::KvType,
-    /// Optional decoder context cap in tokens; 0 = model maximum.
-    pub n_ctx: i32,
-}
-
-impl Default for SessionOptions {
-    fn default() -> Self {
-        SessionOptions {
-            n_threads: 0,
-            kv_type: crate::types::KvType::Auto,
-            n_ctx: 0,
-        }
-    }
-}
-
-/// Per-session effective limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SessionLimits {
-    /// Decoder context cap in force for this session (0 = unbounded family).
-    pub effective_n_ctx: i32,
-    /// Longest accepted audio in ms (0 = no practical limit).
-    pub effective_max_audio_ms: i64,
-    /// Worst-case decoder KV bytes for one utterance (0 = no decoder KV).
-    pub max_kv_bytes: i64,
 }
 
 /// Convert a filesystem path to the bytes the C API's `const char *` expects.
