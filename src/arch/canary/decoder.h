@@ -87,6 +87,7 @@ struct StepBuild {
     ggml_tensor * kv_idx_in   = nullptr;  // i64 [1]
     ggml_tensor * mask_in     = nullptr;  // f16 [max_n_kv, 1]
     ggml_tensor * argmax_out  = nullptr;  // i32 [1]
+    ggml_tensor * logits_out  = nullptr;  // f32 [vocab, 1], raw (vocabulary bias)
     int           max_n_kv    = 0;
     ggml_cgraph * graph       = nullptr;
 };
