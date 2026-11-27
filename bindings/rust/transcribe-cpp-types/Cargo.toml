@@ -1,6 +1,6 @@
 [package]
 name = "transcribe-cpp-types"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 # Lower than transcribe-cpp (1.82): this crate has no FFI. rust-ci checks it.
 rust-version = "1.74"
