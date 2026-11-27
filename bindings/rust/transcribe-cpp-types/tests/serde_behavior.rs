@@ -2,7 +2,7 @@
 //! sparse documents taking the hand-written defaults, unknown error kinds.
 //! (transcribe-cpp's `tests/serde.rs` checks the same through its paths.)
 //! API compatibility with the last release, field names (= JSON keys)
-//! included, is `scripts/ci/rust_semver_check.sh`.
+//! included, is `scripts/ci/rust_semver_check.py`.
 
 #![cfg(feature = "serde")]
 

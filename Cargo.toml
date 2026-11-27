@@ -88,9 +88,9 @@ serde_json = "1"
 # bindings/rust/ (build.rs + src/ at bindings/rust/sys/). The three sibling
 # packages — the safe wrapper, its pure-Rust plain-data types crate
 # (transcribe-cpp-types, no native dependency) and the dev xtask — are
-# workspace members. The
-# sys sources must NOT live inside a member's directory, or cargo would refuse
-# to package them with the root crate (a member owns its whole subtree).
+# workspace members. The sys sources must NOT live inside a member's
+# directory, or cargo would refuse to package them with the root crate (a
+# member owns its whole subtree).
 [workspace]
 resolver = "2"
 members = [

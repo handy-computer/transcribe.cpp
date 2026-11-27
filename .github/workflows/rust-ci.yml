@@ -60,7 +60,7 @@ on:
       - "CMakePresets.json"
       - "tests/cmake/ep-prefix-parent/**"
       - "scripts/ci/rust_package_audit.py"
-      - "scripts/ci/rust_semver_check.sh"
+      - "scripts/ci/rust_semver_check.py"
       - "bindings/python/_generate/check_version_sync.py"
       - ".github/workflows/rust-ci.yml"
   pull_request:
@@ -318,7 +318,7 @@ jobs:
         # publish.yml runs the same script blocking, after prepare.py.
         if: matrix.label == 'linux-static'
         continue-on-error: true
-        run: scripts/ci/rust_semver_check.sh
+        run: uv run --no-project python scripts/ci/rust_semver_check.py
       - name: ccache stats
         if: runner.os == 'Linux'
         run: ccache -s | head -8

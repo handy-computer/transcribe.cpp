@@ -50,10 +50,11 @@ serde = ["dep:serde", "transcribe-cpp-types/serde"]
 # via `metal = ["transcribe-cpp-sys/metal"]`.
 transcribe-cpp-sys = { version = "0.5.0", path = "../../..", default-features = false }
 # The plain-data types (options, results, errors), re-exported at this crate's
-# root. Pinned EXACTLY: several are #[non_exhaustive], so the conversions to the
-# C structs here need a `_` arm the compiler cannot check, and only lockstep
-# versions guarantee every variant has a mapping. scripts/release/prepare.py
-# keeps the pin in step with the release version.
+# root. Pinned EXACTLY: the family-extension enums are #[non_exhaustive], so
+# their conversions to the C structs here need a `_` arm the compiler cannot
+# check, and only lockstep versions guarantee every variant has a mapping
+# (Task / Feature / ExtSlot carry their C value in the types crate instead).
+# scripts/release/prepare.py keeps the pin in step with the release version.
 transcribe-cpp-types = { version = "=0.5.0", path = "../transcribe-cpp-types" }
 thiserror = "2"
 log = "0.4"

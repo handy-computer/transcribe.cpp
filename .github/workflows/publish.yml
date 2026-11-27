@@ -214,7 +214,7 @@ jobs:
         with:
           tool: cargo-semver-checks
       - name: API vs the latest release (blocking; a break needs a minor bump)
-        run: scripts/ci/rust_semver_check.sh
+        run: uv run --no-project python scripts/ci/rust_semver_check.py --strict
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
@@ -339,7 +339,7 @@ jobs:
         with:
           tool: cargo-semver-checks
       - name: API vs the latest release (blocking; a break needs a minor bump)
-        run: scripts/ci/rust_semver_check.sh
+        run: uv run --no-project python scripts/ci/rust_semver_check.py --strict
       # The safe crate cannot be dry-run-verified pre-publish: it depends on
       # transcribe-cpp-sys = "0.0.x" and transcribe-cpp-types = "=0.0.x", and
       # the registry has neither version until they actually publish
@@ -486,7 +486,11 @@ jobs:
     # Tags only. Releases are cut from CI, never a laptop (requirements §5).
     # The pure-Rust types crate publishes FIRST, then sys (the native-carrying
     # crate), then the safe crate, which resolves both by version (types at an
-    # exact `=` pin). cargo publish waits until each is in the index. `crates-io` carries the approval gate + CARGO_REGISTRY_TOKEN. NOW
+    # exact `=` pin). cargo publish waits until each is in the index. Each step
+    # skips a crate whose version is already on crates.io, so "Re-run failed
+    # jobs" finishes a release that stopped part-way (the tag pins the same
+    # commit, so the published bytes are the ones this run would upload).
+    # `crates-io` carries the approval gate + CARGO_REGISTRY_TOKEN. NOW
     # gated behind the full validation set AND create-release (it previously had
     # NO needs: and could burn the immutable crates.io version before anything
     # else built, or before the Release object even existed).
@@ -502,12 +506,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
-      - name: Publish transcribe-cpp-types (the pure-Rust plain-data types)
-        run: cargo publish -p transcribe-cpp-types
-      - name: Publish transcribe-cpp-sys (the native-carrying crate; verifies the build)
-        run: cargo publish -p transcribe-cpp-sys
-      - name: Publish transcribe-cpp (the safe wrapper; resolves the just-published types + sys)
-        run: cargo publish -p transcribe-cpp
+      - name: Publish transcribe-cpp-types, -sys, then transcribe-cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"  # release-preflight proved tag == tree version
+          # types (pure Rust) -> sys (native; verifies the build) -> the safe
+          # wrapper (resolves the just-published types + sys).
+          for crate in transcribe-cpp-types transcribe-cpp-sys transcribe-cpp; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -A 'transcribe-cpp-release (+https://github.com/handy-computer/transcribe.cpp)' \
+              "https://crates.io/api/v1/crates/$crate/$version")
+            case "$code" in
+              200) echo "::notice::$crate $version is already on crates.io; skipped" ;;
+              404) echo "=== cargo publish -p $crate ($version)"; cargo publish -p "$crate" ;;
+              *)   echo "::error::crates.io returned HTTP $code for $crate $version"; exit 1 ;;
+            esac
+          done
 
   ts-pack:
     # Tags only — VALIDATION-phase TS packaging (NO npm publish). Build each
