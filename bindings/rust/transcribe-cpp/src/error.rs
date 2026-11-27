@@ -6,8 +6,8 @@
 //! exception hierarchy — the conformance precedent — and the raw status is
 //! preserved via [`Error::raw_status`].
 
-use crate::result::Transcript;
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{ErrorKind, ErrorReport, Transcript};
 
 /// Convenience alias for results from this crate.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -102,78 +102,12 @@ pub enum Error {
     Other(String),
 }
 
-/// The category of an [`Error`], without its payload. One kind per variant.
-///
-/// Stable for matching and, under the `serde` feature, serialized as a
-/// snake_case string (`"aborted"`, `"model_file_not_found"`, ...). A kind
-/// this version does not know deserializes as [`ErrorKind::Other`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename_all = "snake_case")
-)]
-pub enum ErrorKind {
-    InvalidArgument,
-    NotImplemented,
-    ModelFileNotFound,
-    ModelLoad,
-    OutOfMemory,
-    Backend,
-    Unsupported,
-    BadStructSize,
-    InputTooLong,
-    Aborted,
-    OutputTruncated,
-    OutputRepetition,
-    UnsupportedRole,
-    VersionMismatch,
-    Nul,
-    Busy,
-    InputTooShort,
-    #[cfg_attr(feature = "serde", serde(other))]
-    Other,
-}
-
-/// An owned, plain-data snapshot of an [`Error`]: what crosses a process or
-/// IPC boundary (e.g. a Tauri command's error).
-///
-/// [`Error`] itself serializes to exactly this shape under the `serde`
-/// feature; deserialize into `ErrorReport` on the receiving side (an
-/// [`Error`] cannot be rebuilt from it). JSON looks like:
-///
-/// ```json
-/// { "kind": "aborted", "message": "operation aborted: ...", "status": 13, "partial": { "text": "..." } }
-/// ```
-///
-/// `partial` is `null` unless the error carried a partial transcript. It is
-/// always written (never skipped) so non-self-describing formats such as
-/// postcard round-trip.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ErrorReport {
-    /// The error category.
-    pub kind: ErrorKind,
-    /// The error's `Display` text.
-    pub message: String,
-    /// [`Error::raw_status`]: the `transcribe_status`, or 0 for Rust-side errors.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub status: i32,
-    /// [`Error::partial`], if any.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub partial: Option<Transcript>,
-}
-
 impl From<&Error> for ErrorReport {
     fn from(err: &Error) -> Self {
-        ErrorReport {
-            kind: err.kind(),
-            message: err.to_string(),
-            status: err.raw_status(),
-            partial: err.partial().cloned(),
-        }
+        let mut report = ErrorReport::new(err.kind(), err.to_string());
+        report.status = err.raw_status();
+        report.partial = err.partial().cloned();
+        report
     }
 }
 
@@ -181,18 +115,15 @@ impl From<&Error> for ErrorReport {
 impl From<Error> for ErrorReport {
     fn from(err: Error) -> Self {
         let (kind, message, status) = (err.kind(), err.to_string(), err.raw_status());
-        let partial = match err {
+        let mut report = ErrorReport::new(kind, message);
+        report.status = status;
+        report.partial = match err {
             Error::Aborted { partial, .. }
             | Error::OutputTruncated { partial, .. }
             | Error::OutputRepetition { partial, .. } => partial.map(|p| *p),
             _ => None,
         };
-        ErrorReport {
-            kind,
-            message,
-            status,
-            partial,
-        }
+        report
     }
 }
 

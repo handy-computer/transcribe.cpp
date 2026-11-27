@@ -1,57 +1,46 @@
-//! Idiomatic Rust enums mirroring the C API's parameter enums.
+//! Conversions between the plain-data enums (from `transcribe-cpp-types`) and
+//! the generated `transcribe-cpp-sys` NewTypes, plus [`AbiStruct`].
 //!
-//! Each maps to/from the generated `transcribe-cpp-sys` NewType. Conversions
-//! INTO C are total; conversions OUT of C validate the raw integer and fall
-//! back to a safe default for an unknown value (enum hygiene — we never assume
-//! the library only ever hands back values this version knows about).
+//! Conversions INTO C are total for the exhaustive enums; conversions OUT of C
+//! validate the raw integer and fall back to a safe default for an unknown
+//! value (enum hygiene — we never assume the library only ever hands back
+//! values this version knows about).
+//!
+//! The enums live in another crate, so the conversions are trait impls here
+//! (inherent methods cannot be added to a foreign type). A `#[non_exhaustive]`
+//! enum ([`Task`], [`Feature`], [`ExtSlot`]) could only be matched here with a
+//! `_` arm the compiler cannot check, so instead each carries its C value in an
+//! exhaustive (hidden) `c_value()` in transcribe-cpp-types: a new variant does
+//! not compile without one, and the tests below check every value against the
+//! header.
 
 use transcribe_cpp_sys as sys;
+use transcribe_cpp_types::{
+    Backend, CommitPolicy, Diarize, ExtSlot, Feature, Itn, KvType, Pnc, StreamState, Task,
+    TimestampKind,
+};
 
-/// The task a run performs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Task {
-    /// Transcribe speech in its source language.
-    #[default]
-    Transcribe,
-    /// Translate speech into the target language (model must support it).
-    Translate,
-    /// `RunOptions::prompt` replaces the task instruction; the output is free
-    /// text in `text` / `raw_text` (model must support `Feature::Instruct`;
-    /// offline only).
-    Instruct,
+/// Convert a plain-data value into its C representation.
+pub(crate) trait ToRaw {
+    type Raw;
+    fn to_raw(self) -> Self::Raw;
 }
 
-impl Task {
-    pub(crate) fn to_raw(self) -> sys::transcribe_task {
-        match self {
-            Task::Transcribe => sys::transcribe_task::TRANSCRIBE_TASK_TRANSCRIBE,
-            Task::Translate => sys::transcribe_task::TRANSCRIBE_TASK_TRANSLATE,
-            Task::Instruct => sys::transcribe_task::TRANSCRIBE_TASK_INSTRUCT,
-        }
+/// Build a plain-data value from its C representation (copying any strings).
+pub(crate) trait FromRaw<R> {
+    fn from_raw(raw: R) -> Self;
+}
+
+impl ToRaw for Task {
+    type Raw = sys::transcribe_task;
+    fn to_raw(self) -> Self::Raw {
+        sys::transcribe_task(self.c_value())
     }
 }
 
-/// Requested (or returned) timestamp granularity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum TimestampKind {
-    /// Text only, no alignment data.
-    None,
-    /// "Richest the model supports" — resolved per-family at run time.
-    #[default]
-    Auto,
-    /// Segment-level start/end times.
-    Segment,
-    /// Word-level start/end times.
-    Word,
-    /// Token-level start/end times.
-    Token,
-}
-
-impl TimestampKind {
-    pub(crate) fn to_raw(self) -> sys::transcribe_timestamp_kind {
+impl ToRaw for TimestampKind {
+    type Raw = sys::transcribe_timestamp_kind;
+    fn to_raw(self) -> Self::Raw {
         use sys::transcribe_timestamp_kind as K;
         match self {
             TimestampKind::None => K::TRANSCRIBE_TIMESTAMPS_NONE,
@@ -61,8 +50,10 @@ impl TimestampKind {
             TimestampKind::Token => K::TRANSCRIBE_TIMESTAMPS_TOKEN,
         }
     }
+}
 
-    pub(crate) fn from_raw(raw: sys::transcribe_timestamp_kind) -> Self {
+impl FromRaw<sys::transcribe_timestamp_kind> for TimestampKind {
+    fn from_raw(raw: sys::transcribe_timestamp_kind) -> Self {
         use sys::transcribe_timestamp_kind as K;
         match raw {
             K::TRANSCRIBE_TIMESTAMPS_AUTO => TimestampKind::Auto,
@@ -75,21 +66,9 @@ impl TimestampKind {
     }
 }
 
-/// K/V activation precision for the decoder's flash-attention path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum KvType {
-    /// f16 for quantized weights, f32 for f32 weights. The best default.
-    #[default]
-    Auto,
-    /// Full-precision K/V.
-    F32,
-    /// Half-precision K/V.
-    F16,
-}
-
-impl KvType {
-    pub(crate) fn to_raw(self) -> sys::transcribe_kv_type {
+impl ToRaw for KvType {
+    type Raw = sys::transcribe_kv_type;
+    fn to_raw(self) -> Self::Raw {
         use sys::transcribe_kv_type as K;
         match self {
             KvType::Auto => K::TRANSCRIBE_KV_TYPE_AUTO,
@@ -99,21 +78,9 @@ impl KvType {
     }
 }
 
-/// Punctuation + capitalization runtime toggle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Pnc {
-    /// The family's shipped default (what its published WER was measured at).
-    #[default]
-    Default,
-    /// Explicitly disable runtime PNC (supporting families only).
-    Off,
-    /// Explicitly enable runtime PNC (supporting families only).
-    On,
-}
-
-impl Pnc {
-    pub(crate) fn to_raw(self) -> sys::transcribe_pnc_mode {
+impl ToRaw for Pnc {
+    type Raw = sys::transcribe_pnc_mode;
+    fn to_raw(self) -> Self::Raw {
         use sys::transcribe_pnc_mode as P;
         match self {
             Pnc::Default => P::TRANSCRIBE_PNC_MODE_DEFAULT,
@@ -123,45 +90,9 @@ impl Pnc {
     }
 }
 
-/// Inverse-text-normalization runtime toggle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Itn {
-    /// The family's shipped default.
-    #[default]
-    Default,
-    /// Explicitly disable runtime ITN (supporting families only).
-    Off,
-    /// Explicitly enable runtime ITN (supporting families only).
-    On,
-}
-
-/// Speaker-attribution runtime toggle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Diarize {
-    /// Library default: speaker attribution is disabled for every family.
-    #[default]
-    Default,
-    /// Explicitly disable speaker attribution.
-    Off,
-    /// Enable speaker attribution on supporting models.
-    On,
-}
-
-impl Diarize {
-    pub(crate) fn to_raw(self) -> sys::transcribe_diarize_mode {
-        use sys::transcribe_diarize_mode as D;
-        match self {
-            Diarize::Default => D::TRANSCRIBE_DIARIZE_MODE_DEFAULT,
-            Diarize::Off => D::TRANSCRIBE_DIARIZE_MODE_OFF,
-            Diarize::On => D::TRANSCRIBE_DIARIZE_MODE_ON,
-        }
-    }
-}
-
-impl Itn {
-    pub(crate) fn to_raw(self) -> sys::transcribe_itn_mode {
+impl ToRaw for Itn {
+    type Raw = sys::transcribe_itn_mode;
+    fn to_raw(self) -> Self::Raw {
         use sys::transcribe_itn_mode as I;
         match self {
             Itn::Default => I::TRANSCRIBE_ITN_MODE_DEFAULT,
@@ -171,29 +102,21 @@ impl Itn {
     }
 }
 
-/// Which compute backend to request when loading a model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Backend {
-    /// Best available device; CPU is the always-present fallback. The default.
-    #[default]
-    Auto,
-    /// Strict CPU (no GPU, no host accelerators) — the determinism choice.
-    Cpu,
-    /// CPU plus host-memory accelerators (BLAS/AMX) when present.
-    CpuAccel,
-    /// Require Metal; errors if this build has no Metal.
-    Metal,
-    /// Require Vulkan; errors if this build has no Vulkan.
-    Vulkan,
-    /// Require CUDA; errors if this build has no CUDA.
-    Cuda,
-    /// Require ROCm; errors if this build has no ROCm.
-    Rocm,
+impl ToRaw for Diarize {
+    type Raw = sys::transcribe_diarize_mode;
+    fn to_raw(self) -> Self::Raw {
+        use sys::transcribe_diarize_mode as D;
+        match self {
+            Diarize::Default => D::TRANSCRIBE_DIARIZE_MODE_DEFAULT,
+            Diarize::Off => D::TRANSCRIBE_DIARIZE_MODE_OFF,
+            Diarize::On => D::TRANSCRIBE_DIARIZE_MODE_ON,
+        }
+    }
 }
 
-impl Backend {
-    pub(crate) fn to_raw(self) -> sys::transcribe_backend_request {
+impl ToRaw for Backend {
+    type Raw = sys::transcribe_backend_request;
+    fn to_raw(self) -> Self::Raw {
         use sys::transcribe_backend_request as B;
         match self {
             Backend::Auto => B::TRANSCRIBE_BACKEND_AUTO,
@@ -207,69 +130,16 @@ impl Backend {
     }
 }
 
-/// A yes/no model capability probe (`transcribe_model_supports`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Feature {
-    /// The whisper run extension's initial prompt / prompt tokens.
-    InitialPrompt,
-    /// Runs a multi-tier temperature fallback loop (whisper today).
-    TemperatureFallback,
-    /// Handles audio longer than its native window in one run (whisper today).
-    LongForm,
-    /// Honors the abort callback between chunks/decode steps.
-    Cancellation,
-    /// Exposes a runtime PNC toggle.
-    Pnc,
-    /// Exposes a runtime ITN toggle.
-    Itn,
-    /// Produces structured speaker attribution.
-    Diarization,
-    /// `RunOptions::vocabulary` is formatted for this model.
-    Vocabulary,
-    /// `RunOptions::prompt` reaches a transcription-conditioning slot.
-    ContextPrompt,
-    /// Supports `Task::Instruct`.
-    Instruct,
-    /// Honors `RunOptions::prefix` as forced decoder text.
-    TranscriptPrefix,
-}
-
-impl Feature {
-    pub(crate) fn to_raw(self) -> sys::transcribe_feature {
-        use sys::transcribe_feature as F;
-        match self {
-            Feature::InitialPrompt => F::TRANSCRIBE_FEATURE_INITIAL_PROMPT,
-            Feature::TemperatureFallback => F::TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK,
-            Feature::LongForm => F::TRANSCRIBE_FEATURE_LONG_FORM,
-            Feature::Cancellation => F::TRANSCRIBE_FEATURE_CANCELLATION,
-            Feature::Pnc => F::TRANSCRIBE_FEATURE_PNC,
-            Feature::Itn => F::TRANSCRIBE_FEATURE_ITN,
-            Feature::Diarization => F::TRANSCRIBE_FEATURE_DIARIZATION,
-            Feature::Vocabulary => F::TRANSCRIBE_FEATURE_VOCABULARY,
-            Feature::ContextPrompt => F::TRANSCRIBE_FEATURE_CONTEXT_PROMPT,
-            Feature::Instruct => F::TRANSCRIBE_FEATURE_INSTRUCT,
-            Feature::TranscriptPrefix => F::TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX,
-        }
+impl ToRaw for Feature {
+    type Raw = sys::transcribe_feature;
+    fn to_raw(self) -> Self::Raw {
+        sys::transcribe_feature(self.c_value())
     }
 }
 
-/// When the UI-facing committed text grows during a stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum CommitPolicy {
-    /// The family's stable-prefix implementation. The default.
-    #[default]
-    Auto,
-    /// Commit nothing during feed; finalize commits the final text.
-    OnFinalize,
-    /// Commit a raw prefix accepted by the stable-prefix implementation.
-    StablePrefix,
-}
-
-impl CommitPolicy {
-    pub(crate) fn to_raw(self) -> sys::transcribe_stream_commit_policy {
+impl ToRaw for CommitPolicy {
+    type Raw = sys::transcribe_stream_commit_policy;
+    fn to_raw(self) -> Self::Raw {
         use sys::transcribe_stream_commit_policy as C;
         match self {
             CommitPolicy::Auto => C::TRANSCRIBE_STREAM_COMMIT_AUTO,
@@ -279,18 +149,8 @@ impl CommitPolicy {
     }
 }
 
-/// Stream lifecycle state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum StreamState {
-    Idle,
-    Active,
-    Finished,
-    Failed,
-}
-
-impl StreamState {
-    pub(crate) fn from_raw(raw: sys::transcribe_stream_state) -> Self {
+impl FromRaw<sys::transcribe_stream_state> for StreamState {
+    fn from_raw(raw: sys::transcribe_stream_state) -> Self {
         use sys::transcribe_stream_state as S;
         match raw {
             S::TRANSCRIBE_STREAM_ACTIVE => StreamState::Active,
@@ -298,6 +158,13 @@ impl StreamState {
             S::TRANSCRIBE_STREAM_FAILED => StreamState::Failed,
             _ => StreamState::Idle,
         }
+    }
+}
+
+impl ToRaw for ExtSlot {
+    type Raw = sys::transcribe_ext_slot;
+    fn to_raw(self) -> Self::Raw {
+        sys::transcribe_ext_slot(self.c_value())
     }
 }
 
@@ -381,67 +248,119 @@ impl AbiStruct {
     }
 }
 
-/// The slot a family extension is pointed at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ExtSlot {
-    /// `transcribe_run_params::family`.
-    Run,
-    /// `transcribe_stream_params::family`.
-    Stream,
-    /// `transcribe_diarize_params::family`.
-    DiarizeRun,
-}
+#[cfg(test)]
+mod tests {
+    //! The `#[non_exhaustive]` enums take their C value from transcribe-cpp-types
+    //! (`c_value()`, see the module docs); each variant is checked here against
+    //! the header's constant, both ways. A variant added there needs a row here.
+    use super::*;
+    use transcribe_cpp_types::{BackendMask, Role, Roles};
 
-impl ExtSlot {
-    pub(crate) fn to_raw(self) -> sys::transcribe_ext_slot {
+    /// Every listed variant maps to its C value and back, and the C values are
+    /// exactly `0..n` (no two variants share one, none is skipped).
+    fn round_trip<V, R>(rows: &[(V, R)], to_raw: impl Fn(V) -> R, raw_u32: impl Fn(R) -> u32)
+    where
+        V: Copy + PartialEq + std::fmt::Debug,
+        R: Copy + PartialEq + std::fmt::Debug,
+    {
+        let back = |raw: R| rows.iter().find(|(_, r)| *r == raw).map(|(v, _)| *v);
+        for &(variant, raw) in rows {
+            assert_eq!(to_raw(variant), raw, "{variant:?} -> C");
+            assert_eq!(back(raw), Some(variant), "C {raw:?} -> back");
+        }
+        let mut values: Vec<u32> = rows.iter().map(|(_, r)| raw_u32(*r)).collect();
+        values.sort_unstable();
+        assert_eq!(values, (0..rows.len() as u32).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn task_maps_every_variant() {
+        use sys::transcribe_task as T;
+        round_trip(
+            &[
+                (Task::Transcribe, T::TRANSCRIBE_TASK_TRANSCRIBE),
+                (Task::Translate, T::TRANSCRIBE_TASK_TRANSLATE),
+                (Task::Instruct, T::TRANSCRIBE_TASK_INSTRUCT),
+            ],
+            Task::to_raw,
+            |r| r.0,
+        );
+    }
+
+    #[test]
+    fn feature_maps_every_variant() {
+        use sys::transcribe_feature as F;
+        round_trip(
+            &[
+                (Feature::InitialPrompt, F::TRANSCRIBE_FEATURE_INITIAL_PROMPT),
+                (
+                    Feature::TemperatureFallback,
+                    F::TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK,
+                ),
+                (Feature::LongForm, F::TRANSCRIBE_FEATURE_LONG_FORM),
+                (Feature::Cancellation, F::TRANSCRIBE_FEATURE_CANCELLATION),
+                (Feature::Pnc, F::TRANSCRIBE_FEATURE_PNC),
+                (Feature::Itn, F::TRANSCRIBE_FEATURE_ITN),
+                (Feature::Diarization, F::TRANSCRIBE_FEATURE_DIARIZATION),
+                (Feature::Vocabulary, F::TRANSCRIBE_FEATURE_VOCABULARY),
+                (Feature::ContextPrompt, F::TRANSCRIBE_FEATURE_CONTEXT_PROMPT),
+                (Feature::Instruct, F::TRANSCRIBE_FEATURE_INSTRUCT),
+                (
+                    Feature::TranscriptPrefix,
+                    F::TRANSCRIBE_FEATURE_TRANSCRIPT_PREFIX,
+                ),
+            ],
+            Feature::to_raw,
+            |r| r.0,
+        );
+    }
+
+    #[test]
+    fn ext_slot_maps_every_variant() {
         use sys::transcribe_ext_slot as E;
-        match self {
-            ExtSlot::Run => E::TRANSCRIBE_EXT_SLOT_RUN,
-            ExtSlot::Stream => E::TRANSCRIBE_EXT_SLOT_STREAM,
-            ExtSlot::DiarizeRun => E::TRANSCRIBE_EXT_SLOT_DIARIZE_RUN,
+        round_trip(
+            &[
+                (ExtSlot::Run, E::TRANSCRIBE_EXT_SLOT_RUN),
+                (ExtSlot::Stream, E::TRANSCRIBE_EXT_SLOT_STREAM),
+                (ExtSlot::DiarizeRun, E::TRANSCRIBE_EXT_SLOT_DIARIZE_RUN),
+            ],
+            ExtSlot::to_raw,
+            |r| r.0,
+        );
+    }
+
+    /// `Roles::contains` uses role bits hard-coded in transcribe-cpp-types.
+    #[test]
+    fn role_bits_match_the_header() {
+        use sys::transcribe_role as R;
+        let rows = [
+            (Role::Asr, R::TRANSCRIBE_ROLE_ASR),
+            (Role::Diarize, R::TRANSCRIBE_ROLE_DIARIZE),
+            (Role::LangId, R::TRANSCRIBE_ROLE_LANGID),
+            (Role::Vad, R::TRANSCRIBE_ROLE_VAD),
+            (Role::Turn, R::TRANSCRIBE_ROLE_TURN),
+        ];
+        for (role, bit) in rows {
+            let roles = Roles::from_bits(bit.0);
+            for (other, _) in rows {
+                assert_eq!(roles.contains(other), other == role, "{bit:?} vs {other:?}");
+            }
         }
     }
-}
 
-/// A kind of work a model can do (`transcribe_role`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Role {
-    /// Transcription: [`Session`](crate::Session).
-    Asr,
-    /// Speaker diarization: [`DiarizeSession`](crate::DiarizeSession).
-    Diarize,
-    /// Language identification: [`LangIdSession`](crate::LangIdSession).
-    LangId,
-    /// Voice activity detection: [`VadSession`](crate::VadSession).
-    Vad,
-    /// End-of-turn detection: [`TurnSession`](crate::TurnSession).
-    Turn,
-}
-
-/// The set of [`Role`]s a model serves ([`Model::roles`](crate::Model::roles)).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Roles(pub(crate) u32);
-
-impl Roles {
-    /// Whether the model serves `role`.
-    pub fn contains(self, role: Role) -> bool {
-        let bit = match role {
-            Role::Asr => sys::transcribe_role::TRANSCRIBE_ROLE_ASR,
-            Role::Diarize => sys::transcribe_role::TRANSCRIBE_ROLE_DIARIZE,
-            Role::LangId => sys::transcribe_role::TRANSCRIBE_ROLE_LANGID,
-            Role::Vad => sys::transcribe_role::TRANSCRIBE_ROLE_VAD,
-            Role::Turn => sys::transcribe_role::TRANSCRIBE_ROLE_TURN,
-        };
-        self.0 & bit.0 != 0
-    }
-
-    /// The raw `transcribe_role` bitmask (`TRANSCRIBE_ROLE_*` bits).
-    pub fn bits(self) -> u32 {
-        self.0
+    /// The `BackendMask` constants are hard-coded in transcribe-cpp-types.
+    #[test]
+    fn backend_mask_bits_match_the_header() {
+        for (mask, bits) in [
+            (BackendMask::CPU, sys::TRANSCRIBE_BACKEND_MASK_CPU),
+            (BackendMask::METAL, sys::TRANSCRIBE_BACKEND_MASK_METAL),
+            (BackendMask::VULKAN, sys::TRANSCRIBE_BACKEND_MASK_VULKAN),
+            (BackendMask::CUDA, sys::TRANSCRIBE_BACKEND_MASK_CUDA),
+            (BackendMask::ROCM, sys::TRANSCRIBE_BACKEND_MASK_ROCM),
+            (BackendMask::OTHER, sys::TRANSCRIBE_BACKEND_MASK_OTHER),
+            (BackendMask::ALL, sys::TRANSCRIBE_BACKEND_MASK_ALL),
+        ] {
+            assert_eq!(mask.bits(), bits, "{mask:?}");
+        }
     }
 }

@@ -28,6 +28,9 @@ git push -u origin release-0.0.x
 # 4. Open a PR. Wait for ALL branch CI green
 #    (rust-ci, python-bindings, typescript-ci, swift-ci, native-ci), then merge.
 #    Branch CI is the real gate — the tag run does NOT re-check it.
+#    rust-ci's "API vs the latest release" step reports Rust API breaks
+#    (cargo semver-checks; informational on PRs). publish.yml's rust-verify
+#    re-runs it blocking: a break needs a minor bump (0.5.x -> 0.6.0).
 
 # 5. (optional) Dry run before tagging: full build + TestPyPI, no prod registries.
 gh workflow run publish.yml -f version=0.0.x

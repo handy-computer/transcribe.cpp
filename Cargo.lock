@@ -358,6 +358,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "transcribe-cpp-sys",
+ "transcribe-cpp-types",
 ]
 
 [[package]]
@@ -365,6 +366,15 @@ name = "transcribe-cpp-sys"
 version = "0.5.0"
 dependencies = [
  "cmake",
+ "serde_json",
+]
+
+[[package]]
+name = "transcribe-cpp-types"
+version = "0.5.0"
+dependencies = [
+ "postcard",
+ "serde",
  "serde_json",
 ]
 

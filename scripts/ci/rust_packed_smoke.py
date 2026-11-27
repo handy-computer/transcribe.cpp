@@ -12,14 +12,18 @@ library from NOTHING but the packed sources and then transcribes through the
 real `transcribe-cpp` safe API. A tarball missing a vendored source, a broken
 build.rs, or a bad link manifest is a red gate here, not a user's first build.
 
-Why only the sys crate is packed: the safe `transcribe-cpp` crate depends on
-`transcribe-cpp-sys = "0.0.1"`, and pre-publish the registry only has the 0.0.0
-name-reservation placeholder, so `cargo package -p transcribe-cpp` cannot
-resolve it (this is the inherent sys/safe publish ordering — sys lands first).
-We therefore STAGE the safe crate (its source with the path stripped from the
-sys dep, exactly what `cargo package` would emit) and redirect its sys dep to
-the packed tarball via `[patch.crates-io]`. The safe crate's own registry
-packaging is verified at release time, once the published sys crate exists.
+The pure-Rust `transcribe-cpp-types` crate is packed too, and the consumer
+builds against both tarballs, so a types crate missing a file the safe crate
+needs is caught here as well.
+
+Why the safe crate is not packed: it depends on `transcribe-cpp-sys = "X.Y.Z"`
+and `transcribe-cpp-types = "=X.Y.Z"`, and pre-publish the registry has
+neither version, so `cargo package -p transcribe-cpp` cannot resolve them (this
+is the inherent publish ordering — types and sys land first). We therefore
+STAGE the safe crate (its source with the paths stripped from both deps,
+exactly what `cargo package` would emit) and redirect those deps to the packed
+tarballs via `[patch.crates-io]`. The safe crate's own registry packaging is
+verified at release time, once the published types and sys crates exist.
 
 With no model (`--model` / `$TRANSCRIBE_SMOKE_MODEL` absent) it degrades to an
 install-and-link check: the consumer just prints `transcribe_cpp::version()`.
@@ -80,16 +84,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 """
 
 
-def pack_sys() -> Path:
-    """Pack transcribe-cpp-sys (packaging only) and return its .crate path."""
+def pack(crate: str) -> Path:
+    """Pack `crate` (packaging only) and return its .crate path."""
     subprocess.run(
-        ["cargo", "package", "--no-verify", "--allow-dirty", "-p", "transcribe-cpp-sys"],
+        ["cargo", "package", "--no-verify", "--allow-dirty", "-p", crate],
         cwd=REPO,
         check=True,
     )
-    crates = sorted((REPO / "target" / "package").glob("transcribe-cpp-sys-*.crate"))
+    # `<crate>-<digit>...`: the digit keeps "transcribe-cpp-sys-" from also
+    # matching a hypothetical "transcribe-cpp-sys-foo" package.
+    crates = sorted((REPO / "target" / "package").glob(f"{crate}-[0-9]*.crate"))
     if not crates:
-        sys.exit("packed-smoke FAILED: no transcribe-cpp-sys .crate produced")
+        sys.exit(f"packed-smoke FAILED: no {crate} .crate produced")
     return crates[-1]
 
 
@@ -102,9 +108,10 @@ def extract(crate: Path, dest: Path) -> Path:
 
 
 def stage_safe_crate(dest: Path) -> Path:
-    """Copy the safe crate and strip the `path` from its sys dependency so the
-    consumer's [patch.crates-io] can redirect it to the packed tarball — exactly
-    the transform `cargo package` applies to a path+version dependency."""
+    """Copy the safe crate and strip the `path` from its sys and types
+    dependencies so the consumer's [patch.crates-io] can redirect them to the
+    packed tarballs — exactly the transform `cargo package` applies to a
+    path+version dependency."""
     dest.mkdir(parents=True, exist_ok=True)
     for item in ["src", "build.rs", "Cargo.toml", "README.md", "LICENSE"]:
         src = SAFE_CRATE_DIR / item
@@ -115,15 +122,17 @@ def stage_safe_crate(dest: Path) -> Path:
     cargo_toml = dest / "Cargo.toml"
     text = cargo_toml.read_text()
     # `transcribe-cpp-sys = { version = "0.0.1", path = "../../.." }`
-    #   -> `transcribe-cpp-sys = { version = "0.0.1" }`
-    patched = re.sub(
-        r'(transcribe-cpp-sys\s*=\s*\{[^}]*?),\s*path\s*=\s*"[^"]*"',
-        r"\1",
-        text,
-    )
-    if patched == text:
-        sys.exit("packed-smoke FAILED: could not strip the sys path dep from the safe Cargo.toml")
-    cargo_toml.write_text(patched)
+    #   -> `transcribe-cpp-sys = { version = "0.0.1" }` (and the same for types)
+    for dep in ("transcribe-cpp-sys", "transcribe-cpp-types"):
+        patched = re.sub(
+            rf'({dep}\s*=\s*\{{[^}}]*?),\s*path\s*=\s*"[^"]*"',
+            r"\1",
+            text,
+        )
+        if patched == text:
+            sys.exit(f"packed-smoke FAILED: could not strip the {dep} path dep from the safe Cargo.toml")
+        text = patched
+    cargo_toml.write_text(text)
     return dest
 
 
@@ -136,11 +145,13 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    sys_crate = pack_sys()
-    print(f"packed: {sys_crate.name}")
+    sys_crate = pack("transcribe-cpp-sys")
+    types_crate = pack("transcribe-cpp-types")
+    print(f"packed: {sys_crate.name}, {types_crate.name}")
 
     staging = Path(tempfile.mkdtemp(prefix="rust-packed-smoke-"))
     sys_dir = extract(sys_crate, staging / "sys")
+    types_dir = extract(types_crate, staging / "types")
     safe_dir = stage_safe_crate(staging / "safe")
 
     consumer = staging / "consumer"
@@ -157,10 +168,12 @@ def main() -> int:
             transcribe-cpp = {{ path = "{safe_dir.as_posix()}" }}
             hound = "3"
 
-            # The sys crate is not on the registry at this version yet; redirect
-            # the safe crate's registry dep to the PACKED tarball under test.
+            # The sys and types crates are not on the registry at this version
+            # yet; redirect the safe crate's registry deps to the PACKED
+            # tarballs under test.
             [patch.crates-io]
             transcribe-cpp-sys = {{ path = "{sys_dir.as_posix()}" }}
+            transcribe-cpp-types = {{ path = "{types_dir.as_posix()}" }}
 
             [workspace]
             """

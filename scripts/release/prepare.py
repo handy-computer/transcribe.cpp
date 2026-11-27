@@ -39,6 +39,7 @@ REPO = Path(__file__).resolve().parents[2]
 HEADER = REPO / "include" / "transcribe.h"
 ROOT_CARGO = REPO / "Cargo.toml"
 SAFE_CARGO = REPO / "bindings" / "rust" / "transcribe-cpp" / "Cargo.toml"
+TYPES_CARGO = REPO / "bindings" / "rust" / "transcribe-cpp-types" / "Cargo.toml"
 CARGO_LOCK = REPO / "Cargo.lock"
 PY_DIR = REPO / "bindings" / "python"
 PYPROJECT = PY_DIR / "pyproject.toml"
@@ -101,15 +102,20 @@ def write_version(version: str) -> int:
     _edit(HEADER, r"(#define TRANSCRIBE_VERSION_MINOR )\d+", rf"\g<1>{minor}", expected=1)
     _edit(HEADER, r"(#define TRANSCRIBE_VERSION_PATCH )\d+", rf"\g<1>{patch}", expected=1)
 
-    # Rust manifests: sys [package].version, safe [package].version + sys pin.
+    # Rust manifests: sys [package].version, types [package].version, safe
+    # [package].version + its sys pin + its EXACT (`=`) types pin.
     _edit(ROOT_CARGO, r'(?m)^version = "[^"]+"', f'version = "{version}"', expected=1)
+    _edit(TYPES_CARGO, r'(?m)^version = "[^"]+"', f'version = "{version}"', expected=1)
     _edit(SAFE_CARGO, r'(?m)^version = "[^"]+"', f'version = "{version}"', expected=1)
     _edit(SAFE_CARGO, r'(transcribe-cpp-sys = \{ version = ")[^"]+(")',
           rf"\g<1>{version}\g<2>", expected=1)
+    _edit(SAFE_CARGO, r'(transcribe-cpp-types = \{ version = "=)[^"]+(")',
+          rf"\g<1>{version}\g<2>", expected=1)
 
-    # Cargo.lock: both workspace-crate entries (edited directly so this stays
-    # offline + deterministic; `cargo metadata --locked` in --check proves it).
-    for name in ("transcribe-cpp", "transcribe-cpp-sys"):
+    # Cargo.lock: the three workspace-crate entries (edited directly so this
+    # stays offline + deterministic; `cargo metadata --locked` in --check
+    # proves it).
+    for name in ("transcribe-cpp", "transcribe-cpp-sys", "transcribe-cpp-types"):
         _edit(CARGO_LOCK, rf'(name = "{re.escape(name)}"\nversion = ")[^"]+(")',
               rf"\g<1>{version}\g<2>", expected=1)
 

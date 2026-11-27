@@ -7,6 +7,12 @@
 //! error enum, RAII handles, and a thread-safety model that matches the C
 //! contract.
 //!
+//! The plain-data types (options, results, enums, [`ErrorReport`], ...) are
+//! defined in [`transcribe-cpp-types`](transcribe_cpp_types), a pure-Rust crate
+//! with no native dependency, and re-exported here: a program that only needs
+//! to name them (one talking to transcribe.cpp worker processes, say) can
+//! depend on that crate alone and keep the engine out of its build.
+//!
 //! # Quickstart
 //!
 //! ```no_run
@@ -65,32 +71,36 @@ mod types;
 mod vad;
 mod version;
 
+// The plain-data types live in transcribe-cpp-types (pure Rust, no engine), at
+// the exact same version; they are re-exported here at their pre-0.5.1 paths.
+// `doc(inline)` keeps them documented on this crate's pages, as before.
+#[doc(inline)]
+pub use transcribe_cpp_types::{
+    Backend, BackendMask, Capabilities, CommitPolicy, DeviceType, Diarize, DiarizeExtension,
+    DiarizeInfo, DiarizeOptions, DiarizeSessionOptions, ErrorKind, ErrorReport, ExtSlot, Feature,
+    Itn, KvType, LangIdCandidate, LangIdInfo, LangIdOptions, LangIdResult, LangIdSessionOptions,
+    MoonshineStreamingOptions, ParakeetBufferedStreamOptions, ParakeetStreamOptions, Pnc, Role,
+    Roles, RunExtension, RunOptions, Segment, SessionLimits, SessionOptions,
+    SortformerDiarizeOptions, SortformerPreset, SpeakerSegment, StreamExtension, StreamOptions,
+    StreamState, StreamText, StreamUpdate, Task, TimestampKind, Timings, Token, Transcript,
+    TurnInfo, TurnOptions, TurnResult, TurnSessionOptions, VadInfo, VadOptions, VadResult,
+    VadSegment, VadSessionOptions, VoxtralRealtimeStreamOptions, WhisperRunOptions, Word,
+};
+
 pub use backend::{
     allowed_backends, backend_available, device_count, devices, init_backends,
-    init_backends_default, init_backends_with, BackendMask, Device, DeviceType,
+    init_backends_default, init_backends_with, Device,
 };
 pub use cancel::CancelToken;
-pub use diarize::{DiarizeInfo, DiarizeOptions, DiarizeSession, DiarizeSessionOptions};
-pub use error::{Error, ErrorKind, ErrorReport, Result};
-pub use family::{
-    DiarizeExtension, MoonshineStreamingOptions, ParakeetBufferedStreamOptions,
-    ParakeetStreamOptions, RunExtension, SortformerDiarizeOptions, SortformerPreset,
-    StreamExtension, VoxtralRealtimeStreamOptions, WhisperRunOptions,
-};
-pub use langid::{
-    LangIdCandidate, LangIdInfo, LangIdOptions, LangIdResult, LangIdSession, LangIdSessionOptions,
-};
+pub use diarize::DiarizeSession;
+pub use error::{Error, Result};
+pub use langid::LangIdSession;
 pub use logging::{disable_logging, init_logging};
-pub use model::{Capabilities, Model, ModelOptions, SessionLimits, SessionOptions};
-pub use result::{Segment, SpeakerSegment, Timings, Token, Transcript, Word};
-pub use session::{RunOptions, Session, Stream};
-pub use streaming::{StreamOptions, StreamText, StreamUpdate};
-pub use turn::{TurnInfo, TurnOptions, TurnResult, TurnSession, TurnSessionOptions};
-pub use types::{
-    AbiStruct, Backend, CommitPolicy, Diarize, ExtSlot, Feature, Itn, KvType, Pnc, Role, Roles,
-    StreamState, Task, TimestampKind,
-};
-pub use vad::{VadInfo, VadOptions, VadResult, VadSegment, VadSession, VadSessionOptions};
+pub use model::{Model, ModelOptions};
+pub use session::{Session, Stream};
+pub use turn::TurnSession;
+pub use types::AbiStruct;
+pub use vad::VadSession;
 pub use version::{
     abi_struct_align, abi_struct_size, compiled_version, header_hash, version, version_commit,
 };

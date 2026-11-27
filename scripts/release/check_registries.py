@@ -9,7 +9,8 @@ check, run in release-preflight, that the version being released does not alread
 exist on ANY package publish.yml would upload it under.
 
   TAG (push):
-    crates.io   transcribe-cpp-sys, transcribe-cpp
+    crates.io   transcribe-cpp-types, transcribe-cpp-sys, transcribe-cpp
+                (in publish order)
     PyPI        transcribe-cpp, transcribe-cpp-native, transcribe-cpp-native-cu12
                 (cu12 only uploads when CU12_ON_PYPI, but a 200 there is always a
                  real burn, so it is always checked)
@@ -100,7 +101,7 @@ def targets(version: str, rehearsal: bool) -> "list[tuple[str, str, object]]":
             for name in ("transcribe-cpp", "transcribe-cpp-native")
         ]
     out: list[tuple[str, str, object]] = []
-    for name in ("transcribe-cpp-sys", "transcribe-cpp"):
+    for name in ("transcribe-cpp-types", "transcribe-cpp-sys", "transcribe-cpp"):
         out.append(("crates.io", name,
                     lambda n=name: _simple(f"https://crates.io/api/v1/crates/{n}/{version}")))
     for name in ("transcribe-cpp", "transcribe-cpp-native", "transcribe-cpp-native-cu12"):

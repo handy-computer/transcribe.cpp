@@ -13,7 +13,9 @@
 name = "transcribe-cpp-sys"
 version = "0.5.0"
 edition = "2021"
-rust-version = "1.74"
+# 1.82: the generated FFI uses `unsafe extern` blocks (1.82) and `offset_of!`
+# (1.77). 1.74 was declared through 0.5.0 but never built.
+rust-version = "1.82"
 description = "Native FFI bindings for transcribe.cpp, a C/C++ speech-to-text library built on ggml"
 license = "MIT"
 readme = "bindings/rust/sys/README.md"
@@ -83,10 +85,16 @@ serde_json = "1"
 
 # The sys crate's manifest is THIS file (repo root) so the tarball can carry
 # the whole C++ tree; its Rust sources are the only non-package subtree under
-# bindings/rust/ (build.rs + src/ at bindings/rust/sys/). The two sibling
-# packages — the safe wrapper and the dev xtask — are workspace members. The
-# sys sources must NOT live inside a member's directory, or cargo would refuse
-# to package them with the root crate (a member owns its whole subtree).
+# bindings/rust/ (build.rs + src/ at bindings/rust/sys/). The three sibling
+# packages — the safe wrapper, its pure-Rust plain-data types crate
+# (transcribe-cpp-types, no native dependency) and the dev xtask — are
+# workspace members. The sys sources must NOT live inside a member's
+# directory, or cargo would refuse to package them with the root crate (a
+# member owns its whole subtree).
 [workspace]
 resolver = "2"
-members = ["bindings/rust/transcribe-cpp", "bindings/rust/xtask"]
+members = [
+    "bindings/rust/transcribe-cpp",
+    "bindings/rust/transcribe-cpp-types",
+    "bindings/rust/xtask",
+]

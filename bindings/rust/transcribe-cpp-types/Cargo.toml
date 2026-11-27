@@ -1,0 +1,32 @@
+[package]
+name = "transcribe-cpp-types"
+version = "0.5.0"
+edition = "2021"
+# Lower than transcribe-cpp (1.82): this crate has no FFI. rust-ci checks it.
+rust-version = "1.74"
+description = "Plain-data types of transcribe.cpp's Rust binding (options, results, errors) without the native engine"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/handy-computer/transcribe.cpp"
+homepage = "https://github.com/handy-computer/transcribe.cpp"
+keywords = ["transcription", "speech", "asr", "stt", "serde"]
+categories = ["multimedia::audio", "data-structures"]
+
+[lib]
+name = "transcribe_cpp_types"
+path = "src/lib.rs"
+
+[features]
+# Serialize/Deserialize on every type. transcribe-cpp's own `serde` feature
+# forwards here.
+serde = ["dep:serde"]
+
+# Nothing native, and no build script: a program that only names these types
+# (a daemon talking to transcribe.cpp worker processes, say) never compiles or
+# links the engine. rust-ci asserts the dependency tree stays this small.
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde_json = "1"
