@@ -4587,7 +4587,7 @@ vk_device ggml_vk_get_device(size_t idx) {
 
         size_t dev_num = vk_instance.device_indices[idx];
 
-        std::vector<vk::PhysicalDevice> physical_devices = vk_instance.instance.enumeratePhysicalDevices();
+        const std::vector<vk::PhysicalDevice> & physical_devices = vk_instance.physical_devices;
 
         if (dev_num >= physical_devices.size()) {
             std::cerr << "ggml_vulkan: Device with index " << dev_num << " does not exist." << std::endl;
@@ -5629,7 +5629,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_print_gpu_info(" << dev_num << ")");
     GGML_ASSERT(vk_instance_initialized);
 
-    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
+    const std::vector<vk::PhysicalDevice> & devices = vk_instance.physical_devices;
 
     if (dev_num >= devices.size()) {
         std::cerr << "ggml_vulkan: Device with index " << dev_num << " does not exist." << std::endl;
@@ -5992,7 +5992,9 @@ void ggml_vk_instance_init() {
     // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
 
-    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
+    // transcribe.cpp patch: the only enumeration; see vk_instance_t::physical_devices.
+    vk_instance.physical_devices = vk_instance.instance.enumeratePhysicalDevices();
+    const std::vector<vk::PhysicalDevice> & devices = vk_instance.physical_devices;
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
@@ -14164,7 +14166,7 @@ int ggml_vk_get_device_count() {
 void ggml_vk_get_device_description(int device, char * description, size_t description_size) {
     ggml_vk_instance_init();
 
-    std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
+    const std::vector<vk::PhysicalDevice> & devices = vk_instance.physical_devices;
 
     vk::PhysicalDeviceProperties props;
     devices[device].getProperties(&props);
@@ -16548,7 +16550,7 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     GGML_ASSERT(device < (int) vk_instance.device_indices.size());
     GGML_ASSERT(device < (int) vk_instance.device_supports_membudget.size());
 
-    vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
+    vk::PhysicalDevice vkdev = vk_instance.physical_devices[vk_instance.device_indices[device]];
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
     vk::PhysicalDeviceMemoryProperties2 memprops = {};
     const bool membudget_supported = vk_instance.device_supports_membudget[device];
@@ -16583,7 +16585,7 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
 static vk::PhysicalDeviceType ggml_backend_vk_get_device_type(int device_idx) {
     GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
 
-    vk::PhysicalDevice device = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device_idx]];
+    vk::PhysicalDevice device = vk_instance.physical_devices[vk_instance.device_indices[device_idx]];
 
     vk::PhysicalDeviceProperties2 props = {};
     device.getProperties2(&props);
@@ -16594,7 +16596,7 @@ static vk::PhysicalDeviceType ggml_backend_vk_get_device_type(int device_idx) {
 static std::string ggml_backend_vk_get_device_pci_id(int device_idx) {
     GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
 
-    vk::PhysicalDevice device = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device_idx]];
+    vk::PhysicalDevice device = vk_instance.physical_devices[vk_instance.device_indices[device_idx]];
 
     const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
 

@@ -1413,6 +1413,11 @@ struct vk_instance_t {
     PFN_vkCmdEndDebugUtilsLabelEXT pfn_vkCmdEndDebugUtilsLabelEXT = {};
     PFN_vkCmdInsertDebugUtilsLabelEXT  pfn_vkCmdInsertDebugUtilsLabelEXT  = {};
 
+    // transcribe.cpp patch: the physical devices as enumerated once at
+    // instance init; device_indices indexes this list. Do not enumerate again:
+    // the order can change while the process runs (Windows), and these handles
+    // stay valid for the instance's life.
+    std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<size_t> device_indices;
     std::vector<bool>   device_supports_membudget;
     std::vector<bool>   device_host_buffer_import;
