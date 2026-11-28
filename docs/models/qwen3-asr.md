@@ -19,8 +19,14 @@ see the family doc at
   model (24-layer encoder, LM `hidden_size=2048`,
   `intermediate_size=6144`) for ~0.5pp WER improvement at ~2.5× the
   storage and decode cost.
-- Language coverage is identical across the two variants — pick on
-  the accuracy/cost axis, not on languages.
+- **English-specialized 2B fine-tune.** `oruk-fourier-2b`
+  ([`oruk/oruk-fourier-2b`](https://huggingface.co/oruk/oruk-fourier-2b),
+  CC-BY-NC-4.0) keeps the same 2.19 GB Q8_0 footprint and `qwen3_asr`
+  loader as `qwen3-asr-1.7b`, lowering LibriSpeech `test-clean` Q8_0 WER
+  from 1.62% to **1.40%** for English-only workloads; see
+  [Oruk Fourier 2B](oruk-fourier-2b.md).
+- Language coverage is identical across the two multilingual Qwen
+  variants — pick on the accuracy/cost axis, not on languages.
 
 ## All variants
 
