@@ -16631,6 +16631,46 @@ static std::string ggml_backend_vk_get_device_pci_id(int device_idx) {
     return std::string(pci_bus_id);
 }
 
+// transcribe.cpp patch: deviceUUID formatted for ggml_backend_dev_props::device_uuid.
+// Empty if the driver reports none (all zeros).
+static std::string ggml_backend_vk_get_device_uuid(int device_idx) {
+    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
+
+    vk::PhysicalDevice device = vk_instance.physical_devices[vk_instance.device_indices[device_idx]];
+
+    vk::PhysicalDeviceProperties2 props = {};
+    vk::PhysicalDeviceIDProperties id_props = {};
+
+    props.pNext = &id_props;
+
+    device.getProperties2(&props);
+
+    bool all_zero = true;
+    for (size_t i = 0; i < VK_UUID_SIZE; i++) {
+        if (id_props.deviceUUID[i] != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+
+    if (all_zero) {
+        return "";
+    }
+
+    static const char hex[] = "0123456789abcdef";
+
+    std::string uuid;
+    for (size_t i = 0; i < VK_UUID_SIZE; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            uuid += '-';
+        }
+        uuid += hex[id_props.deviceUUID[i] >> 4];
+        uuid += hex[id_props.deviceUUID[i] & 0x0f];
+    }
+
+    return uuid;
+}
+
 static const char * ggml_backend_vk_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
     return ctx->name.c_str();
@@ -16669,6 +16709,7 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
     props->description = ggml_backend_vk_device_get_description(dev);
     props->type        = ggml_backend_vk_device_get_type(dev);
     props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
+    props->device_uuid = ctx->uuid.empty() ? nullptr : ctx->uuid.c_str();
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ true,
@@ -17523,6 +17564,7 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
                 ctx->description = desc;
                 ctx->is_integrated_gpu = ggml_backend_vk_get_device_type(i) == vk::PhysicalDeviceType::eIntegratedGpu;
                 ctx->pci_bus_id = ggml_backend_vk_get_device_pci_id(i);
+                ctx->uuid = ggml_backend_vk_get_device_uuid(i);
                 ctx->op_offload_min_batch_size = min_batch_size;
                 devices.push_back(new ggml_backend_device {
                     /* .iface   = */ ggml_backend_vk_device_i,

@@ -93,6 +93,31 @@ final class NoModelTests: XCTestCase {
         XCTAssertFalse(Transcribe.devices().isEmpty)
     }
 
+    static func isCanonicalUuid(_ s: String) -> Bool {
+        let chars = Array(s.utf8)
+        guard chars.count == 36 else { return false }
+        var nonzero = false
+        for (i, c) in chars.enumerated() {
+            if i == 8 || i == 13 || i == 18 || i == 23 {
+                if c != UInt8(ascii: "-") { return false }
+                continue
+            }
+            let isDigit = c >= UInt8(ascii: "0") && c <= UInt8(ascii: "9")
+            let isLowerHex = c >= UInt8(ascii: "a") && c <= UInt8(ascii: "f")
+            if !isDigit && !isLowerHex { return false }
+            if c != UInt8(ascii: "0") { nonzero = true }
+        }
+        return nonzero
+    }
+
+    func testCanonicalUuidCheck() {
+        XCTAssertTrue(Self.isCanonicalUuid("8680499a-0100-0000-0002-000000000000"))
+        XCTAssertFalse(Self.isCanonicalUuid(""))
+        XCTAssertFalse(Self.isCanonicalUuid("00000000-0000-0000-0000-000000000000"))
+        XCTAssertFalse(Self.isCanonicalUuid("8680499A-0100-0000-0002-000000000000"))
+        XCTAssertFalse(Self.isCanonicalUuid("8680499a-0100-0000-0002-00000000000"))
+    }
+
     func testEnumeratedDevicesAreSelfConsistent() {
         let devices = Transcribe.devices()
         for (i, dev) in devices.enumerated() {
@@ -105,6 +130,12 @@ final class NoModelTests: XCTestCase {
             // deviceId is either absent (e.g. Metal) or a non-empty id.
             if let deviceId = dev.deviceId {
                 XCTAssertFalse(deviceId.isEmpty, "device \(i) has an empty deviceId")
+            }
+            // deviceUuid is either absent or lower-case 8-4-4-4-12 hex, never
+            // all zeros.
+            if let deviceUuid = dev.deviceUuid {
+                XCTAssertTrue(
+                    Self.isCanonicalUuid(deviceUuid), "device \(i) has a bad deviceUuid \(deviceUuid)")
             }
             XCTAssertFalse(dev.name.isEmpty, "device \(i) has an empty name")
             XCTAssertFalse(dev.kind.isEmpty, "device \(i) has an empty kind")

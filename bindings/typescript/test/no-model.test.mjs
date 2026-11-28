@@ -62,6 +62,22 @@ test("getAvailableBackends returns a non-empty array", () => {
   assert.ok(devices.length >= 1, "expected >= 1 device");
 });
 
+function isCanonicalUuid(s) {
+  return (
+    typeof s === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s) &&
+    /[1-9a-f]/.test(s)
+  );
+}
+
+test("the canonical UUID check", () => {
+  assert.ok(isCanonicalUuid("8680499a-0100-0000-0002-000000000000"));
+  assert.ok(!isCanonicalUuid(""));
+  assert.ok(!isCanonicalUuid("00000000-0000-0000-0000-000000000000"));
+  assert.ok(!isCanonicalUuid("8680499A-0100-0000-0002-000000000000"));
+  assert.ok(!isCanonicalUuid("8680499a-0100-0000-0002-00000000000"));
+});
+
 test("each backend device has a well-formed, index-aligned shape", () => {
   const devices = getAvailableBackends();
   devices.forEach((dev, i) => {
@@ -75,6 +91,11 @@ test("each backend device has a well-formed, index-aligned shape", () => {
     assert.ok(
       dev.deviceId === null || typeof dev.deviceId === "string",
       `device ${i} deviceId must be null or a string`,
+    );
+    // deviceUuid is absent or lower-case 8-4-4-4-12 hex, never all zeros.
+    assert.ok(
+      dev.deviceUuid === null || isCanonicalUuid(dev.deviceUuid),
+      `device ${i} deviceUuid ${JSON.stringify(dev.deviceUuid)} is not a canonical UUID`,
     );
     assert.equal(typeof dev.name, "string");
     assert.ok(dev.name.length > 0, `device ${i} name must be non-empty`);

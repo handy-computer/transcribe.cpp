@@ -181,6 +181,14 @@ extern "C" {
         //   for PCI devices, this should be the lower-case PCI bus id formatted as "domain:bus:device.function" (e.g. "0000:c1:00.0")
         //   if the id is unknown, this should be NULL
         const char * device_id;
+        // device UUID (transcribe.cpp patch)
+        //   the backend's 16 UUID bytes in order, as lower-case hex formatted as "8-4-4-4-12"
+        //   (e.g. "8680499a-0100-0000-0002-000000000000"), as vulkaninfo and nvidia-smi print it
+        //   if the UUID is unknown, this should be NULL
+        //   not guaranteed unique among the listed devices (MoltenVK can report one UUID for distinct GPUs)
+        //   stable across processes and reboots, but it may change with a driver update or when the card
+        //   moves to another slot
+        const char * device_uuid;
         // device capabilities
         struct ggml_backend_dev_caps caps;
     };

@@ -46,6 +46,13 @@ pub struct Device {
     /// Stable hardware id when the backend reports one (PCI bus id for PCI
     /// devices), or `None` (e.g. Metal).
     pub device_id: Option<String>,
+    /// The device's UUID as lower-case 8-4-4-4-12 hex (the backend's 16 bytes
+    /// in order, as `vulkaninfo` and `nvidia-smi` print it), or `None` when
+    /// unknown. Only Vulkan devices report one today. Not guaranteed unique
+    /// among the listed devices (MoltenVK can report one UUID for distinct
+    /// GPUs). Stable across processes and reboots, but may change with a
+    /// driver update or when the card moves to another slot.
+    pub device_uuid: Option<String>,
     /// Reported device memory capacity in bytes, or 0 if unreported.
     pub memory_total: u64,
     /// Available device memory in bytes — a snapshot at the time this was
@@ -88,6 +95,7 @@ impl Device {
             kind: owned_str(raw.kind),
             device_type: DeviceType::from_raw(raw.device_type),
             device_id: owned_opt_str(raw.device_id),
+            device_uuid: owned_opt_str(raw.device_uuid),
             memory_total: raw.memory_total,
             memory_free: raw.memory_free,
             index,

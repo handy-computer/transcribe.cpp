@@ -9,6 +9,7 @@ build configuration the suite runs against.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 import pytest
@@ -32,6 +33,21 @@ def test_backends_non_empty():
     assert t.backends(), "backends() returned an empty list — a CPU device must exist"
 
 
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def _is_canonical_uuid(s: str) -> bool:
+    return _UUID_RE.fullmatch(s) is not None and s.strip("0-") != ""
+
+
+def test_canonical_uuid_check():
+    assert _is_canonical_uuid("8680499a-0100-0000-0002-000000000000")
+    assert not _is_canonical_uuid("")
+    assert not _is_canonical_uuid("00000000-0000-0000-0000-000000000000")
+    assert not _is_canonical_uuid("8680499A-0100-0000-0002-000000000000")
+    assert not _is_canonical_uuid("8680499a-0100-0000-0002-00000000000")
+
+
 def test_device_index_and_fields():
     # Each device carries a process-local display index and an opaque selection
     # handle, plus well-formed metadata. Pin the device-selection surface.
@@ -44,6 +60,10 @@ def test_device_index_and_fields():
         assert dev.memory_total >= 0
         assert dev.memory_free >= 0
         assert dev.device_id is None or isinstance(dev.device_id, str)
+        # device_uuid is absent or lower-case 8-4-4-4-12 hex, never all zeros.
+        assert dev.device_uuid is None or _is_canonical_uuid(dev.device_uuid), (
+            f"device {i} device_uuid {dev.device_uuid!r}"
+        )
         assert isinstance(dev.name, str) and dev.name
         assert isinstance(dev.kind, str) and dev.kind
 

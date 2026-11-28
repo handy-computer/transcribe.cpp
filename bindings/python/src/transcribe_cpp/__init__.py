@@ -332,7 +332,7 @@ class BackendDevice:
     kind: str  # "cpu" | "accel" | "metal" | "vulkan" | "cuda" | "rocm" | "sycl" | "gpu" | "unknown"
     # Vendor-agnostic class: "cpu" | "gpu" | "igpu" | "accel", or "unknown" for a
     # value reported by a runtime newer than this binding (tell such devices
-    # apart by device_id / name, not by this axis).
+    # apart by device_uuid / device_id / name, not by this axis).
     device_type: str
     device_id: Optional[str]  # stable hw id (PCI bus id), or None (e.g. Metal)
     memory_total: int  # reported capacity in bytes, or 0 if unreported
@@ -343,8 +343,17 @@ class BackendDevice:
     # Registry index for display. Exact model selection uses the BackendDevice
     # itself; indices are process-local and not stable across driver updates.
     index: Optional[int] = None
-    # Opaque process-local native device handle. Applications persist device_id,
-    # never this value.
+    # The device's UUID as lower-case 8-4-4-4-12 hex (the backend's 16 bytes in
+    # order, as vulkaninfo and nvidia-smi print it), or None when unknown. Only
+    # Vulkan devices report one today. Not guaranteed unique among the listed
+    # devices (MoltenVK can report one UUID for distinct GPUs). Stable across
+    # processes and reboots, but may change with a driver update or when the
+    # card moves to another slot.
+    device_uuid: Optional[str] = None
+    # Opaque process-local native device handle. Applications never persist
+    # this value: they save device_uuid when present, else device_id (the PCI
+    # bus id, which names the slot rather than the card), with kind and
+    # description beside it since neither id is guaranteed unique or permanent.
     _handle: Optional[int] = field(default=None, repr=False, compare=False)
 
     def __eq__(self, other: object) -> bool:
@@ -369,6 +378,7 @@ def _backend_device_from_raw(dev, handle: Optional[int], index: Optional[int] = 
         memory_total=int(dev.memory_total),
         memory_free=int(dev.memory_free),
         index=index,
+        device_uuid=_decode(dev.device_uuid) if dev.device_uuid else None,
         _handle=handle,
     )
 

@@ -88,12 +88,32 @@ fn devices_is_non_empty() {
     assert!(!devices.is_empty(), "devices() returned empty");
 }
 
+fn is_canonical_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, &c)| match i {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_digit() || (b'a'..=b'f').contains(&c),
+        })
+        && b.iter().any(|&c| c != b'0' && c != b'-')
+}
+
+#[test]
+fn canonical_uuid_check() {
+    assert!(is_canonical_uuid("8680499a-0100-0000-0002-000000000000"));
+    assert!(!is_canonical_uuid(""));
+    assert!(!is_canonical_uuid("00000000-0000-0000-0000-000000000000"));
+    assert!(!is_canonical_uuid("8680499A-0100-0000-0002-000000000000"));
+    assert!(!is_canonical_uuid("8680499a-0100-0000-0002-00000000000"));
+}
+
 #[test]
 fn device_fields_are_well_formed() {
     // Walk every enumerated device and check the invariants the binding
     // promises: the registry index matches its position, the device-type axis
     // is consistent for a CPU device, and the string fields are well-formed
-    // (device_id is None or non-empty; name/kind are never empty).
+    // (device_id is None or non-empty; device_uuid is None or canonical;
+    // name/kind are never empty).
     init_backends_default().expect("init_backends_default");
     let devices = devices();
     for (i, dev) in devices.iter().enumerate() {
@@ -107,6 +127,15 @@ fn device_fields_are_well_formed() {
         // device_id is either absent or a non-empty stable id.
         if let Some(id) = &dev.device_id {
             assert!(!id.is_empty(), "device {i} empty device_id: {dev:?}");
+        }
+
+        // device_uuid is either absent or 36 chars of lower-case 8-4-4-4-12
+        // hex, never all zeros.
+        if let Some(uuid) = &dev.device_uuid {
+            assert!(
+                is_canonical_uuid(uuid),
+                "device {i} bad device_uuid: {dev:?}"
+            );
         }
 
         // The "cpu" kind must report the CPU device-type (the one cross-build

@@ -20,7 +20,8 @@ pub enum DeviceType {
     Accel,
     /// A device-type value this binding does not recognize — reported by a
     /// runtime newer than the header this binding was generated against.
-    /// Distinguish such devices by `transcribe_cpp::Device::device_id` / `transcribe_cpp::Device::name`,
+    /// Distinguish such devices by `transcribe_cpp::Device::device_uuid` /
+    /// `transcribe_cpp::Device::device_id` / `transcribe_cpp::Device::name`,
     /// not by this axis.
     Unknown,
 }

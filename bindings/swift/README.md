@@ -194,7 +194,9 @@ Backends are compiled into the xcframework per Apple slice:
 Request a backend policy with `ModelOptions(backend:)`; probe availability with
 `Transcribe.backendAvailable(_:)`. For exact selection, pass an entry from
 `Transcribe.devices()` to `ModelOptions(device:)`; exact selection never falls
-back to another primary device.
+back to another primary device. A `Device` is process-local: to find it again
+in another process, save its `deviceUuid` or `deviceId` when it has one (Metal
+reports neither), else `kind` + `name` + `description`.
 
 On the CPU and on Metal, model weights are memory-mapped from the file: they
 are served from the page cache, which the OS can reclaim, and do not count

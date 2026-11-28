@@ -1566,5 +1566,6 @@ struct ggml_backend_vk_device_context {
     std::string description;
     bool is_integrated_gpu;
     std::string pci_bus_id;
+    std::string uuid;  // transcribe.cpp patch: see ggml_backend_dev_props::device_uuid; empty if unknown
     int op_offload_min_batch_size;
 };

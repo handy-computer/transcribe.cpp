@@ -154,8 +154,9 @@ int list_devices_main() {
                                                                                 "?";
         const double gib      = 1024.0 * 1024.0 * 1024.0;
         std::printf("  [%d] %s\n", i, (d.description && *d.description) ? d.description : d.name);
-        std::printf("      name=%s  kind=%s  type=%s  id=%s\n", d.name ? d.name : "?", d.kind ? d.kind : "?", type_str,
-                    (d.device_id && *d.device_id) ? d.device_id : "(none)");
+        std::printf("      name=%s  kind=%s  type=%s  id=%s  uuid=%s\n", d.name ? d.name : "?", d.kind ? d.kind : "?",
+                    type_str, (d.device_id && *d.device_id) ? d.device_id : "(none)",
+                    (d.device_uuid && *d.device_uuid) ? d.device_uuid : "(none)");
         std::printf("      memory: %.2f GiB total, %.2f GiB free\n", (double) d.memory_total / gib,
                     (double) d.memory_free / gib);
     }

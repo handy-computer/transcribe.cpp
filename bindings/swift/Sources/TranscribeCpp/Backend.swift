@@ -35,8 +35,8 @@ public enum DeviceType: Sendable, Equatable {
     case accel
     /// A device-type value this binding does not recognize — reported by a
     /// runtime newer than the header this binding was built against.
-    /// Distinguish such devices by `Device.deviceId` / `Device.name`, not by
-    /// this axis.
+    /// Distinguish such devices by `Device.deviceUuid` / `Device.deviceId` /
+    /// `Device.name`, not by this axis.
     case unknown
 
     init(_ c: transcribe_device_type) {
@@ -63,6 +63,13 @@ public struct Device: @unchecked Sendable, Equatable {
     /// Stable hardware id (PCI bus id) when the backend reports one, else nil
     /// (e.g. Metal).
     public let deviceId: String?
+    /// The device's UUID as lower-case 8-4-4-4-12 hex (the backend's 16 bytes
+    /// in order, as `vulkaninfo` and `nvidia-smi` print it), else nil. Only
+    /// Vulkan devices report one today. Not guaranteed unique among the listed
+    /// devices (MoltenVK can report one UUID for distinct GPUs). Stable across
+    /// processes and reboots, but may change with a driver update or when the
+    /// card moves to another slot.
+    public let deviceUuid: String?
     /// Reported device memory capacity in bytes, or 0 if unreported.
     public let memoryTotal: UInt64
     /// Available device memory in bytes — a snapshot at query time, or 0 if
@@ -70,7 +77,8 @@ public struct Device: @unchecked Sendable, Equatable {
     /// refresh; backend-defined and not comparable across device kinds.
     public let memoryFree: UInt64
     /// Process-local registry index for display. Pass this `Device` through
-    /// `ModelOptions(device:)` for exact selection; persist `deviceId` instead.
+    /// `ModelOptions(device:)` for exact selection; persist `deviceUuid` or
+    /// `deviceId` instead.
     public let index: Int?
     let handle: transcribe_device_t
 
@@ -82,6 +90,7 @@ public struct Device: @unchecked Sendable, Equatable {
         kind = raw.kind.map { String(cString: $0) } ?? ""
         deviceType = DeviceType(raw.device_type)
         deviceId = raw.device_id.map { String(cString: $0) }
+        deviceUuid = raw.device_uuid.map { String(cString: $0) }
         memoryTotal = raw.memory_total
         memoryFree = raw.memory_free
         self.index = index
