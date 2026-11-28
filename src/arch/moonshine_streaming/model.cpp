@@ -961,7 +961,8 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
                                        int                           T_enc,
                                        const transcribe_run_params * params,
                                        bool                          emit_dumps,
-                                       bool                          interim) {
+                                       bool                          interim,
+                                       const std::vector<int32_t> *  forced_prefix) {
     (void) params;
 
     if (cc->poll_abort()) {
@@ -1110,6 +1111,17 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         return TRANSCRIBE_OK;
     };
 
+    // A stream decode restarts from BOS, so without help it can re-decode the
+    // already-committed prefix differently (e.g. "And so my" -> "And so, my")
+    // and the transcript would no longer extend the committed text. Force the
+    // committed tokens: the greedy pick is replaced while the step index is
+    // inside the forced prefix.
+    auto apply_forced_prefix = [&]() {
+        if (forced_prefix != nullptr && generated_ids.size() < forced_prefix->size()) {
+            next_token = (*forced_prefix)[generated_ids.size()];
+        }
+    };
+
     if (auto st = run_step(/*n_tokens=*/1, /*n_past=*/0,
                            /*token_id_first=*/decoder_start,
                            /*dump_prompt=*/emit_dumps,
@@ -1117,6 +1129,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
         st != TRANSCRIBE_OK) {
         return st;
     }
+    apply_forced_prefix();
     if (next_token != eos) {
         generated_ids.push_back(next_token);
     }
@@ -1140,6 +1153,7 @@ transcribe_status decode_from_kv_cache(MoonshineStreamingSession *   cc,
             st != TRANSCRIBE_OK) {
             return st;
         }
+        apply_forced_prefix();
         if (next_token != eos) {
             generated_ids.push_back(next_token);
             if (transcribe::stop_on_repetition(generated_ids, "moonshine_streaming run", stop_log_level)) {
@@ -1280,7 +1294,7 @@ transcribe_status decode_from_committed_enc(MoonshineStreamingSession *   cc,
     }
 
     // 4. AR decoder loop.
-    return decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, /*interim=*/false);
+    return decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, /*interim=*/false, /*forced_prefix=*/nullptr);
 }
 
 // Internal one-shot inference helper. Encoder over the full PCM, then
@@ -1432,7 +1446,8 @@ transcribe_status decode_partial(MoonshineStreamingSession *   cc,
         st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, interim); st != TRANSCRIBE_OK) {
+    if (auto st = decode_from_kv_cache(cc, cm, T_enc, params, emit_dumps, interim, &cc->stream_committed_ids);
+        st != TRANSCRIBE_OK) {
         return st;
     }
     // decode_from_kv_cache resets the truncation flags to describe its own
@@ -1601,6 +1616,7 @@ transcribe_status stream_begin(transcribe_session *             session,
     cc->stream_last_decoded_T = 0;
     cc->stream_input_capped   = false;
     cc->stream_token_id_history.clear();
+    cc->stream_committed_ids.clear();
     cc->stream_L_total_frames        = cumulative_left_context(hp);
     cc->stream_R_total_frames        = cumulative_right_context(hp);
     cc->stream_frontend_pad_frames   = k_frontend_pad_enc_frames;
@@ -1840,6 +1856,7 @@ transcribe_status stream_feed(transcribe_session *       session,
             const int                  commit_prefix = stable_token_prefix_from_history(cc, current_ids);
             if (commit_prefix > cc->n_committed_tokens) {
                 cc->n_committed_tokens = commit_prefix;
+                cc->stream_committed_ids.assign(current_ids.begin(), current_ids.begin() + commit_prefix);
             }
 
             if (cc->full_text != prev_full_text) {
@@ -1977,6 +1994,7 @@ transcribe_status stream_finalize(transcribe_session * session, transcribe_strea
     cc->n_committed_words         = static_cast<int>(cc->words.size());
     cc->n_committed_segments      = static_cast<int>(cc->segments.size());
     cc->stream_token_id_history.clear();
+    cc->stream_committed_ids.clear();
     if (cc->full_text != prev_full_text) {
         cc->stream_revision += 1;
     } else {
@@ -2012,6 +2030,7 @@ void stream_reset(transcribe_session * session) {
     cc->stream_last_decoded_T = 0;
     cc->stream_input_capped   = false;
     cc->stream_token_id_history.clear();
+    cc->stream_committed_ids.clear();
 }
 
 bool accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot slot, uint32_t kind) {
