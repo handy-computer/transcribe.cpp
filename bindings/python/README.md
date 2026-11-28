@@ -164,8 +164,11 @@ results = transcribe_cpp.TurnSession.stream_feed_batch(list(zip(sessions, chunks
 `Model(backend=...)` applies a backend policy (`"auto"` uses the best
 available). `transcribe_cpp.backends()` returns process-local device objects;
 pass one as `Model(device=device)` for exact selection with no fallback. Persist
-a device's `device_id`, not its runtime handle or index. `backend_available(kind)`
-checks whether a backend policy can currently be satisfied.
+a device's `device_uuid` when it has one (Vulkan), else its `device_id`, not its
+runtime handle or index. The UUID is not guaranteed unique among the listed
+devices and may change with a driver update or a moved card, so keep `kind` and
+`description` beside it. `backend_available(kind)` checks whether a backend
+policy can currently be satisfied.
 
 ```python
 device = next(d for d in transcribe_cpp.backends() if d.device_type == "cpu")

@@ -900,7 +900,8 @@ TRANSCRIBE_API uint32_t transcribe_allowed_backends(void);
  * Opaque process-local compute-device handle. Handles are owned by the
  * runtime, remain valid for the life of the process, and must not be freed.
  * They may be compared for equality but are not persistent identifiers; use
- * transcribe_device_get_info() and its device_id field for persistence.
+ * transcribe_device_get_info() and its device_uuid / device_id fields for
+ * persistence.
  */
 struct transcribe_device;
 typedef struct transcribe_device * transcribe_device_t;
@@ -942,9 +943,9 @@ typedef enum {
 /*
  * One registered compute device.
  *
- * name / description / kind / device_id are borrowed pointers into
- * runtime-owned storage: valid for the life of the process, never freed by
- * the caller.
+ * name / description / kind / device_id / device_uuid are borrowed pointers
+ * into runtime-owned storage: valid for the life of the process, never freed
+ * by the caller.
  *
  * kind is the library's vendor classification, one of: "cpu", "accel" (a
  * host-memory accelerator such as BLAS/AMX), "metal", "vulkan", "cuda",
@@ -954,6 +955,16 @@ typedef enum {
  * device_id is a stable hardware identifier when the backend reports one
  * (for PCI devices the lower-case bus id "domain:bus:device.function", e.g.
  * "0000:c1:00.0"), or NULL when unknown (e.g. Metal).
+ *
+ * device_uuid is the device's UUID as lower-case 8-4-4-4-12 hex (the
+ * backend's 16 bytes in order, as `vulkaninfo` and `nvidia-smi` print it,
+ * e.g. "8680499a-0100-0000-0002-000000000000"), or NULL when unknown. Only
+ * Vulkan devices report one today. It is not guaranteed unique among the
+ * listed devices (MoltenVK can report one UUID for distinct GPUs). It is
+ * stable across processes and reboots, but may change with a driver update
+ * or when the card moves to another slot. To find a saved device again,
+ * prefer device_uuid, then device_id (which names the slot, not the card),
+ * and compare kind as well.
  *
  * memory_total is the device's reported capacity in bytes. memory_free is a
  * SNAPSHOT of available bytes at the moment this struct was filled; it goes
@@ -973,6 +984,7 @@ struct transcribe_device_info {
     uint64_t               memory_total; /* reported capacity in bytes, or 0 */
     uint64_t               memory_free;  /* available bytes snapshot, or 0 */
     transcribe_device_type device_type;  /* CPU/GPU/IGPU/ACCEL axis */
+    const char *           device_uuid;  /* device UUID (8-4-4-4-12 hex) or NULL */
 };
 
 TRANSCRIBE_API void transcribe_device_info_init(struct transcribe_device_info * p);
@@ -1050,8 +1062,9 @@ TRANSCRIBE_API transcribe_device_t transcribe_model_device(const struct transcri
  *          selected as a primary. Invalid, foreign, or mismatched handles are
  *          rejected with TRANSCRIBE_ERR_INVALID_ARG.
  *
- *          Handles are process-local. Persist device_id (when available), then
- *          enumerate and resolve a fresh handle in each process.
+ *          Handles are process-local. Persist device_uuid or device_id (when
+ *          available), then enumerate and resolve a fresh handle in each
+ *          process.
  *
  * no_mmap: false (the default) memory-maps the model file and serves the
  *          weights straight from it wherever the primary device can use host

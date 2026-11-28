@@ -391,6 +391,7 @@ function deviceFromRaw(
     kind: dev.kind ?? "",
     deviceType: DEVICE_TYPE_NAMES[dev.device_type] ?? "unknown",
     deviceId: dev.device_id ?? null,
+    deviceUuid: dev.device_uuid ?? null,
     memoryTotal: num(dev.memory_total),
     memoryFree: num(dev.memory_free),
     index,

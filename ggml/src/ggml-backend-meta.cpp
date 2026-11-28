@@ -124,6 +124,7 @@ static void ggml_backend_meta_device_get_props(ggml_backend_dev_t dev, ggml_back
     props->description = ggml_backend_meta_device_get_description(dev);
     props->type        = ggml_backend_meta_device_get_type(dev);
     props->device_id   = 0;
+    props->device_uuid = 0;
 
     ggml_backend_meta_device_get_memory(dev, &props->memory_free, &props->memory_total);
 

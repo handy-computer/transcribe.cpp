@@ -199,9 +199,13 @@ README if you need runtime-loaded backend modules or custom
 `devices()` returns process-local `Device` handles. Leave
 `ModelOptions::device` as `None` for the backend's automatic policy, or pass
 `Some(device)` to select that exact primary device with no fallback. Handles
-are not stable across processes; persist `device_id` when it is `Some`,
-otherwise `kind` + `name` + `description` (e.g. Metal), and later re-find the
-device in `devices()` after backend initialization. In dynamic-backend builds,
+are not stable across processes; persist `device_uuid` when it is `Some`
+(Vulkan), else `device_id` when it is `Some`, otherwise `kind` + `name` +
+`description` (e.g. Metal), and later re-find the device in `devices()` after
+backend initialization. `device_uuid` names the card and `device_id` (the PCI
+bus id) its slot; the UUID is not guaranteed unique among the listed devices
+and may change with a driver update or a moved card, so keep `kind` and
+`description` beside it. In dynamic-backend builds,
 finish `init_backends()` or `init_backends_default()` before any thread
 enumerates devices, queries backend availability, or loads a model; native
 registry mutation is a startup-only operation and must not race those calls.

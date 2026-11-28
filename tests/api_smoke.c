@@ -222,6 +222,63 @@ static void test_backend_devices(void) {
     CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_DEVICE_INFO) == _Alignof(struct transcribe_device_info));
 }
 
+/* device_uuid is NULL or canonical: 36 chars, lower-case hex in 8-4-4-4-12,
+ * never all zeros. */
+static int device_uuid_ok(const char * s) {
+    if (s == NULL) {
+        return 1;
+    }
+    if (strlen(s) != 36) {
+        return 0;
+    }
+    int nonzero = 0;
+    for (int i = 0; i < 36; ++i) {
+        const char c = s[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') {
+                return 0;
+            }
+            continue;
+        }
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            return 0;
+        }
+        if (c != '0') {
+            nonzero = 1;
+        }
+    }
+    return nonzero;
+}
+
+static void test_device_uuid(void) {
+    CHECK(device_uuid_ok(NULL));
+    CHECK(device_uuid_ok("8680499a-0100-0000-0002-000000000000"));
+    CHECK(!device_uuid_ok(""));
+    CHECK(!device_uuid_ok("00000000-0000-0000-0000-000000000000"));
+    CHECK(!device_uuid_ok("8680499A-0100-0000-0002-000000000000"));
+    CHECK(!device_uuid_ok("8680499a01000000000200000000000000000"));
+    CHECK(!device_uuid_ok("8680499a-0100-0000-0002-00000000000"));
+
+    const int n = transcribe_device_count();
+    for (int i = 0; i < n; ++i) {
+        struct transcribe_device_info dev;
+        transcribe_device_info_init(&dev);
+        CHECK(transcribe_device_get_info(transcribe_device_get(i), &dev) == TRANSCRIBE_OK);
+        CHECK(device_uuid_ok(dev.device_uuid));
+
+        /* A caller built before device_uuid existed declares the shorter
+         * struct: the fill stops at its size. */
+        static const char             sentinel[] = "untouched";
+        struct transcribe_device_info dev_old;
+        transcribe_device_info_init(&dev_old);
+        dev_old.struct_size = offsetof(struct transcribe_device_info, device_uuid);
+        dev_old.device_uuid = sentinel;
+        CHECK(transcribe_device_get_info(transcribe_device_get(i), &dev_old) == TRANSCRIBE_OK);
+        CHECK(dev_old.device_uuid == sentinel);
+        CHECK(dev_old.kind != NULL && strcmp(dev_old.kind, dev.kind) == 0);
+    }
+}
+
 static void test_log_level_values(void) {
     /* These numeric values must mirror GGML_LOG_LEVEL_* exactly. If this
      * test ever fails, the public contract documented in transcribe.h
@@ -874,6 +931,7 @@ int main(void) {
     test_version();
     test_abi_metadata();
     test_backend_devices();
+    test_device_uuid();
     test_log_level_values();
     test_log_set_null();
     test_init_macros();

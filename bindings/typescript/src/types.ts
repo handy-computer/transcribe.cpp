@@ -115,7 +115,8 @@ export interface TranscriptionResult extends Transcript {
 
 /** Vendor-agnostic device class, orthogonal to {@link BackendInfo.kind}.
  *  `"unknown"` is reported for a device-type value newer than this binding —
- *  distinguish such devices by {@link BackendInfo.deviceId} / name, not this axis. */
+ *  distinguish such devices by {@link BackendInfo.deviceUuid} /
+ *  {@link BackendInfo.deviceId} / name, not this axis. */
 export type DeviceType = "cpu" | "gpu" | "igpu" | "accel" | "unknown";
 
 export interface BackendInfo {
@@ -127,6 +128,13 @@ export interface BackendInfo {
   /** Stable hardware id (PCI bus id) when the backend reports one, else null
    *  (e.g. Metal). */
   deviceId: string | null;
+  /** The device's UUID as lower-case 8-4-4-4-12 hex (the backend's 16 bytes in
+   *  order, as `vulkaninfo` and `nvidia-smi` print it), else null. Only Vulkan
+   *  devices report one today. Not guaranteed unique among the listed devices
+   *  (MoltenVK can report one UUID for distinct GPUs). Stable across processes
+   *  and reboots, but may change with a driver update or when the card moves
+   *  to another slot. */
+  deviceUuid: string | null;
   /** Reported device memory capacity in bytes, or 0 if unreported. */
   memoryTotal: number;
   /** Available device memory in bytes — a snapshot at query time, or 0 if
@@ -134,8 +142,8 @@ export interface BackendInfo {
    *  to refresh; backend-defined and not comparable across device kinds. */
   memoryFree: number;
   /** Process-local registry index for display. Pass this object via
-   *  {@link ModelOptions.device} for exact selection; persist `deviceId`, not
-   *  the index. */
+   *  {@link ModelOptions.device} for exact selection; persist `deviceUuid` or
+   *  `deviceId`, not the index. */
   index: number | null;
 }
 

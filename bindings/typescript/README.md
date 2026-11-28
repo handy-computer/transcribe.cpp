@@ -251,6 +251,12 @@ if (!cpu) throw new Error("CPU device is not registered");
 const exact = await TranscribeModel.load("model.gguf", { device: cpu });
 ```
 
+Device objects are process-local. To find a device again in another process,
+save its `deviceUuid` when it has one (Vulkan), else its `deviceId` (the PCI bus
+id), not its index. The UUID is not guaranteed unique among the listed devices
+and may change with a driver update or a moved card, so keep `kind` and
+`description` beside it.
+
 `backend` defaults to `"auto"` (best accelerator, else CPU). A missing Vulkan
 loader/driver degrades silently to CPU; an explicit backend that cannot be
 satisfied raises a `BackendError`.

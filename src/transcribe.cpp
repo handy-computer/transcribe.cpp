@@ -932,6 +932,7 @@ void fill_device_info(ggml_backend_dev_t dev, uint64_t caller_size, struct trans
     staged.memory_total = props.memory_total;
     staged.memory_free  = props.memory_free;
     staged.device_type  = to_device_type(props.type);
+    staged.device_uuid  = props.device_uuid;
     copy_out_prefix(out, &staged, caller_size, sizeof(staged));
 }
 

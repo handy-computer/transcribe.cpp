@@ -1,0 +1,109 @@
+diff --git a/include/ggml-backend.h b/include/ggml-backend.h
+index d1a7b798..7b4ca747 100644
+--- a/include/ggml-backend.h
++++ b/include/ggml-backend.h
+@@ -181,6 +181,14 @@ extern "C" {
+         //   for PCI devices, this should be the lower-case PCI bus id formatted as "domain:bus:device.function" (e.g. "0000:c1:00.0")
+         //   if the id is unknown, this should be NULL
+         const char * device_id;
++        // device UUID (transcribe.cpp patch)
++        //   the backend's 16 UUID bytes in order, as lower-case hex formatted as "8-4-4-4-12"
++        //   (e.g. "8680499a-0100-0000-0002-000000000000"), as vulkaninfo and nvidia-smi print it
++        //   if the UUID is unknown, this should be NULL
++        //   not guaranteed unique among the listed devices (MoltenVK can report one UUID for distinct GPUs)
++        //   stable across processes and reboots, but it may change with a driver update or when the card
++        //   moves to another slot
++        const char * device_uuid;
+         // device capabilities
+         struct ggml_backend_dev_caps caps;
+     };
+diff --git a/src/ggml-backend-meta.cpp b/src/ggml-backend-meta.cpp
+index c442f603..47f6a20c 100644
+--- a/src/ggml-backend-meta.cpp
++++ b/src/ggml-backend-meta.cpp
+@@ -124,6 +124,7 @@ static void ggml_backend_meta_device_get_props(ggml_backend_dev_t dev, ggml_back
+     props->description = ggml_backend_meta_device_get_description(dev);
+     props->type        = ggml_backend_meta_device_get_type(dev);
+     props->device_id   = 0;
++    props->device_uuid = 0;
+ 
+     ggml_backend_meta_device_get_memory(dev, &props->memory_free, &props->memory_total);
+ 
+diff --git a/src/ggml-vulkan/ggml-vulkan-types.h b/src/ggml-vulkan/ggml-vulkan-types.h
+index dd2f77bb..e1181dee 100644
+--- a/src/ggml-vulkan/ggml-vulkan-types.h
++++ b/src/ggml-vulkan/ggml-vulkan-types.h
+@@ -1566,5 +1566,6 @@ struct ggml_backend_vk_device_context {
+     std::string description;
+     bool is_integrated_gpu;
+     std::string pci_bus_id;
++    std::string uuid;  // transcribe.cpp patch: see ggml_backend_dev_props::device_uuid; empty if unknown
+     int op_offload_min_batch_size;
+ };
+diff --git a/src/ggml-vulkan/ggml-vulkan.cpp b/src/ggml-vulkan/ggml-vulkan.cpp
+index dada781d..c767b3a9 100644
+--- a/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -16631,6 +16631,46 @@ static std::string ggml_backend_vk_get_device_pci_id(int device_idx) {
+     return std::string(pci_bus_id);
+ }
+ 
++// transcribe.cpp patch: deviceUUID formatted for ggml_backend_dev_props::device_uuid.
++// Empty if the driver reports none (all zeros).
++static std::string ggml_backend_vk_get_device_uuid(int device_idx) {
++    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
++
++    vk::PhysicalDevice device = vk_instance.physical_devices[vk_instance.device_indices[device_idx]];
++
++    vk::PhysicalDeviceProperties2 props = {};
++    vk::PhysicalDeviceIDProperties id_props = {};
++
++    props.pNext = &id_props;
++
++    device.getProperties2(&props);
++
++    bool all_zero = true;
++    for (size_t i = 0; i < VK_UUID_SIZE; i++) {
++        if (id_props.deviceUUID[i] != 0) {
++            all_zero = false;
++            break;
++        }
++    }
++
++    if (all_zero) {
++        return "";
++    }
++
++    static const char hex[] = "0123456789abcdef";
++
++    std::string uuid;
++    for (size_t i = 0; i < VK_UUID_SIZE; i++) {
++        if (i == 4 || i == 6 || i == 8 || i == 10) {
++            uuid += '-';
++        }
++        uuid += hex[id_props.deviceUUID[i] >> 4];
++        uuid += hex[id_props.deviceUUID[i] & 0x0f];
++    }
++
++    return uuid;
++}
++
+ static const char * ggml_backend_vk_device_get_name(ggml_backend_dev_t dev) {
+     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+     return ctx->name.c_str();
+@@ -16669,6 +16709,7 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
+     props->description = ggml_backend_vk_device_get_description(dev);
+     props->type        = ggml_backend_vk_device_get_type(dev);
+     props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
++    props->device_uuid = ctx->uuid.empty() ? nullptr : ctx->uuid.c_str();
+     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
+     props->caps = {
+         /* .async                 = */ true,
+@@ -17523,6 +17564,7 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
+                 ctx->description = desc;
+                 ctx->is_integrated_gpu = ggml_backend_vk_get_device_type(i) == vk::PhysicalDeviceType::eIntegratedGpu;
+                 ctx->pci_bus_id = ggml_backend_vk_get_device_pci_id(i);
++                ctx->uuid = ggml_backend_vk_get_device_uuid(i);
+                 ctx->op_offload_min_batch_size = min_batch_size;
+                 devices.push_back(new ggml_backend_device {
+                     /* .iface   = */ ggml_backend_vk_device_i,
